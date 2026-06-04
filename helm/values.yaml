@@ -129,19 +129,19 @@ worker:
 
   # MinIO connection secret
   minioSecret:
-    name: eagle-api-minio
+    name: eagle-api-minio-keys
+    hostKey: MINIO_HOST
     accessKeyKey: MINIO_ACCESS_KEY
     secretKeyKey: MINIO_SECRET_KEY
+    bucketKey: MINIO_BUCKET_NAME
 
   env:
-    MONGODB_HOST:     "mongodb"
+    MONGODB_HOST:     "eagle-api-mongodb"
     MONGODB_PORT:     "27017"
     MONGODB_DATABASE: "epic"
     MONGODB_AUTHSOURCE: "admin"
-    MINIO_HOST:       "minio"
-    MINIO_PORT:       "9000"
-    MINIO_USE_SSL:    "false"
-    MINIO_BUCKET_NAME: "uploads"
+    MINIO_PORT:       "443"
+    MINIO_USE_SSL:    "true"
     DOCLING_URL:      "http://eagle-demi:5001"
     DOCLING_TIMEOUT_MS: "300000"
     MAX_CHUNK_SIZE:   "4000"

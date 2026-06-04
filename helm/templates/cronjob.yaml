@@ -58,6 +58,11 @@ spec:
                       name: {{ .Values.worker.mongoSecret.name }}
                       key: {{ .Values.worker.mongoSecret.passwordKey }}
                 # MinIO credentials
+                - name: MINIO_HOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.worker.minioSecret.name }}
+                      key: {{ .Values.worker.minioSecret.hostKey }}
                 - name: MINIO_ACCESS_KEY
                   valueFrom:
                     secretKeyRef:
@@ -68,6 +73,11 @@ spec:
                     secretKeyRef:
                       name: {{ .Values.worker.minioSecret.name }}
                       key: {{ .Values.worker.minioSecret.secretKeyKey }}
+                - name: MINIO_BUCKET_NAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.worker.minioSecret.name }}
+                      key: {{ .Values.worker.minioSecret.bucketKey }}
               resources:
                 {{- toYaml .Values.worker.resources | nindent 16 }}
               securityContext:
