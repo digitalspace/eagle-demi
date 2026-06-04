@@ -1,0 +1,78 @@
+{{- if .Values.worker.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "eagle-demi.fullname" . }}-worker
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  schedule: {{ .Values.worker.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 7200  # 2-hour hard cap
+      template:
+        metadata:
+          labels:
+            {{- include "eagle-demi.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: worker
+            role: worker-eagle-epic
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+          containers:
+            - name: extract
+              image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+              imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+              command:
+                - node
+                - src/extract.js
+                {{- if .Values.worker.retryFailed }}
+                - --retry-failed
+                {{- end }}
+              env:
+                {{- range $key, $val := .Values.worker.env }}
+                - name: {{ $key }}
+                  value: {{ $val | quote }}
+                {{- end }}
+                # DOCLING_API_KEY from the same secret as docling-serve
+                - name: DOCLING_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.apiKeySecret.name }}
+                      key: {{ .Values.apiKeySecret.key }}
+                # MongoDB credentials
+                - name: MONGODB_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.worker.mongoSecret.name }}
+                      key: {{ .Values.worker.mongoSecret.usernameKey }}
+                - name: MONGODB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.worker.mongoSecret.name }}
+                      key: {{ .Values.worker.mongoSecret.passwordKey }}
+                # MinIO credentials
+                - name: MINIO_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.worker.minioSecret.name }}
+                      key: {{ .Values.worker.minioSecret.accessKeyKey }}
+                - name: MINIO_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.worker.minioSecret.name }}
+                      key: {{ .Values.worker.minioSecret.secretKeyKey }}
+              resources:
+                {{- toYaml .Values.worker.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+{{- end }}

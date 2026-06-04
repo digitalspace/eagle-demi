@@ -92,3 +92,59 @@ probes:
     periodSeconds: 10
     timeoutSeconds: 5
     failureThreshold: 3
+
+# ---------------------------------------------------------------------------
+# Extraction worker (CronJob)
+# Runs extract.js — downloads documents from MinIO, sends to docling-serve,
+# writes DocumentChunks to MongoDB.
+# ---------------------------------------------------------------------------
+worker:
+  enabled: true
+
+  image:
+    repository: ghcr.io/digitalspace/eagle-demi-worker
+    tag: "latest"
+    pullPolicy: Always
+
+  # Cron schedule (default: 2 AM nightly)
+  schedule: "0 2 * * *"
+
+  # --retry-failed: re-extract documents that errored on a previous run
+  retryFailed: false
+
+  # Resource limits (worker is CPU/memory light; no ML model weights)
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  # MongoDB connection — must match eagle-api MongoDB secret
+  mongoSecret:
+    name: eagle-api-mongodb
+    usernameKey: MONGODB_USER
+    passwordKey: MONGODB_PASSWORD
+
+  # MinIO connection secret
+  minioSecret:
+    name: eagle-api-minio
+    accessKeyKey: MINIO_ACCESS_KEY
+    secretKeyKey: MINIO_SECRET_KEY
+
+  env:
+    MONGODB_HOST:     "mongodb"
+    MONGODB_PORT:     "27017"
+    MONGODB_DATABASE: "epic"
+    MONGODB_AUTHSOURCE: "admin"
+    MINIO_HOST:       "minio"
+    MINIO_PORT:       "9000"
+    MINIO_USE_SSL:    "false"
+    MINIO_BUCKET_NAME: "uploads"
+    DOCLING_URL:      "http://eagle-demi:5001"
+    DOCLING_TIMEOUT_MS: "300000"
+    MAX_CHUNK_SIZE:   "4000"
+    MIN_CHUNK_SIZE:   "100"
+    OVERLAP_SIZE:     "200"
+    BATCH_SIZE:       "50"

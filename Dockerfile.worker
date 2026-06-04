@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install dependencies first (layer cache)
+COPY package.json ./
+RUN npm install --omit=dev
+
+COPY src/ ./src/
+
+# Non-root user
+RUN addgroup -S demi && adduser -S demi -G demi
+USER demi
+
+CMD ["node", "src/extract.js"]
