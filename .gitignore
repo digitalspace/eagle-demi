@@ -1,0 +1,19 @@
+# Dependency directories
+node_modules/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Copilot / agent instruction files (local only, not for review)
+.github/copilot-instructions.md
+.github/instructions/
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

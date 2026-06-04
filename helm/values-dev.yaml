@@ -1,0 +1,16 @@
+# Dev overrides — more verbose logging, smaller resource requests.
+image:
+  tag: "v1.21.0"
+  pullPolicy: Always
+
+config:
+  logLevel: "DEBUG"
+  maxDocumentTimeout: "120"    # Shorter timeout in dev (2 min)
+
+resources:
+  requests:
+    cpu: "250m"
+    memory: "2Gi"
+  limits:
+    cpu: "2000m"
+    memory: "6Gi"

@@ -1,0 +1,26 @@
+# Allow only eagle-api pods to reach eagle-demi (docling-serve) on port 5001.
+# All other ingress is denied by default (OpenShift default-deny).
+#
+# eagle-api pods carry the label role: api-eagle-epic (set in their Helm chart).
+# eagle-demi pods carry the label role: demi-eagle-epic (set in deployment.yaml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: eagle-epic-allow-api-to-demi
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      role: demi-eagle-epic
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # eagle-api pods only
+        - podSelector:
+            matchLabels:
+              role: api-eagle-epic
+      ports:
+        - port: {{ .Values.service.port }}
+          protocol: TCP

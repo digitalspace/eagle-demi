@@ -1,0 +1,94 @@
+# Default values for the eagle-demi service.
+# Override in values-{env}.yaml for environment-specific settings.
+# Tear down: helm uninstall eagle-demi -n <namespace>
+
+# Override the full resource name so Service is reachable as
+# http://eagle-demi:5001 from within the cluster.
+fullnameOverride: eagle-demi
+
+# ---------------------------------------------------------------------------
+# Docker image — upstream docling-serve CPU image (no custom build)
+# ---------------------------------------------------------------------------
+image:
+  repository: ghcr.io/docling-project/docling-serve-cpu
+  tag: "v1.21.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# ---------------------------------------------------------------------------
+# Service — ClusterIP only.  eagle-demi is cluster-internal; no Route.
+# eagle-api calls http://eagle-demi:5001/v1/convert/...
+# ---------------------------------------------------------------------------
+service:
+  port: 5001
+
+# ---------------------------------------------------------------------------
+# API key — must be pre-created before deploying:
+#   oc create secret generic eagle-demi-api-key \
+#     --from-literal=DOCLING_SERVE_API_KEY=<strong-random-key> \
+#     -n <namespace>
+#
+# eagle-api reads this same key via its own secret ref and passes it as the
+# X-Api-Key header on every request to docling-serve.
+# ---------------------------------------------------------------------------
+apiKeySecret:
+  name: eagle-demi-api-key
+  key: DOCLING_SERVE_API_KEY
+
+# ---------------------------------------------------------------------------
+# docling-serve runtime configuration
+# See: https://github.com/docling-project/docling-serve/blob/main/docs/configuration.md
+# ---------------------------------------------------------------------------
+config:
+  # Processing limits
+  maxFileSize: "104857600"      # DOCLING_SERVE_MAX_FILE_SIZE (bytes; 100 MB = 104857600)
+  maxDocumentTimeout: "300"     # DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT (seconds; 5 min)
+  maxNumPages: "500"            # DOCLING_SERVE_MAX_NUM_PAGES (0 = unlimited)
+  maxSyncWait: "120"            # DOCLING_SERVE_MAX_SYNC_WAIT (seconds)
+
+  # Engine tuning
+  device: "cpu"                 # DOCLING_DEVICE (cpu | cuda | mps)
+  numThreads: "4"               # DOCLING_NUM_THREADS (torch CPU threads)
+  numWorkers: "2"               # DOCLING_SERVE_ENG_LOC_NUM_WORKERS
+
+  # Security
+  enableRemoteServices: "false" # DOCLING_SERVE_ENABLE_REMOTE_SERVICES (disable Azure/VLM)
+  corsOrigins: "[]"             # DOCLING_SERVE_CORS_ORIGINS (cluster-internal; restrict)
+
+  # Observability
+  logFormat: "json"             # DOCLING_SERVE_LOG_FORMAT (text | json)
+  logLevel: "INFO"              # DOCLING_SERVE_LOG_LEVEL (DEBUG | INFO | WARNING)
+  enablePrometheus: "true"      # DOCLING_SERVE_OTEL_ENABLE_PROMETHEUS
+
+# ---------------------------------------------------------------------------
+# Resource limits — generous memory needed for ML model weights (~4.4 GB image)
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: "500m"
+    memory: "3Gi"
+  limits:
+    cpu: "2000m"
+    memory: "6Gi"
+
+# ---------------------------------------------------------------------------
+# Health probes — docling-serve exposes /health on the same port
+# ---------------------------------------------------------------------------
+probes:
+  # Startup probe allows time for model loading before liveness kicks in
+  startup:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 60    # 10-minute budget for cold start (60 * 10s)
+  liveness:
+    initialDelaySeconds: 0
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 0
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3

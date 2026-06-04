@@ -1,0 +1,72 @@
+# =============================================================================
+# Deploy to Dev
+# =============================================================================
+# Triggered on push to main branch (excluding docs/CI-only changes).
+# No Docker build — uses upstream ghcr.io/docling-project/docling-serve-cpu
+# image directly. Simply deploys/upgrades the Helm release.
+# =============================================================================
+
+name: Deploy to Dev
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - ".github/**"
+      - "README.md"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  OPENSHIFT_NAMESPACE_DEV: 6cdc9e-dev
+  HELM_RELEASE: eagle-demi
+
+jobs:
+  deploy:
+    name: Deploy to Dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install OpenShift CLI
+        run: |
+          curl -LO "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux.tar.gz"
+          tar -xvzf openshift-client-linux.tar.gz
+          sudo mv oc /usr/local/bin/
+          rm -f openshift-client-linux.tar.gz
+
+      - name: Install Helm
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version
+
+      - name: Log into OpenShift
+        run: oc login --token=${{ secrets.OPENSHIFT_TOKEN }} --server=${{ secrets.OPENSHIFT_URL }}
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install ${{ env.HELM_RELEASE }} ./helm \
+            --namespace ${{ env.OPENSHIFT_NAMESPACE_DEV }} \
+            --values ./helm/values-dev.yaml \
+            --wait --timeout=10m
+
+      - name: Verify deployment
+        run: |
+          echo "Verifying eagle-demi deployment..."
+          oc rollout status deployment/${{ env.HELM_RELEASE }} \
+            -n ${{ env.OPENSHIFT_NAMESPACE_DEV }} --timeout=10m
+          echo "✓ eagle-demi healthy"
+
+          echo ""
+          echo "Pods:"
+          oc get pods -n ${{ env.OPENSHIFT_NAMESPACE_DEV }} \
+            -l app.kubernetes.io/instance=${{ env.HELM_RELEASE }}

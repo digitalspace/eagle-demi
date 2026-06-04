@@ -1,0 +1,10 @@
+apiVersion: v2
+name: eagle-demi
+description: >
+  DEMI (Document Extraction & Machine Intelligence) for EPIC.
+  Runs docling-serve (CPU image) as a cluster-internal service for PDF/DOCX
+  extraction. Called by eagle-api on document upload; not exposed externally.
+  Tear down: helm uninstall eagle-demi -n <namespace>
+type: application
+version: 0.1.0
+appVersion: "v1.21.0"

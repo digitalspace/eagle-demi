@@ -1,0 +1,16 @@
+# Prod overrides — conservative timeouts, warning-only logs.
+image:
+  tag: "v1.21.0"
+  pullPolicy: IfNotPresent
+
+config:
+  logLevel: "WARNING"
+  maxDocumentTimeout: "300"
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "3Gi"
+  limits:
+    cpu: "2000m"
+    memory: "6Gi"

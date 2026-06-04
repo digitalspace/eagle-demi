@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "eagle-demi.fullname" . }}
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "eagle-demi.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "eagle-demi.selectorLabels" . | nindent 8 }}
+        # role: demi-eagle-epic is the target selector for the NetworkPolicy
+        # that restricts ingress to eagle-api pods only.
+        role: demi-eagle-epic
+    spec:
+      # docling-serve runs as non-root by default; enforce it here too.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: eagle-demi
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 5001
+              protocol: TCP
+          env:
+            # --- Authentication ---
+            - name: DOCLING_SERVE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apiKeySecret.name }}
+                  key: {{ .Values.apiKeySecret.key }}
+
+            # --- Processing limits ---
+            - name: DOCLING_SERVE_MAX_FILE_SIZE
+              value: {{ .Values.config.maxFileSize | quote }}
+            - name: DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT
+              value: {{ .Values.config.maxDocumentTimeout | quote }}
+            - name: DOCLING_SERVE_MAX_NUM_PAGES
+              value: {{ .Values.config.maxNumPages | quote }}
+            - name: DOCLING_SERVE_MAX_SYNC_WAIT
+              value: {{ .Values.config.maxSyncWait | quote }}
+
+            # --- Engine tuning ---
+            - name: DOCLING_DEVICE
+              value: {{ .Values.config.device | quote }}
+            - name: DOCLING_NUM_THREADS
+              value: {{ .Values.config.numThreads | quote }}
+            - name: DOCLING_SERVE_ENG_LOC_NUM_WORKERS
+              value: {{ .Values.config.numWorkers | quote }}
+
+            # --- Security ---
+            - name: DOCLING_SERVE_ENABLE_REMOTE_SERVICES
+              value: {{ .Values.config.enableRemoteServices | quote }}
+            - name: DOCLING_SERVE_CORS_ORIGINS
+              value: {{ .Values.config.corsOrigins | quote }}
+
+            # --- Observability ---
+            - name: DOCLING_SERVE_LOG_FORMAT
+              value: {{ .Values.config.logFormat | quote }}
+            - name: DOCLING_SERVE_LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            - name: DOCLING_SERVE_OTEL_ENABLE_PROMETHEUS
+              value: {{ .Values.config.enablePrometheus | quote }}
+
+          # Startup probe: allow time for ML model loading before liveness kicks in
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

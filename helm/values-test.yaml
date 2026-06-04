@@ -1,0 +1,7 @@
+# Test overrides
+image:
+  tag: "v1.21.0"
+  pullPolicy: IfNotPresent
+
+config:
+  logLevel: "INFO"

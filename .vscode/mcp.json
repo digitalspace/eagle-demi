@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "mcpjungle": {
+      "type": "http",
+      "url": "http://192.168.1.195:9090/mcp"
+    }
+  }
+}
