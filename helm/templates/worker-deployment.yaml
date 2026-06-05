@@ -27,8 +27,6 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
       containers:
         - name: worker
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

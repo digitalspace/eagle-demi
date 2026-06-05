@@ -24,9 +24,6 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        fsGroup: 1000
-        seccompProfile:
-          type: RuntimeDefault
       containers:
         - name: redis
           image: {{ .Values.rq.redis.image | quote }}
