@@ -45,7 +45,8 @@ config:
   maxFileSize: "104857600"      # DOCLING_SERVE_MAX_FILE_SIZE (bytes; 100 MB = 104857600)
   maxDocumentTimeout: "300"     # DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT (seconds; 5 min)
   maxNumPages: "500"            # DOCLING_SERVE_MAX_NUM_PAGES (0 = unlimited)
-  maxSyncWait: "120"            # DOCLING_SERVE_MAX_SYNC_WAIT (seconds)
+  maxSyncWait: "280"            # DOCLING_SERVE_MAX_SYNC_WAIT (seconds)
+                                # Must be < eagle-api AbortSignal.timeout (300s)
 
   # Engine tuning
   device: "cpu"                 # DOCLING_DEVICE (cpu | cuda | mps)

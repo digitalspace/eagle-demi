@@ -5,7 +5,7 @@ image:
 
 config:
   logLevel: "DEBUG"
-  maxDocumentTimeout: "120"    # Shorter timeout in dev (2 min)
+  maxDocumentTimeout: "280"    # CPU-only: large PDFs can take 3-4 min; must match maxSyncWait
 
 resources:
   requests:
