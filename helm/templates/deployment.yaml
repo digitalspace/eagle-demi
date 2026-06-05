@@ -51,6 +51,23 @@ spec:
             # --- Engine tuning ---
             - name: DOCLING_DEVICE
               value: {{ .Values.config.device | quote }}
+            {{- if eq .Values.engine.kind "rq" }}
+            # RQ engine — API pod dispatches to Redis; no model loading needed
+            - name: DOCLING_SERVE_ENG_KIND
+              value: "rq"
+            - name: DOCLING_SERVE_ENG_RQ_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.rq.redis.secretName }}
+                  key: REDIS_URL
+            - name: DOCLING_SERVE_ENG_RQ_RESULTS_TTL
+              value: {{ .Values.rq.resultsTtl | quote }}
+            - name: DOCLING_SERVE_ENG_RQ_REDIS_MAX_CONNECTIONS
+              value: {{ .Values.rq.maxConnections | quote }}
+            - name: DOCLING_SERVE_LOAD_MODELS_AT_BOOT
+              value: "false"
+            {{- else }}
+            # Local engine — in-process threads, models loaded at boot
             - name: DOCLING_NUM_THREADS
               value: {{ .Values.config.numThreads | quote }}
             - name: DOCLING_SERVE_ENG_LOC_NUM_WORKERS
@@ -59,6 +76,7 @@ spec:
               value: {{ .Values.config.shareModels | quote }}
             - name: DOCLING_PERF_PAGE_BATCH_SIZE
               value: {{ .Values.config.pageBatchSize | quote }}
+            {{- end }}
 
             # --- Security ---
             - name: DOCLING_SERVE_ENABLE_REMOTE_SERVICES

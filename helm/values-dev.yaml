@@ -1,21 +1,44 @@
-# Dev overrides — more verbose logging, smaller resource requests.
+# Dev overrides — RQ engine, verbose logging.
 image:
   tag: "v1.21.0"
   pullPolicy: Always
 
 config:
   logLevel: "DEBUG"
-  maxDocumentTimeout: "280"    # CPU-only: large PDFs can take 3-4 min; must match maxSyncWait
-  numWorkers: "1"              # 1 worker = only one set of page inference tensors active at once
-                               # Model still loads once (shareModels=true), no concurrency overhead
-  shareModels: "true"          # DOCLING_SERVE_ENG_LOC_SHARE_MODELS — single model copy (~4.4GB)
-  pageBatchSize: "1"           # DOCLING_PERF_PAGE_BATCH_SIZE — smallest batch, minimum peak tensor RAM
-  numThreads: "2"              # DOCLING_NUM_THREADS — fewer parallel CPU threads
+  maxDocumentTimeout: "3600"   # 60 min; CPU-only, large scanned PDFs take a long time
 
+# Switch to RQ engine — workers process docs with bounded per-pod memory
+engine:
+  kind: "rq"
+
+rq:
+  enabled: true
+  worker:
+    replicas: 1                # 1 worker in dev (no concurrency needed)
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "5Gi"          # model weights ~4.4GB must be pre-requested to schedule correctly
+      limits:
+        cpu: "2000m"
+        memory: "8Gi"          # 4.4GB model + runtime + inference headroom
+    queueMaxSize: "4"          # cap preprocess lookahead — limits RAM from staged page bitmaps
+    pageBatchSize: "1"         # 1 page per inference pass — minimum peak tensor RAM
+
+# API pod — NO models loaded in RQ mode; lightweight HTTP + Redis client only
 resources:
   requests:
-    cpu: "250m"
-    memory: "5Gi"    # model weights ~4.4GB + PyTorch overhead; must pre-request enough to schedule
+    cpu: "50m"
+    memory: "256Mi"
   limits:
-    cpu: "2000m"
-    memory: "8Gi"    # 4.4GB weights + ~1GB PyTorch/runtime + ~1GB inference headroom
+    cpu: "500m"
+    memory: "512Mi"
+
+# API pod startup probe: model loading happens in workers, not API pod
+# Startup can be near-instant with LOAD_MODELS_AT_BOOT=false
+probes:
+  startup:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 12       # 1-minute budget (was 10 min for model loading)

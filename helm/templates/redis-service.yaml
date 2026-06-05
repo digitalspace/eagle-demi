@@ -1,0 +1,22 @@
+{{- if .Values.rq.enabled }}
+# ClusterIP service for Redis — accessible within namespace only.
+# Workers and the API pod connect via:
+#   redis://:PASSWORD@eagle-demi-redis:6373/
+apiVersion: v1
+kind: Service
+metadata:
+  name: eagle-demi-redis
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: eagle-demi-redis
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: redis
+      port: {{ .Values.rq.redis.port }}
+      targetPort: redis
+      protocol: TCP
+{{- end }}

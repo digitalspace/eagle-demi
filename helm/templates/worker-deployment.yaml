@@ -1,0 +1,96 @@
+{{- if .Values.rq.enabled }}
+# docling-serve RQ workers — pull conversion tasks from Redis and process them.
+# Each worker replica loads its own full model copy and processes one document
+# at a time, keeping memory bounded regardless of document size.
+#
+# Command: docling-serve rq-worker (confirmed in upstream docling-serve-rq-workers.yaml)
+# Image: same upstream CPU image as the API pod — no custom build needed.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eagle-demi-worker
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rq-worker
+spec:
+  replicas: {{ .Values.rq.worker.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: eagle-demi-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eagle-demi-worker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        role: demi-rq-worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["docling-serve"]
+          args: ["rq-worker"]
+          env:
+            # --- API key for self-calls (health checks, etc.) ---
+            - name: DOCLING_SERVE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apiKeySecret.name }}
+                  key: {{ .Values.apiKeySecret.key }}
+
+            # --- RQ engine connection ---
+            - name: DOCLING_SERVE_ENG_KIND
+              value: "rq"
+            - name: DOCLING_SERVE_ENG_RQ_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.rq.redis.secretName }}
+                  key: REDIS_URL
+
+            # --- Processing limits (applied per-worker) ---
+            - name: DOCLING_SERVE_MAX_FILE_SIZE
+              value: {{ .Values.config.maxFileSize | quote }}
+            - name: DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT
+              value: {{ .Values.config.maxDocumentTimeout | quote }}
+            - name: DOCLING_SERVE_MAX_NUM_PAGES
+              value: {{ .Values.config.maxNumPages | quote }}
+
+            # --- Worker pipeline tuning ---
+            # queueMaxSize caps the preprocess lookahead — limits how many
+            # raw page bitmaps accumulate in RAM simultaneously.
+            - name: DOCLING_SERVE_QUEUE_MAX_SIZE
+              value: {{ .Values.rq.worker.queueMaxSize | quote }}
+            - name: DOCLING_PERF_PAGE_BATCH_SIZE
+              value: {{ .Values.rq.worker.pageBatchSize | quote }}
+            - name: DOCLING_SERVE_OCR_BATCH_SIZE
+              value: {{ .Values.rq.worker.ocrBatchSize | quote }}
+            - name: DOCLING_SERVE_LAYOUT_BATCH_SIZE
+              value: {{ .Values.rq.worker.layoutBatchSize | quote }}
+            - name: DOCLING_NUM_THREADS
+              value: {{ .Values.rq.worker.numThreads | quote }}
+            - name: DOCLING_DEVICE
+              value: {{ .Values.config.device | quote }}
+
+            # --- Observability ---
+            - name: DOCLING_SERVE_LOG_FORMAT
+              value: {{ .Values.config.logFormat | quote }}
+            - name: DOCLING_SERVE_LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+
+            # --- Security ---
+            - name: DOCLING_SERVE_ENABLE_REMOTE_SERVICES
+              value: {{ .Values.config.enableRemoteServices | quote }}
+
+          resources:
+            {{- toYaml .Values.rq.worker.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+{{- end }}

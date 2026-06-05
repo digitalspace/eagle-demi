@@ -24,3 +24,32 @@ spec:
       ports:
         - port: {{ .Values.service.port }}
           protocol: TCP
+{{- if .Values.rq.enabled }}
+---
+# Allow RQ workers to connect to Redis.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: eagle-demi-allow-workers-to-redis
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      role: demi-redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # RQ worker pods
+        - podSelector:
+            matchLabels:
+              role: demi-rq-worker
+        # API pod (dispatches jobs, reads results)
+        - podSelector:
+            matchLabels:
+              role: demi-eagle-epic
+      ports:
+        - port: {{ .Values.rq.redis.port }}
+          protocol: TCP
+{{- end }}

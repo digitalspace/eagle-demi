@@ -66,6 +66,61 @@ config:
   enablePrometheus: "true"      # DOCLING_SERVE_OTEL_ENABLE_PROMETHEUS
 
 # ---------------------------------------------------------------------------
+# Compute engine — "local" or "rq"
+# "local"  uses in-process threads (default; no Redis required)
+# "rq"     uses Redis Queue workers (separate pods with bounded memory per doc)
+# ---------------------------------------------------------------------------
+engine:
+  kind: "local"   # Override to "rq" in values-dev.yaml / values-prod.yaml
+
+# ---------------------------------------------------------------------------
+# RQ engine configuration (only used when engine.kind == "rq")
+# Pre-create the Redis secret before deploying:
+#   oc create secret generic eagle-demi-redis \
+#     --from-literal=REDIS_PASSWORD=<strong-random-password> \
+#     -n <namespace>
+# ---------------------------------------------------------------------------
+rq:
+  enabled: false
+
+  redis:
+    # Internal service name; workers and API pod address redis via this host
+    host: "eagle-demi-redis"
+    port: 6373
+    image: "redis:7-alpine"
+    secretName: "eagle-demi-redis"
+    passwordKey: "REDIS_PASSWORD"
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "200m"
+        memory: "256Mi"
+
+  # Results / pub-sub configuration
+  resultsTtl: "14400"          # seconds (4 hours)
+  maxConnections: "50"         # Redis connection pool size (50 = fine for 1-4 workers)
+
+  # Worker pods (docling-serve rq-worker)
+  # Each worker loads its own model copy and processes one document at a time.
+  worker:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "5Gi"
+      limits:
+        cpu: "2000m"
+        memory: "8Gi"
+    # Worker-specific docling pipeline tuning
+    queueMaxSize: "4"          # DOCLING_SERVE_QUEUE_MAX_SIZE  — preprocess lookahead (pages)
+    pageBatchSize: "1"         # DOCLING_PERF_PAGE_BATCH_SIZE   — inference batch (pages)
+    ocrBatchSize: "4"          # DOCLING_SERVE_OCR_BATCH_SIZE
+    layoutBatchSize: "4"       # DOCLING_SERVE_LAYOUT_BATCH_SIZE
+    numThreads: "2"            # DOCLING_NUM_THREADS
+
+# ---------------------------------------------------------------------------
 # Resource limits — generous memory needed for ML model weights (~4.4 GB image)
 # ---------------------------------------------------------------------------
 resources:

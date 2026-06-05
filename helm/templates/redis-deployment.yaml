@@ -1,0 +1,95 @@
+{{- if .Values.rq.enabled }}
+# Redis pod for the RQ engine. Stores task queue entries, pub/sub status
+# updates, and results (TTL'd). emptyDir volume — data is ephemeral by design;
+# if Redis restarts, in-flight jobs will re-queue via Agenda on eagle-api side.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eagle-demi-redis
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: eagle-demi-redis
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eagle-demi-redis
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        role: demi-redis
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: {{ .Values.rq.redis.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["redis-server"]
+          args:
+            - "--port"
+            - {{ .Values.rq.redis.port | quote }}
+            - "--requirepass"
+            - "$(REDIS_PASSWORD)"
+            - "--appendonly"
+            - "yes"
+            - "--dir"
+            - "/data"
+          ports:
+            - name: redis
+              containerPort: {{ .Values.rq.redis.port }}
+              protocol: TCP
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.rq.redis.secretName }}
+                  key: {{ .Values.rq.redis.passwordKey }}
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.rq.redis.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - -p
+                - {{ .Values.rq.redis.port | quote }}
+                - -a
+                - "$(REDIS_PASSWORD)"
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - -p
+                - {{ .Values.rq.redis.port | quote }}
+                - -a
+                - "$(REDIS_PASSWORD)"
+                - ping
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: redis-data
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+{{- end }}
