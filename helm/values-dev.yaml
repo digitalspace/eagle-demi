@@ -15,7 +15,7 @@ config:
 resources:
   requests:
     cpu: "250m"
-    memory: "2Gi"
+    memory: "5Gi"    # model weights ~4.4GB + PyTorch overhead; must pre-request enough to schedule
   limits:
     cpu: "2000m"
-    memory: "6Gi"
+    memory: "8Gi"    # 4.4GB weights + ~1GB PyTorch/runtime + ~1GB inference headroom
