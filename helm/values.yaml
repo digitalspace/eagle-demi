@@ -52,6 +52,9 @@ config:
   device: "cpu"                 # DOCLING_DEVICE (cpu | cuda | mps)
   numThreads: "4"               # DOCLING_NUM_THREADS (torch CPU threads)
   numWorkers: "2"               # DOCLING_SERVE_ENG_LOC_NUM_WORKERS
+  shareModels: "false"          # DOCLING_SERVE_ENG_LOC_SHARE_MODELS — share one model copy
+                                # across all workers; set true on memory-constrained nodes
+  pageBatchSize: "4"            # DOCLING_PERF_PAGE_BATCH_SIZE — pages per inference batch
 
   # Security
   enableRemoteServices: "false" # DOCLING_SERVE_ENABLE_REMOTE_SERVICES (disable Azure/VLM)
