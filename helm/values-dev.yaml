@@ -6,11 +6,11 @@ image:
 config:
   logLevel: "DEBUG"
   maxDocumentTimeout: "280"    # CPU-only: large PDFs can take 3-4 min; must match maxSyncWait
-  numWorkers: "2"              # keep 2 workers but share models (see shareModels)
-  shareModels: "true"          # DOCLING_SERVE_ENG_LOC_SHARE_MODELS — single model copy shared
-                               # across workers: ~4.4GB instead of ~8.8GB; prevents OOMKill
-  pageBatchSize: "2"           # DOCLING_PERF_PAGE_BATCH_SIZE — lower peak memory per batch (default 4)
-  numThreads: "2"              # DOCLING_NUM_THREADS — fewer parallel CPU threads → less memory pressure
+  numWorkers: "1"              # 1 worker = only one set of page inference tensors active at once
+                               # Model still loads once (shareModels=true), no concurrency overhead
+  shareModels: "true"          # DOCLING_SERVE_ENG_LOC_SHARE_MODELS — single model copy (~4.4GB)
+  pageBatchSize: "1"           # DOCLING_PERF_PAGE_BATCH_SIZE — smallest batch, minimum peak tensor RAM
+  numThreads: "2"              # DOCLING_NUM_THREADS — fewer parallel CPU threads
 
 resources:
   requests:
