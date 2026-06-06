@@ -42,7 +42,8 @@ spec:
             - name: redis
               containerPort: {{ .Values.rq.redis.port }}
               protocol: TCP
-          env:            - name: REDIS_PASSWORD
+          env:
+            - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.rq.redis.secretName }}
@@ -80,5 +81,4 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
-      volumes: []
 {{- end }}
