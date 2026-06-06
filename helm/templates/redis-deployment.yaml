@@ -34,23 +34,19 @@ spec:
             - {{ .Values.rq.redis.port | quote }}
             - "--requirepass"
             - "$(REDIS_PASSWORD)"
+            - "--save"
+            - ""
             - "--appendonly"
-            - "yes"
-            - "--dir"
-            - "/data"
+            - "no"
           ports:
             - name: redis
               containerPort: {{ .Values.rq.redis.port }}
               protocol: TCP
-          env:
-            - name: REDIS_PASSWORD
+          env:            - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.rq.redis.secretName }}
                   key: {{ .Values.rq.redis.passwordKey }}
-          volumeMounts:
-            - name: redis-data
-              mountPath: /data
           resources:
             {{- toYaml .Values.rq.redis.resources | nindent 12 }}
           securityContext:
@@ -84,9 +80,5 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
-      volumes:
-        - name: redis-data
-          emptyDir:
-            medium: Memory
-            sizeLimit: 256Mi
+      volumes: []
 {{- end }}
