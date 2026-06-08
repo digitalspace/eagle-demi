@@ -54,10 +54,16 @@ jobs:
 
       - name: Deploy with Helm
         run: |
+          # If a previous run left the release in a pending state, roll back first.
+          STATUS=$(helm status ${{ env.HELM_RELEASE }} -n ${{ env.OPENSHIFT_NAMESPACE_DEV }} -o json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('info',{}).get('status',''))" 2>/dev/null || echo "")
+          if [[ "$STATUS" == "pending-upgrade" || "$STATUS" == "pending-install" ]]; then
+            echo "Release stuck in $STATUS — rolling back before upgrade"
+            helm rollback ${{ env.HELM_RELEASE }} -n ${{ env.OPENSHIFT_NAMESPACE_DEV }} || true
+          fi
           helm upgrade --install ${{ env.HELM_RELEASE }} ./helm \
             --namespace ${{ env.OPENSHIFT_NAMESPACE_DEV }} \
             --values ./helm/values-dev.yaml \
-            --wait --timeout=10m
+            --wait --timeout=10m --cleanup-on-fail
 
       - name: Verify deployment
         run: |
