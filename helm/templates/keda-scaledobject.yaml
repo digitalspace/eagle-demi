@@ -1,0 +1,40 @@
+{{- if and .Values.rq.enabled .Values.keda.enabled }}
+# KEDA scale-to-zero for the docling-serve rq-worker.
+# Scales on the length of the Redis list that RQ enqueues conversion tasks onto.
+# Requires the keda.sh CRDs in the namespace (verify: oc get scaledobjects.keda.sh).
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: eagle-demi-redis-auth
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: password
+      name: {{ .Values.rq.redis.secretName }}
+      key: {{ .Values.keda.passwordSecretKey }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: eagle-demi-worker
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: eagle-demi-worker
+  minReplicaCount: {{ .Values.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  triggers:
+    - type: redis
+      metadata:
+        address: {{ printf "%s:%v" .Values.rq.redis.host .Values.rq.redis.port | quote }}
+        listName: {{ .Values.keda.listName | quote }}
+        listLength: {{ .Values.keda.listLength | quote }}
+        enableTLS: "false"
+        databaseIndex: "0"
+      authenticationRef:
+        name: eagle-demi-redis-auth
+{{- end }}

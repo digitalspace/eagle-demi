@@ -44,12 +44,17 @@ config:
   # Processing limits
   maxFileSize: "104857600"      # DOCLING_SERVE_MAX_FILE_SIZE (bytes; 100 MB = 104857600)
   maxDocumentTimeout: "300"     # DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT (seconds; 5 min)
-  maxNumPages: "500"            # DOCLING_SERVE_MAX_NUM_PAGES (0 = unlimited)
+  maxNumPages: "1000"           # DOCLING_SERVE_MAX_NUM_PAGES — per-request page cap.
+                                # NOT "0": in docling v1.21.0, 0 rejects every doc as
+                                # exceeding the limit ("is not valid"). Node pre-splits
+                                # PDFs to <=10 pages, so any value >=10 is sufficient.
   maxSyncWait: "280"            # DOCLING_SERVE_MAX_SYNC_WAIT (seconds)
                                 # Must be < eagle-api AbortSignal.timeout (300s)
 
   # Engine tuning
   device: "cpu"                 # DOCLING_DEVICE (cpu | cuda | mps)
+  defaultOcrEngine: "rapidocr"  # DOCLING_SERVE_DEFAULT_OCR_ENGINE (rapidocr | tesseract)
+                                # RapidOCR = PP-OCR ONNX models, CPU-friendly, bundled in image
   numThreads: "4"               # DOCLING_NUM_THREADS (torch CPU threads)
   numWorkers: "2"               # DOCLING_SERVE_ENG_LOC_NUM_WORKERS
   shareModels: "false"          # DOCLING_SERVE_ENG_LOC_SHARE_MODELS — share one model copy
@@ -207,3 +212,24 @@ worker:
     MIN_CHUNK_SIZE:   "100"
     OVERLAP_SIZE:     "200"
     BATCH_SIZE:       "50"
+
+# ---------------------------------------------------------------------------
+# KEDA autoscaling for rq-worker (scale-to-zero on idle).
+# Disabled by default; enable per-env ONLY where the keda.sh CRDs are installed
+# (verify: `oc get scaledobjects.keda.sh -n <namespace>`).
+# When enabled, KEDA owns the worker replica count — the static replicas field
+# on the worker Deployment is omitted so the two don't fight.
+# ---------------------------------------------------------------------------
+keda:
+  enabled: false
+  minReplicaCount: 0
+  maxReplicaCount: 1
+  pollingInterval: 15            # seconds between queue-length checks
+  cooldownPeriod: 300            # seconds idle before scaling back to zero
+  # Redis list that docling-serve RQ enqueues conversion tasks onto.
+  # Confirmed from worker logs ("*** Listening on convert...") — queue is "convert",
+  # stored as the Redis list "rq:queue:convert".
+  listName: "rq:queue:convert"
+  listLength: "1"               # target backlog per replica (scale up past this)
+  # Redis password pulled from the existing rq.redis secret via TriggerAuthentication
+  passwordSecretKey: "REDIS_PASSWORD"

@@ -13,7 +13,10 @@ metadata:
     {{- include "eagle-demi.labels" . | nindent 4 }}
     app.kubernetes.io/component: rq-worker
 spec:
+  {{- if not .Values.keda.enabled }}
+  # When KEDA is enabled it owns the replica count (scale-to-zero); omit here.
   replicas: {{ .Values.rq.worker.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: eagle-demi-worker
@@ -73,6 +76,10 @@ spec:
               value: {{ .Values.rq.worker.numThreads | quote }}
             - name: DOCLING_DEVICE
               value: {{ .Values.config.device | quote }}
+            # OCR engine — worker runs inference in RQ mode, so this is the
+            # env that actually selects the engine (RapidOCR).
+            - name: DOCLING_SERVE_DEFAULT_OCR_ENGINE
+              value: {{ .Values.config.defaultOcrEngine | quote }}
 
             # --- Observability ---
             - name: DOCLING_SERVE_LOG_FORMAT
@@ -91,4 +98,12 @@ spec:
             capabilities:
               drop:
                 - ALL
+          volumeMounts:
+            # Scratch for staged page-batch files; ephemeral, bounded.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.rq.worker.tmpSizeLimit | default "2Gi" }}
 {{- end }}

@@ -51,6 +51,10 @@ spec:
             # --- Engine tuning ---
             - name: DOCLING_DEVICE
               value: {{ .Values.config.device | quote }}
+            # OCR engine default (RapidOCR). In RQ mode the worker runs OCR, but
+            # set here too for non-RQ (local) fallback consistency.
+            - name: DOCLING_SERVE_DEFAULT_OCR_ENGINE
+              value: {{ .Values.config.defaultOcrEngine | quote }}
             {{- if eq .Values.engine.kind "rq" }}
             # RQ engine — API pod dispatches to Redis; no model loading needed
             - name: DOCLING_SERVE_ENG_KIND

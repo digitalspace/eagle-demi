@@ -14,16 +14,26 @@ engine:
 rq:
   enabled: true
   worker:
-    replicas: 1                # 1 worker in dev (no concurrency needed)
+    replicas: 1                # ignored when keda.enabled (KEDA owns replicas)
     resources:
       requests:
-        cpu: "250m"
+        cpu: "250m"            # low request fits namespace requests.cpu quota
         memory: "5Gi"          # model weights ~4.4GB must be pre-requested to schedule correctly
       limits:
-        cpu: "2000m"
-        memory: "8Gi"          # 4.4GB model + runtime + inference headroom
+        cpu: "3000m"           # burst on spare node CPU; limits don't count against requests.cpu quota
+        memory: "6Gi"          # 4.4GB model + RapidOCR ONNX + in-mem PDF batch buffer
     queueMaxSize: "4"          # cap preprocess lookahead — limits RAM from staged page bitmaps
     pageBatchSize: "1"         # 1 page per inference pass — minimum peak tensor RAM
+    tmpSizeLimit: "2Gi"        # emptyDir scratch for staged page-batch files
+
+# KEDA: CRDs are installed in 6cdc9e-dev but no operator reconciles ScaledObjects
+# (conditions stay Ready=Unknown, no HPA created). Left disabled until the KEDA
+# operator is confirmed running in the namespace — worker then runs pinned at
+# replicas: 1 (250m req fits dev quota). Flip to true once KEDA reconciles.
+keda:
+  enabled: false
+  minReplicaCount: 0
+  maxReplicaCount: 1
 
 # API pod — NO models loaded in RQ mode; lightweight HTTP + Redis client only
 resources:

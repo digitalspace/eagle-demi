@@ -22,9 +22,13 @@
 
 // Node 20+ provides fetch, FormData, Blob as globals — no import needed.
 const { MongoClient, ObjectId } = require('mongodb');
+const { PDFDocument } = require('pdf-lib');
 const Minio  = require('minio');
 const config = require('./config');
 const { chunkMarkdown } = require('./chunker');
+
+// Pages per batch when pre-splitting large PDFs (caps peak worker memory)
+const BATCH_PAGES = parseInt(process.env.DEMI_BATCH_PAGES || '10', 10);
 
 // File extensions handled by docling-serve
 const SUPPORTED_EXTENSIONS = new Set([
@@ -35,11 +39,11 @@ const SUPPORTED_EXTENSIONS = new Set([
   'xlsx', 'XLSX', '.xlsx', '.XLSX',
 ]);
 
-// Only process published, non-deleted documents
+// Only process non-deleted documents accessible to public or staff
 const BASE_FILTER = {
   _schemaName: 'Document',
   isDeleted:   { $ne: true },
-  read:        'public',
+  read:        { $in: ['public', 'staff'] },
 };
 
 // ── MongoDB helpers ───────────────────────────────────────────────────────────
@@ -145,6 +149,51 @@ async function extractWithDocling(buffer, filename) {
   }
 }
 
+/**
+ * Extract markdown from a file, pre-splitting large PDFs into BATCH_PAGES-page
+ * batches sent to docling-serve one at a time so peak memory stays bounded
+ * regardless of document size. Non-PDF inputs (and PDFs pdf-lib cannot parse)
+ * are sent whole. Batch markdown is concatenated in page order.
+ * @param {Buffer} buffer
+ * @param {string} filename
+ * @returns {Promise<string>}
+ */
+async function splitAndExtract(buffer, filename) {
+  const isPdf = /\.pdf$/i.test(filename);
+  if (!isPdf) return extractWithDocling(buffer, filename);
+
+  let srcPdf;
+  try {
+    srcPdf = await PDFDocument.load(buffer, { ignoreEncryption: true });
+  } catch (err) {
+    // Unparseable PDF — fall back to whole-file send
+    console.warn(`    pdf-lib parse failed (${err.message}); sending whole file`);
+    return extractWithDocling(buffer, filename);
+  }
+
+  const pageCount = srcPdf.getPageCount();
+  if (pageCount <= BATCH_PAGES) return extractWithDocling(buffer, filename);
+
+  const totalBatches = Math.ceil(pageCount / BATCH_PAGES);
+  const baseName = filename.replace(/\.[^.]+$/, '');
+  const parts = [];
+
+  for (let b = 0; b < totalBatches; b++) {
+    const start = b * BATCH_PAGES;
+    const end = Math.min(start + BATCH_PAGES, pageCount);
+    const indices = Array.from({ length: end - start }, (_, i) => start + i);
+
+    const batchDoc = await PDFDocument.create();
+    const copied = await batchDoc.copyPages(srcPdf, indices);
+    copied.forEach((p) => batchDoc.addPage(p));
+    const batchBuf = Buffer.from(await batchDoc.save());
+
+    const md = await extractWithDocling(batchBuf, `${baseName}-batch${b + 1}.pdf`);
+    parts.push(md);
+  }
+  return parts.join('\n\n');
+}
+
 // ── Chunk persistence ─────────────────────────────────────────────────────────
 
 /**
@@ -204,7 +253,7 @@ async function processDocument(db, minioClient, doc, projectLookup, listLookup) 
   try {
     const buffer   = await downloadFromMinio(minioClient, objectPath);
     const filename = doc.documentFileName || objectPath.split('/').pop() || 'document';
-    const markdown = await extractWithDocling(buffer, filename);
+    const markdown = await splitAndExtract(buffer, filename);
     const chunks   = chunkMarkdown(markdown);
 
     const projectName = doc.project ? projectLookup.get(doc.project.toString()) : undefined;
