@@ -54,12 +54,23 @@ async function getDb(client) {
 
 /**
  * Build id→name lookup for Projects so chunks get a denormalised projectName.
+ * Projects store their name in different fields depending on legislation.
  */
 async function buildProjectLookup(db) {
   const projects = await db.collection('epic')
-    .find({ _schemaName: 'Project' }, { projection: { _id: 1, name: 1 } })
+    .find({ _schemaName: 'Project' }, { projection: {
+      _id: 1, name: 1, displayName: 1,
+      currentLegislationYear: 1,
+      legislation_2018: 1, legislation_2002: 1, legislation_1996: 1
+    }})
     .toArray();
-  return new Map(projects.map(p => [p._id.toString(), p.name || '']));
+
+  return new Map(projects.map(p => {
+    const legKey = p.currentLegislationYear || 'legislation_2018';
+    const leg = p[legKey] || p.legislation_2018 || p.legislation_2002 || p.legislation_1996 || {};
+    const name = leg.name || leg.shortName || p.name || p.displayName || '';
+    return [p._id.toString(), name];
+  }));
 }
 
 /**
@@ -211,7 +222,9 @@ async function replaceChunks(db, docId, doc, pageChunks, projectName, listLookup
   const records = pageChunks.map(({ pageNumber, chunkIndex, content }) => ({
     _schemaName:  'DocumentChunk',
     document:     new ObjectId(docId),
+    documentId:   docId,
     project:      doc.project || undefined,
+    projectId:    doc.project ? doc.project.toString() : undefined,
     pageNumber,
     chunkIndex,
     content,
@@ -323,17 +336,18 @@ async function main() {
 
     // ── Process in batches ──────────────────────────────────────────────────
     const minio = getMinioClient();
-    const docs  = await col.find(filter, {
+    const cursor = col.find(filter, {
       projection: {
         _id: 1, internalURL: 1, project: 1,
         displayName: 1, documentFileName: 1,
         type: 1, milestone: 1, datePosted: 1, read: 1,
       },
-    }).toArray();
+    });
 
     let ok = 0, errors = 0, skipped = 0;
 
-    for (const doc of docs) {
+    while (await cursor.hasNext()) {
+      const doc = await cursor.next();
       const result = await processDocument(db, minio, doc, projectLookup, listLookup);
       if (result.status === 'ok')      { ok++;      console.log(`  ✓ ${result.docId} — ${result.chunks} chunks`); }
       else if (result.status === 'skipped') { skipped++; console.log(`  - ${result.docId} — skipped: ${result.reason}`); }
