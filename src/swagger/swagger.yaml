@@ -1,0 +1,199 @@
+openapi: 3.0.3
+info:
+  title: DEMI Central Repository API (demi-api)
+  description: Central authoritative storage and spatial search engine for projects, documents, and administrative region boundaries.
+  version: 1.0.0
+paths:
+  /api/projects:
+    get:
+      summary: Retrieve projects
+      description: Get all projects, optionally filtered by spatial administrative region containment.
+      parameters:
+        - name: region
+          in: query
+          required: false
+          description: Name of the region shapefile boundary to execute point-in-polygon containment check.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A list of projects.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+    post:
+      summary: Create project
+      description: Ingest a new project with name and geographic centroid coordinates.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectInput'
+      responses:
+        '201':
+          description: Project successfully created.
+        '400':
+          description: Missing required fields.
+        '401':
+          description: Unauthorized.
+
+  /api/projects/{id}:
+    get:
+      summary: Get project by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Project document.
+        '404':
+          description: Project not found.
+
+  /api/documents:
+    get:
+      summary: Retrieve documents
+      description: Get all documents, optionally filtered by spatial administrative region of their parent project.
+      parameters:
+        - name: region
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A list of documents.
+    post:
+      summary: Create document
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentInput'
+      responses:
+        '201':
+          description: Document successfully created.
+
+  /api/regions:
+    get:
+      summary: Retrieve regions
+      responses:
+        '200':
+          description: List of region boundary shapes.
+    post:
+      summary: Ingest administrative region shape
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegionInput'
+      responses:
+        '201':
+          description: Region shapefile stored successfully.
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+
+  schemas:
+    Project:
+      type: object
+      properties:
+        _id:
+          type: string
+        trackProjectId:
+          type: integer
+        name:
+          type: string
+        region:
+          type: string
+        centroid:
+          $ref: '#/components/schemas/GeoPoint'
+    
+    ProjectInput:
+      type: object
+      required:
+        - trackProjectId
+        - name
+        - centroid
+      properties:
+        trackProjectId:
+          type: integer
+        name:
+          type: string
+        region:
+          type: string
+        centroid:
+          $ref: '#/components/schemas/GeoPoint'
+
+    DocumentInput:
+      type: object
+      required:
+        - project
+        - displayName
+        - s3Key
+      properties:
+        project:
+          type: string
+        displayName:
+          type: string
+        s3Key:
+          type: string
+        region:
+          type: string
+        edrmsRecordNumber:
+          type: string
+        orcsClassification:
+          type: string
+
+    RegionInput:
+      type: object
+      required:
+        - name
+        - geometry
+      properties:
+        name:
+          type: string
+        geometry:
+          type: object
+          properties:
+            type:
+              type: string
+              enum: [Polygon, MultiPolygon]
+            coordinates:
+              type: array
+              items:
+                type: array
+
+    GeoPoint:
+      type: object
+      required:
+        - type
+        - coordinates
+      properties:
+        type:
+          type: string
+          enum: [Point]
+        coordinates:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: number

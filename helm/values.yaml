@@ -166,7 +166,7 @@ worker:
   enabled: true
 
   image:
-    repository: ghcr.io/digitalspace/eagle-demi-worker
+    repository: ghcr.io/digitalspace/eagle-demi-api
     tag: "latest"
     pullPolicy: Always
 
@@ -214,6 +214,35 @@ worker:
     BATCH_SIZE:       "50"
 
 # ---------------------------------------------------------------------------
+# Central DEMI Express API (demi-api)
+# Runs app.js/server.js — connects to Central MongoDB and handles spatial/CRUD.
+# ---------------------------------------------------------------------------
+api:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/digitalspace/eagle-demi-api
+    tag: "latest"
+    pullPolicy: Always
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  route:
+    enabled: true
+    host: ""
+    path: ""
+    tls:
+      termination: "edge"
+      insecureEdgeTerminationPolicy: "Redirect"
+
+# ---------------------------------------------------------------------------
 # KEDA autoscaling for rq-worker (scale-to-zero on idle).
 # Disabled by default; enable per-env ONLY where the keda.sh CRDs are installed
 # (verify: `oc get scaledobjects.keda.sh -n <namespace>`).
@@ -233,3 +262,4 @@ keda:
   listLength: "1"               # target backlog per replica (scale up past this)
   # Redis password pulled from the existing rq.redis secret via TriggerAuthentication
   passwordSecretKey: "REDIS_PASSWORD"
+

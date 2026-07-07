@@ -1,0 +1,26 @@
+{{- if and .Values.api.enabled .Values.api.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "eagle-demi.fullname" . }}-api
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  {{- if .Values.api.route.host }}
+  host: {{ .Values.api.route.host }}
+  {{- end }}
+  {{- if .Values.api.route.path }}
+  path: {{ .Values.api.route.path }}
+  {{- end }}
+  port:
+    targetPort: http
+  tls:
+    termination: {{ .Values.api.route.tls.termination | default "edge" }}
+    insecureEdgeTerminationPolicy: {{ .Values.api.route.tls.insecureEdgeTerminationPolicy | default "Redirect" }}
+  to:
+    kind: Service
+    name: {{ include "eagle-demi.fullname" . }}-api
+    weight: 100
+  wildcardPolicy: None
+{{- end }}

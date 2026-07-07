@@ -1,8 +1,35 @@
 # eagle-demi
 
-DEMI (Document Extraction & Machine Intelligence) for EPIC. Deploys `docling-serve` as a cluster-internal PDF/DOCX extraction endpoint. Called by eagle-api on document upload; no custom application code — pure Helm deployment of the official upstream image.
+DEMI (Document Extraction & Machine Intelligence) for EPIC. 
 
-## Quick Start
+This repository houses:
+1. **demi-api**: The central, authoritative REST API and geospatial search engine for projects, documents, and administrative boundaries.
+2. **eagle-demi-worker**: Background worker calling `docling-serve` (running as a cluster-internal PDF/DOCX extraction service) to parse page-level chunks.
+
+---
+
+## Central API Server (demi-api)
+
+The Express server acts as the master directory of truth. It manages projects, documents, and administrative regions with native geospatial MongoDB queries.
+
+### Setup and Local Execution
+
+1. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+2. Start the API Server locally (runs on port `5001` by default):
+   ```bash
+   npm start
+   ```
+
+3. View Swagger API documentation:
+   * **URL**: `http://localhost:5001/api-docs`
+
+---
+
+## Quick Start (Extraction Service Deployment)
 
 **Prerequisites:** Create the API key secret in each namespace before deploying:
 
@@ -23,14 +50,16 @@ helm upgrade --install eagle-demi ./helm \
 
 **Deploy to test/prod:** Use the GitHub Actions `workflow_dispatch` workflows in `.github/workflows/`.
 
+---
+
 ## Architecture
 
-- Image: `ghcr.io/docling-project/docling-serve-cpu:v1.21.0`
-- Port: `5001` (ClusterIP only — not exposed externally)
-- Auth: `X-Api-Key` header from `eagle-demi-api-key` OpenShift Secret
-- NetworkPolicy restricts ingress to eagle-api pods (`role: api-eagle-epic`) only
+- **API Port**: `5001` (ClusterIP only — not exposed externally)
+- **Auth**: `X-Api-Key` header verified against `eagle-demi-api-key` OpenShift Secret for mutations (POST, PUT, DELETE).
+- **Geospatial Order**: MongoDB GeoJSON requires `[longitude, latitude]`. Downstream sync engines automatically swap coordinates to `[latitude, longitude]` when feeding search indexes like Typesense.
+- **NetworkPolicy** restricts ingress to eagle-api pods (`role: api-eagle-epic`) only.
 
-eagle-api calls `http://eagle-demi:5001/v1/convert/file` on document upload, stores extracted text as `DocumentChunk` records in MongoDB, and eagle-typesense syncs those to the `document_chunks` Typesense collection.
+---
 
 ## Configuration
 
@@ -44,9 +73,12 @@ All tunable limits live in `helm/values.yaml` — override per environment in `h
 | `config.numThreads` | `4` | Torch CPU threads |
 | `config.numWorkers` | `2` | Engine worker processes |
 
+---
+
 ## Related Repositories
 
-- [eagle-api](https://github.com/bcgov/eagle-api) — Calls eagle-demi on upload
-- [eagle-typesense](https://github.com/digitalspace/eagle-typesense) — Syncs DocumentChunks to Typesense
+- [eagle-api](https://github.com/bcgov/eagle-api) — Reads read-only cached project/document entries
+- [eagle-typesense](https://github.com/digitalspace/eagle-typesense) — Syncs DocumentChunks from MongoDB to Typesense
 - [eagle-dev-guides.wiki](https://github.com/bcgov/eagle-dev-guides/wiki) — Architecture docs
+
 

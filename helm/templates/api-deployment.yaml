@@ -1,0 +1,117 @@
+{{- if .Values.api.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "eagle-demi.fullname" . }}-api
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "eagle-demi.fullname" . }}-api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "eagle-demi.fullname" . }}-api
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        role: demi-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: demi-api
+          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 5001
+              protocol: TCP
+          env:
+            # --- MongoDB ---
+            - name: MONGODB_HOST
+              value: {{ .Values.worker.env.MONGODB_HOST | quote }}
+            - name: MONGODB_PORT
+              value: {{ .Values.worker.env.MONGODB_PORT | quote }}
+            - name: MONGODB_DATABASE
+              value: {{ .Values.worker.env.MONGODB_DATABASE | quote }}
+            - name: MONGODB_AUTHSOURCE
+              value: {{ .Values.worker.env.MONGODB_AUTHSOURCE | quote }}
+            - name: MONGODB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.worker.mongoSecret.name }}
+                  key: {{ .Values.worker.mongoSecret.usernameKey }}
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.worker.mongoSecret.name }}
+                  key: {{ .Values.worker.mongoSecret.passwordKey }}
+
+            # --- MinIO ---
+            - name: MINIO_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.worker.minioSecret.name }}
+                  key: {{ .Values.worker.minioSecret.hostKey }}
+            - name: MINIO_PORT
+              value: {{ .Values.worker.env.MINIO_PORT | quote }}
+            - name: MINIO_USE_SSL
+              value: {{ .Values.worker.env.MINIO_USE_SSL | quote }}
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.worker.minioSecret.name }}
+                  key: {{ .Values.worker.minioSecret.accessKeyKey }}
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.worker.minioSecret.name }}
+                  key: {{ .Values.worker.minioSecret.secretKeyKey }}
+            - name: MINIO_BUCKET_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.worker.minioSecret.name }}
+                  key: {{ .Values.worker.minioSecret.bucketKey }}
+
+            # --- Docling Service (Python) ---
+            - name: DOCLING_URL
+              value: {{ .Values.worker.env.DOCLING_URL | quote }}
+            - name: DOCLING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.apiKeySecret.name }}
+                  key: {{ .Values.apiKeySecret.key }}
+
+            # --- API Port ---
+            - name: PORT
+              value: "5001"
+
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          livenessProbe:
+            httpGet:
+              path: /api/projects
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/projects
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+{{- end }}

@@ -1,19 +1,27 @@
 {
   "name": "eagle-demi",
   "version": "1.0.0",
-  "description": "DEMI extraction worker — bulk-extracts document content via docling-serve into MongoDB DocumentChunks",
-  "main": "src/extract.js",
+  "description": "DEMI central repository and extraction worker API",
+  "main": "src/server.js",
   "scripts": {
+    "start": "node src/server.js",
     "extract": "node src/extract.js",
     "extract:retry": "node src/extract.js --retry-failed",
-    "extract:doc": "node src/extract.js --doc-id"
+    "extract:doc": "node src/extract.js --doc-id",
+    "test": "node --test test/**/*.test.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "helmet": "^7.1.0",
     "minio": "^7.0.8",
-    "mongodb": "^6.5.0",
-    "pdf-lib": "^1.17.1"
+    "mongodb": "^7.0.0",
+    "mongoose": "^9.3.2",
+    "pdf-lib": "^1.17.1",
+    "swagger-ui-express": "^5.0.1",
+    "yamljs": "^0.3.0"
   }
 }

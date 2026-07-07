@@ -3,7 +3,7 @@
 # =============================================================================
 # Manual workflow — triggered via workflow_dispatch with an image version tag.
 # Requires GitHub environment "production" approval gate before deploying.
-# No Docker build — uses upstream ghcr.io/docling-project/docling-serve-cpu.
+# Deploys/upgrades the custom Node.js api and worker image release.
 # =============================================================================
 
 name: Deploy to Prod
@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'docling-serve image tag to deploy (e.g. v1.21.0)'
+        description: 'eagle-demi Node image version tag to deploy (e.g. v2.5.7)'
         required: true
-        default: 'v1.21.0'
+        default: 'v2.5.7'
 
 concurrency:
   group: deploy-prod
@@ -58,13 +58,14 @@ jobs:
           helm upgrade --install ${{ env.HELM_RELEASE }} ./helm \
             --namespace ${{ env.OPENSHIFT_NAMESPACE_PROD }} \
             --values ./helm/values-prod.yaml \
-            --set image.tag=${{ github.event.inputs.version }} \
+            --set api.image.tag=${{ github.event.inputs.version }} \
+            --set worker.image.tag=${{ github.event.inputs.version }} \
             --wait --timeout=10m
 
       - name: Verify deployment
         run: |
-          echo "Verifying eagle-demi deployment..."
-          oc rollout status deployment/${{ env.HELM_RELEASE }} \
+          echo "Verifying eagle-demi-api deployment..."
+          oc rollout status deployment/${{ env.HELM_RELEASE }}-api \
             -n ${{ env.OPENSHIFT_NAMESPACE_PROD }} --timeout=10m
           echo "✓ eagle-demi healthy"
 

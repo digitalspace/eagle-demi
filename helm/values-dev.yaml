@@ -52,3 +52,17 @@ probes:
     periodSeconds: 5
     timeoutSeconds: 5
     failureThreshold: 12       # 1-minute budget (was 10 min for model loading)
+
+# Node.js API and Worker overrides to use GHCR Docker image
+api:
+  image:
+    repository: ghcr.io/digitalspace/eagle-demi-api
+    tag: latest
+    pullPolicy: Always
+
+worker:
+  image:
+    repository: ghcr.io/digitalspace/eagle-demi-api
+    tag: latest
+    pullPolicy: Always
+
