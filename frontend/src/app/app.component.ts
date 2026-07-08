@@ -527,14 +527,18 @@ export class AppComponent implements OnInit {
         projParams += `&and[sector]=${encodeURIComponent(sector)}`;
       }
 
-      const resProj = await fetch(`${basePath}/search?${projParams}`);
+      const resProj = await fetch(`${basePath}/search?${projParams}`, {
+        headers: { 'X-Api-Key': 'eagle-demi-api-key' }
+      });
       if (!resProj.ok) throw new Error(`Projects API returned status ${resProj.status}`);
       const apiProjects = await resProj.json();
 
       let resultsDoc = [];
       if (q) {
         let docParams = `dataset=Document&pageSize=100&keywords=${encodeURIComponent(q)}&fuzzy=true`;
-        const resDoc = await fetch(`${basePath}/search?${docParams}`);
+        const resDoc = await fetch(`${basePath}/search?${docParams}`, {
+          headers: { 'X-Api-Key': 'eagle-demi-api-key' }
+        });
         if (!resDoc.ok) throw new Error(`Documents API returned status ${resDoc.status}`);
         const apiDocuments = await resDoc.json();
         resultsDoc = apiDocuments[0]?.searchResults || [];
