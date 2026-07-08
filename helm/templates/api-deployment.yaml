@@ -41,6 +41,8 @@ spec:
               value: {{ .Values.worker.env.MONGODB_DATABASE | quote }}
             - name: MONGODB_AUTHSOURCE
               value: {{ .Values.worker.env.MONGODB_AUTHSOURCE | quote }}
+            - name: MONGODB_DIRECT
+              value: "true"
             - name: MONGODB_USERNAME
               valueFrom:
                 secretKeyRef:
