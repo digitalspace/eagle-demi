@@ -50,8 +50,8 @@ async function run() {
       if (project) {
         matchedCount++;
 
-        // Prepare metadata block
         const metadata = {
+          ...(project.metadata || {}),
           description: trackProj.description || '',
           address: trackProj.address || '',
           abbreviation: trackProj.abbreviation || '',
@@ -59,7 +59,8 @@ async function run() {
           sub_type_name: trackProj.sub_type_name || '',
           type_name: trackProj.type_name || '',
           project_state_name: trackProj.project_state_name || '',
-          is_active_in_track: trackProj.is_active
+          is_active_in_track: trackProj.is_active,
+          trackAttributes: trackProj
         };
 
         // Align trackProjectId and metadata fields

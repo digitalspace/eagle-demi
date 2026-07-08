@@ -33,3 +33,11 @@ Document Extraction & Machine Intelligence for EPIC.
 - **Read Controller Gating**: GET API routes (`getProjects`, `getProject`, `getDocuments`, `getDocument`) check for administrative credentials (`X-Api-Key`):
   - Requests without the key (public users) are dynamically filtered to return only `isPublished: true` projects and documents whose parent projects are published.
   - Authenticated administrative/internal requests bypass all publication filters.
+
+## Self-Contained Search & Typesense Indexing Architecture
+
+- **Standalone Search Service**: `eagle-demi` handles its own search independently of `eagle-api` or external indexing services.
+- **Embedded Ingest Watcher**: The Typesense Change Stream indexer and full-sync engine are copied into `/src/typesense`.
+- **Automatic Daemon Startup**: The Change Stream sync watcher is loaded on server startup in `src/server.js` and runs in the background. It is skipped when `NODE_ENV === 'test'` to prevent test suites from trying to connect to mock databases.
+- **Direct Frontend Integration**: Frontend default `basePath` in `app.component.ts` points to `/api` (instead of `/api/demi`) so that it communicates natively on the same host (port 5001). No CORS configuration or complex proxy definitions are needed.
+- **Zero Ecosystem Changes**: `eagle-api` and `eagle-typesense` are kept completely untouched and clean. All search, ingestion, indexing, and presentation code remains 100% inside `eagle-demi`.

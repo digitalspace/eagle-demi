@@ -26,7 +26,7 @@ test('Spatial Controller Tests', async (t) => {
       return mockProjects;
     });
 
-    const req = { query: {} };
+    const req = { query: {}, header: (name) => name === 'X-Api-Key' ? 'eagle-demi-api-key' : null };
     let jsonResponse;
     const res = {
       json: (data) => {
@@ -47,7 +47,7 @@ test('Spatial Controller Tests', async (t) => {
       return null;
     });
 
-    const req = { query: { region: 'NonexistentRegion' } };
+    const req = { query: { region: 'NonexistentRegion' }, header: () => null };
     let statusCode;
     let jsonResponse;
     const res = {
@@ -103,7 +103,7 @@ test('Spatial Controller Tests', async (t) => {
       return mockFilteredProjects;
     });
 
-    const req = { query: { region: regionName } };
+    const req = { query: { region: regionName }, header: (name) => name === 'X-Api-Key' ? 'eagle-demi-api-key' : null };
     let jsonResponse;
     const res = {
       json: (data) => {
@@ -124,7 +124,7 @@ test('Spatial Controller Tests', async (t) => {
       throw new Error(errorMsg);
     });
 
-    const req = { query: { region: 'AnyRegion' } };
+    const req = { query: { region: 'AnyRegion' }, header: () => null };
     let statusCode;
     let jsonResponse;
     const res = {

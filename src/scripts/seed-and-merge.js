@@ -155,7 +155,11 @@ async function run() {
           type: 'Point',
           coordinates: coords
         },
-        metadata: metadata,
+        metadata: {
+          ...metadata,
+          trackAttributes: matchedTrack || {},
+          eagleAttributes: legProj
+        },
         isPublished: isPublished,
         createdAt: legProj._createdDate || new Date(),
         updatedAt: legProj._updatedDate || new Date()
@@ -194,7 +198,9 @@ async function run() {
             sub_type_name: tp.sub_type_name || '',
             type_name: tp.type_name || '',
             project_state_name: tp.project_state_name || '',
-            is_active_in_track: tp.is_active
+            is_active_in_track: tp.is_active,
+            trackAttributes: tp,
+            eagleAttributes: {}
           },
           isPublished: false, // Track-only projects are pre-public drafts by definition
           createdAt: new Date(),

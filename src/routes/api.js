@@ -7,6 +7,10 @@ const authMiddleware = require('../middleware/auth');
 const projectController = require('../controllers/project');
 const documentController = require('../controllers/document');
 const regionController = require('../controllers/region');
+const searchController = require('../controllers/search');
+
+// Search Route
+router.get('/search', searchController.search);
 
 // Projects Routes
 router.get('/projects', projectController.getProjects);
