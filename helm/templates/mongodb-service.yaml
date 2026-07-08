@@ -1,0 +1,15 @@
+{{- if .Values.mongodb.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.mongodb.secretName }}
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+spec:
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: 27017
+  selector:
+    app.kubernetes.io/name: {{ .Values.mongodb.secretName }}
+{{- end }}

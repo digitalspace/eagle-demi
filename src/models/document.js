@@ -8,7 +8,8 @@ const DocumentSchema = new mongoose.Schema({
   s3Key: { type: String, required: true, unique: true },
   region: { type: String, default: '', index: true },
   edrmsRecordNumber: { type: String, unique: true, sparse: true, index: true },
-  orcsClassification: { type: String, default: '', index: true }
+  orcsClassification: { type: String, default: '', index: true },
+  isPublished: { type: Boolean, default: false, index: true } // Root-level security flag
 }, { timestamps: true });
 
 module.exports = mongoose.model('Document', DocumentSchema);

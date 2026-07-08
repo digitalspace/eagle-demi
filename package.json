@@ -8,6 +8,8 @@
     "extract": "node src/extract.js",
     "extract:retry": "node src/extract.js --retry-failed",
     "extract:doc": "node src/extract.js --doc-id",
+    "db:merge-track": "node src/scripts/merge-track-projects.js",
+    "db:seed-and-merge": "node src/scripts/seed-and-merge.js",
     "test": "node --test test/**/*.test.js"
   },
   "engines": {

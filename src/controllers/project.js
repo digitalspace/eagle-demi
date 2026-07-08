@@ -3,9 +3,18 @@
 const Project = require('../models/project');
 const Region = require('../models/region');
 
+// Helper to determine if the request is administrative / internal
+function isAdmin(req) {
+  const apiKey = req.header('X-Api-Key');
+  const expectedKey = process.env.DOCLING_API_KEY || 'eagle-demi-api-key';
+  return apiKey && apiKey === expectedKey;
+}
+
 exports.getProjects = async (req, res) => {
   try {
     const { region: regionName } = req.query;
+    const isAuth = isAdmin(req);
+    const baseQuery = isAuth ? {} : { isPublished: true };
 
     if (regionName) {
       const regionDoc = await Region.findOne({ name: regionName });
@@ -14,6 +23,7 @@ exports.getProjects = async (req, res) => {
       }
 
       const projects = await Project.find({
+        ...baseQuery,
         centroid: {
           $geoWithin: { $geometry: regionDoc.geometry }
         }
@@ -21,7 +31,7 @@ exports.getProjects = async (req, res) => {
       return res.json(projects);
     }
 
-    const projects = await Project.find({});
+    const projects = await Project.find(baseQuery);
     return res.json(projects);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -51,7 +61,9 @@ exports.createProject = async (req, res) => {
 exports.getProject = async (req, res) => {
   try {
     const { id } = req.params;
-    const query = isNaN(id) ? { _id: id } : { trackProjectId: Number(id) };
+    const isAuth = isAdmin(req);
+    const baseQuery = isAuth ? {} : { isPublished: true };
+    const query = { ...baseQuery, ...(isNaN(id) ? { _id: id } : { trackProjectId: Number(id) }) };
 
     const project = await Project.findOne(query);
     if (!project) {

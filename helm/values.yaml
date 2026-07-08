@@ -185,9 +185,9 @@ worker:
       cpu: "500m"
       memory: "512Mi"
 
-  # MongoDB connection — must match eagle-api MongoDB secret
+  # MongoDB connection — decoupled dedicated DEMI MongoDB
   mongoSecret:
-    name: eagle-api-mongodb
+    name: eagle-demi-mongodb
     usernameKey: MONGODB_USER
     passwordKey: MONGODB_PASSWORD
 
@@ -200,10 +200,11 @@ worker:
     bucketKey: MINIO_BUCKET_NAME
 
   env:
-    MONGODB_HOST:     "eagle-api-mongodb"
+    MONGODB_HOST:     "eagle-demi-mongodb"
     MONGODB_PORT:     "27017"
-    MONGODB_DATABASE: "epic"
+    MONGODB_DATABASE: "demi"
     MONGODB_AUTHSOURCE: "admin"
+    MONGODB_DIRECT:   "true"
     MINIO_PORT:       "443"
     MINIO_USE_SSL:    "true"
     DOCLING_URL:      "http://eagle-demi:5001"
@@ -262,4 +263,35 @@ keda:
   listLength: "1"               # target backlog per replica (scale up past this)
   # Redis password pulled from the existing rq.redis secret via TriggerAuthentication
   passwordSecretKey: "REDIS_PASSWORD"
+
+# ---------------------------------------------------------------------------
+# Dedicated decoupled MongoDB Instance for DEMI (independent of Eagle!)
+# ---------------------------------------------------------------------------
+mongodb:
+  enabled: true
+  image: "image-registry.openshift-image-registry.svc:5000/6cdc9e-tools/mongodb-80:8.0"
+  imagePullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  persistence:
+    enabled: true
+    storageClass: "netapp-file-standard"
+    size: "5Gi"
+  secretName: "eagle-demi-mongodb"
+  usernameKey: "MONGODB_USER"
+  passwordKey: "MONGODB_PASSWORD"
+  databaseKey: "MONGODB_DATABASE"
+  adminPasswordKey: "MONGODB_ADMIN_PASSWORD"
+  # Default credentials
+  credentials:
+    username: "demi"
+    password: "demi_pass_123"
+    database: "demi"
+    adminPassword: "admin_pass_123"
+
 
