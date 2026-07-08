@@ -573,7 +573,7 @@ export class AppComponent implements OnInit {
             status: p.status || rawMetadata.trackAttributes?.project_state_name || 'Active',
             legacyEagleId: p._id,
             centroid: p.centroid || [-125.0, 54.0],
-            gatingState: (p.read && p.read.includes('public')) ? 'admitted' : 'staged',
+            gatingState: 'admitted',
             region: p.region || 'British Columbia',
             description: p.description || rawMetadata.trackAttributes?.description || 'No project description provided.',
             proponent: p.proponent?.name || rawMetadata.trackAttributes?.proponent_name || 'Proponent Organization',
@@ -599,7 +599,7 @@ export class AppComponent implements OnInit {
             orcsCode: d.orcsClassification || '34800-20/MOCK',
             projectId: projId,
             projectName: resolvedProjectName,
-            gatingState: (d.read && d.read.includes('public')) ? 'admitted' : 'staged',
+            gatingState: 'admitted',
             textSnippet: d.description || 'This is an extracted document from the central registry.'
           };
         });
