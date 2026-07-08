@@ -14,6 +14,7 @@ RUN yarn install --immutable
 
 # Copy source code and specs
 COPY src/ ./src/
+COPY public/ ./public/
 
 # Secure execution as non-root user
 RUN addgroup -S demi && adduser -S demi -G demi
