@@ -89,6 +89,19 @@ spec:
                   name: {{ .Values.apiKeySecret.name }}
                   key: {{ .Values.apiKeySecret.key }}
 
+            # --- Typesense Search ---
+            - name: TYPESENSE_HOST
+              value: "eagle-typesense"
+            - name: TYPESENSE_PORT
+              value: "8108"
+            - name: TYPESENSE_PROTOCOL
+              value: "http"
+            - name: TYPESENSE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: "typesense-api-key"
+                  key: "TYPESENSE_API_KEY"
+
             # --- API Port ---
             - name: PORT
               value: "5001"
