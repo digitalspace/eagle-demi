@@ -16,7 +16,7 @@ exports.search = async (req, res) => {
     const keywords = req.query.keywords || req.query.q || '';
     const fuzzy = req.query.fuzzy === 'true';
     const sectorFilter = req.query['and[sector]'] || '';
-    const pageSize = parseInt(req.query.pageSize || '10', 10);
+    const pageSize = Math.min(parseInt(req.query.pageSize || '10', 10), 250);
 
     const isAuth = isAdmin(req);
 
