@@ -76,7 +76,11 @@ exports.search = async (req, res) => {
 
       const filterBy = [];
       if (!isAuth) {
-        filterBy.push('allowed_roles:=[public]');
+        if (process.env.NODE_ENV === 'production') {
+          filterBy.push('allowed_roles:=[public]');
+        } else {
+          filterBy.push('allowed_roles:=[public, sysadmin, staff]');
+        }
       }
       if (sectorFilter && sectorFilter !== 'all') {
         filterBy.push(`sector:="${sectorFilter}"`);
@@ -186,7 +190,11 @@ exports.search = async (req, res) => {
 
       const filterBy = [];
       if (!isAuth) {
-        filterBy.push('allowed_roles:=[public]');
+        if (process.env.NODE_ENV === 'production') {
+          filterBy.push('allowed_roles:=[public]');
+        } else {
+          filterBy.push('allowed_roles:=[public, sysadmin, staff]');
+        }
       }
 
       // Query document_chunks collection collapsing by documentId!
