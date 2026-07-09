@@ -111,7 +111,7 @@ exports.search = async (req, res) => {
               _id: doc.id,
               name: doc.name || doc.displayName,
               locationDescription: doc.region,
-              centroid: doc.centroid ? [doc.centroid[1], doc.centroid[0]] : [-125.0, 54.0]
+              centroid: doc.centroid ? (doc.centroid[0] < 0 ? [doc.centroid[0], doc.centroid[1]] : [doc.centroid[1], doc.centroid[0]]) : [-125.0, 54.0]
             }
           };
 
@@ -120,7 +120,7 @@ exports.search = async (req, res) => {
             name: doc.name || doc.displayName || 'Unnamed Project',
             sector: doc.sector || 'Other',
             status: doc.status || 'Active',
-            centroid: doc.centroid ? [doc.centroid[1], doc.centroid[0]] : [-125.0, 54.0], // Swap to [lng, lat]
+            centroid: doc.centroid ? (doc.centroid[0] < 0 ? [doc.centroid[0], doc.centroid[1]] : [doc.centroid[1], doc.centroid[0]]) : [-125.0, 54.0],
             read: doc.allowed_roles || ['public'],
             region: doc.region || 'British Columbia',
             description: doc.description || 'No project description provided.',
