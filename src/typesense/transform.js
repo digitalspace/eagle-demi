@@ -262,7 +262,7 @@ function transformDocumentChunk(doc, listLookup, projectLookup, _pcpLookup, docu
     ...(resolveStrict(documentTypeRaw, listLookup)                 && { documentType: resolveStrict(documentTypeRaw, listLookup) }),
     ...(resolveStrict(milestoneRaw, listLookup)                    && { milestone:    resolveStrict(milestoneRaw, listLookup) }),
     ...(toTimestamp(doc.datePosted) !== undefined && { datePosted: toTimestamp(doc.datePosted) }),
-    ...(str(doc.documentName)        && { documentName:  str(doc.documentName) }),
+    documentName:  str(doc.documentName) || parentDoc?.displayName || parentDoc?.documentFileName || 'Untitled Document',
     ...(projectName                  && { projectName }),
     // Chunks inherit roles from parent document (doc.read stored by eagle-demi extract worker)
     allowed_roles: extractRoles(doc),
