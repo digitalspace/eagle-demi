@@ -2,6 +2,7 @@
 
 const Project = require('../models/project');
 const Document = require('../models/document');
+const mongoose = require('mongoose');
 
 // Helper to determine if the request is administrative / internal
 function isAdmin(req) {
@@ -34,20 +35,67 @@ exports.search = async (req, res) => {
           ];
         }
         const projects = await Project.find(baseQuery).limit(requestedPageSize);
-        const mapped = projects.map(p => {
-          const rawMetadata = p.metadata || {
+        const mapped = await Promise.all(projects.map(async p => {
+          let rawMetadata = p.metadata;
+          let legacyProj = null;
+
+          if (!rawMetadata || !rawMetadata.trackAttributes || !rawMetadata.trackAttributes.description) {
+            try {
+              if (mongoose.connection && mongoose.connection.db) {
+                legacyProj = await mongoose.connection.db.collection('epic').findOne({ _id: p._id });
+              }
+            } catch (err) {
+              console.error('Failed to query legacy project from epic collection:', p._id, err);
+            }
+          }
+
+          const description = p.description || 
+            rawMetadata?.trackAttributes?.description || 
+            legacyProj?.description || 
+            (legacyProj && legacyProj.currentLegislationYear && legacyProj[legacyProj.currentLegislationYear]?.description) ||
+            '';
+
+          const sector = p.sector || 
+            rawMetadata?.trackAttributes?.type_name || 
+            legacyProj?.sector || 
+            (legacyProj && legacyProj.currentLegislationYear && legacyProj[legacyProj.currentLegislationYear]?.type) ||
+            'Other';
+
+          const status = p.status || 
+            rawMetadata?.trackAttributes?.project_state_name || 
+            legacyProj?.status || 
+            (legacyProj && legacyProj.currentLegislationYear && legacyProj[legacyProj.currentLegislationYear]?.status) ||
+            'Active';
+
+          let proponentName = 'Proponent Organization';
+          if (p.proponent?.name) {
+            proponentName = p.proponent.name;
+          } else if (rawMetadata?.trackAttributes?.proponent_name) {
+            proponentName = rawMetadata.trackAttributes.proponent_name;
+          } else if (legacyProj) {
+            const legYear = legacyProj.currentLegislationYear || 'legislation_2018';
+            const legBlock = legacyProj[legYear] || {};
+            if (legBlock.proponent) {
+              try {
+                const propOrg = await mongoose.connection.db.collection('epic').findOne({ _id: legBlock.proponent });
+                if (propOrg) proponentName = propOrg.name || 'Proponent Organization';
+              } catch (e) {}
+            }
+          }
+
+          const finalMetadata = {
             trackAttributes: {
-              track_project_id: p.trackProjectId || p.id || 'N/A',
-              lead_agency: p.leadAgency || 'BC Environmental Assessment Office',
-              decision_date: p.eaDecisionDate || null,
+              track_project_id: p.trackProjectId || rawMetadata?.trackAttributes?.track_project_id || legacyProj?.trackProjectId || 'N/A',
+              lead_agency: rawMetadata?.trackAttributes?.lead_agency || legacyProj?.leadAgency || 'BC Environmental Assessment Office',
+              decision_date: rawMetadata?.trackAttributes?.decision_date || legacyProj?.eaDecisionDate || null,
               name: p.name,
-              description: p.description
+              description: description
             },
             eagleAttributes: {
               _id: p._id,
               name: p.name,
-              responsibleEPD: p.responsibleEPD || 'Project Assessment Director',
-              locationDescription: p.region || 'British Columbia',
+              responsibleEPD: rawMetadata?.eagleAttributes?.responsibleEPD || legacyProj?.responsibleEPD || 'Project Assessment Director',
+              locationDescription: p.region || rawMetadata?.eagleAttributes?.locationDescription || legacyProj?.region || 'British Columbia',
               centroid: p.centroid ? p.centroid.coordinates : [-125.0, 54.0]
             }
           };
@@ -55,16 +103,16 @@ exports.search = async (req, res) => {
           return {
             _id: p._id.toString(),
             name: p.name || 'Unnamed Project',
-            sector: p.sector || rawMetadata.trackAttributes?.type_name || 'Other',
-            status: p.status || rawMetadata.trackAttributes?.project_state_name || 'Active',
+            sector: sector,
+            status: status,
             centroid: p.centroid ? p.centroid.coordinates : [-125.0, 54.0],
             read: p.read || ['public'],
             region: p.region || 'British Columbia',
-            description: p.description || rawMetadata.trackAttributes?.description || 'No project description provided.',
-            proponent: { name: p.proponent?.name || rawMetadata.trackAttributes?.proponent_name || 'Proponent Organization' },
-            metadata: rawMetadata
+            description: description || 'No project description provided.',
+            proponent: { name: proponentName },
+            metadata: finalMetadata
           };
-        });
+        }));
 
         return res.json([{ searchResults: mapped }]);
       }
