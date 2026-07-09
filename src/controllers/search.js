@@ -180,7 +180,22 @@ exports.search = async (req, res) => {
       }
     } else if (dataset === 'Document') {
       if (!keywords) {
-        return res.json([{ searchResults: [] }]);
+        const baseQuery = isAuth ? {} : { isPublished: true };
+        const documents = await Document.find(baseQuery).limit(pageSize).sort({ createdAt: -1 });
+        const mapped = documents.map(d => {
+          return {
+            _id: d._id.toString(),
+            displayName: d.displayName || 'Untitled Document',
+            documentFileName: d.s3Key ? d.s3Key.split('/').pop() : 'document.pdf',
+            documentType: 'PDF Document',
+            orcsClassification: d.orcsClassification || '34800-20/MOCK',
+            project: d.project ? d.project.toString() : '',
+            projectName: d.displayName ? d.displayName.split(' - ')[0] : 'Associated Project',
+            description: d.displayName || 'Registry Document',
+            gatingState: 'admitted'
+          };
+        });
+        return res.json([{ searchResults: mapped }]);
       }
 
       const TYPESENSE_HOST = process.env.TYPESENSE_HOST || 'eagle-typesense';

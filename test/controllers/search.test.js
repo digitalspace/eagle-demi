@@ -117,9 +117,35 @@ test('Search Controller Tests', async (t) => {
     }
   });
 
-  await t.test('search documents returns empty array when no keywords are provided', async () => {
+  await t.test('search documents returns documents from MongoDB when no keywords are provided', async () => {
+    const mockDocuments = [
+      {
+        _id: new mongoose.Types.ObjectId('64a5f1dc2d0a9c002225f25a'),
+        displayName: 'Test Doc',
+        s3Key: 'uploads/test_doc.pdf',
+        region: 'Skeena',
+        orcsClassification: '34800-20/MOCK',
+        project: new mongoose.Types.ObjectId('64a5f1dc2d0a9c002225f25e'),
+        isPublished: true
+      }
+    ];
+
+    t.mock.method(Document, 'find', () => {
+      return {
+        limit: (limitVal) => {
+          assert.strictEqual(limitVal, 10);
+          return {
+            sort: async (sortObj) => {
+              assert.deepStrictEqual(sortObj, { createdAt: -1 });
+              return mockDocuments;
+            }
+          };
+        }
+      };
+    });
+
     const req = {
-      query: { dataset: 'Document', keywords: '' },
+      query: { dataset: 'Document', keywords: '', pageSize: '10' },
       header: () => null
     };
 
@@ -134,7 +160,10 @@ test('Search Controller Tests', async (t) => {
 
     await searchController.search(req, res);
 
-    assert.deepStrictEqual(jsonResponse, [{ searchResults: [] }]);
+    assert.ok(Array.isArray(jsonResponse));
+    assert.strictEqual(jsonResponse[0].searchResults.length, 1);
+    assert.strictEqual(jsonResponse[0].searchResults[0].displayName, 'Test Doc');
+    assert.strictEqual(jsonResponse[0].searchResults[0].documentFileName, 'test_doc.pdf');
   });
 
   await t.test('search documents queries Typesense grouped documents when keywords are provided', async () => {
