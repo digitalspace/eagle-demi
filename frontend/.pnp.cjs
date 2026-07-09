@@ -39,6 +39,7 @@ const RAW_RUNTIME_STATE =
           ["@angular/platform-browser-dynamic", "virtual:54c83f56c9e6c0bb4f9e47210a2802ad2ce73c0dfeaee394477d2ee0a14a0745f0e5159bd156b4cfd3ed9f6a7d3840bb97f2a1b5a733d384dfc0346d6e1578a9#npm:19.2.25"],\
           ["@angular/router", "virtual:54c83f56c9e6c0bb4f9e47210a2802ad2ce73c0dfeaee394477d2ee0a14a0745f0e5159bd156b4cfd3ed9f6a7d3840bb97f2a1b5a733d384dfc0346d6e1578a9#npm:19.2.25"],\
           ["@types/jasmine", "npm:5.1.15"],\
+          ["@types/proj4", "npm:2.19.0"],\
           ["demi-demo", "workspace:."],\
           ["jasmine-core", "npm:5.6.0"],\
           ["karma", "npm:6.4.4"],\
@@ -46,6 +47,7 @@ const RAW_RUNTIME_STATE =
           ["karma-coverage", "npm:2.2.1"],\
           ["karma-jasmine", "virtual:54c83f56c9e6c0bb4f9e47210a2802ad2ce73c0dfeaee394477d2ee0a14a0745f0e5159bd156b4cfd3ed9f6a7d3840bb97f2a1b5a733d384dfc0346d6e1578a9#npm:5.1.0"],\
           ["karma-jasmine-html-reporter", "virtual:54c83f56c9e6c0bb4f9e47210a2802ad2ce73c0dfeaee394477d2ee0a14a0745f0e5159bd156b4cfd3ed9f6a7d3840bb97f2a1b5a733d384dfc0346d6e1578a9#npm:2.1.0"],\
+          ["proj4", "virtual:94824720715ed0df12c161c099538aa951f3083b0a4525ff2f3c4a1d2a47111a6a65d6aad933146f8a3cd9d1c9d44ced626759a6c5f467cbb5c525c8ac35aa09#npm:2.20.9"],\
           ["rxjs", "npm:7.8.2"],\
           ["tslib", "npm:2.8.1"],\
           ["typescript", "patch:typescript@npm%3A5.7.3#optional!builtin<compat/typescript>::version=5.7.3&hash=5786d5"],\
@@ -5511,6 +5513,16 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["@types/proj4", [\
+      ["npm:2.19.0", {\
+        "packageLocation": "../../../.yarn/berry/cache/@types-proj4-npm-2.19.0-9482472071-10c0.zip/node_modules/@types/proj4/",\
+        "packageDependencies": [\
+          ["@types/proj4", "npm:2.19.0"],\
+          ["proj4", "virtual:94824720715ed0df12c161c099538aa951f3083b0a4525ff2f3c4a1d2a47111a6a65d6aad933146f8a3cd9d1c9d44ced626759a6c5f467cbb5c525c8ac35aa09#npm:2.20.9"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["@types/qs", [\
       ["npm:6.15.1", {\
         "packageLocation": "../../../.yarn/berry/cache/@types-qs-npm-6.15.1-c9a47e894d-10c0.zip/node_modules/@types/qs/",\
@@ -7124,6 +7136,7 @@ const RAW_RUNTIME_STATE =
           ["@angular/platform-browser-dynamic", "virtual:54c83f56c9e6c0bb4f9e47210a2802ad2ce73c0dfeaee394477d2ee0a14a0745f0e5159bd156b4cfd3ed9f6a7d3840bb97f2a1b5a733d384dfc0346d6e1578a9#npm:19.2.25"],\
           ["@angular/router", "virtual:54c83f56c9e6c0bb4f9e47210a2802ad2ce73c0dfeaee394477d2ee0a14a0745f0e5159bd156b4cfd3ed9f6a7d3840bb97f2a1b5a733d384dfc0346d6e1578a9#npm:19.2.25"],\
           ["@types/jasmine", "npm:5.1.15"],\
+          ["@types/proj4", "npm:2.19.0"],\
           ["demi-demo", "workspace:."],\
           ["jasmine-core", "npm:5.6.0"],\
           ["karma", "npm:6.4.4"],\
@@ -7131,6 +7144,7 @@ const RAW_RUNTIME_STATE =
           ["karma-coverage", "npm:2.2.1"],\
           ["karma-jasmine", "virtual:54c83f56c9e6c0bb4f9e47210a2802ad2ce73c0dfeaee394477d2ee0a14a0745f0e5159bd156b4cfd3ed9f6a7d3840bb97f2a1b5a733d384dfc0346d6e1578a9#npm:5.1.0"],\
           ["karma-jasmine-html-reporter", "virtual:54c83f56c9e6c0bb4f9e47210a2802ad2ce73c0dfeaee394477d2ee0a14a0745f0e5159bd156b4cfd3ed9f6a7d3840bb97f2a1b5a733d384dfc0346d6e1578a9#npm:2.1.0"],\
+          ["proj4", "virtual:94824720715ed0df12c161c099538aa951f3083b0a4525ff2f3c4a1d2a47111a6a65d6aad933146f8a3cd9d1c9d44ced626759a6c5f467cbb5c525c8ac35aa09#npm:2.20.9"],\
           ["rxjs", "npm:7.8.2"],\
           ["tslib", "npm:2.8.1"],\
           ["typescript", "patch:typescript@npm%3A5.7.3#optional!builtin<compat/typescript>::version=5.7.3&hash=5786d5"],\
@@ -9543,6 +9557,15 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["mgrs", [\
+      ["npm:1.0.0", {\
+        "packageLocation": "../../../.yarn/berry/cache/mgrs-npm-1.0.0-59b350d2cc-10c0.zip/node_modules/mgrs/",\
+        "packageDependencies": [\
+          ["mgrs", "npm:1.0.0"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["micromatch", [\
       ["npm:4.0.8", {\
         "packageLocation": "../../../.yarn/berry/cache/micromatch-npm-4.0.8-c9570e4aca-10c0.zip/node_modules/micromatch/",\
@@ -10742,6 +10765,30 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "../../../.yarn/berry/cache/process-nextick-args-npm-2.0.1-b8d7971609-10c0.zip/node_modules/process-nextick-args/",\
         "packageDependencies": [\
           ["process-nextick-args", "npm:2.0.1"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["proj4", [\
+      ["npm:2.20.9", {\
+        "packageLocation": "../../../.yarn/berry/cache/proj4-npm-2.20.9-be21de7d91-10c0.zip/node_modules/proj4/",\
+        "packageDependencies": [\
+          ["proj4", "npm:2.20.9"]\
+        ],\
+        "linkType": "SOFT"\
+      }],\
+      ["virtual:94824720715ed0df12c161c099538aa951f3083b0a4525ff2f3c4a1d2a47111a6a65d6aad933146f8a3cd9d1c9d44ced626759a6c5f467cbb5c525c8ac35aa09#npm:2.20.9", {\
+        "packageLocation": "./.yarn/__virtual__/proj4-virtual-af4b501fec/4/.yarn/berry/cache/proj4-npm-2.20.9-be21de7d91-10c0.zip/node_modules/proj4/",\
+        "packageDependencies": [\
+          ["@types/geotiff", null],\
+          ["geotiff", null],\
+          ["mgrs", "npm:1.0.0"],\
+          ["proj4", "virtual:94824720715ed0df12c161c099538aa951f3083b0a4525ff2f3c4a1d2a47111a6a65d6aad933146f8a3cd9d1c9d44ced626759a6c5f467cbb5c525c8ac35aa09#npm:2.20.9"],\
+          ["wkt-parser", "npm:1.5.5"]\
+        ],\
+        "packagePeers": [\
+          "@types/geotiff",\
+          "geotiff"\
         ],\
         "linkType": "HARD"\
       }]\
@@ -12819,6 +12866,15 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "../../../.yarn/berry/cache/wildcard-npm-2.0.1-7c6a3a3365-10c0.zip/node_modules/wildcard/",\
         "packageDependencies": [\
           ["wildcard", "npm:2.0.1"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
+    ["wkt-parser", [\
+      ["npm:1.5.5", {\
+        "packageLocation": "../../../.yarn/berry/cache/wkt-parser-npm-1.5.5-5ec4ba76eb-10c0.zip/node_modules/wkt-parser/",\
+        "packageDependencies": [\
+          ["wkt-parser", "npm:1.5.5"]\
         ],\
         "linkType": "HARD"\
       }]\

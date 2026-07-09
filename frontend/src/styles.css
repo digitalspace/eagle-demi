@@ -792,3 +792,11 @@ header {
 .region-tooltip::before {
   border-top-color: rgba(0, 51, 103, 0.9) !important;
 }
+
+/* Disable default browser focus outline squares on clicked Leaflet vector layers (polygons) */
+.leaflet-interactive:focus,
+path.leaflet-interactive:focus,
+svg.leaflet-zoom-animated:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
