@@ -50,7 +50,10 @@ export class AppComponent implements OnInit {
   searchQuery = signal<string>('');
   gatingFilter = signal<'all' | 'admitted' | 'staged'>('all');
   sectorFilter = signal<string>('all');
+  regionFilter = signal<string>('all');
   activePage = signal<'map' | 'search'>('map');
+
+  availableRegions = ['Vancouver Island', 'Lower Mainland', 'Thompson', 'Kootenay', 'Cariboo', 'Skeena', 'Omineca', 'Okanagan', 'Peace'];
 
   // Datasets (using Signals - null representing loading sentinel)
   projects = signal<Project[] | null>(null);
@@ -66,6 +69,7 @@ export class AppComponent implements OnInit {
   // Keycloak reference
   private keycloak: any = null;
   private map: any = null;
+  private regionsLayer: any = null;
   private markerClusterGroup: any = null;
   private markersMap = new Map<any, any>();
 
@@ -256,6 +260,7 @@ export class AppComponent implements OnInit {
     const query = this.searchQuery().toLowerCase();
     const gating = this.gatingFilter();
     const sector = this.sectorFilter();
+    const region = this.regionFilter();
     const role = this.currentRole();
 
     // For plain deep search view, return empty array until user starts typing
@@ -276,6 +281,16 @@ export class AppComponent implements OnInit {
       // 3. Sector filter selection
       if (sector !== 'all' && p.sector !== sector) return false;
 
+      // 3b. Region filter selection
+      if (region !== 'all') {
+        const pRegion = (p.region || '').toLowerCase();
+        const fRegion = region.toLowerCase();
+        // Allow flexible partial mapping
+        if (!pRegion.includes(fRegion) && !fRegion.includes(pRegion)) {
+          return false;
+        }
+      }
+
       // 4. Thorough free text search matching name, description, and ALL raw metadata attributes with Levenshtein typo tolerance!
       if (query) {
         const serialized = JSON.stringify(p);
@@ -290,6 +305,10 @@ export class AppComponent implements OnInit {
     const query = this.searchQuery().toLowerCase();
     const gating = this.gatingFilter();
     const role = this.currentRole();
+    
+    // Track active filtered projects to align document list with active map/region filters!
+    const projs = this.filteredProjects() || [];
+    const matchedProjectIds = new Set(projs.map(p => p.id));
 
     // For plain deep search view, return empty array until user starts typing
     if (this.activePage() === 'search' && !query) {
@@ -300,6 +319,9 @@ export class AppComponent implements OnInit {
     if (docs === null) return null;
 
     return docs.filter(d => {
+      // Unify filtering: only show documents belonging to projects that match our current filters (sector, region, etc.)
+      if (!matchedProjectIds.has(d.projectId)) return false;
+
       // 1. Role access gating
       if (role === 'public' && d.gatingState !== 'admitted') return false;
 
@@ -435,6 +457,9 @@ export class AppComponent implements OnInit {
       // Populate markers immediately on map initialization
       this.syncMarkersToMap(this.filteredProjects() || []);
 
+      // Fetch and render reprojected environmental regional boundaries GeoJSON
+      this.loadRegionalBoundaries();
+
     } catch (err) {
       console.error('Leaflet Map initialization failed:', err);
     }
@@ -445,12 +470,128 @@ export class AppComponent implements OnInit {
       if (this.map) {
         this.map.remove();
         this.map = null;
+        this.regionsLayer = null;
         this.markerClusterGroup = null;
         this.markersMap.clear();
       }
     } catch (err) {
       console.warn('Leaflet Map destruction skipped:', err);
     }
+  }
+
+  private async loadRegionalBoundaries() {
+    try {
+      const res = await fetch('/env_regional_boundaries_reprojected.geojson');
+      if (!res.ok) throw new Error('Failed to load regional boundaries GeoJSON');
+      const geojson = await res.json();
+
+      if (!this.map) return;
+
+      this.regionsLayer = L.geoJSON(geojson, {
+        style: (feature: any) => this.getRegionStyle(feature?.properties?.regionName),
+        onEachFeature: (feature: any, layer: any) => {
+          const name = feature?.properties?.regionName;
+          
+          // Tooltip on hover
+          layer.bindTooltip(`<strong>${name} Region</strong>`, { sticky: true, className: 'region-tooltip' });
+
+          // Hover events
+          layer.on({
+            mouseover: (e: any) => {
+              const ly = e.target;
+              const currentFilter = this.regionFilter();
+              if (currentFilter === 'all' || currentFilter.toLowerCase() === name.toLowerCase()) {
+                ly.setStyle({
+                  weight: 3,
+                  color: '#fcba19', // glowing gold outline
+                  fillColor: '#fcba19',
+                  fillOpacity: 0.22
+                });
+              } else {
+                ly.setStyle({
+                  weight: 2,
+                  color: '#fcba19',
+                  fillOpacity: 0.12
+                });
+              }
+              if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) {
+                ly.bringToFront();
+              }
+            },
+            mouseout: (e: any) => {
+              const ly = e.target;
+              this.regionsLayer.resetStyle(ly);
+              ly.setStyle(this.getRegionStyle(name));
+            },
+            click: (e: any) => {
+              const current = this.regionFilter();
+              if (current.toLowerCase() === name.toLowerCase()) {
+                this.setRegionFilter('all');
+              } else {
+                this.setRegionFilter(name);
+              }
+            }
+          });
+        }
+      }).addTo(this.map);
+
+      // Ensure regions layer stays under markers
+      if (this.regionsLayer) {
+        this.regionsLayer.bringToBack();
+      }
+    } catch (err) {
+      console.error('Failed to load regional boundaries:', err);
+    }
+  }
+
+  private getRegionStyle(regionName: string): any {
+    const selected = this.regionFilter();
+    const isSelected = selected !== 'all' && selected.toLowerCase() === (regionName || '').toLowerCase();
+    const hasAnySelection = selected !== 'all';
+
+    if (isSelected) {
+      return {
+        weight: 4.5,      // Extremely prominent thick border
+        color: '#fcba19',   // BC Gold highlight
+        opacity: 1.0,       // Solid border opacity
+        fillColor: '#fcba19',
+        fillOpacity: 0.14,  // Soft glowing background
+        dashArray: ''
+      };
+    }
+
+    if (hasAnySelection) {
+      return {
+        weight: 1.0,
+        color: '#38598a',
+        fillColor: '#38598a',
+        fillOpacity: 0.01,
+        dashArray: '3'
+      };
+    }
+
+    return {
+      weight: 1.5,
+      color: '#38598a', // BC Gov primary blue
+      fillColor: '#38598a',
+      fillOpacity: 0.06,
+      dashArray: ''
+    };
+  }
+
+  private updateRegionsLayerStyle() {
+    if (this.regionsLayer) {
+      this.regionsLayer.eachLayer((layer: any) => {
+        const name = layer.feature?.properties?.regionName;
+        layer.setStyle(this.getRegionStyle(name));
+      });
+    }
+  }
+
+  setRegionFilter(region: string) {
+    this.regionFilter.set(region);
+    this.updateRegionsLayerStyle();
+    this.loadData();
   }
 
   // Load datasets from Express api, falling back to rich mock data if empty/fails
