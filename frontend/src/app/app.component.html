@@ -155,30 +155,30 @@
             </div>
           </div>
         </div>
+      }
 
-        <!-- Region Filters -->
-        <div class="filter-section" style="margin-top: 0.75rem;">
-          <div class="filter-label">Environmental Region Filter</div>
-          <div class="chips-container" style="max-height: 80px; overflow-y: auto; padding-bottom: 4px;">
+      <!-- Region Filters (Shown on ALL Tabs) -->
+      <div class="filter-section" style="margin-top: 0.75rem;">
+        <div class="filter-label">Environmental Region Filter</div>
+        <div class="chips-container" style="max-height: 80px; overflow-y: auto; padding-bottom: 4px;">
+          <div 
+            class="chip" 
+            [class.active]="regionFilter() === 'all'" 
+            (click)="setRegionFilter('all')"
+          >
+            All Regions
+          </div>
+          @for (r of availableRegions; track r) {
             <div 
               class="chip" 
-              [class.active]="regionFilter() === 'all'" 
-              (click)="setRegionFilter('all')"
+              [class.active]="regionFilter() === r" 
+              (click)="setRegionFilter(r)"
             >
-              All Regions
+              {{ r }}
             </div>
-            @for (r of availableRegions; track r) {
-              <div 
-                class="chip" 
-                [class.active]="regionFilter() === r" 
-                (click)="setRegionFilter(r)"
-              >
-                {{ r }}
-              </div>
-            }
-          </div>
+          }
         </div>
-      }
+      </div>
     </div>
 
     <!-- Scrollable Results Panel -->

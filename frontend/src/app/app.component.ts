@@ -654,13 +654,9 @@ export class AppComponent implements OnInit {
       const q = this.searchQuery();
       const sector = this.sectorFilter();
 
-      // Set null sentinel loading state!
+      // Set null sentinel loading states!
       this.projects.set(null);
-      if (q) {
-        this.documents.set(null);
-      } else {
-        this.documents.set([]);
-      }
+      this.documents.set(null);
 
       let projParams = `dataset=Project&pageSize=500`;
       if (q) projParams += `&keywords=${encodeURIComponent(q)}&fuzzy=true`;
@@ -675,15 +671,17 @@ export class AppComponent implements OnInit {
       const apiProjects = await resProj.json();
 
       let resultsDoc = [];
+      let docParams = `dataset=Document&pageSize=500`;
       if (q) {
-        let docParams = `dataset=Document&pageSize=100&keywords=${encodeURIComponent(q)}&fuzzy=true`;
-        const resDoc = await fetch(`${basePath}/search?${docParams}`, {
-          headers: { 'X-Api-Key': 'eagle-demi-api-key' }
-        });
-        if (!resDoc.ok) throw new Error(`Documents API returned status ${resDoc.status}`);
-        const apiDocuments = await resDoc.json();
-        resultsDoc = apiDocuments[0]?.searchResults || [];
+        docParams += `&keywords=${encodeURIComponent(q)}&fuzzy=true`;
       }
+      
+      const resDoc = await fetch(`${basePath}/search?${docParams}`, {
+        headers: { 'X-Api-Key': 'eagle-demi-api-key' }
+      });
+      if (!resDoc.ok) throw new Error(`Documents API returned status ${resDoc.status}`);
+      const apiDocuments = await resDoc.json();
+      resultsDoc = apiDocuments[0]?.searchResults || [];
 
       const resultsProj = apiProjects[0]?.searchResults || [];
 
