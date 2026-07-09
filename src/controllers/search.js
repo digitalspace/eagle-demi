@@ -16,8 +16,9 @@ exports.search = async (req, res) => {
     const keywords = req.query.keywords || req.query.q || '';
     const fuzzy = req.query.fuzzy === 'true';
     const sectorFilter = req.query['and[sector]'] || '';
+    const requestedPageSize = parseInt(req.query.pageSize || '10', 10);
     // Cap pageSize at 250 to comply with Typesense pagination limits
-    const pageSize = Math.min(parseInt(req.query.pageSize || '10', 10), 250);
+    const pageSize = Math.min(requestedPageSize, 250);
 
     const isAuth = isAdmin(req);
 
@@ -32,7 +33,7 @@ exports.search = async (req, res) => {
             { 'metadata.trackAttributes.type_name': sectorFilter }
           ];
         }
-        const projects = await Project.find(baseQuery).limit(pageSize);
+        const projects = await Project.find(baseQuery).limit(requestedPageSize);
         const mapped = projects.map(p => {
           const rawMetadata = p.metadata || {
             trackAttributes: {
@@ -181,7 +182,7 @@ exports.search = async (req, res) => {
     } else if (dataset === 'Document') {
       if (!keywords) {
         const baseQuery = isAuth ? {} : { isPublished: true };
-        const documents = await Document.find(baseQuery).limit(pageSize).sort({ createdAt: -1 });
+        const documents = await Document.find(baseQuery).limit(requestedPageSize).sort({ createdAt: -1 });
         const mapped = documents.map(d => {
           return {
             _id: d._id.toString(),
