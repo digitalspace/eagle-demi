@@ -55,9 +55,10 @@ helm upgrade --install eagle-demi ./helm \
 ## Architecture
 
 - **API Port**: `5001` (ClusterIP only — not exposed externally)
-- **Auth**: `X-Api-Key` header verified against `eagle-demi-api-key` OpenShift Secret for mutations (POST, PUT, DELETE).
+- **Auth**: Dual-layered validation in `src/middleware/auth.js`. Supports `X-Api-Key` for system-to-system integration (e.g. from Track/Submit) and standard Keycloak `Bearer` tokens (validating signatures against remote JWKS certificates) requiring `sysadmin`, `staff`, or `demi-admin` roles for write operations (POST, PUT, DELETE).
 - **Geospatial Order**: MongoDB GeoJSON requires `[longitude, latitude]`. Downstream sync engines automatically swap coordinates to `[latitude, longitude]` when feeding search indexes like Typesense.
 - **NetworkPolicy** restricts ingress to eagle-api pods (`role: api-eagle-epic`) only.
+- **Frontend Built Assets**: The root `public/` directory contains compiled static Angular assets which are ignored in Git and generated automatically during the multi-stage Docker build at image-build time.
 
 ---
 
