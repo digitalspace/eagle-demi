@@ -21,6 +21,9 @@
     <button class="nav-tab" [class.active]="activePage() === 'intake'" (click)="setPage('intake')">
       <i class="fa-solid fa-cloud-arrow-up"></i> Document Intake
     </button>
+    <button class="nav-tab" (click)="openSwagger()">
+      <i class="fa-solid fa-code"></i> Swagger API Docs
+    </button>
   </div>
 
   <div style="display: flex; align-items: center; gap: 1.25rem;">

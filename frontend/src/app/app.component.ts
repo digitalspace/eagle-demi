@@ -924,6 +924,12 @@ export class AppComponent implements OnInit {
     this.resetSelection();
   }
 
+  openSwagger() {
+    const basePath = this.config.API_PATH || '/api';
+    const url = basePath === '/api' ? '/api-docs' : basePath.replace(/\/api$/, '/api-docs');
+    window.open(url, '_blank');
+  }
+
   onIntakeProjectSearch(event: Event) {
     const value = (event.target as HTMLInputElement).value;
     this.intakeProjectSearchQuery.set(value);
