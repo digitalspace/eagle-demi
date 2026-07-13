@@ -4,10 +4,33 @@ info:
   description: Central authoritative storage and spatial search engine for projects, documents, and administrative region boundaries.
   version: 1.0.0
 paths:
+  /api/search:
+    get:
+      summary: Search document content
+      description: Queries the Typesense search engine for matching text chunks within documents.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search query string.
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          description: Filter results by project ID.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Search results containing matched chunks and metadata.
+        '400':
+          description: Missing search query parameter.
+
   /api/projects:
     get:
       summary: Retrieve projects
-      description: Get all projects, optionally filtered by spatial administrative region containment.
+      description: Get all projects, optionally filtered by spatial administrative region containment. Restricted to published projects for unauthenticated public requests.
       parameters:
         - name: region
           in: query
@@ -29,6 +52,7 @@ paths:
       description: Ingest a new project with name and geographic centroid coordinates.
       security:
         - ApiKeyAuth: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -42,10 +66,13 @@ paths:
           description: Missing required fields.
         '401':
           description: Unauthorized.
+        '403':
+          description: Forbidden. Insufficient roles.
 
   /api/projects/{id}:
     get:
       summary: Get project by ID
+      description: Get details of a single project. Returns 404 to unauthenticated users if unpublished.
       parameters:
         - name: id
           in: path
@@ -57,11 +84,55 @@ paths:
           description: Project document.
         '404':
           description: Project not found.
+    put:
+      summary: Update project
+      description: Modify metadata, coordinates, or publication state of an existing project.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectInput'
+      responses:
+        '200':
+          description: Project successfully updated.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Project not found.
+    delete:
+      summary: Delete project
+      description: Permanently remove a project from the master directory.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Project successfully deleted.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Project not found.
 
   /api/documents:
     get:
       summary: Retrieve documents
-      description: Get all documents, optionally filtered by spatial administrative region of their parent project.
+      description: Get all documents, optionally filtered by spatial administrative region of their parent project. Restricts to published documents for unauthenticated public requests.
       parameters:
         - name: region
           in: query
@@ -73,8 +144,10 @@ paths:
           description: A list of documents.
     post:
       summary: Create document
+      description: Register document metadata record in the database.
       security:
         - ApiKeyAuth: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -84,17 +157,105 @@ paths:
       responses:
         '201':
           description: Document successfully created.
+        '401':
+          description: Unauthorized.
+
+  /api/documents/extract:
+    post:
+      summary: Upload and extract document
+      description: Uploads document file to S3 MinIO and queues/processes text extraction.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                upfile:
+                  type: string
+                  format: binary
+                project:
+                  type: string
+                displayName:
+                  type: string
+      responses:
+        '200':
+          description: Document successfully uploaded and parsed.
+        '401':
+          description: Unauthorized.
+
+  /api/documents/{id}:
+    get:
+      summary: Get document by ID
+      description: Retrieve details of a single document.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Document successfully retrieved.
+        '404':
+          description: Document not found.
+    put:
+      summary: Update document
+      description: Modify document metadata, parent project reference, or publication state.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentInput'
+      responses:
+        '200':
+          description: Document successfully updated.
+        '401':
+          description: Unauthorized.
+    delete:
+      summary: Delete document
+      description: Delete a document and its parsed chunks.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Document successfully deleted.
+        '401':
+          description: Unauthorized.
 
   /api/regions:
     get:
       summary: Retrieve regions
+      description: Get all administrative boundary regions.
       responses:
         '200':
           description: List of region boundary shapes.
     post:
       summary: Ingest administrative region shape
+      description: Create a new region boundary boundary.
       security:
         - ApiKeyAuth: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -104,6 +265,61 @@ paths:
       responses:
         '201':
           description: Region shapefile stored successfully.
+        '401':
+          description: Unauthorized.
+
+  /api/regions/{id}:
+    get:
+      summary: Get region by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Region document.
+        '404':
+          description: Region not found.
+    put:
+      summary: Update region
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegionInput'
+      responses:
+        '200':
+          description: Region successfully updated.
+        '401':
+          description: Unauthorized.
+    delete:
+      summary: Delete region
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Region successfully deleted.
+        '401':
+          description: Unauthorized.
 
 components:
   securitySchemes:
@@ -111,6 +327,10 @@ components:
       type: apiKey
       in: header
       name: X-Api-Key
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
 
   schemas:
     Project:
