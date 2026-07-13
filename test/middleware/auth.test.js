@@ -90,4 +90,84 @@ test('Auth Middleware Tests', async (t) => {
     assert.strictEqual(statusVal, 401);
     assert.ok(jsonVal.error.includes('Valid X-Api-Key or Bearer token required'));
   });
+
+  await t.test('returns 403 when Bearer token is verified but lacks required roles', () => {
+    config.keycloakEnabled = true;
+
+    // Stub jwt.decode to return kid
+    t.mock.method(jwt, 'decode', () => ({ header: { kid: 'key-id' } }));
+
+    // Stub jwt.verify to call callback with success, but user has no roles
+    t.mock.method(jwt, 'verify', (token, getKey, options, callback) => {
+      callback(null, {
+        preferred_username: 'regular-user',
+        realm_access: { roles: ['guest'] }
+      });
+    });
+
+    const req = {
+      header: (name) => {
+        if (name === 'Authorization') return 'Bearer mock-token';
+        return null;
+      }
+    };
+
+    let statusVal = 0;
+    let jsonVal = null;
+    const res = {
+      status: (val) => {
+        statusVal = val;
+        return {
+          json: (data) => {
+            jsonVal = data;
+          }
+        };
+      }
+    };
+    const next = () => {};
+
+    authMiddleware(req, res, next);
+
+    assert.strictEqual(statusVal, 403);
+    assert.ok(jsonVal.error.includes('Forbidden. User does not possess admin or staff permissions'));
+  });
+
+  await t.test('returns 401 when Bearer token verification fails', () => {
+    config.keycloakEnabled = true;
+
+    // Stub jwt.decode to return kid
+    t.mock.method(jwt, 'decode', () => ({ header: { kid: 'key-id' } }));
+
+    // Stub jwt.verify to call callback with error
+    t.mock.method(jwt, 'verify', (token, getKey, options, callback) => {
+      callback(new Error('invalid signature'));
+    });
+
+    const req = {
+      header: (name) => {
+        if (name === 'Authorization') return 'Bearer mock-token';
+        return null;
+      }
+    };
+
+    let statusVal = 0;
+    let jsonVal = null;
+    const res = {
+      status: (val) => {
+        statusVal = val;
+        return {
+          json: (data) => {
+            jsonVal = data;
+          }
+        };
+      }
+    };
+    const next = () => {};
+
+    authMiddleware(req, res, next);
+
+    assert.strictEqual(statusVal, 401);
+    assert.ok(jsonVal.error.includes('JWT verification failed: invalid signature'));
+  });
 });
+
