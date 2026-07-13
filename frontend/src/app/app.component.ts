@@ -51,7 +51,33 @@ export class AppComponent implements OnInit {
   gatingFilter = signal<'all' | 'admitted' | 'staged'>('all');
   sectorFilter = signal<string>('all');
   regionFilter = signal<string>('all');
-  activePage = signal<'map' | 'search'>('map');
+  activePage = signal<'map' | 'search' | 'intake'>('map');
+
+  intakeProjectId = signal<string>('');
+  intakeProjectSearchQuery = signal<string>('');
+  showIntakeDropdown = signal<boolean>(false);
+  activeIngestion = signal<{ fileName: string, progress: number, status: string, docId?: string } | null>(null);
+
+  intakeProjectValid = computed(() => {
+    const id = this.intakeProjectId();
+    if (!id) return false;
+    if (/^[a-f0-9]{24}$/i.test(id)) return true;
+    const list = this.projects();
+    if (list) {
+      return list.some(p => String(p.id) === String(id));
+    }
+    return false;
+  });
+
+  filteredIntakeProjects = computed(() => {
+    const q = this.intakeProjectSearchQuery().toLowerCase().trim();
+    const list = this.projects() || [];
+    if (!q) return list;
+    return list.filter(p => 
+      (p.name && p.name.toLowerCase().includes(q)) || 
+      (p.id && String(p.id).toLowerCase().includes(q))
+    );
+  });
 
   availableRegions = ['Vancouver Island', 'Lower Mainland', 'Thompson', 'Kootenay', 'Cariboo', 'Skeena', 'Omineca', 'Okanagan', 'Peace'];
 
@@ -893,9 +919,131 @@ export class AppComponent implements OnInit {
     this.resetSelection();
   }
 
-  setPage(page: 'map' | 'search') {
+  setPage(page: 'map' | 'search' | 'intake') {
     this.activePage.set(page);
     this.resetSelection();
+  }
+
+  onIntakeProjectSearch(event: Event) {
+    const value = (event.target as HTMLInputElement).value;
+    this.intakeProjectSearchQuery.set(value);
+    if (!value.trim()) {
+      this.intakeProjectId.set('');
+    }
+  }
+
+  selectIntakeProject(proj: Project) {
+    this.intakeProjectId.set(String(proj.id));
+    this.intakeProjectSearchQuery.set(proj.name);
+    this.showIntakeDropdown.set(false);
+  }
+
+  onIntakeDropdownBlur() {
+    setTimeout(() => {
+      this.showIntakeDropdown.set(false);
+      const currentId = this.intakeProjectId();
+      const currentProj = (this.projects() || []).find(p => String(p.id) === currentId);
+      if (currentProj) {
+        this.intakeProjectSearchQuery.set(currentProj.name);
+      } else {
+        this.intakeProjectSearchQuery.set('');
+      }
+    }, 200);
+  }
+
+  isProjectSelected(id: string | number): boolean {
+    return String(id) === this.intakeProjectId();
+  }
+
+  triggerFileInput() {
+    if (!this.intakeProjectValid()) return;
+    const el = document.getElementById('fileInput') as HTMLInputElement;
+    if (el) el.click();
+  }
+
+  async onFileSelected(event: Event) {
+    const input = event.target as HTMLInputElement;
+    const file = input?.files?.[0];
+    if (!file) return;
+    await this.uploadDocument(file);
+    input.value = '';
+  }
+
+  async uploadDocument(file: File) {
+    if (!this.intakeProjectValid()) return;
+
+    this.activeIngestion.set({ fileName: file.name, progress: 10, status: 'Uploading...' });
+
+    const formData = new FormData();
+    formData.append('upfile', file);
+    formData.append('project', this.intakeProjectId());
+
+    try {
+      const basePath = this.config.API_PATH || '/api';
+      
+      // Simulate progress up to 40% during upload
+      const intervalSim = setInterval(() => {
+        const cur = this.activeIngestion();
+        if (cur && cur.progress < 40) {
+          this.activeIngestion.set({ ...cur, progress: cur.progress + 5, status: 'Uploading...' });
+        } else {
+          clearInterval(intervalSim);
+        }
+      }, 300);
+
+      const response = await fetch(`${basePath}/documents/extract`, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'X-Api-Key': 'eagle-demi-api-key'
+        }
+      });
+
+      clearInterval(intervalSim);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Upload failed (status: ${response.status})`);
+      }
+      
+      const data = await response.json();
+
+      this.activeIngestion.set({ fileName: file.name, progress: 50, status: 'Queued for extraction...', docId: data.docId });
+      this.pollExtractionStatus(data.docId);
+    } catch (err: any) {
+      this.activeIngestion.set({ fileName: file.name, progress: 100, status: `Error: ${err.message}` });
+    }
+  }
+
+  pollExtractionStatus(docId: string) {
+    const basePath = this.config.API_PATH || '/api';
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${basePath}/documents/${docId}`, {
+          headers: { 'X-Api-Key': 'eagle-demi-api-key' }
+        });
+        if (!res.ok) return;
+        const doc = await res.json();
+
+        // Increment extraction progress slowly to simulate activity
+        const cur = this.activeIngestion();
+        let currentProg = cur ? cur.progress : 50;
+        if (currentProg < 95) currentProg += 5;
+
+        if (doc.contentExtracted) {
+          clearInterval(interval);
+          this.activeIngestion.set({ fileName: doc.displayName, progress: 100, status: 'Extraction complete!' });
+          this.loadData(); // reload projects and documents explorer list
+        } else if (doc.contentExtractionError) {
+          clearInterval(interval);
+          this.activeIngestion.set({ fileName: doc.displayName, progress: 100, status: `Extraction failed: ${doc.contentExtractionError}` });
+        } else {
+          this.activeIngestion.set({ fileName: doc.displayName, progress: currentProg, status: 'Extracting text layout with Docling...' });
+        }
+      } catch {
+        // Keep polling
+      }
+    }, 2500);
   }
 
   private searchDebounceTimer: any = null;

@@ -18,6 +18,9 @@
     <button class="nav-tab" [class.active]="activePage() === 'search'" (click)="setPage('search')">
       <i class="fa-solid fa-magnifying-glass"></i> Deep Text Search
     </button>
+    <button class="nav-tab" [class.active]="activePage() === 'intake'" (click)="setPage('intake')">
+      <i class="fa-solid fa-cloud-arrow-up"></i> Document Intake
+    </button>
   </div>
 
   <div style="display: flex; align-items: center; gap: 1.25rem;">
@@ -515,6 +518,149 @@
               </div>
             }
           }
+        </div>
+      </div>
+    </div>
+  </div>
+}
+
+@else if (activePage() === 'intake') {
+  <div class="intake-page-container">
+    <div class="intake-hero">
+      <h1>Digital File Library Ingestion Registry</h1>
+      <p>Securely upload documents directly to the master registry. Extract structured sections using high-performance AI engines.</p>
+    </div>
+
+    <div class="intake-grid">
+      <!-- Intake Form Card -->
+      <div class="intake-card">
+        <h2><i class="fa-solid fa-cloud-arrow-up"></i> Document Upload</h2>
+        <p>Before submitting, please select the target project to file this document under.</p>
+
+        <!-- Project ID field -->
+        <div class="input-group" style="position: relative;">
+          <label for="intakeProjectIdInput">Target Project:</label>
+          @if (projects() === null) {
+            <input id="intakeProjectIdInput" type="text" disabled placeholder="Loading projects list...">
+          } @else {
+            <div style="position: relative; width: 100%;">
+              <input 
+                id="intakeProjectIdInput" 
+                type="text" 
+                [value]="intakeProjectSearchQuery()" 
+                (input)="onIntakeProjectSearch($event)" 
+                (focus)="showIntakeDropdown.set(true)"
+                (blur)="onIntakeDropdownBlur()"
+                placeholder="Search and select project..."
+                autocomplete="off"
+                style="padding-right: 2.5rem;"
+              >
+              <i class="fa-solid fa-chevron-down" style="position: absolute; right: 1rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;"></i>
+              
+              @if (showIntakeDropdown() && filteredIntakeProjects().length > 0) {
+                <div class="searchable-dropdown-list">
+                  @for (proj of filteredIntakeProjects(); track proj.id) {
+                    <div 
+                      class="searchable-dropdown-option" 
+                      [class.selected]="isProjectSelected(proj.id)"
+                      (mousedown)="selectIntakeProject(proj)"
+                    >
+                      <div style="font-weight: 600;">{{ proj.name }}</div>
+                      <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.15rem;">ID: {{ proj.id }}</div>
+                    </div>
+                  }
+                </div>
+              } @else if (showIntakeDropdown() && filteredIntakeProjects().length === 0) {
+                <div class="searchable-dropdown-list" style="position: absolute; top: 100%; left: 0; right: 0; background: var(--white); border: 1.5px solid var(--bc-gray-border); border-radius: 6px; padding: 1rem; text-align: center; z-index: 1000; box-shadow: 0 8px 24px rgba(0,0,0,0.12); margin-top: 4px; color: var(--text-muted); font-size: 0.9rem;">
+                  No projects match your search
+                </div>
+              }
+            </div>
+          }
+          @if (intakeProjectId() && !intakeProjectValid()) {
+            <div style="color: #dc3545; font-size: 0.8rem; margin-top: 0.35rem; font-weight: 500;">
+              <i class="fa-solid fa-triangle-exclamation"></i> Invalid project selected.
+            </div>
+          } @else if (intakeProjectValid()) {
+            <div style="color: #2e7559; font-size: 0.8rem; margin-top: 0.35rem; font-weight: 500;">
+              <i class="fa-solid fa-circle-check"></i> Project selected. Ready to upload.
+            </div>
+          }
+        </div>
+
+        <!-- Drop/Drag Zone -->
+        <div 
+          class="drop-zone" 
+          [class.disabled]="!intakeProjectValid()" 
+          (click)="triggerFileInput()"
+        >
+          <i class="fa-regular fa-file-pdf"></i>
+          @if (!intakeProjectValid()) {
+            <p style="font-weight: 600; color: var(--text-muted);">Unlock upload by entering a valid project ID above</p>
+          } @else {
+            <p style="font-weight: 600; color: var(--bc-blue-dark);">Drag & Drop your PDF file here, or click to browse</p>
+            <p class="drop-zone-help-text">Only PDF documents are supported. Max file size: 100MB.</p>
+          }
+          <input 
+            type="file" 
+            id="fileInput" 
+            style="display: none;" 
+            (change)="onFileSelected($event)" 
+            accept="application/pdf"
+            [disabled]="!intakeProjectValid()"
+          >
+        </div>
+
+        <!-- Active Progress Bar -->
+        @if (activeIngestion()) {
+          <div 
+            class="ingestion-progress" 
+            [class.success]="activeIngestion()?.status === 'Extraction complete!'"
+            [class.error]="activeIngestion()?.status?.startsWith('Error:') || activeIngestion()?.status?.startsWith('Extraction failed:')"
+          >
+            <div class="progress-details">
+              <span class="filename" [title]="activeIngestion()?.fileName">
+                <i class="fa-regular fa-file-pdf" style="color: #ff4d4f; margin-right: 0.25rem;"></i>
+                {{ activeIngestion()?.fileName }}
+              </span>
+              <span class="status">{{ activeIngestion()?.status }}</span>
+            </div>
+            <div class="progress-bar-container">
+              <div class="progress-bar" [style.width.%]="activeIngestion()?.progress || 0"></div>
+            </div>
+          </div>
+        }
+      </div>
+
+      <!-- Guidelines Card -->
+      <div class="intake-card" style="background-color: #fafbfc;">
+        <h2><i class="fa-solid fa-circle-info"></i> Ingestion Guidelines</h2>
+        <p>The Digital File Library maintains rigorous security and document visibility rules:</p>
+        
+        <div class="info-bullets-list">
+          <div class="info-bullet">
+            <i class="fa-solid fa-shield-halved"></i>
+            <div>
+              <strong>Security Protection Active:</strong>
+              <p style="margin-top: 0.25rem; margin-bottom: 0;">For security, the extraction pipeline is protected. Every ingest request is audited, parsed, and restricted to staff roles by default. Public citizens see only documents that are explicitly flagged as <code>isPublished: true</code>.</p>
+            </div>
+          </div>
+
+          <div class="info-bullet">
+            <i class="fa-solid fa-circle-nodes"></i>
+            <div>
+              <strong>Automatic Cache Sync:</strong>
+              <p style="margin-top: 0.25rem; margin-bottom: 0;">Once Docling extracts layout and chunks are saved, a background webhook triggers automatically to cache metadata to `eagle-api`, keeping legacy platforms synced.</p>
+            </div>
+          </div>
+
+          <div class="info-bullet">
+            <i class="fa-solid fa-wand-magic-sparkles"></i>
+            <div>
+              <strong>AI Text Extractor:</strong>
+              <p style="margin-top: 0.25rem; margin-bottom: 0;">Docling isolates headers, paragraphs, and tables automatically, indexing individual pages as independent chunks for high-relevance deep keyword search.</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
