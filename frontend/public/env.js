@@ -14,7 +14,7 @@
   window.__env.USE_MOCK_DATA = false;
 
   // Keycloak Authentication Configuration
-  window.__env.KEYCLOAK_CLIENT_ID = 'eagle-admin-console';
+  window.__env.KEYCLOAK_CLIENT_ID = 'eagle-demi-console';
   window.__env.KEYCLOAK_URL = 'https://dev.loginproxy.gov.bc.ca/auth';
   window.__env.KEYCLOAK_REALM = 'eao-epic';
   window.__env.KEYCLOAK_ENABLED = true;
