@@ -58,7 +58,7 @@ const config = {
   // Keycloak & Token Authentication
   keycloakUrl:           process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',
-  keycloakClientId:      process.env.KEYCLOAK_CLIENT_ID || 'eagle-admin-console',
+  keycloakClientId:      process.env.KEYCLOAK_CLIENT_ID || 'eagle-demi-console',
   keycloakEnabled:       process.env.KEYCLOAK_ENABLED !== 'false',
   ssoJwksUri:            process.env.SSO_JWKSURI || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}/protocol/openid-connect/certs`,
   ssoIssuer:             process.env.SSO_ISSUER || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}`,
