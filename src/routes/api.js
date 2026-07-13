@@ -20,9 +20,14 @@ router.put('/projects/:id', authMiddleware, projectController.updateProject);
 router.delete('/projects/:id', authMiddleware, projectController.deleteProject);
 
 // Documents Routes
+const multer = require('multer');
+const config = require('../config');
+const upload = multer({ dest: config.uploadDir });
+
 router.get('/documents', documentController.getDocuments);
 router.get('/documents/:id', documentController.getDocument);
 router.post('/documents', authMiddleware, documentController.createDocument);
+router.post('/documents/extract', authMiddleware, upload.single('upfile'), documentController.extractDocument);
 router.put('/documents/:id', authMiddleware, documentController.updateDocument);
 router.delete('/documents/:id', authMiddleware, documentController.deleteDocument);
 

@@ -1,5 +1,12 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const mongoose = require('mongoose');
+const config = require('../config');
+const extract = require('../extract');
+
 const Document = require('../models/document');
 const Project = require('../models/project');
 const Region = require('../models/region');
@@ -141,6 +148,118 @@ exports.deleteDocument = async (req, res) => {
     }
     return res.json({ message: 'Document deleted successfully', deleted });
   } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+async function triggerEagleSync(doc) {
+  const eagleApiUrl = process.env.EAGLE_API_URL || 'http://localhost:3000';
+  const apiKey = process.env.DOCLING_API_KEY || 'eagle-demi-api-key';
+
+  try {
+    const res = await fetch(`${eagleApiUrl}/api/document/sync`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Api-Key': apiKey
+      },
+      body: JSON.stringify(doc)
+    });
+    if (!res.ok) {
+      console.error(`[demi-api] Webhook sync returned HTTP ${res.status}`);
+    } else {
+      console.log(`[demi-api] Document cache synchronized to eagle-api for ${doc._id}`);
+    }
+  } catch (err) {
+    console.error(`[demi-api] Failed to trigger webhook sync to eagle-api:`, err.message);
+  }
+}
+
+exports.extractDocument = async (req, res) => {
+  try {
+    const file = req.file;
+    const { project, displayName, region, edrmsRecordNumber, orcsClassification, isPublished } = req.body;
+
+    if (!file) {
+      return res.status(400).json({ error: 'No file uploaded.' });
+    }
+    if (!project || !mongoose.Types.ObjectId.isValid(project)) {
+      if (file.path) fs.promises.unlink(file.path).catch(() => {});
+      return res.status(400).json({ error: 'A valid project id is required.' });
+    }
+
+    // Verify parent project exists
+    const parentProject = await Project.findById(project);
+    if (!parentProject) {
+      if (file.path) fs.promises.unlink(file.path).catch(() => {});
+      return res.status(404).json({ error: `Parent Project with id ${project} not found.` });
+    }
+
+    // Upload to MinIO
+    const fileExtension = file.originalname.match(/\.([0-9a-z]+$)/i)?.[1] || '';
+    const randomizedName = crypto.randomBytes(16).toString('hex') + (fileExtension ? '.' + fileExtension : '');
+    const objectPath = path.posix.join(project.toString(), randomizedName);
+
+    const minioClient = extract.getMinioClient();
+    const exists = await minioClient.bucketExists(config.minioBucket);
+    if (!exists) {
+      await minioClient.makeBucket(config.minioBucket);
+    }
+
+    await minioClient.fPutObject(config.minioBucket, objectPath, file.path);
+    fs.promises.unlink(file.path).catch(() => {});
+
+    const newDoc = new Document({
+      project,
+      displayName: displayName || file.originalname,
+      s3Key: objectPath,
+      region: region || parentProject.region,
+      edrmsRecordNumber,
+      orcsClassification,
+      isPublished: isPublished === 'true' || isPublished === true
+    });
+
+    const saved = await newDoc.save();
+
+    // Trigger background extraction asynchronously
+    setImmediate(async () => {
+      try {
+        const db = mongoose.connection.db;
+        const minio = extract.getMinioClient();
+
+        console.log(`[demi-api] Starting async extraction for document: ${saved._id}`);
+        const buffer = await extract.downloadFromMinio(minio, objectPath);
+        const filename = saved.displayName || file.originalname;
+        const markdown = await extract.splitAndExtract(buffer, filename);
+
+        const { chunkMarkdown } = require('../chunker');
+        const chunks = chunkMarkdown(markdown);
+
+        // Fetch lookups
+        const projectLookup = await extract.buildProjectLookup(db);
+        const listLookup = await extract.buildListLookup(db);
+        const projectName = projectLookup.get(project.toString());
+
+        const count = await extract.replaceChunks(db, saved._id.toString(), saved, chunks, projectName, listLookup);
+        await extract.markDocument(db, saved._id.toString(), count, null);
+
+        console.log(`[demi-api] Extracted ${count} chunks for document: ${saved._id}`);
+
+        // Trigger cache sync
+        await triggerEagleSync(saved);
+      } catch (err) {
+        console.error(`[demi-api] Background extraction failed for document ${saved._id}:`, err.message);
+        const db = mongoose.connection.db;
+        await extract.markDocument(db, saved._id.toString(), 0, err.message);
+      }
+    });
+
+    return res.status(202).json({
+      message: 'File stored and extraction queued.',
+      docId: String(saved._id)
+    });
+  } catch (err) {
+    if (req.file && req.file.path) fs.promises.unlink(req.file.path).catch(() => {});
     return res.status(500).json({ error: err.message });
   }
 };

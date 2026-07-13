@@ -51,6 +51,9 @@ const config = {
   doclingTimeout: parseInt(process.env.DOCLING_TIMEOUT_MS || '300000', 10),
 
   batchSize: parseInt(process.env.BATCH_SIZE || '50', 10),
+
+  uploadDir:             process.env.UPLOAD_DIRECTORY || '/tmp',
+  enableVirusScanning:   process.env.ENABLE_VIRUS_SCANNING === 'true',
 };
 
 module.exports = config;
