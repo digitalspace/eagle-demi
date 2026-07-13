@@ -14,6 +14,7 @@ RUN yarn install --immutable
 
 # Copy frontend source code and configs
 COPY frontend/src/ ./src/
+COPY frontend/public/ ./public/
 COPY frontend/angular.json frontend/tsconfig*.json ./
 
 # Build frontend (outputs to /app/public)
