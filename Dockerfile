@@ -27,7 +27,7 @@ WORKDIR /app
 RUN corepack enable
 
 # Copy backend dependency configuration
-COPY package.json yarn.lock .pnp.cjs .pnp.loader.mjs ./
+COPY package.json yarn.lock ./
 COPY .yarn/ ./.yarn/
 
 # Production-only backend dependency install
