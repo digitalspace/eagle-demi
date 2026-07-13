@@ -21,3 +21,7 @@ CLAUDE.md
 
 # Temporary files
 tmp/
+
+# Built frontend static directory
+public/
+
