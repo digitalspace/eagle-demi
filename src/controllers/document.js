@@ -13,9 +13,31 @@ const Region = require('../models/region');
 
 // Helper to determine if the request is administrative / internal
 function isAdmin(req) {
+  if (req.user) {
+    const roles = req.user.realm_access?.roles || [];
+    return roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
+  }
+
   const apiKey = req.header('X-Api-Key');
   const expectedKey = process.env.DOCLING_API_KEY || 'eagle-demi-api-key';
-  return apiKey && apiKey === expectedKey;
+  if (apiKey && apiKey === expectedKey) return true;
+
+  const authHeader = req.header('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    const jwt = require('jsonwebtoken');
+    try {
+      const decoded = jwt.decode(token);
+      if (decoded && decoded.realm_access && decoded.realm_access.roles) {
+        const roles = decoded.realm_access.roles;
+        return roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
+      }
+    } catch (err) {
+      // Decode failed, fallback to public
+    }
+  }
+
+  return false;
 }
 
 exports.getDocuments = async (req, res) => {

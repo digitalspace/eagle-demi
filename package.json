@@ -19,6 +19,8 @@
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^3.2.2",
     "minio": "^7.0.8",
     "mongodb": "^7.0.0",
     "mongoose": "^9.3.2",
