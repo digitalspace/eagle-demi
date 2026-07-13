@@ -75,6 +75,17 @@ All tunable limits live in `helm/values.yaml` — override per environment in `h
 
 ---
 
+## Document Intake Frontend (frontend)
+
+The standalone Angular 19 application lives under `frontend/`. It compiles into static assets housed in `public/` and is served directly by `demi-api`.
+
+### Key Features
+* **Interactive Map Explorer**: View and query project coordinates.
+* **Deep Text Search**: Query extracted document chunks powered by the Typesense search engine.
+* **Document Ingestion**: Upload files with an integrated, searchable project dropdown menu (supports both production 24-character hexadecimal MongoDB ObjectIDs and local mock numeric IDs).
+
+---
+
 ## Related Repositories
 
 - [eagle-api](https://github.com/bcgov/eagle-api) — Reads read-only cached project/document entries
