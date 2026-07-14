@@ -8,7 +8,7 @@
  *   MONGODB_PASSWORD, MONGODB_AUTHSOURCE, MONGODB_DIRECT
  *   MINIO_HOST, MINIO_PORT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY,
  *   MINIO_BUCKET_NAME, MINIO_USE_SSL
- *   DOCLING_URL          — docling-serve base URL (default: http://eagle-demi:5001)
+ *   DOCLING_URL          — docling-serve base URL (default: http://eagle-demi:5000)
  *   DOCLING_API_KEY      — X-Api-Key for docling-serve
  */
 
@@ -40,7 +40,7 @@ const config = {
   minioBucket:  process.env.MINIO_BUCKET_NAME || 'uploads',
   minioSsl:     process.env.MINIO_USE_SSL === 'true',
 
-  doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5001',
+  doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
   doclingKey:   process.env.DOCLING_API_KEY  || '',
 
   maxChunkSize: parseInt(process.env.MAX_CHUNK_SIZE || '4000', 10),
@@ -58,7 +58,7 @@ const config = {
   // Keycloak & Token Authentication
   keycloakUrl:           process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',
-  keycloakClientId:      process.env.KEYCLOAK_CLIENT_ID || 'eagle-demi-console',
+  keycloakClientId:      process.env.KEYCLOAK_CLIENT_ID || 'eagle-admin-console',
   keycloakEnabled:       process.env.KEYCLOAK_ENABLED !== 'false',
   ssoJwksUri:            process.env.SSO_JWKSURI || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}/protocol/openid-connect/certs`,
   ssoIssuer:             process.env.SSO_ISSUER || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}`,

@@ -29,7 +29,7 @@ spec:
           imagePullPolicy: {{ .Values.api.image.pullPolicy }}
           ports:
             - name: http
-              containerPort: 5001
+              containerPort: 3000
               protocol: TCP
           env:
             # --- MongoDB ---
@@ -104,7 +104,7 @@ spec:
 
             # --- API Port ---
             - name: PORT
-              value: "5001"
+              value: "3000"
 
           resources:
             {{- toYaml .Values.api.resources | nindent 12 }}

@@ -1,4 +1,4 @@
-# Allow only eagle-api pods to reach eagle-demi (docling-serve) on port 5001.
+# Allow only eagle-api pods to reach eagle-demi (docling-serve) on port 5000.
 # All other ingress is denied by default (OpenShift default-deny).
 #
 # eagle-api pods carry the label role: api-eagle-epic (set in their Helm chart).

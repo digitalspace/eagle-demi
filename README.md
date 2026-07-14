@@ -19,13 +19,13 @@ The Express server acts as the master directory of truth. It manages projects, d
    npm install
    ```
 
-2. Start the API Server locally (runs on port `5001` by default):
+2. Start the API Server locally (runs on port `3000` by default):
    ```bash
    npm start
    ```
 
 3. View Swagger API documentation:
-   * **URL**: `http://localhost:5001/api-docs`
+   * **URL**: `http://localhost:3000/api-docs`
 
 ---
 
@@ -54,7 +54,7 @@ helm upgrade --install eagle-demi ./helm \
 
 ## Architecture
 
-- **API Port**: `5001` (ClusterIP only — not exposed externally)
+- **API Port**: `3000` (ClusterIP only — not exposed externally)
 - **Auth**: Dual-layered validation in `src/middleware/auth.js`. Supports `X-Api-Key` for system-to-system integration (e.g. from Track/Submit) and standard Keycloak `Bearer` tokens (validating signatures against remote JWKS certificates) requiring `sysadmin`, `staff`, or `demi-admin` roles for write operations (POST, PUT, DELETE).
 - **Geospatial Order**: MongoDB GeoJSON requires `[longitude, latitude]`. Downstream sync engines automatically swap coordinates to `[latitude, longitude]` when feeding search indexes like Typesense.
 - **NetworkPolicy** restricts ingress to eagle-api pods (`role: api-eagle-epic`) only.

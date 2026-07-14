@@ -5,7 +5,7 @@ Document Extraction & Machine Intelligence for EPIC.
 ## Configuration & Usage
 
 - **Base Image**: Uses upstream `docling-serve-cpu` directly. No custom app code.
-- **Port**: 5001 (ClusterIP only).
+- **Port**: 5000 (ClusterIP only).
 - **Security**: Access restricted to `eagle-api` via `NetworkPolicy`. Requires `X-Api-Key` header.
 
 ## CRITICAL Mandates
@@ -39,5 +39,5 @@ Document Extraction & Machine Intelligence for EPIC.
 - **Standalone Search Service**: `eagle-demi` handles its own search independently of `eagle-api` or external indexing services.
 - **Embedded Ingest Watcher**: The Typesense Change Stream indexer and full-sync engine are copied into `/src/typesense`.
 - **Automatic Daemon Startup**: The Change Stream sync watcher is loaded on server startup in `src/server.js` and runs in the background. It is skipped when `NODE_ENV === 'test'` to prevent test suites from trying to connect to mock databases.
-- **Direct Frontend Integration**: Frontend default `basePath` in `app.component.ts` points to `/api` (instead of `/api/demi`) so that it communicates natively on the same host (port 5001). No CORS configuration or complex proxy definitions are needed.
+- **Direct Frontend Integration**: Frontend default `basePath` in `app.component.ts` points to `/api` (instead of `/api/demi`) so that it communicates natively on the same host (port 3000). No CORS configuration or complex proxy definitions are needed.
 - **Zero Ecosystem Changes**: `eagle-api` and `eagle-typesense` are kept completely untouched and clean. All search, ingestion, indexing, and presentation code remains 100% inside `eagle-demi`.

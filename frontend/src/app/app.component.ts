@@ -404,8 +404,81 @@ export class AppComponent implements OnInit {
   }
 
   ngOnInit() {
+    this.setupFetchInterceptor();
     this.initKeycloak();
     this.loadData();
+  }
+
+  // Intercept window.fetch globally to inject Keycloak Bearer Token and handle retry flow on 401/403
+  private setupFetchInterceptor() {
+    const originalFetch = window.fetch;
+    let refreshPromise: Promise<any> | null = null;
+
+    const setAuthHeader = (reqInit: RequestInit, token: string) => {
+      if (!reqInit.headers) {
+        reqInit.headers = {};
+      }
+      if (reqInit.headers instanceof Headers) {
+        reqInit.headers.set('Authorization', 'Bearer ' + token);
+      } else if (Array.isArray(reqInit.headers)) {
+        const index = reqInit.headers.findIndex(([k]) => k.toLowerCase() === 'authorization');
+        if (index !== -1) {
+          reqInit.headers[index] = ['Authorization', 'Bearer ' + token];
+        } else {
+          reqInit.headers.push(['Authorization', 'Bearer ' + token]);
+        }
+      } else {
+        reqInit.headers = {
+          ...reqInit.headers,
+          'Authorization': 'Bearer ' + token
+        };
+      }
+    };
+
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : input.url);
+      const basePath = this.config.API_PATH || '/api';
+
+      // Only intercept calls targeting backend API when Keycloak token exists
+      if (url.includes(basePath) && this.keycloak && this.keycloak.token) {
+        init = init || {};
+        setAuthHeader(init, this.keycloak.token);
+      }
+
+      try {
+        let response = await originalFetch(input, init);
+
+        // Catch 401 or 403 response, refresh token and retry request matching eagle-admin
+        if ((response.status === 401 || response.status === 403) && this.keycloak) {
+          if (!refreshPromise) {
+            refreshPromise = this.keycloak.updateToken(30)
+              .then((refreshed: any) => {
+                refreshPromise = null;
+                return refreshed;
+              })
+              .catch((err: any) => {
+                refreshPromise = null;
+                console.warn('[Fetch Interceptor] Keycloak token refresh failed:', err);
+                throw err;
+              });
+          }
+
+          try {
+            await refreshPromise;
+            if (init && this.keycloak.token) {
+              setAuthHeader(init, this.keycloak.token);
+            }
+            response = await originalFetch(input, init);
+          } catch (refreshErr) {
+            // If token refresh fails, let original error stand
+          }
+        }
+
+        return response;
+      } catch (err) {
+        throw err;
+      }
+    };
   }
 
   // Keycloak check-sso initialization Flow
@@ -422,7 +495,8 @@ export class AppComponent implements OnInit {
       this.keycloak.init({
         onLoad: 'check-sso',
         silentCheckSsoRedirectUri: window.location.origin + '/silent-check-sso.html',
-        pkceMethod: 'S256'
+        pkceMethod: 'S256',
+        scope: 'openid roles'
       }).then((authenticated: boolean) => {
         // Clean URL parameters from OAuth state redirections
         this.cleanUrlParams();

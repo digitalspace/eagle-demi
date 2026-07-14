@@ -3,7 +3,7 @@
 # Tear down: helm uninstall eagle-demi -n <namespace>
 
 # Override the full resource name so Service is reachable as
-# http://eagle-demi:5001 from within the cluster.
+# http://eagle-demi:5000 from within the cluster.
 fullnameOverride: eagle-demi
 
 # ---------------------------------------------------------------------------
@@ -18,10 +18,10 @@ replicaCount: 1
 
 # ---------------------------------------------------------------------------
 # Service — ClusterIP only.  eagle-demi is cluster-internal; no Route.
-# eagle-api calls http://eagle-demi:5001/v1/convert/...
+# eagle-api calls http://eagle-demi:5000/v1/convert/...
 # ---------------------------------------------------------------------------
 service:
-  port: 5001
+  port: 5000
 
 # ---------------------------------------------------------------------------
 # API key — must be pre-created before deploying:
@@ -207,7 +207,7 @@ worker:
     MONGODB_DIRECT:   "true"
     MINIO_PORT:       "443"
     MINIO_USE_SSL:    "true"
-    DOCLING_URL:      "http://eagle-demi:5001"
+    DOCLING_URL:      "http://eagle-demi:5000"
     DOCLING_TIMEOUT_MS: "300000"
     MAX_CHUNK_SIZE:   "4000"
     MIN_CHUNK_SIZE:   "100"

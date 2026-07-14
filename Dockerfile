@@ -45,7 +45,7 @@ RUN addgroup -S demi && adduser -S demi -G demi
 USER demi
 
 # Expose Express server port
-EXPOSE 5001
+EXPOSE 3000
 
 # Default CMD (Express API)
 CMD ["node", "src/server.js"]

@@ -1,5 +1,5 @@
 # ClusterIP service — eagle-demi is cluster-internal only (no Route).
-# eagle-api calls: http://eagle-demi:5001/v1/convert/...
+# eagle-api calls: http://eagle-demi:5000/v1/convert/...
 apiVersion: v1
 kind: Service
 metadata:
