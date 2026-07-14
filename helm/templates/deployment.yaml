@@ -39,7 +39,9 @@ spec:
                   key: {{ .Values.apiKeySecret.key }}
 
             # --- Network Port ---
-            - name: DOCLING_SERVE_PORT
+            - name: UVICORN_PORT
+              value: "5000"
+            - name: PORT
               value: "5000"
 
             # --- Processing limits ---
