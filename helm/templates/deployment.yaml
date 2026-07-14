@@ -38,6 +38,10 @@ spec:
                   name: {{ .Values.apiKeySecret.name }}
                   key: {{ .Values.apiKeySecret.key }}
 
+            # --- Network Port ---
+            - name: DOCLING_SERVE_PORT
+              value: "5000"
+
             # --- Processing limits ---
             - name: DOCLING_SERVE_MAX_FILE_SIZE
               value: {{ .Values.config.maxFileSize | quote }}
