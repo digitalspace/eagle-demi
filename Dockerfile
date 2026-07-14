@@ -1,5 +1,5 @@
 # Stage 1: Build the Angular frontend
-FROM node:20-alpine AS frontend-builder
+FROM node:24-alpine AS frontend-builder
 WORKDIR /app/frontend
 
 # Enable Corepack for Yarn
@@ -21,7 +21,7 @@ COPY frontend/angular.json frontend/tsconfig*.json ./
 RUN yarn build
 
 # Stage 2: Create the central Express API runtime image
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /app
 
 # Enable Corepack for Yarn 4
