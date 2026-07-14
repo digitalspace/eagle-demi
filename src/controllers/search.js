@@ -3,9 +3,38 @@
 const Project = require('../models/project');
 const Document = require('../models/document');
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
+const jwksClient = require('jwks-rsa');
+const config = require('../config');
+
+// Initialize JWKS client with caching for performance
+const clientInstance = jwksClient({
+  strictSsl: true,
+  jwksUri: config.ssoJwksUri,
+  cache: true,
+  cacheMaxAge: 86400000, // 24 hours
+  rateLimit: true,
+  jwksRequestsPerMinute: 5
+});
+
+function getKey(header, callback) {
+  clientInstance.getSigningKey(header.kid, (err, key) => {
+    if (err) {
+      callback(err);
+    } else {
+      callback(null, key.publicKey || key.rsaPublicKey);
+    }
+  });
+}
+
+// Escapes regex characters to prevent regex injection (ReDoS)
+function escapeRegExp(string) {
+  if (!string) return '';
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Helper to determine if the request is administrative / internal
-function isAdmin(req) {
+async function isAdmin(req) {
   if (req.user) {
     const roles = req.user.realm_access?.roles || [];
     return roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
@@ -18,20 +47,54 @@ function isAdmin(req) {
   const authHeader = req.header('Authorization');
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
-    const jwt = require('jsonwebtoken');
-    try {
-      const decoded = jwt.decode(token);
-      if (decoded && decoded.realm_access && decoded.realm_access.roles) {
-        const roles = decoded.realm_access.roles;
-        return roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
+
+    if (!config.keycloakEnabled) {
+      // Local testing / Keycloak bypass (do not verify signature, only decode)
+      try {
+        const decoded = jwt.decode(token);
+        if (decoded && decoded.realm_access && decoded.realm_access.roles) {
+          const roles = decoded.realm_access.roles;
+          return roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
+        }
+      } catch (err) {
+        return false;
       }
-    } catch (err) {
-      // Decode failed, fallback to public
     }
+
+    // Verify token against remote Keycloak JWKS
+    return new Promise((resolve) => {
+      let kid;
+      try {
+        const decoded = jwt.decode(token, { complete: true });
+        if (!decoded || !decoded.header || !decoded.header.kid) {
+          return resolve(false);
+        }
+        kid = decoded.header.kid;
+      } catch (err) {
+        return resolve(false);
+      }
+
+      const options = {
+        algorithms: ['RS256'],
+        issuer: config.ssoIssuer
+      };
+
+      jwt.verify(token, getKey, options, (err, decoded) => {
+        if (err) {
+          console.error('[demi-api] search JWT verification error:', err.message);
+          return resolve(false);
+        }
+
+        const roles = decoded.realm_access?.roles || [];
+        const hasPermission = roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
+        resolve(hasPermission);
+      });
+    });
   }
 
   return false;
 }
+
 
 exports.search = async (req, res) => {
   try {
@@ -43,12 +106,12 @@ exports.search = async (req, res) => {
     // Cap pageSize at 250 to comply with Typesense pagination limits
     const pageSize = Math.min(requestedPageSize, 250);
 
-    const isAuth = isAdmin(req);
+    const isAuth = await isAdmin(req);
 
     if (dataset === 'Project') {
       // If no keywords are provided, do a simple MongoDB query
       if (!keywords) {
-        const baseQuery = isAuth ? {} : { isPublished: true };
+        const baseQuery = isAuth ? {} : { $or: [{ isPublished: true }, { read: { $in: ['public'] } }] };
         if (sectorFilter && sectorFilter !== 'all') {
           // Check both legacy "sector" field or metadata.trackAttributes.type_name
           baseQuery.$or = [
@@ -128,10 +191,11 @@ exports.search = async (req, res) => {
             sector: sector,
             status: status,
             centroid: p.centroid ? p.centroid.coordinates : [-125.0, 54.0],
-            read: p.read || ['public'],
+            read: p.read || (p.isPublished === false ? ['sysadmin', 'staff'] : ['public']),
             region: p.region || 'British Columbia',
             description: description || 'No project description provided.',
             proponent: { name: proponentName },
+            isPublished: p.isPublished !== false && (!p.read || p.read.includes('public')),
             metadata: finalMetadata
           };
         }));
@@ -195,6 +259,7 @@ exports.search = async (req, res) => {
             region: doc.region || 'British Columbia',
             description: doc.description || 'No project description provided.',
             proponent: { name: doc.proponent || 'Proponent Organization' },
+            isPublished: doc.allowed_roles ? doc.allowed_roles.includes('public') : true,
             metadata: rawMetadata
           };
         });
@@ -203,8 +268,9 @@ exports.search = async (req, res) => {
       } catch (err) {
         console.error('Typesense query failed, using MongoDB fallback:', err);
         // Fallback to Mongo regex search
-        const regex = new RegExp(keywords, 'i');
-        const baseQuery = isAuth ? {} : { isPublished: true };
+        const escaped = escapeRegExp(keywords);
+        const regex = new RegExp(escaped, 'i');
+        const baseQuery = isAuth ? {} : { $or: [{ isPublished: true }, { read: { $in: ['public'] } }] };
         baseQuery.$or = [
           { name: regex },
           { description: regex },
@@ -239,10 +305,11 @@ exports.search = async (req, res) => {
             sector: p.sector || rawMetadata.trackAttributes?.type_name || 'Other',
             status: p.status || rawMetadata.trackAttributes?.project_state_name || 'Active',
             centroid: p.centroid ? p.centroid.coordinates : [-125.0, 54.0],
-            read: p.read || ['public'],
+            read: p.read || (p.isPublished === false ? ['sysadmin', 'staff'] : ['public']),
             region: p.region || 'British Columbia',
             description: p.description || rawMetadata.trackAttributes?.description || 'No project description provided.',
             proponent: { name: p.proponent?.name || rawMetadata.trackAttributes?.proponent_name || 'Proponent Organization' },
+            isPublished: p.isPublished !== false && (!p.read || p.read.includes('public')),
             metadata: rawMetadata
           };
         });
@@ -251,7 +318,7 @@ exports.search = async (req, res) => {
       }
     } else if (dataset === 'Document') {
       if (!keywords) {
-        const baseQuery = isAuth ? {} : { isPublished: true };
+        const baseQuery = isAuth ? {} : { $or: [{ isPublished: true }, { read: { $in: ['public'] } }] };
         const documents = await Document.find(baseQuery).limit(requestedPageSize).sort({ createdAt: -1 });
         const mapped = documents.map(d => {
           return {
@@ -263,7 +330,8 @@ exports.search = async (req, res) => {
             project: d.project ? d.project.toString() : '',
             projectName: d.displayName ? d.displayName.split(' - ')[0] : 'Associated Project',
             description: d.displayName || 'Registry Document',
-            gatingState: 'admitted'
+            isPublished: d.isPublished !== false && (!d.read || d.read.includes('public')),
+            gatingState: d.isPublished === false || (d.read && !d.read.includes('public')) ? 'staged' : 'admitted'
           };
         });
         return res.json([{ searchResults: mapped }]);
@@ -318,6 +386,7 @@ exports.search = async (req, res) => {
             project: doc.projectId || '',
             projectName: doc.projectName || 'Associated Project',
             read: doc.allowed_roles || ['public'],
+            isPublished: doc.allowed_roles ? doc.allowed_roles.includes('public') : true,
             description: snippet
           };
         });
@@ -326,8 +395,9 @@ exports.search = async (req, res) => {
       } catch (err) {
         console.error('Typesense document query failed, using MongoDB fallback:', err);
         // Fallback to Mongo Document text/regex search
-        const regex = new RegExp(keywords, 'i');
-        const baseQuery = isAuth ? {} : { isPublished: true };
+        const escaped = escapeRegExp(keywords);
+        const regex = new RegExp(escaped, 'i');
+        const baseQuery = isAuth ? {} : { $or: [{ isPublished: true }, { read: { $in: ['public'] } }] };
         baseQuery.$or = [
           { displayName: regex },
           { orcsClassification: regex }
@@ -340,7 +410,8 @@ exports.search = async (req, res) => {
           documentType: 'PDF Document',
           project: d.project ? d.project.toString() : '',
           projectName: 'Associated Project',
-          read: d.isPublished ? ['public'] : ['sysadmin'],
+          read: d.read || (d.isPublished === false ? ['sysadmin', 'staff'] : ['public']),
+          isPublished: d.isPublished !== false && (!d.read || d.read.includes('public')),
           description: 'This is an extracted document from the central registry.'
         }));
 

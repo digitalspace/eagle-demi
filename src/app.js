@@ -45,6 +45,11 @@ try {
 // Mount Central API Routes
 app.use('/api', apiRoutes);
 
+// Fallback to Angular SPA index.html for deep links
+app.get(['/map', '/search', '/intake'], (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/index.html'));
+});
+
 // Catch 404
 app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found.' });

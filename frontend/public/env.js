@@ -9,8 +9,9 @@
   window.__env.ENVIRONMENT = 'dev'; // local | dev | test | prod
   window.__env.BANNER_COLOUR = 'blue';
 
-  // API Configuration — Connects directly to remote DEV DEMI API
-  window.__env.API_PATH = 'https://eagle-demi-api-6cdc9e-dev.apps.silver.devops.gov.bc.ca/api';
+  // API Configuration — Set to remote Dev API to bypass local backend/port-forwarding
+  // window.__env.API_PATH = 'http://localhost:3000/api'; // Local backend
+  window.__env.API_PATH = 'https://eagle-demi-api-6cdc9e-dev.apps.silver.devops.gov.bc.ca/api'; // Remote Dev API
   window.__env.USE_MOCK_DATA = false;
 
   // Keycloak Authentication Configuration

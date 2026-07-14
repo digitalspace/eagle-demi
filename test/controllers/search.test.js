@@ -57,6 +57,31 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(jsonResponse[0].searchResults.length, 1);
     assert.strictEqual(jsonResponse[0].searchResults[0].name, 'Ajax Mine');
     assert.strictEqual(jsonResponse[0].searchResults[0].sector, 'Mining');
+    assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
+  });
+
+  await t.test('search projects gates by read array for public/unauthenticated requests', async () => {
+    let capturedQuery = null;
+    t.mock.method(Project, 'find', (query) => {
+      capturedQuery = query;
+      return {
+        limit: async () => []
+      };
+    });
+
+    const req = {
+      query: { dataset: 'Project', keywords: '', pageSize: '10' },
+      header: () => null
+    };
+
+    const res = {
+      json: () => res,
+      status: () => res
+    };
+
+    await searchController.search(req, res);
+
+    assert.deepStrictEqual(capturedQuery, { $or: [{ isPublished: true }, { read: { $in: ['public'] } }] });
   });
 
   await t.test('search projects queries Typesense when keywords are provided', async () => {
@@ -110,6 +135,7 @@ test('Search Controller Tests', async (t) => {
       assert.ok(Array.isArray(jsonResponse));
       assert.strictEqual(jsonResponse[0].searchResults.length, 1);
       assert.strictEqual(jsonResponse[0].searchResults[0].name, 'Ajax Mine');
+      assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
       // Verify coordinates were swapped back to [lng, lat]
       assert.deepStrictEqual(jsonResponse[0].searchResults[0].centroid, [-120.37, 50.62]);
     } finally {
@@ -164,6 +190,7 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(jsonResponse[0].searchResults.length, 1);
     assert.strictEqual(jsonResponse[0].searchResults[0].displayName, 'Test Doc');
     assert.strictEqual(jsonResponse[0].searchResults[0].documentFileName, 'test_doc.pdf');
+    assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
   });
 
   await t.test('search documents queries Typesense grouped documents when keywords are provided', async () => {
@@ -225,6 +252,7 @@ test('Search Controller Tests', async (t) => {
       assert.strictEqual(jsonResponse[0].searchResults.length, 1);
       assert.strictEqual(jsonResponse[0].searchResults[0]._id, 'doc-123');
       assert.strictEqual(jsonResponse[0].searchResults[0].description, 'Extract <mark>content</mark> of the mine.');
+      assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
     } finally {
       global.fetch = originalFetch;
     }
@@ -253,5 +281,42 @@ test('Search Controller Tests', async (t) => {
 
     assert.strictEqual(statusCode, 400);
     assert.ok(jsonResponse.error.includes('Invalid or unsupported dataset'));
+  });
+
+  await t.test('search projects regex fallback escapes special regex characters', async () => {
+    let capturedQuery = null;
+    t.mock.method(Project, 'find', (query) => {
+      capturedQuery = query;
+      return {
+        limit: async () => []
+      };
+    });
+
+    // Mock global fetch to force Typesense query to fail and use fallback
+    const originalFetch = global.fetch;
+    global.fetch = async () => {
+      return { ok: false, status: 500 };
+    };
+
+    const req = {
+      query: { dataset: 'Project', keywords: 'Ajax.*Mine+', pageSize: '10' },
+      header: () => null
+    };
+
+    const res = {
+      json: () => res,
+      status: () => res
+    };
+
+    try {
+      await searchController.search(req, res);
+      assert.ok(capturedQuery);
+      // Ensure the captured query has escaped regex
+      const escapedPattern = 'Ajax\\.\\*Mine\\+';
+      const nameRegex = capturedQuery.$or[0].name;
+      assert.strictEqual(nameRegex.source, escapedPattern);
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 });

@@ -1,0 +1,128 @@
+<!-- Plain Typesense Deep Search Layout -->
+<div class="search-page-container">
+  <div class="search-hero">
+    <h1>Deep-Text Registry Search</h1>
+    <p>Search across 350+ environmental assessment projects and 60,000+ extracted PDF document pages.</p>
+    
+    <!-- Unified Search Input -->
+    <div class="hero-search-box">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input 
+        type="text" 
+        placeholder="Type query to search projects & documents (e.g., 'water quality', 'fish habitat', 'Ajax')..." 
+        [value]="service.searchQuery()" 
+        (input)="onSearchInput($event)"
+      >
+    </div>
+
+    <!-- Quick stats bar -->
+    <div style="display:flex; justify-content:center; gap: 2.5rem; margin-top: 1.5rem; font-size: 0.9rem; color: rgba(255, 255, 255, 0.75)">
+      <span style="display: inline-flex; align-items: center; gap: 0.5rem;">
+        <i class="fa-solid fa-folder" style="color: #f59e0b; font-size: 1.05rem;"></i>
+        <span><strong>{{ service.projects()?.length || 0 }}</strong> Total Projects</span>
+      </span>
+      <span style="display: inline-flex; align-items: center; gap: 0.5rem;">
+        <i class="fa-solid fa-file-pdf" style="color: #ef4444; font-size: 1.05rem;"></i>
+        <span><strong>{{ service.documents()?.length || 0 }}+</strong> Searchable PDF Documents</span>
+      </span>
+    </div>
+  </div>
+
+  <!-- Dual list column layout -->
+  <div class="search-results-grid">
+    <!-- Projects Section -->
+    <div class="results-column">
+      <h2 class="column-title">
+        <i class="fa-solid fa-folder"></i> Matching Projects ({{ service.filteredProjects()?.length || 0 }})
+      </h2>
+      <div class="scrollable-column">
+        @if (service.filteredProjects() === null) {
+          <!-- Shimmering Loading Skeleton -->
+          <div class="loading-skeleton-pulse">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+          </div>
+        } @else if (service.filteredProjects()!.length === 0) {
+          <div class="empty-state">
+            <i class="fa-solid fa-folder-open"></i>
+            @if (!service.searchQuery()) {
+              <div>Type inside the search box above to display projects.</div>
+            } @else {
+              <div>No projects match your search keywords.</div>
+            }
+          </div>
+        } @else {
+          @for (proj of service.filteredProjects(); track proj.id) {
+            <div class="search-result-card" [class.active]="service.selectedProject()?.id === proj.id" (click)="selectProject(proj)">
+              <div class="card-header">
+                <span class="card-title" [innerHTML]="highlightText(proj.name, service.searchQuery())"></span>
+                <span class="badge" [class]="proj.gatingState === 'admitted' ? 'badge-admitted' : 'badge-staged'">
+                  {{ proj.gatingState }}
+                </span>
+              </div>
+              <div class="card-desc" [innerHTML]="highlightText(proj.description, service.searchQuery())"></div>
+              <div class="card-footer">
+                <span><i class="fa-solid fa-tag"></i> {{ proj.sector }}</span>
+                <span><i class="fa-solid fa-map-pin"></i> {{ proj.region }}</span>
+                <span><i class="fa-solid fa-shield-halved"></i> {{ proj.status }}</span>
+              </div>
+            </div>
+          }
+        }
+      </div>
+    </div>
+
+    <!-- Documents Section -->
+    <div class="results-column">
+      <h2 class="column-title">
+        <i class="fa-solid fa-file-invoice"></i> Matching Documents & Snippets ({{ service.filteredDocuments()?.length || 0 }})
+      </h2>
+      <div class="scrollable-column">
+        @if (service.filteredDocuments() === null) {
+          <!-- Shimmering Loading Skeleton -->
+          <div class="loading-skeleton-pulse">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+          </div>
+        } @else if (service.filteredDocuments()!.length === 0) {
+          <div class="empty-state">
+            <i class="fa-solid fa-file-excel"></i>
+            @if (!service.searchQuery()) {
+              <div>Type inside the search box above to search document pages.</div>
+            } @else {
+              <div>No document contents match your search keywords.</div>
+            }
+          </div>
+        } @else {
+          @for (doc of service.filteredDocuments(); track doc.id) {
+            <div class="search-result-card document-result-card" [class.active]="service.selectedDocument()?.id === doc.id" (click)="selectDocument(doc)">
+              <div class="card-header">
+                <span class="card-title">
+                  <i class="fa-regular fa-file-pdf" style="color: #ff4d4f; margin-right: 0.25rem;"></i>
+                  <span [innerHTML]="highlightText(doc.displayName, service.searchQuery())"></span>
+                </span>
+                <span class="badge badge-admitted" style="font-size: 0.65rem;">
+                  {{ doc.documentType }}
+                </span>
+              </div>
+              
+              @if (doc.textSnippet) {
+                <div class="document-content-snippet">
+                  <i class="fa-solid fa-quote-left"></i>
+                  <span>...<span [innerHTML]="highlightText(doc.textSnippet, service.searchQuery())"></span>...</span>
+                </div>
+              }
+
+              <div class="card-footer">
+                <span><i class="fa-solid fa-folder"></i> <span [innerHTML]="highlightText(doc.projectName, service.searchQuery())"></span></span>
+                <span><i class="fa-solid fa-barcode"></i> ORCS: {{ doc.orcsCode }}</span>
+              </div>
+            </div>
+          }
+        }
+      </div>
+    </div>
+  </div>
+</div>

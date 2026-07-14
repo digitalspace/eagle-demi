@@ -41,3 +41,26 @@ Document Extraction & Machine Intelligence for EPIC.
 - **Automatic Daemon Startup**: The Change Stream sync watcher is loaded on server startup in `src/server.js` and runs in the background. It is skipped when `NODE_ENV === 'test'` to prevent test suites from trying to connect to mock databases.
 - **Direct Frontend Integration**: Frontend default `basePath` in `app.component.ts` points to `/api` (instead of `/api/demi`) so that it communicates natively on the same host (port 3000). No CORS configuration or complex proxy definitions are needed.
 - **Zero Ecosystem Changes**: `eagle-api` and `eagle-typesense` are kept completely untouched and clean. All search, ingestion, indexing, and presentation code remains 100% inside `eagle-demi`.
+
+## Dual Local Development Modes
+
+Local development of the DEMI frontend can be run in two modes:
+
+* **Direct Mode (Bypassing Local Backend & DB Port-Forward)**:
+  * Configure `window.__env.API_PATH` in `env.js` to point to the remote Dev API: `https://eagle-demi-api-6cdc9e-dev.apps.silver.devops.gov.bc.ca/api`.
+  * Start only the frontend with `cd frontend && yarn dev`.
+  * No database port-forwarding or local Express server execution required. This matches the standard `eagle-admin` local development paradigm.
+* **Full-Stack Mode (Local Backend + Database Tunnel)**:
+  * Configure `window.__env.API_PATH` in `env.js` to point to `http://localhost:3000/api`.
+  * Open a secure database tunnel with `oc port-forward pods/eagle-demi-mongodb-0 27017:27017`.
+  * Run the local backend with `node src/server.js`.
+  * Start the frontend with `cd frontend && yarn dev`.
+  * Required only when testing backend schema, Express routing, or database connection modifications locally.
+
+## Keycloak Session Persistence & Refresh Handling
+
+To circumvent browser third-party cookie blocking on `localhost` during iframe silent SSO checks (`check-sso`), DEMI utilizes a `sessionStorage` fallback:
+- **First-Time Page Load / New Tab**: `sessionStorage` does not contain `isLoggedIn`. Initializes Keycloak in `'check-sso'` mode. No unwanted automatic redirect loops or forced login prompts occur.
+- **Button-Triggered Login**: Sets `sessionStorage.setItem('isLoggedIn', 'true')` upon successful authentication.
+- **Page Refresh (Active Session)**: Reads `isLoggedIn` from `sessionStorage` and initializes Keycloak using `'login-required'`. Keycloak silently verifies the active top-level session via direct redirect and logs the user back in instantly, preserving authenticated state across refreshes.
+- **Logout**: Clears `sessionStorage` and `localStorage`, returning the client to standard public access mode.
