@@ -6,11 +6,11 @@
   // ==========================================================================
 
   window.__env.configEndpoint = false;
-  window.__env.ENVIRONMENT = 'dev'; // local | dev | test | prod
+  window.__env.ENVIRONMENT = 'local'; // local | dev | test | prod
   window.__env.BANNER_COLOUR = 'blue';
 
-  // API Configuration — Connects directly to remote DEV DEMI API
-  window.__env.API_PATH = 'https://eagle-demi-api-6cdc9e-dev.apps.silver.devops.gov.bc.ca/api';
+  // API Configuration — Connects directly to local DEMI API
+  window.__env.API_PATH = 'http://localhost:3000/api';
   window.__env.USE_MOCK_DATA = false;
 
   // Keycloak Authentication Configuration

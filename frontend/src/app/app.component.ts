@@ -978,9 +978,10 @@ export class AppComponent implements OnInit {
 
   setDemoRole(role: 'public' | 'admin') {
     if (role === 'admin' && this.authEnabled() && !this.isAuthenticated()) {
-      // Trigger Interactive Keycloak Login!
+      // Trigger Interactive Keycloak Login with IDIR hint!
       this.keycloak.login({
-        redirectUri: window.location.origin + '/admin'
+        idpHint: 'idir',
+        redirectUri: window.location.origin
       });
     } else {
       this.currentRole.set(role);
