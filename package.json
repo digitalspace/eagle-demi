@@ -12,6 +12,7 @@
     "db:sync": "node scratch/sync_epic_collections.js",
     "typesense:sync": "TYPESENSE_MIN_FREE_GIB=1 NODE_PATH=node_modules node -r dotenv/config src/typesense/full-sync.js",
     "typesense:test-search": "node scratch/test_public_search.js",
+    "diagnose": "node src/scripts/diagnose.js",
     "test": "node --test test/**/*.test.js"
   },
   "engines": {
