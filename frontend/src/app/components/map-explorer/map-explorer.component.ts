@@ -101,7 +101,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       await this.service.loadBoundaryGeometry(bLayer);
 
       // Only render if a specific single boundary item is specified/selected!
-      if (bFilter !== 'all') {
+      if (bFilter !== 'all' && bFilter !== '') {
         const singleBoundaryData = await this.service.loadSingleBoundaryGeometry(bLayer, bFilter);
         if (singleBoundaryData && this.map && this.service.activeBoundaryLayer() === bLayer && this.service.boundaryFilter() === bFilter) {
           this.renderBoundaryShapes([singleBoundaryData], bLayer, bFilter);
@@ -118,6 +118,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
             });
           }
         }
+      } else {
+        await this.updateViewportBoundaries();
       }
     });
   }
@@ -139,7 +141,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   // GIS Leaflet Map initialization
   private initMap() {
     try {
-      this.map = L.map('map', { zoomControl: false }).setView([54.0, -125.0], 5);
+      this.map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([54.0, -125.0], 5);
       
       L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
@@ -149,7 +151,10 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
       L.control.zoom({ position: 'bottomright' }).addTo(this.map);
 
-      const onMove = () => this.updateViewportProjects();
+      const onMove = () => {
+        this.updateViewportProjects();
+        this.updateViewportBoundaries();
+      };
       this.map.on('moveend', onMove);
       this.map.on('zoomend', () => {
         onMove();
@@ -169,7 +174,10 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         }
       });
       
-      setTimeout(() => this.updateViewportProjects(), 500);
+      setTimeout(() => {
+        this.updateViewportProjects();
+        this.updateViewportBoundaries();
+      }, 500);
 
       this.syncMarkersToMap(this.service.filteredProjects() || []);
       // Do not load regional boundaries initially, respect activeBoundaryLayer
@@ -213,6 +221,26 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     });
 
     this.service.mapInViewProjectIds.set(inViewIds);
+  }
+
+  private async updateViewportBoundaries() {
+    if (!this.map) return;
+    const bLayer = this.service.activeBoundaryLayer();
+    const bFilter = this.service.boundaryFilter();
+
+    if (bLayer === 'none' || bLayer === 'regions') {
+      return;
+    }
+
+    if (bFilter === 'all' || bFilter === '') {
+      const bounds = this.map.getBounds();
+      const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+      
+      const boundaries = await this.service.loadBoundariesByBBox(bLayer, bbox);
+      if (this.map && this.service.activeBoundaryLayer() === bLayer && (this.service.boundaryFilter() === 'all' || this.service.boundaryFilter() === '')) {
+        this.renderBoundaryShapes(boundaries, bLayer, bFilter || 'all');
+      }
+    }
   }
 
   private syncMarkersToMap(filteredProjects: Project[]) {
@@ -441,6 +469,15 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   private renderBoundaryShapes(boundaries: any[], type: string, filterValue: string) {
     if (!this.map) return;
 
+    if (this.boundariesLayer) {
+      try {
+        this.map.removeLayer(this.boundariesLayer);
+      } catch (err) {
+        console.warn('Error removing old boundaries layer:', err);
+      }
+      this.boundariesLayer = null;
+    }
+
     // Convert array of database boundary objects into a standard GeoJSON FeatureCollection
     const featureCollection = {
       type: 'FeatureCollection',
@@ -452,7 +489,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
           type: b.type,
           code: b.code
         },
-        geometry: b.geometry
+        geometry: b.geometry || b.simplifiedGeometry
       }))
     };
 
@@ -569,13 +606,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   private bindUnifiedTooltip(layer: any, name: string, type: string) {
-    let suffix = '';
-    if (type === 'regions') suffix = 'Region';
-    else if (type === 'regionalDistricts') suffix = 'Regional District';
-    else if (type === 'municipalities') suffix = 'Municipality';
-    else if (type === 'electoralDistricts') suffix = 'Electoral District';
-
-    layer.bindTooltip(`<strong>${name}${suffix ? ' ' + suffix : ''}</strong>`, {
+    layer.bindTooltip(`<strong>${(name || '').trim()}</strong>`, {
       sticky: true,
       className: 'region-tooltip'
     });

@@ -591,6 +591,31 @@ export class RegistryStateService {
     }
   }
 
+  async loadBoundariesByBBox(type: string, bbox: string): Promise<any[]> {
+    let basePath = '/api';
+    if (this.config.API_PATH) {
+      basePath = this.config.API_PATH;
+    }
+
+    let apiType = '';
+    if (type === 'regionalDistricts') apiType = 'Regional District';
+    else if (type === 'municipalities') apiType = 'Municipality';
+    else if (type === 'electoralDistricts') apiType = 'Electoral District';
+    else apiType = type;
+
+    try {
+      const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}&bbox=${encodeURIComponent(bbox)}`, {
+        headers: { 'X-Api-Key': 'eagle-demi-api-key' }
+      });
+      if (!res.ok) throw new Error(`Failed to load BBox boundaries for ${type}`);
+      const data = await res.json();
+      return data;
+    } catch (err) {
+      console.error(`Failed to load BBox boundaries for ${type}:`, err);
+      return [];
+    }
+  }
+
   async loadSingleBoundaryGeometry(type: string, name: string): Promise<any> {
     if (!type || !name || name === 'all') return null;
 
@@ -1110,9 +1135,9 @@ export class RegistryStateService {
     if (!boundaries || !Array.isArray(boundaries)) return true;
 
     const boundary = boundaries.find((b: any) => (b.name || '').toLowerCase() === boundaryName.toLowerCase());
-    if (!boundary || !boundary.geometry) return true;
+    if (!boundary || (!boundary.geometry && !boundary.simplifiedGeometry)) return true;
 
-    const geom = boundary.geometry;
+    const geom = boundary.geometry || boundary.simplifiedGeometry;
     const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
 
     if (geom.type === 'Polygon') {
