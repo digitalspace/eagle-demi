@@ -143,16 +143,44 @@ async function main() {
 
   try {
     const filterBy = 'allowed_roles:=[public, sysadmin, staff]';
-    const docsUrl = `${TYPESENSE_BASE}/collections/documents/documents/search?q=${encodeURIComponent(testKeywords)}&query_by=displayName,documentFileName,description,projectName&per_page=5&filter_by=${encodeURIComponent(filterBy)}`;
-    const chunksUrl = `${TYPESENSE_BASE}/collections/document_chunks/documents/search?q=${encodeURIComponent(testKeywords)}&query_by=content&group_by=documentId&group_limit=1&per_page=5&filter_by=${encodeURIComponent(filterBy)}`;
+    const multiSearchUrl = `${TYPESENSE_BASE}/multi_search`;
+    const multiSearchBody = {
+      searches: [
+        {
+          collection: 'documents',
+          q: testKeywords,
+          query_by: 'displayName,documentFileName,description,projectName',
+          per_page: 5,
+          filter_by: filterBy
+        },
+        {
+          collection: 'document_chunks',
+          q: testKeywords,
+          query_by: 'content',
+          group_by: 'documentId',
+          group_limit: 1,
+          per_page: 5,
+          filter_by: filterBy
+        }
+      ]
+    };
 
-    const [docsRes, chunksRes] = await Promise.all([
-      fetch(docsUrl, { headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY } }),
-      fetch(chunksUrl, { headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY } })
-    ]);
+    const response = await fetch(multiSearchUrl, {
+      method: 'POST',
+      headers: {
+        'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(multiSearchBody)
+    });
 
-    const docsData = await docsRes.json();
-    const chunksData = await chunksRes.json();
+    if (!response.ok) {
+      throw new Error(`Typesense multi_search responded with status ${response.status}`);
+    }
+
+    const data = await response.json();
+    const docsData = data.results[0];
+    const chunksData = data.results[1];
 
     const docHits = docsData.hits ? docsData.hits.length : 0;
     const chunkHits = chunksData.grouped_hits ? chunksData.grouped_hits.length : 0;
