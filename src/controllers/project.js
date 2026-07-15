@@ -2,6 +2,28 @@
 
 const Project = require('../models/project');
 const Region = require('../models/region');
+const Boundary = require('../models/boundary');
+
+async function autoTagProjectBoundaries(project) {
+  if (!project.centroid || !project.centroid.coordinates) return;
+  try {
+    const intersectingBoundaries = await Boundary.find({
+      geometry: {
+        $geoIntersects: {
+          $geometry: {
+            type: 'Point',
+            coordinates: project.centroid.coordinates
+          }
+        }
+      }
+    });
+    project.regionalDistrict = intersectingBoundaries.find(b => b.type === 'Regional District')?.name || '';
+    project.municipality = intersectingBoundaries.find(b => b.type === 'Municipality')?.name || '';
+    project.electoralDistrict = intersectingBoundaries.find(b => b.type === 'Electoral District')?.name || '';
+  } catch (err) {
+    console.error('Error in autoTagProjectBoundaries:', err);
+  }
+}
 
 // Helper to determine if the request is administrative / internal
 function isAdmin(req) {
@@ -34,23 +56,28 @@ function isAdmin(req) {
 
 exports.getProjects = async (req, res) => {
   try {
-    const { region: regionName } = req.query;
+    const { region: regionName, regionalDistrict, municipality, electoralDistrict } = req.query;
     const isAuth = isAdmin(req);
     const baseQuery = isAuth ? {} : { isPublished: true };
+
+    if (regionalDistrict) {
+      baseQuery.regionalDistrict = regionalDistrict;
+    }
+    if (municipality) {
+      baseQuery.municipality = municipality;
+    }
+    if (electoralDistrict) {
+      baseQuery.electoralDistrict = electoralDistrict;
+    }
 
     if (regionName) {
       const regionDoc = await Region.findOne({ name: regionName });
       if (!regionDoc) {
         return res.status(404).json({ error: 'Region not found' });
       }
-
-      const projects = await Project.find({
-        ...baseQuery,
-        centroid: {
-          $geoWithin: { $geometry: regionDoc.geometry }
-        }
-      });
-      return res.json(projects);
+      baseQuery.centroid = {
+        $geoWithin: { $geometry: regionDoc.geometry }
+      };
     }
 
     const projects = await Project.find(baseQuery);
@@ -69,6 +96,7 @@ exports.createProject = async (req, res) => {
     }
 
     const newProject = new Project(req.body);
+    await autoTagProjectBoundaries(newProject);
 
     const saved = await newProject.save();
     return res.status(201).json(saved);
@@ -101,6 +129,22 @@ exports.updateProject = async (req, res) => {
   try {
     const { id } = req.params;
     const query = isNaN(id) ? { _id: id } : { trackProjectId: Number(id) };
+
+    if (req.body.centroid && req.body.centroid.coordinates) {
+      const intersectingBoundaries = await Boundary.find({
+        geometry: {
+          $geoIntersects: {
+            $geometry: {
+              type: 'Point',
+              coordinates: req.body.centroid.coordinates
+            }
+          }
+        }
+      });
+      req.body.regionalDistrict = intersectingBoundaries.find(b => b.type === 'Regional District')?.name || '';
+      req.body.municipality = intersectingBoundaries.find(b => b.type === 'Municipality')?.name || '';
+      req.body.electoralDistrict = intersectingBoundaries.find(b => b.type === 'Electoral District')?.name || '';
+    }
 
     const updated = await Project.findOneAndUpdate(query, req.body, { new: true, runValidators: true });
     if (!updated) {

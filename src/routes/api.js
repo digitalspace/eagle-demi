@@ -7,6 +7,7 @@ const authMiddleware = require('../middleware/auth');
 const projectController = require('../controllers/project');
 const documentController = require('../controllers/document');
 const regionController = require('../controllers/region');
+const boundaryController = require('../controllers/boundary');
 const searchController = require('../controllers/search');
 
 // Search Route
@@ -37,5 +38,12 @@ router.get('/regions/:id', regionController.getRegion);
 router.post('/regions', authMiddleware, regionController.createRegion);
 router.put('/regions/:id', authMiddleware, regionController.updateRegion);
 router.delete('/regions/:id', authMiddleware, regionController.deleteRegion);
+
+// Boundaries (Borders) Routes
+router.get('/boundaries', boundaryController.getBoundaries);
+router.get('/boundaries/:id', boundaryController.getBoundary);
+router.post('/boundaries', authMiddleware, boundaryController.createBoundary);
+router.put('/boundaries/:id', authMiddleware, boundaryController.updateBoundary);
+router.delete('/boundaries/:id', authMiddleware, boundaryController.deleteBoundary);
 
 module.exports = router;

@@ -29,6 +29,14 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       this.syncMarkersToMap(filtered);
       setTimeout(() => this.updateViewportProjects(), 100);
     });
+
+    // Re-render regional boundaries whenever they are loaded or map is ready!
+    effect(() => {
+      const geojson = this.service.regionalBoundariesGeoJSON();
+      if (geojson && this.map) {
+        this.loadRegionalBoundaries();
+      }
+    });
   }
 
   ngOnInit() {
@@ -147,8 +155,17 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   private loadRegionalBoundaries() {
-    const geojson = this.service.regionalBoundariesGeoJSON;
+    const geojson = this.service.regionalBoundariesGeoJSON();
     if (!geojson || !this.map) return;
+
+    if (this.regionsLayer) {
+      try {
+        this.map.removeLayer(this.regionsLayer);
+      } catch (err) {
+        console.warn('Error removing old regions layer:', err);
+      }
+      this.regionsLayer = null;
+    }
 
     this.regionsLayer = L.geoJSON(geojson, {
       style: (feature: any) => this.getRegionStyle(feature?.properties?.regionName),

@@ -6,6 +6,9 @@ const ProjectSchema = new mongoose.Schema({
   trackProjectId: { type: Number, required: true, unique: true, index: true },
   name: { type: String, required: true },
   region: { type: String, default: '', index: true },
+  regionalDistrict: { type: String, default: '', index: true },
+  municipality: { type: String, default: '', index: true },
+  electoralDistrict: { type: String, default: '', index: true },
   centroid: {
     type: { type: String, enum: ['Point'], default: 'Point' },
     coordinates: { type: [Number], required: true } // [longitude, latitude] standard GeoJSON order

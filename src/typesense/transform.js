@@ -139,7 +139,7 @@ function transformProject(doc, listLookup) {
     ...(resolvePermissive(leg.currentPhaseName, listLookup) && { currentPhaseName: resolvePermissive(leg.currentPhaseName, listLookup) }),
     ...(resolvePermissive(leg.eacDecision, listLookup)      && { eacDecision:      resolvePermissive(leg.eacDecision, listLookup) }),
     ...(str(leg.type)             && { type:             str(leg.type) }),
-    ...(str(leg.sector)           && { sector:           str(leg.sector) }),
+    sector:           str(leg.sector || doc.metadata?.type_name || 'Other'),
     ...(str(leg.location)         && { location:         str(leg.location) }),
     ...(str(leg.shortName)        && { displayName:      str(leg.shortName) }),
     ...(resolvePermissive(leg.proponent, listLookup)    && { proponent:        resolvePermissive(leg.proponent, listLookup) }),

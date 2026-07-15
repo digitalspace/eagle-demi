@@ -40,7 +40,7 @@ export class RegistryStateService {
   mapInViewProjectIds = signal<(string | number)[]>([]);
 
   // Boundaries GeoJSON cache
-  regionalBoundariesGeoJSON: any = null;
+  regionalBoundariesGeoJSON = signal<any>(null);
 
   // Keycloak reference
   keycloak: any = null;
@@ -243,7 +243,9 @@ export class RegistryStateService {
     const projs = this.projects();
     if (projs === null) return null;
 
-    return projs.filter(p => {
+    console.log('[Registry filteredProjects] Starting filter of projects count:', projs.length, { query, gating, sector, region, role });
+
+    const result = projs.filter(p => {
       // 1. Role access gating
       if (role === 'public' && p.gatingState !== 'admitted') return false;
 
@@ -251,11 +253,24 @@ export class RegistryStateService {
       if (gating !== 'all' && p.gatingState !== gating) return false;
 
       // 3. Sector filter selection
-      if (sector !== 'all' && p.sector !== sector) return false;
+      if (sector !== 'all') {
+        const pSector = (p.sector || '').toLowerCase();
+        const fSector = sector.toLowerCase();
+        if (fSector === 'mining') {
+          if (!pSector.startsWith('mine') && !pSector.includes('mining')) {
+            return false;
+          }
+        } else {
+          if (!pSector.includes(fSector)) {
+            return false;
+          }
+        }
+      }
 
       // 3b. Region filter selection
       if (region !== 'all') {
-        if (this.regionalBoundariesGeoJSON && p.centroid) {
+        const geo = this.regionalBoundariesGeoJSON();
+        if (geo && p.centroid) {
           if (!this.isProjectInRegion(p, region)) {
             return false;
           }
@@ -277,6 +292,9 @@ export class RegistryStateService {
 
       return true;
     });
+
+    console.log('[Registry filteredProjects] Filtered projects result count:', result.length);
+    return result;
   });
 
   filteredDocuments = computed(() => {
@@ -499,7 +517,7 @@ export class RegistryStateService {
     try {
       const res = await fetch('/env_regional_boundaries_reprojected.geojson');
       if (!res.ok) throw new Error('Failed to load regional boundaries GeoJSON');
-      this.regionalBoundariesGeoJSON = await res.json();
+      this.regionalBoundariesGeoJSON.set(await res.json());
     } catch (err) {
       console.error('Failed to load regional boundaries:', err);
     }
@@ -574,6 +592,9 @@ export class RegistryStateService {
         projParams += `&and[sector]=${encodeURIComponent(sector)}`;
       }
 
+      console.log('[Registry loadData] Sector filter signal value:', sector);
+      console.log('[Registry loadData] Fetching projects from URL:', `${basePath}/search?${projParams}`);
+
       const resProj = await fetch(`${basePath}/search?${projParams}`, {
         headers: { 'X-Api-Key': 'eagle-demi-api-key' }
       });
@@ -595,17 +616,7 @@ export class RegistryStateService {
 
       const resultsProj = apiProjects[0]?.searchResults || [];
 
-      console.log('--- [DEMI DEBUG] PROJECTS FETCHED ---');
-      console.log('Total Projects Count:', resultsProj.length);
-      console.log('Current User Role Signal:', this.currentRole());
-      const stagedProjects = resultsProj.filter((p: any) => p.isPublished === false || (p.read && !p.read.includes('public')));
-      console.log('Staged (Unpublished) Projects from API payload:', stagedProjects.map((p: any) => ({
-        id: p._id,
-        name: p.name,
-        read: p.read,
-        isPublished: p.isPublished
-      })));
-      console.log('------------------------------------');
+      console.log('[Registry loadData] Projects fetched count:', resultsProj.length);
 
       if (Array.isArray(resultsProj) && resultsProj.length > 0) {
         const mappedProjects: Project[] = resultsProj.map((p: any) => {
@@ -629,7 +640,7 @@ export class RegistryStateService {
           return {
             id: p._id,
             name: p.name || 'Unnamed Project',
-            sector: p.sector || rawMetadata.trackAttributes?.type_name || 'Other',
+            sector: (p.sector && p.sector !== 'Other') ? p.sector : (rawMetadata.type_name || rawMetadata.trackAttributes?.type_name || 'Other'),
             status: p.status || rawMetadata.trackAttributes?.project_state_name || 'Active',
             legacyEagleId: p._id,
             centroid: this.parseCentroid(p.centroid),
@@ -956,9 +967,10 @@ export class RegistryStateService {
   }
 
   private isProjectInRegion(p: Project, regionName: string): boolean {
-    if (!this.regionalBoundariesGeoJSON || !p.centroid) return true;
+    const geo = this.regionalBoundariesGeoJSON();
+    if (!geo || !p.centroid) return true;
     
-    const feature = this.regionalBoundariesGeoJSON.features.find((f: any) => 
+    const feature = geo.features.find((f: any) => 
       (f.properties?.regionName || '').toLowerCase() === regionName.toLowerCase()
     );
     if (!feature || !feature.geometry) return true;

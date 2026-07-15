@@ -101,25 +101,50 @@ exports.search = async (req, res) => {
     const dataset = req.query.dataset;
     const keywords = req.query.keywords || req.query.q || '';
     const fuzzy = req.query.fuzzy === 'true';
-    const sectorFilter = req.query['and[sector]'] || '';
+    const sectorFilter = req.query['and[sector]'] || (req.query.and && req.query.and.sector) || req.query.sector || '';
     const requestedPageSize = parseInt(req.query.pageSize || '10', 10);
     // Cap pageSize at 250 to comply with Typesense pagination limits
     const pageSize = Math.min(requestedPageSize, 250);
 
     const isAuth = await isAdmin(req);
+    console.log('[demi-api search] Incoming parameters:', { dataset, keywords, fuzzy, sectorFilter, requestedPageSize, isAuth });
 
     if (dataset === 'Project') {
       // If no keywords are provided, do a simple MongoDB query
       if (!keywords) {
-        const baseQuery = isAuth ? {} : { $or: [{ isPublished: true }, { read: { $in: ['public'] } }] };
-        if (sectorFilter && sectorFilter !== 'all') {
-          // Check both legacy "sector" field or metadata.trackAttributes.type_name
-          baseQuery.$or = [
-            { sector: sectorFilter },
-            { 'metadata.trackAttributes.type_name': sectorFilter }
-          ];
+        const baseQuery = {};
+        const queryClauses = [];
+
+        if (!isAuth) {
+          queryClauses.push({ $or: [{ isPublished: true }, { read: { $in: ['public'] } }] });
         }
+
+        if (sectorFilter && sectorFilter !== 'all') {
+          let sectorRegex;
+          if (sectorFilter.toLowerCase() === 'mining') {
+            sectorRegex = /^Mine/i;
+          } else {
+            sectorRegex = new RegExp(sectorFilter, 'i');
+          }
+          queryClauses.push({
+            $or: [
+              { sector: sectorRegex },
+              { 'metadata.type_name': sectorRegex },
+              { 'metadata.trackAttributes.type_name': sectorRegex }
+            ]
+          });
+        }
+
+        if (queryClauses.length > 0) {
+          if (queryClauses.length === 1) {
+            Object.assign(baseQuery, queryClauses[0]);
+          } else {
+            baseQuery.$and = queryClauses;
+          }
+        }
+        console.log('[demi-api search] MongoDB Project query built:', JSON.stringify(baseQuery));
         const projects = await Project.find(baseQuery).limit(requestedPageSize);
+        console.log('[demi-api search] MongoDB query found raw project count:', projects.length);
         const mapped = await Promise.all(projects.map(async p => {
           let rawMetadata = p.metadata;
           let legacyProj = null;
@@ -141,6 +166,7 @@ exports.search = async (req, res) => {
             '';
 
           const sector = p.sector || 
+            rawMetadata?.type_name ||
             rawMetadata?.trackAttributes?.type_name || 
             legacyProj?.sector || 
             (legacyProj && legacyProj.currentLegislationYear && legacyProj[legacyProj.currentLegislationYear]?.type) ||
@@ -218,7 +244,13 @@ exports.search = async (req, res) => {
         }
       }
       if (sectorFilter && sectorFilter !== 'all') {
-        filterBy.push(`sector:="${sectorFilter}"`);
+        if (sectorFilter.toLowerCase() === 'energy') {
+          filterBy.push('sector:="Energy*"');
+        } else if (sectorFilter.toLowerCase() === 'mining') {
+          filterBy.push('sector:="Mine*"');
+        } else {
+          filterBy.push(`sector:="${sectorFilter}"`);
+        }
       }
 
       const typesenseUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/collections/projects/documents/search?q=${encodeURIComponent(keywords)}&query_by=name,displayName,description,proponent&num_typos=${fuzzy ? 2 : 0}&per_page=${pageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
@@ -277,11 +309,19 @@ exports.search = async (req, res) => {
           { region: regex }
         ];
         if (sectorFilter && sectorFilter !== 'all') {
+          let sectorRegex;
+          if (sectorFilter.toLowerCase() === 'mining') {
+            sectorRegex = /^Mine/i;
+          } else {
+            sectorRegex = new RegExp(sectorFilter, 'i');
+          }
           baseQuery.$and = [
-            { $or: [{ sector: sectorFilter }, { 'metadata.trackAttributes.type_name': sectorFilter }] }
+            { $or: [{ sector: sectorRegex }, { 'metadata.type_name': sectorRegex }, { 'metadata.trackAttributes.type_name': sectorRegex }] }
           ];
         }
+        console.log('[demi-api search] MongoDB Fallback Project query built:', JSON.stringify(baseQuery));
         const projects = await Project.find(baseQuery).limit(pageSize);
+        console.log('[demi-api search] MongoDB Fallback query found raw project count:', projects.length);
         const mapped = projects.map(p => {
           const rawMetadata = p.metadata || {
             trackAttributes: {
@@ -302,7 +342,7 @@ exports.search = async (req, res) => {
           return {
             _id: p._id.toString(),
             name: p.name || 'Unnamed Project',
-            sector: p.sector || rawMetadata.trackAttributes?.type_name || 'Other',
+            sector: p.sector || rawMetadata?.type_name || rawMetadata?.trackAttributes?.type_name || 'Other',
             status: p.status || rawMetadata.trackAttributes?.project_state_name || 'Active',
             centroid: p.centroid ? p.centroid.coordinates : [-125.0, 54.0],
             read: p.read || (p.isPublished === false ? ['sysadmin', 'staff'] : ['public']),

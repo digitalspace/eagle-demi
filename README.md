@@ -24,7 +24,12 @@ The Express server acts as the master directory of truth. It manages projects, d
    npm start
    ```
 
-3. View Swagger API documentation:
+3. Seed administrative boundaries and retroactively tag existing projects:
+   ```bash
+   node src/scripts/seed-boundaries.js
+   ```
+
+4. View Swagger API documentation:
    * **URL**: `http://localhost:3000/api-docs`
 
 ---
