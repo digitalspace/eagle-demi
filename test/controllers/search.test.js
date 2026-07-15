@@ -1,5 +1,7 @@
 'use strict';
 
+process.env.NODE_ENV = 'test';
+
 const test = require('node:test');
 const assert = require('node:assert');
 const mongoose = require('mongoose');
@@ -249,20 +251,24 @@ test('Search Controller Tests', async (t) => {
       ]
     };
 
-    // Mock global fetch to handle parallel dual queries
+    // Mock global fetch to handle batched multi_search query
     const originalFetch = global.fetch;
-    global.fetch = async (url) => {
-      if (url.includes('collections/documents/documents/search')) {
+    global.fetch = async (url, options) => {
+      if (url.includes('multi_search')) {
+        assert.strictEqual(options.method, 'POST');
+        const body = JSON.parse(options.body);
+        assert.strictEqual(body.searches.length, 2);
+        assert.strictEqual(body.searches[0].collection, 'documents');
+        assert.strictEqual(body.searches[1].collection, 'document_chunks');
         return {
           ok: true,
           status: 200,
-          json: async () => mockDocsResponse
-        };
-      } else if (url.includes('collections/document_chunks/documents/search')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => mockChunksResponse
+          json: async () => ({
+            results: [
+              mockDocsResponse,
+              mockChunksResponse
+            ]
+          })
         };
       }
       return { ok: false, status: 404 };

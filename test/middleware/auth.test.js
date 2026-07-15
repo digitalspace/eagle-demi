@@ -1,5 +1,8 @@
 'use strict';
 
+process.env.NODE_ENV = 'test';
+process.env.DOCLING_API_KEY = 'eagle-demi-api-key';
+
 const test = require('node:test');
 const assert = require('node:assert');
 const jwt = require('jsonwebtoken');

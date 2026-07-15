@@ -39,59 +39,10 @@ async function isAdmin(req) {
     const roles = req.user.realm_access?.roles || [];
     return roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
   }
-
   const apiKey = req.header('X-Api-Key');
-  const expectedKey = process.env.DOCLING_API_KEY || 'eagle-demi-api-key';
-  if (apiKey && apiKey === expectedKey) return true;
-
-  const authHeader = req.header('Authorization');
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-
-    if (!config.keycloakEnabled) {
-      // Local testing / Keycloak bypass (do not verify signature, only decode)
-      try {
-        const decoded = jwt.decode(token);
-        if (decoded && decoded.realm_access && decoded.realm_access.roles) {
-          const roles = decoded.realm_access.roles;
-          return roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
-        }
-      } catch (err) {
-        return false;
-      }
-    }
-
-    // Verify token against remote Keycloak JWKS
-    return new Promise((resolve) => {
-      let kid;
-      try {
-        const decoded = jwt.decode(token, { complete: true });
-        if (!decoded || !decoded.header || !decoded.header.kid) {
-          return resolve(false);
-        }
-        kid = decoded.header.kid;
-      } catch (err) {
-        return resolve(false);
-      }
-
-      const options = {
-        algorithms: ['RS256'],
-        issuer: config.ssoIssuer
-      };
-
-      jwt.verify(token, getKey, options, (err, decoded) => {
-        if (err) {
-          console.error('[demi-api] search JWT verification error:', err.message);
-          return resolve(false);
-        }
-
-        const roles = decoded.realm_access?.roles || [];
-        const hasPermission = roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
-        resolve(hasPermission);
-      });
-    });
-  }
-
+  const expectedKey = process.env.DOCLING_API_KEY;
+  if (expectedKey && apiKey && apiKey === expectedKey) return true;
+  if (process.env.NODE_ENV !== 'production' && apiKey === 'eagle-demi-api-key') return true;
   return false;
 }
 
@@ -391,24 +342,47 @@ exports.search = async (req, res) => {
         }
       }
 
-      const docsTypesenseUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/collections/documents/documents/search?q=${encodeURIComponent(keywords)}&query_by=displayName,documentFileName,description,projectName&num_typos=${fuzzy ? 2 : 0}&per_page=${pageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
-      const chunksTypesenseUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/collections/document_chunks/documents/search?q=${encodeURIComponent(keywords)}&query_by=content&group_by=documentId&group_limit=1&num_typos=${fuzzy ? 2 : 0}&per_page=${pageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
+      const multiSearchUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/multi_search`;
+      const multiSearchBody = {
+        searches: [
+          {
+            collection: 'documents',
+            q: keywords,
+            query_by: 'displayName,documentFileName,description,projectName',
+            num_typos: fuzzy ? 2 : 0,
+            per_page: pageSize,
+            ...(filterBy.length > 0 ? { filter_by: filterBy.join(' && ') } : {})
+          },
+          {
+            collection: 'document_chunks',
+            q: keywords,
+            query_by: 'content',
+            group_by: 'documentId',
+            group_limit: 1,
+            num_typos: fuzzy ? 2 : 0,
+            per_page: pageSize,
+            ...(filterBy.length > 0 ? { filter_by: filterBy.join(' && ') } : {})
+          }
+        ]
+      };
 
       try {
-        const [docsRes, chunksRes] = await Promise.all([
-          fetch(docsTypesenseUrl, { headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY } }),
-          fetch(chunksTypesenseUrl, { headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY } })
-        ]);
+        const response = await fetch(multiSearchUrl, {
+          method: 'POST',
+          headers: {
+            'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(multiSearchBody)
+        });
 
-        if (!docsRes.ok) {
-          throw new Error(`Typesense docs query responded with ${docsRes.status}`);
-        }
-        if (!chunksRes.ok) {
-          throw new Error(`Typesense chunks query responded with ${chunksRes.status}`);
+        if (!response.ok) {
+          throw new Error(`Typesense multi_search responded with ${response.status}`);
         }
 
-        const docsData = await docsRes.json();
-        const chunksData = await chunksRes.json();
+        const data = await response.json();
+        const docsData = data.results[0];
+        const chunksData = data.results[1];
         const mergedDocsMap = new Map();
 
         // 1. Process metadata hits from 'documents' collection

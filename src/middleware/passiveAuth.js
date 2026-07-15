@@ -30,7 +30,6 @@ module.exports = (req, res, next) => {
   const expectedKey = process.env.DOCLING_API_KEY;
 
   if (expectedKey && apiKey && apiKey === expectedKey) {
-    // Grant access as a system user
     req.user = {
       preferred_username: 'internal-service',
       realm_access: { roles: ['sysadmin', 'staff', 'demi-admin'] }
@@ -58,11 +57,11 @@ module.exports = (req, res, next) => {
         const decoded = jwt.decode(token);
         if (decoded && decoded.realm_access && decoded.realm_access.roles) {
           req.user = decoded;
-          return next();
         }
       } catch (err) {
-        return res.status(401).json({ error: 'Unauthorized. Invalid Bearer token structure.' });
+        // Silent catch for passive authentication
       }
+      return next();
     }
 
     // Verify token against remote Keycloak JWKS
@@ -70,11 +69,11 @@ module.exports = (req, res, next) => {
     try {
       const decoded = jwt.decode(token, { complete: true });
       if (!decoded || !decoded.header || !decoded.header.kid) {
-        return res.status(401).json({ error: 'Unauthorized. JWT header or kid is missing.' });
+        return next();
       }
       kid = decoded.header.kid;
     } catch (err) {
-      return res.status(401).json({ error: 'Unauthorized. Malformed Bearer token.' });
+      return next();
     }
 
     const options = {
@@ -83,25 +82,13 @@ module.exports = (req, res, next) => {
     };
 
     jwt.verify(token, getKey, options, (err, decoded) => {
-      if (err) {
-        console.error('[demi-api] JWT verification error:', err.message);
-        return res.status(401).json({ error: `Unauthorized. JWT verification failed: ${err.message}` });
+      if (!err && decoded) {
+        req.user = decoded;
       }
-
-      // Check if user has required roles (sysadmin, staff, or demi-admin)
-      const roles = decoded.realm_access?.roles || [];
-      const hasPermission = roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
-
-      if (!hasPermission) {
-        return res.status(403).json({ error: 'Forbidden. User does not possess admin or staff permissions.' });
-      }
-
-      req.user = decoded;
       return next();
     });
     return;
   }
 
-  // 3. Unauthorized fallback
-  return res.status(401).json({ error: 'Unauthorized. Valid X-Api-Key or Bearer token required.' });
+  return next();
 };
