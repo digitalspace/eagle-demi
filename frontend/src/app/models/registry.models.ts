@@ -7,6 +7,9 @@ export interface Project {
   centroid: [number, number]; // [longitude, latitude]
   gatingState: 'admitted' | 'staged';
   region: string;
+  regionalDistrict?: string;
+  municipality?: string;
+  electoralDistrict?: string;
   description: string;
   proponent: string;
   rawMetadata?: any;

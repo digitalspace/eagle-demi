@@ -72,6 +72,10 @@ const PROJECT_SCHEMA = {
     { name: 'decisionDate',     type: 'int64',   sort: true,   range_index: true,  optional: true },
     // [lat, lng] centroid geopoint for map and proximity search
     { name: 'centroid',         type: 'geopoint',              optional: true },
+    // Administrative boundaries fields
+    { name: 'regionalDistrict',  type: 'string',  facet: true,  optional: true },
+    { name: 'electoralDistrict', type: 'string',  facet: true,  optional: true },
+    { name: 'municipality',      type: 'string',  facet: true,  optional: true },
     // 30-day click score — updated nightly by popularity-sync.js (0 = unscored)
     { name: 'popularity',       type: 'int32',   sort: true },  // must be non-optional for default_sorting_field
     // Access control — roles that may see this project (mirrors MongoDB read array)
@@ -216,7 +220,7 @@ const QUERY_BY = {
  */
 const FACET_BY = {
   Document:            'type,milestone,documentAuthorType,projectPhase,legislation,documentSource,region',
-  Project:             'region,status,currentPhaseName,eacDecision,type,sector',
+  Project:             'region,status,currentPhaseName,eacDecision,type,sector,regionalDistrict,electoralDistrict,municipality',
   RecentActivity:      'type',
   ProjectNotification: 'type,region,decision,pcp',
   DocumentChunk:       'documentType,projectId,region',

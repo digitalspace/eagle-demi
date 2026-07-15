@@ -186,15 +186,14 @@ async function startWatcher(typesense, mongoDB, listLookupRef, projectLookupRef,
     }
   });
 
-  changeStream.on('error', (err) => {
-    console.error('Change Stream error:', err.message);
-    // The stream will be invalidated; the outer reconnect loop will restart
-  });
-
-  // Return a promise that resolves when the stream closes
-  return new Promise((resolve) => {
+  // Return a promise that resolves when the stream closes, or rejects on error
+  return new Promise((resolve, reject) => {
     changeStream.on('close', resolve);
     changeStream.on('end', resolve);
+    changeStream.on('error', (err) => {
+      console.error('Change Stream error:', err.message);
+      reject(err);
+    });
   });
 }
 
@@ -212,7 +211,28 @@ async function main() {
       });
       await mongo.connect();
       const db = mongo.db(process.env.MONGODB_DATABASE || 'epic');
-      console.log('Connected to MongoDB. Starting Change Stream...');
+      console.log('Connected to MongoDB. Checking replica set status...');
+
+      const hello = await db.command({ hello: 1 });
+      const isReplicaSet = !!hello.setName;
+
+      if (!isReplicaSet) {
+        console.warn('MongoDB is not running as a replica set. Change Stream indexing is disabled.');
+        
+        const listLookupRef = { map: await buildListLookup(db) };
+        console.log(`List lookup loaded: ${listLookupRef.map.size} entries`);
+
+        const projectLookupRef = { map: await buildProjectLookup(db) };
+        console.log(`Project lookup loaded: ${projectLookupRef.map.size} entries`);
+
+        const pcpLookupRef = { map: await buildPcpLookup(db) };
+        console.log(`PCP lookup loaded: ${pcpLookupRef.map.size} entries`);
+
+        await ensureCollections(typesense);
+        break; // Exit reconnect loop gracefully since change stream is unsupported
+      }
+
+      console.log('MongoDB replica set detected. Starting Change Stream...');
 
       const listLookupRef = { map: await buildListLookup(db) };
       console.log(`List lookup loaded: ${listLookupRef.map.size} entries`);

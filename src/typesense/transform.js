@@ -146,6 +146,9 @@ function transformProject(doc, listLookup) {
     ...(toTimestamp(leg.dateUpdated)    !== undefined && { updatedDate:   toTimestamp(leg.dateUpdated) }),
     ...(toTimestamp(leg.decisionDate)  !== undefined && { decisionDate:  toTimestamp(leg.decisionDate) }),
     ...parseCentroid(leg.centroid),
+    ...(str(doc.regionalDistrict)  && { regionalDistrict:  str(doc.regionalDistrict) }),
+    ...(str(doc.electoralDistrict) && { electoralDistrict: str(doc.electoralDistrict) }),
+    ...(str(doc.municipality)      && { municipality:      str(doc.municipality) }),
     ...(transformPolygon(doc.geometry) && { geometry_polygon: transformPolygon(doc.geometry) }),
     popularity:   0,  // default; overwritten nightly by popularity-sync.js
     allowed_roles: extractRoles(doc),

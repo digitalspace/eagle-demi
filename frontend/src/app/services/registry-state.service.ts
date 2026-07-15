@@ -42,6 +42,30 @@ export class RegistryStateService {
   // Boundaries GeoJSON cache
   regionalBoundariesGeoJSON = signal<any>(null);
 
+  // Active administrative boundary layer category on the map
+  activeBoundaryLayer = signal<'none' | 'regions' | 'regionalDistricts' | 'municipalities' | 'electoralDistricts'>('regions');
+
+  // Active administrative filter value
+  boundaryFilter = signal<string>('all');
+
+  // Cache of loaded GeoJSON data with geometry to avoid repeated API fetches
+  loadedBoundariesGeoJSON = signal<Record<string, any>>({});
+
+  // Loading state for administrative boundaries loading
+  isLoadingBoundaries = signal<boolean>(false);
+
+  // Computed alphabetical list of boundary names in active layer
+  activeBoundaryNames = computed(() => {
+    const bLayer = this.activeBoundaryLayer();
+    if (bLayer === 'none' || bLayer === 'regions') return [];
+    
+    const cache = this.loadedBoundariesGeoJSON();
+    const data = cache[bLayer];
+    if (!data || !Array.isArray(data)) return [];
+    
+    return data.map((b: any) => b.name).sort((a: string, b: string) => a.localeCompare(b));
+  });
+
   // Keycloak reference
   keycloak: any = null;
 
@@ -234,6 +258,8 @@ export class RegistryStateService {
     const sector = this.sectorFilter();
     const region = this.regionFilter();
     const role = this.currentRole();
+    const bLayer = this.activeBoundaryLayer();
+    const bFilter = this.boundaryFilter();
 
     // For plain deep search view, return empty array until user starts typing
     if (this.activePage() === 'search' && !query) {
@@ -243,7 +269,7 @@ export class RegistryStateService {
     const projs = this.projects();
     if (projs === null) return null;
 
-    console.log('[Registry filteredProjects] Starting filter of projects count:', projs.length, { query, gating, sector, region, role });
+    console.log('[Registry filteredProjects] Starting filter of projects count:', projs.length, { query, gating, sector, region, role, bLayer, bFilter });
 
     const result = projs.filter(p => {
       // 1. Role access gating
@@ -281,6 +307,13 @@ export class RegistryStateService {
           if (!pRegion.includes(fRegion) && !fRegion.includes(pRegion)) {
             return false;
           }
+        }
+      }
+
+      // 3c. Administrative Boundary filter selection with dynamic client-side containment checks
+      if (bLayer !== 'none' && bFilter !== 'all') {
+        if (!this.isProjectInBoundary(p, bLayer, bFilter)) {
+          return false;
         }
       }
 
@@ -522,6 +555,43 @@ export class RegistryStateService {
       console.error('Failed to load regional boundaries:', err);
     }
   }
+
+  async loadBoundaryGeometry(type: string): Promise<any> {
+    const currentCache = this.loadedBoundariesGeoJSON();
+    if (currentCache[type]) return currentCache[type];
+
+    this.isLoadingBoundaries.set(true);
+
+    let basePath = '/api';
+    if (this.config.API_PATH) {
+      basePath = this.config.API_PATH;
+    }
+
+    let apiType = '';
+    if (type === 'regionalDistricts') apiType = 'Regional District';
+    else if (type === 'municipalities') apiType = 'Municipality';
+    else if (type === 'electoralDistricts') apiType = 'Electoral District';
+    else apiType = type;
+
+    console.log(`[Registry loadBoundaryGeometry] Lazy loading boundaries for category: ${type} (API query type: ${apiType})`);
+
+    try {
+      const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}&geometry=true`, {
+        headers: { 'X-Api-Key': 'eagle-demi-api-key' }
+      });
+      if (!res.ok) throw new Error(`Failed to load boundaries for ${type}`);
+      const data = await res.json();
+      
+      this.loadedBoundariesGeoJSON.update(cache => ({ ...cache, [type]: data }));
+      return data;
+    } catch (err) {
+      console.error(`Failed to load boundary geometry for ${type}:`, err);
+      return [];
+    } finally {
+      this.isLoadingBoundaries.set(false);
+    }
+  }
+
 
   // Load datasets from Express api, falling back to rich mock data if empty/fails
   async loadData() {
@@ -976,6 +1046,28 @@ export class RegistryStateService {
     if (!feature || !feature.geometry) return true;
 
     const geom = feature.geometry;
+    const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
+
+    if (geom.type === 'Polygon') {
+      return this.isPointInPolygon(point, geom.coordinates);
+    } else if (geom.type === 'MultiPolygon') {
+      return this.isPointInMultiPolygon(point, geom.coordinates);
+    }
+
+    return true;
+  }
+
+  isProjectInBoundary(p: Project, bLayer: string, boundaryName: string): boolean {
+    if (!bLayer || bLayer === 'none' || bLayer === 'regions' || !boundaryName || boundaryName === 'all' || !p.centroid) return true;
+
+    const cache = this.loadedBoundariesGeoJSON();
+    const boundaries = cache[bLayer];
+    if (!boundaries || !Array.isArray(boundaries)) return true;
+
+    const boundary = boundaries.find((b: any) => (b.name || '').toLowerCase() === boundaryName.toLowerCase());
+    if (!boundary || !boundary.geometry) return true;
+
+    const geom = boundary.geometry;
     const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
 
     if (geom.type === 'Polygon') {
