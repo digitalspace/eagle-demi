@@ -172,21 +172,21 @@
               <div 
                 class="chip" 
                 [class.active]="service.activeBoundaryLayer() === 'regionalDistricts'" 
-                (click)="service.activeBoundaryLayer.set('regionalDistricts'); service.boundaryFilter.set('all')"
+                (click)="service.activeBoundaryLayer.set('regionalDistricts'); service.boundaryFilter.set('')"
               >
                 Regional Districts
               </div>
               <div 
                 class="chip" 
                 [class.active]="service.activeBoundaryLayer() === 'municipalities'" 
-                (click)="service.activeBoundaryLayer.set('municipalities'); service.boundaryFilter.set('all')"
+                (click)="service.activeBoundaryLayer.set('municipalities'); service.boundaryFilter.set('')"
               >
                 Municipalities
               </div>
               <div 
                 class="chip" 
                 [class.active]="service.activeBoundaryLayer() === 'electoralDistricts'" 
-                (click)="service.activeBoundaryLayer.set('electoralDistricts'); service.boundaryFilter.set('all')"
+                (click)="service.activeBoundaryLayer.set('electoralDistricts'); service.boundaryFilter.set('')"
               >
                 Electoral Districts
               </div>
@@ -208,10 +208,10 @@
             <div class="filter-section" style="margin-top: 0.85rem; border-top: 1px dashed var(--bc-gray-border); padding-top: 0.85rem;">
               <div class="filter-label" style="display:flex; justify-content:space-between; align-items:center;">
                 <span>Select Specific Boundary Filter</span>
-                @if (service.boundaryFilter() !== 'all') {
+                @if (service.boundaryFilter() !== 'all' && service.boundaryFilter() !== '') {
                   <button 
                     style="background:none; border:none; color: var(--bc-blue-primary); font-size:0.7rem; font-weight:700; cursor:pointer; text-decoration:underline;"
-                    (click)="service.boundaryFilter.set('all')"
+                    (click)="service.boundaryFilter.set('')"
                   >
                     Clear Filter
                   </button>
@@ -249,6 +249,13 @@
                   </div>
                 }
               </div>
+
+              <!-- Premium Info Hint to select a single boundary shape -->
+              @if (service.boundaryFilter() === '' || service.boundaryFilter() === 'all') {
+                <div style="background: rgba(99, 102, 241, 0.08); border-left: 3px solid #6366f1; padding: 0.6rem 0.8rem; border-radius: 6px; font-size: 0.78rem; color: var(--text-dark); margin-top: 0.75rem; border-right: 1px solid rgba(99, 102, 241, 0.15); border-top: 1px solid rgba(99, 102, 241, 0.15); border-bottom: 1px solid rgba(99, 102, 241, 0.15);">
+                  Please search and select a specific boundary above. Only a single selected boundary shape is requested with its full geometry on-demand to optimize performance.
+                </div>
+              }
             </div>
           }
         </div>

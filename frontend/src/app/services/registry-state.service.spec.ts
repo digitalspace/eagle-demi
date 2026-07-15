@@ -63,4 +63,33 @@ describe('RegistryStateService', () => {
     expect(result).toEqual(mockResponse);
     expect(service.loadedBoundariesGeoJSON()['regionalDistricts']).toEqual(mockResponse);
   });
+
+  it('should load single boundary geometry from cache if available', async () => {
+    const mockData = [{ name: 'Victoria-Beacon Hill', geometry: { type: 'Polygon', coordinates: [] } }];
+    service.loadedBoundariesGeoJSON.set({
+      electoralDistricts: mockData
+    });
+
+    const result = await service.loadSingleBoundaryGeometry('electoralDistricts', 'Victoria-Beacon Hill');
+    expect(result).toBe(mockData[0]);
+  });
+
+  it('should fetch single boundary geometry and update cache if not already cached with geometry', async () => {
+    const initialCache = [{ name: 'Victoria-Beacon Hill' }];
+    service.loadedBoundariesGeoJSON.set({
+      electoralDistricts: initialCache
+    });
+
+    const mockResponse = { name: 'Victoria-Beacon Hill', geometry: { type: 'Polygon', coordinates: [[1, 2]] } };
+    const fetchSpy = spyOn(window, 'fetch').and.resolveTo(new Response(JSON.stringify(mockResponse), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+
+    const result = await service.loadSingleBoundaryGeometry('electoralDistricts', 'Victoria-Beacon Hill');
+
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(result).toEqual(mockResponse);
+    expect(service.loadedBoundariesGeoJSON()['electoralDistricts'][0].geometry).toEqual(mockResponse.geometry);
+  });
 });

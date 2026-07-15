@@ -558,7 +558,7 @@ export class RegistryStateService {
 
   async loadBoundaryGeometry(type: string): Promise<any> {
     const currentCache = this.loadedBoundariesGeoJSON();
-    if (currentCache[type]) return currentCache[type];
+    if (currentCache[type] && currentCache[type].length > 0) return currentCache[type];
 
     this.isLoadingBoundaries.set(true);
 
@@ -573,20 +573,66 @@ export class RegistryStateService {
     else if (type === 'electoralDistricts') apiType = 'Electoral District';
     else apiType = type;
 
-    console.log(`[Registry loadBoundaryGeometry] Lazy loading boundaries for category: ${type} (API query type: ${apiType})`);
+    console.log(`[Registry loadBoundaryGeometry] Lazy loading metadata for category: ${type} (API query type: ${apiType})`);
 
     try {
-      const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}&geometry=true`, {
+      const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}`, {
         headers: { 'X-Api-Key': 'eagle-demi-api-key' }
       });
-      if (!res.ok) throw new Error(`Failed to load boundaries for ${type}`);
+      if (!res.ok) throw new Error(`Failed to load boundaries metadata for ${type}`);
       const data = await res.json();
       
       this.loadedBoundariesGeoJSON.update(cache => ({ ...cache, [type]: data }));
       return data;
     } catch (err) {
-      console.error(`Failed to load boundary geometry for ${type}:`, err);
+      console.error(`Failed to load boundary metadata for ${type}:`, err);
       return [];
+    } finally {
+      this.isLoadingBoundaries.set(false);
+    }
+  }
+
+  async loadSingleBoundaryGeometry(type: string, name: string): Promise<any> {
+    if (!type || !name || name === 'all') return null;
+
+    const currentCache = this.loadedBoundariesGeoJSON();
+    const boundaries = currentCache[type] || [];
+    const match = boundaries.find((b: any) => (b.name || '').toLowerCase() === name.toLowerCase());
+    if (match && match.geometry) return match;
+
+    this.isLoadingBoundaries.set(true);
+
+    let basePath = '/api';
+    if (this.config.API_PATH) {
+      basePath = this.config.API_PATH;
+    }
+
+    console.log(`[Registry loadSingleBoundaryGeometry] Lazy loading single geometry for: ${name} (${type})`);
+
+    try {
+      const res = await fetch(`${basePath}/boundaries/${encodeURIComponent(name)}`, {
+        headers: { 'X-Api-Key': 'eagle-demi-api-key' }
+      });
+      if (!res.ok) throw new Error(`Failed to load single boundary geometry for ${name}`);
+      const data = await res.json();
+
+      if (data && data.geometry) {
+        this.loadedBoundariesGeoJSON.update(cache => {
+          const list = cache[type] ? [...cache[type]] : [];
+          const idx = list.findIndex((b: any) => (b.name || '').toLowerCase() === name.toLowerCase());
+          if (idx !== -1) {
+            list[idx] = { ...list[idx], geometry: data.geometry };
+          } else {
+            list.push(data);
+          }
+          return { ...cache, [type]: list };
+        });
+        return data;
+      }
+      return null;
+    } catch (err) {
+      console.error(`Failed to load single boundary geometry for ${name}:`, err);
+      return null;
     } finally {
       this.isLoadingBoundaries.set(false);
     }

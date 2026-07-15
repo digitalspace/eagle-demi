@@ -8,7 +8,7 @@ exports.getBoundaries = async (req, res) => {
     const { type, geometry } = req.query;
     const query = type ? { type } : {};
     const projection = geometry === 'true' ? {} : { geometry: 0 };
-    const boundaries = await Boundary.find(query, projection);
+    const boundaries = await Boundary.find(query, projection).lean();
     return res.json(boundaries);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -42,7 +42,7 @@ exports.getBoundary = async (req, res) => {
     const { id } = req.params;
     const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { name: id };
 
-    const boundary = await Boundary.findOne(query);
+    const boundary = await Boundary.findOne(query).lean();
     if (!boundary) {
       return res.status(404).json({ error: 'Boundary not found' });
     }

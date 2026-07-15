@@ -20,10 +20,12 @@ test('Boundary Controller Tests', async (t) => {
       { type: 'Municipality', name: 'Vancouver' }
     ];
 
-    t.mock.method(Boundary, 'find', async (query, projection) => {
+    t.mock.method(Boundary, 'find', (query, projection) => {
       assert.deepStrictEqual(query, {});
       assert.deepStrictEqual(projection, { geometry: 0 });
-      return mockBoundaries;
+      return {
+        lean: () => Promise.resolve(mockBoundaries)
+      };
     });
 
     const req = { query: {} };
@@ -46,10 +48,12 @@ test('Boundary Controller Tests', async (t) => {
       { type: 'Regional District', name: 'Metro Vancouver', geometry: { type: 'Polygon', coordinates: [] } }
     ];
 
-    t.mock.method(Boundary, 'find', async (query, projection) => {
+    t.mock.method(Boundary, 'find', (query, projection) => {
       assert.deepStrictEqual(query, { type: 'Regional District' });
       assert.deepStrictEqual(projection, {});
-      return mockBoundaries;
+      return {
+        lean: () => Promise.resolve(mockBoundaries)
+      };
     });
 
     const req = { query: { type: 'Regional District', geometry: 'true' } };
@@ -126,9 +130,11 @@ test('Boundary Controller Tests', async (t) => {
     const boundaryId = '64a5f1dc2d0a9c002225f25a';
     const mockBoundary = { _id: boundaryId, name: 'Metro Vancouver' };
 
-    t.mock.method(Boundary, 'findOne', async (query) => {
+    t.mock.method(Boundary, 'findOne', (query) => {
       assert.deepStrictEqual(query, { _id: boundaryId });
-      return mockBoundary;
+      return {
+        lean: () => Promise.resolve(mockBoundary)
+      };
     });
 
     const req = { params: { id: boundaryId } };
@@ -150,9 +156,11 @@ test('Boundary Controller Tests', async (t) => {
     const boundaryName = 'Metro Vancouver';
     const mockBoundary = { name: boundaryName };
 
-    t.mock.method(Boundary, 'findOne', async (query) => {
+    t.mock.method(Boundary, 'findOne', (query) => {
       assert.deepStrictEqual(query, { name: boundaryName });
-      return mockBoundary;
+      return {
+        lean: () => Promise.resolve(mockBoundary)
+      };
     });
 
     const req = { params: { id: boundaryName } };
@@ -171,8 +179,10 @@ test('Boundary Controller Tests', async (t) => {
   });
 
   await t.test('getBoundary returns 404 if boundary does not exist', async () => {
-    t.mock.method(Boundary, 'findOne', async () => {
-      return null;
+    t.mock.method(Boundary, 'findOne', () => {
+      return {
+        lean: () => Promise.resolve(null)
+      };
     });
 
     const req = { params: { id: 'Nonexistent' } };

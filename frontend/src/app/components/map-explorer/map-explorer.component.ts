@@ -38,7 +38,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     // Sync boundaryFilter with boundarySearchQuery for the custom searchable list
     effect(() => {
       const activeFilter = this.service.boundaryFilter();
-      if (activeFilter === 'all') {
+      if (activeFilter === 'all' || activeFilter === '') {
         this.boundarySearchQuery.set('');
       } else {
         this.boundarySearchQuery.set(activeFilter);
@@ -97,10 +97,27 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         return;
       }
 
-      // Load boundary geometry from cache/API
-      const data = await this.service.loadBoundaryGeometry(bLayer);
-      if (data && Array.isArray(data) && this.map && this.service.activeBoundaryLayer() === bLayer) {
-        this.renderBoundaryShapes(data, bLayer, bFilter);
+      // Load boundary metadata from cache/API (without geometries)
+      await this.service.loadBoundaryGeometry(bLayer);
+
+      // Only render if a specific single boundary item is specified/selected!
+      if (bFilter !== 'all') {
+        const singleBoundaryData = await this.service.loadSingleBoundaryGeometry(bLayer, bFilter);
+        if (singleBoundaryData && this.map && this.service.activeBoundaryLayer() === bLayer && this.service.boundaryFilter() === bFilter) {
+          this.renderBoundaryShapes([singleBoundaryData], bLayer, bFilter);
+
+          // Auto-center map and fit bounds to the single selected boundary shape
+          if (this.boundariesLayer) {
+            this.boundariesLayer.eachLayer((layer: any) => {
+              if (layer.getBounds) {
+                const bounds = layer.getBounds();
+                if (bounds && bounds.isValid()) {
+                  this.map.fitBounds(bounds, { padding: [30, 30], maxZoom: 10, animate: true, duration: 0.4 });
+                }
+              }
+            });
+          }
+        }
       }
     });
   }
@@ -139,10 +156,15 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         const bLayer = this.service.activeBoundaryLayer();
         if (bLayer === 'municipalities' && this.boundariesLayer) {
           const bFilter = this.service.boundaryFilter();
-          const currentCache = this.service.loadedBoundariesGeoJSON();
-          const data = currentCache[bLayer];
-          if (data) {
-            this.renderBoundaryShapes(data, bLayer, bFilter);
+          if (bFilter !== 'all') {
+            const currentCache = this.service.loadedBoundariesGeoJSON();
+            const data = currentCache[bLayer];
+            if (data && Array.isArray(data)) {
+              const match = data.find((b: any) => (b.name || '').toLowerCase() === bFilter.toLowerCase());
+              if (match && match.geometry) {
+                this.renderBoundaryShapes([match], bLayer, bFilter);
+              }
+            }
           }
         }
       });
@@ -610,41 +632,20 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     const value = (event.target as HTMLInputElement).value;
     this.boundarySearchQuery.set(value);
     if (!value.trim()) {
-      this.service.boundaryFilter.set('all');
+      this.service.boundaryFilter.set('');
     }
   }
 
   selectBoundaryOption(name: string) {
     this.setBoundaryFilter(name);
     this.showBoundaryDropdown.set(false);
-    
-    // Auto-center map on the selected boundary if geometry is loaded
-    const bLayer = this.service.activeBoundaryLayer();
-    const cache = this.service.loadedBoundariesGeoJSON();
-    const boundaries = cache[bLayer];
-    if (boundaries && Array.isArray(boundaries)) {
-      const match = boundaries.find((b: any) => (b.name || '').toLowerCase() === name.toLowerCase());
-      if (match && this.boundariesLayer) {
-        // Find corresponding Leaflet layer and fit bounds
-        this.boundariesLayer.eachLayer((layer: any) => {
-          if (layer.feature && layer.feature.properties && layer.feature.properties.name === name) {
-            if (layer.getBounds) {
-              const bounds = layer.getBounds();
-              if (bounds && bounds.isValid()) {
-                this.map.fitBounds(bounds, { padding: [30, 30], maxZoom: 10, animate: true, duration: 0.4 });
-              }
-            }
-          }
-        });
-      }
-    }
   }
 
   onBoundaryDropdownBlur() {
     setTimeout(() => {
       this.showBoundaryDropdown.set(false);
       const activeFilter = this.service.boundaryFilter();
-      if (activeFilter === 'all') {
+      if (activeFilter === 'all' || activeFilter === '') {
         this.boundarySearchQuery.set('');
       } else {
         this.boundarySearchQuery.set(activeFilter);
