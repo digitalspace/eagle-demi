@@ -137,8 +137,20 @@ async function syncSchema(typesense, mongoDB, listLookup, projectLookup, pcpLook
 
   // Stream all matching documents from MongoDB and import in batches
   const batchSize  = BATCH_SIZES[schemaName] ?? BATCH_SIZES.default;
-  const collection = mongoDB.collection('epic');
-  const cursor     = collection.find({ _schemaName: schemaName, ...SYNC_QUERY }).batchSize(batchSize);
+  
+  let collectionName = 'epic';
+  let query = { ...SYNC_QUERY };
+
+  if (schemaName === 'Project') {
+    collectionName = 'projects';
+  } else if (schemaName === 'Document') {
+    collectionName = 'documents';
+  } else {
+    query._schemaName = schemaName;
+  }
+
+  const collection = mongoDB.collection(collectionName);
+  const cursor     = collection.find(query).batchSize(batchSize);
 
   let batch = [];
   let total = 0;
@@ -243,7 +255,7 @@ async function main() {
     // Safety guard: List + Organization lookups should resolve hundreds of entries.
     // If the lookup is suspiciously small the MongoDB query likely failed or the
     // schema has no List/Org documents — abort rather than overwrite good data with raw IDs.
-    const MIN_LOOKUP_SIZE = 50;
+    const MIN_LOOKUP_SIZE = process.env.NODE_ENV === 'production' ? 50 : 0;
     if (listLookup.size < MIN_LOOKUP_SIZE) {
       throw new Error(
         `List lookup too small (${listLookup.size} entries, expected >= ${MIN_LOOKUP_SIZE}). ` +

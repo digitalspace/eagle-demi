@@ -39,11 +39,9 @@ const SUPPORTED_EXTENSIONS = new Set([
   'xlsx', 'XLSX', '.xlsx', '.XLSX',
 ]);
 
-// Only process non-deleted documents accessible to public or staff
+// Only process non-deleted documents
 const BASE_FILTER = {
-  _schemaName: 'Document',
   isDeleted:   { $ne: true },
-  read:        { $in: ['public', 'staff'] },
 };
 
 // ── MongoDB helpers ───────────────────────────────────────────────────────────
@@ -57,8 +55,8 @@ async function getDb(client) {
  * Projects store their name in different fields depending on legislation.
  */
 async function buildProjectLookup(db) {
-  const projects = await db.collection('epic')
-    .find({ _schemaName: 'Project' }, { projection: {
+  const projects = await db.collection('projects')
+    .find({}, { projection: {
       _id: 1, name: 1, displayName: 1,
       currentLegislationYear: 1,
       legislation_2018: 1, legislation_2002: 1, legislation_1996: 1
@@ -233,7 +231,7 @@ async function replaceChunks(db, docId, doc, pageChunks, projectName, listLookup
     documentType: resolveLabel(doc.type, listLookup),
     milestone:    resolveLabel(doc.milestone, listLookup),
     datePosted:   doc.datePosted || undefined,
-    read:         doc.read,
+    read:         doc.read || (doc.isPublished === false ? ['sysadmin', 'staff'] : ['public']),
     dateAdded:    Date.now(),
   }));
 
@@ -245,7 +243,7 @@ async function replaceChunks(db, docId, doc, pageChunks, projectName, listLookup
  * Mark a Document record with extraction outcome.
  */
 async function markDocument(db, docId, pageCount, error) {
-  const col = db.collection('epic');
+  const col = db.collection('documents');
   const update = error
     ? { $set: { contentExtracted: true, contentExtractedAt: new Date(), contentPageCount: 0, contentExtractionError: String(error), extractionMethod: 'docling' } }
     : { $set: { contentExtracted: true, contentExtractedAt: new Date(), contentPageCount: pageCount, contentExtractionError: null, extractionMethod: 'docling' } };
@@ -256,11 +254,11 @@ async function markDocument(db, docId, pageCount, error) {
 
 async function processDocument(db, minioClient, doc, projectLookup, listLookup) {
   const docId      = doc._id.toString();
-  const objectPath = doc.internalURL;
+  const objectPath = doc.s3Key;
 
   if (!objectPath) {
-    await markDocument(db, docId, 0, 'No internalURL');
-    return { docId, status: 'skipped', reason: 'no internalURL' };
+    await markDocument(db, docId, 0, 'No s3Key');
+    return { docId, status: 'skipped', reason: 'no s3Key' };
   }
 
   try {
@@ -292,7 +290,7 @@ async function main() {
   const client = new MongoClient(config.mongoUri);
   await client.connect();
   const db = await getDb(client);
-  const col = db.collection('epic');
+  const col = db.collection('documents');
 
   try {
     // ── Build filter ────────────────────────────────────────────────────────
@@ -300,12 +298,12 @@ async function main() {
 
     if (docIdArg) {
       // Single-document mode: override everything
-      filter = { _schemaName: 'Document', _id: new ObjectId(docIdArg) };
+      filter = { _id: new ObjectId(docIdArg) };
     } else {
+      const extRegex = new RegExp(`\\.(${[...SUPPORTED_EXTENSIONS].map(ext => ext.replace('.', '')).join('|')})$`, 'i');
       filter = {
         ...BASE_FILTER,
-        internalURL: { $exists: true, $ne: '' },
-        internalExt: { $in: [...SUPPORTED_EXTENSIONS] },
+        s3Key: { $exists: true, $ne: '', $regex: extRegex },
       };
 
       if (retryFailed) {
@@ -338,9 +336,9 @@ async function main() {
     const minio = getMinioClient();
     const cursor = col.find(filter, {
       projection: {
-        _id: 1, internalURL: 1, project: 1,
+        _id: 1, s3Key: 1, project: 1,
         displayName: 1, documentFileName: 1,
-        type: 1, milestone: 1, datePosted: 1, read: 1,
+        type: 1, milestone: 1, datePosted: 1, isPublished: 1, read: 1,
       },
     });
 

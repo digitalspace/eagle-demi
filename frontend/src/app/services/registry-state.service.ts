@@ -251,9 +251,8 @@ export class RegistryStateService {
     }
   ];
 
-  // Dynamic Filtering Computations (Signals are automatically tracked!)
-  filteredProjects = computed(() => {
-    const query = this.searchQuery().toLowerCase();
+  // Projects matching active filters (excluding query)
+  filteredProjectsNoQuery = computed(() => {
     const gating = this.gatingFilter();
     const sector = this.sectorFilter();
     const region = this.regionFilter();
@@ -261,17 +260,10 @@ export class RegistryStateService {
     const bLayer = this.activeBoundaryLayer();
     const bFilter = this.boundaryFilter();
 
-    // For plain deep search view, return empty array until user starts typing
-    if (this.activePage() === 'search' && !query) {
-      return [];
-    }
-
     const projs = this.projects();
     if (projs === null) return null;
 
-    console.log('[Registry filteredProjects] Starting filter of projects count:', projs.length, { query, gating, sector, region, role, bLayer, bFilter });
-
-    const result = projs.filter(p => {
+    return projs.filter(p => {
       // 1. Role access gating
       if (role === 'public' && p.gatingState !== 'admitted') return false;
 
@@ -283,13 +275,9 @@ export class RegistryStateService {
         const pSector = (p.sector || '').toLowerCase();
         const fSector = sector.toLowerCase();
         if (fSector === 'mining') {
-          if (!pSector.startsWith('mine') && !pSector.includes('mining')) {
-            return false;
-          }
+          if (!pSector.startsWith('mine') && !pSector.includes('mining')) return false;
         } else {
-          if (!pSector.includes(fSector)) {
-            return false;
-          }
+          if (!pSector.includes(fSector)) return false;
         }
       }
 
@@ -297,33 +285,44 @@ export class RegistryStateService {
       if (region !== 'all') {
         const geo = this.regionalBoundariesGeoJSON();
         if (geo && p.centroid) {
-          if (!this.isProjectInRegion(p, region)) {
-            return false;
-          }
+          if (!this.isProjectInRegion(p, region)) return false;
         } else {
           // Fallback to string attribute comparison if GeoJSON not loaded yet
           const pRegion = (p.region || '').toLowerCase();
           const fRegion = region.toLowerCase();
-          if (!pRegion.includes(fRegion) && !fRegion.includes(pRegion)) {
-            return false;
-          }
+          if (!pRegion.includes(fRegion) && !fRegion.includes(pRegion)) return false;
         }
       }
 
       // 3c. Administrative Boundary filter selection with dynamic client-side containment checks
       if (bLayer !== 'none' && bFilter !== 'all') {
-        if (!this.isProjectInBoundary(p, bLayer, bFilter)) {
-          return false;
-        }
-      }
-
-      // 4. Thorough free text search matching name, description, and ALL raw metadata attributes with Levenshtein typo tolerance!
-      if (query) {
-        const serialized = JSON.stringify(p);
-        if (!this.fuzzyMatch(serialized, query)) return false;
+        if (!this.isProjectInBoundary(p, bLayer, bFilter)) return false;
       }
 
       return true;
+    });
+  });
+
+  // Dynamic Filtering Computations (Signals are automatically tracked!)
+  filteredProjects = computed(() => {
+    const query = this.searchQuery().toLowerCase();
+
+    // For plain deep search view, return empty array until user starts typing
+    if (this.activePage() === 'search' && !query) {
+      return [];
+    }
+
+    const projs = this.filteredProjectsNoQuery();
+    if (projs === null) return null;
+
+    if (!query) return projs;
+
+    console.log('[Registry filteredProjects] Starting query filter of projects count:', projs.length, { query });
+
+    const result = projs.filter(p => {
+      // Thorough free text search matching name, description, and ALL raw metadata attributes with Levenshtein typo tolerance!
+      const serialized = JSON.stringify(p);
+      return this.fuzzyMatch(serialized, query);
     });
 
     console.log('[Registry filteredProjects] Filtered projects result count:', result.length);
@@ -336,7 +335,7 @@ export class RegistryStateService {
     const role = this.currentRole();
     
     // Track active filtered projects to align document list with active map/region filters!
-    const projs = this.filteredProjects() || [];
+    const projs = this.filteredProjectsNoQuery() || [];
     const matchedProjectIds = new Set(projs.map(p => p.id));
 
     // For plain deep search view, return empty array until user starts typing
@@ -349,7 +348,7 @@ export class RegistryStateService {
 
     return docs.filter(d => {
       // Unify filtering: only show documents belonging to projects that match our current filters (sector, region, etc.)
-      if (!matchedProjectIds.has(d.projectId)) return false;
+      if (this.activePage() !== 'search' && !matchedProjectIds.has(d.projectId)) return false;
 
       // 1. Role access gating
       if (role === 'public' && d.gatingState !== 'admitted') return false;

@@ -27,9 +27,10 @@ function str(value) {
  * Returns { centroid: [lng, lat] } or {} if invalid.
  */
 function parseCentroid(c) {
-  if (!Array.isArray(c) || c.length < 2) return {};
-  const lng = parseFloat(c[0]);
-  const lat = parseFloat(c[1]);
+  const coords = (c && c.coordinates && Array.isArray(c.coordinates)) ? c.coordinates : c;
+  if (!Array.isArray(coords) || coords.length < 2) return {};
+  const lng = parseFloat(coords[0]);
+  const lat = parseFloat(coords[1]);
   if (isNaN(lng) || isNaN(lat) || lat < 48 || lat > 60 || lng < -139 || lng > -114) return {};
   return { centroid: [lat, lng] }; // Swap to [lat, lng] for Typesense geopoint
 }
@@ -132,24 +133,23 @@ function transformProject(doc, listLookup) {
 
   return {
     id:               doc._id.toString(),
-    ...(str(leg.name)             && { name:             str(leg.name) }),
-    ...(str(leg.description)      && { description:      str(leg.description) }),
-    ...(str(doc.region || leg.region) && { region:           str(doc.region || leg.region) }),
-    ...(str(leg.status)           && { status:           str(leg.status) }),
-    ...(resolvePermissive(leg.currentPhaseName, listLookup) && { currentPhaseName: resolvePermissive(leg.currentPhaseName, listLookup) }),
-    ...(resolvePermissive(leg.eacDecision, listLookup)      && { eacDecision:      resolvePermissive(leg.eacDecision, listLookup) }),
-    ...(str(leg.type)             && { type:             str(leg.type) }),
-    sector:           str(leg.sector || doc.metadata?.type_name || 'Other'),
-    ...(str(leg.location)         && { location:         str(leg.location) }),
-    ...(str(leg.shortName)        && { displayName:      str(leg.shortName) }),
-    ...(resolvePermissive(leg.proponent, listLookup)    && { proponent:        resolvePermissive(leg.proponent, listLookup) }),
-    ...(toTimestamp(leg.dateUpdated)    !== undefined && { updatedDate:   toTimestamp(leg.dateUpdated) }),
-    ...(toTimestamp(leg.decisionDate)  !== undefined && { decisionDate:  toTimestamp(leg.decisionDate) }),
-    ...parseCentroid(leg.centroid),
+    ...(str(leg.name || doc.name)             && { name:             str(leg.name || doc.name) }),
+    ...(str(leg.description || doc.description)   && { description:      str(leg.description || doc.description) }),
+    ...(str(doc.region || leg.region)         && { region:           str(doc.region || leg.region) }),
+    ...(str(leg.status || doc.status)         && { status:           str(leg.status || doc.status) }),
+    ...(resolvePermissive(leg.currentPhaseName || doc.currentPhaseName, listLookup) && { currentPhaseName: resolvePermissive(leg.currentPhaseName || doc.currentPhaseName, listLookup) }),
+    ...(resolvePermissive(leg.eacDecision || doc.eacDecision, listLookup)      && { eacDecision:      resolvePermissive(leg.eacDecision || doc.eacDecision, listLookup) }),
+    ...(str(leg.type || doc.type)             && { type:             str(leg.type || doc.type) }),
+    sector:           str(leg.sector || doc.sector || doc.metadata?.type_name || 'Other'),
+    ...(str(leg.location || doc.location)     && { location:         str(leg.location || doc.location) }),
+    ...(str(leg.shortName || doc.displayName || leg.name || doc.name) && { displayName:      str(leg.shortName || doc.displayName || leg.name || doc.name) }),
+    ...(resolvePermissive(leg.proponent || doc.proponent, listLookup)    && { proponent:        resolvePermissive(leg.proponent || doc.proponent, listLookup) }),
+    ...(toTimestamp(leg.dateUpdated || doc.updatedAt || doc.dateUpdated)    !== undefined && { updatedDate:   toTimestamp(leg.dateUpdated || doc.updatedAt || doc.dateUpdated) }),
+    ...(toTimestamp(leg.decisionDate || doc.decisionDate)  !== undefined && { decisionDate:  toTimestamp(leg.decisionDate || doc.decisionDate) }),
+    ...parseCentroid(leg.centroid || doc.centroid),
     ...(str(doc.regionalDistrict)  && { regionalDistrict:  str(doc.regionalDistrict) }),
     ...(str(doc.electoralDistrict) && { electoralDistrict: str(doc.electoralDistrict) }),
     ...(str(doc.municipality)      && { municipality:      str(doc.municipality) }),
-    ...(transformPolygon(doc.geometry) && { geometry_polygon: transformPolygon(doc.geometry) }),
     popularity:   0,  // default; overwritten nightly by popularity-sync.js
     allowed_roles: extractRoles(doc),
   };
@@ -267,8 +267,10 @@ function transformDocumentChunk(doc, listLookup, projectLookup, _pcpLookup, docu
     ...(toTimestamp(doc.datePosted) !== undefined && { datePosted: toTimestamp(doc.datePosted) }),
     documentName:  str(doc.documentName) || parentDoc?.displayName || parentDoc?.documentFileName || 'Untitled Document',
     ...(projectName                  && { projectName }),
-    // Chunks inherit roles from parent document (doc.read stored by eagle-demi extract worker)
-    allowed_roles: extractRoles(doc),
+    // Chunks inherit roles from parent document constrained to parent project
+    allowed_roles: projectId
+      ? constrainToProject(parentDoc?.read || extractRoles(doc), projectMeta)
+      : (parentDoc?.read || extractRoles(doc)),
   };
 }
 
@@ -287,8 +289,8 @@ const TRANSFORMS = {
  * the parent project's visibility — a child must never be more permissive than its project.
  */
 async function buildProjectLookup(db) {
-  const docs = await db.collection('epic')
-    .find({ _schemaName: 'Project' })
+  const docs = await db.collection('projects')
+    .find({})
     .project({ _id: 1, read: 1, name: 1, displayName: 1, region: 1, legislation_2018: 1, legislation_2002: 1, legislation_1996: 1, currentLegislationYear: 1 })
     .toArray();
   const map = new Map();
@@ -328,9 +330,9 @@ async function buildPcpLookup(db) {
  * before those fields were denormalised into the chunk records.
  */
 async function buildDocumentLookup(db) {
-  const docs = await db.collection('epic')
-    .find({ _schemaName: 'Document' })
-    .project({ _id: 1, milestone: 1, type: 1, project: 1, region: 1 })
+  const docs = await db.collection('documents')
+    .find({})
+    .project({ _id: 1, milestone: 1, type: 1, project: 1, region: 1, read: 1 })
     .toArray();
   const map = new Map();
   for (const item of docs) {
@@ -338,7 +340,8 @@ async function buildDocumentLookup(db) {
       milestone: item.milestone,
       type: item.type,
       project: item.project ? item.project.toString() : undefined,
-      region: item.region
+      region: item.region,
+      read: item.read || []
     });
   }
   return map;

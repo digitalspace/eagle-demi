@@ -193,8 +193,37 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
   });
 
-  await t.test('search documents queries Typesense grouped documents when keywords are provided', async () => {
-    const mockTypesenseResponse = {
+  await t.test('search documents queries Typesense grouped documents and metadata when keywords are provided', async () => {
+    const mockDocsResponse = {
+      hits: [
+        {
+          document: {
+            id: 'doc-metadata-only',
+            displayName: 'Metadata Match Report',
+            documentFileName: 'metadata_match.pdf',
+            type: 'PDF Document',
+            projectId: '64a5f1dc2d0a9c002225f25e',
+            projectName: 'Ajax Mine',
+            allowed_roles: ['public'],
+            description: 'Direct title match document.'
+          }
+        },
+        {
+          document: {
+            id: 'doc-123',
+            displayName: 'Mine Assessment.pdf',
+            documentFileName: 'Mine Assessment.pdf',
+            type: 'PDF Document',
+            projectId: '64a5f1dc2d0a9c002225f25e',
+            projectName: 'Ajax Mine',
+            allowed_roles: ['public'],
+            description: 'This is a generic description.'
+          }
+        }
+      ]
+    };
+
+    const mockChunksResponse = {
       grouped_hits: [
         {
           group_key: ['doc-123'],
@@ -220,16 +249,23 @@ test('Search Controller Tests', async (t) => {
       ]
     };
 
-    // Mock global fetch
+    // Mock global fetch to handle parallel dual queries
     const originalFetch = global.fetch;
     global.fetch = async (url) => {
-      assert.ok(url.includes('collections/document_chunks/documents/search'));
-      assert.ok(url.includes('group_by=documentId'));
-      return {
-        ok: true,
-        status: 200,
-        json: async () => mockTypesenseResponse
-      };
+      if (url.includes('collections/documents/documents/search')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => mockDocsResponse
+        };
+      } else if (url.includes('collections/document_chunks/documents/search')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => mockChunksResponse
+        };
+      }
+      return { ok: false, status: 404 };
     };
 
     const req = {
@@ -249,10 +285,19 @@ test('Search Controller Tests', async (t) => {
     try {
       await searchController.search(req, res);
       assert.ok(Array.isArray(jsonResponse));
-      assert.strictEqual(jsonResponse[0].searchResults.length, 1);
-      assert.strictEqual(jsonResponse[0].searchResults[0]._id, 'doc-123');
-      assert.strictEqual(jsonResponse[0].searchResults[0].description, 'Extract <mark>content</mark> of the mine.');
-      assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
+      const results = jsonResponse[0].searchResults;
+      
+      // Should find 2 unique merged documents
+      assert.strictEqual(results.length, 2);
+      
+      // 'doc-123' matched both metadata and content, so its description is updated with the deep-text snippet and ranked first
+      assert.strictEqual(results[0]._id, 'doc-123');
+      assert.strictEqual(results[0].description, 'Extract <mark>content</mark> of the mine.');
+      assert.strictEqual(results[0].isPublished, true);
+
+      // 'doc-metadata-only' matched only metadata, so it ranks second and preserves its generic description
+      assert.strictEqual(results[1]._id, 'doc-metadata-only');
+      assert.strictEqual(results[1].description, 'Direct title match document.');
     } finally {
       global.fetch = originalFetch;
     }

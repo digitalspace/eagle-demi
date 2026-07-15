@@ -391,18 +391,46 @@ exports.search = async (req, res) => {
         }
       }
 
-      // Query document_chunks collection collapsing by documentId!
-      const typesenseUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/collections/document_chunks/documents/search?q=${encodeURIComponent(keywords)}&query_by=content&group_by=documentId&group_limit=1&num_typos=${fuzzy ? 2 : 0}&per_page=${pageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
+      const docsTypesenseUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/collections/documents/documents/search?q=${encodeURIComponent(keywords)}&query_by=displayName,documentFileName,description,projectName&num_typos=${fuzzy ? 2 : 0}&per_page=${pageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
+      const chunksTypesenseUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/collections/document_chunks/documents/search?q=${encodeURIComponent(keywords)}&query_by=content&group_by=documentId&group_limit=1&num_typos=${fuzzy ? 2 : 0}&per_page=${pageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
 
       try {
-        const typesenseRes = await fetch(typesenseUrl, {
-          headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY }
-        });
-        if (!typesenseRes.ok) {
-          throw new Error(`Typesense responded with ${typesenseRes.status}`);
+        const [docsRes, chunksRes] = await Promise.all([
+          fetch(docsTypesenseUrl, { headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY } }),
+          fetch(chunksTypesenseUrl, { headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY } })
+        ]);
+
+        if (!docsRes.ok) {
+          throw new Error(`Typesense docs query responded with ${docsRes.status}`);
         }
-        const data = await typesenseRes.json();
-        const searchResults = (data.grouped_hits || []).map(group => {
+        if (!chunksRes.ok) {
+          throw new Error(`Typesense chunks query responded with ${chunksRes.status}`);
+        }
+
+        const docsData = await docsRes.json();
+        const chunksData = await chunksRes.json();
+        const mergedDocsMap = new Map();
+
+        // 1. Process metadata hits from 'documents' collection
+        (docsData.hits || []).forEach(hit => {
+          const doc = hit.document;
+          const docId = doc.id;
+          mergedDocsMap.set(docId, {
+            _id: docId,
+            displayName: doc.displayName || 'Untitled Document',
+            documentFileName: doc.documentFileName || 'document.pdf',
+            documentType: doc.type || 'PDF Document',
+            project: doc.projectId || '',
+            projectName: doc.projectName || 'Associated Project',
+            read: doc.allowed_roles || ['public'],
+            isPublished: doc.allowed_roles ? doc.allowed_roles.includes('public') : true,
+            description: doc.description || 'This is an extracted document from the central registry.',
+            _source: 'metadata'
+          });
+        });
+
+        // 2. Process deep-text hits from 'document_chunks' collection
+        (chunksData.grouped_hits || []).forEach(group => {
           const docId = group.group_key[0];
           const firstHit = group.hits[0];
           const doc = firstHit.document;
@@ -418,20 +446,36 @@ exports.search = async (req, res) => {
             snippet = doc.content ? doc.content.substring(0, 300) + '...' : '';
           }
 
-          return {
-            _id: docId,
-            displayName: doc.documentName || 'Untitled Document',
-            documentFileName: doc.documentName || 'document.pdf',
-            documentType: doc.documentType || 'PDF Document',
-            project: doc.projectId || '',
-            projectName: doc.projectName || 'Associated Project',
-            read: doc.allowed_roles || ['public'],
-            isPublished: doc.allowed_roles ? doc.allowed_roles.includes('public') : true,
-            description: snippet
-          };
+          if (mergedDocsMap.has(docId)) {
+            const existing = mergedDocsMap.get(docId);
+            existing.description = snippet;
+            existing._source = 'both';
+          } else {
+            mergedDocsMap.set(docId, {
+              _id: docId,
+              displayName: doc.documentName || 'Untitled Document',
+              documentFileName: doc.documentName || 'document.pdf',
+              documentType: doc.documentType || 'PDF Document',
+              project: doc.projectId || '',
+              projectName: doc.projectName || 'Associated Project',
+              read: doc.allowed_roles || ['public'],
+              isPublished: doc.allowed_roles ? doc.allowed_roles.includes('public') : true,
+              description: snippet,
+              _source: 'content'
+            });
+          }
         });
 
-        return res.json([{ searchResults }]);
+        const searchResults = Array.from(mergedDocsMap.values());
+        searchResults.sort((a, b) => {
+          const scoreMap = { both: 1, metadata: 2, content: 3 };
+          return (scoreMap[a._source] || 3) - (scoreMap[b._source] || 3);
+        });
+
+        const slicedResults = searchResults.slice(0, pageSize);
+        slicedResults.forEach(r => delete r._source);
+
+        return res.json([{ searchResults: slicedResults }]);
       } catch (err) {
         console.error('Typesense document query failed, using MongoDB fallback:', err);
         // Fallback to Mongo Document text/regex search

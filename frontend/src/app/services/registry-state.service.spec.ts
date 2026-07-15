@@ -92,4 +92,51 @@ describe('RegistryStateService', () => {
     expect(result).toEqual(mockResponse);
     expect(service.loadedBoundariesGeoJSON()['electoralDistricts'][0].geometry).toEqual(mockResponse.geometry);
   });
+
+  it('should compute filteredProjectsNoQuery based on active filters but ignore search queries', () => {
+    const mockProjects: any[] = [
+      { id: 'p1', name: 'Mine A', sector: 'Mining', gatingState: 'admitted', region: 'Thompson-Okanagan' },
+      { id: 'p2', name: 'Wind B', sector: 'Energy', gatingState: 'admitted', region: 'Thompson-Okanagan' }
+    ];
+    service.projects.set(mockProjects);
+    service.searchQuery.set('Mine'); // search query set to 'Mine'
+
+    // When sector filter is 'all', both are returned by filteredProjectsNoQuery because it ignores search query 'Mine'
+    expect(service.filteredProjectsNoQuery()).toEqual(mockProjects);
+
+    // But filteredProjects should honor the search query 'Mine'
+    expect(service.filteredProjects()).toEqual([mockProjects[0]]);
+
+    // If sector filter is set to Energy, filteredProjectsNoQuery should filter by sector
+    service.sectorFilter.set('Energy');
+    expect(service.filteredProjectsNoQuery()).toEqual([mockProjects[1]]);
+    // filteredProjects will be empty because Wind B does not match 'Mine'
+    expect(service.filteredProjects()).toEqual([]);
+  });
+
+  it('should bypass project-matching check for filteredDocuments when on the search page', () => {
+    const mockProjects: any[] = [
+      { id: 'p1', name: 'Mine A', sector: 'Mining', gatingState: 'admitted', region: 'Thompson-Okanagan' }
+    ];
+    const mockDocs: any[] = [
+      { id: 'd1', displayName: 'Doc A', projectId: 'p1', gatingState: 'admitted' }
+    ];
+    service.projects.set(mockProjects);
+    service.documents.set(mockDocs);
+
+    // Set search page and keyword that does NOT match project name 'Mine A'
+    service.activePage.set('search');
+    service.searchQuery.set('Doc A');
+
+    // Projects list will be empty because 'Mine A' doesn't match 'Doc A'
+    expect(service.filteredProjects()).toEqual([]);
+
+    // But documents list should successfully find the matching document because it bypasses parent project keyword check
+    expect(service.filteredDocuments()).toEqual([mockDocs[0]]);
+
+    // When on the map page, it should require the parent project to be in filteredProjectsNoQuery
+    service.activePage.set('map');
+    service.sectorFilter.set('Energy'); // 'p1' (Mining) is excluded from filteredProjectsNoQuery now
+    expect(service.filteredDocuments()).toEqual([]);
+  });
 });
