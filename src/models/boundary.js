@@ -9,9 +9,14 @@ const BoundarySchema = new mongoose.Schema({
   geometry: {
     type: { type: String, enum: ['Polygon', 'MultiPolygon'], required: true },
     coordinates: { type: mongoose.Schema.Types.Mixed, required: true }
+  },
+  simplifiedGeometry: {
+    type: { type: String, enum: ['Polygon', 'MultiPolygon'] },
+    coordinates: { type: mongoose.Schema.Types.Mixed }
   }
 }, { timestamps: true });
 
 BoundarySchema.index({ geometry: '2dsphere' });
+BoundarySchema.index({ simplifiedGeometry: '2dsphere' });
 
 module.exports = mongoose.model('Boundary', BoundarySchema, 'administrative_boundaries');

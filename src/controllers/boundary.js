@@ -5,9 +5,51 @@ const Boundary = require('../models/boundary');
 
 exports.getBoundaries = async (req, res) => {
   try {
-    const { type, geometry } = req.query;
-    const query = type ? { type } : {};
-    const projection = geometry === 'true' ? {} : { geometry: 0 };
+    const { type, geometry, bbox } = req.query;
+    
+    let spatialQuery = {};
+    if (bbox) {
+      let parsedBbox;
+      try {
+        if (bbox.trim().startsWith('{')) {
+          parsedBbox = JSON.parse(bbox);
+        } else {
+          const [west, south, east, north] = bbox.split(',').map(Number);
+          if (!isNaN(west) && !isNaN(south) && !isNaN(east) && !isNaN(north)) {
+            parsedBbox = {
+              type: 'Polygon',
+              coordinates: [[
+                [west, south],
+                [east, south],
+                [east, north],
+                [west, north],
+                [west, south]
+              ]]
+            };
+          }
+        }
+      } catch (e) {
+        // Fall back gracefully for invalid bbox formats
+      }
+
+      if (parsedBbox) {
+        spatialQuery = {
+          geometry: {
+            $geoIntersects: {
+              $geometry: parsedBbox
+            }
+          }
+        };
+      }
+    }
+
+    const query = {
+      ...(type ? { type } : {}),
+      ...spatialQuery
+    };
+
+    // By default, project out heavy full geometries and return lightweight simplified ones for fast rendering
+    const projection = geometry === 'true' ? { simplifiedGeometry: 0 } : { geometry: 0 };
     const boundaries = await Boundary.find(query, projection).lean();
     return res.json(boundaries);
   } catch (err) {

@@ -50,13 +50,56 @@ test('Boundary Controller Tests', async (t) => {
 
     t.mock.method(Boundary, 'find', (query, projection) => {
       assert.deepStrictEqual(query, { type: 'Regional District' });
-      assert.deepStrictEqual(projection, {});
+      assert.deepStrictEqual(projection, { simplifiedGeometry: 0 });
       return {
         lean: () => Promise.resolve(mockBoundaries)
       };
     });
 
     const req = { query: { type: 'Regional District', geometry: 'true' } };
+    let jsonResponse;
+    const res = {
+      json: (data) => {
+        jsonResponse = data;
+        return res;
+      },
+      status: () => res
+    };
+
+    await boundaryController.getBoundaries(req, res);
+
+    assert.deepStrictEqual(jsonResponse, mockBoundaries);
+  });
+
+  await t.test('getBoundaries filters by bbox parameter when present', async () => {
+    const mockBoundaries = [
+      { type: 'Regional District', name: 'Capital Regional District' }
+    ];
+
+    t.mock.method(Boundary, 'find', (query, projection) => {
+      assert.deepStrictEqual(query, {
+        geometry: {
+          $geoIntersects: {
+            $geometry: {
+              type: 'Polygon',
+              coordinates: [[
+                [-124, 48],
+                [-123, 48],
+                [-123, 49],
+                [-124, 49],
+                [-124, 48]
+              ]]
+            }
+          }
+        }
+      });
+      assert.deepStrictEqual(projection, { geometry: 0 });
+      return {
+        lean: () => Promise.resolve(mockBoundaries)
+      };
+    });
+
+    const req = { query: { bbox: '-124,48,-123,49' } };
     let jsonResponse;
     const res = {
       json: (data) => {
