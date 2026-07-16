@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, AfterViewInit, inject, effect, signal, computed } from '@angular/core';
+import { Component, OnInit, OnDestroy, AfterViewInit, inject, effect, signal, computed, untracked } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Project, Document } from '../../models/registry.models';
@@ -105,7 +105,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       const layers = this.service.activeBoundaryLayers();
       for (const bLayer of layers) {
         if (bLayer !== 'none' && bLayer !== 'regions') {
-          this.service.loadBoundaryGeometry(bLayer, false);
+          this.service.loadBoundaryGeometry(bLayer, 'simplified');
         }
       }
     });
@@ -113,8 +113,6 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     // Re-render administrative boundaries whenever they change or are loaded!
     effect(() => {
       const layers = this.service.activeBoundaryLayers();
-      const bFilter = this.service.boundaryFilter();
-      const bFilterLayer = this.service.boundaryFilterLayer();
       const cache = this.service.loadedBoundariesGeoJSON(); // Synchronously track cache updates!
       const regionsGeojson = this.service.regionalBoundariesGeoJSON();
       
@@ -142,7 +140,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         if (layers.includes(type)) {
           const boundaries = cache[type] || [];
           if (boundaries.length > 0) {
-            this.renderBoundaryShapes(boundaries, type, bFilter || 'all', bFilterLayer || 'none');
+            untracked(() => {
+              this.renderBoundaryShapes(boundaries, type);
+            });
           }
         } else {
           const existing = this.boundariesLayers.get(type);
@@ -157,15 +157,24 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         }
       }
     });
+
+    // Re-style administrative boundaries in-place whenever active filters change!
+    effect(() => {
+      this.service.boundaryFilter();
+      this.service.boundaryFilterLayer();
+      untracked(() => {
+        this.updateBoundaryLayersStyles();
+      });
+    });
   }
 
   ngOnInit() {
     this.service.activePage.set('map');
     
     // Proactively load administrative names (without heavy geometries) so they are immediately searchable
-    this.service.loadBoundaryGeometry('regionalDistricts', false);
-    this.service.loadBoundaryGeometry('municipalities', false);
-    this.service.loadBoundaryGeometry('electoralDistricts', false);
+    this.service.loadBoundaryGeometry('regionalDistricts', 'metadata');
+    this.service.loadBoundaryGeometry('municipalities', 'metadata');
+    this.service.loadBoundaryGeometry('electoralDistricts', 'metadata');
   }
 
   ngAfterViewInit() {
@@ -197,14 +206,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       this.map.on('moveend', onMove);
       this.map.on('zoomend', () => {
         onMove();
-        const layers = this.service.activeBoundaryLayers();
-        if (layers.includes('municipalities')) {
-          const bFilter = this.service.boundaryFilter();
-          const bFilterLayer = this.service.boundaryFilterLayer();
-          const currentCache = this.service.loadedBoundariesGeoJSON();
-          const data = currentCache['municipalities'] || [];
-          this.renderBoundaryShapes(data, 'municipalities', bFilter || 'all', bFilterLayer || 'none');
-        }
+        this.updateBoundaryLayersStyles();
       });
       
       setTimeout(() => {
@@ -485,7 +487,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     return JSON.stringify(proj.rawMetadata, null, 2);
   }
 
-  private renderBoundaryShapes(boundaries: any[], type: string, filterValue: string, filterLayer: string) {
+  private renderBoundaryShapes(boundaries: any[], type: string) {
     if (!this.map) return;
 
     // Clean up existing layer group for this type first
@@ -514,11 +516,10 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       }))
     };
 
-    const currentZoom = this.map.getZoom();
-
     const newLayer = L.geoJSON(featureCollection, {
       smoothFactor: 1.0, // Auto-simplifies geometry at lower zoom levels for premium performance
       style: (feature: any) => {
+        const currentZoom = this.map ? this.map.getZoom() : 13;
         // Zoom gating: Municipalities only visible at Zoom > 6
         if (type === 'municipalities' && currentZoom <= 6) {
           return {
@@ -530,6 +531,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         }
 
         const name = feature?.properties?.name;
+        const filterValue = this.service.boundaryFilter() || 'all';
+        const filterLayer = this.service.boundaryFilterLayer() || 'none';
         const isSelected = filterValue !== 'all' && filterValue !== '' && filterLayer === type && (name || '').toLowerCase() === filterValue.toLowerCase();
         const hasAnySelection = filterValue !== 'all' && filterValue !== '';
 
@@ -579,17 +582,14 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       onEachFeature: (feature: any, layer: any) => {
         const name = feature?.properties?.name;
         
-        // Zoom-gated interactive boundaries
-        if (type === 'municipalities' && currentZoom <= 6) {
-          return;
-        }
- 
         // Beautiful sticky high-contrast tooltip - identical to environmental regions
         this.bindUnifiedTooltip(layer, name, type);
  
         layer.on({
           mouseover: (e: any) => {
             const ly = e.target;
+            const filterValue = this.service.boundaryFilter() || 'all';
+            const filterLayer = this.service.boundaryFilterLayer() || 'none';
             const isSelected = filterValue !== 'all' && filterValue !== '' && filterLayer === type && (name || '').toLowerCase() === filterValue.toLowerCase();
             const hasAnySelection = filterValue !== 'all' && filterValue !== '';
 
@@ -648,6 +648,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
                 }
               }
             }
+            this.updateBoundaryLayersStyles();
           }
         });
       }
@@ -657,6 +658,14 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     newLayer.bringToBack();
   }
 
+  private updateBoundaryLayersStyles() {
+    this.boundariesLayers.forEach((layerGroup) => {
+      layerGroup.eachLayer((layer: any) => {
+        layerGroup.resetStyle(layer);
+      });
+    });
+  }
+
   private bindUnifiedTooltip(layer: any, name: string, type: string) {
     layer.bindTooltip(`<strong>${(name || '').trim()}</strong>`, {
       sticky: true,
@@ -664,41 +673,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     });
   }
 
-  private getMatchingProjectsCountForBoundary(name: string, type: string): number {
-    const allProjs = this.service.projects() || [];
-    
-    const activeSector = this.service.sectorFilter();
-    const activeGating = this.service.gatingFilter();
-    const activeQuery = this.service.searchQuery().toLowerCase();
-    
-    return allProjs.filter(p => {
-      // Role access gating
-      if (this.service.currentRole() === 'public' && p.gatingState !== 'admitted') return false;
 
-      // Sector check
-      if (activeSector !== 'all') {
-        const pSector = (p.sector || '').toLowerCase();
-        const fSector = activeSector.toLowerCase();
-        if (fSector === 'mining') {
-          if (!pSector.startsWith('mine') && !pSector.includes('mining')) return false;
-        } else {
-          if (!pSector.includes(fSector)) return false;
-        }
-      }
-
-      // Gating check
-      if (activeGating !== 'all' && p.gatingState !== activeGating) return false;
-
-      // Query check
-      if (activeQuery) {
-        const serialized = JSON.stringify(p);
-        if (!this.service.fuzzyMatch(serialized, activeQuery)) return false;
-      }
-
-      // Boundary check using high-performance dynamic client-side containment checks
-      return this.service.isProjectInBoundary(p, type, name);
-    }).length;
-  }
 
   setBoundaryFilter(val: string, layerType: string) {
     this.service.boundaryFilter.set(val);

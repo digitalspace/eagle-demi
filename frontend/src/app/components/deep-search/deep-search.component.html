@@ -56,12 +56,12 @@
           @for (proj of service.filteredProjects(); track proj.id) {
             <div class="search-result-card" [class.active]="service.selectedProject()?.id === proj.id" (click)="selectProject(proj)">
               <div class="card-header">
-                <span class="card-title" [innerHTML]="highlightText(proj.name, service.searchQuery())"></span>
+                <span class="card-title" [innerHTML]="highlightText(proj.name, service.debouncedSearchQuery())"></span>
                 <span class="badge" [class]="proj.gatingState === 'admitted' ? 'badge-admitted' : 'badge-staged'">
                   {{ proj.gatingState }}
                 </span>
               </div>
-              <div class="card-desc" [innerHTML]="highlightText(proj.description, service.searchQuery())"></div>
+              <div class="card-desc" [innerHTML]="highlightText(proj.description, service.debouncedSearchQuery())"></div>
               <div class="card-footer">
                 <span><i class="fa-solid fa-tag"></i> {{ proj.sector }}</span>
                 <span><i class="fa-solid fa-map-pin"></i> {{ proj.region }}</span>
@@ -101,7 +101,7 @@
               <div class="card-header">
                 <span class="card-title">
                   <i class="fa-regular fa-file-pdf" style="color: #ff4d4f; margin-right: 0.25rem;"></i>
-                  <span [innerHTML]="highlightText(doc.displayName, service.searchQuery())"></span>
+                  <span [innerHTML]="highlightText(doc.displayName, service.debouncedSearchQuery())"></span>
                 </span>
                 <span class="badge badge-admitted" style="font-size: 0.65rem;">
                   {{ doc.documentType }}
@@ -111,12 +111,12 @@
               @if (doc.textSnippet) {
                 <div class="document-content-snippet">
                   <i class="fa-solid fa-quote-left"></i>
-                  <span>...<span [innerHTML]="highlightText(doc.textSnippet, service.searchQuery())"></span>...</span>
+                  <span>...<span [innerHTML]="highlightText(doc.textSnippet, service.debouncedSearchQuery())"></span>...</span>
                 </div>
               }
 
               <div class="card-footer">
-                <span><i class="fa-solid fa-folder"></i> <span [innerHTML]="highlightText(doc.projectName, service.searchQuery())"></span></span>
+                <span><i class="fa-solid fa-folder"></i> <span [innerHTML]="highlightText(doc.projectName, service.debouncedSearchQuery())"></span></span>
                 <span><i class="fa-solid fa-barcode"></i> ORCS: {{ doc.orcsCode }}</span>
               </div>
             </div>

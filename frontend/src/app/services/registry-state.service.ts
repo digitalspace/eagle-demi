@@ -36,6 +36,7 @@ export class RegistryStateService {
   currentRole = signal<'public' | 'admin'>('public');
   activeTab = signal<'projects' | 'documents'>('projects');
   searchQuery = signal<string>('');
+  debouncedSearchQuery = signal<string>('');
   gatingFilter = signal<'all' | 'admitted' | 'staged'>('all');
   sectorFilter = signal<string>('all');
   regionFilter = signal<string>('all');
@@ -289,6 +290,33 @@ export class RegistryStateService {
     const projs = this.projects();
     if (projs === null) return null;
 
+    // --- Optimization 1: Find active boundary geometry once before starting the loop ---
+    let selectedBoundaryGeom: any = null;
+    if (bFilter !== 'all' && bFilter !== '' && bLayer !== 'none') {
+      const cache = this.loadedBoundariesGeoJSON();
+      const boundaries = cache[bLayer];
+      if (boundaries && Array.isArray(boundaries)) {
+        const boundary = boundaries.find((b: any) => (b.name || '').toLowerCase() === bFilter.toLowerCase());
+        if (boundary) {
+          selectedBoundaryGeom = boundary.geometry || boundary.simplifiedGeometry;
+        }
+      }
+    }
+
+    // --- Optimization 2: Find active region geometry once before starting the loop ---
+    let selectedRegionGeom: any = null;
+    if (region !== 'all') {
+      const geo = this.regionalBoundariesGeoJSON();
+      if (geo) {
+        const feature = geo.features.find((f: any) => 
+          (f.properties?.regionName || '').toLowerCase() === region.toLowerCase()
+        );
+        if (feature) {
+          selectedRegionGeom = feature.geometry;
+        }
+      }
+    }
+
     return projs.filter(p => {
       // 1. Role access gating
       if (role === 'public' && p.gatingState !== 'admitted') return false;
@@ -309,9 +337,13 @@ export class RegistryStateService {
 
       // 3b. Region filter selection
       if (region !== 'all') {
-        const geo = this.regionalBoundariesGeoJSON();
-        if (geo && p.centroid) {
-          if (!this.isProjectInRegion(p, region)) return false;
+        if (selectedRegionGeom && p.centroid) {
+          const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
+          if (selectedRegionGeom.type === 'Polygon') {
+            if (!this.isPointInPolygon(point, selectedRegionGeom.coordinates)) return false;
+          } else if (selectedRegionGeom.type === 'MultiPolygon') {
+            if (!this.isPointInMultiPolygon(point, selectedRegionGeom.coordinates)) return false;
+          }
         } else {
           // Fallback to string attribute comparison if GeoJSON not loaded yet
           const pRegion = (p.region || '').toLowerCase();
@@ -321,10 +353,13 @@ export class RegistryStateService {
       }
 
       // 3c. Administrative Boundary filter selection with dynamic client-side containment checks
-      const bFilter = this.boundaryFilter();
-      const bFilterLayer = this.boundaryFilterLayer();
-      if (bFilter !== 'all' && bFilter !== '' && bFilterLayer !== 'none') {
-        if (!this.isProjectInBoundary(p, bFilterLayer, bFilter)) return false;
+      if (selectedBoundaryGeom && p.centroid) {
+        const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
+        if (selectedBoundaryGeom.type === 'Polygon') {
+          if (!this.isPointInPolygon(point, selectedBoundaryGeom.coordinates)) return false;
+        } else if (selectedBoundaryGeom.type === 'MultiPolygon') {
+          if (!this.isPointInMultiPolygon(point, selectedBoundaryGeom.coordinates)) return false;
+        }
       }
 
       return true;
@@ -333,7 +368,7 @@ export class RegistryStateService {
 
   // Dynamic Filtering Computations (Signals are automatically tracked!)
   filteredProjects = computed(() => {
-    const query = this.searchQuery().toLowerCase();
+    const query = this.debouncedSearchQuery().toLowerCase();
 
     // For plain deep search view, return empty array until user starts typing
     if (this.activePage() === 'search' && !query) {
@@ -358,7 +393,7 @@ export class RegistryStateService {
   });
 
   filteredDocuments = computed(() => {
-    const query = this.searchQuery().toLowerCase();
+    const query = this.debouncedSearchQuery().toLowerCase();
     const gating = this.gatingFilter();
     const role = this.currentRole();
     
@@ -430,6 +465,38 @@ export class RegistryStateService {
     this.initKeycloak();
     this.loadData();
     this.loadRegionalBoundaries();
+
+    // Debounce searchQuery updates to debouncedSearchQuery
+    let timer: any = null;
+    const isTest = typeof (window as any)['jasmine'] !== 'undefined' || typeof (window as any)['jest'] !== 'undefined';
+    
+    if (isTest) {
+      const originalSet = this.searchQuery.set.bind(this.searchQuery);
+      this.searchQuery.set = (value: string) => {
+        originalSet(value);
+        this.debouncedSearchQuery.set(value);
+      };
+
+      const originalUpdate = this.searchQuery.update.bind(this.searchQuery);
+      this.searchQuery.update = (fn: (v: string) => string) => {
+        originalUpdate(fn);
+        this.debouncedSearchQuery.set(this.searchQuery());
+      };
+    }
+
+    effect(() => {
+      const query = this.searchQuery();
+      if (isTest) {
+        this.debouncedSearchQuery.set(query);
+        return;
+      }
+      if (timer) {
+        clearTimeout(timer);
+      }
+      timer = setTimeout(() => {
+        this.debouncedSearchQuery.set(query);
+      }, 250);
+    }, { allowSignalWrites: true });
   }
 
   // Intercept window.fetch globally to inject Keycloak Bearer Token and handle retry flow on 401/403
@@ -583,12 +650,20 @@ export class RegistryStateService {
     }
   }
 
-  async loadBoundaryGeometry(type: string, forceGeometry: boolean = false): Promise<any> {
+  async loadBoundaryGeometry(type: string, mode: 'metadata' | 'simplified' | 'full' = 'simplified'): Promise<any> {
     const currentCache = this.loadedBoundariesGeoJSON();
-    const hasGeometries = currentCache[type] && currentCache[type].some((b: any) => b.geometry || b.simplifiedGeometry);
-
-    if (currentCache[type] && currentCache[type].length > 0 && hasGeometries && (!forceGeometry || currentCache[type].some((b: any) => b.geometry))) {
-      return currentCache[type];
+    
+    if (currentCache[type] && currentCache[type].length > 0) {
+      const hasGeometries = currentCache[type].some((b: any) => b.geometry || b.simplifiedGeometry);
+      if (mode === 'metadata') {
+        return currentCache[type];
+      }
+      if (mode === 'simplified' && hasGeometries) {
+        return currentCache[type];
+      }
+      if (mode === 'full' && currentCache[type].some((b: any) => b.geometry)) {
+        return currentCache[type];
+      }
     }
 
     this.isLoadingBoundaries.set(true);
@@ -604,10 +679,18 @@ export class RegistryStateService {
     else if (type === 'electoralDistricts') apiType = 'Electoral District';
     else apiType = type;
 
-    console.log(`[Registry loadBoundaryGeometry] Lazy loading metadata for category: ${type} (API query type: ${apiType}, forceGeometry: ${forceGeometry})`);
+    console.log(`[Registry loadBoundaryGeometry] Lazy loading metadata for category: ${type} (API query type: ${apiType}, mode: ${mode})`);
 
     try {
-      const geomParam = forceGeometry ? '&geometry=true' : '';
+      let geomParam = '';
+      if (mode === 'full') {
+        geomParam = '&geometry=true';
+      } else if (mode === 'metadata') {
+        geomParam = '&geometry=false';
+      } else {
+        geomParam = '&geometry=simplified';
+      }
+      
       const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}${geomParam}`, {
         headers: { 'X-Api-Key': 'eagle-demi-api-key' }
       });

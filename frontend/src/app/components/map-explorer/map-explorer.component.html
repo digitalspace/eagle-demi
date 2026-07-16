@@ -339,7 +339,7 @@
               (click)="selectProject(proj)"
             >
               <div class="card-header">
-                <div class="card-title" [innerHTML]="highlightText(proj.name, service.searchQuery())"></div>
+                <div class="card-title" [innerHTML]="highlightText(proj.name, service.debouncedSearchQuery())"></div>
                 <span class="badge" [class]="proj.gatingState === 'admitted' ? 'badge-admitted' : 'badge-staged'">
                   {{ proj.gatingState }}
                 </span>
@@ -348,7 +348,7 @@
                 <span><i class="fa-solid fa-tag"></i> {{ proj.sector || 'Unclassified' }}</span>
                 <span><i class="fa-solid fa-map-pin"></i> {{ proj.region || 'BC' }}</span>
               </div>
-              <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" [innerHTML]="highlightText(proj.description, service.searchQuery())">
+              <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" [innerHTML]="highlightText(proj.description, service.debouncedSearchQuery())">
               </div>
             </div>
           }
@@ -377,19 +377,19 @@
               <div class="card-header">
                 <div class="card-title" style="color: var(--bc-blue-primary);">
                   <i class="fa-regular fa-file-pdf" style="color: #ff4d4f; margin-right: 0.25rem;"></i>
-                  <span [innerHTML]="highlightText(doc.displayName, service.searchQuery())"></span>
+                  <span [innerHTML]="highlightText(doc.displayName, service.debouncedSearchQuery())"></span>
                 </div>
                 <span class="badge badge-admitted" style="font-size: 0.65rem;">
                   {{ doc.documentType }}
                 </span>
               </div>
               <div class="card-meta">
-                <span><i class="fa-solid fa-folder"></i> <span [innerHTML]="highlightText(doc.projectName, service.searchQuery())"></span></span>
+                <span><i class="fa-solid fa-folder"></i> <span [innerHTML]="highlightText(doc.projectName, service.debouncedSearchQuery())"></span></span>
                 <span><i class="fa-solid fa-barcode"></i> ORCS: {{ doc.orcsCode }}</span>
               </div>
               @if (doc.textSnippet) {
                 <div style="background: var(--bc-gray-light); padding: 0.6rem; border-radius: 6px; font-family: monospace; font-size: 0.78rem; border-left: 3px solid var(--bc-blue-primary);">
-                  "<span [innerHTML]="highlightText(doc.textSnippet, service.searchQuery())"></span>"
+                  "<span [innerHTML]="highlightText(doc.textSnippet, service.debouncedSearchQuery())"></span>"
                 </div>
               }
             </div>

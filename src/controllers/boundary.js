@@ -48,11 +48,19 @@ exports.getBoundaries = async (req, res) => {
       ...spatialQuery
     };
 
-    // If geometry === 'true', we only want full geometry. Otherwise, we prefer simplified, falling back to full if empty
-    const projection = geometry === 'true' ? { simplifiedGeometry: 0 } : {};
+    // Optimize database projection based on requested geometry mode
+    let projection = {};
+    if (geometry === 'true') {
+      projection = { simplifiedGeometry: 0 };
+    } else if (geometry === 'false') {
+      projection = { geometry: 0, simplifiedGeometry: 0 };
+    } else {
+      projection = { geometry: 0 };
+    }
+
     let boundaries = await Boundary.find(query, projection).lean();
 
-    if (geometry !== 'true') {
+    if (geometry !== 'true' && geometry !== 'false') {
       boundaries = boundaries.map(b => {
         if (!b.simplifiedGeometry && b.geometry) {
           b.simplifiedGeometry = b.geometry;
