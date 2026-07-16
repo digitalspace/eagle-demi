@@ -3,6 +3,24 @@ import { Project, Document } from '../models/registry.models';
 
 declare const Keycloak: any;
 
+const loadInitialCache = (): Record<string, any> => {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const cached = window.localStorage.getItem('demi_boundaries_cache');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object') {
+          console.log('[Registry] Restored administrative boundaries cache from localStorage');
+          return parsed;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Registry] Failed to load boundaries cache from localStorage:', err);
+  }
+  return {};
+};
+
 @Injectable({
   providedIn: 'root'
 })
@@ -42,14 +60,22 @@ export class RegistryStateService {
   // Boundaries GeoJSON cache
   regionalBoundariesGeoJSON = signal<any>(null);
 
+  // Active administrative boundary layer categories on the map (multiple allowed!)
+  activeBoundaryLayers = signal<string[]>([]);
+
   // Active administrative boundary layer category on the map
-  activeBoundaryLayer = signal<'none' | 'regions' | 'regionalDistricts' | 'municipalities' | 'electoralDistricts'>('regions');
+  activeBoundaryLayer = computed<'none' | 'regions' | 'regionalDistricts' | 'municipalities' | 'electoralDistricts'>(() => {
+    const layers = this.activeBoundaryLayers();
+    if (layers.length === 0) return 'none';
+    return layers[layers.length - 1] as any;
+  });
 
   // Active administrative filter value
   boundaryFilter = signal<string>('all');
+  boundaryFilterLayer = signal<string>('none');
 
   // Cache of loaded GeoJSON data with geometry to avoid repeated API fetches
-  loadedBoundariesGeoJSON = signal<Record<string, any>>({});
+  loadedBoundariesGeoJSON = signal<Record<string, any>>(loadInitialCache());
 
   // Loading state for administrative boundaries loading
   isLoadingBoundaries = signal<boolean>(false);
@@ -295,8 +321,10 @@ export class RegistryStateService {
       }
 
       // 3c. Administrative Boundary filter selection with dynamic client-side containment checks
-      if (bLayer !== 'none' && bFilter !== 'all') {
-        if (!this.isProjectInBoundary(p, bLayer, bFilter)) return false;
+      const bFilter = this.boundaryFilter();
+      const bFilterLayer = this.boundaryFilterLayer();
+      if (bFilter !== 'all' && bFilter !== '' && bFilterLayer !== 'none') {
+        if (!this.isProjectInBoundary(p, bFilterLayer, bFilter)) return false;
       }
 
       return true;
@@ -555,9 +583,13 @@ export class RegistryStateService {
     }
   }
 
-  async loadBoundaryGeometry(type: string): Promise<any> {
+  async loadBoundaryGeometry(type: string, forceGeometry: boolean = false): Promise<any> {
     const currentCache = this.loadedBoundariesGeoJSON();
-    if (currentCache[type] && currentCache[type].length > 0) return currentCache[type];
+    const hasGeometries = currentCache[type] && currentCache[type].some((b: any) => b.geometry || b.simplifiedGeometry);
+
+    if (currentCache[type] && currentCache[type].length > 0 && hasGeometries && (!forceGeometry || currentCache[type].some((b: any) => b.geometry))) {
+      return currentCache[type];
+    }
 
     this.isLoadingBoundaries.set(true);
 
@@ -572,20 +604,57 @@ export class RegistryStateService {
     else if (type === 'electoralDistricts') apiType = 'Electoral District';
     else apiType = type;
 
-    console.log(`[Registry loadBoundaryGeometry] Lazy loading metadata for category: ${type} (API query type: ${apiType})`);
+    console.log(`[Registry loadBoundaryGeometry] Lazy loading metadata for category: ${type} (API query type: ${apiType}, forceGeometry: ${forceGeometry})`);
 
     try {
-      const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}`, {
+      const geomParam = forceGeometry ? '&geometry=true' : '';
+      const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}${geomParam}`, {
         headers: { 'X-Api-Key': 'eagle-demi-api-key' }
       });
       if (!res.ok) throw new Error(`Failed to load boundaries metadata for ${type}`);
       const data = await res.json();
       
-      this.loadedBoundariesGeoJSON.update(cache => ({ ...cache, [type]: data }));
+      this.loadedBoundariesGeoJSON.update(cache => {
+        const next = { ...cache, [type]: data };
+        this.saveCache(next);
+        return next;
+      });
       return data;
     } catch (err) {
       console.error(`Failed to load boundary metadata for ${type}:`, err);
-      return [];
+      // Fallback to premium quality mock lists when offline or on network failure
+      let fallback: any[] = [];
+      if (type === 'regionalDistricts') {
+        fallback = [
+          { name: 'Capital Regional District', type: 'Regional District' },
+          { name: 'Metro Vancouver', type: 'Regional District' },
+          { name: 'Thompson-Nicola', type: 'Regional District' },
+          { name: 'Bulkley-Nechako', type: 'Regional District' },
+          { name: 'Peace River', type: 'Regional District' }
+        ];
+      } else if (type === 'municipalities') {
+        fallback = [
+          { name: 'City of Vancouver', type: 'Municipality' },
+          { name: 'City of Victoria', type: 'Municipality' },
+          { name: 'City of Kamloops', type: 'Municipality' },
+          { name: 'District of Kitimat', type: 'Municipality' },
+          { name: 'Village of Valemount', type: 'Municipality' }
+        ];
+      } else if (type === 'electoralDistricts') {
+        fallback = [
+          { name: 'Kamloops-South Thompson', type: 'Electoral District' },
+          { name: 'Skeena', type: 'Electoral District' },
+          { name: 'Victoria-Beacon Hill', type: 'Electoral District' },
+          { name: 'Vancouver-Point Grey', type: 'Electoral District' },
+          { name: 'Peace River South', type: 'Electoral District' }
+        ];
+      }
+      this.loadedBoundariesGeoJSON.update(cache => {
+        const next = { ...cache, [type]: fallback };
+        this.saveCache(next);
+        return next;
+      });
+      return fallback;
     } finally {
       this.isLoadingBoundaries.set(false);
     }
@@ -649,7 +718,9 @@ export class RegistryStateService {
           } else {
             list.push(data);
           }
-          return { ...cache, [type]: list };
+          const next = { ...cache, [type]: list };
+          this.saveCache(next);
+          return next;
         });
         return data;
       }
@@ -659,6 +730,28 @@ export class RegistryStateService {
       return null;
     } finally {
       this.isLoadingBoundaries.set(false);
+    }
+  }
+
+  private saveCache(cache: Record<string, any>) {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        // Strip out heavy geometry data to keep the localStorage footprint tiny (under 50KB!)
+        const strippedCache: Record<string, any> = {};
+        for (const key of Object.keys(cache)) {
+          if (Array.isArray(cache[key])) {
+            strippedCache[key] = cache[key].map((b: any) => {
+              const { geometry, simplifiedGeometry, ...rest } = b;
+              return rest;
+            });
+          } else {
+            strippedCache[key] = cache[key];
+          }
+        }
+        window.localStorage.setItem('demi_boundaries_cache', JSON.stringify(strippedCache));
+      }
+    } catch (err) {
+      console.warn('[Registry] Failed to save boundaries cache to localStorage:', err);
     }
   }
 

@@ -115,20 +115,6 @@
       <details class="filter-accordion">
         <summary><i class="fa-solid fa-earth-oceania"></i> Environmental Regions</summary>
         <div class="filter-accordion-content">
-          <!-- Visual Overlay Toggle for Environmental Regions -->
-          <div style="margin: 0.75rem 0; display: flex; align-items: center; justify-content: space-between; background: rgba(56, 89, 138, 0.05); padding: 0.6rem 0.8rem; border-radius: 6px; border: 1px solid rgba(56, 89, 138, 0.15);">
-            <span style="font-size: 0.8rem; font-weight: 600; color: var(--bc-blue-dark);"><i class="fa-solid fa-map"></i> Show Regions Overlay on Map</span>
-            <label class="switch" style="position: relative; display: inline-block; width: 34px; height: 20px;">
-              <input 
-                type="checkbox" 
-                style="opacity: 0; width: 0; height: 0;"
-                [checked]="service.activeBoundaryLayer() === 'regions'" 
-                (change)="service.activeBoundaryLayer.set(service.activeBoundaryLayer() === 'regions' ? 'none' : 'regions')"
-              >
-              <span class="slider round"></span>
-            </label>
-          </div>
-
           <div class="filter-section">
             <div class="filter-label">Region Filter</div>
             <div class="chips-container" style="max-height: 120px; overflow-y: auto; padding-bottom: 4px;">
@@ -154,112 +140,178 @@
       </details>
 
       <!-- Section 4: Administrative Boundary Filters (Collapsible) -->
-      <details class="filter-accordion">
-        <summary><i class="fa-solid fa-landmark"></i> Administrative Boundaries</summary>
+      <details class="filter-accordion" [open]="service.boundaryFilter() !== 'all' && service.boundaryFilter() !== ''">
+        <summary><i class="fa-solid fa-map-location-dot"></i> Administrative Boundaries</summary>
         <div class="filter-accordion-content">
           
-          <!-- Boundary Category Selection Pills -->
-          <div class="filter-section" style="margin-top: 0.75rem;">
-            <div class="filter-label">Boundary Layer Category</div>
-            <div class="chips-container">
-              <div 
-                class="chip" 
-                [class.active]="service.activeBoundaryLayer() === 'none'" 
-                (click)="service.activeBoundaryLayer.set('none'); service.boundaryFilter.set('all')"
-              >
-                None
-              </div>
-              <div 
-                class="chip" 
-                [class.active]="service.activeBoundaryLayer() === 'regionalDistricts'" 
-                (click)="service.activeBoundaryLayer.set('regionalDistricts'); service.boundaryFilter.set('')"
-              >
-                Regional Districts
-              </div>
-              <div 
-                class="chip" 
-                [class.active]="service.activeBoundaryLayer() === 'municipalities'" 
-                (click)="service.activeBoundaryLayer.set('municipalities'); service.boundaryFilter.set('')"
-              >
-                Municipalities
-              </div>
-              <div 
-                class="chip" 
-                [class.active]="service.activeBoundaryLayer() === 'electoralDistricts'" 
-                (click)="service.activeBoundaryLayer.set('electoralDistricts'); service.boundaryFilter.set('')"
-              >
-                Electoral Districts
-              </div>
+          <!-- Regional Districts Filter Section -->
+          <div class="filter-section" style="margin-top: 0.5rem;">
+            <div class="filter-label" style="text-transform: capitalize; margin-bottom: 0.5rem;">
+              Regional District
             </div>
-          </div>
-
-          <!-- Dynamic Warning for Zoom-Gated Municipalities -->
-          @if (service.activeBoundaryLayer() === 'municipalities' && map && map.getZoom() <= 6) {
-            <div style="background: rgba(252, 186, 25, 0.1); border-left: 3px solid var(--bc-gold); padding: 0.6rem 0.8rem; border-radius: 6px; font-size: 0.78rem; color: var(--text-dark); margin-top: 0.75rem; display: flex; gap: 0.5rem; align-items: flex-start; border-right: 1px solid rgba(252, 186, 25, 0.2); border-top: 1px solid rgba(252, 186, 25, 0.2); border-bottom: 1px solid rgba(252, 186, 25, 0.2);">
-              <i class="fa-solid fa-triangle-exclamation" style="color: #c99000; font-size: 0.9rem; margin-top: 0.1rem;"></i>
-              <div>
-                <strong>Zoom Gated Layer:</strong> Municipalities only render on-map at zoom levels > 6. Please zoom in on the map explorer to view boundaries.
-              </div>
-            </div>
-          }
-
-          <!-- Context-Aware Dynamic Dropdown Sub-Filter -->
-          @if (service.activeBoundaryLayer() !== 'none' && service.activeBoundaryLayer() !== 'regions') {
-            <div class="filter-section" style="margin-top: 0.85rem; border-top: 1px dashed var(--bc-gray-border); padding-top: 0.85rem;">
-              <div class="filter-label" style="display:flex; justify-content:space-between; align-items:center;">
-                <span>Select Specific Boundary Filter</span>
-                @if (service.boundaryFilter() !== 'all' && service.boundaryFilter() !== '') {
+            
+            <div style="position: relative; width: 100%;">
+              <div class="search-input-container" style="margin-bottom: 0.5rem;">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input 
+                  type="text" 
+                  class="search-bar" 
+                  placeholder="Search regional districts..."
+                  [value]="activeDistrictQuery()"
+                  (input)="onDistrictSearchInput($event)"
+                  (focus)="showDistrictDropdown.set(true)"
+                  (blur)="onDistrictDropdownBlur()"
+                >
+                @if (service.boundaryFilterLayer() === 'regionalDistricts' && service.boundaryFilter() !== 'all' && service.boundaryFilter() !== '') {
                   <button 
-                    style="background:none; border:none; color: var(--bc-blue-primary); font-size:0.7rem; font-weight:700; cursor:pointer; text-decoration:underline;"
-                    (click)="service.boundaryFilter.set('')"
+                    (click)="setBoundaryFilter('all', 'regionalDistricts')"
+                    style="position: absolute; right: 1rem; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #cc3333; font-weight: bold; display: flex; align-items: center;"
                   >
-                    Clear Filter
+                    <i class="fa-solid fa-circle-xmark" style="position: static; color: inherit; transform: none; font-size: 1rem;"></i>
                   </button>
                 }
               </div>
-              <div style="position: relative; width: 100%;">
+
+              <!-- Dropdown items -->
+              @if (showDistrictDropdown() && filteredRegionalDistricts().length > 0) {
+                <div class="custom-dropdown" style="position: absolute; top: 100%; left: 0; right: 0; background: var(--white); border: 1px solid var(--bc-gray-border); border-radius: 8px; max-height: 200px; overflow-y: auto; z-index: 1010; box-shadow: 0 4px 12px rgba(0,0,0,0.15); margin-top: 2px;">
+                  @for (name of filteredRegionalDistricts(); track name) {
+                    <div 
+                      (mousedown)="selectDistrictOption(name)"
+                      style="padding: 0.5rem 0.75rem; font-size: 0.8rem; color: var(--text-dark); cursor: pointer; border-bottom: 1px solid var(--bc-gray-light); transition: background 0.15s ease;"
+                      [style.background]="service.boundaryFilterLayer() === 'regionalDistricts' && (service.boundaryFilter() || '').toLowerCase() === name.toLowerCase() ? 'rgba(0, 51, 103, 0.08)' : 'transparent'"
+                      [style.font-weight]="service.boundaryFilterLayer() === 'regionalDistricts' && (service.boundaryFilter() || '').toLowerCase() === name.toLowerCase() ? 'bold' : 'normal'"
+                    >
+                      <span [innerHTML]="highlightText(name, activeDistrictQuery())"></span>
+                    </div>
+                  }
+                </div>
+              } @else if (showDistrictDropdown() && activeDistrictQuery()) {
+                <div style="position: absolute; top: 100%; left: 0; right: 0; background: var(--white); border: 1px solid var(--bc-gray-border); border-radius: 8px; padding: 0.75rem; text-align: center; font-size: 0.8rem; color: var(--text-secondary); z-index: 1010; box-shadow: 0 4px 12px rgba(0,0,0,0.15); margin-top: 2px;">
+                  No matching regional districts found.
+                </div>
+              }
+            </div>
+          </div>
+
+          <!-- Municipalities Filter Section -->
+          <div class="filter-section" style="margin-top: 1rem;">
+            <div class="filter-label" style="text-transform: capitalize; margin-bottom: 0.5rem;">
+              Municipality
+            </div>
+            
+            <div style="position: relative; width: 100%;">
+              <div class="search-input-container" style="margin-bottom: 0.5rem;">
+                <i class="fa-solid fa-magnifying-glass"></i>
                 <input 
                   type="text" 
-                  [value]="boundarySearchQuery()" 
-                  (input)="onBoundarySearchInput($event)" 
-                  (focus)="showBoundaryDropdown.set(true)"
-                  (blur)="onBoundaryDropdownBlur()"
-                  placeholder="Search and select boundary shape..."
-                  autocomplete="off"
-                  class="search-bar"
-                  style="padding-left: 1rem; padding-right: 2.5rem;"
+                  class="search-bar" 
+                  placeholder="Search municipalities..."
+                  [value]="activeMuniQuery()"
+                  (input)="onMuniSearchInput($event)"
+                  (focus)="showMuniDropdown.set(true)"
+                  (blur)="onMuniDropdownBlur()"
                 >
-                <i class="fa-solid fa-chevron-down" style="position: absolute; right: 1rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;"></i>
-                
-                @if (showBoundaryDropdown() && filteredBoundaryNames().length > 0) {
-                  <div class="searchable-dropdown-list">
-                    @for (name of filteredBoundaryNames(); track name) {
-                      <div 
-                        class="searchable-dropdown-option" 
-                        [class.selected]="service.boundaryFilter() === name"
-                        (mousedown)="selectBoundaryOption(name)"
-                      >
-                        {{ name }}
-                      </div>
-                    }
-                  </div>
-                } @else if (showBoundaryDropdown() && filteredBoundaryNames().length === 0) {
-                  <div class="searchable-dropdown-list" style="position: absolute; top: 100%; left: 0; right: 0; background: var(--white); border: 1.5px solid var(--bc-gray-border); border-radius: 6px; padding: 1rem; text-align: center; z-index: 1000; box-shadow: 0 8px 24px rgba(0,0,0,0.12); margin-top: 4px; color: var(--text-muted); font-size: 0.9rem;">
-                    No boundaries match your search
-                  </div>
+                @if (service.boundaryFilterLayer() === 'municipalities' && service.boundaryFilter() !== 'all' && service.boundaryFilter() !== '') {
+                  <button 
+                    (click)="setBoundaryFilter('all', 'municipalities')"
+                    style="position: absolute; right: 1rem; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #cc3333; font-weight: bold; display: flex; align-items: center;"
+                  >
+                    <i class="fa-solid fa-circle-xmark" style="position: static; color: inherit; transform: none; font-size: 1rem;"></i>
+                  </button>
                 }
               </div>
 
-              <!-- Premium Info Hint to select a single boundary shape -->
-              @if (service.boundaryFilter() === '' || service.boundaryFilter() === 'all') {
-                <div style="background: rgba(99, 102, 241, 0.08); border-left: 3px solid #6366f1; padding: 0.6rem 0.8rem; border-radius: 6px; font-size: 0.78rem; color: var(--text-dark); margin-top: 0.75rem; border-right: 1px solid rgba(99, 102, 241, 0.15); border-top: 1px solid rgba(99, 102, 241, 0.15); border-bottom: 1px solid rgba(99, 102, 241, 0.15);">
-                  Please search and select a specific boundary above. Only a single selected boundary shape is requested with its full geometry on-demand to optimize performance.
+              <!-- Dropdown items -->
+              @if (showMuniDropdown() && filteredMunicipalities().length > 0) {
+                <div class="custom-dropdown" style="position: absolute; top: 100%; left: 0; right: 0; background: var(--white); border: 1px solid var(--bc-gray-border); border-radius: 8px; max-height: 200px; overflow-y: auto; z-index: 1010; box-shadow: 0 4px 12px rgba(0,0,0,0.15); margin-top: 2px;">
+                  @for (name of filteredMunicipalities(); track name) {
+                    <div 
+                      (mousedown)="selectMuniOption(name)"
+                      style="padding: 0.5rem 0.75rem; font-size: 0.8rem; color: var(--text-dark); cursor: pointer; border-bottom: 1px solid var(--bc-gray-light); transition: background 0.15s ease;"
+                      [style.background]="service.boundaryFilterLayer() === 'municipalities' && (service.boundaryFilter() || '').toLowerCase() === name.toLowerCase() ? 'rgba(0, 51, 103, 0.08)' : 'transparent'"
+                      [style.font-weight]="service.boundaryFilterLayer() === 'municipalities' && (service.boundaryFilter() || '').toLowerCase() === name.toLowerCase() ? 'bold' : 'normal'"
+                    >
+                      <span [innerHTML]="highlightText(name, activeMuniQuery())"></span>
+                    </div>
+                  }
+                </div>
+              } @else if (showMuniDropdown() && activeMuniQuery()) {
+                <div style="position: absolute; top: 100%; left: 0; right: 0; background: var(--white); border: 1px solid var(--bc-gray-border); border-radius: 8px; padding: 0.75rem; text-align: center; font-size: 0.8rem; color: var(--text-secondary); z-index: 1010; box-shadow: 0 4px 12px rgba(0,0,0,0.15); margin-top: 2px;">
+                  No matching municipalities found.
                 </div>
               }
+            </div>
+          </div>
+
+          <!-- Electoral Districts Filter Section -->
+          <div class="filter-section" style="margin-top: 1rem;">
+            <div class="filter-label" style="text-transform: capitalize; margin-bottom: 0.5rem;">
+              Electoral District
+            </div>
+            
+            <div style="position: relative; width: 100%;">
+              <div class="search-input-container" style="margin-bottom: 0.5rem;">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input 
+                  type="text" 
+                  class="search-bar" 
+                  placeholder="Search electoral districts..."
+                  [value]="activeElectoralQuery()"
+                  (input)="onElectoralSearchInput($event)"
+                  (focus)="showElectoralDropdown.set(true)"
+                  (blur)="onElectoralDropdownBlur()"
+                >
+                @if (service.boundaryFilterLayer() === 'electoralDistricts' && service.boundaryFilter() !== 'all' && service.boundaryFilter() !== '') {
+                  <button 
+                    (click)="setBoundaryFilter('all', 'electoralDistricts')"
+                    style="position: absolute; right: 1rem; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #cc3333; font-weight: bold; display: flex; align-items: center;"
+                  >
+                    <i class="fa-solid fa-circle-xmark" style="position: static; color: inherit; transform: none; font-size: 1rem;"></i>
+                  </button>
+                }
+              </div>
+
+              <!-- Dropdown items -->
+              @if (showElectoralDropdown() && filteredElectoralDistricts().length > 0) {
+                <div class="custom-dropdown" style="position: absolute; top: 100%; left: 0; right: 0; background: var(--white); border: 1px solid var(--bc-gray-border); border-radius: 8px; max-height: 200px; overflow-y: auto; z-index: 1010; box-shadow: 0 4px 12px rgba(0,0,0,0.15); margin-top: 2px;">
+                  @for (name of filteredElectoralDistricts(); track name) {
+                    <div 
+                      (mousedown)="selectElectoralOption(name)"
+                      style="padding: 0.5rem 0.75rem; font-size: 0.8rem; color: var(--text-dark); cursor: pointer; border-bottom: 1px solid var(--bc-gray-light); transition: background 0.15s ease;"
+                      [style.background]="service.boundaryFilterLayer() === 'electoralDistricts' && (service.boundaryFilter() || '').toLowerCase() === name.toLowerCase() ? 'rgba(0, 51, 103, 0.08)' : 'transparent'"
+                      [style.font-weight]="service.boundaryFilterLayer() === 'electoralDistricts' && (service.boundaryFilter() || '').toLowerCase() === name.toLowerCase() ? 'bold' : 'normal'"
+                    >
+                      <span [innerHTML]="highlightText(name, activeElectoralQuery())"></span>
+                    </div>
+                  }
+                </div>
+              } @else if (showElectoralDropdown() && activeElectoralQuery()) {
+                <div style="position: absolute; top: 100%; left: 0; right: 0; background: var(--white); border: 1px solid var(--bc-gray-border); border-radius: 8px; padding: 0.75rem; text-align: center; font-size: 0.8rem; color: var(--text-secondary); z-index: 1010; box-shadow: 0 4px 12px rgba(0,0,0,0.15); margin-top: 2px;">
+                  No matching electoral districts found.
+                </div>
+              }
+            </div>
+          </div>
+
+          <!-- Quick Chip Filter to clear selection -->
+          @if (service.boundaryFilter() !== 'all' && service.boundaryFilter() !== '') {
+            <div style="margin-top: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+              <span style="font-size: 0.75rem; color: var(--text-secondary);">Active filter:</span>
+              <div 
+                class="chip active" 
+                (click)="setBoundaryFilter('all', 'none')"
+                style="font-size: 0.75rem; padding: 0.25rem 0.65rem;"
+              >
+                {{ service.boundaryFilter() }} <i class="fa-solid fa-xmark" style="margin-left: 0.25rem; font-size: 0.7rem;"></i>
+              </div>
             </div>
           }
         </div>
       </details>
+
+
+
 
     </div>
 
@@ -350,6 +402,83 @@
   <!-- Map Container Panel -->
   <div class="map-container">
     <div id="map"></div>
+
+    <!-- Floating Layer Switcher Control Widget (Top Left) -->
+    <div class="map-overlay-widget" style="top: 1rem; bottom: auto; left: 1rem; right: auto; width: 230px; padding: 1rem; border-left: 4px solid var(--bc-blue-primary);">
+      <div class="widget-title" style="margin-bottom: 0.65rem;">
+        <i class="fa-solid fa-layer-group" style="color: var(--bc-blue-primary);"></i> Map Overlays
+      </div>
+      
+      <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; font-weight: 600; color: var(--text-dark); cursor: pointer; padding: 0.35rem 0.5rem; border-radius: 6px; transition: background 0.15s ease;"
+               [style.background]="isLayerActive('regions') ? 'rgba(252, 186, 25, 0.08)' : 'transparent'">
+          <input 
+            type="checkbox" 
+            [checked]="isLayerActive('regions')" 
+            (change)="toggleLayer('regions')"
+            style="accent-color: var(--bc-gold); cursor: pointer;"
+          >
+          <span style="display: flex; align-items: center; gap: 0.35rem;">
+            <span style="width: 7px; height: 7px; background: #fcba19; border-radius: 50%;"></span>
+            Environmental Regions
+          </span>
+        </label>
+
+        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; font-weight: 600; color: var(--text-dark); cursor: pointer; padding: 0.35rem 0.5rem; border-radius: 6px; transition: background 0.15s ease;"
+               [style.background]="isLayerActive('regionalDistricts') ? 'rgba(99, 102, 241, 0.08)' : 'transparent'">
+          <input 
+            type="checkbox" 
+            [checked]="isLayerActive('regionalDistricts')" 
+            (change)="toggleLayer('regionalDistricts')"
+            style="accent-color: #6366f1; cursor: pointer;"
+          >
+          <span style="display: flex; align-items: center; gap: 0.35rem;">
+            <span style="width: 7px; height: 7px; background: #6366f1; border-radius: 50%;"></span>
+            Regional Districts
+          </span>
+        </label>
+
+        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; font-weight: 600; color: var(--text-dark); cursor: pointer; padding: 0.35rem 0.5rem; border-radius: 6px; transition: background 0.15s ease;"
+               [style.background]="isLayerActive('municipalities') ? 'rgba(13, 148, 136, 0.08)' : 'transparent'">
+          <input 
+            type="checkbox" 
+            [checked]="isLayerActive('municipalities')" 
+            (change)="toggleLayer('municipalities')"
+            style="accent-color: #0d9488; cursor: pointer;"
+          >
+          <span style="display: flex; align-items: center; gap: 0.35rem;">
+            <span style="width: 7px; height: 7px; background: #0d9488; border-radius: 50%; border: 1.5px dashed #0d9488;"></span>
+            Municipalities
+          </span>
+        </label>
+
+        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; font-weight: 600; color: var(--text-dark); cursor: pointer; padding: 0.35rem 0.5rem; border-radius: 6px; transition: background 0.15s ease;"
+               [style.background]="isLayerActive('electoralDistricts') ? 'rgba(236, 72, 153, 0.08)' : 'transparent'">
+          <input 
+            type="checkbox" 
+            [checked]="isLayerActive('electoralDistricts')" 
+            (change)="toggleLayer('electoralDistricts')"
+            style="accent-color: #ec4899; cursor: pointer;"
+          >
+          <span style="display: flex; align-items: center; gap: 0.35rem;">
+            <span style="width: 7px; height: 7px; background: #ec4899; border-radius: 50%;"></span>
+            Electoral Districts
+          </span>
+        </label>
+      </div>
+
+      <!-- Active Boundary Filter Indicator -->
+      @if (service.boundaryFilter() !== 'all' && service.boundaryFilter() !== '') {
+        <div style="margin-top: 0.85rem; padding: 0.5rem; background: rgba(56, 89, 138, 0.08); border-radius: 6px; font-size: 0.72rem; display: flex; align-items: center; justify-content: space-between; border-left: 3px solid var(--bc-blue-primary);">
+          <div style="font-weight: bold; color: var(--text-dark); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;" [title]="service.boundaryFilter()">
+            Filter: {{ service.boundaryFilter() }}
+          </div>
+          <button (click)="service.boundaryFilter.set('all')" style="background: none; border: none; cursor: pointer; color: #cc3333; font-weight: bold; font-size: 0.85rem; padding: 0 0.2rem; display: flex; align-items: center;">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      }
+    </div>
 
     <!-- Floating Boundary Loading Spinner Overlay -->
     @if (service.isLoadingBoundaries()) {

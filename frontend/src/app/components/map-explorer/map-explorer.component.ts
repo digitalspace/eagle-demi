@@ -19,29 +19,77 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   public map: any = null;
   private regionsLayer: any = null;
-  private boundariesLayer: any = null;
+  private boundariesLayers = new Map<string, any>();
   private markerClusterGroup: any = null;
   private markersMap = new Map<any, any>();
 
-  // Custom searchable select signals
-  boundarySearchQuery = signal<string>('');
-  showBoundaryDropdown = signal<boolean>(false);
+  // Custom searchable select signals per category
+  activeDistrictQuery = signal<string>('');
+  showDistrictDropdown = signal<boolean>(false);
 
-  filteredBoundaryNames = computed(() => {
-    const q = this.boundarySearchQuery().toLowerCase().trim();
-    const names = this.service.activeBoundaryNames();
+  activeMuniQuery = signal<string>('');
+  showMuniDropdown = signal<boolean>(false);
+
+  activeElectoralQuery = signal<string>('');
+  showElectoralDropdown = signal<boolean>(false);
+
+  regionalDistrictNames = computed(() => {
+    const cache = this.service.loadedBoundariesGeoJSON();
+    const data = cache['regionalDistricts'] || [];
+    return data.map((b: any) => b.name).sort((a: string, b: string) => a.localeCompare(b));
+  });
+
+  municipalityNames = computed(() => {
+    const cache = this.service.loadedBoundariesGeoJSON();
+    const data = cache['municipalities'] || [];
+    return data.map((b: any) => b.name).sort((a: string, b: string) => a.localeCompare(b));
+  });
+
+  electoralDistrictNames = computed(() => {
+    const cache = this.service.loadedBoundariesGeoJSON();
+    const data = cache['electoralDistricts'] || [];
+    return data.map((b: any) => b.name).sort((a: string, b: string) => a.localeCompare(b));
+  });
+
+  filteredRegionalDistricts = computed(() => {
+    const q = this.activeDistrictQuery().toLowerCase().trim();
+    const names = this.regionalDistrictNames();
     if (!q) return names;
-    return names.filter(name => name.toLowerCase().includes(q));
+    return names.filter((name: string) => name.toLowerCase().includes(q));
+  });
+
+  filteredMunicipalities = computed(() => {
+    const q = this.activeMuniQuery().toLowerCase().trim();
+    const names = this.municipalityNames();
+    if (!q) return names;
+    return names.filter((name: string) => name.toLowerCase().includes(q));
+  });
+
+  filteredElectoralDistricts = computed(() => {
+    const q = this.activeElectoralQuery().toLowerCase().trim();
+    const names = this.electoralDistrictNames();
+    if (!q) return names;
+    return names.filter((name: string) => name.toLowerCase().includes(q));
   });
 
   constructor() {
-    // Sync boundaryFilter with boundarySearchQuery for the custom searchable list
+    // Sync boundaryFilters with active search queries
     effect(() => {
       const activeFilter = this.service.boundaryFilter();
+      const activeLayer = this.service.boundaryFilterLayer();
+      
       if (activeFilter === 'all' || activeFilter === '') {
-        this.boundarySearchQuery.set('');
+        this.activeDistrictQuery.set('');
+        this.activeMuniQuery.set('');
+        this.activeElectoralQuery.set('');
       } else {
-        this.boundarySearchQuery.set(activeFilter);
+        if (activeLayer === 'regionalDistricts') {
+          this.activeDistrictQuery.set(activeFilter);
+        } else if (activeLayer === 'municipalities') {
+          this.activeMuniQuery.set(activeFilter);
+        } else if (activeLayer === 'electoralDistricts') {
+          this.activeElectoralQuery.set(activeFilter);
+        }
       }
     });
 
@@ -52,37 +100,32 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       setTimeout(() => this.updateViewportProjects(), 100);
     });
 
-    // Re-render regional boundaries whenever they are loaded or map is ready!
+    // Load geometries for all active boundary layers
     effect(() => {
-      const bLayer = this.service.activeBoundaryLayer();
-      const geojson = this.service.regionalBoundariesGeoJSON();
-      if (geojson && this.map && bLayer === 'regions') {
-        this.loadRegionalBoundaries();
+      const layers = this.service.activeBoundaryLayers();
+      for (const bLayer of layers) {
+        if (bLayer !== 'none' && bLayer !== 'regions') {
+          this.service.loadBoundaryGeometry(bLayer, false);
+        }
       }
     });
 
     // Re-render administrative boundaries whenever they change or are loaded!
-    effect(async () => {
-      const bLayer = this.service.activeBoundaryLayer();
+    effect(() => {
+      const layers = this.service.activeBoundaryLayers();
       const bFilter = this.service.boundaryFilter();
+      const bFilterLayer = this.service.boundaryFilterLayer();
+      const cache = this.service.loadedBoundariesGeoJSON(); // Synchronously track cache updates!
+      const regionsGeojson = this.service.regionalBoundariesGeoJSON();
       
       if (!this.map) return;
 
-      // Clean up previous boundariesLayer
-      if (this.boundariesLayer) {
-        try {
-          this.map.removeLayer(this.boundariesLayer);
-        } catch (err) {
-          console.warn('Error removing old boundaries layer:', err);
+      // Handle environmental regions ('regions' layer)
+      if (layers.includes('regions')) {
+        if (regionsGeojson && !this.regionsLayer) {
+          this.loadRegionalBoundaries();
         }
-        this.boundariesLayer = null;
-      }
-
-      // Mutual exclusion: if activeBoundaryLayer is regions, show environmental regions, otherwise hide them!
-      if (bLayer === 'regions') {
-        this.loadRegionalBoundaries();
       } else {
-        // Hide regional boundaries
         if (this.regionsLayer) {
           try {
             this.map.removeLayer(this.regionsLayer);
@@ -93,39 +136,36 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         }
       }
 
-      if (bLayer === 'none' || bLayer === 'regions') {
-        return;
-      }
-
-      // Load boundary metadata from cache/API (without geometries)
-      await this.service.loadBoundaryGeometry(bLayer);
-
-      // Only render if a specific single boundary item is specified/selected!
-      if (bFilter !== 'all' && bFilter !== '') {
-        const singleBoundaryData = await this.service.loadSingleBoundaryGeometry(bLayer, bFilter);
-        if (singleBoundaryData && this.map && this.service.activeBoundaryLayer() === bLayer && this.service.boundaryFilter() === bFilter) {
-          this.renderBoundaryShapes([singleBoundaryData], bLayer, bFilter);
-
-          // Auto-center map and fit bounds to the single selected boundary shape
-          if (this.boundariesLayer) {
-            this.boundariesLayer.eachLayer((layer: any) => {
-              if (layer.getBounds) {
-                const bounds = layer.getBounds();
-                if (bounds && bounds.isValid()) {
-                  this.map.fitBounds(bounds, { padding: [30, 30], maxZoom: 10, animate: true, duration: 0.4 });
-                }
-              }
-            });
+      // Handle other administrative layers
+      const adminTypes = ['regionalDistricts', 'municipalities', 'electoralDistricts'];
+      for (const type of adminTypes) {
+        if (layers.includes(type)) {
+          const boundaries = cache[type] || [];
+          if (boundaries.length > 0) {
+            this.renderBoundaryShapes(boundaries, type, bFilter || 'all', bFilterLayer || 'none');
+          }
+        } else {
+          const existing = this.boundariesLayers.get(type);
+          if (existing) {
+            try {
+              this.map.removeLayer(existing);
+            } catch (err) {
+              console.warn(`Error removing old boundaries layer for ${type}:`, err);
+            }
+            this.boundariesLayers.delete(type);
           }
         }
-      } else {
-        await this.updateViewportBoundaries();
       }
     });
   }
 
   ngOnInit() {
     this.service.activePage.set('map');
+    
+    // Proactively load administrative names (without heavy geometries) so they are immediately searchable
+    this.service.loadBoundaryGeometry('regionalDistricts', false);
+    this.service.loadBoundaryGeometry('municipalities', false);
+    this.service.loadBoundaryGeometry('electoralDistricts', false);
   }
 
   ngAfterViewInit() {
@@ -153,36 +193,28 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
       const onMove = () => {
         this.updateViewportProjects();
-        this.updateViewportBoundaries();
       };
       this.map.on('moveend', onMove);
       this.map.on('zoomend', () => {
         onMove();
-        const bLayer = this.service.activeBoundaryLayer();
-        if (bLayer === 'municipalities' && this.boundariesLayer) {
+        const layers = this.service.activeBoundaryLayers();
+        if (layers.includes('municipalities')) {
           const bFilter = this.service.boundaryFilter();
-          if (bFilter !== 'all') {
-            const currentCache = this.service.loadedBoundariesGeoJSON();
-            const data = currentCache[bLayer];
-            if (data && Array.isArray(data)) {
-              const match = data.find((b: any) => (b.name || '').toLowerCase() === bFilter.toLowerCase());
-              if (match && match.geometry) {
-                this.renderBoundaryShapes([match], bLayer, bFilter);
-              }
-            }
-          }
+          const bFilterLayer = this.service.boundaryFilterLayer();
+          const currentCache = this.service.loadedBoundariesGeoJSON();
+          const data = currentCache['municipalities'] || [];
+          this.renderBoundaryShapes(data, 'municipalities', bFilter || 'all', bFilterLayer || 'none');
         }
       });
       
       setTimeout(() => {
         this.updateViewportProjects();
-        this.updateViewportBoundaries();
       }, 500);
 
       this.syncMarkersToMap(this.service.filteredProjects() || []);
-      // Do not load regional boundaries initially, respect activeBoundaryLayer
-      const bLayer = this.service.activeBoundaryLayer();
-      if (bLayer === 'regions') {
+      // Do not load regional boundaries initially, respect activeBoundaryLayers
+      const layers = this.service.activeBoundaryLayers();
+      if (layers.includes('regions')) {
         this.loadRegionalBoundaries();
       }
 
@@ -197,7 +229,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         this.map.remove();
         this.map = null;
         this.regionsLayer = null;
-        this.boundariesLayer = null;
+        this.boundariesLayers.clear();
         this.markerClusterGroup = null;
         this.markersMap.clear();
       }
@@ -223,25 +255,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     this.service.mapInViewProjectIds.set(inViewIds);
   }
 
-  private async updateViewportBoundaries() {
-    if (!this.map) return;
-    const bLayer = this.service.activeBoundaryLayer();
-    const bFilter = this.service.boundaryFilter();
 
-    if (bLayer === 'none' || bLayer === 'regions') {
-      return;
-    }
-
-    if (bFilter === 'all' || bFilter === '') {
-      const bounds = this.map.getBounds();
-      const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
-      
-      const boundaries = await this.service.loadBoundariesByBBox(bLayer, bbox);
-      if (this.map && this.service.activeBoundaryLayer() === bLayer && (this.service.boundaryFilter() === 'all' || this.service.boundaryFilter() === '')) {
-        this.renderBoundaryShapes(boundaries, bLayer, bFilter || 'all');
-      }
-    }
-  }
 
   private syncMarkersToMap(filteredProjects: Project[]) {
     if (!this.map) return;
@@ -311,16 +325,20 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
             const currentFilter = this.service.regionFilter();
             if (currentFilter === 'all' || currentFilter.toLowerCase() === name.toLowerCase()) {
               ly.setStyle({
-                weight: 3,
+                weight: 3.0,
                 color: '#fcba19',
                 fillColor: '#fcba19',
-                fillOpacity: 0.22
+                fillOpacity: 0.22,
+                dashArray: ''
               });
             } else {
               ly.setStyle({
-                weight: 2,
+                weight: 2.0,
                 color: '#fcba19',
-                fillOpacity: 0.12
+                fillColor: '#fcba19',
+                fillOpacity: 0.12,
+                opacity: 0.6,
+                dashArray: '3, 3'
               });
             }
           },
@@ -367,17 +385,18 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     if (hasAnySelection) {
       return {
         weight: 1.0,
-        color: '#38598a',
-        fillColor: '#38598a',
+        color: '#fcba19',
+        fillColor: '#fcba19',
         fillOpacity: 0.01,
-        dashArray: '3'
+        opacity: 0.4,
+        dashArray: '3, 3'
       };
     }
 
     return {
       weight: 1.5,
-      color: '#38598a',
-      fillColor: '#38598a',
+      color: '#fcba19',
+      fillColor: '#fcba19',
       fillOpacity: 0.06,
       dashArray: ''
     };
@@ -466,16 +485,18 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     return JSON.stringify(proj.rawMetadata, null, 2);
   }
 
-  private renderBoundaryShapes(boundaries: any[], type: string, filterValue: string) {
+  private renderBoundaryShapes(boundaries: any[], type: string, filterValue: string, filterLayer: string) {
     if (!this.map) return;
 
-    if (this.boundariesLayer) {
+    // Clean up existing layer group for this type first
+    const existing = this.boundariesLayers.get(type);
+    if (existing) {
       try {
-        this.map.removeLayer(this.boundariesLayer);
+        this.map.removeLayer(existing);
       } catch (err) {
-        console.warn('Error removing old boundaries layer:', err);
+        console.warn(`Error removing old boundaries layer for ${type}:`, err);
       }
-      this.boundariesLayer = null;
+      this.boundariesLayers.delete(type);
     }
 
     // Convert array of database boundary objects into a standard GeoJSON FeatureCollection
@@ -495,13 +516,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
     const currentZoom = this.map.getZoom();
 
-    this.boundariesLayer = L.geoJSON(featureCollection, {
+    const newLayer = L.geoJSON(featureCollection, {
       smoothFactor: 1.0, // Auto-simplifies geometry at lower zoom levels for premium performance
       style: (feature: any) => {
-        const name = feature?.properties?.name;
-        const isSelected = filterValue !== 'all' && filterValue.toLowerCase() === (name || '').toLowerCase();
-        const hasAnySelection = filterValue !== 'all';
-
         // Zoom gating: Municipalities only visible at Zoom > 6
         if (type === 'municipalities' && currentZoom <= 6) {
           return {
@@ -512,13 +529,30 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
           };
         }
 
+        const name = feature?.properties?.name;
+        const isSelected = filterValue !== 'all' && filterValue !== '' && filterLayer === type && (name || '').toLowerCase() === filterValue.toLowerCase();
+        const hasAnySelection = filterValue !== 'all' && filterValue !== '';
+
+        let strokeColor = '#0d9488';
+        let fOpacity = 0.06;
+
+        if (type === 'regionalDistricts') {
+          strokeColor = '#6366f1';
+          fOpacity = 0.07;
+        } else if (type === 'municipalities') {
+          strokeColor = '#0d9488';
+          fOpacity = 0.06;
+        } else if (type === 'electoralDistricts') {
+          strokeColor = '#ec4899';
+          fOpacity = 0.07;
+        }
+
         if (isSelected) {
           return {
-            weight: 4.5,
-            color: '#6366f1',
-            opacity: 1.0,
-            fillColor: '#6366f1',
-            fillOpacity: 0.12,
+            weight: 3.5,
+            color: strokeColor,
+            fillColor: strokeColor,
+            fillOpacity: fOpacity + 0.15,
             dashArray: ''
           };
         }
@@ -526,18 +560,19 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         if (hasAnySelection) {
           return {
             weight: 1.0,
-            color: '#0d9488',
-            fillColor: '#0d9488',
-            fillOpacity: 0.01,
+            color: strokeColor,
+            fillColor: strokeColor,
+            fillOpacity: fOpacity / 2,
+            opacity: 0.4,
             dashArray: '3, 3'
           };
         }
 
         return {
           weight: 1.5,
-          color: '#0d9488',
-          fillColor: '#0d9488',
-          fillOpacity: 0.04,
+          color: strokeColor,
+          fillColor: strokeColor,
+          fillOpacity: fOpacity,
           dashArray: ''
         };
       },
@@ -549,45 +584,63 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
           return;
         }
  
-        // Dynamic matches calculation
-        const matchCount = this.getMatchingProjectsCountForBoundary(name, type);
- 
         // Beautiful sticky high-contrast tooltip - identical to environmental regions
         this.bindUnifiedTooltip(layer, name, type);
  
         layer.on({
           mouseover: (e: any) => {
             const ly = e.target;
-            const isSelected = filterValue !== 'all' && filterValue.toLowerCase() === (name || '').toLowerCase();
-            
-            if (isSelected) {
+            const isSelected = filterValue !== 'all' && filterValue !== '' && filterLayer === type && (name || '').toLowerCase() === filterValue.toLowerCase();
+            const hasAnySelection = filterValue !== 'all' && filterValue !== '';
+
+            let highlightColor = '#6366f1';
+            let hoverFillOpacity = 0.20;
+
+            if (type === 'regionalDistricts') {
+              highlightColor = '#6366f1';
+              hoverFillOpacity = 0.20;
+            } else if (type === 'municipalities') {
+              highlightColor = '#0d9488';
+              hoverFillOpacity = 0.18;
+            } else if (type === 'electoralDistricts') {
+              highlightColor = '#ec4899';
+              hoverFillOpacity = 0.20;
+            }
+
+            if (!hasAnySelection || isSelected) {
               ly.setStyle({
-                weight: 5.5,
-                color: '#6366f1',
-                fillColor: '#6366f1',
-                fillOpacity: 0.22
+                weight: 3.0,
+                color: highlightColor,
+                fillColor: highlightColor,
+                fillOpacity: hoverFillOpacity,
+                dashArray: ''
               });
             } else {
               ly.setStyle({
-                weight: 3.0,
-                color: '#6366f1',
-                fillColor: '#6366f1',
-                fillOpacity: 0.18
+                weight: 2.0,
+                color: highlightColor,
+                fillColor: highlightColor,
+                fillOpacity: hoverFillOpacity / 2,
+                opacity: 0.6,
+                dashArray: '3, 3'
               });
             }
           },
           mouseout: (e: any) => {
             const ly = e.target;
-            if (this.boundariesLayer) {
-              this.boundariesLayer.resetStyle(ly);
+            const targetLayer = this.boundariesLayers.get(type);
+            if (targetLayer) {
+              targetLayer.resetStyle(ly);
             }
           },
           click: (e: any) => {
-            const current = this.service.boundaryFilter();
-            if (current.toLowerCase() === name.toLowerCase()) {
-              this.setBoundaryFilter('all');
+            const currentFilter = this.service.boundaryFilter();
+            if (currentFilter.toLowerCase() === (name || '').toLowerCase()) {
+              this.service.boundaryFilter.set('all');
+              this.service.boundaryFilterLayer.set('none');
             } else {
-              this.setBoundaryFilter(name);
+              this.service.boundaryFilter.set(name);
+              this.service.boundaryFilterLayer.set(type);
               if (layer.getBounds) {
                 const bounds = layer.getBounds();
                 if (bounds && bounds.isValid()) {
@@ -600,9 +653,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     }).addTo(this.map);
 
-    if (this.boundariesLayer) {
-      this.boundariesLayer.bringToBack();
-    }
+    this.boundariesLayers.set(type, newLayer);
+    newLayer.bringToBack();
   }
 
   private bindUnifiedTooltip(layer: any, name: string, type: string) {
@@ -648,43 +700,122 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     }).length;
   }
 
-  setBoundaryFilter(val: string) {
+  setBoundaryFilter(val: string, layerType: string) {
     this.service.boundaryFilter.set(val);
-    if (this.boundariesLayer) {
-      this.boundariesLayer.eachLayer((layer: any) => {
-        if (this.boundariesLayer) {
-          this.boundariesLayer.resetStyle(layer);
-        }
+    if (val === 'all' || val === '') {
+      this.service.boundaryFilterLayer.set('none');
+    } else {
+      this.service.boundaryFilterLayer.set(layerType);
+      
+      // Automatically enable respective map overlay category on the map
+      const currentLayers = this.service.activeBoundaryLayers();
+      if (!currentLayers.includes(layerType)) {
+        this.service.activeBoundaryLayers.set([...currentLayers, layerType]);
+      }
+    }
+    this.boundariesLayers.forEach((targetLayer) => {
+      targetLayer.eachLayer((layer: any) => {
+        targetLayer.resetStyle(layer);
       });
-    }
+    });
   }
 
-  onBoundarySearchInput(event: Event) {
+  onDistrictSearchInput(event: Event) {
     const value = (event.target as HTMLInputElement).value;
-    this.boundarySearchQuery.set(value);
+    this.activeDistrictQuery.set(value);
     if (!value.trim()) {
-      this.service.boundaryFilter.set('');
+      this.setBoundaryFilter('all', 'none');
     }
   }
 
-  selectBoundaryOption(name: string) {
-    this.setBoundaryFilter(name);
-    this.showBoundaryDropdown.set(false);
+  selectDistrictOption(name: string) {
+    this.setBoundaryFilter(name, 'regionalDistricts');
+    this.showDistrictDropdown.set(false);
   }
 
-  onBoundaryDropdownBlur() {
+  onDistrictDropdownBlur() {
     setTimeout(() => {
-      this.showBoundaryDropdown.set(false);
+      this.showDistrictDropdown.set(false);
       const activeFilter = this.service.boundaryFilter();
-      if (activeFilter === 'all' || activeFilter === '') {
-        this.boundarySearchQuery.set('');
+      const activeLayer = this.service.boundaryFilterLayer();
+      if (activeLayer === 'regionalDistricts') {
+        this.activeDistrictQuery.set(activeFilter);
       } else {
-        this.boundarySearchQuery.set(activeFilter);
+        this.activeDistrictQuery.set('');
+      }
+    }, 200);
+  }
+
+  onMuniSearchInput(event: Event) {
+    const value = (event.target as HTMLInputElement).value;
+    this.activeMuniQuery.set(value);
+    if (!value.trim()) {
+      this.setBoundaryFilter('all', 'none');
+    }
+  }
+
+  selectMuniOption(name: string) {
+    this.setBoundaryFilter(name, 'municipalities');
+    this.showMuniDropdown.set(false);
+  }
+
+  onMuniDropdownBlur() {
+    setTimeout(() => {
+      this.showMuniDropdown.set(false);
+      const activeFilter = this.service.boundaryFilter();
+      const activeLayer = this.service.boundaryFilterLayer();
+      if (activeLayer === 'municipalities') {
+        this.activeMuniQuery.set(activeFilter);
+      } else {
+        this.activeMuniQuery.set('');
+      }
+    }, 200);
+  }
+
+  onElectoralSearchInput(event: Event) {
+    const value = (event.target as HTMLInputElement).value;
+    this.activeElectoralQuery.set(value);
+    if (!value.trim()) {
+      this.setBoundaryFilter('all', 'none');
+    }
+  }
+
+  selectElectoralOption(name: string) {
+    this.setBoundaryFilter(name, 'electoralDistricts');
+    this.showElectoralDropdown.set(false);
+  }
+
+  onElectoralDropdownBlur() {
+    setTimeout(() => {
+      this.showElectoralDropdown.set(false);
+      const activeFilter = this.service.boundaryFilter();
+      const activeLayer = this.service.boundaryFilterLayer();
+      if (activeLayer === 'electoralDistricts') {
+        this.activeElectoralQuery.set(activeFilter);
+      } else {
+        this.activeElectoralQuery.set('');
       }
     }, 200);
   }
 
   highlightText(text: string, query: string): string {
     return this.service.highlightText(text, query);
+  }
+
+  isLayerActive(layer: string): boolean {
+    return this.service.activeBoundaryLayers().includes(layer);
+  }
+
+  toggleLayer(layer: string) {
+    const current = this.service.activeBoundaryLayers();
+    if (current.includes(layer)) {
+      this.service.activeBoundaryLayers.set(current.filter(l => l !== layer));
+      if (this.service.boundaryFilterLayer() === layer) {
+        this.service.boundaryFilter.set('all');
+        this.service.boundaryFilterLayer.set('none');
+      }
+    } else {
+      this.service.activeBoundaryLayers.set([...current, layer]);
+    }
   }
 }

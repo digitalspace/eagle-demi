@@ -48,9 +48,20 @@ exports.getBoundaries = async (req, res) => {
       ...spatialQuery
     };
 
-    // By default, project out heavy full geometries and return lightweight simplified ones for fast rendering
-    const projection = geometry === 'true' ? { simplifiedGeometry: 0 } : { geometry: 0 };
-    const boundaries = await Boundary.find(query, projection).lean();
+    // If geometry === 'true', we only want full geometry. Otherwise, we prefer simplified, falling back to full if empty
+    const projection = geometry === 'true' ? { simplifiedGeometry: 0 } : {};
+    let boundaries = await Boundary.find(query, projection).lean();
+
+    if (geometry !== 'true') {
+      boundaries = boundaries.map(b => {
+        if (!b.simplifiedGeometry && b.geometry) {
+          b.simplifiedGeometry = b.geometry;
+        }
+        delete b.geometry;
+        return b;
+      });
+    }
+
     return res.json(boundaries);
   } catch (err) {
     return res.status(500).json({ error: err.message });

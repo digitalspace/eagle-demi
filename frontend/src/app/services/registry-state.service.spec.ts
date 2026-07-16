@@ -5,6 +5,7 @@ describe('RegistryStateService', () => {
   let service: RegistryStateService;
 
   beforeEach(() => {
+    localStorage.clear();
     TestBed.configureTestingModule({
       providers: [RegistryStateService]
     });
@@ -16,14 +17,14 @@ describe('RegistryStateService', () => {
   });
 
   it('should have correct default signal values', () => {
-    expect(service.activeBoundaryLayer()).toBe('regions');
+    expect(service.activeBoundaryLayer()).toBe('none');
     expect(service.boundaryFilter()).toBe('all');
     expect(service.loadedBoundariesGeoJSON()).toEqual({});
     expect(service.activeBoundaryNames()).toEqual([]);
   });
 
   it('should compute activeBoundaryNames alphabetically', () => {
-    service.activeBoundaryLayer.set('regionalDistricts');
+    service.activeBoundaryLayers.set(['regionalDistricts']);
     service.loadedBoundariesGeoJSON.set({
       regionalDistricts: [
         { name: 'Capital' },
@@ -40,7 +41,7 @@ describe('RegistryStateService', () => {
   });
 
   it('should load boundary geometry from cache if available', async () => {
-    const mockData = [{ name: 'Test District' }];
+    const mockData = [{ name: 'Test District', simplifiedGeometry: { type: 'Polygon', coordinates: [] } }];
     service.loadedBoundariesGeoJSON.set({
       regionalDistricts: mockData
     });
@@ -56,7 +57,7 @@ describe('RegistryStateService', () => {
       headers: { 'Content-Type': 'application/json' }
     }));
 
-    service.activeBoundaryLayer.set('regionalDistricts');
+    service.activeBoundaryLayers.set(['regionalDistricts']);
     const result = await service.loadBoundaryGeometry('regionalDistricts');
 
     expect(fetchSpy).toHaveBeenCalled();

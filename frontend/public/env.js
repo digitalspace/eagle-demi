@@ -9,9 +9,10 @@
   window.__env.ENVIRONMENT = 'dev'; // local | dev | test | prod
   window.__env.BANNER_COLOUR = 'blue';
 
-  // API Configuration — Set to remote Dev API to bypass local backend/port-forwarding
-  // window.__env.API_PATH = 'http://localhost:3000/api'; // Local backend
-  window.__env.API_PATH = 'https://eagle-demi-api-6cdc9e-dev.apps.silver.devops.gov.bc.ca/api'; // Remote Dev API
+  // API — proxy.conf.js reads API_LOCATION to generate dev server proxy rules
+  // The Angular app uses relative paths (/api) — never API_LOCATION directly
+  window.__env.API_LOCATION = 'https://eagle-demi-api-6cdc9e-dev.apps.silver.devops.gov.bc.ca';
+  window.__env.API_PATH = '/api';
   window.__env.USE_MOCK_DATA = false;
 
   // Keycloak Authentication Configuration
