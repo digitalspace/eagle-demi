@@ -96,18 +96,52 @@ exports.search = async (req, res) => {
         console.log('[demi-api search] MongoDB Project query built:', JSON.stringify(baseQuery));
         const projects = await Project.find(baseQuery).limit(requestedPageSize);
         console.log('[demi-api search] MongoDB query found raw project count:', projects.length);
-        const mapped = await Promise.all(projects.map(async p => {
-          let rawMetadata = p.metadata;
-          let legacyProj = null;
 
-          if (!rawMetadata || !rawMetadata.trackAttributes || !rawMetadata.trackAttributes.description) {
-            try {
-              if (mongoose.connection && mongoose.connection.db) {
-                legacyProj = await mongoose.connection.db.collection('epic').findOne({ _id: p._id });
-              }
-            } catch (err) {
-              console.error('Failed to query legacy project from epic collection:', p._id, err);
+        // Pre-fetch all legacy projects in one bulk query to prevent OOM / N+1 query loop
+        let legacyMap = new Map();
+        let propMap = new Map();
+
+        try {
+          if (mongoose.connection && mongoose.connection.db) {
+            const projectIds = projects.map(p => p._id);
+            const legacyProjects = await mongoose.connection.db.collection('epic')
+              .find({ _id: { $in: projectIds } })
+              .toArray();
+            
+            for (const lp of legacyProjects) {
+              legacyMap.set(lp._id.toString(), lp);
             }
+
+            // Extract all proponent IDs for bulk pre-fetching
+            const proponentIds = [];
+            for (const lp of legacyProjects) {
+              const legYear = lp.currentLegislationYear || 'legislation_2018';
+              const legBlock = lp[legYear] || {};
+              if (legBlock.proponent) {
+                proponentIds.push(legBlock.proponent);
+              }
+            }
+
+            if (proponentIds.length > 0) {
+              const proponentOrgs = await mongoose.connection.db.collection('epic')
+                .find({ _id: { $in: proponentIds } })
+                .toArray();
+              for (const po of proponentOrgs) {
+                propMap.set(po._id.toString(), po);
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[demi-api search] Failed to pre-fetch bulk legacy data:', err);
+        }
+
+        const mapped = projects.map(p => {
+          const rawMetadata = p.metadata;
+          const pIdStr = p._id.toString();
+          
+          let legacyProj = null;
+          if (!rawMetadata || !rawMetadata.trackAttributes || !rawMetadata.trackAttributes.description) {
+            legacyProj = legacyMap.get(pIdStr) || null;
           }
 
           const description = p.description || 
@@ -138,10 +172,10 @@ exports.search = async (req, res) => {
             const legYear = legacyProj.currentLegislationYear || 'legislation_2018';
             const legBlock = legacyProj[legYear] || {};
             if (legBlock.proponent) {
-              try {
-                const propOrg = await mongoose.connection.db.collection('epic').findOne({ _id: legBlock.proponent });
-                if (propOrg) proponentName = propOrg.name || 'Proponent Organization';
-              } catch (e) {}
+              const propOrg = propMap.get(legBlock.proponent.toString());
+              if (propOrg) {
+                proponentName = propOrg.name || 'Proponent Organization';
+              }
             }
           }
 
@@ -163,7 +197,7 @@ exports.search = async (req, res) => {
           };
 
           return {
-            _id: p._id.toString(),
+            _id: pIdStr,
             name: p.name || 'Unnamed Project',
             sector: sector,
             status: status,
@@ -175,7 +209,7 @@ exports.search = async (req, res) => {
             isPublished: p.isPublished !== false && (!p.read || p.read.includes('public')),
             metadata: finalMetadata
           };
-        }));
+        });
 
         return res.json([{ searchResults: mapped }]);
       }
