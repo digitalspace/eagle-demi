@@ -1,4 +1,4 @@
-import { Injectable, signal, computed, effect } from '@angular/core';
+import { Injectable, signal, computed, effect, untracked } from '@angular/core';
 import { Project, Document } from '../models/registry.models';
 
 declare const Keycloak: any;
@@ -77,6 +77,31 @@ export class RegistryStateService {
 
   // Cache of loaded GeoJSON data with geometry to avoid repeated API fetches
   loadedBoundariesGeoJSON = signal<Record<string, any>>(loadInitialCache());
+
+  // Tracks the highest resolution mode loaded for each boundary category to prevent infinite fetch loops
+  loadedBoundaryModes = computed<Record<string, 'none' | 'metadata' | 'simplified' | 'full'>>(() => {
+    const cache = this.loadedBoundariesGeoJSON();
+    const result: Record<string, 'none' | 'metadata' | 'simplified' | 'full'> = {
+      regionalDistricts: 'none',
+      municipalities: 'none',
+      electoralDistricts: 'none'
+    };
+    for (const key of ['regionalDistricts', 'municipalities', 'electoralDistricts']) {
+      const list = cache[key];
+      if (list && list.length > 0) {
+        const hasFull = list.some((b: any) => b.geometry);
+        const hasSimplified = list.some((b: any) => b.simplifiedGeometry);
+        if (hasFull) {
+          result[key] = 'full';
+        } else if (hasSimplified) {
+          result[key] = 'simplified';
+        } else {
+          result[key] = 'metadata';
+        }
+      }
+    }
+    return result;
+  });
 
   // Loading state for administrative boundaries loading
   isLoadingBoundaries = signal<boolean>(false);
@@ -651,18 +676,19 @@ export class RegistryStateService {
   }
 
   async loadBoundaryGeometry(type: string, mode: 'metadata' | 'simplified' | 'full' = 'simplified'): Promise<any> {
-    const currentCache = this.loadedBoundariesGeoJSON();
+    const ranks: Record<string, number> = { none: 0, metadata: 1, simplified: 2, full: 3 };
     
-    if (currentCache[type] && currentCache[type].length > 0) {
-      const hasGeometries = currentCache[type].some((b: any) => b.geometry || b.simplifiedGeometry);
-      if (mode === 'metadata') {
-        return currentCache[type];
-      }
-      if (mode === 'simplified' && hasGeometries) {
-        return currentCache[type];
-      }
-      if (mode === 'full' && currentCache[type].some((b: any) => b.geometry)) {
-        return currentCache[type];
+    // Wrap cache signal reads in untracked() to prevent caller effects from registering these as dependencies!
+    const cache = untracked(() => this.loadedBoundariesGeoJSON());
+    const modes = untracked(() => this.loadedBoundaryModes());
+
+    const currentMode = modes[type] || 'none';
+    const requestedRank = ranks[mode] || 0;
+    const currentRank = ranks[currentMode] || 0;
+
+    if (currentRank >= requestedRank) {
+      if (cache[type] && cache[type].length > 0) {
+        return cache[type];
       }
     }
 
@@ -697,8 +723,8 @@ export class RegistryStateService {
       if (!res.ok) throw new Error(`Failed to load boundaries metadata for ${type}`);
       const data = await res.json();
       
-      this.loadedBoundariesGeoJSON.update(cache => {
-        const next = { ...cache, [type]: data };
+      this.loadedBoundariesGeoJSON.update(prev => {
+        const next = { ...prev, [type]: data };
         this.saveCache(next);
         return next;
       });
@@ -732,8 +758,8 @@ export class RegistryStateService {
           { name: 'Peace River South', type: 'Electoral District' }
         ];
       }
-      this.loadedBoundariesGeoJSON.update(cache => {
-        const next = { ...cache, [type]: fallback };
+      this.loadedBoundariesGeoJSON.update(prev => {
+        const next = { ...prev, [type]: fallback };
         this.saveCache(next);
         return next;
       });
