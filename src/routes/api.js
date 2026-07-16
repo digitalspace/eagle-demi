@@ -10,6 +10,10 @@ const documentController = require('../controllers/document');
 const regionController = require('../controllers/region');
 const boundaryController = require('../controllers/boundary');
 const searchController = require('../controllers/search');
+const logController = require('../controllers/log');
+
+// Logs Route (Admin Only)
+router.get('/admin/logs', authMiddleware, logController.getLogs);
 
 // Search Route
 router.get('/search', passiveAuthMiddleware, searchController.search);

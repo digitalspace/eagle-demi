@@ -31,6 +31,7 @@
     "pdf-lib": "^1.17.1",
     "swagger-ui-express": "^5.0.1",
     "typesense": "^3.0.5",
+    "winston": "^3.19.0",
     "yamljs": "^0.3.0"
   }
 }

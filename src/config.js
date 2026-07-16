@@ -55,6 +55,11 @@ const config = {
   uploadDir:             process.env.UPLOAD_DIRECTORY || '/tmp',
   enableVirusScanning:   process.env.ENABLE_VIRUS_SCANNING === 'true',
 
+  // Logging Configuration
+  logLevel:              process.env.LOG_LEVEL || 'info',
+  logCappedSizeBytes:    parseInt(process.env.LOG_CAPPED_SIZE_BYTES || '52428800', 10), // 50MB
+  logCappedMaxDocuments: parseInt(process.env.LOG_CAPPED_MAX_DOCUMENTS || '100000', 10),
+
   // Keycloak & Token Authentication
   keycloakUrl:           process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',
