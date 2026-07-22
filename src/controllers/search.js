@@ -14,7 +14,7 @@ const clientInstance = jwksClient({
   cache: true,
   cacheMaxAge: 86400000, // 24 hours
   rateLimit: true,
-  jwksRequestsPerMinute: 5
+  jwksRequestsPerMinute: 30
 });
 
 function getKey(header, callback) {
@@ -42,7 +42,7 @@ async function isAdmin(req) {
   const apiKey = req.header('X-Api-Key');
   const expectedKey = process.env.DOCLING_API_KEY;
   if (expectedKey && apiKey && apiKey === expectedKey) return true;
-  if (process.env.NODE_ENV !== 'production' && apiKey === 'eagle-demi-api-key') return true;
+  if (process.env.NODE_ENV === 'test' && apiKey === 'eagle-demi-api-key') return true;
   return false;
 }
 
@@ -75,7 +75,7 @@ exports.search = async (req, res) => {
           if (sectorFilter.toLowerCase() === 'mining') {
             sectorRegex = /^Mine/i;
           } else {
-            sectorRegex = new RegExp(sectorFilter, 'i');
+            sectorRegex = new RegExp(escapeRegExp(sectorFilter), 'i');
           }
           queryClauses.push({
             $or: [
@@ -298,7 +298,7 @@ exports.search = async (req, res) => {
           if (sectorFilter.toLowerCase() === 'mining') {
             sectorRegex = /^Mine/i;
           } else {
-            sectorRegex = new RegExp(sectorFilter, 'i');
+            sectorRegex = new RegExp(escapeRegExp(sectorFilter), 'i');
           }
           baseQuery.$and = [
             { $or: [{ sector: sectorRegex }, { 'metadata.type_name': sectorRegex }, { 'metadata.trackAttributes.type_name': sectorRegex }] }

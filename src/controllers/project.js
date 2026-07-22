@@ -34,7 +34,7 @@ function isAdmin(req) {
   const apiKey = req.header('X-Api-Key');
   const expectedKey = process.env.DOCLING_API_KEY;
   if (expectedKey && apiKey && apiKey === expectedKey) return true;
-  if (process.env.NODE_ENV !== 'production' && apiKey === 'eagle-demi-api-key') return true;
+  if (process.env.NODE_ENV === 'test' && apiKey === 'eagle-demi-api-key') return true;
   return false;
 }
 
@@ -73,13 +73,22 @@ exports.getProjects = async (req, res) => {
 
 exports.createProject = async (req, res) => {
   try {
-    const { trackProjectId, name, centroid } = req.body;
+    const { trackProjectId, name, description, sector, region, status, centroid, isPublished } = req.body;
 
     if (!trackProjectId || !name || !centroid || !centroid.coordinates) {
       return res.status(400).json({ error: 'Missing required fields: trackProjectId, name, centroid' });
     }
 
-    const newProject = new Project(req.body);
+    const newProject = new Project({
+      trackProjectId,
+      name,
+      description,
+      sector,
+      region,
+      status,
+      centroid,
+      isPublished: isPublished !== undefined ? isPublished : false
+    });
     await autoTagProjectBoundaries(newProject);
 
     const saved = await newProject.save();
@@ -113,24 +122,34 @@ exports.updateProject = async (req, res) => {
   try {
     const { id } = req.params;
     const query = isNaN(id) ? { _id: id } : { trackProjectId: Number(id) };
+    const { name, description, sector, region, status, centroid, isPublished } = req.body;
 
-    if (req.body.centroid && req.body.centroid.coordinates) {
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
+    if (sector !== undefined) updateData.sector = sector;
+    if (region !== undefined) updateData.region = region;
+    if (status !== undefined) updateData.status = status;
+    if (isPublished !== undefined) updateData.isPublished = isPublished;
+
+    if (centroid && centroid.coordinates) {
+      updateData.centroid = centroid;
       const intersectingBoundaries = await Boundary.find({
         geometry: {
           $geoIntersects: {
             $geometry: {
               type: 'Point',
-              coordinates: req.body.centroid.coordinates
+              coordinates: centroid.coordinates
             }
           }
         }
       });
-      req.body.regionalDistrict = intersectingBoundaries.find(b => b.type === 'Regional District')?.name || '';
-      req.body.municipality = intersectingBoundaries.find(b => b.type === 'Municipality')?.name || '';
-      req.body.electoralDistrict = intersectingBoundaries.find(b => b.type === 'Electoral District')?.name || '';
+      updateData.regionalDistrict = intersectingBoundaries.find(b => b.type === 'Regional District')?.name || '';
+      updateData.municipality = intersectingBoundaries.find(b => b.type === 'Municipality')?.name || '';
+      updateData.electoralDistrict = intersectingBoundaries.find(b => b.type === 'Electoral District')?.name || '';
     }
 
-    const updated = await Project.findOneAndUpdate(query, req.body, { new: true, runValidators: true });
+    const updated = await Project.findOneAndUpdate(query, updateData, { new: true, runValidators: true });
     if (!updated) {
       return res.status(404).json({ error: 'Project not found' });
     }

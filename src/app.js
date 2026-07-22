@@ -23,16 +23,18 @@ const apiRoutes = require('./routes/api');
 // Initialize Express
 const app = express();
 
-// Request ID Tracing & HTTP Request Metrics Middlewares (Applied first)
+// Request ID Tracing, Rate Limiting & HTTP Request Metrics Middlewares (Applied first)
 const requestIdMiddleware = require('./middleware/request-id');
 const httpLoggerMiddleware = require('./middleware/http-logger');
+const rateLimiterMiddleware = require('./middleware/rate-limiter');
 
 app.use(requestIdMiddleware);
 app.use(httpLoggerMiddleware);
+app.use('/api', rateLimiterMiddleware);
 
 // Security & Body Parsing Middleware
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors());
+app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 

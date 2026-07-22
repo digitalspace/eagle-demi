@@ -3,6 +3,11 @@
 const mongoose = require('mongoose');
 const { logger } = require('../utils/logger');
 
+function escapeRegExp(string) {
+  if (!string) return '';
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Retrieve application logs from the MongoDB Capped Collection.
  * Accessible only by administrators.
@@ -33,7 +38,7 @@ exports.getLogs = async (req, res) => {
 
     // 3. Text search
     if (req.query.search) {
-      filter.message = { $regex: req.query.search, $options: 'i' };
+      filter.message = { $regex: escapeRegExp(req.query.search), $options: 'i' };
     }
 
     // 4. Pagination / Limits

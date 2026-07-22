@@ -20,7 +20,7 @@ function isAdmin(req) {
   const apiKey = req.header('X-Api-Key');
   const expectedKey = process.env.DOCLING_API_KEY;
   if (expectedKey && apiKey && apiKey === expectedKey) return true;
-  if (process.env.NODE_ENV !== 'production' && apiKey === 'eagle-demi-api-key') return true;
+  if (process.env.NODE_ENV === 'test' && apiKey === 'eagle-demi-api-key') return true;
   return false;
 }
 
@@ -135,7 +135,15 @@ exports.getDocument = async (req, res) => {
 exports.updateDocument = async (req, res) => {
   try {
     const { id } = req.params;
-    const updated = await Document.findByIdAndUpdate(id, req.body, { new: true, runValidators: true }).populate('project');
+    const { displayName, region, edrmsRecordNumber, orcsClassification, isPublished } = req.body;
+    const updateData = {};
+    if (displayName !== undefined) updateData.displayName = displayName;
+    if (region !== undefined) updateData.region = region;
+    if (edrmsRecordNumber !== undefined) updateData.edrmsRecordNumber = edrmsRecordNumber;
+    if (orcsClassification !== undefined) updateData.orcsClassification = orcsClassification;
+    if (isPublished !== undefined) updateData.isPublished = isPublished;
+
+    const updated = await Document.findByIdAndUpdate(id, updateData, { new: true, runValidators: true }).populate('project');
     if (!updated) {
       return res.status(404).json({ error: 'Document not found' });
     }
@@ -160,7 +168,7 @@ exports.deleteDocument = async (req, res) => {
 
 async function triggerEagleSync(doc) {
   const eagleApiUrl = process.env.EAGLE_API_URL || 'http://localhost:3000';
-  const apiKey = process.env.DOCLING_API_KEY || 'eagle-demi-api-key';
+  const apiKey = process.env.DOCLING_API_KEY;
 
   try {
     const res = await fetch(`${eagleApiUrl}/api/document/sync`, {

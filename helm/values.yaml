@@ -287,11 +287,11 @@ mongodb:
   passwordKey: "MONGODB_PASSWORD"
   databaseKey: "MONGODB_DATABASE"
   adminPasswordKey: "MONGODB_ADMIN_PASSWORD"
-  # Default credentials
+  # Default development credentials (MUST be overridden in OpenShift production secrets)
   credentials:
     username: "demi"
-    password: "demi_pass_123"
+    password: "CHANGE_ME_PRODUCTION_SECRET"
     database: "demi"
-    adminPassword: "admin_pass_123"
+    adminPassword: "CHANGE_ME_PRODUCTION_ADMIN_SECRET"
 
 

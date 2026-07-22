@@ -11,7 +11,7 @@ const clientInstance = jwksClient({
   cache: true,
   cacheMaxAge: 86400000, // 24 hours
   rateLimit: true,
-  jwksRequestsPerMinute: 5
+  jwksRequestsPerMinute: 30
 });
 
 function getKey(header, callback) {
@@ -38,8 +38,8 @@ module.exports = (req, res, next) => {
     return next();
   }
 
-  // Development/Testing fallback (bypassed in production)
-  if (process.env.NODE_ENV !== 'production' && apiKey === 'eagle-demi-api-key') {
+  // Testing fallback only
+  if (process.env.NODE_ENV === 'test' && apiKey === 'eagle-demi-api-key') {
     req.user = {
       preferred_username: 'internal-service',
       realm_access: { roles: ['sysadmin', 'staff', 'demi-admin'] }
@@ -53,15 +53,20 @@ module.exports = (req, res, next) => {
     const token = authHeader.split(' ')[1];
 
     if (!config.keycloakEnabled) {
-      // Local testing / Keycloak bypass (do not verify signature, only decode)
-      try {
-        const decoded = jwt.decode(token);
-        if (decoded && decoded.realm_access && decoded.realm_access.roles) {
-          req.user = decoded;
-          return next();
+      if (process.env.NODE_ENV === 'test') {
+        // Local testing / Keycloak bypass (do not verify signature, only decode)
+        try {
+          const decoded = jwt.decode(token);
+          if (decoded && decoded.realm_access && decoded.realm_access.roles) {
+            req.user = decoded;
+            return next();
+          }
+        } catch (err) {
+          return res.status(401).json({ error: 'Unauthorized. Invalid Bearer token structure.' });
         }
-      } catch (err) {
-        return res.status(401).json({ error: 'Unauthorized. Invalid Bearer token structure.' });
+      } else {
+        console.warn('[demi-api] Warning: keycloakEnabled is false in non-test environment. Bearer token signature verification cannot be bypassed.');
+        return res.status(401).json({ error: 'Unauthorized. Keycloak signature verification required.' });
       }
     }
 

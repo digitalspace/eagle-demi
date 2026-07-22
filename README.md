@@ -78,6 +78,8 @@ All tunable limits live in `helm/values.yaml` — override per environment in `h
 | `config.maxNumPages` | `500` | Max pages per document |
 | `config.numThreads` | `4` | Torch CPU threads |
 | `config.numWorkers` | `2` | Engine worker processes |
+| `CORS_ORIGIN` | `*` | Allowed CORS origins (override in production) |
+| Rate Limiting | `300 req/min` | Built-in IP rate limiter on `/api` routes |
 
 ---
 

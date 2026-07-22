@@ -22,7 +22,7 @@ test('Boundary Controller Tests', async (t) => {
 
     t.mock.method(Boundary, 'find', (query, projection) => {
       assert.deepStrictEqual(query, {});
-      assert.deepStrictEqual(projection, {});
+      assert.deepStrictEqual(projection, { geometry: 0 });
       return {
         lean: () => Promise.resolve(mockBoundaries)
       };
@@ -93,7 +93,7 @@ test('Boundary Controller Tests', async (t) => {
           }
         }
       });
-      assert.deepStrictEqual(projection, {});
+      assert.deepStrictEqual(projection, { geometry: 0 });
       return {
         lean: () => Promise.resolve(mockBoundaries)
       };
