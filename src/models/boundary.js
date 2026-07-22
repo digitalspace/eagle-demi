@@ -3,8 +3,8 @@
 const mongoose = require('mongoose');
 
 const BoundarySchema = new mongoose.Schema({
-  type: { type: String, required: true, index: true }, // 'Regional District', 'Municipality'
-  name: { type: String, required: true, index: true },
+  type: { type: String, required: true }, // 'Regional District', 'Municipality', 'Electoral District'
+  name: { type: String, required: true },
   code: { type: String, default: '' },
   geometry: {
     type: { type: String, enum: ['Polygon', 'MultiPolygon'], required: true },
@@ -16,7 +16,9 @@ const BoundarySchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
+BoundarySchema.index({ type: 1, name: 1 }, { unique: true });
+BoundarySchema.index({ type: 1, simplifiedGeometry: '2dsphere' });
 BoundarySchema.index({ geometry: '2dsphere' });
-BoundarySchema.index({ simplifiedGeometry: '2dsphere' });
 
 module.exports = mongoose.model('Boundary', BoundarySchema, 'administrative_boundaries');
+

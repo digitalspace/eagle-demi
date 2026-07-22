@@ -4,10 +4,10 @@ const mongoose = require('mongoose');
 const config = require('../config');
 
 const LogSchema = new mongoose.Schema({
-  timestamp: { type: Date, default: Date.now, index: true },
-  level: { type: String, required: true, index: true },
+  timestamp: { type: Date, default: Date.now },
+  level: { type: String, required: true },
   message: { type: String, required: true },
-  requestId: { type: String, default: '', index: true },
+  requestId: { type: String, default: '' },
   meta: { type: mongoose.Schema.Types.Mixed, default: {} },
   stack: { type: String, default: '' }
 }, {
@@ -18,4 +18,9 @@ const LogSchema = new mongoose.Schema({
   }
 });
 
+LogSchema.index({ level: 1, timestamp: -1 });
+LogSchema.index({ requestId: 1 });
+LogSchema.index({ timestamp: -1 });
+
 module.exports = mongoose.model('Log', LogSchema);
+
