@@ -1,18 +1,48 @@
-# Prod overrides — conservative timeouts, warning-only logs.
-replicaCount: 2
-
+# Production environment overrides for eagle-demi
 image:
   tag: "v1.21.0"
   pullPolicy: IfNotPresent
 
 config:
-  logLevel: "WARNING"
-  maxDocumentTimeout: "300"
+  logLevel: "WARN"
+  maxDocumentTimeout: "3600"
+
+mongodb:
+  enabled: true
+  existingSecret: true
+  secretName: "eagle-demi-mongodb"
+
+engine:
+  kind: "rq"
+
+rq:
+  enabled: true
+  worker:
+    replicas: 2
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "5Gi"
+      limits:
+        cpu: "4000m"
+        memory: "8Gi"
 
 resources:
   requests:
-    cpu: "500m"
-    memory: "3Gi"
+    cpu: "100m"
+    memory: "512Mi"
   limits:
-    cpu: "2000m"
-    memory: "6Gi"
+    cpu: "1000m"
+    memory: "1Gi"
+
+api:
+  image:
+    repository: ghcr.io/digitalspace/eagle-demi-api
+    tag: stable
+    pullPolicy: IfNotPresent
+
+worker:
+  image:
+    repository: ghcr.io/digitalspace/eagle-demi-api
+    tag: stable
+    pullPolicy: IfNotPresent

@@ -1,7 +1,48 @@
-# Test overrides
+# Test environment overrides for eagle-demi
 image:
-  tag: "v1.21.0"
-  pullPolicy: IfNotPresent
+  tag: "latest"
+  pullPolicy: Always
 
 config:
   logLevel: "INFO"
+  maxDocumentTimeout: "3600"
+
+mongodb:
+  enabled: true
+  existingSecret: true
+  secretName: "eagle-demi-mongodb"
+
+engine:
+  kind: "rq"
+
+rq:
+  enabled: true
+  worker:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "5Gi"
+      limits:
+        cpu: "3000m"
+        memory: "6Gi"
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+api:
+  image:
+    repository: ghcr.io/digitalspace/eagle-demi-api
+    tag: test
+    pullPolicy: Always
+
+worker:
+  image:
+    repository: ghcr.io/digitalspace/eagle-demi-api
+    tag: test
+    pullPolicy: Always

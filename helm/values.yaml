@@ -283,15 +283,16 @@ mongodb:
     storageClass: "netapp-file-standard"
     size: "5Gi"
   secretName: "eagle-demi-mongodb"
+  existingSecret: false
   usernameKey: "MONGODB_USER"
   passwordKey: "MONGODB_PASSWORD"
   databaseKey: "MONGODB_DATABASE"
   adminPasswordKey: "MONGODB_ADMIN_PASSWORD"
-  # Default development credentials (MUST be overridden in OpenShift production secrets)
+  # Default development credentials
   credentials:
     username: "demi"
-    password: "CHANGE_ME_PRODUCTION_SECRET"
+    password: "demi_pass_123"
     database: "demi"
-    adminPassword: "CHANGE_ME_PRODUCTION_ADMIN_SECRET"
+    adminPassword: "admin_pass_123"
 
 
