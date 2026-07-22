@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const Boundary = require('../models/boundary');
+const { parseBboxPolygon } = require('../helpers/geo');
 
 exports.getBoundaries = async (req, res) => {
   try {
@@ -9,29 +10,7 @@ exports.getBoundaries = async (req, res) => {
     
     let spatialQuery = {};
     if (bbox) {
-      let parsedBbox;
-      try {
-        if (bbox.trim().startsWith('{')) {
-          parsedBbox = JSON.parse(bbox);
-        } else {
-          const [west, south, east, north] = bbox.split(',').map(Number);
-          if (!isNaN(west) && !isNaN(south) && !isNaN(east) && !isNaN(north)) {
-            parsedBbox = {
-              type: 'Polygon',
-              coordinates: [[
-                [west, south],
-                [east, south],
-                [east, north],
-                [west, north],
-                [west, south]
-              ]]
-            };
-          }
-        }
-      } catch (e) {
-        // Fall back gracefully for invalid bbox formats
-      }
-
+      const parsedBbox = parseBboxPolygon(bbox);
       if (parsedBbox) {
         spatialQuery = {
           geometry: {

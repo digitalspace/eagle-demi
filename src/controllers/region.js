@@ -5,7 +5,7 @@ const Region = require('../models/region');
 
 exports.getRegions = async (req, res) => {
   try {
-    const regions = await Region.find({});
+    const regions = await Region.find({}).lean();
     return res.json(regions);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -40,7 +40,7 @@ exports.getRegion = async (req, res) => {
     const { id } = req.params;
     const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { name: id };
 
-    const region = await Region.findOne(query);
+    const region = await Region.findOne(query).lean();
     if (!region) {
       return res.status(404).json({ error: 'Region not found' });
     }

@@ -44,9 +44,11 @@ test('Document Controller Tests', async (t) => {
       assert.strictEqual(query.isPublished, true);
       assert.deepStrictEqual(query.project.$in, [mockPublishedProjects[0]._id]);
       return {
-        populate: async (field) => {
+        populate: (field) => {
           assert.strictEqual(field, 'project');
-          return mockDocs;
+          return {
+            lean: async () => mockDocs
+          };
         }
       };
     });
@@ -77,9 +79,11 @@ test('Document Controller Tests', async (t) => {
       // Query should be empty (no public-filtering)
       assert.deepStrictEqual(query, {});
       return {
-        populate: async (field) => {
+        populate: (field) => {
           assert.strictEqual(field, 'project');
-          return mockDocs;
+          return {
+            lean: async () => mockDocs
+          };
         }
       };
     });
@@ -115,9 +119,11 @@ test('Document Controller Tests', async (t) => {
     t.mock.method(Document, 'findById', (id) => {
       assert.strictEqual(id, docId);
       return {
-        populate: async (field) => {
+        populate: (field) => {
           assert.strictEqual(field, 'project');
-          return mockDoc;
+          return {
+            lean: async () => mockDoc
+          };
         }
       };
     });
@@ -148,7 +154,9 @@ test('Document Controller Tests', async (t) => {
 
     t.mock.method(Document, 'findById', (id) => {
       return {
-        populate: async () => mockDoc
+        populate: () => ({
+          lean: async () => mockDoc
+        })
       };
     });
 

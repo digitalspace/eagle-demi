@@ -19,4 +19,6 @@ const DocumentSchema = new mongoose.Schema({
   extractionMethod: { type: String, default: '' }
 }, { timestamps: true });
 
+DocumentSchema.index({ displayName: 'text', orcsClassification: 'text' });
+
 module.exports = mongoose.model('Document', DocumentSchema);

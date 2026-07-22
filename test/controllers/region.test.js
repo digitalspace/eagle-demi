@@ -20,9 +20,11 @@ test('Region Controller Tests', async (t) => {
       { name: 'Kootenay', geometry: { type: 'Polygon', coordinates: [] } }
     ];
 
-    t.mock.method(Region, 'find', async (query) => {
+    t.mock.method(Region, 'find', (query) => {
       assert.deepStrictEqual(query, {});
-      return mockRegions;
+      return {
+        lean: async () => mockRegions
+      };
     });
 
     const req = {};
@@ -75,9 +77,11 @@ test('Region Controller Tests', async (t) => {
     const regionId = '64a5f1dc2d0a9c002225f25a';
     const mockRegion = { _id: regionId, name: 'Skeena' };
 
-    t.mock.method(Region, 'findOne', async (query) => {
+    t.mock.method(Region, 'findOne', (query) => {
       assert.deepStrictEqual(query, { _id: regionId });
-      return mockRegion;
+      return {
+        lean: async () => mockRegion
+      };
     });
 
     const req = { params: { id: regionId } };
@@ -96,8 +100,10 @@ test('Region Controller Tests', async (t) => {
   });
 
   await t.test('getRegion returns 404 if region does not exist', async () => {
-    t.mock.method(Region, 'findOne', async () => {
-      return null;
+    t.mock.method(Region, 'findOne', () => {
+      return {
+        lean: async () => null
+      };
     });
 
     const req = { params: { id: 'NonexistentRegion' } };

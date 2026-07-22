@@ -18,5 +18,6 @@ const ProjectSchema = new mongoose.Schema({
 }, { timestamps: true, strict: false });
 
 ProjectSchema.index({ centroid: '2dsphere' });
+ProjectSchema.index({ name: 'text', region: 'text' });
 
 module.exports = mongoose.model('Project', ProjectSchema);

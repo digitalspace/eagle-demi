@@ -54,7 +54,7 @@ exports.getDocuments = async (req, res) => {
         projectQuery.isPublished = true;
       }
 
-      const projects = await Project.find(projectQuery).select('_id');
+      const projects = await Project.find(projectQuery).select('_id').lean();
       const projectIds = projects.map(p => p._id);
 
       // Intersect project IDs
@@ -64,11 +64,11 @@ exports.getDocuments = async (req, res) => {
         query.project = { $in: projectIds };
       }
 
-      const documents = await Document.find(query).populate('project');
+      const documents = await Document.find(query).populate('project').lean();
       return res.json(documents);
     }
 
-    const documents = await Document.find(query).populate('project');
+    const documents = await Document.find(query).populate('project').lean();
     return res.json(documents);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -114,7 +114,7 @@ exports.getDocument = async (req, res) => {
     const { id } = req.params;
     const isAuth = isAdmin(req);
 
-    const doc = await Document.findById(id).populate('project');
+    const doc = await Document.findById(id).populate('project').lean();
     if (!doc) {
       return res.status(404).json({ error: 'Document not found' });
     }
