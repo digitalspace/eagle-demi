@@ -200,11 +200,7 @@ exports.search = async (req, res) => {
 
       const filterBy = [];
       if (!isAuth) {
-        if (process.env.NODE_ENV === 'production') {
-          filterBy.push('allowed_roles:=[public]');
-        } else {
-          filterBy.push('allowed_roles:=[public, sysadmin, staff]');
-        }
+        filterBy.push('allowed_roles:=[public]');
       }
       if (sectorFilter && sectorFilter !== 'all') {
         if (sectorFilter.toLowerCase() === 'energy') {
@@ -347,11 +343,7 @@ exports.search = async (req, res) => {
 
       const filterBy = [];
       if (!isAuth) {
-        if (process.env.NODE_ENV === 'production') {
-          filterBy.push('allowed_roles:=[public]');
-        } else {
-          filterBy.push('allowed_roles:=[public, sysadmin, staff]');
-        }
+        filterBy.push('allowed_roles:=[public]');
       }
 
       const multiSearchUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/multi_search`;
