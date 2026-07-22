@@ -52,7 +52,7 @@ class MongoCappedTransport extends winston.Transport {
           // Fallback to direct stderr print without looping back to Winston
           process.stderr.write(`[MongoCappedTransport Error] Failed to write log: ${err.message}\n`);
         });
-      } catch (err) {
+      } catch (_err) {
         // Model may not be registered yet, gracefully ignore
       }
     }

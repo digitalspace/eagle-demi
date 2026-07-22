@@ -29,7 +29,7 @@ function parseBboxPolygon(bbox) {
         ]]
       };
     }
-  } catch (e) {
+  } catch (_e) {
     // Graceful fallback for malformed bounding box inputs
   }
 

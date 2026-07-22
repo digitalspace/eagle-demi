@@ -48,7 +48,7 @@ const SYNC_QUERY = {
   ],
 };
 
-async function ensureCollectionExists(typesense, schema) {
+async function _ensureCollectionExists(typesense, schema) {
   try {
     await typesense.collections(schema.name).retrieve();
   } catch {

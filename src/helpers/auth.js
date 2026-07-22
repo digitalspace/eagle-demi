@@ -63,7 +63,7 @@ function authenticate(req, onSuccess, onFailure) {
           if (decoded && decoded.realm_access && decoded.realm_access.roles) {
             return onSuccess(decoded);
           }
-        } catch (err) {
+        } catch (_err) {
           return onFailure(401, 'Unauthorized. Invalid Bearer token structure.');
         }
       } else {
@@ -72,14 +72,12 @@ function authenticate(req, onSuccess, onFailure) {
       }
     }
 
-    let kid;
     try {
       const decoded = jwt.decode(token, { complete: true });
       if (!decoded || !decoded.header || !decoded.header.kid) {
         return onFailure(401, 'Unauthorized. JWT header or kid is missing.');
       }
-      kid = decoded.header.kid;
-    } catch (err) {
+    } catch (_err) {
       return onFailure(401, 'Unauthorized. Malformed Bearer token.');
     }
 

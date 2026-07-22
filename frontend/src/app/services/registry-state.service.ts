@@ -409,7 +409,7 @@ export class RegistryStateService {
               setAuthHeader(init, this.keycloak.token);
             }
             response = await originalFetch(input, init);
-          } catch (refreshErr) {
+          } catch (_refreshErr) {
             // let original error stand
           }
         }
@@ -673,7 +673,7 @@ export class RegistryStateService {
         for (const key of Object.keys(cache)) {
           if (Array.isArray(cache[key])) {
             strippedCache[key] = cache[key].map((b: any) => {
-              const { geometry, simplifiedGeometry, ...rest } = b;
+              const { geometry: _geometry, simplifiedGeometry: _simplifiedGeometry, ...rest } = b;
               return rest;
             });
           } else {
@@ -1022,7 +1022,7 @@ export class RegistryStateService {
 
   // Fallbacks helpers
   private generateFallbackDescription(p: any, rawMetadata: any): string {
-    let desc = p.description || rawMetadata.trackAttributes?.description || '';
+    const desc = p.description || rawMetadata.trackAttributes?.description || '';
     if (desc && desc !== 'No project description provided.' && desc !== 'No project description provided') {
       return desc;
     }

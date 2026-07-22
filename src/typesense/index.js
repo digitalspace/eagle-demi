@@ -42,7 +42,7 @@ function isDeleted(doc) {
  * Distinguishes 404 (not found) from network errors — only creates on 404.
  */
 async function ensureCollections(typesense) {
-  for (const [schemaName, schema] of Object.entries(SCHEMAS)) {
+  for (const schema of Object.values(SCHEMAS)) {
     const aliasName = schema.name;
     try {
       await typesense.aliases(aliasName).retrieve();

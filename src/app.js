@@ -74,7 +74,7 @@ app.use((req, res) => {
 });
 
 // Centralized Error Handler
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   logger.error('Central API Error:', { error: err.message, stack: err.stack });
   res.status(err.status || 500).json({
     error: err.message || 'Internal Server Error'

@@ -11,7 +11,6 @@ const extract = require('../../src/extract');
 // Load models
 const Document = require('../../src/models/document');
 const Project = require('../../src/models/project');
-const Region = require('../../src/models/region');
 const documentController = require('../../src/controllers/document');
 
 test('Document Controller Tests', async (t) => {
@@ -152,7 +151,7 @@ test('Document Controller Tests', async (t) => {
       project: { _id: '64a5f1dc2d0a9c002225f25e', isPublished: true }
     };
 
-    t.mock.method(Document, 'findById', (id) => {
+    t.mock.method(Document, 'findById', (_id) => {
       return {
         populate: () => ({
           lean: async () => mockDoc

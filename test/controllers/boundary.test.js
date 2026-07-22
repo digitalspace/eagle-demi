@@ -2,7 +2,6 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const mongoose = require('mongoose');
 
 // Load models
 const Boundary = require('../../src/models/boundary');

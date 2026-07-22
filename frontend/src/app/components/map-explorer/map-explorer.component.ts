@@ -351,7 +351,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
             }
             ly.setStyle(this.getRegionStyle(name));
           },
-          click: (e: any) => {
+          click: (_e: any) => {
             const current = this.service.regionFilter();
             if (current.toLowerCase() === name.toLowerCase()) {
               this.setRegionFilter('all');
@@ -633,7 +633,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
               targetLayer.resetStyle(ly);
             }
           },
-          click: (e: any) => {
+          click: (_e: any) => {
             const currentFilter = this.service.boundaryFilter();
             if (currentFilter.toLowerCase() === (name || '').toLowerCase()) {
               this.service.boundaryFilter.set('all');
@@ -666,7 +666,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     });
   }
 
-  private bindUnifiedTooltip(layer: any, name: string, type: string) {
+  private bindUnifiedTooltip(layer: any, name: string, _type: string) {
     layer.bindTooltip(`<strong>${(name || '').trim()}</strong>`, {
       sticky: true,
       className: 'region-tooltip'

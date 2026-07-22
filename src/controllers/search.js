@@ -3,31 +3,9 @@
 const Project = require('../models/project');
 const Document = require('../models/document');
 const mongoose = require('mongoose');
-const jwt = require('jsonwebtoken');
-const jwksClient = require('jwks-rsa');
-const config = require('../config');
-
-// Initialize JWKS client with caching for performance
-const clientInstance = jwksClient({
-  strictSsl: true,
-  jwksUri: config.ssoJwksUri,
-  cache: true,
-  cacheMaxAge: 86400000, // 24 hours
-  rateLimit: true,
-  jwksRequestsPerMinute: 30
-});
-
-function getKey(header, callback) {
-  clientInstance.getSigningKey(header.kid, (err, key) => {
-    if (err) {
-      callback(err);
-    } else {
-      callback(null, key.publicKey || key.rsaPublicKey);
-    }
-  });
-}
 
 // Escapes regex characters to prevent regex injection (ReDoS)
+
 function escapeRegExp(string) {
   if (!string) return '';
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

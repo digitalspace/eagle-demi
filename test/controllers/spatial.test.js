@@ -4,7 +4,6 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
-const mongoose = require('mongoose');
 
 // Load models so controllers can reference them
 const Project = require('../../src/models/project');
@@ -241,7 +240,7 @@ test('Spatial Controller Tests', async (t) => {
       ];
     });
 
-    t.mock.method(Project, 'findOneAndUpdate', async (query, updateBody, options) => {
+    t.mock.method(Project, 'findOneAndUpdate', async (query, updateBody, _options) => {
       return { ...updateBody, trackProjectId: 12345 };
     });
 
