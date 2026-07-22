@@ -16,7 +16,7 @@ async function autoTagProjectBoundaries(project) {
           }
         }
       }
-    });
+    }, { type: 1, name: 1 });
     project.regionalDistrict = intersectingBoundaries.find(b => b.type === 'Regional District')?.name || '';
     project.municipality = intersectingBoundaries.find(b => b.type === 'Municipality')?.name || '';
     project.electoralDistrict = intersectingBoundaries.find(b => b.type === 'Electoral District')?.name || '';
@@ -104,9 +104,7 @@ exports.createProject = async (req, res) => {
 exports.getProject = async (req, res) => {
   try {
     const { id } = req.params;
-    const isAuth = isAdmin(req);
-    const baseQuery = isAuth ? {} : { isPublished: true };
-    const query = { ...baseQuery, ...(isNaN(id) ? { _id: id } : { trackProjectId: Number(id) }) };
+    const query = isNaN(id) ? { _id: id } : { trackProjectId: Number(id) };
 
     const project = await Project.findOne(query);
     if (!project) {
@@ -122,11 +120,16 @@ exports.updateProject = async (req, res) => {
   try {
     const { id } = req.params;
     const query = isNaN(id) ? { _id: id } : { trackProjectId: Number(id) };
-    const { name, description, sector, region, status, centroid, isPublished } = req.body;
+
+    const {
+      name, description, centroid, proponent, type, sector, region, status, isPublished
+    } = req.body;
 
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (description !== undefined) updateData.description = description;
+    if (proponent !== undefined) updateData.proponent = proponent;
+    if (type !== undefined) updateData.type = type;
     if (sector !== undefined) updateData.sector = sector;
     if (region !== undefined) updateData.region = region;
     if (status !== undefined) updateData.status = status;
@@ -143,7 +146,7 @@ exports.updateProject = async (req, res) => {
             }
           }
         }
-      });
+      }, { type: 1, name: 1 });
       updateData.regionalDistrict = intersectingBoundaries.find(b => b.type === 'Regional District')?.name || '';
       updateData.municipality = intersectingBoundaries.find(b => b.type === 'Municipality')?.name || '';
       updateData.electoralDistrict = intersectingBoundaries.find(b => b.type === 'Electoral District')?.name || '';
