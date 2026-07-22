@@ -370,4 +370,61 @@ test('Search Controller Tests', async (t) => {
       global.fetch = originalFetch;
     }
   });
+
+  await t.test('search projects with scoped role (e.g. ajax) constructs correct filter for Typesense', async () => {
+    let capturedUrl = null;
+    const originalFetch = global.fetch;
+    global.fetch = async (url) => {
+      capturedUrl = url;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ hits: [] })
+      };
+    };
+
+    const req = {
+      query: { dataset: 'Project', keywords: 'Mining', pageSize: '10' },
+      user: { realm_access: { roles: ['ajax'] } },
+      header: () => null
+    };
+
+    const res = {
+      json: () => res,
+      status: () => res
+    };
+
+    try {
+      await searchController.search(req, res);
+      assert.ok(capturedUrl);
+      assert.ok(capturedUrl.includes('filter_by=allowed_roles%3A%3D%5Bpublic%2C%20ajax%5D') || capturedUrl.includes('allowed_roles:=[public, ajax]'));
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  await t.test('search projects with scoped role (e.g. ajax) constructs correct query for Mongo', async () => {
+    let capturedQuery = null;
+    t.mock.method(Project, 'find', (query) => {
+      capturedQuery = query;
+      return {
+        limit: async () => []
+      };
+    });
+
+    const req = {
+      query: { dataset: 'Project', keywords: '', pageSize: '10' },
+      user: { realm_access: { roles: ['ajax'] } },
+      header: () => null
+    };
+
+    const res = {
+      json: () => res,
+      status: () => res
+    };
+
+    await searchController.search(req, res);
+    assert.deepStrictEqual(capturedQuery, { $or: [{ isPublished: true }, { read: { $in: ['public', 'ajax'] } }] });
+  });
 });
+

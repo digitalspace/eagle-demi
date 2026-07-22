@@ -11,17 +11,41 @@ function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Helper to determine if the request is administrative / internal
-async function isAdmin(req) {
-  if (req.user) {
-    const roles = req.user.realm_access?.roles || [];
-    return roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
-  }
+/**
+ * Dynamically resolves user roles from Keycloak JWT payload or X-Api-Key.
+ * Passes user's assigned roles directly to Mongo & Typesense.
+ *
+ * @param {object} req Express request
+ * @returns {object} Access context containing user roles, Typesense filter clause, and Mongo read query
+ */
+function getUserAccessContext(req) {
+  // Handle system-to-system API key if provided
   const apiKey = req.header('X-Api-Key');
   const expectedKey = process.env.DOCLING_API_KEY;
-  if (expectedKey && apiKey && apiKey === expectedKey) return true;
-  if (process.env.NODE_ENV === 'test' && apiKey === 'eagle-demi-api-key') return true;
-  return false;
+  if ((expectedKey && apiKey && apiKey === expectedKey) ||
+      (process.env.NODE_ENV === 'test' && apiKey === 'eagle-demi-api-key')) {
+    return {
+      roles: ['*'],
+      typesenseFilter: null,
+      mongoReadClause: null
+    };
+  }
+
+  const roles = new Set(['public']);
+
+  if (req.user && req.user.realm_access && Array.isArray(req.user.realm_access.roles)) {
+    for (const r of req.user.realm_access.roles) {
+      if (r) roles.add(r);
+    }
+  }
+
+  const effectiveRoles = Array.from(roles);
+
+  return {
+    roles: effectiveRoles,
+    typesenseFilter: `allowed_roles:=[${effectiveRoles.join(', ')}]`,
+    mongoReadClause: { $or: [{ isPublished: true }, { read: { $in: effectiveRoles } }] }
+  };
 }
 
 
@@ -35,8 +59,8 @@ exports.search = async (req, res) => {
     // Cap pageSize at 250 to comply with Typesense pagination limits
     const pageSize = Math.min(requestedPageSize, 250);
 
-    const isAuth = await isAdmin(req);
-    console.log('[demi-api search] Incoming parameters:', { dataset, keywords, fuzzy, sectorFilter, requestedPageSize, isAuth });
+    const accessContext = getUserAccessContext(req);
+    console.log('[demi-api search] Incoming parameters:', { dataset, keywords, fuzzy, sectorFilter, requestedPageSize, accessRoles: accessContext.roles });
 
     if (dataset === 'Project') {
       // If no keywords are provided, do a simple MongoDB query
@@ -44,8 +68,8 @@ exports.search = async (req, res) => {
         const baseQuery = {};
         const queryClauses = [];
 
-        if (!isAuth) {
-          queryClauses.push({ $or: [{ isPublished: true }, { read: { $in: ['public'] } }] });
+        if (accessContext.mongoReadClause) {
+          queryClauses.push(accessContext.mongoReadClause);
         }
 
         if (sectorFilter && sectorFilter !== 'all') {
@@ -199,8 +223,8 @@ exports.search = async (req, res) => {
       const TYPESENSE_API_KEY = process.env.TYPESENSE_API_KEY || 'local-dev-key';
 
       const filterBy = [];
-      if (!isAuth) {
-        filterBy.push('allowed_roles:=[public]');
+      if (accessContext.typesenseFilter) {
+        filterBy.push(accessContext.typesenseFilter);
       }
       if (sectorFilter && sectorFilter !== 'all') {
         if (sectorFilter.toLowerCase() === 'energy') {
@@ -261,7 +285,7 @@ exports.search = async (req, res) => {
         // Fallback to Mongo regex search
         const escaped = escapeRegExp(keywords);
         const regex = new RegExp(escaped, 'i');
-        const baseQuery = isAuth ? {} : { $or: [{ isPublished: true }, { read: { $in: ['public'] } }] };
+        const baseQuery = accessContext.mongoReadClause ? { ...accessContext.mongoReadClause } : {};
         baseQuery.$or = [
           { name: regex },
           { description: regex },
@@ -317,7 +341,7 @@ exports.search = async (req, res) => {
       }
     } else if (dataset === 'Document') {
       if (!keywords) {
-        const baseQuery = isAuth ? {} : { $or: [{ isPublished: true }, { read: { $in: ['public'] } }] };
+        const baseQuery = accessContext.mongoReadClause ? { ...accessContext.mongoReadClause } : {};
         const documents = await Document.find(baseQuery).limit(requestedPageSize).sort({ createdAt: -1 });
         const mapped = documents.map(d => {
           return {
@@ -342,8 +366,8 @@ exports.search = async (req, res) => {
       const TYPESENSE_API_KEY = process.env.TYPESENSE_API_KEY || 'local-dev-key';
 
       const filterBy = [];
-      if (!isAuth) {
-        filterBy.push('allowed_roles:=[public]');
+      if (accessContext.typesenseFilter) {
+        filterBy.push(accessContext.typesenseFilter);
       }
 
       const multiSearchUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/multi_search`;
@@ -459,7 +483,7 @@ exports.search = async (req, res) => {
         // Fallback to Mongo Document text/regex search
         const escaped = escapeRegExp(keywords);
         const regex = new RegExp(escaped, 'i');
-        const baseQuery = isAuth ? {} : { $or: [{ isPublished: true }, { read: { $in: ['public'] } }] };
+        const baseQuery = accessContext.mongoReadClause ? { ...accessContext.mongoReadClause } : {};
         baseQuery.$or = [
           { displayName: regex },
           { orcsClassification: regex }
