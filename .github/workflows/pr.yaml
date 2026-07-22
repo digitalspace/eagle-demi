@@ -1,0 +1,67 @@
+# =============================================================================
+# PR Validation
+# =============================================================================
+# Runs linting, tests, and builds for API and Frontend on pull requests.
+# =============================================================================
+
+name: PR Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test-api:
+    name: Test & Lint API
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Lint API
+        run: yarn lint
+
+      - name: Run API tests
+        run: yarn test
+
+  test-frontend:
+    name: Test & Build Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install frontend dependencies
+        run: yarn --cwd frontend install --immutable
+
+      - name: Lint Frontend
+        run: yarn --cwd frontend lint
+
+      - name: Build Frontend
+        run: yarn --cwd frontend build

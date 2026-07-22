@@ -3,7 +3,7 @@
 # =============================================================================
 # Manual workflow — triggered via workflow_dispatch with an image version tag.
 # Requires GitHub environment "production" approval gate before deploying.
-# Deploys/upgrades the custom Node.js api and worker image release.
+# Deploys/upgrades the eagle-demi Helm release in 6cdc9e-prod.
 # =============================================================================
 
 name: Deploy to Prod
@@ -12,9 +12,15 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'eagle-demi Node image version tag to deploy (e.g. v2.5.7)'
-        required: true
-        default: 'v2.5.7'
+        description: 'eagle-demi image version tag verified in test (e.g. v2.5.7)'
+        required: false
+        default: ''
+        type: string
+      rollback_revision:
+        description: 'Helm revision number to roll back to (e.g. 15). If set, performs helm rollback.'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: deploy-prod
@@ -36,7 +42,16 @@ jobs:
       name: production
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        run: |
+          VERSION="${{ inputs.version }}"
+          ROLLBACK_REV="${{ inputs.rollback_revision }}"
+          if [ -z "$VERSION" ] && [ -z "$ROLLBACK_REV" ]; then
+            echo "Error: Must specify either a version tag to deploy or a rollback_revision."
+            exit 1
+          fi
 
       - name: Install OpenShift CLI
         run: |
@@ -62,14 +77,24 @@ jobs:
           echo "❌ Failed to log into OpenShift after 10 attempts."
           exit 1
 
-
-      - name: Deploy with Helm
+      - name: Helm Rollback
+        if: inputs.rollback_revision != ''
         run: |
+          echo "Rolling back ${{ env.HELM_RELEASE }} in prod to revision ${{ inputs.rollback_revision }}..."
+          helm rollback ${{ env.HELM_RELEASE }} ${{ inputs.rollback_revision }} \
+            --namespace ${{ env.OPENSHIFT_NAMESPACE_PROD }} \
+            --wait --timeout=10m
+
+      - name: Helm Upgrade / Deploy
+        if: inputs.rollback_revision == '' && inputs.version != ''
+        run: |
+          echo "Deploying version ${{ inputs.version }} to Prod..."
           helm upgrade --install ${{ env.HELM_RELEASE }} ./helm \
             --namespace ${{ env.OPENSHIFT_NAMESPACE_PROD }} \
             --values ./helm/values-prod.yaml \
-            --set api.image.tag=${{ github.event.inputs.version }} \
-            --set worker.image.tag=${{ github.event.inputs.version }} \
+            --set api.image.tag=${{ inputs.version }} \
+            --set worker.image.tag=${{ inputs.version }} \
+            --set frontend.image.tag=${{ inputs.version }} \
             --wait --timeout=10m
 
       - name: Verify deployment
@@ -77,9 +102,20 @@ jobs:
           echo "Verifying eagle-demi-api deployment..."
           oc rollout status deployment/${{ env.HELM_RELEASE }}-api \
             -n ${{ env.OPENSHIFT_NAMESPACE_PROD }} --timeout=10m
-          echo "✓ eagle-demi healthy"
+          echo "✓ eagle-demi-api healthy"
+
+          if oc get deployment/${{ env.HELM_RELEASE }}-frontend -n ${{ env.OPENSHIFT_NAMESPACE_PROD }} >/dev/null 2>&1; then
+            echo "Verifying eagle-demi-frontend deployment..."
+            oc rollout status deployment/${{ env.HELM_RELEASE }}-frontend \
+              -n ${{ env.OPENSHIFT_NAMESPACE_PROD }} --timeout=10m
+            echo "✓ eagle-demi-frontend healthy"
+          fi
 
           echo ""
           echo "Pods:"
           oc get pods -n ${{ env.OPENSHIFT_NAMESPACE_PROD }} \
             -l app.kubernetes.io/instance=${{ env.HELM_RELEASE }}
+
+          echo ""
+          echo "Helm Release History:"
+          helm history ${{ env.HELM_RELEASE }} -n ${{ env.OPENSHIFT_NAMESPACE_PROD }}

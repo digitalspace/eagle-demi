@@ -1,8 +1,13 @@
 # =============================================================================
 # Deploy to Test
 # =============================================================================
-# Manual workflow — triggered via workflow_dispatch with an image version tag.
-# Deploys/upgrades the custom Node.js api and worker image release.
+# Manual workflow triggered via workflow_dispatch.
+# Features:
+# 1. Rollback support: Specify rollback_revision (Helm revision #) or an old version tag.
+# 2. Automated Semantic Versioning: If version is blank, inspects commit history since
+#    the last tag, calculates next semver (major/minor/patch), tags the repo,
+#    creates a GitHub Release draft, builds images, and deploys.
+# 3. Explicit Version: Specify an existing or new version tag (e.g., v2.5.7).
 # =============================================================================
 
 name: Deploy to Test
@@ -11,29 +16,180 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'eagle-demi Node image version tag to deploy (e.g. v2.5.7)'
-        required: true
-        default: 'v2.5.7'
+        description: 'Version tag to deploy (e.g. v2.5.7). Leave blank to auto-generate from commits.'
+        required: false
+        default: ''
+        type: string
+      rollback_revision:
+        description: 'Helm revision number to roll back to (e.g. 12). If set, performs helm rollback.'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: deploy-test
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
+  packages: write
 
 env:
   OPENSHIFT_NAMESPACE_TEST: 6cdc9e-test
   HELM_RELEASE: eagle-demi
+  REGISTRY: ghcr.io
+  API_IMAGE_NAME: digitalspace/eagle-demi-api
+  FRONTEND_IMAGE_NAME: digitalspace/eagle-demi-frontend
 
 jobs:
+  prepare:
+    name: Prepare Version or Rollback
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.decide.outputs.mode }}
+      version: ${{ steps.decide.outputs.version }}
+      revision: ${{ steps.decide.outputs.revision }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine action mode and semantic tag
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ROLLBACK_REV="${{ inputs.rollback_revision }}"
+          INPUT_VERSION="${{ inputs.version }}"
+
+          if [ -n "$ROLLBACK_REV" ]; then
+            echo "Mode: Helm Rollback to revision $ROLLBACK_REV"
+            echo "mode=rollback" >> "$GITHUB_OUTPUT"
+            echo "revision=$ROLLBACK_REV" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "mode=deploy" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$INPUT_VERSION" ]; then
+            TARGET_VERSION="$INPUT_VERSION"
+            echo "Using explicitly provided version: $TARGET_VERSION"
+          else
+            echo "No version provided. Calculating next semantic version from commits..."
+            LATEST_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || echo "v0.0.0")
+            echo "Latest tag found: $LATEST_TAG"
+
+            VERSION="${LATEST_TAG#v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+            MAJOR=${MAJOR:-0}
+            MINOR=${MINOR:-0}
+            PATCH=${PATCH:-0}
+
+            if [ "$LATEST_TAG" = "v0.0.0" ]; then
+              COMMITS=$(git log --oneline)
+            else
+              COMMITS=$(git log "${LATEST_TAG}..HEAD" --oneline)
+            fi
+
+            BUMP="patch"
+            if echo "$COMMITS" | grep -E -q "BREAKING CHANGE|!:"; then
+              BUMP="major"
+            elif echo "$COMMITS" | grep -E -q "^[a-f0-9]+ feat(\([^\)]+\))?:"; then
+              BUMP="minor"
+            fi
+
+            if [ "$BUMP" = "major" ]; then
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+            elif [ "$BUMP" = "minor" ]; then
+              MINOR=$((MINOR + 1))
+              PATCH=0
+            else
+              PATCH=$((PATCH + 1))
+            fi
+
+            TARGET_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+            echo "Calculated next version: $TARGET_VERSION ($BUMP bump)"
+          fi
+
+          echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+
+          # Tag repo and create release draft if tag does not exist
+          if ! git rev-parse "$TARGET_VERSION" >/dev/null 2>&1; then
+            echo "Creating Git tag $TARGET_VERSION..."
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TARGET_VERSION" -m "Release $TARGET_VERSION"
+            git push origin "$TARGET_VERSION" || true
+          fi
+
+          if ! gh release view "$TARGET_VERSION" >/dev/null 2>&1; then
+            echo "Creating GitHub Release draft for $TARGET_VERSION..."
+            gh release create "$TARGET_VERSION" \
+              --title "Release $TARGET_VERSION" \
+              --generate-notes \
+              --draft || true
+          fi
+
+  build:
+    name: Build Images for Deploy
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.version }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push API Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.API_IMAGE_NAME }}:${{ needs.prepare.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.API_IMAGE_NAME }}:test
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build & Push Frontend Image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ needs.prepare.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:test
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
   deploy:
-    name: Deploy to Test
+    name: Deploy / Rollback on Test
+    needs: [prepare, build]
+    if: always() && !cancelled() && !contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
 
       - name: Install OpenShift CLI
         run: |
@@ -59,24 +215,46 @@ jobs:
           echo "❌ Failed to log into OpenShift after 10 attempts."
           exit 1
 
-
-      - name: Deploy with Helm
+      - name: Helm Rollback
+        if: needs.prepare.outputs.mode == 'rollback'
         run: |
+          echo "Rolling back ${{ env.HELM_RELEASE }} to revision ${{ needs.prepare.outputs.revision }}..."
+          helm rollback ${{ env.HELM_RELEASE }} ${{ needs.prepare.outputs.revision }} \
+            --namespace ${{ env.OPENSHIFT_NAMESPACE_TEST }} \
+            --wait --timeout=10m
+
+      - name: Helm Upgrade / Deploy
+        if: needs.prepare.outputs.mode == 'deploy'
+        run: |
+          TARGET_VER="${{ needs.prepare.outputs.version }}"
+          echo "Deploying version $TARGET_VER to Test..."
           helm upgrade --install ${{ env.HELM_RELEASE }} ./helm \
             --namespace ${{ env.OPENSHIFT_NAMESPACE_TEST }} \
             --values ./helm/values-test.yaml \
-            --set api.image.tag=${{ github.event.inputs.version }} \
-            --set worker.image.tag=${{ github.event.inputs.version }} \
+            --set api.image.tag=$TARGET_VER \
+            --set worker.image.tag=$TARGET_VER \
+            --set frontend.image.tag=$TARGET_VER \
             --wait --timeout=10m
 
-      - name: Verify deployment
+      - name: Verify deployment status
         run: |
-          echo "Verifying eagle-demi-api deployment..."
+          echo "Verifying eagle-demi-api rollout status..."
           oc rollout status deployment/${{ env.HELM_RELEASE }}-api \
             -n ${{ env.OPENSHIFT_NAMESPACE_TEST }} --timeout=10m
-          echo "✓ eagle-demi healthy"
+          echo "✓ eagle-demi-api healthy"
+
+          if oc get deployment/${{ env.HELM_RELEASE }}-frontend -n ${{ env.OPENSHIFT_NAMESPACE_TEST }} >/dev/null 2>&1; then
+            echo "Verifying eagle-demi-frontend rollout status..."
+            oc rollout status deployment/${{ env.HELM_RELEASE }}-frontend \
+              -n ${{ env.OPENSHIFT_NAMESPACE_TEST }} --timeout=10m
+            echo "✓ eagle-demi-frontend healthy"
+          fi
 
           echo ""
-          echo "Pods:"
+          echo "Current Pods:"
           oc get pods -n ${{ env.OPENSHIFT_NAMESPACE_TEST }} \
             -l app.kubernetes.io/instance=${{ env.HELM_RELEASE }}
+
+          echo ""
+          echo "Helm Release History:"
+          helm history ${{ env.HELM_RELEASE }} -n ${{ env.OPENSHIFT_NAMESPACE_TEST }}

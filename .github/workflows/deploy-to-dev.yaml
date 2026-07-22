@@ -1,9 +1,9 @@
 # =============================================================================
 # Build and Deploy to Dev
 # =============================================================================
-# Triggered on push to main branch (excluding docs/CI-only changes).
-# Builds the unified Node.js API and worker image, pushes to GHCR,
-# and deploys/upgrades the Helm release in 6cdc9e-dev namespace.
+# Triggered on push to main branch or workflow_dispatch.
+# Separately builds and pushes Node.js API (eagle-demi-api) and Angular frontend
+# (eagle-demi-frontend) images, then deploys/upgrades the Helm release in 6cdc9e-dev.
 # =============================================================================
 
 name: Build and Deploy to Dev
@@ -14,6 +14,7 @@ on:
       - main
     paths-ignore:
       - "README.md"
+      - "*.md"
   workflow_dispatch:
 
 concurrency:
@@ -28,24 +29,54 @@ env:
   OPENSHIFT_NAMESPACE_DEV: 6cdc9e-dev
   HELM_RELEASE: eagle-demi
   REGISTRY: ghcr.io
-  IMAGE_NAME: digitalspace/eagle-demi-api
+  API_IMAGE_NAME: digitalspace/eagle-demi-api
+  FRONTEND_IMAGE_NAME: digitalspace/eagle-demi-frontend
 
 jobs:
-  build:
-    name: Build & Push Node Image
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api == 'true' || github.event_name == 'workflow_dispatch' }}
+      frontend: ${{ steps.filter.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Filter changed paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'src/**'
+              - 'package.json'
+              - 'yarn.lock'
+              - 'Dockerfile'
+              - 'helm/**'
+              - '.github/workflows/deploy-to-dev.yaml'
+            frontend:
+              - 'frontend/**'
+              - 'helm/**'
+              - '.github/workflows/deploy-to-dev.yaml'
+
+  build-api:
+    name: Build & Push API Image
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.api == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
       SHORT_SHA: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -57,10 +88,10 @@ jobs:
           TAG="${{ github.sha }}"
           TAG="${TAG:0:7}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+          echo "image=${{ env.REGISTRY }}/${{ env.API_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
@@ -68,20 +99,66 @@ jobs:
           tags: |
             ${{ steps.tag.outputs.image }}:latest
             ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.tag }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  build-frontend:
+    name: Build & Push Demo Frontend Image
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.frontend == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      SHORT_SHA: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine image tag
+        id: tag
+        run: |
+          TAG="${{ github.sha }}"
+          TAG="${TAG:0:7}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.tag.outputs.image }}:latest
+            ${{ steps.tag.outputs.image }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
   deploy:
     name: Deploy to Dev
-    needs: build
+    needs: [detect-changes, build-api, build-frontend]
+    if: always() && !cancelled() && !contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v4
 
       - name: Install OpenShift CLI
         run: |
@@ -107,6 +184,19 @@ jobs:
           echo "❌ Failed to log into OpenShift after 10 attempts."
           exit 1
 
+      - name: Determine tag for deployment
+        id: deploy-tags
+        run: |
+          API_TAG="${{ needs.build-api.outputs.SHORT_SHA }}"
+          if [ -z "$API_TAG" ]; then
+            API_TAG="latest"
+          fi
+          FRONTEND_TAG="${{ needs.build-frontend.outputs.SHORT_SHA }}"
+          if [ -z "$FRONTEND_TAG" ]; then
+            FRONTEND_TAG="latest"
+          fi
+          echo "api_tag=$API_TAG" >> "$GITHUB_OUTPUT"
+          echo "frontend_tag=$FRONTEND_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Deploy with Helm
         run: |
@@ -118,8 +208,9 @@ jobs:
           helm upgrade --install ${{ env.HELM_RELEASE }} ./helm \
             --namespace ${{ env.OPENSHIFT_NAMESPACE_DEV }} \
             --values ./helm/values-dev.yaml \
-            --set api.image.tag=${{ needs.build.outputs.SHORT_SHA }} \
-            --set worker.image.tag=${{ needs.build.outputs.SHORT_SHA }} \
+            --set api.image.tag=${{ steps.deploy-tags.outputs.api_tag }} \
+            --set worker.image.tag=${{ steps.deploy-tags.outputs.api_tag }} \
+            --set frontend.image.tag=${{ steps.deploy-tags.outputs.frontend_tag }} \
             --wait --timeout=10m --cleanup-on-fail
 
       - name: Verify deployment
@@ -128,6 +219,13 @@ jobs:
           oc rollout status deployment/${{ env.HELM_RELEASE }}-api \
             -n ${{ env.OPENSHIFT_NAMESPACE_DEV }} --timeout=10m
           echo "✓ eagle-demi-api healthy"
+
+          if oc get deployment/${{ env.HELM_RELEASE }}-frontend -n ${{ env.OPENSHIFT_NAMESPACE_DEV }} >/dev/null 2>&1; then
+            echo "Verifying eagle-demi-frontend deployment..."
+            oc rollout status deployment/${{ env.HELM_RELEASE }}-frontend \
+              -n ${{ env.OPENSHIFT_NAMESPACE_DEV }} --timeout=10m
+            echo "✓ eagle-demi-frontend healthy"
+          fi
 
           echo ""
           echo "Pods:"

@@ -244,6 +244,35 @@ api:
       insecureEdgeTerminationPolicy: "Redirect"
 
 # ---------------------------------------------------------------------------
+# Central DEMI Demo Frontend (demi-frontend)
+# Angular SPA served via unprivileged nginx
+# ---------------------------------------------------------------------------
+frontend:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/digitalspace/eagle-demi-frontend
+    tag: "latest"
+    pullPolicy: Always
+
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+  route:
+    enabled: true
+    host: ""
+    path: ""
+    tls:
+      termination: "edge"
+      insecureEdgeTerminationPolicy: "Redirect"
+
+# ---------------------------------------------------------------------------
 # KEDA autoscaling for rq-worker (scale-to-zero on idle).
 # Disabled by default; enable per-env ONLY where the keda.sh CRDs are installed
 # (verify: `oc get scaledobjects.keda.sh -n <namespace>`).
