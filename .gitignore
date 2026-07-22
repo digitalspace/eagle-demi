@@ -7,7 +7,7 @@ node_modules/
 .env.*.local
 
 # Copilot / agent instruction files (local only, not for review)
-.github/copilot-instructions.md
+.github/antigravity.md
 .github/instructions/
 
 # Editor
