@@ -12,9 +12,9 @@ COPY .yarn/ ./.yarn/
 # Production-only backend dependency install
 RUN yarn install --immutable
 
-# Copy backend source code and static fallback directory if present
+# Copy backend source code and ensure static public directory exists
 COPY src/ ./src/
-COPY public/ ./public/
+RUN mkdir -p ./public
 
 # Secure execution as non-root user
 RUN addgroup -S demi && adduser -S demi -G demi
