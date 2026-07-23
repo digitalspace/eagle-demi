@@ -20,6 +20,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@azure/functions": "^4.5.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
@@ -31,6 +32,7 @@
     "mongoose": "^9.3.2",
     "multer": "^2.2.0",
     "pdf-lib": "^1.17.1",
+    "serverless-http": "^3.2.0",
     "swagger-ui-express": "^5.0.1",
     "typesense": "^3.0.5",
     "winston": "^3.19.0",

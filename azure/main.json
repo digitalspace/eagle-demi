@@ -1,0 +1,842 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.45.15.27210",
+      "templateHash": "4052055553783561217"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "canadacentral",
+      "metadata": {
+        "description": "Target Azure region"
+      }
+    },
+    "environmentName": {
+      "type": "string",
+      "defaultValue": "dev",
+      "metadata": {
+        "description": "Environment name (e.g. dev, test, prod)"
+      }
+    },
+    "minioHost": {
+      "type": "string",
+      "defaultValue": "minio-6cdc9e-dev.apps.silver.devops.gov.bc.ca",
+      "metadata": {
+        "description": "OpenShift MinIO Endpoint URL"
+      }
+    },
+    "minioAccessKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "OpenShift MinIO Access Key"
+      }
+    },
+    "minioSecretKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "OpenShift MinIO Secret Key"
+      }
+    },
+    "typesenseApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Typesense Master API Key"
+      }
+    },
+    "budgetAmount": {
+      "type": "int",
+      "defaultValue": 50,
+      "metadata": {
+        "description": "Monthly Budget Limit in USD"
+      }
+    },
+    "contactEmails": {
+      "type": "array",
+      "defaultValue": [
+        "Daniel.T.Truong@gov.bc.ca"
+      ],
+      "metadata": {
+        "description": "Notification Email Addresses for Cost Alerts"
+      }
+    }
+  },
+  "variables": {
+    "defaultTags": {
+      "Project": "DEMI",
+      "Application": "eagle-demi",
+      "Environment": "[parameters('environmentName')]",
+      "ManagedBy": "Bicep",
+      "CostCenter": "c4b0a8"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-static-web-app",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "environmentName": {
+            "value": "[parameters('environmentName')]"
+          },
+          "tags": {
+            "value": "[variables('defaultTags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "17056123253511480964"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "canadacentral",
+              "metadata": {
+                "description": "Location for the App Service resource (Default: canadacentral)"
+              }
+            },
+            "environmentName": {
+              "type": "string",
+              "metadata": {
+                "description": "Environment name (e.g. dev, test, prod)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Default resource tags"
+              }
+            },
+            "appServicePlanName": {
+              "type": "string",
+              "defaultValue": "[format('demi-frontend-plan-{0}', parameters('environmentName'))]",
+              "metadata": {
+                "description": "App Service Plan Name"
+              }
+            },
+            "appName": {
+              "type": "string",
+              "defaultValue": "[format('demi-frontend-{0}', parameters('environmentName'))]",
+              "metadata": {
+                "description": "App Service Web App Name"
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2023-12-01",
+              "name": "[parameters('appServicePlanName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "F1",
+                "tier": "Free"
+              },
+              "kind": "linux",
+              "properties": {
+                "reserved": true
+              }
+            },
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2023-12-01",
+              "name": "[parameters('appName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                "siteConfig": {
+                  "linuxFxVersion": "NODE|20-lts",
+                  "appCommandLine": "npx pm2 serve /home/site/wwwroot --no-daemon --spa"
+                },
+                "httpsOnly": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "staticWebAppName": {
+              "type": "string",
+              "value": "[parameters('appName')]"
+            },
+            "staticWebAppDefaultHostName": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', parameters('appName')), '2023-12-01').defaultHostName]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-cosmos-mongo",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "environmentName": {
+            "value": "[parameters('environmentName')]"
+          },
+          "tags": {
+            "value": "[variables('defaultTags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "1891008989158914271"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Location for Cosmos DB Account"
+              }
+            },
+            "environmentName": {
+              "type": "string",
+              "metadata": {
+                "description": "Environment name (e.g. dev, test, prod)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Default resource tags"
+              }
+            }
+          },
+          "variables": {
+            "accountName": "[format('demi-mongo-{0}-{1}', parameters('environmentName'), uniqueString(resourceGroup().id))]",
+            "databaseName": "[format('demi-{0}', parameters('environmentName'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.DocumentDB/databaseAccounts",
+              "apiVersion": "2023-11-15",
+              "name": "[variables('accountName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "MongoDB",
+              "properties": {
+                "databaseAccountOfferType": "Standard",
+                "publicNetworkAccess": "Disabled",
+                "apiProperties": {
+                  "serverVersion": "7.0"
+                },
+                "capabilities": [
+                  {
+                    "name": "EnableServerless"
+                  }
+                ],
+                "locations": [
+                  {
+                    "locationName": "[parameters('location')]",
+                    "failoverPriority": 0,
+                    "isZoneRedundant": false
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases",
+              "apiVersion": "2023-11-15",
+              "name": "[format('{0}/{1}', variables('accountName'), variables('databaseName'))]",
+              "properties": {
+                "resource": {
+                  "id": "[variables('databaseName')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "connectionString": {
+              "type": "string",
+              "value": "[listConnectionStrings(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName')), '2023-11-15').connectionStrings[0].connectionString]"
+            },
+            "mongoDatabaseName": {
+              "type": "string",
+              "value": "[variables('databaseName')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-container-apps",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "environmentName": {
+            "value": "[parameters('environmentName')]"
+          },
+          "tags": {
+            "value": "[variables('defaultTags')]"
+          },
+          "typesenseApiKey": {
+            "value": "[parameters('typesenseApiKey')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "14278922321547088045"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Location for Azure Container Apps"
+              }
+            },
+            "environmentName": {
+              "type": "string",
+              "metadata": {
+                "description": "Environment name (e.g. dev, test, prod)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Default resource tags"
+              }
+            },
+            "typesenseApiKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Typesense Master API Key"
+              }
+            }
+          },
+          "variables": {
+            "storageAccountName": "[take(format('tsstg{0}{1}', parameters('environmentName'), uniqueString(resourceGroup().id)), 24)]",
+            "fileShareName": "typesense-data",
+            "containerAppEnvName": "[format('demi-ca-env-{0}', parameters('environmentName'))]",
+            "containerAppName": "[format('demi-typesense-{0}', parameters('environmentName'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-01-01",
+              "name": "[variables('storageAccountName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "kind": "StorageV2",
+              "properties": {
+                "supportsHttpsTrafficOnly": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false,
+                "publicNetworkAccess": "Disabled",
+                "networkAcls": {
+                  "defaultAction": "Deny",
+                  "bypass": "AzureServices"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/default/{1}', variables('storageAccountName'), variables('fileShareName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2023-05-01",
+              "name": "[variables('containerAppEnvName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "zoneRedundant": false
+              }
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments/storages",
+              "apiVersion": "2023-05-01",
+              "name": "[format('{0}/{1}', variables('containerAppEnvName'), 'typesense-volume')]",
+              "properties": {
+                "azureFile": {
+                  "accountName": "[variables('storageAccountName')]",
+                  "accountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').keys[0].value]",
+                  "shareName": "[variables('fileShareName')]",
+                  "accessMode": "ReadWrite"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', variables('containerAppEnvName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2023-05-01",
+              "name": "[variables('containerAppName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('containerAppEnvName'))]",
+                "configuration": {
+                  "ingress": {
+                    "external": true,
+                    "targetPort": 8108,
+                    "transport": "auto"
+                  },
+                  "secrets": [
+                    {
+                      "name": "typesense-api-key",
+                      "value": "[parameters('typesenseApiKey')]"
+                    }
+                  ]
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "typesense",
+                      "image": "typesense/typesense:27.1",
+                      "args": [
+                        "--data-dir",
+                        "/data",
+                        "--api-key",
+                        "$(TYPESENSE_API_KEY)",
+                        "--enable-cors"
+                      ],
+                      "env": [
+                        {
+                          "name": "TYPESENSE_API_KEY",
+                          "secretRef": "typesense-api-key"
+                        }
+                      ],
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1.0Gi"
+                      },
+                      "volumeMounts": [
+                        {
+                          "volumeName": "typesense-storage",
+                          "mountPath": "/data"
+                        }
+                      ]
+                    }
+                  ],
+                  "volumes": [
+                    {
+                      "name": "typesense-storage",
+                      "storageType": "AzureFile",
+                      "storageName": "typesense-volume"
+                    }
+                  ],
+                  "scale": {
+                    "minReplicas": 0,
+                    "maxReplicas": 1
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', variables('containerAppEnvName'))]",
+                "[resourceId('Microsoft.App/managedEnvironments/storages', variables('containerAppEnvName'), 'typesense-volume')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "typesenseFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2023-05-01').configuration.ingress.fqdn]"
+            },
+            "typesenseUrl": {
+              "type": "string",
+              "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2023-05-01').configuration.ingress.fqdn)]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-function-app",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "environmentName": {
+            "value": "[parameters('environmentName')]"
+          },
+          "tags": {
+            "value": "[variables('defaultTags')]"
+          },
+          "minioHost": {
+            "value": "[parameters('minioHost')]"
+          },
+          "minioAccessKey": {
+            "value": "[parameters('minioAccessKey')]"
+          },
+          "minioSecretKey": {
+            "value": "[parameters('minioSecretKey')]"
+          },
+          "mongodbConnectionString": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cosmos-mongo'), '2025-04-01').outputs.connectionString.value]"
+          },
+          "typesenseUrl": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-container-apps'), '2025-04-01').outputs.typesenseUrl.value]"
+          },
+          "typesenseApiKey": {
+            "value": "[parameters('typesenseApiKey')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "12477110368364844652"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Location for Azure Function App resources"
+              }
+            },
+            "environmentName": {
+              "type": "string",
+              "metadata": {
+                "description": "Environment name (e.g. dev, test, prod)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Default resource tags"
+              }
+            },
+            "minioHost": {
+              "type": "string",
+              "metadata": {
+                "description": "OpenShift MinIO Endpoint URL"
+              }
+            },
+            "minioAccessKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "OpenShift MinIO Access Key"
+              }
+            },
+            "minioSecretKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "OpenShift MinIO Secret Key"
+              }
+            },
+            "mongodbConnectionString": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Cosmos DB Connection String"
+              }
+            },
+            "typesenseUrl": {
+              "type": "string",
+              "metadata": {
+                "description": "Typesense Host Endpoint URL"
+              }
+            },
+            "typesenseApiKey": {
+              "type": "securestring",
+              "metadata": {
+                "description": "Typesense API Key"
+              }
+            }
+          },
+          "variables": {
+            "functionAppName": "[format('demi-api-{0}', parameters('environmentName'))]",
+            "appServicePlanName": "[format('demi-plan-{0}', parameters('environmentName'))]",
+            "storageAccountName": "[format('demistg{0}{1}', parameters('environmentName'), uniqueString(resourceGroup().id))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-01-01",
+              "name": "[variables('storageAccountName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "kind": "StorageV2",
+              "properties": {
+                "supportsHttpsTrafficOnly": true,
+                "minimumTlsVersion": "TLS1_2",
+                "allowBlobPublicAccess": false
+              }
+            },
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2023-12-01",
+              "name": "[variables('appServicePlanName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Y1",
+                "tier": "Dynamic"
+              },
+              "properties": {
+                "reserved": true
+              }
+            },
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2023-12-01",
+              "name": "[variables('functionAppName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "kind": "functionapp,linux",
+              "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+                "siteConfig": {
+                  "linuxFxVersion": "NODE|20",
+                  "appSettings": [
+                    {
+                      "name": "AzureWebJobsStorage",
+                      "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};EndpointSuffix={1};AccountKey={2}', variables('storageAccountName'), environment().suffixes.storage, listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').keys[0].value)]"
+                    },
+                    {
+                      "name": "FUNCTIONS_EXTENSION_VERSION",
+                      "value": "~4"
+                    },
+                    {
+                      "name": "FUNCTIONS_WORKER_RUNTIME",
+                      "value": "node"
+                    },
+                    {
+                      "name": "WEBSITE_NODE_DEFAULT_VERSION",
+                      "value": "~20"
+                    },
+                    {
+                      "name": "MONGODB_URI",
+                      "value": "[parameters('mongodbConnectionString')]"
+                    },
+                    {
+                      "name": "MINIO_HOST",
+                      "value": "[parameters('minioHost')]"
+                    },
+                    {
+                      "name": "MINIO_ACCESS_KEY",
+                      "value": "[parameters('minioAccessKey')]"
+                    },
+                    {
+                      "name": "MINIO_SECRET_KEY",
+                      "value": "[parameters('minioSecretKey')]"
+                    },
+                    {
+                      "name": "TYPESENSE_URL",
+                      "value": "[parameters('typesenseUrl')]"
+                    },
+                    {
+                      "name": "TYPESENSE_API_KEY",
+                      "value": "[parameters('typesenseApiKey')]"
+                    }
+                  ],
+                  "cors": {
+                    "allowedOrigins": [
+                      "https://portal.azure.com",
+                      "*"
+                    ]
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+                "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "functionAppName": {
+              "type": "string",
+              "value": "[variables('functionAppName')]"
+            },
+            "functionAppHostName": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-12-01').defaultHostName]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-container-apps')]",
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-cosmos-mongo')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-cost-budget",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "environmentName": {
+            "value": "[parameters('environmentName')]"
+          },
+          "budgetAmount": {
+            "value": "[parameters('budgetAmount')]"
+          },
+          "contactEmails": {
+            "value": "[parameters('contactEmails')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "10125766643988242277"
+            }
+          },
+          "parameters": {
+            "environmentName": {
+              "type": "string",
+              "metadata": {
+                "description": "Environment name (e.g. dev, test, prod)"
+              }
+            },
+            "budgetAmount": {
+              "type": "int",
+              "defaultValue": 50,
+              "metadata": {
+                "description": "Monthly Budget Amount in USD (e.g. 50)"
+              }
+            },
+            "contactEmails": {
+              "type": "array",
+              "defaultValue": [
+                "Daniel.T.Truong@gov.bc.ca"
+              ],
+              "metadata": {
+                "description": "Email addresses to receive budget threshold alerts"
+              }
+            }
+          },
+          "variables": {
+            "budgetName": "[format('demi-budget-{0}', parameters('environmentName'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Consumption/budgets",
+              "apiVersion": "2021-10-01",
+              "name": "[variables('budgetName')]",
+              "properties": {
+                "category": "Cost",
+                "amount": "[parameters('budgetAmount')]",
+                "timeGrain": "Monthly",
+                "timePeriod": {
+                  "startDate": "2026-08-01T00:00:00Z"
+                },
+                "notifications": {
+                  "Actual_80_Percent": {
+                    "enabled": true,
+                    "operator": "GreaterThanOrEqualTo",
+                    "threshold": 80,
+                    "contactEmails": "[parameters('contactEmails')]"
+                  },
+                  "Actual_100_Percent": {
+                    "enabled": true,
+                    "operator": "GreaterThanOrEqualTo",
+                    "threshold": 100,
+                    "contactEmails": "[parameters('contactEmails')]"
+                  }
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "budgetName": {
+              "type": "string",
+              "value": "[variables('budgetName')]"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "staticWebAppDefaultHostName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-static-web-app'), '2025-04-01').outputs.staticWebAppDefaultHostName.value]"
+    },
+    "functionAppHostName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-function-app'), '2025-04-01').outputs.functionAppHostName.value]"
+    },
+    "typesenseUrl": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-container-apps'), '2025-04-01').outputs.typesenseUrl.value]"
+    }
+  }
+}

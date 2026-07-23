@@ -64,3 +64,18 @@ To circumvent browser third-party cookie blocking on `localhost` during iframe s
 - **Button-Triggered Login**: Sets `sessionStorage.setItem('isLoggedIn', 'true')` upon successful authentication.
 - **Page Refresh (Active Session)**: Reads `isLoggedIn` from `sessionStorage` and initializes Keycloak using `'login-required'`. Keycloak silently verifies the active top-level session via direct redirect and logs the user back in instantly, preserving authenticated state across refreshes.
 - **Logout**: Clears `sessionStorage` and `localStorage`, returning the client to standard public access mode.
+
+## Azure Environments (`c4b0a8: EPIC.AI`)
+
+Account: `Daniel.T.Truong@gov.bc.ca` | Tenant: `Government of BC` (`6fdb5200-3d0d-4a8a-b036-d3685e359adc`)
+
+| Environment | Subscription Name | Subscription ID |
+|---|---|---|
+| **dev** | `c4b0a8-dev - EPIC.AI` | `d2f8d048-2af3-44fd-81cc-858c040001f2` |
+| **test** | `c4b0a8-test - EPIC.AI` | `7897ceb1-9a86-4639-87d7-7f9ff67142b3` |
+| **tools** | `c4b0a8-tools - EPIC.AI` | `82efd4f0-7548-4fe6-8741-9e6c3297092f` |
+| **prod** | `c4b0a8-prod - EPIC.AI` | `be5924ac-1083-4a1b-be92-7b444882cfd9` |
+
+Switch active subscription: `az account set --subscription "<subscription_id>"`.
+See details in [AZURE_ENVIRONMENTS.md](file:///root/repos/eagle-demi/AZURE_ENVIRONMENTS.md).
+

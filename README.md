@@ -44,7 +44,7 @@ oc create secret generic eagle-demi-api-key \
   -n 6cdc9e-dev
 ```
 
-**Deploy to dev:**
+**Deploy to dev (OpenShift):**
 
 ```bash
 helm upgrade --install eagle-demi ./helm \
@@ -52,6 +52,8 @@ helm upgrade --install eagle-demi ./helm \
   --values ./helm/values-dev.yaml \
   --wait --timeout=10m
 ```
+
+**Deploy to dev (Azure):** See the [Azure Environments Wiki](https://github.com/bcgov/eagle-demi/wiki/Azure-Environments) page for Bicep IaC instructions and GitHub Actions workflow setup (`.github/workflows/azure-deploy-dev.yaml`).
 
 **Deploy to test/prod:** Use the GitHub Actions `workflow_dispatch` workflows in `.github/workflows/`.
 
