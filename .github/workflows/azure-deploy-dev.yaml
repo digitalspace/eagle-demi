@@ -39,6 +39,7 @@ env:
 jobs:
   deploy-infra:
     name: Provision Infrastructure (Bicep)
+    if: ${{ secrets.AZURE_CREDENTIALS != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -74,7 +75,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install & Build Frontend
         run: |
@@ -102,7 +103,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install Dependencies & Build API
         run: |
