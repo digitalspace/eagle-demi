@@ -39,15 +39,16 @@ var defaultTags = {
   CostCenter: 'c4b0a8'
 }
 
-// 1. Angular Frontend (Azure App Service Linux - canadacentral)
+// 1. Angular Frontend (Azure Static Web Apps - Free Tier CDN)
 module staticWebApp './modules/static-web-app.bicep' = {
   name: 'deploy-static-web-app'
   params: {
-    location: location
+    location: 'centralus'
     environmentName: environmentName
     tags: defaultTags
   }
 }
+
 
 // 2. Database (Azure Cosmos DB for MongoDB Serverless)
 module cosmosMongo './modules/cosmos-mongo.bicep' = {

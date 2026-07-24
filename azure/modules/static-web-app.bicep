@@ -1,6 +1,6 @@
-// Azure App Service (Linux) for DEMI Angular Frontend in canadacentral
-@description('Location for the App Service resource (Default: canadacentral)')
-param location string = 'canadacentral'
+// Azure Static Web App for DEMI Angular Frontend
+@description('Location for the Static Web App resource (Default: centralus for SWA control plane)')
+param location string = 'centralus'
 
 @description('Environment name (e.g. dev, test, prod)')
 param environmentName string
@@ -8,41 +8,24 @@ param environmentName string
 @description('Default resource tags')
 param tags object
 
-@description('App Service Plan Name')
-param appServicePlanName string = 'demi-frontend-plan-${environmentName}'
-
-@description('App Service Web App Name')
+@description('Static Web App Name')
 param appName string = 'demi-frontend-${environmentName}'
 
-// App Service Plan (Free F1 or Basic B1 tier in canadacentral)
-resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
-  name: appServicePlanName
-  location: location
-  tags: tags
-  sku: {
-    name: 'B1'
-    tier: 'Basic'
-  }
-  kind: 'linux'
-  properties: {
-    reserved: true // Required for Linux
-  }
-}
-
-// Web App for Angular SPA
-resource webApp 'Microsoft.Web/sites@2023-12-01' = {
+// Free Tier Azure Static Web App (Global CDN distribution)
+resource staticWebApp 'Microsoft.Web/staticSites@2023-12-01' = {
   name: appName
   location: location
   tags: tags
+  sku: {
+    name: 'Free'
+    tier: 'Free'
+  }
   properties: {
-    serverFarmId: appServicePlan.id
-    siteConfig: {
-      linuxFxVersion: 'NODE|20-lts'
-      appCommandLine: 'npx pm2 serve /home/site/wwwroot --no-daemon --spa'
-    }
-    httpsOnly: true
+    allowConfigFileUpdates: true
+    stagingEnvironmentPolicy: 'Enabled'
   }
 }
 
-output staticWebAppName string = webApp.name
-output staticWebAppDefaultHostName string = webApp.properties.defaultHostName
+output staticWebAppName string = staticWebApp.name
+output staticWebAppDefaultHostName string = staticWebApp.properties.defaultHostname
+

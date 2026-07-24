@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "4052055553783561217"
+      "templateHash": "8105174900012957573"
     }
   },
   "parameters": {
@@ -86,7 +86,7 @@
         "mode": "Incremental",
         "parameters": {
           "location": {
-            "value": "[parameters('location')]"
+            "value": "centralus"
           },
           "environmentName": {
             "value": "[parameters('environmentName')]"
@@ -102,15 +102,15 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "17056123253511480964"
+              "templateHash": "18288095767785029184"
             }
           },
           "parameters": {
             "location": {
               "type": "string",
-              "defaultValue": "canadacentral",
+              "defaultValue": "centralus",
               "metadata": {
-                "description": "Location for the App Service resource (Default: canadacentral)"
+                "description": "Location for the Static Web App resource (Default: centralus for SWA control plane)"
               }
             },
             "environmentName": {
@@ -125,54 +125,29 @@
                 "description": "Default resource tags"
               }
             },
-            "appServicePlanName": {
-              "type": "string",
-              "defaultValue": "[format('demi-frontend-plan-{0}', parameters('environmentName'))]",
-              "metadata": {
-                "description": "App Service Plan Name"
-              }
-            },
             "appName": {
               "type": "string",
               "defaultValue": "[format('demi-frontend-{0}', parameters('environmentName'))]",
               "metadata": {
-                "description": "App Service Web App Name"
+                "description": "Static Web App Name"
               }
             }
           },
           "resources": [
             {
-              "type": "Microsoft.Web/serverfarms",
-              "apiVersion": "2023-12-01",
-              "name": "[parameters('appServicePlanName')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "sku": {
-                "name": "F1",
-                "tier": "Free"
-              },
-              "kind": "linux",
-              "properties": {
-                "reserved": true
-              }
-            },
-            {
-              "type": "Microsoft.Web/sites",
+              "type": "Microsoft.Web/staticSites",
               "apiVersion": "2023-12-01",
               "name": "[parameters('appName')]",
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
-              "properties": {
-                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
-                "siteConfig": {
-                  "linuxFxVersion": "NODE|20-lts",
-                  "appCommandLine": "npx pm2 serve /home/site/wwwroot --no-daemon --spa"
-                },
-                "httpsOnly": true
+              "sku": {
+                "name": "Free",
+                "tier": "Free"
               },
-              "dependsOn": [
-                "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
-              ]
+              "properties": {
+                "allowConfigFileUpdates": true,
+                "stagingEnvironmentPolicy": "Enabled"
+              }
             }
           ],
           "outputs": {
@@ -182,7 +157,7 @@
             },
             "staticWebAppDefaultHostName": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Web/sites', parameters('appName')), '2023-12-01').defaultHostName]"
+              "value": "[reference(resourceId('Microsoft.Web/staticSites', parameters('appName')), '2023-12-01').defaultHostname]"
             }
           }
         }
@@ -549,7 +524,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "12477110368364844652"
+              "templateHash": "13319685992572944515"
             }
           },
           "parameters": {
@@ -638,8 +613,8 @@
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
               "sku": {
-                "name": "Y1",
-                "tier": "Dynamic"
+                "name": "B1",
+                "tier": "Basic"
               },
               "properties": {
                 "reserved": true

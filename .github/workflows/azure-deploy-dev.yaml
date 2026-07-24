@@ -3,7 +3,7 @@
 # =============================================================================
 # Triggered on push to main branch (when azure or application files change) or
 # workflow_dispatch. Provisions Bicep IaC with DEMI tags, deploys Angular frontend
-# to Azure Static Web Apps, and deploys Node.js API to Azure Functions.
+# to Azure Web App, and deploys Node.js API to Azure Functions.
 # =============================================================================
 
 name: Deploy DEMI to Azure Dev
@@ -39,7 +39,7 @@ env:
 jobs:
   deploy-infra:
     name: Provision Infrastructure (Bicep)
-    if: ${{ secrets.AZURE_CREDENTIALS != '' }}
+    if: ${{ secrets.AZURE_CREDENTIALS != '' || secrets.AZURE_CLIENT_ID != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -48,13 +48,21 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+          allow-no-subscriptions: true
+
+      - name: Validate Bicep Template
+        run: |
+          az bicep build --file ./azure/main.bicep
 
       - name: Create Resource Group if not exists
         uses: azure/cli@v2
         with:
           inlineScript: |
-            az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.LOCATION }} --tags Project=DEMI Application=eagle-demi Environment=dev CostCenter=c4b0a8
+            az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.LOCATION }} --tags Project=DEMI Application=eagle-demi Environment=dev CostCenter=c4b0a8 ManagedBy=Bicep
 
       - name: Deploy Bicep IaC
         uses: azure/arm-deploy@v1
@@ -62,11 +70,13 @@ jobs:
           scope: resourcegroup
           resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
           template: ./azure/main.bicep
-          parameters: ./azure/main.bicepparam
+          parameters: ./azure/main.bicepparam minioAccessKey="${{ secrets.MINIO_ACCESS_KEY || 'minio' }}" minioSecretKey="${{ secrets.MINIO_SECRET_KEY || 'minio123' }}" typesenseApiKey="${{ secrets.TYPESENSE_API_KEY || 'demi-typesense-dev-key' }}"
+
 
   deploy-frontend:
-    name: Build & Deploy Frontend (Static Web Apps)
+    name: Build & Deploy Frontend (Azure Static Web App)
     needs: deploy-infra
+    if: always() && !cancelled() && !contains(needs.*.result, 'failure') && (secrets.AZURE_CREDENTIALS != '' || secrets.AZURE_CLIENT_ID != '')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -84,17 +94,36 @@ jobs:
           yarn install --immutable
           yarn build --configuration production
 
-      - name: Deploy to Azure Static Web Apps
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          allow-no-subscriptions: true
+
+      - name: Fetch Static Web App Deployment Token
+        id: get-swa-token
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            TOKEN=$(az staticwebapp secrets list --name demi-frontend-dev --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --query "properties.apiKey" -o tsv 2>/dev/null || echo "")
+            echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Frontend to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         with:
-          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
-          app_location: '/frontend'
-          output_location: 'dist/frontend'
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN || steps.get-swa-token.outputs.token }}
+          app_location: 'frontend'
+          output_location: 'dist'
           action: 'upload'
+
 
   deploy-api:
     name: Deploy API (Azure Functions)
     needs: deploy-infra
+    if: always() && !cancelled() && !contains(needs.*.result, 'failure') && (secrets.AZURE_CREDENTIALS != '' || secrets.AZURE_CLIENT_ID != '')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -110,8 +139,18 @@ jobs:
           corepack enable
           yarn install --immutable
 
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          allow-no-subscriptions: true
+
       - name: Deploy to Azure Functions
         uses: Azure/functions-action@v1
         with:
           app-name: demi-api-dev
           package: '.'
+

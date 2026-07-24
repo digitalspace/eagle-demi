@@ -64,49 +64,19 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
 }
 
 deploy_frontend() {
-  echo -e "\n${BLUE}[1/3] Building Angular frontend production bundle...${NC}"
+  echo -e "\n${BLUE}[1/2] Building Angular frontend production bundle...${NC}"
   yarn --cwd "$REPO_ROOT/frontend" build
 
-  echo -e "\n${BLUE}[2/3] Packaging frontend dist directory...${NC}"
-  FRONTEND_ZIP="/tmp/frontend-deploy.zip"
-  rm -f "$FRONTEND_ZIP"
-
-  DIST_PATH="$REPO_ROOT/frontend/dist"
-  if [ ! -d "$DIST_PATH" ]; then
-    echo -e "${RED}Error: Frontend build output not found at ${DIST_PATH}${NC}"
-    exit 1
-  fi
-
-  python3 -c "
-import zipfile, os
-dist_path = '$DIST_PATH'
-zip_path = '$FRONTEND_ZIP'
-
-with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
-    for root, dirs, files in os.walk(dist_path):
-        for file in files:
-            full_path = os.path.join(root, file)
-            rel_path = os.path.relpath(full_path, dist_path)
-            z.write(full_path, rel_path)
-"
-
-  ZIP_SIZE=$(du -h "$FRONTEND_ZIP" | cut -f1)
-  echo -e "${GREEN}✓ Frontend package created: ${FRONTEND_ZIP} (${ZIP_SIZE})${NC}"
-
-  echo -e "${BLUE}[3/3] Deploying frontend package to ${YELLOW}${FRONTEND_APP_NAME}${NC}..."
-  az webapp deployment source config-zip \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$FRONTEND_APP_NAME" \
-    --src "$FRONTEND_ZIP"
-
-  echo -e "${GREEN}✓ Frontend successfully deployed to https://${FRONTEND_APP_NAME}.azurewebsites.net${NC}"
-
-  echo -e "\n${BLUE}Verifying frontend endpoint...${NC}"
-  if curl -s -f "https://${FRONTEND_APP_NAME}.azurewebsites.net/map" > /dev/null; then
-    echo -e "${GREEN}✓ Frontend map route verified online!${NC}"
+  echo -e "\n${BLUE}[2/2] Deploying frontend static bundle to Azure Static Web App ${YELLOW}${FRONTEND_APP_NAME}${NC}..."
+  SWA_TOKEN=$(az staticwebapp secrets list --name "$FRONTEND_APP_NAME" --resource-group "$RESOURCE_GROUP" --query "properties.apiKey" -o tsv 2>/dev/null || echo "")
+  if [ -n "$SWA_TOKEN" ]; then
+    npx -y @azure/static-web-apps-cli deploy "$REPO_ROOT/frontend/dist" --deployment-token "$SWA_TOKEN" --env production
   else
-    echo -e "${YELLOW}! Frontend deployment uploaded. (Routing route check complete)${NC}"
+    echo -e "${YELLOW}! Unable to fetch SWA token. Deploying via Azure CLI SWA command...${NC}"
+    npx -y @azure/static-web-apps-cli deploy "$REPO_ROOT/frontend/dist" --app-name "$FRONTEND_APP_NAME" --resource-group "$RESOURCE_GROUP" --env production
   fi
+
+  echo -e "${GREEN}✓ Frontend successfully deployed to Azure Static Web App ${FRONTEND_APP_NAME}${NC}"
 }
 
 case "$TARGET" in
