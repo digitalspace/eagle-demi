@@ -39,13 +39,23 @@ env:
 jobs:
   deploy-infra:
     name: Provision Infrastructure (Bicep)
-    if: ${{ secrets.AZURE_CREDENTIALS != '' || secrets.AZURE_CLIENT_ID != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check Credentials
+        id: check-creds
+        run: |
+          if [ -n "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -n "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+            echo "has_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Azure credentials (AZURE_CLIENT_ID or AZURE_CREDENTIALS) not set in repository secrets."
+          fi
+
       - name: Azure Login
+        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -55,16 +65,19 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Validate Bicep Template
+        if: steps.check-creds.outputs.has_creds == 'true'
         run: |
           az bicep build --file ./azure/main.bicep
 
       - name: Create Resource Group if not exists
+        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/cli@v2
         with:
           inlineScript: |
             az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.LOCATION }} --tags Project=DEMI Application=eagle-demi Environment=dev CostCenter=c4b0a8 ManagedBy=Bicep
 
       - name: Deploy Bicep IaC
+        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/arm-deploy@v1
         with:
           scope: resourcegroup
@@ -76,18 +89,29 @@ jobs:
   deploy-frontend:
     name: Build & Deploy Frontend (Azure Static Web App)
     needs: deploy-infra
-    if: always() && !cancelled() && !contains(needs.*.result, 'failure') && (secrets.AZURE_CREDENTIALS != '' || secrets.AZURE_CLIENT_ID != '')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check Credentials
+        id: check-creds
+        run: |
+          if [ -n "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -n "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+            echo "has_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Azure credentials not set in repository secrets."
+          fi
+
       - name: Setup Node.js
+        if: steps.check-creds.outputs.has_creds == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
       - name: Install & Build Frontend
+        if: steps.check-creds.outputs.has_creds == 'true'
         run: |
           cd frontend
           corepack enable
@@ -95,6 +119,7 @@ jobs:
           yarn build --configuration production
 
       - name: Azure Login
+        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -104,6 +129,7 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Fetch Static Web App Deployment Token
+        if: steps.check-creds.outputs.has_creds == 'true'
         id: get-swa-token
         uses: azure/cli@v2
         with:
@@ -112,6 +138,7 @@ jobs:
             echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Deploy Frontend to Azure Static Web Apps
+        if: steps.check-creds.outputs.has_creds == 'true'
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN || steps.get-swa-token.outputs.token }}
@@ -123,23 +150,35 @@ jobs:
   deploy-api:
     name: Deploy API (Azure Functions)
     needs: deploy-infra
-    if: always() && !cancelled() && !contains(needs.*.result, 'failure') && (secrets.AZURE_CREDENTIALS != '' || secrets.AZURE_CLIENT_ID != '')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check Credentials
+        id: check-creds
+        run: |
+          if [ -n "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -n "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+            echo "has_creds=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Azure credentials not set in repository secrets."
+          fi
+
       - name: Setup Node.js
+        if: steps.check-creds.outputs.has_creds == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
       - name: Install Dependencies & Build API
+        if: steps.check-creds.outputs.has_creds == 'true'
         run: |
           corepack enable
           yarn install --immutable
 
       - name: Azure Login
+        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -149,8 +188,10 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Deploy to Azure Functions
+        if: steps.check-creds.outputs.has_creds == 'true'
         uses: Azure/functions-action@v1
         with:
           app-name: demi-api-dev
           package: '.'
+
 
