@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const compression = require('compression');
 const cors = require('cors');
 const helmet = require('helmet');
 const mongoose = require('mongoose');
@@ -33,6 +34,7 @@ app.use(httpLoggerMiddleware);
 app.use('/api', rateLimiterMiddleware);
 
 // Security & Body Parsing Middleware
+app.use(compression());
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
 app.use(express.json({ limit: '10mb' }));
@@ -43,14 +45,30 @@ app.use('/', express.static(path.join(__dirname, '../public')));
 app.use('/admin', express.static(path.join(__dirname, '../public')));
 app.use('/demo', express.static(path.join(__dirname, '../public')));
 
-// Database Connection
-mongoose.connect(config.mongoUri)
-  .then(() => {
-    logger.info('Successfully connected to Central DEMI MongoDB');
-  })
-  .catch((err) => {
-    logger.error('Error connecting to Central DEMI MongoDB:', { error: err.message, stack: err.stack });
-  });
+// Database Connection helper for serverless execution
+let isConnecting = false;
+async function ensureDbConnected() {
+  if (mongoose.connection.readyState === 1) return;
+  if (isConnecting) return;
+  isConnecting = true;
+  try {
+    await mongoose.connect(config.mongoUri, { serverSelectionTimeoutMS: 5000 });
+    logger.info('Successfully connected to Central DEMI MongoDB / Cosmos DB');
+  } catch (err) {
+    logger.error('Error connecting to Central DEMI MongoDB / Cosmos DB:', { error: err.message, stack: err.stack });
+  } finally {
+    isConnecting = false;
+  }
+}
+
+// Ensure DB is connected before processing requests
+app.use(async (req, res, next) => {
+  await ensureDbConnected();
+  next();
+});
+
+// Initial connection attempt
+ensureDbConnected();
 
 // Mount Swagger Documentation UI
 try {
@@ -60,8 +78,9 @@ try {
   logger.error('Failed to load Swagger specification:', { error: err.message, stack: err.stack });
 }
 
-// Mount Central API Routes
+// Mount Central API Routes (supports both /api prefix and direct routes)
 app.use('/api', apiRoutes);
+app.use('/', apiRoutes);
 
 // Fallback to Angular SPA index.html for deep links
 app.get(['/map', '/search', '/intake'], (req, res) => {

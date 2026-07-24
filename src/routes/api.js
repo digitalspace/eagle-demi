@@ -15,6 +15,19 @@ const logController = require('../controllers/log');
 // Logs Route (Admin Only)
 router.get('/admin/logs', authMiddleware, logController.getLogs);
 
+const dbController = require('../controllers/db');
+const configController = require('../controllers/config');
+
+// Config Route
+router.get('/config', configController.getConfig);
+
+// Database Management & Seeding Routes
+router.get('/db/stats', dbController.getDbStats);
+router.post('/db/seed', dbController.seedDatabase);
+router.post('/db/import', dbController.importCollection);
+router.post('/db/query', dbController.queryCollection);
+router.post('/sync', dbController.seedDatabase);
+
 // Search Route
 router.get('/search', passiveAuthMiddleware, searchController.search);
 

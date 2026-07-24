@@ -20,7 +20,7 @@ module.exports = (req, res, next) => {
     return next();
   }
 
-  const ip = req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
+  const ip = req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '127.0.0.1';
   const now = Date.now();
 
   let record = hits.get(ip);

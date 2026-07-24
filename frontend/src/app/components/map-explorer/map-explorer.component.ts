@@ -120,7 +120,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
       // Handle environmental regions ('regions' layer)
       if (layers.includes('regions')) {
-        if (regionsGeojson && !this.regionsLayer) {
+        if (!regionsGeojson) {
+          this.service.loadRegionalBoundaries();
+        } else if (!this.regionsLayer) {
           this.loadRegionalBoundaries();
         }
       } else {
@@ -240,24 +242,35 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
+  private viewportTimer: any = null;
+
   private updateViewportProjects() {
     if (!this.map) return;
-    const bounds = this.map.getBounds();
-    const inViewIds: (string | number)[] = [];
+    if (this.viewportTimer) clearTimeout(this.viewportTimer);
 
-    (this.service.projects() || []).forEach(p => {
-      if (p && p.centroid && Array.isArray(p.centroid) && p.centroid.length === 2) {
-        const [lng, lat] = p.centroid;
-        if (bounds.contains([lat, lng])) {
-          inViewIds.push(p.id);
+    this.viewportTimer = setTimeout(() => {
+      if (!this.map) return;
+      const bounds = this.map.getBounds();
+      const inViewIds: (string | number)[] = [];
+
+      (this.service.projects() || []).forEach(p => {
+        if (p && p.centroid && Array.isArray(p.centroid) && p.centroid.length === 2) {
+          const [lng, lat] = p.centroid;
+          if (bounds.contains([lat, lng])) {
+            inViewIds.push(p.id);
+          }
         }
-      }
-    });
+      });
 
-    this.service.mapInViewProjectIds.set(inViewIds);
+      // Only update signal if list of visible IDs actually changed
+      const prev = this.service.mapInViewProjectIds();
+      if (prev.length !== inViewIds.length || !prev.every((id, i) => id === inViewIds[i])) {
+        this.service.mapInViewProjectIds.set(inViewIds);
+      }
+    }, 150);
   }
 
-
+  private canvasRenderer = L.canvas({ padding: 0.5, tolerance: 10 });
 
   private syncMarkersToMap(filteredProjects: Project[]) {
     if (!this.map) return;
@@ -266,16 +279,30 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       this.markerClusterGroup = L.markerClusterGroup({
         showCoverageOnHover: false,
         maxClusterRadius: 40,
-        spiderfyOnMaxZoom: true
+        spiderfyOnMaxZoom: true,
+        chunkedLoading: true,
+        chunkInterval: 50
       });
       this.map.addLayer(this.markerClusterGroup);
     }
 
-    this.markerClusterGroup.clearLayers();
-    this.markersMap.clear();
+    const nextIds = new Set(filteredProjects.map(p => p.id));
+    const toRemove: (string | number)[] = [];
 
+    // Remove markers for projects no longer in active filter
+    this.markersMap.forEach((marker, id) => {
+      if (!nextIds.has(id)) {
+        this.markerClusterGroup.removeLayer(marker);
+        toRemove.push(id);
+      }
+    });
+    toRemove.forEach(id => this.markersMap.delete(id));
+
+    // Reuse existing markers and only create new markers for newly matched projects
     filteredProjects.forEach(p => {
-      if (p && p.centroid && Array.isArray(p.centroid) && p.centroid.length === 2) {
+      if (!p || !p.centroid || !Array.isArray(p.centroid) || p.centroid.length !== 2) return;
+
+      if (!this.markersMap.has(p.id)) {
         const [lng, lat] = p.centroid;
 
         const customIcon = L.divIcon({
@@ -308,6 +335,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
     if (this.regionsLayer) {
       try {
+        this.regionsLayer.clearLayers();
         this.map.removeLayer(this.regionsLayer);
       } catch (err) {
         console.warn('Error removing old regions layer:', err);
@@ -316,6 +344,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
 
     this.regionsLayer = L.geoJSON(geojson, {
+      renderer: this.canvasRenderer,
       style: (feature: any) => this.getRegionStyle(feature?.properties?.regionName),
       onEachFeature: (feature: any, layer: any) => {
         const name = feature?.properties?.regionName;
@@ -494,6 +523,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     const existing = this.boundariesLayers.get(type);
     if (existing) {
       try {
+        existing.clearLayers();
         this.map.removeLayer(existing);
       } catch (err) {
         console.warn(`Error removing old boundaries layer for ${type}:`, err);
@@ -517,6 +547,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     };
 
     const newLayer = L.geoJSON(featureCollection, {
+      renderer: this.canvasRenderer,
       smoothFactor: 1.0, // Auto-simplifies geometry at lower zoom levels for premium performance
       style: (feature: any) => {
         const currentZoom = this.map ? this.map.getZoom() : 13;

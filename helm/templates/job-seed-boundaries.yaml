@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "eagle-demi.fullname" . }}-seed-boundaries
+  labels:
+    {{- include "eagle-demi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db-seed
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "eagle-demi.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: db-seed
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: seed-boundaries
+          image: "{{ .Values.api.image.repository }}:{{ .Values.api.image.tag }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          command:
+            - node
+            - src/scripts/seed-boundaries.js
+          env:
+            - name: NODE_ENV
+              value: "production"
+            # MongoDB credentials
+            - name: MONGODB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.worker.mongoSecret.name }}
+                  key: {{ .Values.worker.mongoSecret.usernameKey }}
+            - name: MONGODB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.worker.mongoSecret.name }}
+                  key: {{ .Values.worker.mongoSecret.passwordKey }}
+            - name: MONGODB_DATABASE
+              value: {{ .Values.api.mongoDatabase | default "demi" | quote }}
+            - name: MONGODB_HOST
+              value: {{ .Values.api.mongoHost | default "mongodb" | quote }}
+            - name: MONGODB_PORT
+              value: {{ .Values.api.mongoPort | default "27017" | quote }}
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

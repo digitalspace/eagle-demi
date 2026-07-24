@@ -9,7 +9,8 @@ module.exports = (req, res, next) => {
   res.on('finish', () => {
     const diff = process.hrtime(start);
     const timeMs = ((diff[0] * 1e9 + diff[1]) / 1e6).toFixed(2);
-    const { method, originalUrl, ip } = req;
+    const { method, originalUrl } = req;
+    const ip = req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '127.0.0.1';
     const { statusCode } = res;
     const contentLength = res.get('Content-Length') || 0;
 

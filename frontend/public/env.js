@@ -5,14 +5,14 @@
   // STANDALONE DEMI DEMO LOCAL DEVELOPMENT CONFIGURATION
   // ==========================================================================
 
-  window.__env.configEndpoint = false;
+  window.__env.configEndpoint = true;
   window.__env.ENVIRONMENT = 'dev'; // local | dev | test | prod
   window.__env.BANNER_COLOUR = 'blue';
 
   // API — proxy.conf.js reads API_LOCATION to generate dev server proxy rules
   // The Angular app uses relative paths (/api) — never API_LOCATION directly
-  window.__env.API_LOCATION = 'https://eagle-demi-api-6cdc9e-dev.apps.silver.devops.gov.bc.ca';
-  window.__env.API_PATH = '/api';
+  window.__env.API_LOCATION = 'https://demi-api-dev.azurewebsites.net';
+  window.__env.API_PATH = 'https://demi-api-dev.azurewebsites.net/api';
   window.__env.USE_MOCK_DATA = false;
 
   // Keycloak Authentication Configuration

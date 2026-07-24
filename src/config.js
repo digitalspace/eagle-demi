@@ -13,6 +13,9 @@
  */
 
 function buildMongoUri() {
+  if (process.env.MONGODB_URI) {
+    return process.env.MONGODB_URI;
+  }
   const user = encodeURIComponent(process.env.MONGODB_USERNAME || '');
   const pass = encodeURIComponent(process.env.MONGODB_PASSWORD || '');
   const host = process.env.MONGODB_HOST     || 'localhost';

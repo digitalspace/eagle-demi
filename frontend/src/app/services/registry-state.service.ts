@@ -1,6 +1,7 @@
-import { Injectable, signal, computed, effect, untracked } from '@angular/core';
+import { Injectable, signal, computed, effect, untracked, inject } from '@angular/core';
 import { Project, Document } from '../models/registry.models';
 import { MOCK_PROJECTS, MOCK_DOCUMENTS } from '../mocks/mock-registry.data';
+import { ConfigService, AppConfig } from './config.service';
 
 declare const Keycloak: any;
 
@@ -26,8 +27,22 @@ const loadInitialCache = (): Record<string, any> => {
   providedIn: 'root'
 })
 export class RegistryStateService {
-  // Config paradigm states
-  config = (window as any).__env || {};
+  private configService = inject(ConfigService);
+
+  get config(): AppConfig {
+    return this.configService.config;
+  }
+  
+  getBasePath(): string {
+    let basePath = this.config.API_PATH || '/api';
+    if (this.config.API_LOCATION && (!basePath.startsWith('http://') && !basePath.startsWith('https://'))) {
+      const loc = this.config.API_LOCATION.replace(/\/$/, '');
+      const path = basePath.startsWith('/') ? basePath : '/' + basePath;
+      basePath = `${loc}${path}`;
+    }
+    return basePath;
+  }
+
   authEnabled = signal<boolean>(this.config.KEYCLOAK_ENABLED !== false);
   isAuthenticated = signal<boolean>(false);
   isUnauthorized = signal<boolean>(false);
@@ -185,28 +200,37 @@ export class RegistryStateService {
 
       // 3b. Region filter selection
       if (region !== 'all') {
-        if (selectedRegionGeom && p.centroid) {
+        const pRegion = (p.region || '').toLowerCase();
+        const fRegion = region.toLowerCase();
+        if (pRegion) {
+          if (!pRegion.includes(fRegion) && !fRegion.includes(pRegion)) return false;
+        } else if (selectedRegionGeom && p.centroid) {
           const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
           if (selectedRegionGeom.type === 'Polygon') {
             if (!this.isPointInPolygon(point, selectedRegionGeom.coordinates)) return false;
           } else if (selectedRegionGeom.type === 'MultiPolygon') {
             if (!this.isPointInMultiPolygon(point, selectedRegionGeom.coordinates)) return false;
           }
-        } else {
-          // Fallback to string attribute comparison if GeoJSON not loaded yet
-          const pRegion = (p.region || '').toLowerCase();
-          const fRegion = region.toLowerCase();
-          if (!pRegion.includes(fRegion) && !fRegion.includes(pRegion)) return false;
         }
       }
 
-      // 3c. Administrative Boundary filter selection with dynamic client-side containment checks
-      if (selectedBoundaryGeom && p.centroid) {
-        const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
-        if (selectedBoundaryGeom.type === 'Polygon') {
-          if (!this.isPointInPolygon(point, selectedBoundaryGeom.coordinates)) return false;
-        } else if (selectedBoundaryGeom.type === 'MultiPolygon') {
-          if (!this.isPointInMultiPolygon(point, selectedBoundaryGeom.coordinates)) return false;
+      // 3c. Administrative Boundary filter selection (prioritize tagged properties over ray casting)
+      if (bFilter !== 'all' && bFilter !== '' && bLayer !== 'none') {
+        const fFilter = bFilter.toLowerCase();
+        let targetProp = '';
+        if (bLayer === 'regionalDistricts') targetProp = (p.regionalDistrict || '').toLowerCase();
+        else if (bLayer === 'municipalities') targetProp = (p.municipality || '').toLowerCase();
+        else if (bLayer === 'electoralDistricts') targetProp = (p.electoralDistrict || '').toLowerCase();
+
+        if (targetProp) {
+          if (!targetProp.includes(fFilter) && !fFilter.includes(targetProp)) return false;
+        } else if (selectedBoundaryGeom && p.centroid) {
+          const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
+          if (selectedBoundaryGeom.type === 'Polygon') {
+            if (!this.isPointInPolygon(point, selectedBoundaryGeom.coordinates)) return false;
+          } else if (selectedBoundaryGeom.type === 'MultiPolygon') {
+            if (!this.isPointInMultiPolygon(point, selectedBoundaryGeom.coordinates)) return false;
+          }
         }
       }
 
@@ -375,7 +399,7 @@ export class RegistryStateService {
 
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : input.url);
-      const basePath = this.config.API_PATH || '/api';
+      const basePath = this.getBasePath();
 
       if (url.includes(basePath)) {
         console.log('[Fetch Interceptor] Targeting API:', url);
@@ -488,8 +512,10 @@ export class RegistryStateService {
     }
   }
 
-  private async loadRegionalBoundaries() {
+  async loadRegionalBoundaries() {
+    if (this.regionalBoundariesGeoJSON()) return;
     try {
+      console.log('[Registry] Lazy loading environmental regions GeoJSON...');
       const res = await fetch('/env_regional_boundaries_reprojected.geojson');
       if (!res.ok) throw new Error('Failed to load regional boundaries GeoJSON');
       this.regionalBoundariesGeoJSON.set(await res.json());
@@ -517,10 +543,7 @@ export class RegistryStateService {
 
     this.isLoadingBoundaries.set(true);
 
-    let basePath = '/api';
-    if (this.config.API_PATH) {
-      basePath = this.config.API_PATH;
-    }
+    const basePath = this.getBasePath();
 
     let apiType = '';
     if (type === 'regionalDistricts') apiType = 'Regional District';
@@ -553,50 +576,20 @@ export class RegistryStateService {
       });
       return data;
     } catch (err) {
-      console.error(`Failed to load boundary metadata for ${type}:`, err);
-      // Fallback to premium quality mock lists when offline or on network failure
-      let fallback: any[] = [];
-      if (type === 'regionalDistricts') {
-        fallback = [
-          { name: 'Capital Regional District', type: 'Regional District' },
-          { name: 'Metro Vancouver', type: 'Regional District' },
-          { name: 'Thompson-Nicola', type: 'Regional District' },
-          { name: 'Bulkley-Nechako', type: 'Regional District' },
-          { name: 'Peace River', type: 'Regional District' }
-        ];
-      } else if (type === 'municipalities') {
-        fallback = [
-          { name: 'City of Vancouver', type: 'Municipality' },
-          { name: 'City of Victoria', type: 'Municipality' },
-          { name: 'City of Kamloops', type: 'Municipality' },
-          { name: 'District of Kitimat', type: 'Municipality' },
-          { name: 'Village of Valemount', type: 'Municipality' }
-        ];
-      } else if (type === 'electoralDistricts') {
-        fallback = [
-          { name: 'Kamloops-South Thompson', type: 'Electoral District' },
-          { name: 'Skeena', type: 'Electoral District' },
-          { name: 'Victoria-Beacon Hill', type: 'Electoral District' },
-          { name: 'Vancouver-Point Grey', type: 'Electoral District' },
-          { name: 'Peace River South', type: 'Electoral District' }
-        ];
-      }
+      console.error(`[Registry loadBoundaryGeometry] Failed to load boundary metadata for ${type}:`, err);
       this.loadedBoundariesGeoJSON.update(prev => {
-        const next = { ...prev, [type]: fallback };
+        const next = { ...prev, [type]: [] };
         this.saveCache(next);
         return next;
       });
-      return fallback;
+      return [];
     } finally {
       this.isLoadingBoundaries.set(false);
     }
   }
 
   async loadBoundariesByBBox(type: string, bbox: string): Promise<any[]> {
-    let basePath = '/api';
-    if (this.config.API_PATH) {
-      basePath = this.config.API_PATH;
-    }
+    const basePath = this.getBasePath();
 
     let apiType = '';
     if (type === 'regionalDistricts') apiType = 'Regional District';
@@ -627,10 +620,7 @@ export class RegistryStateService {
 
     this.isLoadingBoundaries.set(true);
 
-    let basePath = '/api';
-    if (this.config.API_PATH) {
-      basePath = this.config.API_PATH;
-    }
+    const basePath = this.getBasePath();
 
     console.log(`[Registry loadSingleBoundaryGeometry] Lazy loading single geometry for: ${name} (${type})`);
 
@@ -738,10 +728,7 @@ export class RegistryStateService {
     }
 
     try {
-      let basePath = '/api';
-      if (this.config.API_PATH) {
-        basePath = this.config.API_PATH;
-      }
+      const basePath = this.getBasePath();
 
       console.log('[Registry] Loading real-time projects and documents from central dev database...');
 
@@ -818,7 +805,7 @@ export class RegistryStateService {
         });
         this.projects.set(mappedProjects);
       } else {
-        this.projects.set(buildMockProjects());
+        this.projects.set([]);
       }
 
       if (Array.isArray(resultsDoc) && resultsDoc.length > 0) {
@@ -853,12 +840,13 @@ export class RegistryStateService {
         });
         this.documents.set(mappedDocs);
       } else {
-        this.documents.set(this.mockDocuments);
+        this.documents.set([]);
       }
     } catch (err) {
-      console.warn('API search fetch failed. Loading premium fallback mock database:', err);
-      this.projects.set(buildMockProjects());
-      this.documents.set(this.mockDocuments);
+      console.error('[Registry loadData] API search fetch failed:', err);
+      this.projects.set([]);
+      this.documents.set([]);
+      throw err;
     }
   }
 
@@ -915,7 +903,7 @@ export class RegistryStateService {
     formData.append('project', this.intakeProjectId());
 
     try {
-      const basePath = this.config.API_PATH || '/api';
+      const basePath = this.getBasePath();
       
       // Sim upload progress
       const intervalSim = setInterval(() => {
@@ -952,7 +940,7 @@ export class RegistryStateService {
   }
 
   pollExtractionStatus(docId: string) {
-    const basePath = this.config.API_PATH || '/api';
+    const basePath = this.getBasePath();
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`${basePath}/documents/${docId}`, {
