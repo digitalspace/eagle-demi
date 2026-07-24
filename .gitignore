@@ -21,7 +21,17 @@ CLAUDE.md
 
 # Temporary files
 tmp/
+*.zip
+*.tar.gz
 
-# Built frontend static directory
+# Lock files (Yarn 4 project)
+package-lock.json
+
+# Built frontend static & distribution
 public/
+dist/
+.angular/
+
+# Deploy archives
+.deploy_archives/
 

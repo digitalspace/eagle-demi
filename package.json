@@ -13,6 +13,9 @@
     "db:seed-boundaries": "node src/scripts/seed-boundaries.js",
     "typesense:sync": "TYPESENSE_MIN_FREE_GIB=1 NODE_PATH=node_modules node -r dotenv/config src/typesense/full-sync.js",
     "diagnose": "node src/scripts/diagnose.js",
+    "deploy:azure": "bash scripts/deploy-azure.sh all",
+    "deploy:azure:api": "bash scripts/deploy-azure.sh api",
+    "deploy:azure:frontend": "bash scripts/deploy-azure.sh frontend",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "node --test test/**/*.test.js"
