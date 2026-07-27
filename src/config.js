@@ -12,29 +12,33 @@
  *   DOCLING_API_KEY      — X-Api-Key for docling-serve
  */
 
-function buildMongoUri() {
-  if (process.env.MONGODB_URI) {
-    return process.env.MONGODB_URI;
+function buildCosmosDbUri() {
+  const uri = process.env.COSMOSDB_URI || process.env.MONGODB_URI;
+  if (uri) {
+    if ((uri.includes('documents.azure.com') || uri.includes('cosmos')) && !uri.includes('retryWrites=')) {
+      const joinChar = uri.includes('?') ? '&' : '?';
+      return `${uri}${joinChar}retryWrites=false`;
+    }
+    return uri;
   }
-  const user = encodeURIComponent(process.env.MONGODB_USERNAME || '');
-  const pass = encodeURIComponent(process.env.MONGODB_PASSWORD || '');
-  const host = process.env.MONGODB_HOST     || 'localhost';
-  const port = process.env.MONGODB_PORT     || '27017';
-  const db   = process.env.MONGODB_DATABASE || 'epic';
-  const auth = process.env.MONGODB_AUTHSOURCE || 'admin';
-  const replication = process.env.MONGODB_DIRECT === 'true'
-    ? 'directConnection=true'
-    : 'replicaSet=rs0';
+  const user = encodeURIComponent(process.env.COSMOSDB_USERNAME || process.env.MONGODB_USERNAME || '');
+  const pass = encodeURIComponent(process.env.COSMOSDB_PASSWORD || process.env.MONGODB_PASSWORD || '');
+  const host = process.env.COSMOSDB_HOST || process.env.MONGODB_HOST || 'localhost';
+  const port = process.env.COSMOSDB_PORT || process.env.MONGODB_PORT || '27017';
+  const db   = process.env.COSMOSDB_DATABASE || process.env.MONGODB_DATABASE || 'epic';
 
   if (user && pass) {
-    return `mongodb://${user}:${pass}@${host}:${port}/${db}?authSource=${auth}&${replication}`;
+    return `mongodb://${user}:${pass}@${host}:${port}/${db}?retryWrites=false`;
   }
-  return `mongodb://${host}:${port}/${db}?${replication}`;
+  return `mongodb://${host}:${port}/${db}?retryWrites=false`;
 }
 
 const config = {
-  mongoUri:     buildMongoUri(),
-  mongoDb:      process.env.MONGODB_DATABASE || 'epic',
+  cosmosDbUri:        buildCosmosDbUri(),
+  cosmosDatabaseName: process.env.COSMOSDB_DATABASE || process.env.MONGODB_DATABASE || 'epic',
+  // Backward compatibility aliases
+  mongoUri:           buildCosmosDbUri(),
+  mongoDb:            process.env.COSMOSDB_DATABASE || process.env.MONGODB_DATABASE || 'epic',
 
   minioHost:    process.env.MINIO_HOST       || 'localhost',
   minioPort:    parseInt(process.env.MINIO_PORT || '9000', 10),

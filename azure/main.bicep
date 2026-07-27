@@ -49,9 +49,9 @@ module frontendWebApp './modules/frontend-web-app.bicep' = {
   }
 }
 
-// 2. Database (Azure Cosmos DB for MongoDB Serverless)
-module cosmosMongo './modules/cosmos-mongo.bicep' = {
-  name: 'deploy-cosmos-mongo'
+// 2. Database (Azure Cosmos DB Serverless)
+module cosmosDb './modules/cosmos-db.bicep' = {
+  name: 'deploy-cosmos-db'
   params: {
     location: location
     environmentName: environmentName
@@ -80,7 +80,7 @@ module apiWebApp './modules/api-web-app.bicep' = {
     minioHost: minioHost
     minioAccessKey: minioAccessKey
     minioSecretKey: minioSecretKey
-    mongodbConnectionString: cosmosMongo.outputs.connectionString
+    mongodbConnectionString: cosmosDb.outputs.connectionString
     typesenseUrl: containerApps.outputs.typesenseUrl
     typesenseApiKey: typesenseApiKey
   }

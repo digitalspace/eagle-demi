@@ -95,7 +95,15 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'WEBSITE_RUN_FROM_PACKAGE'
           value: '1'
         }
-        // MongoDB Connection
+        // Azure Cosmos DB Connection
+        {
+          name: 'COSMOSDB_URI'
+          value: mongodbConnectionString
+        }
+        {
+          name: 'COSMOSDB_DATABASE'
+          value: 'epic'
+        }
         {
           name: 'MONGODB_URI'
           value: mongodbConnectionString

@@ -1,4 +1,4 @@
-// Azure Cosmos DB (MongoDB API) Module for DEMI
+// Azure Cosmos DB Account Module for DEMI
 @description('Location for Cosmos DB Account')
 param location string = resourceGroup().location
 
@@ -8,7 +8,7 @@ param environmentName string
 @description('Default resource tags')
 param tags object
 
-var accountName = 'demi-mongo-${environmentName}-${uniqueString(resourceGroup().id)}'
+var accountName = 'demi-cosmos-${environmentName}-${uniqueString(resourceGroup().id)}'
 var databaseName = 'demi-${environmentName}'
 
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
@@ -18,7 +18,10 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
   kind: 'MongoDB'
   properties: {
     databaseAccountOfferType: 'Standard'
-    publicNetworkAccess: 'Disabled'
+    publicNetworkAccess: 'Enabled'
+    isAccessFromAzureServicesAllowed: true
+    disableKeyBasedMetadataWriteAccess: true
+    minimalTlsVersion: 'Tls12'
     apiProperties: {
       serverVersion: '7.0'
     }
@@ -37,7 +40,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
   }
 }
 
-resource mongoDatabase 'Microsoft.DocumentDB/databaseAccounts/mongodbDatabases@2023-11-15' = {
+resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/mongodbDatabases@2023-11-15' = {
   parent: cosmosAccount
   name: databaseName
   properties: {
@@ -48,4 +51,4 @@ resource mongoDatabase 'Microsoft.DocumentDB/databaseAccounts/mongodbDatabases@2
 }
 
 output connectionString string = cosmosAccount.listConnectionStrings().connectionStrings[0].connectionString
-output mongoDatabaseName string = mongoDatabase.name
+output databaseName string = cosmosDatabase.name

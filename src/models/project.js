@@ -23,6 +23,7 @@ ProjectSchema.index({ isPublished: 1, region: 1 });
 ProjectSchema.index({ isPublished: 1, regionalDistrict: 1 });
 ProjectSchema.index({ isPublished: 1, municipality: 1 });
 ProjectSchema.index({ read: 1 });
+ProjectSchema.index({ name: 'text' });
 
 module.exports = mongoose.model('Project', ProjectSchema);
 

@@ -86,18 +86,18 @@ let connectionPromise = null;
 async function ensureDbConnected() {
   if (mongoose.connection.readyState === 1) return;
   if (!connectionPromise) {
-    logger.info('Initiating connection to Central DEMI MongoDB / Cosmos DB...');
-    connectionPromise = mongoose.connect(config.mongoUri, {
+    logger.info('Initiating connection to Central DEMI Azure Cosmos DB...');
+    connectionPromise = mongoose.connect(config.cosmosDbUri, {
       serverSelectionTimeoutMS: 5000,
       connectTimeoutMS: 5000,
       family: 4,
       autoIndex: false
     }).then(conn => {
-      logger.info('Successfully connected to Central DEMI MongoDB / Cosmos DB');
+      logger.info('Successfully connected to Central DEMI Azure Cosmos DB');
       return conn;
     }).catch(err => {
       connectionPromise = null;
-      logger.error('Error connecting to Central DEMI MongoDB / Cosmos DB:', { error: err.message, stack: err.stack });
+      logger.error('Error connecting to Central DEMI Azure Cosmos DB:', { error: err.message, stack: err.stack });
       throw err;
     });
   }
