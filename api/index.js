@@ -1,35 +1,108 @@
 'use strict';
 
 const { app } = require('@azure/functions');
-const serverless = require('serverless-http');
-
-let handler = null;
-
-function getHandler() {
-  if (handler) return handler;
-  const expressApp = require('../src/app');
-  handler = serverless(expressApp, {
-    request(request, event, context) {
-      if (context) {
-        context.callbackWaitsForEmptyEventLoop = false;
-      }
-    }
-  });
-  return handler;
-}
+const { Readable } = require('stream');
+const EventEmitter = require('events');
 
 async function handleExpress(request, context) {
-  try {
-    const serverlessHandler = getHandler();
-    return await serverlessHandler(request, context);
-  } catch (err) {
-    context.error('[expressApi] Adapter Error:', err);
-    return {
-      status: 500,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ error: err.message || 'Internal Server Error', stack: err.stack })
-    };
-  }
+  return new Promise(async (resolve, reject) => {
+    try {
+      const urlObj = new URL(request.url);
+      
+      let bodyBuffer = null;
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        const arrayBuffer = await request.arrayBuffer();
+        bodyBuffer = Buffer.from(arrayBuffer);
+      }
+
+      // 1. Construct Node.js Readable stream as req
+      const req = new Readable({
+        read() {
+          if (bodyBuffer) {
+            this.push(bodyBuffer);
+            bodyBuffer = null;
+          } else {
+            this.push(null);
+          }
+        }
+      });
+
+      const headers = {};
+      for (const [key, value] of request.headers.entries()) {
+        headers[key.toLowerCase()] = value;
+      }
+
+      Object.assign(req, {
+        method: request.method,
+        url: urlObj.pathname + urlObj.search,
+        originalUrl: urlObj.pathname + urlObj.search,
+        headers: headers,
+        query: Object.fromEntries(urlObj.searchParams.entries()),
+        socket: { remoteAddress: headers['x-forwarded-for'] || '127.0.0.1' },
+        connection: { remoteAddress: headers['x-forwarded-for'] || '127.0.0.1' }
+      });
+
+      // 2. Construct ServerResponse event emitter as res
+      const res = new EventEmitter();
+      res.statusCode = 200;
+      res.headers = {};
+      res.headersSent = false;
+
+      const chunks = [];
+
+      res.setHeader = (name, value) => {
+        res.headers[name.toLowerCase()] = value;
+        return res;
+      };
+
+      res.getHeader = (name) => res.headers[name.toLowerCase()];
+
+      res.removeHeader = (name) => {
+        delete res.headers[name.toLowerCase()];
+      };
+
+      res.writeHead = (statusCode, headersInput) => {
+        res.statusCode = statusCode;
+        if (headersInput) {
+          for (const [k, v] of Object.entries(headersInput)) {
+            res.setHeader(k, v);
+          }
+        }
+        res.headersSent = true;
+        return res;
+      };
+
+      res.write = (chunk) => {
+        if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        return true;
+      };
+
+      res.end = (chunk) => {
+        if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        res.headersSent = true;
+        const responseBuffer = Buffer.concat(chunks);
+        resolve({
+          status: res.statusCode,
+          headers: res.headers,
+          body: responseBuffer
+        });
+      };
+
+      const expressApp = require('../src/app');
+      expressApp(req, res);
+    } catch (err) {
+      if (context && context.error) {
+        context.error('[expressApi] Adapter Error:', err);
+      } else {
+        console.error('[expressApi] Adapter Error:', err);
+      }
+      resolve({
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ error: err.message || 'Internal Server Error' })
+      });
+    }
+  });
 }
 
 app.http('expressApi', {
@@ -45,5 +118,3 @@ app.http('expressApiRoot', {
   route: '',
   handler: handleExpress
 });
-
-
