@@ -59,11 +59,14 @@ Deploy directly from terminal using the Azure CLI:
 
 ## Azure Serverless Architecture
 
-- **Runtime**: Azure Functions v4 (Node.js 22) wrapping Express application routes.
-- **Database**: Azure Cosmos DB for MongoDB (Serverless mode).
+- **Runtime**: Azure App Service / Web App (Node.js 22 Express REST API).
+- **Database**: Azure Cosmos DB (MongoDB API v7.0 in Serverless mode).
+  - Configured with `COSMOSDB_URI` and `COSMOSDB_DATABASE`.
+  - Configured with `publicNetworkAccess: 'Disabled'` to satisfy BC Gov management group policy (`Deny-PublicPaaSEndpoints`).
+  - Auto-enforces `retryWrites=false` and TLS 1.2.
 - **Search Engine**: Azure Container Apps hosting Typesense with embedded Change Stream sync.
 - **Auth**: Dual-layered validation in `src/middleware/auth.js`. Supports `X-Api-Key` for system-to-system integration and Keycloak `Bearer` tokens.
-- **Geospatial Order**: MongoDB GeoJSON requires `[longitude, latitude]`. Downstream sync engines swap coordinates to `[latitude, longitude]` for search indexes.
+- **Geospatial Order**: GeoJSON requires `[longitude, latitude]`. Downstream sync engines swap coordinates to `[latitude, longitude]` for search indexes.
 
 ---
 
