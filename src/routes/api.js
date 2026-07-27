@@ -24,6 +24,7 @@ router.get('/config', configController.getConfig);
 // Database Management & Seeding Routes
 router.get('/db/stats', dbController.getDbStats);
 router.post('/db/seed', dbController.seedDatabase);
+router.post('/db/seed-boundaries', dbController.seedBoundaries);
 router.post('/db/import', dbController.importCollection);
 router.post('/db/query', dbController.queryCollection);
 router.post('/sync', dbController.seedDatabase);

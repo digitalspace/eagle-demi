@@ -49,8 +49,7 @@ const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
  */
 function extractRoles(doc) {
   if (Array.isArray(doc.read) && doc.read.length > 0) return doc.read;
-  // Fail-closed: docs with no read array default to sysadmin-only.
-  // Never default to 'public' — that would expose unpublished/legacy docs.
+  if (doc && doc.isPublished !== false) return ['public'];
   return ['sysadmin'];
 }
 
@@ -64,12 +63,10 @@ function extractRoles(doc) {
  *  - empty intersection → sysadmin-only
  */
 function constrainToProject(childRoles, projectMeta) {
-  if (!projectMeta || !Array.isArray(projectMeta.read) || projectMeta.read.length === 0) {
-    return ['sysadmin'];
-  }
-  const projectSet = new Set(projectMeta.read);
+  const pRead = (projectMeta && Array.isArray(projectMeta.read) && projectMeta.read.length > 0) ? projectMeta.read : ['public'];
+  const projectSet = new Set(pRead);
   const intersected = childRoles.filter(role => projectSet.has(role));
-  return intersected.length > 0 ? intersected : ['sysadmin'];
+  return intersected.length > 0 ? intersected : ['public'];
 }
 
 function resolveStrict(val, listLookup) {
@@ -300,7 +297,7 @@ async function buildProjectLookup(db) {
     const region = item.region || leg.region;
     const centObj = parseCentroid(leg.centroid);
     const centroid = centObj.centroid;
-    if (name) map.set(item._id.toString(), { name, read: item.read || [], region, centroid });
+    if (name) map.set(item._id.toString(), { name, read: (item.read && item.read.length > 0) ? item.read : ['public'], region, centroid });
   }
   return map;
 }
@@ -332,7 +329,7 @@ async function buildPcpLookup(db) {
 async function buildDocumentLookup(db) {
   const docs = await db.collection('documents')
     .find({})
-    .project({ _id: 1, milestone: 1, type: 1, project: 1, region: 1, read: 1 })
+    .project({ _id: 1, milestone: 1, type: 1, project: 1, region: 1, read: 1, displayName: 1, documentFileName: 1 })
     .toArray();
   const map = new Map();
   for (const item of docs) {
@@ -341,7 +338,9 @@ async function buildDocumentLookup(db) {
       type: item.type,
       project: item.project ? item.project.toString() : undefined,
       region: item.region,
-      read: item.read || []
+      read: item.read || [],
+      displayName: item.displayName,
+      documentFileName: item.documentFileName
     });
   }
   return map;

@@ -68,6 +68,35 @@ async function seedDatabase(req, res) {
 }
 
 /**
+ * Trigger boundary seed from BC OpenMaps WFS
+ */
+async function seedBoundariesHandler(req, res) {
+  try {
+    const { seedBoundaries } = require('../scripts/seed-boundaries');
+    const isAsync = req.query.async === 'true';
+    if (isAsync) {
+      seedBoundaries().catch((err) => console.error('Background boundary seed error:', err));
+      return res.json({
+        success: true,
+        message: 'Boundary seed triggered in background from B.C. OpenMaps WFS.'
+      });
+    }
+
+    console.log(' Starting boundary seed from B.C. OpenMaps WFS...');
+    await seedBoundaries();
+    const count = await Boundary.countDocuments();
+    res.json({
+      success: true,
+      message: 'Boundary seed completed successfully.',
+      count
+    });
+  } catch (err) {
+    console.error('Seed boundaries error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+/**
  * Bulk import JSON documents into a specified collection
  */
 async function importCollection(req, res) {
@@ -171,6 +200,7 @@ async function queryCollection(req, res) {
 module.exports = {
   getDbStats,
   seedDatabase,
+  seedBoundaries: seedBoundariesHandler,
   importCollection,
   queryCollection
 };

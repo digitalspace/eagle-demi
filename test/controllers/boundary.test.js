@@ -21,7 +21,7 @@ test('Boundary Controller Tests', async (t) => {
 
     t.mock.method(Boundary, 'find', (query, projection) => {
       assert.deepStrictEqual(query, {});
-      assert.deepStrictEqual(projection, { geometry: 0 });
+      assert.deepStrictEqual(projection, {});
       return {
         lean: () => Promise.resolve(mockBoundaries)
       };
@@ -49,7 +49,7 @@ test('Boundary Controller Tests', async (t) => {
 
     t.mock.method(Boundary, 'find', (query, projection) => {
       assert.deepStrictEqual(query, { type: 'Regional District' });
-      assert.deepStrictEqual(projection, { simplifiedGeometry: 0 });
+      assert.deepStrictEqual(projection, {});
       return {
         lean: () => Promise.resolve(mockBoundaries)
       };
@@ -92,7 +92,7 @@ test('Boundary Controller Tests', async (t) => {
           }
         }
       });
-      assert.deepStrictEqual(projection, { geometry: 0 });
+      assert.deepStrictEqual(projection, {});
       return {
         lean: () => Promise.resolve(mockBoundaries)
       };

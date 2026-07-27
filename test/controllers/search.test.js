@@ -163,6 +163,7 @@ test('Search Controller Tests', async (t) => {
         limit: (limitVal) => {
           assert.strictEqual(limitVal, 10);
           return {
+            populate: async () => mockDocuments,
             sort: async (sortObj) => {
               assert.deepStrictEqual(sortObj, { createdAt: -1 });
               return mockDocuments;

@@ -29,17 +29,18 @@ exports.getBoundaries = async (req, res) => {
 
     // Optimize database projection based on requested geometry mode
     let projection = {};
-    if (geometry === 'true') {
-      projection = { simplifiedGeometry: 0 };
-    } else if (geometry === 'false') {
+    if (geometry === 'false') {
       projection = { geometry: 0, simplifiedGeometry: 0 };
-    } else {
-      projection = { geometry: 0 };
     }
 
     let boundaries = await Boundary.find(query, projection).lean();
 
-    if (geometry !== 'true' && geometry !== 'false') {
+    if (geometry === 'true') {
+      boundaries = boundaries.map(b => {
+        delete b.simplifiedGeometry;
+        return b;
+      });
+    } else if (geometry !== 'false') {
       boundaries = boundaries.map(b => {
         if (!b.simplifiedGeometry && b.geometry) {
           b.simplifiedGeometry = b.geometry;

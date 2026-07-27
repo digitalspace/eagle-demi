@@ -3,7 +3,8 @@
 # =============================================================================
 # Triggered on push to main branch (when azure or application files change) or
 # workflow_dispatch. Provisions Bicep IaC with DEMI tags, deploys Angular frontend
-# to Azure Web App, and deploys Node.js API to Azure Functions.
+# to Azure Web App (demi-frontend-dev), and deploys Node.js Express API to Azure
+# Web App (demi-api-dev).
 # =============================================================================
 
 name: Deploy DEMI to Azure Dev
@@ -17,7 +18,6 @@ on:
       - 'api/**'
       - 'frontend/**'
       - 'azure/**'
-      - 'host.json'
       - 'package.json'
       - 'yarn.lock'
       - '.github/workflows/azure-deploy-dev.yaml'
@@ -87,7 +87,7 @@ jobs:
 
 
   deploy-frontend:
-    name: Build & Deploy Frontend (Azure Static Web App)
+    name: Build & Deploy Frontend (Azure Web App)
     needs: deploy-infra
     runs-on: ubuntu-latest
     steps:
@@ -117,6 +117,11 @@ jobs:
           corepack enable
           yarn install --immutable
           yarn build --configuration production
+          
+          # Zip dist output for Web App deployment
+          DIST_DIR=$(test -d dist/browser && echo "dist/browser" || echo "dist")
+          cd $DIST_DIR
+          zip -r /tmp/frontend.zip .
 
       - name: Azure Login
         if: steps.check-creds.outputs.has_creds == 'true'
@@ -128,27 +133,16 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
           allow-no-subscriptions: true
 
-      - name: Fetch Static Web App Deployment Token
+      - name: Deploy Frontend Zip to Azure Web App
         if: steps.check-creds.outputs.has_creds == 'true'
-        id: get-swa-token
         uses: azure/cli@v2
         with:
           inlineScript: |
-            TOKEN=$(az staticwebapp secrets list --name demi-frontend-dev --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --query "properties.apiKey" -o tsv 2>/dev/null || echo "")
-            echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy Frontend to Azure Static Web Apps
-        if: steps.check-creds.outputs.has_creds == 'true'
-        uses: Azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN || steps.get-swa-token.outputs.token }}
-          app_location: 'frontend'
-          output_location: 'dist'
-          action: 'upload'
+            az webapp deploy -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-frontend-dev --src-path /tmp/frontend.zip --type zip
 
 
   deploy-api:
-    name: Deploy API (Azure Functions)
+    name: Build & Deploy API (Azure Web App)
     needs: deploy-infra
     runs-on: ubuntu-latest
     steps:
@@ -171,11 +165,22 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install Dependencies & Build API
+      - name: Install Dependencies & Package API
         if: steps.check-creds.outputs.has_creds == 'true'
         run: |
           corepack enable
           yarn install --immutable
+          
+          python3 -c "
+          import zipfile, os
+          with zipfile.ZipFile('/tmp/api.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              for root, dirs, files in os.walk('.'):
+                  dirs[:] = [d for d in dirs if d not in ['frontend', '.git', 'dist', '.angular']]
+                  for file in files:
+                      if file.endswith('.pyc') or file.endswith('.log'): continue
+                      p = os.path.join(root, file)
+                      z.write(p, os.path.relpath(p, '.'))
+          "
 
       - name: Azure Login
         if: steps.check-creds.outputs.has_creds == 'true'
@@ -187,11 +192,9 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
           allow-no-subscriptions: true
 
-      - name: Deploy to Azure Functions
+      - name: Deploy API Zip to Azure Web App
         if: steps.check-creds.outputs.has_creds == 'true'
-        uses: Azure/functions-action@v1
+        uses: azure/cli@v2
         with:
-          app-name: demi-api-dev
-          package: '.'
-
-
+          inlineScript: |
+            az webapp deploy -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-api-dev --src-path /tmp/api.zip --type zip

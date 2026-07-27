@@ -240,7 +240,7 @@ export class RegistryStateService {
 
   // Dynamic Filtering Computations (Signals are automatically tracked!)
   filteredProjects = computed(() => {
-    const query = this.debouncedSearchQuery().toLowerCase();
+    const query = this.debouncedSearchQuery().toLowerCase().trim();
 
     // For plain deep search view, return empty array until user starts typing
     if (this.activePage() === 'search' && !query) {
@@ -252,11 +252,17 @@ export class RegistryStateService {
 
     if (!query) return projs;
 
+    if (this.searchQuery()) {
+      // Server search API already filtered projects matching metadata and document content
+      return projs;
+    }
+
     console.log('[Registry filteredProjects] Starting query filter of projects count:', projs.length, { query });
 
     const result = projs.filter(p => {
-      // Concatenate search text fields to bypass JSON stringify and speed up search by 1000x
-      const textToSearch = `${p.name || ''} ${p.sector || ''} ${p.status || ''} ${p.region || ''} ${p.gatingState || ''}`;
+      const propName = typeof p.proponent === 'string' ? p.proponent : ((p.proponent as any)?.name || '');
+      const trackDesc = p.rawMetadata?.trackAttributes?.description || '';
+      const textToSearch = `${p.name || ''} ${p.sector || ''} ${p.status || ''} ${p.region || ''} ${p.gatingState || ''} ${p.description || ''} ${trackDesc} ${propName}`;
       return this.fuzzyMatch(textToSearch, query);
     });
 
@@ -265,7 +271,7 @@ export class RegistryStateService {
   });
 
   filteredDocuments = computed(() => {
-    const query = this.debouncedSearchQuery().toLowerCase();
+    const query = this.debouncedSearchQuery().toLowerCase().trim();
     const gating = this.gatingFilter();
     const role = this.currentRole();
     
@@ -291,9 +297,9 @@ export class RegistryStateService {
       // 2. Gating filter selection
       if (gating !== 'all' && d.gatingState !== gating) return false;
 
-      // 3. Concatenate search text fields to bypass JSON stringify and speed up search by 1000x
+      // 3. Concatenate search text fields to bypass JSON stringify and speed up search
       if (query) {
-        const textToSearch = `${d.displayName || d.documentFileName || d.documentType || d.projectName || ''} ${d.orcsCode || d.gatingState || ''} ${d.textSnippet || ''}`;
+        const textToSearch = `${d.displayName || ''} ${d.documentFileName || ''} ${d.documentType || ''} ${d.projectName || ''} ${d.orcsCode || ''} ${d.gatingState || ''} ${d.textSnippet || ''} ${(d as any).description || ''}`;
         if (!this.fuzzyMatch(textToSearch, query)) return false;
       }
 
@@ -460,7 +466,6 @@ export class RegistryStateService {
       const loadMode = previouslyLoggedIn ? 'login-required' : 'check-sso';
       this.keycloak.init({
         onLoad: loadMode,
-        silentCheckSsoRedirectUri: window.location.origin + '/silent-check-sso.html',
         checkLoginIframe: false,
         pkceMethod: 'S256',
         scope: 'openid roles'

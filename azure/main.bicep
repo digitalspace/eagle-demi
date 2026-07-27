@@ -39,16 +39,15 @@ var defaultTags = {
   CostCenter: 'c4b0a8'
 }
 
-// 1. Angular Frontend (Azure Static Web Apps - Free Tier CDN)
-module staticWebApp './modules/static-web-app.bicep' = {
-  name: 'deploy-static-web-app'
+// 1. Angular Frontend (Azure App Service Linux Web App)
+module frontendWebApp './modules/frontend-web-app.bicep' = {
+  name: 'deploy-frontend-web-app'
   params: {
-    location: 'centralus'
+    location: location
     environmentName: environmentName
     tags: defaultTags
   }
 }
-
 
 // 2. Database (Azure Cosmos DB for MongoDB Serverless)
 module cosmosMongo './modules/cosmos-mongo.bicep' = {
@@ -71,9 +70,9 @@ module containerApps './modules/container-apps.bicep' = {
   }
 }
 
-// 4. REST API (Azure Functions Node.js)
-module functionApp './modules/function-app.bicep' = {
-  name: 'deploy-function-app'
+// 4. REST API (Azure App Service Linux Web App)
+module apiWebApp './modules/api-web-app.bicep' = {
+  name: 'deploy-api-web-app'
   params: {
     location: location
     environmentName: environmentName
@@ -98,6 +97,6 @@ module costBudget './modules/cost-budget.bicep' = {
 }
 
 // Outputs
-output staticWebAppDefaultHostName string = staticWebApp.outputs.staticWebAppDefaultHostName
-output functionAppHostName string = functionApp.outputs.functionAppHostName
+output frontendWebAppHostName string = frontendWebApp.outputs.frontendWebAppHostName
+output apiWebAppHostName string = apiWebApp.outputs.apiWebAppHostName
 output typesenseUrl string = containerApps.outputs.typesenseUrl

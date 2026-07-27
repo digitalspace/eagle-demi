@@ -1,38 +1,36 @@
-'use strict';
-
-require('dotenv').config();
-const mongoose = require('mongoose');
-const config = require('../config');
+const { logger } = require('../utils/logger');
 const Boundary = require('../models/boundary');
 
 const LAYERS = [
   {
     type: 'Regional District',
-    url: 'https://openmaps.gov.bc.ca/geo/pub/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=pub:WHSE_LEGAL_ADMIN_BOUNDARIES.ABMS_REGIONAL_DISTRICTS_SP&outputFormat=application/json&srsName=EPSG:4326',
+    url: 'https://openmaps.gov.bc.ca/geo/pub/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=pub:WHSE_LEGAL_ADMIN_BOUNDARIES.ABMS_REGIONAL_DISTRICTS_SP&outputFormat=application/json&srsName=EPSG:4326&maxFeatures=10000',
     getName: (f) => f.properties.ADMIN_AREA_NAME || f.properties.REGIONAL_DISTRICT_NAME || f.properties.REG_DIST_NAME || '',
     getCode: (f) => f.properties.LGL_ADMIN_AREA_ID || f.properties.REGIONAL_DISTRICT_NUM || f.properties.REG_DIST_ID || ''
   },
   {
     type: 'Municipality',
-    url: 'https://openmaps.gov.bc.ca/geo/pub/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=pub:WHSE_LEGAL_ADMIN_BOUNDARIES.ABMS_MUNICIPALITIES_SP&outputFormat=application/json&srsName=EPSG:4326',
+    url: 'https://openmaps.gov.bc.ca/geo/pub/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=pub:WHSE_LEGAL_ADMIN_BOUNDARIES.ABMS_MUNICIPALITIES_SP&outputFormat=application/json&srsName=EPSG:4326&maxFeatures=10000',
     getName: (f) => f.properties.ADMIN_AREA_NAME || f.properties.MUNICIPALITY_NAME || f.properties.MUN_NAME || '',
     getCode: (f) => f.properties.LGL_ADMIN_AREA_ID || f.properties.MUNICIPALITY_ID || f.properties.MUN_ID || ''
   },
   {
     type: 'Electoral District',
-    url: 'https://openmaps.gov.bc.ca/geo/pub/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=pub:WHSE_ADMIN_BOUNDARIES.EBC_PROV_ELECTORAL_DIST_SVW&outputFormat=application/json&srsName=EPSG:4326',
+    url: 'https://openmaps.gov.bc.ca/geo/pub/wfs?service=WFS&version=1.1.0&request=GetFeature&typeName=pub:WHSE_ADMIN_BOUNDARIES.EBC_PROV_ELECTORAL_DIST_SVW&outputFormat=application/json&srsName=EPSG:4326&maxFeatures=10000',
     getName: (f) => f.properties.ED_NAME || f.properties.ELECTORAL_DISTRICT_NAME || '',
     getCode: (f) => f.properties.ELECTORAL_DISTRICT_ID || f.properties.ED_CODE || ''
   }
 ];
 
-async function run() {
-  console.log('Connecting to database...');
-  await mongoose.connect(config.mongoUri);
-  console.log('Connected.');
+async function seedBoundaries() {
+  const log = (msg) => (logger ? logger.info(msg) : console.log(msg));
+  const logErr = (msg, err) => (logger ? logger.error(msg, { error: err?.message || err }) : console.error(msg, err));
+
+  log('=== Starting B.C. OpenMaps WFS Boundary Seed ===');
+  await Boundary.collection.dropIndex('type_1_name_1').catch(() => {});
 
   for (const layer of LAYERS) {
-    console.log(`\nFetching ${layer.type} features from B.C. OpenMaps WFS API...`);
+    log(`Fetching ${layer.type} features from B.C. OpenMaps WFS API...`);
     try {
       const response = await fetch(layer.url);
       if (!response.ok) {
@@ -41,85 +39,108 @@ async function run() {
       const data = await response.json();
       
       if (!data.features || data.features.length === 0) {
-        console.warn(`No features found for ${layer.type}`);
+        log(`No features found for ${layer.type}`);
         continue;
       }
 
-      console.log(`Fetched ${data.features.length} features. Ingesting into database...`);
+      log(`Fetched ${data.features.length} features for ${layer.type}. Processing...`);
 
       const docs = data.features.map(f => {
-        // Handle invalid geometries or nulls gracefully
         if (!f.geometry || !f.geometry.coordinates) return null;
         return {
           type: layer.type,
           name: layer.getName(f),
           code: String(layer.getCode(f)),
           geometry: f.geometry,
-          simplifiedGeometry: simplifyGeometry(f.geometry, 0.001) // 0.001 degrees tolerance (~111 meters)
+          simplifiedGeometry: simplifyGeometry(f.geometry, 0.001)
         };
       }).filter(Boolean);
 
-      console.log(`Clearing existing ${layer.type} records...`);
+      log(`Clearing existing ${layer.type} records...`);
       await Boundary.deleteMany({ type: layer.type });
 
-      console.log(`Inserting ${docs.length} valid records...`);
-      await Boundary.insertMany(docs);
-      console.log(`✓ successfully seeded ${docs.length} ${layer.type} records!`);
-
-    } catch (err) {
-      console.error(`Error processing ${layer.type}:`, err.message);
-    }
-  }
-
-  console.log('\nRetroactively tagging existing projects with administrative boundaries...');
-  try {
-    const Project = require('../models/project');
-    const projects = await Project.find({ 'centroid.coordinates': { $exists: true, $ne: [] } });
-    console.log(`Found ${projects.length} projects with centroids to process.`);
-    
-    let updatedCount = 0;
-    for (const project of projects) {
-      const intersectingBoundaries = await Boundary.find({
-        geometry: {
-          $geoIntersects: {
-            $geometry: {
-              type: 'Point',
-              coordinates: project.centroid.coordinates
+      log(`Inserting ${docs.length} valid records for ${layer.type} in chunks...`);
+      let insertedCount = 0;
+      for (let i = 0; i < docs.length; i += 10) {
+        const chunk = docs.slice(i, i + 10);
+        try {
+          await Boundary.insertMany(chunk, { ordered: false });
+          insertedCount += chunk.length;
+        } catch (bErr) {
+          logErr(`Chunk insert warning for ${layer.type} at offset ${i}:`, bErr.message);
+          // Fallback to individual inserts
+          for (const doc of chunk) {
+            try {
+              await Boundary.updateOne(
+                { type: doc.type, name: doc.name },
+                { $set: doc },
+                { upsert: true }
+              );
+              insertedCount++;
+            } catch (iErr) {
+              logErr(`Individual insert error for ${layer.type} ${doc.name}:`, iErr.message);
             }
           }
         }
-      });
-      
-      const regionalDistrict = intersectingBoundaries.find(b => b.type === 'Regional District')?.name || '';
-      const municipality = intersectingBoundaries.find(b => b.type === 'Municipality')?.name || '';
-      const electoralDistrict = intersectingBoundaries.find(b => b.type === 'Electoral District')?.name || '';
-      
-      let modified = false;
-      if (project.regionalDistrict !== regionalDistrict) {
-        project.regionalDistrict = regionalDistrict;
-        modified = true;
       }
-      if (project.municipality !== municipality) {
-        project.municipality = municipality;
-        modified = true;
-      }
-      if (project.electoralDistrict !== electoralDistrict) {
-        project.electoralDistrict = electoralDistrict;
-        modified = true;
-      }
-      
-      if (modified) {
-        await project.save();
-        updatedCount++;
-      }
+      log(`Successfully inserted ${insertedCount} ${layer.type} records!`);
+
+    } catch (err) {
+      logErr(`Error processing ${layer.type}:`, err);
     }
-    console.log(`✓ Retroactively updated ${updatedCount} projects with spatial boundaries.`);
-  } catch (err) {
-    console.error('Error during retroactive project tagging:', err);
   }
 
-  await mongoose.disconnect();
-  console.log('\nFinished all boundary migrations.');
+  log('Retroactively tagging existing projects with administrative boundaries...');
+  try {
+    await Boundary.createIndexes().catch(e => logErr('Index creation warning:', e));
+    const Project = require('../models/project');
+    const projects = await Project.find({ 'centroid.coordinates': { $exists: true, $ne: [] } });
+    log(`Found ${projects.length} projects with centroids to process.`);
+    
+    let updatedCount = 0;
+    for (const project of projects) {
+      try {
+        const intersectingBoundaries = await Boundary.find({
+          geometry: {
+            $geoIntersects: {
+              $geometry: {
+                type: 'Point',
+                coordinates: project.centroid.coordinates
+              }
+            }
+          }
+        });
+        
+        const regionalDistrict = intersectingBoundaries.find(b => b.type === 'Regional District')?.name || '';
+        const municipality = intersectingBoundaries.find(b => b.type === 'Municipality')?.name || '';
+        const electoralDistrict = intersectingBoundaries.find(b => b.type === 'Electoral District')?.name || '';
+        
+        let modified = false;
+        if (project.regionalDistrict !== regionalDistrict) {
+          project.regionalDistrict = regionalDistrict;
+          modified = true;
+        }
+        if (project.municipality !== municipality) {
+          project.municipality = municipality;
+          modified = true;
+        }
+        if (project.electoralDistrict !== electoralDistrict) {
+          project.electoralDistrict = electoralDistrict;
+          modified = true;
+        }
+        
+        if (modified) {
+          await project.save();
+          updatedCount++;
+        }
+      } catch (pErr) {
+        logErr(`Failed to intersect project ${project._id}:`, pErr.message);
+      }
+    }
+    log(`Finished tagging ${updatedCount} projects with boundaries.`);
+  } catch (err) {
+    logErr('Error tagging projects with boundaries:', err);
+  }
 }
 
 /**
@@ -210,7 +231,18 @@ function simplifyGeometry(geometry, tolerance = 0.001) {
   return geometry;
 }
 
-run().catch(err => {
-  console.error('Migration failed:', err);
-  process.exit(1);
-});
+if (require.main === module) {
+  require('dotenv').config();
+  const mongoose = require('mongoose');
+  const config = require('../config');
+  mongoose.connect(config.mongoUri)
+    .then(() => seedBoundaries())
+    .then(() => mongoose.disconnect())
+    .then(() => process.exit(0))
+    .catch(err => {
+      console.error('Boundary seed failed:', err);
+      process.exit(1);
+    });
+}
+
+module.exports = { seedBoundaries };

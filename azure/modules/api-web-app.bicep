@@ -1,5 +1,5 @@
-// Azure Functions Module for DEMI Node.js REST API
-@description('Location for Azure Function App resources')
+// Azure App Service Module for DEMI Node.js REST API
+@description('Location for Azure Web App resources')
 param location string = resourceGroup().location
 
 @description('Environment name (e.g. dev, test, prod)')
@@ -30,12 +30,12 @@ param typesenseUrl string
 @secure()
 param typesenseApiKey string
 
-var functionAppName = 'demi-api-${environmentName}'
+var apiAppName = 'demi-api-${environmentName}'
 var appServicePlanName = 'demi-plan-${environmentName}'
 var storageAccountName = 'demistg${environmentName}${uniqueString(resourceGroup().id)}'
 
-// Storage Account required by Azure Functions runtime
-resource functionStorage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+// Storage Account for API logs and temporary persistence
+resource apiStorage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: storageAccountName
   location: location
   tags: tags
@@ -50,7 +50,7 @@ resource functionStorage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   }
 }
 
-// Consumption App Service Plan ($0 when idle)
+// App Service Plan (Basic B1 Linux)
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location
@@ -64,37 +64,34 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   }
 }
 
-// Azure Function App (Node.js 20)
-resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
-  name: functionAppName
+// Azure Web App (Node.js 22 Express API)
+resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
+  name: apiAppName
   location: location
   tags: tags
-  kind: 'functionapp,linux'
+  kind: 'app,linux'
   properties: {
     serverFarmId: appServicePlan.id
     siteConfig: {
-      linuxFxVersion: 'NODE|20'
+      linuxFxVersion: 'NODE|22'
+      appCommandLine: 'node src/index.js'
       appSettings: [
         {
           name: 'AzureWebJobsStorage'
-          value: 'DefaultEndpointsProtocol=https;AccountName=${functionStorage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${functionStorage.listKeys().keys[0].value}'
-        }
-        {
-          name: 'FUNCTIONS_EXTENSION_VERSION'
-          value: '~4'
-        }
-        {
-          name: 'FUNCTIONS_WORKER_RUNTIME'
-          value: 'node'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${apiStorage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${apiStorage.listKeys().keys[0].value}'
         }
         {
           name: 'WEBSITE_NODE_DEFAULT_VERSION'
-          value: '~20'
+          value: '~22'
         }
         // MongoDB Connection
         {
           name: 'MONGODB_URI'
           value: mongodbConnectionString
+        }
+        {
+          name: 'MONGODB_DATABASE'
+          value: 'epic'
         }
         // OpenShift MinIO Connection
         {
@@ -118,10 +115,20 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'TYPESENSE_API_KEY'
           value: typesenseApiKey
         }
+        // Build & Deployment Configuration
+        {
+          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
+          value: 'false'
+        }
+        {
+          name: 'WEBSITE_HTTPLOGGING_RETENTION_DAYS'
+          value: '3'
+        }
       ]
       cors: {
         allowedOrigins: [
           'https://portal.azure.com'
+          'https://demi-frontend-dev.azurewebsites.net'
           '*'
         ]
       }
@@ -129,5 +136,5 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
-output functionAppName string = functionApp.name
-output functionAppHostName string = functionApp.properties.defaultHostName
+output apiWebAppName string = apiWebApp.name
+output apiWebAppHostName string = apiWebApp.properties.defaultHostName

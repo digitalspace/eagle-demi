@@ -1,5 +1,14 @@
 'use strict';
 
+const crypto = require('crypto');
+if (!globalThis.crypto || !globalThis.crypto.getRandomValues) {
+  try {
+    globalThis.crypto = crypto.webcrypto || crypto;
+  } catch (e) {}
+}
+
+
+
 /**
  * Full sync: MongoDB → Typesense (zero-downtime using collection aliases).
  *
@@ -143,8 +152,29 @@ async function syncSchema(typesense, mongoDB, listLookup, projectLookup, pcpLook
 
   if (schemaName === 'Project') {
     collectionName = 'projects';
+    const count = await mongoDB.collection('projects').countDocuments();
+    if (count === 0) {
+      collectionName = 'epic';
+      query._schemaName = 'Project';
+    }
   } else if (schemaName === 'Document') {
     collectionName = 'documents';
+    const count = await mongoDB.collection('documents').countDocuments();
+    if (count === 0) {
+      collectionName = 'epic';
+      query._schemaName = 'Document';
+    }
+  } else if (schemaName === 'DocumentChunk') {
+    collectionName = 'document_chunks';
+    let count = await mongoDB.collection('document_chunks').countDocuments();
+    if (count === 0) {
+      count = await mongoDB.collection('documentchunks').countDocuments();
+      if (count > 0) collectionName = 'documentchunks';
+      else {
+        collectionName = 'epic';
+        query._schemaName = 'DocumentChunk';
+      }
+    }
   } else {
     query._schemaName = schemaName;
   }
@@ -246,8 +276,25 @@ async function main() {
     }
 
     await mongo.connect();
-    const db = mongo.db(process.env.MONGODB_DATABASE || 'epic');
-    console.log('Connected to MongoDB');
+    let dbName = process.env.MONGODB_DATABASE || 'epic';
+    let db = mongo.db(dbName);
+    
+    // Check if target database actually contains data; fallback to 'test' if empty
+    let projCount = await db.collection('projects').countDocuments().catch(() => 0);
+    if (projCount === 0) {
+      projCount = await db.collection('epic').countDocuments({ _schemaName: 'Project' }).catch(() => 0);
+    }
+    if (projCount === 0 && dbName !== 'test') {
+      console.log(`0 projects in database '${dbName}', checking 'test' DB...`);
+      const testDb = mongo.db('test');
+      const testProjCount = await testDb.collection('projects').countDocuments().catch(() => 0);
+      if (testProjCount > 0) {
+        dbName = 'test';
+        db = testDb;
+      }
+    }
+
+    console.log(`Connected to MongoDB database: ${dbName}`);
 
     const listLookup = await buildListLookup(db);
     console.log(`List lookup loaded: ${listLookup.size} entries`);

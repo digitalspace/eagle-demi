@@ -16,7 +16,7 @@ const BoundarySchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-BoundarySchema.index({ type: 1, name: 1 }, { unique: true });
+BoundarySchema.index({ type: 1, name: 1 });
 BoundarySchema.index({ type: 1, simplifiedGeometry: '2dsphere' });
 BoundarySchema.index({ geometry: '2dsphere' });
 

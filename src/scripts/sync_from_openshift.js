@@ -68,7 +68,12 @@ async function runSync() {
   logger.info('Connected to Cosmos DB. Syncing collections...');
 
   await syncCollection(Region, '/regions', 'regions');
-  await syncCollection(Boundary, '/boundaries', 'boundaries');
+  try {
+    const { seedBoundaries } = require('./seed-boundaries');
+    await seedBoundaries();
+  } catch (err) {
+    logger.error('Error seeding boundaries from OpenMaps WFS:', { error: err.message });
+  }
   await syncCollection(Project, '/projects', 'projects');
   await syncCollection(Document, '/documents', 'documents');
 

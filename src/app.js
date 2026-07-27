@@ -1,5 +1,12 @@
 'use strict';
 
+const nodeCrypto = require('crypto');
+if (!globalThis.crypto || !globalThis.crypto.getRandomValues) {
+  try {
+    globalThis.crypto = nodeCrypto.webcrypto || nodeCrypto;
+  } catch (e) {}
+}
+
 const express = require('express');
 const compression = require('compression');
 const cors = require('cors');
@@ -45,30 +52,63 @@ app.use('/', express.static(path.join(__dirname, '../public')));
 app.use('/admin', express.static(path.join(__dirname, '../public')));
 app.use('/demo', express.static(path.join(__dirname, '../public')));
 
-// Database Connection helper for serverless execution
-let isConnecting = false;
-async function ensureDbConnected() {
-  if (mongoose.connection.readyState === 1) return;
-  if (isConnecting) return;
-  isConnecting = true;
-  try {
-    await mongoose.connect(config.mongoUri, { serverSelectionTimeoutMS: 5000 });
-    logger.info('Successfully connected to Central DEMI MongoDB / Cosmos DB');
-  } catch (err) {
-    logger.error('Error connecting to Central DEMI MongoDB / Cosmos DB:', { error: err.message, stack: err.stack });
-  } finally {
-    isConnecting = false;
-  }
-}
+// Config controller
+const configController = require('./controllers/config');
 
-// Ensure DB is connected before processing requests
-app.use(async (req, res, next) => {
-  await ensureDbConnected();
-  next();
+// Fast non-DB routes (/api/config, /config, /api/health, /health)
+app.get('/api/config', configController.getConfig);
+app.get('/config', configController.getConfig);
+app.get('/api/health', (req, res) => res.json({ status: 'ok', db: mongoose.connection.readyState === 1 }));
+app.get('/health', (req, res) => res.json({ status: 'ok', db: mongoose.connection.readyState === 1 }));
+app.get('/api/health/db', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      await ensureDbConnected();
+    }
+    return res.json({ ok: true, state: mongoose.connection.readyState });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message, name: err.name, code: err.code });
+  }
 });
 
-// Initial connection attempt
-ensureDbConnected();
+// Database Connection helper for serverless execution
+let connectionPromise = null;
+async function ensureDbConnected() {
+  if (mongoose.connection.readyState === 1) return;
+  if (!connectionPromise) {
+    logger.info('Initiating connection to Central DEMI MongoDB / Cosmos DB...');
+    connectionPromise = mongoose.connect(config.mongoUri, {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000,
+      family: 4,
+      autoIndex: false
+    }).then(conn => {
+      logger.info('Successfully connected to Central DEMI MongoDB / Cosmos DB');
+      return conn;
+    }).catch(err => {
+      connectionPromise = null;
+      logger.error('Error connecting to Central DEMI MongoDB / Cosmos DB:', { error: err.message, stack: err.stack });
+      throw err;
+    });
+  }
+  return connectionPromise;
+}
+
+// Ensure DB is connected before processing requests (except fast non-DB endpoints)
+app.use(async (req, res, next) => {
+  const p = req.path || req.originalUrl || '';
+  if (p.includes('/config') || p.includes('/health')) {
+    return next();
+  }
+  try {
+    await ensureDbConnected();
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'Database connection failed.', details: err.message });
+  }
+});
+
+// DB connection is handled lazily per request in middleware above
 
 // Mount Swagger Documentation UI
 try {

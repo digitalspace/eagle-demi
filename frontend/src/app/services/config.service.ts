@@ -34,11 +34,17 @@ export class ConfigService {
 
     if (this.configuration.configEndpoint === true) {
       try {
-        const liveConfig = await firstValueFrom(this.http.get<AppConfig>('/api/config'));
+        let configUrl = '/api/config';
+        if (this.configuration.API_PATH) {
+          configUrl = `${this.configuration.API_PATH.replace(/\/$/, '')}/config`;
+        } else if (this.configuration.API_LOCATION) {
+          configUrl = `${this.configuration.API_LOCATION.replace(/\/$/, '')}/api/config`;
+        }
+        const liveConfig = await firstValueFrom(this.http.get<AppConfig>(configUrl));
         this.configuration = { ...this.configuration, ...liveConfig };
-        console.log('[ConfigService] Dynamic configuration loaded from /api/config:', this.configuration);
+        console.log('[ConfigService] Dynamic configuration loaded from ' + configUrl + ':', this.configuration);
       } catch (e) {
-        console.warn('[ConfigService] Failed to load runtime config from /api/config, fallback to window.__env:', e);
+        console.warn('[ConfigService] Failed to load runtime config, fallback to window.__env:', e);
       }
     }
   }

@@ -11,6 +11,16 @@ function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function getTypesenseBaseUrl() {
+  if (process.env.TYPESENSE_URL) {
+    return process.env.TYPESENSE_URL.replace(/\/$/, '');
+  }
+  const host = process.env.TYPESENSE_HOST || 'eagle-typesense';
+  const port = process.env.TYPESENSE_PORT || '8108';
+  const protocol = process.env.TYPESENSE_PROTOCOL || 'http';
+  return `${protocol}://${host}:${port}`;
+}
+
 /**
  * Dynamically resolves user roles from Keycloak JWT payload or X-Api-Key.
  * Passes user's assigned roles directly to Mongo & Typesense.
@@ -217,9 +227,7 @@ exports.search = async (req, res) => {
       }
 
       // If keywords ARE provided, query Typesense
-      const TYPESENSE_HOST = process.env.TYPESENSE_HOST || 'eagle-typesense';
-      const TYPESENSE_PORT = process.env.TYPESENSE_PORT || '8108';
-      const TYPESENSE_PROTOCOL = process.env.TYPESENSE_PROTOCOL || 'http';
+      const TYPESENSE_BASE_URL = getTypesenseBaseUrl();
       const TYPESENSE_API_KEY = process.env.TYPESENSE_API_KEY || 'local-dev-key';
 
       const filterBy = [];
@@ -236,7 +244,7 @@ exports.search = async (req, res) => {
         }
       }
 
-      const typesenseUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/collections/projects/documents/search?q=${encodeURIComponent(keywords)}&query_by=name,displayName,description,proponent&num_typos=${fuzzy ? 2 : 0}&per_page=${pageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
+      const typesenseUrl = `${TYPESENSE_BASE_URL}/collections/projects/documents/search?q=${encodeURIComponent(keywords)}&query_by=name,displayName,description,proponent&num_typos=${fuzzy ? 2 : 0}&min_len_1_typo=2&min_len_2_typo=4&prefix=true&per_page=${pageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
 
       try {
         const typesenseRes = await fetch(typesenseUrl, {
@@ -340,29 +348,8 @@ exports.search = async (req, res) => {
         return res.json([{ searchResults: mapped }]);
       }
     } else if (dataset === 'Document') {
-      if (!keywords) {
-        const baseQuery = accessContext.mongoReadClause ? { ...accessContext.mongoReadClause } : {};
-        const documents = await Document.find(baseQuery).limit(requestedPageSize).sort({ createdAt: -1 });
-        const mapped = documents.map(d => {
-          return {
-            _id: d._id.toString(),
-            displayName: d.displayName || 'Untitled Document',
-            documentFileName: d.s3Key ? d.s3Key.split('/').pop() : 'document.pdf',
-            documentType: 'PDF Document',
-            orcsClassification: d.orcsClassification || '34800-20/MOCK',
-            project: d.project ? d.project.toString() : '',
-            projectName: d.displayName ? d.displayName.split(' - ')[0] : 'Associated Project',
-            description: d.displayName || 'Registry Document',
-            isPublished: d.isPublished !== false && (!d.read || d.read.includes('public')),
-            gatingState: d.isPublished === false || (d.read && !d.read.includes('public')) ? 'staged' : 'admitted'
-          };
-        });
-        return res.json([{ searchResults: mapped }]);
-      }
-
-      const TYPESENSE_HOST = process.env.TYPESENSE_HOST || 'eagle-typesense';
-      const TYPESENSE_PORT = process.env.TYPESENSE_PORT || '8108';
-      const TYPESENSE_PROTOCOL = process.env.TYPESENSE_PROTOCOL || 'http';
+      const searchKeyword = keywords || '*';
+      const TYPESENSE_BASE_URL = getTypesenseBaseUrl();
       const TYPESENSE_API_KEY = process.env.TYPESENSE_API_KEY || 'local-dev-key';
 
       const filterBy = [];
@@ -370,24 +357,30 @@ exports.search = async (req, res) => {
         filterBy.push(accessContext.typesenseFilter);
       }
 
-      const multiSearchUrl = `${TYPESENSE_PROTOCOL}://${TYPESENSE_HOST}:${TYPESENSE_PORT}/multi_search`;
+      const multiSearchUrl = `${TYPESENSE_BASE_URL}/multi_search`;
       const multiSearchBody = {
         searches: [
           {
             collection: 'documents',
-            q: keywords,
+            q: searchKeyword,
             query_by: 'displayName,documentFileName,description,projectName',
             num_typos: fuzzy ? 2 : 0,
+            min_len_1_typo: 2,
+            min_len_2_typo: 4,
+            prefix: true,
             per_page: pageSize,
             ...(filterBy.length > 0 ? { filter_by: filterBy.join(' && ') } : {})
           },
           {
             collection: 'document_chunks',
-            q: keywords,
+            q: searchKeyword,
             query_by: 'content',
             group_by: 'documentId',
             group_limit: 1,
             num_typos: fuzzy ? 2 : 0,
+            min_len_1_typo: 2,
+            min_len_2_typo: 4,
+            prefix: true,
             per_page: pageSize,
             ...(filterBy.length > 0 ? { filter_by: filterBy.join(' && ') } : {})
           }
@@ -480,33 +473,40 @@ exports.search = async (req, res) => {
         return res.json([{ searchResults: slicedResults }]);
       } catch (err) {
         console.error('Typesense document query failed, using MongoDB fallback:', err);
-        // Fallback to Mongo Document text/regex search
-        const escaped = escapeRegExp(keywords);
-        const regex = new RegExp(escaped, 'i');
-        const baseQuery = accessContext.mongoReadClause ? { ...accessContext.mongoReadClause } : {};
-        baseQuery.$or = [
-          { displayName: regex },
-          { orcsClassification: regex }
-        ];
-        const documents = await Document.find(baseQuery).limit(pageSize);
-        const searchResults = documents.map(d => ({
-          _id: d._id.toString(),
-          displayName: d.displayName || 'Untitled Document',
-          documentFileName: d.displayName || 'document.pdf',
-          documentType: 'PDF Document',
-          project: d.project ? d.project.toString() : '',
-          projectName: 'Associated Project',
-          read: d.read || (d.isPublished === false ? ['sysadmin', 'staff'] : ['public']),
-          isPublished: d.isPublished !== false && (!d.read || d.read.includes('public')),
-          description: 'This is an extracted document from the central registry.'
-        }));
-
-        return res.json([{ searchResults }]);
+        try {
+          const baseQuery = accessContext.mongoReadClause ? { ...accessContext.mongoReadClause } : {};
+          if (keywords && keywords !== '*') {
+            const escaped = escapeRegExp(keywords);
+            const regex = new RegExp(escaped, 'i');
+            baseQuery.$or = [
+              { displayName: regex },
+              { s3Key: regex },
+              { region: regex }
+            ];
+          }
+          const docs = await Document.find(baseQuery).limit(pageSize).populate('project', 'name');
+          const mappedDocs = docs.map(d => ({
+            _id: d._id.toString(),
+            displayName: d.displayName || 'Untitled Document',
+            documentFileName: d.s3Key ? d.s3Key.split('/').pop() : 'document.pdf',
+            documentType: 'PDF Document',
+            project: d.project ? (d.project._id || d.project).toString() : '',
+            projectName: d.project && d.project.name ? d.project.name : 'Associated Project',
+            read: d.read || ['public'],
+            isPublished: d.isPublished !== false,
+            description: `Official document extracted from central registry.`
+          }));
+          return res.json([{ searchResults: mappedDocs }]);
+        } catch (mErr) {
+          console.error('MongoDB document fallback query failed:', mErr);
+          return res.json([{ searchResults: [] }]);
+        }
       }
     } else {
       return res.status(400).json({ error: `Invalid or unsupported dataset: ${dataset}` });
     }
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[demi-api search] Top-level search error:', err);
+    return res.json([{ searchResults: [] }]);
   }
 };
