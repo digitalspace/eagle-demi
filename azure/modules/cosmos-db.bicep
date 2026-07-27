@@ -18,8 +18,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
   kind: 'MongoDB'
   properties: {
     databaseAccountOfferType: 'Standard'
-    publicNetworkAccess: 'Enabled'
-    isAccessFromAzureServicesAllowed: true
+    publicNetworkAccess: 'Disabled'
     disableKeyBasedMetadataWriteAccess: true
     minimalTlsVersion: 'Tls12'
     apiProperties: {
