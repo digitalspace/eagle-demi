@@ -4,7 +4,9 @@ const crypto = require('crypto');
 if (!globalThis.crypto || !globalThis.crypto.getRandomValues) {
   try {
     globalThis.crypto = crypto.webcrypto || crypto;
-  } catch (e) {}
+  } catch (e) {
+    /* ignore crypto fallback error */
+  }
 }
 
 

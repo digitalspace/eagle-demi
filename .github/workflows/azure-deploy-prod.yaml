@@ -1,30 +1,16 @@
 # =============================================================================
-# Build and Deploy DEMI to Azure Dev
+# Build and Deploy DEMI to Azure Prod
 # =============================================================================
-# Triggered on push to main branch (when azure or application files change) or
-# workflow_dispatch. Provisions Bicep IaC with DEMI tags, deploys Angular frontend
-# to Azure Web App (demi-frontend-dev), and deploys Node.js Express API to Azure
-# Web App (demi-api-dev).
+# Triggered on workflow_dispatch or tag/release.
 # =============================================================================
 
-name: Deploy DEMI to Azure Dev
+name: Deploy DEMI to Azure Prod
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'src/**'
-      - 'api/**'
-      - 'frontend/**'
-      - 'azure/**'
-      - 'package.json'
-      - 'yarn.lock'
-      - '.github/workflows/azure-deploy-dev.yaml'
   workflow_dispatch:
 
 concurrency:
-  group: deploy-azure-dev
+  group: deploy-azure-prod
   cancel-in-progress: false
 
 permissions:
@@ -32,8 +18,8 @@ permissions:
   contents: read
 
 env:
-  AZURE_SUBSCRIPTION_ID: 'd2f8d048-2af3-44fd-81cc-858c040001f2' # c4b0a8-dev - EPIC.AI
-  AZURE_RESOURCE_GROUP: 'c4b0a8-dev-rg'
+  AZURE_SUBSCRIPTION_ID: 'be5924ac-1083-4a1b-be92-7b444882cfd9' # c4b0a8-prod - EPIC.AI
+  AZURE_RESOURCE_GROUP: 'c4b0a8-prod-rg'
   LOCATION: 'canadacentral'
 
 jobs:
@@ -51,7 +37,7 @@ jobs:
             echo "has_creds=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_creds=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Azure credentials (AZURE_CLIENT_ID or AZURE_CREDENTIALS) not set in repository secrets."
+            echo "::warning::Azure credentials not set in repository secrets."
           fi
 
       - name: Azure Login
@@ -74,7 +60,7 @@ jobs:
         uses: azure/cli@v2
         with:
           inlineScript: |
-            az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.LOCATION }} --tags Project=DEMI Application=eagle-demi Environment=dev CostCenter=c4b0a8 ManagedBy=Bicep
+            az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.LOCATION }} --tags Project=DEMI Application=eagle-demi Environment=prod CostCenter=c4b0a8 ManagedBy=Bicep
 
       - name: Deploy Bicep IaC
         if: steps.check-creds.outputs.has_creds == 'true'
@@ -83,7 +69,7 @@ jobs:
           scope: resourcegroup
           resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
           template: ./azure/main.bicep
-          parameters: ./azure/main.bicepparam minioAccessKey="${{ secrets.MINIO_ACCESS_KEY || 'minio' }}" minioSecretKey="${{ secrets.MINIO_SECRET_KEY || 'minio123' }}" typesenseApiKey="${{ secrets.TYPESENSE_API_KEY || 'demi-typesense-dev-key' }}"
+          parameters: ./azure/main.bicepparam environmentName=prod minioAccessKey="${{ secrets.MINIO_ACCESS_KEY }}" minioSecretKey="${{ secrets.MINIO_SECRET_KEY }}" typesenseApiKey="${{ secrets.TYPESENSE_API_KEY }}"
 
 
   deploy-frontend:
@@ -101,7 +87,6 @@ jobs:
             echo "has_creds=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_creds=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Azure credentials not set in repository secrets."
           fi
 
       - name: Setup Node.js
@@ -117,8 +102,6 @@ jobs:
           corepack enable
           yarn install --immutable
           yarn build --configuration production
-          
-          # Zip dist output for Web App deployment
           DIST_DIR=$(test -d dist/browser && echo "dist/browser" || echo "dist")
           cd $DIST_DIR
           zip -r /tmp/frontend.zip .
@@ -138,11 +121,11 @@ jobs:
         uses: azure/cli@v2
         with:
           inlineScript: |
-            az webapp deploy -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-frontend-dev --src-path /tmp/frontend.zip --type zip
+            az webapp deploy -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-frontend-prod --src-path /tmp/frontend.zip --type zip
 
 
   deploy-api:
-    name: Build & Deploy API (Azure Web App)
+    name: Build & Deploy API (Azure Function App)
     needs: deploy-infra
     runs-on: ubuntu-latest
     steps:
@@ -156,7 +139,6 @@ jobs:
             echo "has_creds=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_creds=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Azure credentials not set in repository secrets."
           fi
 
       - name: Setup Node.js
@@ -170,7 +152,6 @@ jobs:
         run: |
           corepack enable
           yarn install --immutable
-          
           python3 -c "
           import zipfile, os
           with zipfile.ZipFile('/tmp/api.zip', 'w', zipfile.ZIP_DEFLATED) as z:
@@ -197,4 +178,4 @@ jobs:
         uses: azure/cli@v2
         with:
           inlineScript: |
-            az functionapp deployment source config-zip -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-api-dev --src /tmp/api.zip
+            az functionapp deployment source config-zip -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-api-prod --src /tmp/api.zip

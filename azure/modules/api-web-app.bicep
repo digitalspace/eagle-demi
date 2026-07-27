@@ -64,25 +64,36 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   }
 }
 
-// Azure Web App (Node.js 22 Express API)
+// Azure Function App (Node.js 22 Express API via @azure/functions)
 resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
   name: apiAppName
   location: location
   tags: tags
-  kind: 'app,linux'
+  kind: 'functionapp,linux'
   properties: {
     serverFarmId: appServicePlan.id
     siteConfig: {
       linuxFxVersion: 'NODE|22'
-      appCommandLine: 'node src/index.js'
       appSettings: [
         {
           name: 'AzureWebJobsStorage'
           value: 'DefaultEndpointsProtocol=https;AccountName=${apiStorage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${apiStorage.listKeys().keys[0].value}'
         }
         {
+          name: 'FUNCTIONS_WORKER_RUNTIME'
+          value: 'node'
+        }
+        {
+          name: 'FUNCTIONS_EXTENSION_VERSION'
+          value: '~4'
+        }
+        {
           name: 'WEBSITE_NODE_DEFAULT_VERSION'
           value: '~22'
+        }
+        {
+          name: 'WEBSITE_RUN_FROM_PACKAGE'
+          value: '1'
         }
         // MongoDB Connection
         {
@@ -93,7 +104,7 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'MONGODB_DATABASE'
           value: 'epic'
         }
-        // OpenShift MinIO Connection
+        // MinIO Storage Connection
         {
           name: 'MINIO_HOST'
           value: minioHost
@@ -129,6 +140,8 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         allowedOrigins: [
           'https://portal.azure.com'
           'https://demi-frontend-dev.azurewebsites.net'
+          'https://demi-frontend-test.azurewebsites.net'
+          'https://demi-frontend-prod.azurewebsites.net'
           '*'
         ]
       }

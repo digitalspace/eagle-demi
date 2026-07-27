@@ -1,61 +1,54 @@
 # Eagle DEMI Instructions
 
-Document Extraction & Machine Intelligence for EPIC.
+Document Extraction & Machine Intelligence for EPIC on Azure Serverless.
 
-## Configuration & Usage
+## Configuration & Architecture
 
-- **Base Image**: Uses upstream `docling-serve-cpu` directly. No custom app code.
-- **Port**: 5000 (ClusterIP only).
-- **Security**: Access restricted to `eagle-api` via `NetworkPolicy`. Requires `X-Api-Key` header.
+- **Runtime**: Azure Functions v4 (Node.js 22) wrapping Express API routes.
+- **Port**: 3000 (local Express) / 443 (Azure Function App HTTPS).
+- **Security**: Access restricted via API key (`X-Api-Key` header) and Keycloak JWT Bearer authentication.
 
 ## CRITICAL Mandates
 
-- **Internal Only**: Never expose via Route or Ingress. It is a cluster-internal extraction service.
-- **Timeout Chain**: Ensure timeouts are aligned across the stack: `docling-serve` (280s) < `eagle-api` (300s) < `rproxy` (330s) < `HAProxy` (360s).
-- **Secrets**: `eagle-demi-api-key` must be created manually before first deployment and shared with `eagle-api`.
+- **Timeout Chain**: Ensure timeouts are aligned across the stack: `docling-serve` (280s) < `eagle-api` (300s) < Azure Function App (330s).
+- **Secrets**: App secrets managed via Azure Key Vault / App Settings in Bicep IaC.
 
-## Tuning & Architecture
+## Tuning & Extraction Architecture
 
-- **OCR Engine**: RapidOCR is configured as the default engine (`DOCLING_SERVE_DEFAULT_OCR_ENGINE=rapidocr`) due to its balance of speed and accuracy on CPU compared to Tesseract.
-- **Queueing & Batching**: Operates in RQ mode (`DOCLING_SERVE_ENG_KIND=rq`) with Redis. The `eagle-api` splits PDFs into 10-page batches and queues them to avoid `docling-serve` hanging on massive legacy documents.
-- **Autoscaling**: KEDA (`ScaledObject`) is used to scale `eagle-demi-worker` pods based on the Redis queue length (`rq:queue:convert`), ensuring burst capacity during heavy ETL while scaling to zero when idle.
-- **Resource Limits**: CPU limits on workers are set to burst (`3000m`), while requests are kept low (`250m`) to fit within namespace quotas, prioritizing processing speed when nodes have spare capacity.
+- **OCR Engine**: RapidOCR is configured as default engine (`DOCLING_SERVE_DEFAULT_OCR_ENGINE=rapidocr`) for balanced CPU speed and accuracy.
+- **Queueing & Batching**: Operates in RQ mode (`DOCLING_SERVE_ENG_KIND=rq`) with Redis. `eagle-api` splits PDFs into 10-page batches and queues them to avoid `docling-serve` hanging on massive legacy documents.
+- **Container Apps Processing**: Typesense and worker tasks run in Azure Container Apps (`demi-typesense-{env}`) scaled dynamically.
 
 ## Decoupled Database Architecture
 
-- **Standalone Setup**: DEMI hosts its own independent MongoDB StatefulSet (`eagle-demi-mongodb`) with a dedicated Persistent Volume Claim (`eagle-demi-mongodb-pvc`) mounted at `/data/db`.
-- **Direct Connection Bypass**: Appended `MONGODB_DIRECT: "true"` to environment variables to ensure the Mongoose client connects directly without trying to resolve a replica-set primary.
-- **Authentication Source**: Root-level admin user and credential initialization via community image defaults require `authSource=admin` appended to connection URIs.
+- **Azure Cosmos DB for MongoDB**: DEMI uses serverless Azure Cosmos DB for MongoDB (`demi-mongo-{env}`).
+- **Direct Connection Bypass**: Connection string uses direct serverless cluster endpoint.
 
 ## API Security & Search Gating
 
-- **isPublished Root-level Flag**: Project and Document schemas explicitly store root-level, indexed `isPublished` boolean flags. These are populated from legacy `read` arrays during seeding (where presence of `"public"` equals `isPublished: true`). Track-only projects are defaulted to `isPublished: false`.
-- **Read Controller Gating**: GET API routes (`getProjects`, `getProject`, `getDocuments`, `getDocument`) check for administrative credentials (`X-Api-Key`):
-  - Requests without the key (public users) are dynamically filtered to return only `isPublished: true` projects and documents whose parent projects are published.
+- **isPublished Root-level Flag**: Project and Document schemas store root-level, indexed `isPublished` boolean flags. Populated from legacy `read` arrays during seeding (presence of `"public"` = `isPublished: true`). Track-only projects default to `isPublished: false`.
+- **Read Controller Gating**: GET API routes check for administrative credentials (`X-Api-Key`):
+  - Requests without key (public users) are dynamically filtered to return only `isPublished: true` projects/documents.
   - Authenticated administrative/internal requests bypass all publication filters.
 
 ## Self-Contained Search & Typesense Indexing Architecture
 
-- **Standalone Search Service**: `eagle-demi` handles its own search independently of `eagle-api` or external indexing services.
-- **Embedded Ingest Watcher**: The Typesense Change Stream indexer and full-sync engine are copied into `/src/typesense`.
-- **Automatic Daemon Startup**: The Change Stream sync watcher is loaded on server startup in `src/server.js` and runs in the background. It is skipped when `NODE_ENV === 'test'` to prevent test suites from trying to connect to mock databases.
-- **Direct Frontend Integration**: Frontend default `basePath` in `app.component.ts` points to `/api` (instead of `/api/demi`) so that it communicates natively on the same host (port 3000). No CORS configuration or complex proxy definitions are needed.
-- **Zero Ecosystem Changes**: `eagle-api` and `eagle-typesense` are kept completely untouched and clean. All search, ingestion, indexing, and presentation code remains 100% inside `eagle-demi`.
+- **Standalone Search Service**: `eagle-demi` handles search independently.
+- **Embedded Ingest Watcher**: Typesense Change Stream indexer lives in `/src/typesense`.
+- **Automatic Daemon Startup**: Loaded on server startup in `src/server.js` and background function execution. Skipped when `NODE_ENV === 'test'`.
+- **Direct Frontend Integration**: Frontend `basePath` points to `/api` so that it communicates natively on same host. No complex proxy definitions needed.
 
-## Dual Local Development Modes
+## Local Development Modes
 
 Local development of the DEMI frontend can be run in two modes:
 
-* **Direct Mode (Bypassing Local Backend & DB Port-Forward)**:
-  * Configure `window.__env.API_PATH` in `env.js` to point to the remote Dev API: `https://eagle-demi-api-6cdc9e-dev.apps.silver.devops.gov.bc.ca/api`.
+* **Direct Mode (Remote Dev API)**:
+  * Configure `window.__env.API_PATH` in `env.js` to point to `https://demi-api-dev.azurewebsites.net/api`.
   * Start only the frontend with `cd frontend && yarn dev`.
-  * No database port-forwarding or local Express server execution required. This matches the standard `eagle-admin` local development paradigm.
-* **Full-Stack Mode (Local Backend + Database Tunnel)**:
+* **Full-Stack Mode (Local Backend + Local/Remote DB)**:
   * Configure `window.__env.API_PATH` in `env.js` to point to `http://localhost:3000/api`.
-  * Open a secure database tunnel with `oc port-forward pods/eagle-demi-mongodb-0 27017:27017`.
-  * Run the local backend with `node src/server.js`.
-  * Start the frontend with `cd frontend && yarn dev`.
-  * Required only when testing backend schema, Express routing, or database connection modifications locally.
+  * Run backend with `node src/server.js`.
+  * Start frontend with `cd frontend && yarn dev`.
 
 ## Keycloak Session Persistence & Refresh Handling
 
@@ -77,5 +70,3 @@ Account: `Daniel.T.Truong@gov.bc.ca` | Tenant: `Government of BC` (`6fdb5200-3d0
 | **prod** | `c4b0a8-prod - EPIC.AI` | `be5924ac-1083-4a1b-be92-7b444882cfd9` |
 
 Switch active subscription: `az account set --subscription "<subscription_id>"`.
-See details in [AZURE_ENVIRONMENTS.md](file:///root/repos/eagle-demi/AZURE_ENVIRONMENTS.md).
-

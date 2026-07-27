@@ -1,27 +1,28 @@
 # eagle-demi
 
-DEMI (Document Extraction & Machine Intelligence) for EPIC. 
+DEMI (Document Extraction & Machine Intelligence) for EPIC on Azure Serverless. 
 
 This repository houses:
-1. **demi-api**: The central, authoritative REST API and geospatial search engine for projects, documents, and administrative boundaries.
-2. **eagle-demi-worker**: Background worker calling `docling-serve` (running as a cluster-internal PDF/DOCX extraction service) to parse page-level chunks.
+1. **demi-api**: The central, authoritative REST API and geospatial search engine for projects, documents, and administrative boundaries running as an Azure Function App (`@azure/functions` v4).
+2. **eagle-demi-worker**: Background worker calling `docling-serve` for PDF/DOCX page-level chunk extraction.
+3. **demi-frontend**: Angular 19 document intake frontend deployed to Azure App Service / Web App.
 
 ---
 
 ## Central API Server (demi-api)
 
-The Express server acts as the master directory of truth. It manages projects, documents, and administrative regions with native geospatial MongoDB queries.
+The Node.js server acts as the master directory of truth. It manages projects, documents, and administrative regions with native geospatial MongoDB / Cosmos DB queries.
 
 ### Setup and Local Execution
 
 1. Install dependencies:
    ```bash
-   npm install
+   yarn install
    ```
 
 2. Start the API Server locally (runs on port `3000` by default):
    ```bash
-   npm start
+   yarn start
    ```
 
 3. Seed administrative boundaries and retroactively tag existing projects:
@@ -34,65 +35,46 @@ The Express server acts as the master directory of truth. It manages projects, d
 
 ---
 
-## Quick Start (Extraction Service Deployment)
+## Azure Deployment Quick Start
 
-**Prerequisites:** Create the API key secret in each namespace before deploying:
+### Deploy via GitHub Actions Workflows
+
+* **Dev Environment**: Automatic deployment on push to `main` via `.github/workflows/azure-deploy-dev.yaml`.
+* **Test Environment**: Trigger manually via `.github/workflows/azure-deploy-test.yaml`.
+* **Prod Environment**: Trigger manually via `.github/workflows/azure-deploy-prod.yaml`.
+
+### Direct Deployment Script
+
+Deploy directly from terminal using the Azure CLI:
 
 ```bash
-oc create secret generic eagle-demi-api-key \
-  --from-literal=DOCLING_SERVE_API_KEY=$(openssl rand -hex 32) \
-  -n 6cdc9e-dev
+# Deploy both API and Frontend to Dev
+./scripts/deploy-azure.sh all c4b0a8-dev-rg
+
+# Deploy API Function App only
+./scripts/deploy-azure.sh api c4b0a8-dev-rg
 ```
-
-**Deploy to dev (OpenShift):**
-
-```bash
-helm upgrade --install eagle-demi ./helm \
-  --namespace 6cdc9e-dev \
-  --values ./helm/values-dev.yaml \
-  --wait --timeout=10m
-```
-
-**Deploy to dev (Azure):** See the [Azure Environments Wiki](https://github.com/bcgov/eagle-demi/wiki/Azure-Environments) page for Bicep IaC instructions and GitHub Actions workflow setup (`.github/workflows/azure-deploy-dev.yaml`).
-
-**Deploy to test/prod:** Use the GitHub Actions `workflow_dispatch` workflows in `.github/workflows/`.
 
 ---
 
-## Architecture
+## Azure Serverless Architecture
 
-- **API Port**: `3000` (ClusterIP only — not exposed externally)
-- **Auth**: Dual-layered validation in `src/middleware/auth.js`. Supports `X-Api-Key` for system-to-system integration (e.g. from Track/Submit) and standard Keycloak `Bearer` tokens (validating signatures against remote JWKS certificates) requiring `sysadmin`, `staff`, or `demi-admin` roles for write operations (POST, PUT, DELETE).
-- **Geospatial Order**: MongoDB GeoJSON requires `[longitude, latitude]`. Downstream sync engines automatically swap coordinates to `[latitude, longitude]` when feeding search indexes like Typesense.
-- **NetworkPolicy** restricts ingress to eagle-api pods (`role: api-eagle-epic`) only.
-- **Frontend Built Assets**: The root `public/` directory contains compiled static Angular assets which are ignored in Git and generated automatically during the multi-stage Docker build at image-build time.
-
----
-
-## Configuration
-
-All tunable limits live in `helm/values.yaml` — override per environment in `helm/values-{env}.yaml`.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `config.maxFileSize` | `104857600` | Max upload size (bytes; 100 MB) |
-| `config.maxDocumentTimeout` | `300` | Per-document timeout (seconds) |
-| `config.maxNumPages` | `500` | Max pages per document |
-| `config.numThreads` | `4` | Torch CPU threads |
-| `config.numWorkers` | `2` | Engine worker processes |
-| `CORS_ORIGIN` | `*` | Allowed CORS origins (override in production) |
-| Rate Limiting | `300 req/min` | Built-in IP rate limiter on `/api` routes |
+- **Runtime**: Azure Functions v4 (Node.js 22) wrapping Express application routes.
+- **Database**: Azure Cosmos DB for MongoDB (Serverless mode).
+- **Search Engine**: Azure Container Apps hosting Typesense with embedded Change Stream sync.
+- **Auth**: Dual-layered validation in `src/middleware/auth.js`. Supports `X-Api-Key` for system-to-system integration and Keycloak `Bearer` tokens.
+- **Geospatial Order**: MongoDB GeoJSON requires `[longitude, latitude]`. Downstream sync engines swap coordinates to `[latitude, longitude]` for search indexes.
 
 ---
 
 ## Document Intake Frontend (frontend)
 
-The standalone Angular 19 application lives under `frontend/`. It compiles into static assets housed in `public/` and is served directly by `demi-api`.
+The standalone Angular 19 application lives under `frontend/`. It compiles into static assets and is deployed to Azure Web App (`demi-frontend-{env}`).
 
 ### Key Features
 * **Interactive Map Explorer**: View and query project coordinates.
-* **Deep Text Search**: Query extracted document chunks powered by the Typesense search engine.
-* **Document Ingestion**: Upload files with an integrated, searchable project dropdown menu (supports both production 24-character hexadecimal MongoDB ObjectIDs and local mock numeric IDs).
+* **Deep Text Search**: Query extracted document chunks powered by Typesense.
+* **Document Ingestion**: Upload files with integrated, searchable project dropdowns.
 
 ---
 
@@ -100,6 +82,3 @@ The standalone Angular 19 application lives under `frontend/`. It compiles into 
 
 - [eagle-api](https://github.com/bcgov/eagle-api) — Reads read-only cached project/document entries
 - [eagle-typesense](https://github.com/digitalspace/eagle-typesense) — Syncs DocumentChunks from MongoDB to Typesense
-- [eagle-dev-guides.wiki](https://github.com/bcgov/eagle-dev-guides/wiki) — Architecture docs
-
-

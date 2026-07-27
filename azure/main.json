@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "4095955009774190325"
+      "templateHash": "1344887051175122075"
     }
   },
   "parameters": {
@@ -554,7 +554,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "15641816317809846434"
+              "templateHash": "8776660184794887447"
             }
           },
           "parameters": {
@@ -656,20 +656,31 @@
               "name": "[variables('apiAppName')]",
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
-              "kind": "app,linux",
+              "kind": "functionapp,linux",
               "properties": {
                 "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
                 "siteConfig": {
                   "linuxFxVersion": "NODE|22",
-                  "appCommandLine": "node src/index.js",
                   "appSettings": [
                     {
                       "name": "AzureWebJobsStorage",
                       "value": "[format('DefaultEndpointsProtocol=https;AccountName={0};EndpointSuffix={1};AccountKey={2}', variables('storageAccountName'), environment().suffixes.storage, listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-01-01').keys[0].value)]"
                     },
                     {
+                      "name": "FUNCTIONS_WORKER_RUNTIME",
+                      "value": "node"
+                    },
+                    {
+                      "name": "FUNCTIONS_EXTENSION_VERSION",
+                      "value": "~4"
+                    },
+                    {
                       "name": "WEBSITE_NODE_DEFAULT_VERSION",
                       "value": "~22"
+                    },
+                    {
+                      "name": "WEBSITE_RUN_FROM_PACKAGE",
+                      "value": "1"
                     },
                     {
                       "name": "MONGODB_URI",
@@ -712,6 +723,8 @@
                     "allowedOrigins": [
                       "https://portal.azure.com",
                       "https://demi-frontend-dev.azurewebsites.net",
+                      "https://demi-frontend-test.azurewebsites.net",
+                      "https://demi-frontend-prod.azurewebsites.net",
                       "*"
                     ]
                   }

@@ -6,7 +6,6 @@ const net = require('net');
 const mockSocket = new net.Socket();
 
 let cachedExpressApp = null;
-let expressAppError = null;
 
 function getExpressApp() {
   if (cachedExpressApp) return cachedExpressApp;
