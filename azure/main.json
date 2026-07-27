@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "4072200565779832963"
+      "templateHash": "9448546817499214161"
     }
   },
   "parameters": {
@@ -78,7 +78,7 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "deploy-frontend-web-app",
+      "name": "deploy-vnet",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -102,7 +102,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "3741057162594415061"
+              "templateHash": "6877066900804921227"
             }
           },
           "parameters": {
@@ -110,7 +110,7 @@
               "type": "string",
               "defaultValue": "[resourceGroup().location]",
               "metadata": {
-                "description": "Location for Azure Web App resources"
+                "description": "Location for VNet resources"
               }
             },
             "environmentName": {
@@ -127,67 +127,246 @@
             }
           },
           "variables": {
-            "frontendAppName": "[format('demi-frontend-{0}', parameters('environmentName'))]",
-            "frontendAppPlanName": "[format('demi-frontend-plan-{0}', parameters('environmentName'))]"
+            "vnetName": "[format('demi-vnet-{0}', parameters('environmentName'))]",
+            "apiSubnetName": "api-integration-subnet",
+            "peSubnetName": "private-endpoints-subnet"
           },
           "resources": [
             {
-              "type": "Microsoft.Web/serverfarms",
-              "apiVersion": "2023-12-01",
-              "name": "[variables('frontendAppPlanName')]",
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2023-09-01",
+              "name": "[variables('vnetName')]",
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
-              "sku": {
-                "name": "B1",
-                "tier": "Basic"
-              },
               "properties": {
-                "reserved": true
-              }
-            },
-            {
-              "type": "Microsoft.Web/sites",
-              "apiVersion": "2023-12-01",
-              "name": "[variables('frontendAppName')]",
-              "location": "[parameters('location')]",
-              "tags": "[parameters('tags')]",
-              "kind": "app,linux",
-              "properties": {
-                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('frontendAppPlanName'))]",
-                "siteConfig": {
-                  "linuxFxVersion": "NODE|20-lts",
-                  "appCommandLine": "npx pm2 serve /home/site/wwwroot --no-daemon --spa",
-                  "appSettings": [
-                    {
-                      "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
-                      "value": "false"
-                    },
-                    {
-                      "name": "WEBSITE_HTTPLOGGING_RETENTION_DAYS",
-                      "value": "3"
+                "addressSpace": {
+                  "addressPrefixes": [
+                    "10.0.0.0/16"
+                  ]
+                },
+                "subnets": [
+                  {
+                    "name": "[variables('apiSubnetName')]",
+                    "properties": {
+                      "addressPrefix": "10.0.1.0/24",
+                      "delegations": [
+                        {
+                          "name": "serverFarmsDelegation",
+                          "properties": {
+                            "serviceName": "Microsoft.Web/serverFarms"
+                          }
+                        }
+                      ]
                     }
-                  ],
-                  "cors": {
-                    "allowedOrigins": [
-                      "https://portal.azure.com",
-                      "*"
-                    ]
+                  },
+                  {
+                    "name": "[variables('peSubnetName')]",
+                    "properties": {
+                      "addressPrefix": "10.0.2.0/24",
+                      "privateEndpointNetworkPolicies": "Disabled"
+                    }
                   }
-                }
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Web/serverfarms', variables('frontendAppPlanName'))]"
-              ]
+                ]
+              }
             }
           ],
           "outputs": {
-            "frontendWebAppName": {
+            "vnetId": {
               "type": "string",
-              "value": "[variables('frontendAppName')]"
+              "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
             },
-            "frontendWebAppHostName": {
+            "apiSubnetId": {
               "type": "string",
-              "value": "[reference(resourceId('Microsoft.Web/sites', variables('frontendAppName')), '2023-12-01').defaultHostName]"
+              "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('apiSubnetName'))]"
+            },
+            "peSubnetId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('peSubnetName'))]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-key-vault",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "environmentName": {
+            "value": "[parameters('environmentName')]"
+          },
+          "tags": {
+            "value": "[variables('defaultTags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "6486625091344203047"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Location for Azure Key Vault"
+              }
+            },
+            "environmentName": {
+              "type": "string",
+              "metadata": {
+                "description": "Environment name (e.g. dev, test, prod)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Default resource tags"
+              }
+            }
+          },
+          "variables": {
+            "keyVaultName": "[take(format('demi-kv-{0}-{1}', parameters('environmentName'), uniqueString(resourceGroup().id)), 24)]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.KeyVault/vaults",
+              "apiVersion": "2023-07-01",
+              "name": "[variables('keyVaultName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "enabledForDeployment": true,
+                "enabledForTemplateDeployment": true,
+                "enabledForDiskEncryption": true,
+                "enableRbacAuthorization": true,
+                "tenantId": "[subscription().tenantId]",
+                "sku": {
+                  "name": "standard",
+                  "family": "A"
+                },
+                "networkAcls": {
+                  "defaultAction": "Allow",
+                  "bypass": "AzureServices"
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "keyVaultName": {
+              "type": "string",
+              "value": "[variables('keyVaultName')]"
+            },
+            "keyVaultId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+            },
+            "keyVaultUri": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '2023-07-01').vaultUri]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "deploy-static-web-app",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "environmentName": {
+            "value": "[parameters('environmentName')]"
+          },
+          "tags": {
+            "value": "[variables('defaultTags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.45.15.27210",
+              "templateHash": "14943430926306839769"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Location for Azure Static Web App resources"
+              }
+            },
+            "environmentName": {
+              "type": "string",
+              "metadata": {
+                "description": "Environment name (e.g. dev, test, prod)"
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Default resource tags"
+              }
+            }
+          },
+          "variables": {
+            "staticWebAppName": "[format('demi-frontend-swa-{0}', parameters('environmentName'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/staticSites",
+              "apiVersion": "2023-12-01",
+              "name": "[variables('staticWebAppName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "sku": {
+                "name": "Free",
+                "tier": "Free"
+              },
+              "properties": {
+                "repositoryUrl": "",
+                "allowConfigFileUpdates": true,
+                "provider": "Custom",
+                "stagingEnvironmentPolicy": "Enabled"
+              }
+            }
+          ],
+          "outputs": {
+            "staticWebAppName": {
+              "type": "string",
+              "value": "[variables('staticWebAppName')]"
+            },
+            "staticWebAppDefaultHostname": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/staticSites', variables('staticWebAppName')), '2023-12-01').defaultHostname]"
+            },
+            "staticWebAppUrl": {
+              "type": "string",
+              "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/staticSites', variables('staticWebAppName')), '2023-12-01').defaultHostname)]"
             }
           }
         }
@@ -211,6 +390,9 @@
           },
           "tags": {
             "value": "[variables('defaultTags')]"
+          },
+          "peSubnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.peSubnetId.value]"
           }
         },
         "template": {
@@ -220,7 +402,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "3945740949211566098"
+              "templateHash": "12795779246912976662"
             }
           },
           "parameters": {
@@ -242,11 +424,19 @@
               "metadata": {
                 "description": "Default resource tags"
               }
+            },
+            "peSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Subnet ID for Private Endpoint (optional)"
+              }
             }
           },
           "variables": {
             "accountName": "[format('demi-cosmos-{0}-{1}', parameters('environmentName'), uniqueString(resourceGroup().id))]",
-            "databaseName": "[format('demi-{0}', parameters('environmentName'))]"
+            "databaseName": "[format('demi-{0}', parameters('environmentName'))]",
+            "privateEndpointName": "[format('pe-cosmos-{0}', parameters('environmentName'))]"
           },
           "resources": [
             {
@@ -258,7 +448,7 @@
               "kind": "MongoDB",
               "properties": {
                 "databaseAccountOfferType": "Standard",
-                "publicNetworkAccess": "Disabled",
+                "publicNetworkAccess": "[if(not(empty(parameters('peSubnetId'))), 'Disabled', 'Enabled')]",
                 "disableKeyBasedMetadataWriteAccess": true,
                 "minimalTlsVersion": "Tls12",
                 "apiProperties": {
@@ -290,6 +480,33 @@
               "dependsOn": [
                 "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]"
               ]
+            },
+            {
+              "condition": "[not(empty(parameters('peSubnetId')))]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2023-09-01",
+              "name": "[variables('privateEndpointName')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('peSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[variables('privateEndpointName')]",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]",
+                      "groupIds": [
+                        "MongoDB"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]"
+              ]
             }
           ],
           "outputs": {
@@ -300,10 +517,17 @@
             "databaseName": {
               "type": "string",
               "value": "[variables('databaseName')]"
+            },
+            "cosmosAccountId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]"
             }
           }
         }
-      }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-vnet')]"
+      ]
     },
     {
       "type": "Microsoft.Resources/deployments",
@@ -546,6 +770,9 @@
           },
           "typesenseApiKey": {
             "value": "[parameters('typesenseApiKey')]"
+          },
+          "apiSubnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.apiSubnetId.value]"
           }
         },
         "template": {
@@ -555,7 +782,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "7483280171719439017"
+              "templateHash": "16944859275526238991"
             }
           },
           "parameters": {
@@ -613,12 +840,19 @@
               "metadata": {
                 "description": "Typesense API Key"
               }
+            },
+            "apiSubnetId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Subnet ID for Virtual Network Integration"
+              }
             }
           },
           "variables": {
             "apiAppName": "[format('demi-api-{0}', parameters('environmentName'))]",
             "appServicePlanName": "[format('demi-plan-{0}', parameters('environmentName'))]",
-            "storageAccountName": "[format('demistg{0}{1}', parameters('environmentName'), uniqueString(resourceGroup().id))]"
+            "storageAccountName": "[take(format('demistg{0}{1}', parameters('environmentName'), uniqueString(resourceGroup().id)), 24)]"
           },
           "resources": [
             {
@@ -644,8 +878,8 @@
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
               "sku": {
-                "name": "B1",
-                "tier": "Basic"
+                "name": "Y1",
+                "tier": "Dynamic"
               },
               "properties": {
                 "reserved": true
@@ -658,10 +892,15 @@
               "location": "[parameters('location')]",
               "tags": "[parameters('tags')]",
               "kind": "functionapp,linux",
+              "identity": {
+                "type": "SystemAssigned"
+              },
               "properties": {
                 "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+                "virtualNetworkSubnetId": "[if(not(empty(parameters('apiSubnetId'))), parameters('apiSubnetId'), null())]",
                 "siteConfig": {
                   "linuxFxVersion": "NODE|22",
+                  "vnetRouteAllEnabled": "[not(empty(parameters('apiSubnetId')))]",
                   "appSettings": [
                     {
                       "name": "AzureWebJobsStorage",
@@ -731,9 +970,8 @@
                   "cors": {
                     "allowedOrigins": [
                       "https://portal.azure.com",
-                      "https://demi-frontend-dev.azurewebsites.net",
-                      "https://demi-frontend-test.azurewebsites.net",
-                      "https://demi-frontend-prod.azurewebsites.net"
+                      "[format('https://demi-frontend-{0}.azurewebsites.net', parameters('environmentName'))]",
+                      "[format('https://demi-frontend-swa-{0}.azurestaticapps.net', parameters('environmentName'))]"
                     ]
                   }
                 }
@@ -752,13 +990,18 @@
             "apiWebAppHostName": {
               "type": "string",
               "value": "[reference(resourceId('Microsoft.Web/sites', variables('apiAppName')), '2023-12-01').defaultHostName]"
+            },
+            "apiPrincipalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', variables('apiAppName')), '2023-12-01', 'full').identity.principalId]"
             }
           }
         }
       },
       "dependsOn": [
         "[resourceId('Microsoft.Resources/deployments', 'deploy-container-apps')]",
-        "[resourceId('Microsoft.Resources/deployments', 'deploy-cosmos-db')]"
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-cosmos-db')]",
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-vnet')]"
       ]
     },
     {
@@ -858,9 +1101,9 @@
     }
   ],
   "outputs": {
-    "frontendWebAppHostName": {
+    "staticWebAppDefaultHostname": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-frontend-web-app'), '2025-04-01').outputs.frontendWebAppHostName.value]"
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-static-web-app'), '2025-04-01').outputs.staticWebAppDefaultHostname.value]"
     },
     "apiWebAppHostName": {
       "type": "string",
@@ -869,6 +1112,10 @@
     "typesenseUrl": {
       "type": "string",
       "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-container-apps'), '2025-04-01').outputs.typesenseUrl.value]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-key-vault'), '2025-04-01').outputs.keyVaultName.value]"
     }
   }
 }

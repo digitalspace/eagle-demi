@@ -1,4 +1,4 @@
-// Azure Cosmos DB Account Module for DEMI
+// Azure Cosmos DB Account Module for DEMI (Serverless Mode)
 @description('Location for Cosmos DB Account')
 param location string = resourceGroup().location
 
@@ -8,8 +8,12 @@ param environmentName string
 @description('Default resource tags')
 param tags object
 
+@description('Subnet ID for Private Endpoint (optional)')
+param peSubnetId string = ''
+
 var accountName = 'demi-cosmos-${environmentName}-${uniqueString(resourceGroup().id)}'
 var databaseName = 'demi-${environmentName}'
+var privateEndpointName = 'pe-cosmos-${environmentName}'
 
 resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
   name: accountName
@@ -18,7 +22,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2023-11-15' = {
   kind: 'MongoDB'
   properties: {
     databaseAccountOfferType: 'Standard'
-    publicNetworkAccess: 'Disabled'
+    publicNetworkAccess: !empty(peSubnetId) ? 'Disabled' : 'Enabled'
     disableKeyBasedMetadataWriteAccess: true
     minimalTlsVersion: 'Tls12'
     apiProperties: {
@@ -49,5 +53,29 @@ resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/mongodbDatabases@
   }
 }
 
+// Private Endpoint for Cosmos DB when peSubnetId is supplied
+resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!empty(peSubnetId)) {
+  name: privateEndpointName
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: peSubnetId
+    }
+    privateLinkServiceConnections: [
+      {
+        name: privateEndpointName
+        properties: {
+          privateLinkServiceId: cosmosAccount.id
+          groupIds: [
+            'MongoDB'
+          ]
+        }
+      }
+    ]
+  }
+}
+
 output connectionString string = cosmosAccount.listConnectionStrings().connectionStrings[0].connectionString
 output databaseName string = cosmosDatabase.name
+output cosmosAccountId string = cosmosAccount.id

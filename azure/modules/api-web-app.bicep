@@ -1,4 +1,4 @@
-// Azure App Service Module for DEMI Node.js REST API
+// Azure App Service Module for DEMI Node.js REST API (Serverless Azure Function)
 @description('Location for Azure Web App resources')
 param location string = resourceGroup().location
 
@@ -30,11 +30,14 @@ param typesenseUrl string
 @secure()
 param typesenseApiKey string
 
+@description('Subnet ID for Virtual Network Integration')
+param apiSubnetId string = ''
+
 var apiAppName = 'demi-api-${environmentName}'
 var appServicePlanName = 'demi-plan-${environmentName}'
-var storageAccountName = 'demistg${environmentName}${uniqueString(resourceGroup().id)}'
+var storageAccountName = take('demistg${environmentName}${uniqueString(resourceGroup().id)}', 24)
 
-// Storage Account for API logs and temporary persistence
+// Storage Account for API logs and Function host persistence
 resource apiStorage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: storageAccountName
   location: location
@@ -50,30 +53,35 @@ resource apiStorage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   }
 }
 
-// App Service Plan (Basic B1 Linux)
+// App Service Plan (Consumption Y1 Serverless Plan for auto-scaling & $0 idle cost)
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location
   tags: tags
   sku: {
-    name: 'B1'
-    tier: 'Basic'
+    name: 'Y1'
+    tier: 'Dynamic'
   }
   properties: {
     reserved: true // Linux worker
   }
 }
 
-// Azure Function App (Node.js 22 Express API via @azure/functions)
+// Azure Function App (Node.js 22 Express API via @azure/functions in Serverless Consumption mode)
 resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
   name: apiAppName
   location: location
   tags: tags
   kind: 'functionapp,linux'
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     serverFarmId: appServicePlan.id
+    virtualNetworkSubnetId: !empty(apiSubnetId) ? apiSubnetId : null
     siteConfig: {
       linuxFxVersion: 'NODE|22'
+      vnetRouteAllEnabled: !empty(apiSubnetId)
       appSettings: [
         {
           name: 'AzureWebJobsStorage'
@@ -147,9 +155,8 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
       cors: {
         allowedOrigins: [
           'https://portal.azure.com'
-          'https://demi-frontend-dev.azurewebsites.net'
-          'https://demi-frontend-test.azurewebsites.net'
-          'https://demi-frontend-prod.azurewebsites.net'
+          'https://demi-frontend-${environmentName}.azurewebsites.net'
+          'https://demi-frontend-swa-${environmentName}.azurestaticapps.net'
         ]
       }
     }
@@ -158,3 +165,4 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
 
 output apiWebAppName string = apiWebApp.name
 output apiWebAppHostName string = apiWebApp.properties.defaultHostName
+output apiPrincipalId string = apiWebApp.identity.principalId
