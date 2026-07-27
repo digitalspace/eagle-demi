@@ -22,12 +22,12 @@ const configController = require('../controllers/config');
 router.get('/config', configController.getConfig);
 
 // Database Management & Seeding Routes
-router.get('/db/stats', dbController.getDbStats);
-router.post('/db/seed', dbController.seedDatabase);
-router.post('/db/seed-boundaries', dbController.seedBoundaries);
-router.post('/db/import', dbController.importCollection);
-router.post('/db/query', dbController.queryCollection);
-router.post('/sync', dbController.seedDatabase);
+router.get('/db/stats', authMiddleware, dbController.getDbStats);
+router.post('/db/seed', authMiddleware, dbController.seedDatabase);
+router.post('/db/seed-boundaries', authMiddleware, dbController.seedBoundaries);
+router.post('/db/import', authMiddleware, dbController.importCollection);
+router.post('/db/query', authMiddleware, dbController.queryCollection);
+router.post('/sync', authMiddleware, dbController.seedDatabase);
 
 // Search Route
 router.get('/search', passiveAuthMiddleware, searchController.search);
