@@ -3,9 +3,9 @@
 DEMI (Document Extraction & Machine Intelligence) for EPIC on Azure Serverless. 
 
 This repository houses:
-1. **demi-api**: The central, authoritative REST API and geospatial search engine for projects, documents, and administrative boundaries running as an Azure Function App (`@azure/functions` v4).
+1. **demi-api**: Central, authoritative REST API and geospatial search engine for projects, documents, and administrative boundaries running as an Azure Function App (`@azure/functions` v4 on Node.js 22).
 2. **eagle-demi-worker**: Background worker calling `docling-serve` for PDF/DOCX page-level chunk extraction.
-3. **demi-frontend**: Angular 19 document intake frontend deployed to Azure App Service / Web App.
+3. **demi-frontend**: Angular 19 document intake frontend deployed to Azure App Service / Static Web App.
 
 ---
 
@@ -35,17 +35,29 @@ The Node.js server acts as the master directory of truth. It manages projects, d
 
 ---
 
-## Azure Deployment Quick Start
+## Azure Serverless Architecture
 
-### Deploy via GitHub Actions Workflows
+- **Runtime**: Azure Functions v4 (`@azure/functions` v4 on Node.js 22, `Y1` Consumption Plan).
+- **Native Stream Adapter (`api/index.js`)**: Converts Azure Functions v4 `HttpRequest` objects into Node.js `Readable` streams and bridges them directly into Express route handlers without external socket or proxy adapter overhead.
+- **Serverless-Safe Rate Limiter (`src/middleware/rate-limiter.js`)**: Dynamically switches to `inlineCleanup` mode when `isServerless` is true, avoiding background `setInterval` timers that lock process state or leak memory during execution freeze cycles.
+- **Atomic Deployment (`WEBSITE_RUN_FROM_PACKAGE=1`)**: Packages the API into a read-only zip archive mounted directly at `/home/site/wwwroot/` for zero-downtime, instant cold starts.
+- **Database**: Azure Cosmos DB (MongoDB API v7.0 in Serverless mode).
+  - Configured with `COSMOSDB_URI` and `COSMOSDB_DATABASE`.
+  - Configured with `publicNetworkAccess: 'Disabled'` and Private Endpoints inside Azure VNet (`10.53.244.0/24`) to satisfy BC Gov management group policies (`Deny-PublicPaaSEndpoints`).
+  - Auto-enforces `retryWrites=false` and TLS 1.2.
+- **Search Engine**: Azure Container Apps hosting Typesense (`demi-typesense-{env}`) with embedded MongoDB Change Stream sync daemon.
+- **Auth**: Dual-layered validation in `src/middleware/auth.js`. Supports `X-Api-Key` for system-to-system integration and Keycloak `Bearer` tokens.
+- **Geospatial Order**: GeoJSON requires `[longitude, latitude]`. Downstream sync engines swap coordinates to `[latitude, longitude]` for search indexes.
 
-* **Dev Environment**: Automatic deployment on push to `main` via `.github/workflows/azure-deploy-dev.yaml`.
-* **Test Environment**: Trigger manually via `.github/workflows/azure-deploy-test.yaml`.
-* **Prod Environment**: Trigger manually via `.github/workflows/azure-deploy-prod.yaml`.
+---
+
+## IaC & Deployment Workflows
+
+Infrastructure is defined via Bicep (`azure/main.bicep` and `azure/modules/`).
 
 ### Direct Deployment Script
 
-Deploy directly from terminal using the Azure CLI:
+Deploy directly from terminal using the Azure CLI script:
 
 ```bash
 # Deploy both API and Frontend to Dev
@@ -53,20 +65,16 @@ Deploy directly from terminal using the Azure CLI:
 
 # Deploy API Function App only
 ./scripts/deploy-azure.sh api c4b0a8-dev-rg
+
+# Deploy Frontend Web App only
+./scripts/deploy-azure.sh frontend c4b0a8-dev-rg
 ```
 
----
+### GitHub Actions Workflows
 
-## Azure Serverless Architecture
-
-- **Runtime**: Azure App Service / Web App (Node.js 22 Express REST API).
-- **Database**: Azure Cosmos DB (MongoDB API v7.0 in Serverless mode).
-  - Configured with `COSMOSDB_URI` and `COSMOSDB_DATABASE`.
-  - Configured with `publicNetworkAccess: 'Disabled'` to satisfy BC Gov management group policy (`Deny-PublicPaaSEndpoints`).
-  - Auto-enforces `retryWrites=false` and TLS 1.2.
-- **Search Engine**: Azure Container Apps hosting Typesense with embedded Change Stream sync.
-- **Auth**: Dual-layered validation in `src/middleware/auth.js`. Supports `X-Api-Key` for system-to-system integration and Keycloak `Bearer` tokens.
-- **Geospatial Order**: GeoJSON requires `[longitude, latitude]`. Downstream sync engines swap coordinates to `[latitude, longitude]` for search indexes.
+* **Dev Environment**: Automatic deployment on push to `main` via `.github/workflows/azure-deploy-dev.yaml`.
+* **Test Environment**: Trigger manually via `.github/workflows/azure-deploy-test.yaml`.
+* **Prod Environment**: Trigger manually via `.github/workflows/azure-deploy-prod.yaml`.
 
 ---
 
@@ -85,3 +93,4 @@ The standalone Angular 19 application lives under `frontend/`. It compiles into 
 
 - [eagle-api](https://github.com/bcgov/eagle-api) — Reads read-only cached project/document entries
 - [eagle-typesense](https://github.com/digitalspace/eagle-typesense) — Syncs DocumentChunks from MongoDB to Typesense
+

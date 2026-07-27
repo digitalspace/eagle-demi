@@ -4,7 +4,11 @@ Document Extraction & Machine Intelligence for EPIC on Azure Serverless.
 
 ## Configuration & Architecture
 
-- **Runtime**: Azure Functions v4 (Node.js 22) wrapping Express API routes.
+- **Runtime**: Azure Functions v4 (Node.js 22) wrapping Express API routes on `Y1` Consumption Plan.
+- **Native Stream Adapter (`api/index.js`)**: Custom Node `Readable` stream adapter bridging Azure Functions `HttpRequest` to Express without third-party socket/proxy adapter overhead.
+- **Rate Limiter (`src/middleware/rate-limiter.js`)**: Dynamic `inlineCleanup` when `isServerless` is true (avoids background `setInterval` timers).
+- **Package Deployment**: Requires `WEBSITE_RUN_FROM_PACKAGE=1` for atomic zip package mounting at `/home/site/wwwroot/`.
+- **Infrastructure as Code**: Bicep modules in `azure/main.bicep` and `azure/modules/`.
 - **Port**: 3000 (local Express) / 443 (Azure Function App HTTPS).
 - **Security**: Access restricted via API key (`X-Api-Key` header) and Keycloak JWT Bearer authentication.
 
@@ -70,3 +74,4 @@ Account: `Daniel.T.Truong@gov.bc.ca` | Tenant: `Government of BC` (`6fdb5200-3d0
 | **prod** | `c4b0a8-prod - EPIC.AI` | `be5924ac-1083-4a1b-be92-7b444882cfd9` |
 
 Switch active subscription: `az account set --subscription "<subscription_id>"`.
+
