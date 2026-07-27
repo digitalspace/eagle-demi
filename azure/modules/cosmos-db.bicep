@@ -76,6 +76,7 @@ resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!
   }
 }
 
+@secure()
 output connectionString string = cosmosAccount.listConnectionStrings().connectionStrings[0].connectionString
 output databaseName string = cosmosDatabase.name
 output cosmosAccountId string = cosmosAccount.id

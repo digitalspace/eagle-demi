@@ -36,12 +36,11 @@ jobs:
           if [ -n "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -n "${{ secrets.AZURE_CREDENTIALS }}" ]; then
             echo "has_creds=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_creds=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Azure credentials not set in repository secrets."
+            echo "::error::Azure credentials not set in repository secrets."
+            exit 1
           fi
 
       - name: Azure Login
-        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -51,25 +50,33 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Validate Bicep Template
-        if: steps.check-creds.outputs.has_creds == 'true'
         run: |
           az bicep build --file ./azure/main.bicep
 
       - name: Create Resource Group if not exists
-        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/cli@v2
         with:
           inlineScript: |
             az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.LOCATION }} --tags Project=DEMI Application=eagle-demi Environment=test CostCenter=c4b0a8 ManagedBy=Bicep
 
       - name: Deploy Bicep IaC
-        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/arm-deploy@v1
         with:
           scope: resourcegroup
           resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
           template: ./azure/main.bicep
           parameters: ./azure/main.bicepparam environmentName=test minioAccessKey="${{ secrets.MINIO_ACCESS_KEY }}" minioSecretKey="${{ secrets.MINIO_SECRET_KEY }}" typesenseApiKey="${{ secrets.TYPESENSE_API_KEY }}"
+
+      - name: Report Infrastructure Failure to Job Summary
+        if: failure()
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            echo "### ❌ Infrastructure Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "#### Azure Deployment Error Diagnostics:" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+            az deployment group list -g ${{ env.AZURE_RESOURCE_GROUP }} --query "[0].properties.error" -o json >> $GITHUB_STEP_SUMMARY 2>&1 || echo "No deployment error details found." >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
 
   deploy-frontend:
@@ -86,17 +93,16 @@ jobs:
           if [ -n "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -n "${{ secrets.AZURE_CREDENTIALS }}" ]; then
             echo "has_creds=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Azure credentials not set in repository secrets."
+            exit 1
           fi
 
       - name: Setup Node.js
-        if: steps.check-creds.outputs.has_creds == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
       - name: Install & Build Frontend
-        if: steps.check-creds.outputs.has_creds == 'true'
         run: |
           cd frontend
           corepack enable
@@ -107,7 +113,6 @@ jobs:
           zip -r /tmp/frontend.zip .
 
       - name: Azure Login
-        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -117,11 +122,16 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Deploy Frontend Zip to Azure Web App
-        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/cli@v2
         with:
           inlineScript: |
             az webapp deploy -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-frontend-test --src-path /tmp/frontend.zip --type zip
+
+      - name: Report Frontend Failure to Job Summary
+        if: failure()
+        run: |
+          echo "### ❌ Frontend Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Check step logs above for details on build or Azure Web App deployment errors." >> $GITHUB_STEP_SUMMARY
 
 
   deploy-api:
@@ -138,17 +148,16 @@ jobs:
           if [ -n "${{ secrets.AZURE_CLIENT_ID }}" ] || [ -n "${{ secrets.AZURE_CREDENTIALS }}" ]; then
             echo "has_creds=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_creds=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Azure credentials not set in repository secrets."
+            exit 1
           fi
 
       - name: Setup Node.js
-        if: steps.check-creds.outputs.has_creds == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
       - name: Install Dependencies & Package API
-        if: steps.check-creds.outputs.has_creds == 'true'
         run: |
           corepack enable
           yarn install --immutable
@@ -164,7 +173,6 @@ jobs:
           "
 
       - name: Azure Login
-        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -174,8 +182,13 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Deploy API Zip to Azure Function App
-        if: steps.check-creds.outputs.has_creds == 'true'
         uses: azure/cli@v2
         with:
           inlineScript: |
             az functionapp deployment source config-zip -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-api-test --src /tmp/api.zip
+
+      - name: Report API Failure to Job Summary
+        if: failure()
+        run: |
+          echo "### ❌ API Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Check step logs above for details on packaging or Azure Function App deployment errors." >> $GITHUB_STEP_SUMMARY

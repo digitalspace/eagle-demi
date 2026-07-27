@@ -1,11 +1,12 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "languageVersion": "2.0",
   "contentVersion": "1.0.0.0",
   "metadata": {
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "9448546817499214161"
+      "templateHash": "10838700532234851267"
     }
   },
   "parameters": {
@@ -74,8 +75,8 @@
       "CostCenter": "c4b0a8"
     }
   },
-  "resources": [
-    {
+  "resources": {
+    "vnet": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "deploy-vnet",
@@ -187,7 +188,7 @@
         }
       }
     },
-    {
+    "keyVault": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "deploy-key-vault",
@@ -282,7 +283,7 @@
         }
       }
     },
-    {
+    "staticWebApp": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "deploy-static-web-app",
@@ -372,7 +373,7 @@
         }
       }
     },
-    {
+    "cosmosDb": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "deploy-cosmos-db",
@@ -392,17 +393,18 @@
             "value": "[variables('defaultTags')]"
           },
           "peSubnetId": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.peSubnetId.value]"
+            "value": "[reference('vnet').outputs.peSubnetId.value]"
           }
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
           "contentVersion": "1.0.0.0",
           "metadata": {
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "12795779246912976662"
+              "templateHash": "12606132993390234786"
             }
           },
           "parameters": {
@@ -438,8 +440,8 @@
             "databaseName": "[format('demi-{0}', parameters('environmentName'))]",
             "privateEndpointName": "[format('pe-cosmos-{0}', parameters('environmentName'))]"
           },
-          "resources": [
-            {
+          "resources": {
+            "cosmosAccount": {
               "type": "Microsoft.DocumentDB/databaseAccounts",
               "apiVersion": "2023-11-15",
               "name": "[variables('accountName')]",
@@ -468,7 +470,7 @@
                 ]
               }
             },
-            {
+            "cosmosDatabase": {
               "type": "Microsoft.DocumentDB/databaseAccounts/mongodbDatabases",
               "apiVersion": "2023-11-15",
               "name": "[format('{0}/{1}', variables('accountName'), variables('databaseName'))]",
@@ -478,10 +480,10 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]"
+                "cosmosAccount"
               ]
             },
-            {
+            "privateEndpoint": {
               "condition": "[not(empty(parameters('peSubnetId')))]",
               "type": "Microsoft.Network/privateEndpoints",
               "apiVersion": "2023-09-01",
@@ -505,14 +507,14 @@
                 ]
               },
               "dependsOn": [
-                "[resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName'))]"
+                "cosmosAccount"
               ]
             }
-          ],
+          },
           "outputs": {
             "connectionString": {
-              "type": "string",
-              "value": "[listConnectionStrings(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName')), '2023-11-15').connectionStrings[0].connectionString]"
+              "type": "securestring",
+              "value": "[listConnectionStrings('cosmosAccount', '2023-11-15').connectionStrings[0].connectionString]"
             },
             "databaseName": {
               "type": "string",
@@ -526,10 +528,10 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Resources/deployments', 'deploy-vnet')]"
+        "vnet"
       ]
     },
-    {
+    "containerApps": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "deploy-container-apps",
@@ -734,7 +736,7 @@
         }
       }
     },
-    {
+    "apiWebApp": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "deploy-api-web-app",
@@ -763,16 +765,16 @@
             "value": "[parameters('minioSecretKey')]"
           },
           "mongodbConnectionString": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cosmos-db'), '2025-04-01').outputs.connectionString.value]"
+            "value": "[listOutputsWithSecureValues('cosmosDb', '2025-04-01').connectionString]"
           },
           "typesenseUrl": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-container-apps'), '2025-04-01').outputs.typesenseUrl.value]"
+            "value": "[reference('containerApps').outputs.typesenseUrl.value]"
           },
           "typesenseApiKey": {
             "value": "[parameters('typesenseApiKey')]"
           },
           "apiSubnetId": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-vnet'), '2025-04-01').outputs.apiSubnetId.value]"
+            "value": "[reference('vnet').outputs.apiSubnetId.value]"
           }
         },
         "template": {
@@ -999,12 +1001,12 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Resources/deployments', 'deploy-container-apps')]",
-        "[resourceId('Microsoft.Resources/deployments', 'deploy-cosmos-db')]",
-        "[resourceId('Microsoft.Resources/deployments', 'deploy-vnet')]"
+        "containerApps",
+        "cosmosDb",
+        "vnet"
       ]
     },
-    {
+    "costBudget": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "deploy-cost-budget",
@@ -1099,23 +1101,23 @@
         }
       }
     }
-  ],
+  },
   "outputs": {
     "staticWebAppDefaultHostname": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-static-web-app'), '2025-04-01').outputs.staticWebAppDefaultHostname.value]"
+      "value": "[reference('staticWebApp').outputs.staticWebAppDefaultHostname.value]"
     },
     "apiWebAppHostName": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-api-web-app'), '2025-04-01').outputs.apiWebAppHostName.value]"
+      "value": "[reference('apiWebApp').outputs.apiWebAppHostName.value]"
     },
     "typesenseUrl": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-container-apps'), '2025-04-01').outputs.typesenseUrl.value]"
+      "value": "[reference('containerApps').outputs.typesenseUrl.value]"
     },
     "keyVaultName": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-key-vault'), '2025-04-01').outputs.keyVaultName.value]"
+      "value": "[reference('keyVault').outputs.keyVaultName.value]"
     }
   }
 }
