@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.45.15.27210",
-      "templateHash": "1344887051175122075"
+      "templateHash": "4072200565779832963"
     }
   },
   "parameters": {
@@ -196,7 +196,7 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "deploy-cosmos-mongo",
+      "name": "deploy-cosmos-db",
       "properties": {
         "expressionEvaluationOptions": {
           "scope": "inner"
@@ -220,7 +220,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "1891008989158914271"
+              "templateHash": "3945740949211566098"
             }
           },
           "parameters": {
@@ -245,7 +245,7 @@
             }
           },
           "variables": {
-            "accountName": "[format('demi-mongo-{0}-{1}', parameters('environmentName'), uniqueString(resourceGroup().id))]",
+            "accountName": "[format('demi-cosmos-{0}-{1}', parameters('environmentName'), uniqueString(resourceGroup().id))]",
             "databaseName": "[format('demi-{0}', parameters('environmentName'))]"
           },
           "resources": [
@@ -259,6 +259,8 @@
               "properties": {
                 "databaseAccountOfferType": "Standard",
                 "publicNetworkAccess": "Disabled",
+                "disableKeyBasedMetadataWriteAccess": true,
+                "minimalTlsVersion": "Tls12",
                 "apiProperties": {
                   "serverVersion": "7.0"
                 },
@@ -295,7 +297,7 @@
               "type": "string",
               "value": "[listConnectionStrings(resourceId('Microsoft.DocumentDB/databaseAccounts', variables('accountName')), '2023-11-15').connectionStrings[0].connectionString]"
             },
-            "mongoDatabaseName": {
+            "databaseName": {
               "type": "string",
               "value": "[variables('databaseName')]"
             }
@@ -333,7 +335,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "14278922321547088045"
+              "templateHash": "6486616457620065763"
             }
           },
           "parameters": {
@@ -436,7 +438,7 @@
                 "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('containerAppEnvName'))]",
                 "configuration": {
                   "ingress": {
-                    "external": true,
+                    "external": false,
                     "targetPort": 8108,
                     "transport": "auto"
                   },
@@ -456,8 +458,7 @@
                         "--data-dir",
                         "/data",
                         "--api-key",
-                        "$(TYPESENSE_API_KEY)",
-                        "--enable-cors"
+                        "$(TYPESENSE_API_KEY)"
                       ],
                       "env": [
                         {
@@ -466,8 +467,8 @@
                         }
                       ],
                       "resources": {
-                        "cpu": "[json('0.5')]",
-                        "memory": "1.0Gi"
+                        "cpu": "[json('1.0')]",
+                        "memory": "2.0Gi"
                       },
                       "volumeMounts": [
                         {
@@ -485,7 +486,7 @@
                     }
                   ],
                   "scale": {
-                    "minReplicas": 0,
+                    "minReplicas": 1,
                     "maxReplicas": 1
                   }
                 }
@@ -538,7 +539,7 @@
             "value": "[parameters('minioSecretKey')]"
           },
           "mongodbConnectionString": {
-            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cosmos-mongo'), '2025-04-01').outputs.connectionString.value]"
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-cosmos-db'), '2025-04-01').outputs.connectionString.value]"
           },
           "typesenseUrl": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'deploy-container-apps'), '2025-04-01').outputs.typesenseUrl.value]"
@@ -554,7 +555,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.45.15.27210",
-              "templateHash": "8776660184794887447"
+              "templateHash": "7483280171719439017"
             }
           },
           "parameters": {
@@ -683,6 +684,14 @@
                       "value": "1"
                     },
                     {
+                      "name": "COSMOSDB_URI",
+                      "value": "[parameters('mongodbConnectionString')]"
+                    },
+                    {
+                      "name": "COSMOSDB_DATABASE",
+                      "value": "epic"
+                    },
+                    {
                       "name": "MONGODB_URI",
                       "value": "[parameters('mongodbConnectionString')]"
                     },
@@ -724,8 +733,7 @@
                       "https://portal.azure.com",
                       "https://demi-frontend-dev.azurewebsites.net",
                       "https://demi-frontend-test.azurewebsites.net",
-                      "https://demi-frontend-prod.azurewebsites.net",
-                      "*"
+                      "https://demi-frontend-prod.azurewebsites.net"
                     ]
                   }
                 }
@@ -750,7 +758,7 @@
       },
       "dependsOn": [
         "[resourceId('Microsoft.Resources/deployments', 'deploy-container-apps')]",
-        "[resourceId('Microsoft.Resources/deployments', 'deploy-cosmos-mongo')]"
+        "[resourceId('Microsoft.Resources/deployments', 'deploy-cosmos-db')]"
       ]
     },
     {

@@ -79,7 +79,7 @@ resource typesenseContainerApp 'Microsoft.App/containerApps@2023-05-01' = {
     managedEnvironmentId: caEnvironment.id
     configuration: {
       ingress: {
-        external: true
+        external: false
         targetPort: 8108
         transport: 'auto'
       }
@@ -100,7 +100,6 @@ resource typesenseContainerApp 'Microsoft.App/containerApps@2023-05-01' = {
             '/data'
             '--api-key'
             '$(TYPESENSE_API_KEY)'
-            '--enable-cors'
           ]
           env: [
             {
@@ -109,8 +108,8 @@ resource typesenseContainerApp 'Microsoft.App/containerApps@2023-05-01' = {
             }
           ]
           resources: {
-            cpu: json('0.5')
-            memory: '1.0Gi'
+            cpu: json('1.0')
+            memory: '2.0Gi'
           }
           volumeMounts: [
             {
@@ -128,7 +127,7 @@ resource typesenseContainerApp 'Microsoft.App/containerApps@2023-05-01' = {
         }
       ]
       scale: {
-        minReplicas: 0 // Scale to 0 when idle ($0 cost)
+        minReplicas: 1
         maxReplicas: 1
       }
     }

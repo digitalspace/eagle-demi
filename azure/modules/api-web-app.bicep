@@ -150,7 +150,6 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           'https://demi-frontend-dev.azurewebsites.net'
           'https://demi-frontend-test.azurewebsites.net'
           'https://demi-frontend-prod.azurewebsites.net'
-          '*'
         ]
       }
     }

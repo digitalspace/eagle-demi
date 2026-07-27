@@ -106,8 +106,7 @@ const DOCUMENT_CHUNKS_SCHEMA = {
     { name: 'allowed_roles',  type: 'string[]', facet: true,  optional: true },
     // [lat, lng] centroid geopoint inherited from parent project
     { name: 'centroid',       type: 'geopoint',              optional: true },
-    // Future: embedding field for vector/AI search
-    // { name: 'embedding', type: 'float[]', num_dim: 768, optional: true },
+    { name: 'embedding',      type: 'float[]', num_dim: 768, optional: true },
   ],
 };
 
