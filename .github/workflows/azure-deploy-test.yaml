@@ -32,7 +32,7 @@ permissions:
   contents: read
 
 env:
-  AZURE_SUBSCRIPTION_ID: 'd2f8d048-2af3-44fd-81cc-858c040001f2' # c4b0a8-test - EPIC.AI
+  AZURE_SUBSCRIPTION_ID: '7897ceb1-9a86-4639-87d7-7f9ff67142b3' # c4b0a8-test - EPIC.AI
   AZURE_RESOURCE_GROUP: 'c4b0a8-test-rg'
   LOCATION: 'canadacentral'
 
