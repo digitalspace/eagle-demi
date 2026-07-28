@@ -3,7 +3,7 @@
 const winston = require('winston');
 const { format, transports } = winston;
 const { AsyncLocalStorage } = require('async_hooks');
-const mongoose = require('mongoose');
+const LogModel = require('../models/log');
 const config = require('../config');
 
 // Asynchronous Context Tracking for Request/Correlation IDs
@@ -18,11 +18,11 @@ const requestIdFormat = format((info) => {
   return info;
 });
 
-// Custom Winston Transport to write to the MongoDB Capped Collection
-class MongoCappedTransport extends winston.Transport {
+// Custom Winston Transport to write logs to Azure Cosmos DB
+class CosmosLogTransport extends winston.Transport {
   constructor(opts) {
     super(opts);
-    this.name = 'MongoCappedTransport';
+    this.name = 'CosmosLogTransport';
     this.level = opts.level || 'info';
   }
 
@@ -31,30 +31,20 @@ class MongoCappedTransport extends winston.Transport {
       this.emit('logged', info);
     });
 
-    // Write to DB only if connection is healthy
-    if (mongoose.connection && mongoose.connection.readyState === 1) {
-      try {
-        const LogModel = mongoose.model('Log');
-        
-        // Extract meta fields excluding default winston fields
-        const { timestamp, level, message, requestId, stack, ...meta } = info;
-
-        const logEntry = new LogModel({
-          timestamp: timestamp ? new Date(timestamp) : new Date(),
-          level: level,
-          message: message,
-          requestId: requestId || '',
-          meta: meta || {},
-          stack: stack || ''
-        });
-
-        logEntry.save().catch((err) => {
-          // Fallback to direct stderr print without looping back to Winston
-          process.stderr.write(`[MongoCappedTransport Error] Failed to write log: ${err.message}\n`);
-        });
-      } catch (_err) {
-        // Model may not be registered yet, gracefully ignore
-      }
+    try {
+      const { timestamp, level, message, requestId, stack, ...meta } = info;
+      LogModel.upsert({
+        timestamp: timestamp ? new Date(timestamp).toISOString() : new Date().toISOString(),
+        level: level,
+        message: message,
+        requestId: requestId || '',
+        meta: meta || {},
+        stack: stack || ''
+      }).catch((err) => {
+        process.stderr.write(`[CosmosLogTransport Error] Failed to write log: ${err.message}\n`);
+      });
+    } catch (_err) {
+      // Gracefully ignore during shutdown or startup
     }
 
     callback();
@@ -78,20 +68,19 @@ const defaultTransports = [
         : format.printf(({ timestamp, level, message, requestId, stack }) => {
             const reqTag = requestId ? ` [${requestId}]` : '';
             const msg = stack ? `${message}\n${stack}` : message;
-            // ANSI escape codes for level colorizing in local dev
             let colorLevel = level.toUpperCase();
-            if (level === 'info') colorLevel = `\x1b[32m${colorLevel}\x1b[0m`; // Green
-            else if (level === 'error') colorLevel = `\x1b[31m${colorLevel}\x1b[0m`; // Red
-            else if (level === 'warn') colorLevel = `\x1b[33m${colorLevel}\x1b[0m`; // Yellow
-            else if (level === 'debug') colorLevel = `\x1b[36m${colorLevel}\x1b[0m`; // Cyan
+            if (level === 'info') colorLevel = `\x1b[32m${colorLevel}\x1b[0m`;
+            else if (level === 'error') colorLevel = `\x1b[31m${colorLevel}\x1b[0m`;
+            else if (level === 'warn') colorLevel = `\x1b[33m${colorLevel}\x1b[0m`;
+            else if (level === 'debug') colorLevel = `\x1b[36m${colorLevel}\x1b[0m`;
 
             return `${timestamp} ${colorLevel}${reqTag}: ${msg}`;
           })
     )
   }),
 
-  // 2. Custom MongoDB Capped Transport
-  new MongoCappedTransport({
+  // 2. Custom Cosmos DB Transport
+  new CosmosLogTransport({
     level: config.logLevel
   })
 ];
@@ -105,7 +94,7 @@ const logger = winston.createLogger({
 module.exports = {
   logger,
   asyncLocalStorage,
-  
+
   /**
    * Run a function within a logging request context.
    * @param {string} requestId - Unique ID of the current request execution chain.

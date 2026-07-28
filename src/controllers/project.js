@@ -1,31 +1,7 @@
 'use strict';
 
 const Project = require('../models/project');
-const Region = require('../models/region');
-const Boundary = require('../models/boundary');
 
-async function autoTagProjectBoundaries(project) {
-  if (!project.centroid || !project.centroid.coordinates) return;
-  try {
-    const intersectingBoundaries = await Boundary.find({
-      geometry: {
-        $geoIntersects: {
-          $geometry: {
-            type: 'Point',
-            coordinates: project.centroid.coordinates
-          }
-        }
-      }
-    }, { type: 1, name: 1 });
-    project.regionalDistrict = intersectingBoundaries.find(b => b.type === 'Regional District')?.name || '';
-    project.municipality = intersectingBoundaries.find(b => b.type === 'Municipality')?.name || '';
-    project.electoralDistrict = intersectingBoundaries.find(b => b.type === 'Electoral District')?.name || '';
-  } catch (err) {
-    console.error('Error in autoTagProjectBoundaries:', err);
-  }
-}
-
-// Helper to determine if the request is administrative / internal
 function isAdmin(req) {
   if (req.user) {
     const roles = req.user.realm_access?.roles || [];
@@ -40,31 +16,29 @@ function isAdmin(req) {
 
 exports.getProjects = async (req, res) => {
   try {
-    const { region: regionName, regionalDistrict, municipality, electoralDistrict } = req.query;
+    const { regionalDistrict, municipality, electoralDistrict } = req.query;
     const isAuth = isAdmin(req);
-    const baseQuery = isAuth ? {} : { isPublished: true };
+    const conditions = [];
+    const parameters = [];
 
+    if (!isAuth) {
+      conditions.push('c.isPublished = true');
+    }
     if (regionalDistrict) {
-      baseQuery.regionalDistrict = regionalDistrict;
+      parameters.push({ name: '@rd', value: regionalDistrict });
+      conditions.push('c.regionalDistrict = @rd');
     }
     if (municipality) {
-      baseQuery.municipality = municipality;
+      parameters.push({ name: '@muni', value: municipality });
+      conditions.push('c.municipality = @muni');
     }
     if (electoralDistrict) {
-      baseQuery.electoralDistrict = electoralDistrict;
+      parameters.push({ name: '@ed', value: electoralDistrict });
+      conditions.push('c.electoralDistrict = @ed');
     }
 
-    if (regionName) {
-      const regionDoc = await Region.findOne({ name: regionName });
-      if (!regionDoc) {
-        return res.status(404).json({ error: 'Region not found' });
-      }
-      baseQuery.centroid = {
-        $geoWithin: { $geometry: regionDoc.geometry }
-      };
-    }
-
-    const projects = await Project.find(baseQuery);
+    const whereClause = conditions.length > 0 ? conditions.join(' AND ') : '';
+    const projects = await Project.find(whereClause, parameters, { orderBy: 'c.name ASC' });
     return res.json(projects);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -79,24 +53,27 @@ exports.createProject = async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: trackProjectId, name, centroid' });
     }
 
-    const newProject = new Project({
-      trackProjectId,
+    const newProject = {
+      _id: String(trackProjectId),
+      trackProjectId: Number(trackProjectId),
       name,
-      description,
-      sector,
-      region,
-      status,
+      description: description || '',
+      sector: sector || '',
+      region: region || '',
+      status: status || '',
       centroid,
-      isPublished: isPublished !== undefined ? isPublished : false
-    });
-    await autoTagProjectBoundaries(newProject);
+      isPublished: isPublished !== undefined ? Boolean(isPublished) : false,
+      sources: {
+        track: {},
+        eagle: null,
+        nrpti: { recordCount: 0, orderCount: 0, inspectionCount: 0, ticketCount: 0, lastRecordDate: null },
+        wildfire: { activeCountWithin50km: 0, nearestDistanceKm: null, firesOfNoteNearby: 0, lastCalculatedAt: null }
+      }
+    };
 
-    const saved = await newProject.save();
+    const saved = await Project.upsert(newProject);
     return res.status(201).json(saved);
   } catch (err) {
-    if (err.code === 11000) {
-      return res.status(409).json({ error: 'Project with trackProjectId already exists' });
-    }
     return res.status(500).json({ error: err.message });
   }
 };
@@ -104,9 +81,10 @@ exports.createProject = async (req, res) => {
 exports.getProject = async (req, res) => {
   try {
     const { id } = req.params;
-    const query = isNaN(id) ? { _id: id } : { trackProjectId: Number(id) };
-
-    const project = await Project.findOne(query);
+    let project = await Project.findById(id);
+    if (!project && !isNaN(id)) {
+      project = await Project.findOne('c.trackProjectId = @tpid', [{ name: '@tpid', value: Number(id) }]);
+    }
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
@@ -119,44 +97,17 @@ exports.getProject = async (req, res) => {
 exports.updateProject = async (req, res) => {
   try {
     const { id } = req.params;
-    const query = isNaN(id) ? { _id: id } : { trackProjectId: Number(id) };
-
-    const {
-      name, description, centroid, proponent, type, sector, region, status, isPublished
-    } = req.body;
-
-    const updateData = {};
-    if (name !== undefined) updateData.name = name;
-    if (description !== undefined) updateData.description = description;
-    if (proponent !== undefined) updateData.proponent = proponent;
-    if (type !== undefined) updateData.type = type;
-    if (sector !== undefined) updateData.sector = sector;
-    if (region !== undefined) updateData.region = region;
-    if (status !== undefined) updateData.status = status;
-    if (isPublished !== undefined) updateData.isPublished = isPublished;
-
-    if (centroid && centroid.coordinates) {
-      updateData.centroid = centroid;
-      const intersectingBoundaries = await Boundary.find({
-        geometry: {
-          $geoIntersects: {
-            $geometry: {
-              type: 'Point',
-              coordinates: centroid.coordinates
-            }
-          }
-        }
-      }, { type: 1, name: 1 });
-      updateData.regionalDistrict = intersectingBoundaries.find(b => b.type === 'Regional District')?.name || '';
-      updateData.municipality = intersectingBoundaries.find(b => b.type === 'Municipality')?.name || '';
-      updateData.electoralDistrict = intersectingBoundaries.find(b => b.type === 'Electoral District')?.name || '';
+    let existing = await Project.findById(id);
+    if (!existing && !isNaN(id)) {
+      existing = await Project.findOne('c.trackProjectId = @tpid', [{ name: '@tpid', value: Number(id) }]);
     }
-
-    const updated = await Project.findOneAndUpdate(query, updateData, { new: true, runValidators: true });
-    if (!updated) {
+    if (!existing) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    return res.json(updated);
+
+    const updated = { ...existing, ...req.body };
+    const saved = await Project.upsert(updated);
+    return res.json(saved);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -165,13 +116,16 @@ exports.updateProject = async (req, res) => {
 exports.deleteProject = async (req, res) => {
   try {
     const { id } = req.params;
-    const query = isNaN(id) ? { _id: id } : { trackProjectId: Number(id) };
-
-    const deleted = await Project.findOneAndDelete(query);
-    if (!deleted) {
+    let existing = await Project.findById(id);
+    if (!existing && !isNaN(id)) {
+      existing = await Project.findOne('c.trackProjectId = @tpid', [{ name: '@tpid', value: Number(id) }]);
+    }
+    if (!existing) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    return res.json({ message: 'Project deleted successfully', deleted });
+
+    await Project.deleteById(existing._id);
+    return res.json({ message: 'Project deleted successfully', deleted: existing });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

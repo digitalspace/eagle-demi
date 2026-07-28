@@ -1,5 +1,7 @@
 export interface Project {
+  _id?: string;
   id: string | number;
+  trackProjectId?: number | string;
   name: string;
   sector: string;
   status: string;
@@ -13,6 +15,12 @@ export interface Project {
   description: string;
   proponent: string;
   rawMetadata?: any;
+  sources?: {
+    track?: any;
+    eagle?: any;
+    nrpti?: { recordCount?: number; orderCount?: number; inspectionCount?: number; ticketCount?: number; count?: number; records?: any[] };
+    wildfire?: { count?: number; activeNearby?: boolean; nearestDistanceKm?: number; wildfires?: any[] };
+  };
 }
 
 export interface Document {

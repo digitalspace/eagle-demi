@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: eagle-demi-nightly-sync
+  labels:
+    app: eagle-demi
+    component: nightly-sync
+spec:
+  schedule: "0 2 * * *"  # Run nightly at 2:00 AM UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: eagle-demi
+            component: nightly-sync
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: nightly-sync
+              image: image-registry.openshift-image-registry.svc:5000/6cdc9e-tools/eagle-demi:latest
+              command:
+                - /bin/sh
+                - -c
+                - "npm run db:nightly-sync"
+              envFrom:
+                - secretRef:
+                    name: eagle-demi-mongodb
+                - secretRef:
+                    name: eagle-api-mongodb
+              env:
+                - name: NODE_ENV
+                  value: "production"
+                - name: TYPESENSE_HOST
+                  value: "typesense"
+                - name: TYPESENSE_PORT
+                  value: "8108"
+                - name: TYPESENSE_PROTOCOL
+                  value: "http"
+                - name: TYPESENSE_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: eagle-typesense-secret
+                      key: api-key
+              resources:
+                requests:
+                  cpu: "250m"
+                  memory: "512Mi"
+                limits:
+                  cpu: "1"
+                  memory: "2Gi"

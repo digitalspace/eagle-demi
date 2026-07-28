@@ -118,3 +118,20 @@ app.http('expressApiRoot', {
   route: '',
   handler: handleExpress
 });
+
+app.timer('nightlySyncTimer', {
+  schedule: '0 0 2 * * *',
+  handler: async (myTimer, context) => {
+    const log = context && context.log ? context.log : console.log;
+    const errLog = context && context.error ? context.error : console.error;
+    log('[Azure Timer] Nightly Sync Timer triggered at:', new Date().toISOString());
+    try {
+      const { runNightlySync } = require('../src/scripts/nightly-sync');
+      await runNightlySync();
+      log('[Azure Timer] Nightly Sync finished successfully.');
+    } catch (err) {
+      errLog('[Azure Timer] Nightly Sync failed with error:', err.message || err);
+    }
+  }
+});
+

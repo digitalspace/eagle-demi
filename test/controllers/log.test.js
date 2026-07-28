@@ -5,7 +5,6 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-// Ensure Log model is registered
 const Log = require('../../src/models/log');
 const logController = require('../../src/controllers/log');
 
@@ -21,23 +20,11 @@ test('Log Controller Tests', async (t) => {
       { level: 'error', message: 'Second log', requestId: 'req-2' }
     ];
 
-    // Mock Log.find and its builder chain
-    t.mock.method(Log, 'find', (query) => {
-      // Expect empty query since no filters are sent
-      assert.deepStrictEqual(query, {});
-      return {
-        sort: (sortObj) => {
-          assert.deepStrictEqual(sortObj, { timestamp: -1 });
-          return {
-            limit: (limitVal) => {
-              assert.strictEqual(limitVal, 100);
-              return {
-                lean: async () => mockLogs
-              };
-            }
-          };
-        }
-      };
+    t.mock.method(Log, 'find', async (whereClause, parameters, options) => {
+      assert.strictEqual(whereClause, '');
+      assert.strictEqual(options.maxItemCount, 100);
+      assert.strictEqual(options.orderBy, 'c.timestamp DESC');
+      return mockLogs;
     });
 
     const req = { query: {} };
@@ -62,30 +49,17 @@ test('Log Controller Tests', async (t) => {
     assert.deepStrictEqual(jsonResponse.data, mockLogs);
   });
 
-  await t.test('getLogs correctly filters by level and requestId, and respects limit/sort', async () => {
+  await t.test('getLogs correctly filters by level and requestId', async () => {
     const mockLogs = [
       { level: 'error', message: 'Error log matching', requestId: 'req-abc' }
     ];
 
-    t.mock.method(Log, 'find', (query) => {
-      // Validate query properties
-      assert.strictEqual(query.level, 'error');
-      assert.strictEqual(query.requestId, 'req-abc');
-      return {
-        sort: (sortObj) => {
-          // Sort direction should be ascending (1)
-          assert.deepStrictEqual(sortObj, { timestamp: 1 });
-          return {
-            limit: (limitVal) => {
-              // Custom limit of 10
-              assert.strictEqual(limitVal, 10);
-              return {
-                lean: async () => mockLogs
-              };
-            }
-          };
-        }
-      };
+    t.mock.method(Log, 'find', async (whereClause, parameters, options) => {
+      assert.ok(whereClause.includes('c.level = @level'));
+      assert.ok(whereClause.includes('c.requestId = @reqId'));
+      assert.strictEqual(options.maxItemCount, 10);
+      assert.strictEqual(options.orderBy, 'c.timestamp ASC');
+      return mockLogs;
     });
 
     const req = {
@@ -116,36 +90,5 @@ test('Log Controller Tests', async (t) => {
     assert.ok(jsonResponse.success);
     assert.strictEqual(jsonResponse.count, 1);
     assert.deepStrictEqual(jsonResponse.data, mockLogs);
-  });
-
-  await t.test('getLogs correctly processes search regex filter', async () => {
-    t.mock.method(Log, 'find', (query) => {
-      // Validate query has regex search on message
-      assert.ok(query.message);
-      assert.ok(query.message.$regex);
-      assert.strictEqual(query.message.$regex, 'database');
-      assert.strictEqual(query.message.$options, 'i');
-      return {
-        sort: () => ({
-          limit: () => ({
-            lean: async () => []
-          })
-        })
-      };
-    });
-
-    const req = {
-      query: {
-        search: 'database'
-      }
-    };
-
-    const res = {
-      status: () => ({
-        json: () => {}
-      })
-    };
-
-    await logController.getLogs(req, res);
   });
 });

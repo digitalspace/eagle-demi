@@ -70,6 +70,7 @@ export class RegistryStateService {
   // Selected Items (using Signals)
   selectedProject = signal<Project | null>(null);
   selectedDocument = signal<Document | null>(null);
+  selectedProjectRecords = signal<any[] | null>(null);
 
   // Map viewport states
   mapInViewProjectIds = signal<(string | number)[]>([]);
@@ -933,9 +934,39 @@ export class RegistryStateService {
     this.loadData();
   }
 
-  selectProject(proj: Project | null) {
+  async selectProject(proj: Project | null) {
     this.selectedProject.set(proj);
     this.selectedDocument.set(null);
+    this.selectedProjectRecords.set(null);
+
+    if (proj) {
+      const projIds = [proj._id, proj.id, proj.trackProjectId, proj.legacyEagleId].filter(Boolean);
+      const basePath = this.getBasePath();
+      
+      for (const pId of projIds) {
+        try {
+          const response = await fetch(`${basePath}/records?project=${pId}`);
+          if (response.ok) {
+            const json = await response.json();
+            if (json.data && Array.isArray(json.data) && json.data.length > 0) {
+              this.selectedProjectRecords.set(json.data);
+              const recCount = json.pagination?.total ?? json.data.length;
+              if (!proj.sources) proj.sources = {};
+              if (!proj.sources.nrpti) {
+                proj.sources.nrpti = { recordCount: recCount, orderCount: 0, inspectionCount: recCount, ticketCount: 0 };
+              } else {
+                proj.sources.nrpti.recordCount = recCount;
+              }
+              // Update signal with enriched project
+              this.selectedProject.set({ ...proj });
+              break;
+            }
+          }
+        } catch (err) {
+          console.warn('[RegistryState] Failed to fetch project records:', err);
+        }
+      }
+    }
   }
 
   selectDocument(doc: Document | null) {

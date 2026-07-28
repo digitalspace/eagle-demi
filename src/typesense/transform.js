@@ -2,12 +2,6 @@
 
 /**
  * Transform MongoDB documents into Typesense-compatible flat objects.
- *
- * Rules:
- *  - id = MongoDB _id as string (Typesense requires "id" field)
- *  - Dates → Unix timestamp in seconds (int64)
- *  - ObjectId references → string
- *  - Omit null/undefined/empty values — Typesense optional fields handle absence
  */
 
 function toTimestamp(value) {
@@ -21,47 +15,23 @@ function str(value) {
   return String(value);
 }
 
-/**
- * Parse a [lng, lat] centroid pair from a legislation sub-object.
- * Validates that coordinates are within BC bounds before accepting.
- * Returns { centroid: [lng, lat] } or {} if invalid.
- */
 function parseCentroid(c) {
   const coords = (c && c.coordinates && Array.isArray(c.coordinates)) ? c.coordinates : c;
   if (!Array.isArray(coords) || coords.length < 2) return {};
   const lng = parseFloat(coords[0]);
   const lat = parseFloat(coords[1]);
   if (isNaN(lng) || isNaN(lat) || lat < 48 || lat > 60 || lng < -139 || lng > -114) return {};
-  return { centroid: [lat, lng] }; // Swap to [lat, lng] for Typesense geopoint
+  return { centroid: [lat, lng] };
 }
-
-
 
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
-/**
- * Extract allowed roles from a MongoDB document's read array.
- * Fail-closed: returns ['sysadmin'] when read is absent or empty, so unpublished
- * docs are never exposed publicly. Only docs with an explicit read array containing
- * role names (e.g. ['public']) will be visible to those roles at search time.
- * Used to populate the allowed_roles field in Typesense so scoped search keys
- * can filter by role at query time.
- */
 function extractRoles(doc) {
   if (Array.isArray(doc.read) && doc.read.length > 0) return doc.read;
   if (doc && doc.isPublished !== false) return ['public'];
   return ['sysadmin'];
 }
 
-/**
- * Constrain a child document's roles to the intersection with its parent project's read array.
- * A child (activity, document) must never be more visible than its parent project.
- *
- * ONLY call this when projectId exists. Fail-closed:
- *  - projectMeta missing (deleted/unnamed project) → sysadmin-only
- *  - empty read array on project → sysadmin-only
- *  - empty intersection → sysadmin-only
- */
 function constrainToProject(childRoles, projectMeta) {
   const pRead = (projectMeta && Array.isArray(projectMeta.read) && projectMeta.read.length > 0) ? projectMeta.read : ['public'];
   const projectSet = new Set(pRead);
@@ -120,7 +90,7 @@ function transformDocument(doc, listLookup, projectLookup) {
     ...(toTimestamp(doc.dateUploaded)  !== undefined && { dateUploaded:  toTimestamp(doc.dateUploaded) }),
     isFeatured: doc.isFeatured === true,
     ...(str(doc.documentSource)    && { documentSource: str(doc.documentSource) }),
-    popularity:   0,  // default; overwritten nightly by popularity-sync.js
+    popularity:   0,
     allowed_roles: projectId ? constrainToProject(extractRoles(doc), projectMeta) : extractRoles(doc),
   };
 }
@@ -147,7 +117,8 @@ function transformProject(doc, listLookup) {
     ...(str(doc.regionalDistrict)  && { regionalDistrict:  str(doc.regionalDistrict) }),
     ...(str(doc.electoralDistrict) && { electoralDistrict: str(doc.electoralDistrict) }),
     ...(str(doc.municipality)      && { municipality:      str(doc.municipality) }),
-    popularity:   0,  // default; overwritten nightly by popularity-sync.js
+    nrptiRecordCount: doc.sources?.nrpti?.recordCount || 0,
+    popularity:   0,
     allowed_roles: extractRoles(doc),
   };
 }
@@ -159,14 +130,11 @@ function transformRecentActivity(doc, listLookup, projectLookup, pcpLookup) {
     : undefined;
   const projectName = projectMeta?.name;
 
-  // Strip HTML tags so indexed text doesn't contain markup; preserve original for display.
   const contentHtml  = str(doc.content);
   const contentPlain = contentHtml
     ? contentHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() || undefined
     : undefined;
 
-  // PCP (Comment Period) — stored as an ObjectId ref on the RecentActivity doc.
-  // Look up isMet and metURL so the frontend can route "View Engagement" correctly.
   const pcpId  = doc.pcp ? doc.pcp.toString() : undefined;
   const pcpMeta = (pcpLookup && pcpId && pcpLookup.has(pcpId)) ? pcpLookup.get(pcpId) : null;
 
@@ -184,12 +152,10 @@ function transformRecentActivity(doc, listLookup, projectLookup, pcpLookup) {
     complianceAndEnforcement: doc.complianceAndEnforcement === true,
     ...(str(doc.documentUrl)           && { documentUrl:              str(doc.documentUrl) }),
     ...(str(doc.contentUrl)            && { contentUrl:               str(doc.contentUrl) }),
-    dateAdded: toTimestamp(doc.dateAdded) ?? 0,  // non-optional for default_sorting_field
-    // PCP routing fields
+    dateAdded: toTimestamp(doc.dateAdded) ?? 0,
     ...(pcpId                          && { pcpId }),
     ...(pcpMeta?.isMet === true        && { pcpIsMet: true }),
     ...(pcpMeta?.metURL                && { pcpMetURL: str(pcpMeta.metURL) }),
-    // ProjectNotification ref — lets the frontend fetch inline documents on the Updates tab
     ...(doc.projectNotification        && { projectNotificationId: doc.projectNotification.toString() }),
     allowed_roles: projectId ? constrainToProject(extractRoles(doc), projectMeta) : extractRoles(doc),
   };
@@ -201,10 +167,7 @@ function transformProjectNotification(doc, listLookup) {
     ? descriptionHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() || undefined
     : undefined;
 
-  // pcp is stored as a plain string: 'none' | 'pending' | 'open' | 'closed'
   const pcp = str(doc.pcp) && doc.pcp !== 'none' ? str(doc.pcp) : undefined;
-
-  // Engage engagement link — mirrors the CommentPeriod isMet/metURL pattern
   const isMet  = doc.isMet === true;
   const metURL = str(doc.metURL);
 
@@ -225,7 +188,7 @@ function transformProjectNotification(doc, listLookup) {
     ...(metURL                           && { metURL }),
     ...(toTimestamp(doc.dateStarted)   !== undefined && { dateStarted:   toTimestamp(doc.dateStarted) }),
     ...(toTimestamp(doc.dateCompleted) !== undefined && { dateCompleted: toTimestamp(doc.dateCompleted) }),
-    notificationReceivedDate: toTimestamp(doc.notificationReceivedDate) ?? 0,  // non-optional for default_sorting_field
+    notificationReceivedDate: toTimestamp(doc.notificationReceivedDate) ?? 0,
     ...(toTimestamp(doc.decisionDate)    !== undefined && { decisionDate: toTimestamp(doc.decisionDate) }),
     ...(doc.associatedProjectId          && { associatedProjectId:     doc.associatedProjectId.toString() }),
     ...(str(doc.associatedProjectName)   && { associatedProjectName:   str(doc.associatedProjectName) }),
@@ -246,7 +209,6 @@ function transformDocumentChunk(doc, listLookup, projectLookup, _pcpLookup, docu
   const region       = doc.region || parentDoc?.region || projectMeta?.region;
   const centroid     = projectMeta?.centroid;
 
-  // Prefer the value stored on the chunk itself; fall back to the parent Document
   const milestoneRaw    = doc.milestone    ?? parentDoc?.milestone;
   const documentTypeRaw = doc.documentType ?? parentDoc?.type;
 
@@ -264,10 +226,31 @@ function transformDocumentChunk(doc, listLookup, projectLookup, _pcpLookup, docu
     ...(toTimestamp(doc.datePosted) !== undefined && { datePosted: toTimestamp(doc.datePosted) }),
     documentName:  str(doc.documentName) || parentDoc?.displayName || parentDoc?.documentFileName || 'Untitled Document',
     ...(projectName                  && { projectName }),
-    // Chunks inherit roles from parent document constrained to parent project
     allowed_roles: projectId
       ? constrainToProject(parentDoc?.read || extractRoles(doc), projectMeta)
       : (parentDoc?.read || extractRoles(doc)),
+  };
+}
+
+function transformRecord(doc, listLookup, projectLookup) {
+  const projectId = doc.project ? doc.project.toString() : undefined;
+  const projectMeta = (projectLookup && projectId && projectLookup.has(projectId))
+    ? projectLookup.get(projectId)
+    : undefined;
+  const projectName = str(doc.projectName) || projectMeta?.name;
+
+  return {
+    id: doc._id.toString(),
+    recordName: str(doc.recordName) || 'Compliance Record',
+    ...(str(doc.recordType) && { recordType: str(doc.recordType) }),
+    ...(str(doc.nrptiSchemaName) && { nrptiSchemaName: str(doc.nrptiSchemaName) }),
+    ...(str(doc.issuingAgency) && { issuingAgency: str(doc.issuingAgency) }),
+    ...(projectName && { projectName }),
+    ...(str(doc.issuedToName) && { issuedToName: str(doc.issuedToName) }),
+    ...(str(doc.summary) && { summary: str(doc.summary) }),
+    ...(toTimestamp(doc.dateIssued) !== undefined && { dateIssued: toTimestamp(doc.dateIssued) }),
+    ...(projectId && { projectId }),
+    allowed_roles: extractRoles(doc),
   };
 }
 
@@ -277,14 +260,9 @@ const TRANSFORMS = {
   RecentActivity:      transformRecentActivity,
   ProjectNotification: transformProjectNotification,
   DocumentChunk:       transformDocumentChunk,
+  Record:              transformRecord,
 };
 
-/**
- * Build a Map<projectIdString, { name, read }> for all Project documents.
- * Project names are nested under legislation sub-objects (e.g. legislation_2018.name).
- * The read array is included so child documents (activities, documents) can inherit
- * the parent project's visibility — a child must never be more permissive than its project.
- */
 async function buildProjectLookup(db) {
   const docs = await db.collection('projects')
     .find({})
@@ -302,10 +280,6 @@ async function buildProjectLookup(db) {
   return map;
 }
 
-/**
- * Build a Map<idString, { isMet, metURL }> for all public CommentPeriod documents.
- * Used to populate pcpId/pcpIsMet/pcpMetURL on RecentActivity records at sync time.
- */
 async function buildPcpLookup(db) {
   const docs = await db.collection('epic')
     .find({ _schemaName: 'CommentPeriod', read: { $in: ['public'] } })
@@ -321,11 +295,6 @@ async function buildPcpLookup(db) {
   return map;
 }
 
-/**
- * Build a Map<idString, { milestone, documentType }> for all Documents.
- * Used to resolve milestone and documentType on DocumentChunks that were extracted
- * before those fields were denormalised into the chunk records.
- */
 async function buildDocumentLookup(db) {
   const docs = await db.collection('documents')
     .find({})
@@ -346,10 +315,6 @@ async function buildDocumentLookup(db) {
   return map;
 }
 
-/**
- * Build a Map<idString, name> for all List and Organization documents.
- * Pass the result into transformDoc so ObjectId references are resolved to labels.
- */
 async function buildListLookup(db) {
   const docs = await db.collection('epic')
     .find({ _schemaName: { $in: ['List', 'Organization'] } })
@@ -362,13 +327,6 @@ async function buildListLookup(db) {
   return map;
 }
 
-/**
- * Transform a MongoDB document into a Typesense document.
- * Returns null if the schemaName is not indexed.
- * @param {Map} [listLookup]    - Optional id→name map built with buildListLookup()
- * @param {Map} [projectLookup] - Optional id→name map built with buildProjectLookup()
- * @param {Map} [pcpLookup]     - Optional id→{ isMet, metURL } map built with buildPcpLookup()
- */
 function transformDoc(schemaName, doc, listLookup, projectLookup, pcpLookup, documentLookup) {
   const fn = TRANSFORMS[schemaName];
   if (!fn) return null;

@@ -1,11 +1,10 @@
 'use strict';
 
-const mongoose = require('mongoose');
 const Region = require('../models/region');
 
 exports.getRegions = async (req, res) => {
   try {
-    const regions = await Region.find({}).lean();
+    const regions = await Region.find('', [], { orderBy: 'c.name ASC' });
     return res.json(regions);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -20,17 +19,15 @@ exports.createRegion = async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: name, geometry' });
     }
 
-    const newRegion = new Region({
+    const newRegion = {
+      _id: name,
       name,
       geometry
-    });
+    };
 
-    const saved = await newRegion.save();
+    const saved = await Region.upsert(newRegion);
     return res.status(201).json(saved);
   } catch (err) {
-    if (err.code === 11000) {
-      return res.status(409).json({ error: 'Region with that name already exists' });
-    }
     return res.status(500).json({ error: err.message });
   }
 };
@@ -38,9 +35,10 @@ exports.createRegion = async (req, res) => {
 exports.getRegion = async (req, res) => {
   try {
     const { id } = req.params;
-    const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { name: id };
-
-    const region = await Region.findOne(query).lean();
+    let region = await Region.findById(id);
+    if (!region) {
+      region = await Region.findOne('c.name = @name', [{ name: '@name', value: id }]);
+    }
     if (!region) {
       return res.status(404).json({ error: 'Region not found' });
     }
@@ -53,13 +51,17 @@ exports.getRegion = async (req, res) => {
 exports.updateRegion = async (req, res) => {
   try {
     const { id } = req.params;
-    const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { name: id };
-
-    const updated = await Region.findOneAndUpdate(query, req.body, { new: true, runValidators: true });
-    if (!updated) {
+    let existing = await Region.findById(id);
+    if (!existing) {
+      existing = await Region.findOne('c.name = @name', [{ name: '@name', value: id }]);
+    }
+    if (!existing) {
       return res.status(404).json({ error: 'Region not found' });
     }
-    return res.json(updated);
+
+    const updated = { ...existing, ...req.body };
+    const saved = await Region.upsert(updated);
+    return res.json(saved);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -68,13 +70,16 @@ exports.updateRegion = async (req, res) => {
 exports.deleteRegion = async (req, res) => {
   try {
     const { id } = req.params;
-    const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { name: id };
-
-    const deleted = await Region.findOneAndDelete(query);
-    if (!deleted) {
+    let existing = await Region.findById(id);
+    if (!existing) {
+      existing = await Region.findOne('c.name = @name', [{ name: '@name', value: id }]);
+    }
+    if (!existing) {
       return res.status(404).json({ error: 'Region not found' });
     }
-    return res.json({ message: 'Region deleted successfully', deleted });
+
+    await Region.deleteById(existing._id);
+    return res.json({ message: 'Region deleted successfully', deleted: existing });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

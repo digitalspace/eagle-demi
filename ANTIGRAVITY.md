@@ -27,6 +27,14 @@ Document Extraction & Machine Intelligence for EPIC on Azure Serverless.
 
 - **Azure Cosmos DB for MongoDB**: DEMI uses serverless Azure Cosmos DB for MongoDB (`demi-mongo-{env}`).
 - **Direct Connection Bypass**: Connection string uses direct serverless cluster endpoint.
+- **Multi-Source Project Model (`sources.*`)**:
+  - `sources.track`: Master EAO attributes from EPIC.track.
+  - `sources.eagle`: Legacy EAGLE portal project attributes.
+  - `sources.nrpti`: Public compliance & enforcement record metrics.
+- **NRPTI Project Auto-Seeding & Reconciliation**:
+  - `src/scripts/sync-nrpti.js` matches C&E records against existing projects via `_epicProjectId`, exact name, or fuzzy normalized name (`normalizeProjectName`).
+  - Unmatched C&E records **auto-seed new `Project` documents** with `sources.nrpti` metrics and `sources.track: null`.
+  - When TRACK syncs EAO projects, it reconciles against existing documents, populating `sources.track` and root EAO metadata without breaking existing NRPTI record links.
 
 ## API Security & Search Gating
 

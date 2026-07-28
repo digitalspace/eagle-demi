@@ -9,6 +9,8 @@ const projectController = require('../controllers/project');
 const documentController = require('../controllers/document');
 const regionController = require('../controllers/region');
 const boundaryController = require('../controllers/boundary');
+const recordController = require('../controllers/record');
+const wildfireController = require('../controllers/wildfire');
 const searchController = require('../controllers/search');
 const logController = require('../controllers/log');
 
@@ -28,9 +30,19 @@ router.post('/db/seed-boundaries', authMiddleware, dbController.seedBoundaries);
 router.post('/db/import', authMiddleware, dbController.importCollection);
 router.post('/db/query', authMiddleware, dbController.queryCollection);
 router.post('/sync', authMiddleware, dbController.seedDatabase);
+router.post('/admin/sync', authMiddleware, dbController.runNightlySyncHandler);
+router.post('/admin/sync/nrpti', authMiddleware, dbController.runNrptiSyncHandler);
 
 // Search Route
 router.get('/search', passiveAuthMiddleware, searchController.search);
+
+// Compliance Records Routes
+router.get('/records', passiveAuthMiddleware, recordController.getRecords);
+router.get('/records/:id', passiveAuthMiddleware, recordController.getRecord);
+
+// Wildfire Routes
+router.get('/wildfires', passiveAuthMiddleware, wildfireController.getWildfires);
+router.post('/admin/sync/wildfires', authMiddleware, wildfireController.syncWildfiresAdmin);
 
 // Projects Routes
 router.get('/projects', passiveAuthMiddleware, projectController.getProjects);

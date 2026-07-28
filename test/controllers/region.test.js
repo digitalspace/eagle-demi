@@ -3,7 +3,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-// Load models
 const Region = require('../../src/models/region');
 const regionController = require('../../src/controllers/region');
 
@@ -19,11 +18,8 @@ test('Region Controller Tests', async (t) => {
       { name: 'Kootenay', geometry: { type: 'Polygon', coordinates: [] } }
     ];
 
-    t.mock.method(Region, 'find', (query) => {
-      assert.deepStrictEqual(query, {});
-      return {
-        lean: async () => mockRegions
-      };
+    t.mock.method(Region, 'find', async () => {
+      return mockRegions;
     });
 
     const req = {};
@@ -47,9 +43,10 @@ test('Region Controller Tests', async (t) => {
       geometry: { type: 'Polygon', coordinates: [[[-120, 50], [-119, 50], [-119, 49], [-120, 50]]] }
     };
 
-    t.mock.method(Region.prototype, 'save', async function() {
-      assert.strictEqual(this.name, reqBody.name);
-      return this;
+    let upsertedDoc;
+    t.mock.method(Region, 'upsert', async (doc) => {
+      upsertedDoc = doc;
+      return doc;
     });
 
     const req = { body: reqBody };
@@ -72,15 +69,13 @@ test('Region Controller Tests', async (t) => {
     assert.strictEqual(jsonResponse.name, reqBody.name);
   });
 
-  await t.test('getRegion finds region by ObjectId', async () => {
-    const regionId = '64a5f1dc2d0a9c002225f25a';
+  await t.test('getRegion finds region by ID', async () => {
+    const regionId = 'Skeena';
     const mockRegion = { _id: regionId, name: 'Skeena' };
 
-    t.mock.method(Region, 'findOne', (query) => {
-      assert.deepStrictEqual(query, { _id: regionId });
-      return {
-        lean: async () => mockRegion
-      };
+    t.mock.method(Region, 'findById', async (id) => {
+      if (id === regionId) return mockRegion;
+      return null;
     });
 
     const req = { params: { id: regionId } };
@@ -99,11 +94,8 @@ test('Region Controller Tests', async (t) => {
   });
 
   await t.test('getRegion returns 404 if region does not exist', async () => {
-    t.mock.method(Region, 'findOne', () => {
-      return {
-        lean: async () => null
-      };
-    });
+    t.mock.method(Region, 'findById', async () => null);
+    t.mock.method(Region, 'findOne', async () => null);
 
     const req = { params: { id: 'NonexistentRegion' } };
     let statusCode;
@@ -126,18 +118,13 @@ test('Region Controller Tests', async (t) => {
   });
 
   await t.test('updateRegion modifies existing region record', async () => {
-    const regionId = '64a5f1dc2d0a9c002225f25a';
-    const updatePayload = { name: 'Skeena-North' };
-    const mockUpdatedRegion = { _id: regionId, name: 'Skeena-North' };
+    const regionId = 'Skeena';
+    const mockRegion = { _id: regionId, name: 'Skeena' };
 
-    t.mock.method(Region, 'findOneAndUpdate', async (query, update, options) => {
-      assert.deepStrictEqual(query, { _id: regionId });
-      assert.deepStrictEqual(update, updatePayload);
-      assert.ok(options.new);
-      return mockUpdatedRegion;
-    });
+    t.mock.method(Region, 'findById', async () => mockRegion);
+    t.mock.method(Region, 'upsert', async (doc) => doc);
 
-    const req = { params: { id: regionId }, body: updatePayload };
+    const req = { params: { id: regionId }, body: { name: 'Skeena-North' } };
     let jsonResponse;
     const res = {
       json: (data) => {
@@ -149,17 +136,15 @@ test('Region Controller Tests', async (t) => {
 
     await regionController.updateRegion(req, res);
 
-    assert.deepStrictEqual(jsonResponse, mockUpdatedRegion);
+    assert.strictEqual(jsonResponse.name, 'Skeena-North');
   });
 
   await t.test('deleteRegion removes a region from the directory', async () => {
-    const regionId = '64a5f1dc2d0a9c002225f25a';
-    const mockDeleted = { _id: regionId, name: 'Skeena' };
+    const regionId = 'Skeena';
+    const mockRegion = { _id: regionId, name: 'Skeena' };
 
-    t.mock.method(Region, 'findOneAndDelete', async (query) => {
-      assert.deepStrictEqual(query, { _id: regionId });
-      return mockDeleted;
-    });
+    t.mock.method(Region, 'findById', async () => mockRegion);
+    t.mock.method(Region, 'deleteById', async () => true);
 
     const req = { params: { id: regionId } };
     let jsonResponse;
@@ -174,6 +159,5 @@ test('Region Controller Tests', async (t) => {
     await regionController.deleteRegion(req, res);
 
     assert.strictEqual(jsonResponse.message, 'Region deleted successfully');
-    assert.deepStrictEqual(jsonResponse.deleted, mockDeleted);
   });
 });

@@ -2,15 +2,14 @@
 
 const BaseRepository = require('./base');
 
-class ProjectRepository extends BaseRepository {
+class WildfireRepository extends BaseRepository {
   constructor() {
-    super('projects');
+    super('wildfires');
   }
 }
 
-const instance = new ProjectRepository();
+const instance = new WildfireRepository();
 
-// Export singleton instance with static proxy methods for backward compatibility
 module.exports = {
   find: (whereClause, parameters, options) => instance.find(whereClause, parameters, options),
   findById: (id) => instance.findById(id),

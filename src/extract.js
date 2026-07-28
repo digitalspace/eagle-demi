@@ -21,7 +21,7 @@
  */
 
 // Node 20+ provides fetch, FormData, Blob as globals — no import needed.
-const { MongoClient, ObjectId } = require('mongodb');
+// Native Cosmos DB / MinIO extraction helper
 const { PDFDocument } = require('pdf-lib');
 const Minio  = require('minio');
 const config = require('./config');
@@ -213,16 +213,15 @@ async function replaceChunks(db, docId, doc, pageChunks, projectName, listLookup
   const col = db.collection('epic');
 
   // Delete stale chunks first so re-runs stay clean
-  await col.deleteMany({ _schemaName: 'DocumentChunk', document: new ObjectId(docId) });
+  await col.deleteMany({ _schemaName: 'DocumentChunk', documentId: String(docId) });
 
   if (pageChunks.length === 0) return 0;
 
   const records = pageChunks.map(({ pageNumber, chunkIndex, content }) => ({
     _schemaName:  'DocumentChunk',
-    document:     new ObjectId(docId),
-    documentId:   docId,
+    documentId:   String(docId),
     project:      doc.project || undefined,
-    projectId:    doc.project ? doc.project.toString() : undefined,
+    projectId:    doc.project ? String(doc.project) : undefined,
     pageNumber,
     chunkIndex,
     content,
@@ -247,7 +246,7 @@ async function markDocument(db, docId, pageCount, error) {
   const update = error
     ? { $set: { contentExtracted: true, contentExtractedAt: new Date(), contentPageCount: 0, contentExtractionError: String(error), extractionMethod: 'docling' } }
     : { $set: { contentExtracted: true, contentExtractedAt: new Date(), contentPageCount: pageCount, contentExtractionError: null, extractionMethod: 'docling' } };
-  await col.updateOne({ _id: new ObjectId(docId) }, update);
+  await col.updateOne({ _id: String(docId) }, update);
 }
 
 // ── Core per-document logic ───────────────────────────────────────────────────
@@ -298,7 +297,7 @@ async function main() {
 
     if (docIdArg) {
       // Single-document mode: override everything
-      filter = { _id: new ObjectId(docIdArg) };
+      filter = { _id: String(docIdArg) };
     } else {
       const extRegex = new RegExp(`\\.(${[...SUPPORTED_EXTENSIONS].map(ext => ext.replace('.', '')).join('|')})$`, 'i');
       filter = {

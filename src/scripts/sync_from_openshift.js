@@ -1,14 +1,12 @@
 'use strict';
 
-const mongoose = require('mongoose');
-const config = require('../config');
+const { initCosmosClient } = require('../db/cosmos');
 const { logger } = require('../utils/logger');
 
-// Load Mongoose Models
+// Load Repository Models
 const Project = require('../models/project');
 const Document = require('../models/document');
 const Region = require('../models/region');
-const Boundary = require('../models/boundary');
 
 const OPENSHIFT_API_URL = process.env.OPENSHIFT_API_URL || 'https://eagle-demi-api-6cdc9e-dev.apps.silver.devops.gov.bc.ca/api';
 
@@ -22,7 +20,7 @@ async function fetchFromOpenShift(endpoint) {
   return await response.json();
 }
 
-async function syncCollection(model, endpoint, name) {
+async function syncCollection(Model, endpoint, name) {
   try {
     const items = await fetchFromOpenShift(endpoint);
     logger.info(`Fetched ${items.length} ${name} from OpenShift.`);
@@ -32,22 +30,13 @@ async function syncCollection(model, endpoint, name) {
       return;
     }
 
-    const bulkOps = items.map((item) => ({
-      updateOne: {
-        filter: { _id: item._id },
-        update: { $set: item },
-        upsert: true
-      }
-    }));
-
-    // Process in batches of 500
-    const batchSize = 500;
     let synced = 0;
-    for (let i = 0; i < bulkOps.length; i += batchSize) {
-      const batch = bulkOps.slice(i, i + batchSize);
-      await model.bulkWrite(batch, { ordered: false });
-      synced += batch.length;
-      logger.info(`Synced ${synced}/${items.length} ${name}...`);
+    for (const item of items) {
+      await Model.upsert(item);
+      synced++;
+      if (synced % 100 === 0) {
+        logger.info(`Synced ${synced}/${items.length} ${name}...`);
+      }
     }
 
     logger.info(`Successfully synced ${synced} ${name} into Cosmos DB.`);
@@ -58,14 +47,7 @@ async function syncCollection(model, endpoint, name) {
 
 async function runSync() {
   logger.info('=== Starting OpenShift -> Azure Cosmos DB Sync ===');
-
-  const shouldDisconnect = mongoose.connection.readyState !== 1;
-  if (shouldDisconnect) {
-    logger.info(`Connecting to Cosmos DB: ${config.mongoUri.replace(/:[^:@]+@/, ':***@')}`);
-    await mongoose.connect(config.mongoUri);
-  }
-
-  logger.info('Connected to Cosmos DB. Syncing collections...');
+  await initCosmosClient();
 
   await syncCollection(Region, '/regions', 'regions');
   try {
@@ -78,9 +60,6 @@ async function runSync() {
   await syncCollection(Document, '/documents', 'documents');
 
   logger.info('=== Sync Completed Successfully! ===');
-  if (shouldDisconnect) {
-    await mongoose.disconnect();
-  }
 }
 
 if (require.main === module) {

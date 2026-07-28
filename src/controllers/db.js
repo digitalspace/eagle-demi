@@ -1,17 +1,18 @@
 'use strict';
 
-const mongoose = require('mongoose');
 const Project = require('../models/project');
 const Document = require('../models/document');
 const Region = require('../models/region');
 const Boundary = require('../models/boundary');
+const Record = require('../models/record');
 const { runSync } = require('../scripts/sync_from_openshift');
 
 const models = {
   projects: Project,
   documents: Document,
   regions: Region,
-  boundaries: Boundary
+  boundaries: Boundary,
+  records: Record
 };
 
 /**
@@ -25,8 +26,9 @@ async function getDbStats(req, res) {
     }
     res.json({
       success: true,
-      database: mongoose.connection.name || 'demi',
-      connectionState: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+      database: 'epic',
+      connectionState: 'connected',
+      driver: 'azure-cosmos-sdk',
       stats
     });
   } catch (err) {
@@ -39,7 +41,6 @@ async function getDbStats(req, res) {
  */
 async function seedDatabase(req, res) {
   try {
-    // Run sync asynchronously in background or await if requested
     const isAsync = req.query.async === 'true';
     if (isAsync) {
       runSync().catch((err) => console.error('Background seed error:', err));
@@ -117,23 +118,17 @@ async function importCollection(req, res) {
     }
 
     const Model = models[collection];
-    const bulkOps = items.map((item) => ({
-      updateOne: {
-        filter: { _id: item._id || new mongoose.Types.ObjectId() },
-        update: { $set: item },
-        upsert: true
-      }
-    }));
-
-    const result = await Model.bulkWrite(bulkOps, { ordered: false });
+    let upsertedCount = 0;
+    for (const item of items) {
+      await Model.upsert(item);
+      upsertedCount++;
+    }
     const count = await Model.countDocuments();
 
     res.json({
       success: true,
       collection,
-      matchedCount: result.matchedCount,
-      modifiedCount: result.modifiedCount,
-      upsertedCount: result.upsertedCount,
+      upsertedCount,
       totalCount: count
     });
   } catch (err) {
@@ -146,7 +141,7 @@ async function importCollection(req, res) {
  */
 async function queryCollection(req, res) {
   try {
-    const { collection, action = 'find', filter = {}, update = {}, limit = 100 } = req.body;
+    const { collection, action = 'find' } = req.body;
     if (!collection || !models[collection]) {
       return res.status(400).json({
         success: false,
@@ -159,30 +154,15 @@ async function queryCollection(req, res) {
 
     switch (action) {
       case 'find':
-        data = await Model.find(filter).limit(Number(limit));
-        break;
-      case 'findOne':
-        data = await Model.findOne(filter);
-        break;
-      case 'updateOne':
-        data = await Model.updateOne(filter, update, { upsert: true });
-        break;
-      case 'updateMany':
-        data = await Model.updateMany(filter, update);
-        break;
-      case 'deleteOne':
-        data = await Model.deleteOne(filter);
-        break;
-      case 'deleteMany':
-        data = await Model.deleteMany(filter);
+        data = await Model.find();
         break;
       case 'count':
-        data = { count: await Model.countDocuments(filter) };
+        data = { count: await Model.countDocuments() };
         break;
       default:
         return res.status(400).json({
           success: false,
-          error: `Unsupported action '${action}'. Allowed: find, findOne, updateOne, updateMany, deleteOne, deleteMany, count`
+          error: `Unsupported action '${action}'. Allowed: find, count`
         });
     }
 
@@ -197,10 +177,74 @@ async function queryCollection(req, res) {
   }
 }
 
+/**
+ * Trigger nightly sync process manually via HTTP API
+ */
+async function runNightlySyncHandler(req, res) {
+  try {
+    const { runNightlySync } = require('../scripts/nightly-sync');
+    const isAsync = req.query.async === 'true';
+    if (isAsync) {
+      runNightlySync().catch((err) => console.error('Background nightly sync error:', err));
+      return res.json({
+        success: true,
+        message: 'Nightly sync process triggered in background.'
+      });
+    }
+
+    console.log(' Starting manual nightly sync...');
+    await runNightlySync();
+    const stats = {};
+    for (const [name, model] of Object.entries(models)) {
+      stats[name] = await model.countDocuments();
+    }
+
+    res.json({
+      success: true,
+      message: 'Nightly sync completed successfully.',
+      stats
+    });
+  } catch (err) {
+    console.error('Nightly sync error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+/**
+ * Trigger NRPTI sync process manually via HTTP API
+ */
+async function runNrptiSyncHandler(req, res) {
+  try {
+    const { syncNrptiData } = require('../scripts/sync-nrpti');
+    const isAsync = req.query.async === 'true';
+
+    if (isAsync) {
+      syncNrptiData().catch((err) => console.error('Background NRPTI sync error:', err));
+      return res.json({
+        success: true,
+        message: 'NRPTI sync process triggered in background.'
+      });
+    }
+
+    console.log(' Starting manual NRPTI sync...');
+    const results = await syncNrptiData();
+    res.json({
+      success: true,
+      message: 'NRPTI sync completed successfully.',
+      results
+    });
+  } catch (err) {
+    console.error('NRPTI sync error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
 module.exports = {
   getDbStats,
   seedDatabase,
   seedBoundaries: seedBoundariesHandler,
   importCollection,
-  queryCollection
+  queryCollection,
+  runNightlySyncHandler,
+  runNrptiSyncHandler
 };

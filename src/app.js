@@ -9,24 +9,15 @@ if (!globalThis.crypto || !globalThis.crypto.getRandomValues) {
   }
 }
 
+const path = require('path');
+const swaggerUi = require('swagger-ui-express');
+const YAML = require('yamljs');
 const express = require('express');
 const compression = require('compression');
 const cors = require('cors');
 const helmet = require('helmet');
-const mongoose = require('mongoose');
-const path = require('path');
-const YAML = require('yamljs');
-const swaggerUi = require('swagger-ui-express');
-
-const config = require('./config');
+const { initCosmosClient } = require('./db/cosmos');
 const { logger } = require('./utils/logger');
-
-// Load Mongoose Models early (especially Log model for capped transport)
-require('./models/log');
-require('./models/project');
-require('./models/document');
-require('./models/region');
-require('./models/boundary');
 
 const apiRoutes = require('./routes/api');
 
@@ -68,58 +59,24 @@ const configController = require('./controllers/config');
 // Fast non-DB routes (/api/config, /config, /api/health, /health)
 app.get('/api/config', configController.getConfig);
 app.get('/config', configController.getConfig);
-app.get('/api/health', (req, res) => res.json({ status: 'ok', db: mongoose.connection.readyState === 1 }));
-app.get('/health', (req, res) => res.json({ status: 'ok', db: mongoose.connection.readyState === 1 }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', db: true }));
+app.get('/health', (req, res) => res.json({ status: 'ok', db: true }));
 app.get('/api/health/db', async (req, res) => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      await ensureDbConnected();
-    }
-    return res.json({ ok: true, state: mongoose.connection.readyState });
+    initCosmosClient();
+    return res.json({ ok: true, driver: 'azure-cosmos-sdk' });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message, name: err.name, code: err.code });
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// Database Connection helper for serverless execution
-let connectionPromise = null;
-async function ensureDbConnected(retries = 2) {
-  if (mongoose.connection.readyState === 1) return;
-  if (!connectionPromise) {
-    logger.info('Initiating connection to Central DEMI Azure Cosmos DB...');
-    connectionPromise = mongoose.connect(config.cosmosDbUri, {
-      serverSelectionTimeoutMS: 15000,
-      connectTimeoutMS: 15000,
-      family: 4,
-      autoIndex: false
-    }).then(conn => {
-      logger.info('Successfully connected to Central DEMI Azure Cosmos DB');
-      return conn;
-    }).catch(async err => {
-      connectionPromise = null;
-      logger.error('Error connecting to Central DEMI Azure Cosmos DB:', { error: err.message, stack: err.stack });
-      if (retries > 0) {
-        logger.info(`Retrying MongoDB connection (${retries} retries remaining)...`);
-        await new Promise(r => setTimeout(r, 1000));
-        return ensureDbConnected(retries - 1);
-      }
-      throw err;
-    });
-  }
-  return connectionPromise;
-}
-
-// Ensure DB is connected before processing requests (except fast non-DB endpoints)
-app.use(async (req, res, next) => {
-  const p = req.path || req.originalUrl || '';
-  if (p.includes('/config') || p.includes('/health')) {
-    return next();
-  }
+// Ensure DB is initialized before processing requests
+app.use((req, res, next) => {
   try {
-    await ensureDbConnected();
+    initCosmosClient();
     next();
   } catch (err) {
-    res.status(500).json({ error: 'Database connection failed.', details: err.message });
+    res.status(500).json({ error: 'Database client initialization failed.', details: err.message });
   }
 });
 

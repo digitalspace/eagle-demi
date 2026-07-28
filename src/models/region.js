@@ -1,16 +1,21 @@
 'use strict';
 
-const mongoose = require('mongoose');
+const BaseRepository = require('./base');
 
-const RegionSchema = new mongoose.Schema({
-  name: { type: String, required: true, unique: true },
-  geometry: {
-    type: { type: String, enum: ['Polygon', 'MultiPolygon'], required: true },
-    coordinates: { type: mongoose.Schema.Types.Mixed, required: true }
+class RegionRepository extends BaseRepository {
+  constructor() {
+    super('regions');
   }
-}, { timestamps: true });
+}
 
-RegionSchema.index({ geometry: '2dsphere' });
+const instance = new RegionRepository();
 
-module.exports = mongoose.model('Region', RegionSchema);
-
+module.exports = {
+  find: (whereClause, parameters, options) => instance.find(whereClause, parameters, options),
+  findById: (id) => instance.findById(id),
+  findOne: (whereClause, parameters) => instance.findOne(whereClause, parameters),
+  upsert: (doc) => instance.upsert(doc),
+  deleteById: (id) => instance.deleteById(id),
+  countDocuments: (whereClause, parameters) => instance.countDocuments(whereClause, parameters),
+  instance
+};

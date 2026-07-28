@@ -30,8 +30,27 @@ The Node.js server acts as the master directory of truth. It manages projects, d
    node src/scripts/seed-boundaries.js
    ```
 
-4. View Swagger API documentation:
+4. Run NRPTI Compliance & Enforcement sync (merges with existing projects or auto-seeds new ones):
+   ```bash
+   NODE_PATH=node_modules node -r dotenv/config src/scripts/sync-nrpti.js
+   ```
+
+5. View Swagger API documentation:
    * **URL**: `http://localhost:3000/api-docs`
+
+---
+
+## Multi-Source Project Integration & Auto-Seeding
+
+DEMI uses a multi-source hybrid project model (`sources.*` namespace):
+* **`sources.track`**: Master EAO project attributes from EPIC.track (`epictrack-api`).
+* **`sources.eagle`**: Legacy EAGLE portal project records.
+* **`sources.nrpti`**: Public compliance & enforcement records from NRPTI API (`Order`, `Inspection`, `Ticket`, etc.).
+
+### NRPTI Reconciliation Workflow (`src/scripts/sync-nrpti.js`)
+1. **Matching**: NRPTI records match existing projects via `_epicProjectId`, exact name, or fuzzy normalized name (`normalizeProjectName`).
+2. **Auto-Seeding**: When an NRPTI record refers to a project not yet in DEMI, a new `Project` document is **auto-seeded** with `sources.nrpti` metrics and `sources.track: null`.
+3. **TRACK Reconciliation**: When TRACK syncs EAO metadata, it enriches any existing NRPTI-seeded project documents with `sources.track` attributes, completing the composite record while preserving all C&E record links.
 
 ---
 
@@ -41,11 +60,12 @@ The Node.js server acts as the master directory of truth. It manages projects, d
 - **Native Stream Adapter (`api/index.js`)**: Converts Azure Functions v4 `HttpRequest` objects into Node.js `Readable` streams and bridges them directly into Express route handlers without external socket or proxy adapter overhead.
 - **Serverless-Safe Rate Limiter (`src/middleware/rate-limiter.js`)**: Dynamically switches to `inlineCleanup` mode when `isServerless` is true, avoiding background `setInterval` timers that lock process state or leak memory during execution freeze cycles.
 - **Atomic Deployment (`WEBSITE_RUN_FROM_PACKAGE=1`)**: Packages the API into a read-only zip archive mounted directly at `/home/site/wwwroot/` for zero-downtime, instant cold starts.
-- **Database**: Azure Cosmos DB (MongoDB API v7.0 in Serverless mode).
-  - Configured with `COSMOSDB_URI` and `COSMOSDB_DATABASE`.
-  - Configured with `publicNetworkAccess: 'Disabled'` and Private Endpoints inside Azure VNet (`10.53.244.0/24`) to satisfy BC Gov management group policies (`Deny-PublicPaaSEndpoints`).
-  - Auto-enforces `retryWrites=false` and TLS 1.2.
-- **Search Engine**: Azure Container Apps hosting Typesense (`demi-typesense-{env}`) with embedded MongoDB Change Stream sync daemon.
+- **Database**: Azure Cosmos DB (Native `@azure/cosmos` SQL SDK).
+  - Configured with `COSMOSDB_URI`, `COSMOSDB_DATABASE`, and `COSMOSDB_KEY`.
+  - Native repository models (`src/db/cosmos.js` and `src/models/*.js`) handle all CRUD operations with `/id` partition keys.
+  - Legacy `mongoose` and `mongodb` dependencies have been completely removed.
+- **Incremental Delta Sync Engine**: Azure Container App Job (`demi-sync-job-{env}`) scheduled nightly (`0 2 * * *`), utilizing `sync_state` high-water mark timestamps (`lastSyncedAt`) to perform efficient delta ingestion across NRPTI, Wildfires, and Track sources.
+- **Search Engine**: Azure Container Apps hosting Typesense (`demi-typesense-{env}`).
 - **Auth**: Dual-layered validation in `src/middleware/auth.js`. Supports `X-Api-Key` for system-to-system integration and Keycloak `Bearer` tokens.
 - **Geospatial Order**: GeoJSON requires `[longitude, latitude]`. Downstream sync engines swap coordinates to `[latitude, longitude]` for search indexes.
 

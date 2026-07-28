@@ -35,3 +35,7 @@ dist/
 # Deploy archives
 .deploy_archives/
 
+# Local scratch
+scratch/
+
+

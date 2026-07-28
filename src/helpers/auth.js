@@ -34,7 +34,7 @@ function getKey(header, callback) {
 function authenticate(req, onSuccess, onFailure) {
   // 1. System-to-System API Key Check
   const apiKey = req.header('X-Api-Key');
-  const expectedKey = config.doclingApiKey || process.env.DOCLING_API_KEY;
+  const expectedKey = config.doclingKey || process.env.DOCLING_API_KEY;
 
   if (expectedKey && apiKey && apiKey === expectedKey) {
     return onSuccess({

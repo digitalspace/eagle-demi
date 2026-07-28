@@ -22,6 +22,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   private boundariesLayers = new Map<string, any>();
   private markerClusterGroup: any = null;
   private markersMap = new Map<any, any>();
+  private wildfireLayerGroup: any = null;
+
+  showWildfires = signal<boolean>(false);
 
   // Custom searchable select signals per category
   activeDistrictQuery = signal<string>('');
@@ -167,6 +170,20 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       untracked(() => {
         this.updateBoundaryLayersStyles();
       });
+    });
+
+    // Reactive effect to render or remove active B.C. Wildfires
+    effect(() => {
+      const active = this.showWildfires();
+      if (!this.map) return;
+      if (active) {
+        this.loadWildfiresOnMap();
+      } else if (this.wildfireLayerGroup) {
+        try {
+          this.map.removeLayer(this.wildfireLayerGroup);
+        } catch (e) {}
+        this.wildfireLayerGroup = null;
+      }
     });
   }
 
@@ -812,5 +829,111 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     } else {
       this.service.activeBoundaryLayers.set([...current, layer]);
     }
+  }
+
+  toggleWildfires() {
+    this.showWildfires.set(!this.showWildfires());
+  }
+
+  private loadWildfiresOnMap() {
+    if (!this.map) return;
+    if (this.wildfireLayerGroup) {
+      this.map.removeLayer(this.wildfireLayerGroup);
+      this.wildfireLayerGroup = null;
+    }
+
+    const fireCentres: Record<number, string> = {
+      1: 'Cariboo Fire Centre',
+      2: 'Kamloops Fire Centre',
+      3: 'Coastal Fire Centre',
+      4: 'Prince George Fire Centre',
+      5: 'Northwest Fire Centre',
+      6: 'Southeast Fire Centre'
+    };
+
+    const wfsUrl = 'https://openmaps.gov.bc.ca/geo/pub/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=pub:WHSE_LAND_AND_NATURAL_RESOURCE.PROT_CURRENT_FIRE_PNTS_SP&outputFormat=application/json&srsName=EPSG:4326';
+
+    fetch(wfsUrl)
+      .then(res => res.json())
+      .then(geoJson => {
+        if (!geoJson || !geoJson.features) return;
+
+        this.wildfireLayerGroup = L.geoJSON(geoJson, {
+          pointToLayer: (feature: any, latlng: any) => {
+            const props = feature.properties || {};
+            const status = props.FIRE_STATUS || 'Active';
+            const isFireOfNote = props.FIRE_OF_NOTE_IND === 'Y' || status === 'Fire of Note';
+
+            let color = '#d90429'; // Red for Out of Control / Fire of Note
+            if (status === 'Out') {
+              color = '#6c757d'; // Gray for extinguised
+            } else if (status === 'Under Control') {
+              color = '#2b9348'; // Muted Green for under control
+            } else if (status === 'Being Held') {
+              color = '#e85d04'; // Orange for being held
+            }
+
+            // Ensure valid lat/lng coordinates
+            let validLatLng = latlng;
+            if ((!latlng || Math.abs(latlng.lat) > 90 || Math.abs(latlng.lng) > 180) && props.LATITUDE && props.LONGITUDE) {
+              validLatLng = L.latLng(props.LATITUDE, props.LONGITUDE);
+            }
+
+            const sizePx = isFireOfNote ? 30 : (status === 'Out' ? 20 : 26);
+            const anchorPx = Math.floor(sizePx / 2);
+
+            const customIcon = L.divIcon({
+              className: 'wildfire-marker-icon',
+              html: `<div class="wildfire-marker-pill ${isFireOfNote ? 'fire-of-note' : ''}" style="background-color: ${color}; width: ${sizePx}px; height: ${sizePx}px;"><i class="fa-solid fa-fire"></i></div>`,
+              iconSize: [sizePx, sizePx],
+              iconAnchor: [anchorPx, anchorPx]
+            });
+
+            return L.marker(validLatLng, { icon: customIcon });
+          },
+          onEachFeature: (feature: any, layer: any) => {
+            const props = feature.properties || {};
+            const fireNum = props.FIRE_NUMBER || 'Wildfire';
+            const incidentName = props.INCIDENT_NAME && props.INCIDENT_NAME !== fireNum ? props.INCIDENT_NAME : '';
+            const title = incidentName ? `${incidentName} (${fireNum})` : fireNum;
+            const status = props.FIRE_STATUS || 'Active';
+            const cause = props.FIRE_CAUSE || 'Unknown';
+            const size = props.CURRENT_SIZE != null ? `${props.CURRENT_SIZE} ha` : 'Unknown';
+            const centerName = fireCentres[props.FIRE_CENTRE] || `Fire Centre #${props.FIRE_CENTRE || 'Unknown'}`;
+            const location = props.GEOGRAPHIC_DESCRIPTION || '';
+            const ignition = props.IGNITION_DATE ? props.IGNITION_DATE.replace('Z', '') : '';
+            const isNote = props.FIRE_OF_NOTE_IND === 'Y';
+
+            let popupContent = `
+              <div style="font-family: sans-serif; padding: 4px; max-width: 250px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 6px;">
+                  <h4 style="margin: 0; color: #d90429; font-size: 0.95rem;">
+                    <i class="fa-solid fa-fire"></i> ${title}
+                  </h4>
+                  ${isNote ? '<span style="background: #d90429; color: white; font-size: 0.65rem; font-weight: 700; padding: 2px 6px; border-radius: 4px;">FIRE OF NOTE</span>' : ''}
+                </div>
+                <p style="margin: 3px 0; font-size: 0.8rem;"><strong>Status:</strong> <span style="font-weight: 700;">${status}</span></p>
+                ${location ? `<p style="margin: 3px 0; font-size: 0.8rem;"><strong>Location:</strong> ${location.trim()}</p>` : ''}
+                <p style="margin: 3px 0; font-size: 0.8rem;"><strong>Current Size:</strong> ${size}</p>
+                <p style="margin: 3px 0; font-size: 0.8rem;"><strong>Cause:</strong> ${cause}</p>
+                <p style="margin: 3px 0; font-size: 0.8rem;"><strong>Fire Center:</strong> ${centerName}</p>
+                ${ignition ? `<p style="margin: 3px 0; font-size: 0.8rem;"><strong>Ignited:</strong> ${ignition}</p>` : ''}
+                ${props.FIRE_URL ? `
+                  <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #eee;">
+                    <a href="${props.FIRE_URL}" target="_blank" rel="noopener" style="color: #0056b3; font-size: 0.78rem; font-weight: 600; text-decoration: underline; display: inline-flex; align-items: center; gap: 4px;">
+                      View Official BC Wildfire Details <i class="fa-solid fa-arrow-up-right-from-square" style="font-size: 0.7rem;"></i>
+                    </a>
+                  </div>
+                ` : ''}
+              </div>
+            `;
+
+            layer.bindPopup(popupContent);
+          }
+        }).addTo(this.map);
+      })
+      .catch(err => {
+        console.warn('Failed to load active wildfires from DataBC WFS:', err);
+      });
   }
 }

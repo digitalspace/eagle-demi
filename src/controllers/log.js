@@ -1,63 +1,34 @@
 'use strict';
 
-const mongoose = require('mongoose');
+const LogModel = require('../models/log');
 const { logger } = require('../utils/logger');
 
-function escapeRegExp(string) {
-  if (!string) return '';
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Retrieve application logs from the MongoDB Capped Collection.
- * Accessible only by administrators.
- * 
- * GET /api/admin/logs
- * Query Parameters:
- *   - level: filter by level (error, warn, info, debug)
- *   - requestId: filter by request trace ID
- *   - search: text search query
- *   - limit: number of logs to return (default: 100, max: 1000)
- *   - sort: sort direction (1 for oldest first, -1 for newest first, default: -1)
- */
 exports.getLogs = async (req, res) => {
   try {
-    const LogModel = mongoose.model('Log');
+    const conditions = [];
+    const parameters = [];
 
-    const filter = {};
-
-    // 1. Level filter
     if (req.query.level) {
-      filter.level = req.query.level.toLowerCase();
+      parameters.push({ name: '@level', value: req.query.level.toLowerCase() });
+      conditions.push('c.level = @level');
     }
 
-    // 2. RequestId filter
     if (req.query.requestId) {
-      filter.requestId = req.query.requestId;
+      parameters.push({ name: '@reqId', value: req.query.requestId });
+      conditions.push('c.requestId = @reqId');
     }
 
-    // 3. Text search
-    if (req.query.search) {
-      filter.message = { $regex: escapeRegExp(req.query.search), $options: 'i' };
-    }
-
-    // 4. Pagination / Limits
     let limit = parseInt(req.query.limit || '100', 10);
     if (isNaN(limit) || limit <= 0) limit = 100;
     if (limit > 1000) limit = 1000;
 
-    // 5. Sorting
-    let sortVal = -1;
-    if (req.query.sort === '1' || req.query.sort === 'asc') {
-      sortVal = 1;
-    }
+    const sortOrder = (req.query.sort === '1' || req.query.sort === 'asc') ? 'ASC' : 'DESC';
+    const whereClause = conditions.length > 0 ? conditions.join(' AND ') : '';
 
-    logger.debug(`Retrieving logs with filter: ${JSON.stringify(filter)} limit: ${limit} sort: ${sortVal}`);
-
-    const logs = await LogModel.find(filter)
-      .sort({ timestamp: sortVal })
-      .limit(limit)
-      .lean();
+    const logs = await LogModel.find(whereClause, parameters, {
+      maxItemCount: limit,
+      orderBy: `c.timestamp ${sortOrder}`
+    });
 
     return res.status(200).json({
       success: true,

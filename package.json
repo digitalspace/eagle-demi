@@ -9,6 +9,8 @@
     "extract:retry": "node src/extract.js --retry-failed",
     "extract:doc": "node src/extract.js --doc-id",
     "db:seed": "node src/scripts/seed-and-merge.js",
+    "db:nightly-sync": "NODE_PATH=node_modules node -r dotenv/config src/scripts/nightly-sync.js",
+    "db:sync-incremental": "NODE_PATH=node_modules node -r dotenv/config src/scripts/incremental-sync.js",
     "db:sync-local": "node scripts/sync-local.js",
     "db:seed-boundaries": "node src/scripts/seed-boundaries.js",
     "typesense:sync": "TYPESENSE_MIN_FREE_GIB=1 NODE_PATH=node_modules node -r dotenv/config src/typesense/full-sync.js",
@@ -24,6 +26,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@azure/cosmos": "^4.10.0",
     "@azure/functions": "^4.5.0",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
@@ -33,8 +36,6 @@
     "jsonwebtoken": "^9.0.2",
     "jwks-rsa": "^3.2.2",
     "minio": "^7.0.8",
-    "mongodb": "^7.0.0",
-    "mongoose": "^9.3.2",
     "multer": "^2.2.0",
     "pdf-lib": "^1.17.1",
     "serverless-http": "^3.2.0",

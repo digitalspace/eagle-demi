@@ -161,3 +161,43 @@ Request increases to the **namespace `compute-long-running` `requests.cpu` quota
 ## Migration & Rollback
 - **Rollback:** revert `jobQueue.js`, `extract.js`, Helm values + template env edits; redeploy previous worker image tag. No DB schema changes.
 - **Quota:** if scaling workers beyond request budget (esp. test, ~340m free), file the namespace `requests.cpu` increase before rollout.
+
+---
+
+## NRPTI Compliance & Enforcement Project Integration Architecture
+
+### Multi-Source Project Reconciliation Lifecycle
+1. **Primary Master**: EPIC.track (`epictrack-api`) provides master EAO project boundaries and metadata (`sources.track`).
+2. **C&E Ingestion**: NRPTI (`src/scripts/sync-nrpti.js`) ingests public compliance & enforcement records from the NRPTI API and links them to projects.
+3. **Matching Priority**:
+   - Priority 1: Direct link via `_epicProjectId` / `sources.eagle._id`.
+   - Priority 2: Exact name match (`name.toLowerCase().trim()`).
+   - Priority 3: Fuzzy normalized name match (`normalizeProjectName(name)`, stripping noise words like `"Mine"`, `"Project"`, `"Facility"`).
+4. **Auto-Seeding Unmatched C&E Projects**:
+   - Unmatched NRPTI compliance records do **not** use placeholder/sample projects.
+   - A new `Project` document is **auto-seeded** with `sources.nrpti.isPrimarySource = true` and `sources.track = null`.
+5. **Subsequent TRACK Sync Enrichment**:
+   - When TRACK syncs EAO project metadata, it reconciles against existing projects (including NRPTI-seeded projects).
+---
+
+## Native Azure Cosmos DB SDK & Incremental Delta Sync Engine
+
+### Architectural Evolution
+All legacy `mongoose` and `mongodb` drivers have been removed from `eagle-demi`. Database operations now execute through `@azure/cosmos` native SQL repository models (`src/db/cosmos.js` and `src/models/*.js`).
+
+### Core Database Models (`src/models/`)
+- **`ProjectModel`**: Repository pattern for `projects` container. Partition key: `/id`.
+- **`DocumentModel`**: Repository pattern for `documents` container. Partition key: `/id`.
+- **`RecordModel`**: Repository pattern for `records` container. Partition key: `/id`.
+- **`BoundaryModel`**: Repository pattern for `boundaries` container. Partition key: `/id`.
+- **`RegionModel`**: Repository pattern for `regions` container. Partition key: `/id`.
+- **`WildfireModel`**: Repository pattern for `wildfires` container. Partition key: `/id`.
+- **`LogModel`**: Repository pattern for `logs` container. Partition key: `/id`.
+- **`SyncStateModel`**: Repository pattern for `sync_state` container. Partition key: `/id`. Stores high-water marks (`lastSyncedAt`).
+
+### Incremental Delta Sync Engine (`src/scripts/incremental-sync.js`)
+- **High-Water Mark Persistence**: High-water marks (`lastSyncedAt`) are maintained in the `sync_state` container per source system (`openshift`, `nrpti`, `wildfire`).
+- **Delta Querying**: On each execution, only modified/new records since `lastSyncedAt` (`since`) are fetched and upserted into Azure Cosmos DB.
+- **Azure Container App Job (`demi-sync-job-dev`)**: Scheduled nightly (`0 2 * * *`) as an Azure Container App Job that scales to zero when idle, saving cloud compute costs while ensuring fresh data ingestion.
+
+

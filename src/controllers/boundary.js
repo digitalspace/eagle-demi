@@ -1,44 +1,23 @@
 'use strict';
 
-const mongoose = require('mongoose');
 const Boundary = require('../models/boundary');
-const { parseBboxPolygon } = require('../helpers/geo');
 
 exports.getBoundaries = async (req, res) => {
   try {
     if (typeof res.setHeader === 'function') {
       res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
-    } else if (typeof res.set === 'function') {
-      res.set('Cache-Control', 'public, max-age=86400, s-maxage=86400');
     }
-    const { type, geometry, bbox } = req.query;
-    
-    let spatialQuery = {};
-    if (bbox) {
-      const parsedBbox = parseBboxPolygon(bbox);
-      if (parsedBbox) {
-        spatialQuery = {
-          geometry: {
-            $geoIntersects: {
-              $geometry: parsedBbox
-            }
-          }
-        };
-      }
+    const { type, geometry } = req.query;
+    const conditions = [];
+    const parameters = [];
+
+    if (type) {
+      parameters.push({ name: '@type', value: String(type) });
+      conditions.push('c.type = @type');
     }
 
-    const query = {
-      ...(type ? { type } : {}),
-      ...spatialQuery
-    };
-
-    // Optimize database projection based on requested geometry mode
-    let projection = {};
-    if (geometry === 'false') {
-      projection = { geometry: 0, simplifiedGeometry: 0 };
-    }
-
-    let boundaries = await Boundary.find(query, projection).lean();
+    const whereClause = conditions.length > 0 ? conditions.join(' AND ') : '';
+    let boundaries = await Boundary.find(whereClause, parameters, { orderBy: 'c.name ASC' });
 
     if (geometry === 'true') {
       boundaries = boundaries.map(b => {
@@ -69,14 +48,15 @@ exports.createBoundary = async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: type, name, geometry' });
     }
 
-    const newBoundary = new Boundary({
+    const newBoundary = {
+      _id: `${type}_${name}`,
       type,
       name,
-      code,
+      code: code || '',
       geometry
-    });
+    };
 
-    const saved = await newBoundary.save();
+    const saved = await Boundary.upsert(newBoundary);
     return res.status(201).json(saved);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -86,9 +66,10 @@ exports.createBoundary = async (req, res) => {
 exports.getBoundary = async (req, res) => {
   try {
     const { id } = req.params;
-    const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { name: id };
-
-    const boundary = await Boundary.findOne(query).lean();
+    let boundary = await Boundary.findById(id);
+    if (!boundary) {
+      boundary = await Boundary.findOne('c.name = @name', [{ name: '@name', value: id }]);
+    }
     if (!boundary) {
       return res.status(404).json({ error: 'Boundary not found' });
     }
@@ -101,13 +82,17 @@ exports.getBoundary = async (req, res) => {
 exports.updateBoundary = async (req, res) => {
   try {
     const { id } = req.params;
-    const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { name: id };
-
-    const updated = await Boundary.findOneAndUpdate(query, req.body, { new: true, runValidators: true });
-    if (!updated) {
+    let existing = await Boundary.findById(id);
+    if (!existing) {
+      existing = await Boundary.findOne('c.name = @name', [{ name: '@name', value: id }]);
+    }
+    if (!existing) {
       return res.status(404).json({ error: 'Boundary not found' });
     }
-    return res.json(updated);
+
+    const updated = { ...existing, ...req.body };
+    const saved = await Boundary.upsert(updated);
+    return res.json(saved);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -116,13 +101,16 @@ exports.updateBoundary = async (req, res) => {
 exports.deleteBoundary = async (req, res) => {
   try {
     const { id } = req.params;
-    const query = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { name: id };
-
-    const deleted = await Boundary.findOneAndDelete(query);
-    if (!deleted) {
+    let existing = await Boundary.findById(id);
+    if (!existing) {
+      existing = await Boundary.findOne('c.name = @name', [{ name: '@name', value: id }]);
+    }
+    if (!existing) {
       return res.status(404).json({ error: 'Boundary not found' });
     }
-    return res.json({ message: 'Boundary deleted successfully', deleted });
+
+    await Boundary.deleteById(existing._id);
+    return res.json({ message: 'Boundary deleted successfully', deleted: existing });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
