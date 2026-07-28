@@ -1,4 +1,6 @@
 import { TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { RegistryStateService } from './registry-state.service';
 
 describe('RegistryStateService', () => {
@@ -7,7 +9,11 @@ describe('RegistryStateService', () => {
   beforeEach(() => {
     localStorage.clear();
     TestBed.configureTestingModule({
-      providers: [RegistryStateService]
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        RegistryStateService
+      ]
     });
     service = TestBed.inject(RegistryStateService);
   });
@@ -17,7 +23,7 @@ describe('RegistryStateService', () => {
   });
 
   it('should have correct default signal values', () => {
-    expect(service.activeBoundaryLayer()).toBe('none');
+    expect(service.activeBoundaryLayer()).toBe('regions');
     expect(service.boundaryFilter()).toBe('all');
     expect(service.loadedBoundariesGeoJSON()).toEqual({});
     expect(service.activeBoundaryNames()).toEqual([]);

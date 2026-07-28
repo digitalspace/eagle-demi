@@ -62,6 +62,14 @@ To circumvent browser third-party cookie blocking on `localhost` during iframe s
 - **Page Refresh (Active Session)**: Reads `isLoggedIn` from `sessionStorage` and initializes Keycloak using `'login-required'`. Keycloak silently verifies the active top-level session via direct redirect and logs the user back in instantly, preserving authenticated state across refreshes.
 - **Logout**: Clears `sessionStorage` and `localStorage`, returning the client to standard public access mode.
 
+## GIS Map & Topological Boundary Assets Architecture
+
+- **Static Asset Serving**: Pre-processed GeoJSON boundary files (`regional_districts.geojson`, `municipalities.geojson`, `electoral_districts.geojson`) are served directly from `frontend/public/assets/geojson/`.
+- **Topological Arc Simplification**: Boundaries are built using `node scripts/export-topological-boundaries.js` which executes Mapshaper Visvalingam-Whyatt arc simplification (`-clean -simplify visvalingam keep-shapes`). Shared borders between neighboring polygons are simplified as shared arcs, guaranteeing **zero overlaps or sliver gaps**.
+- **Default Layer & Zoom Rules**:
+  - `activeBoundaryLayers` defaults to `['regions']` (Environmental Regions ON by default).
+  - Zoom-gating was removed so that all administrative boundary layers (including municipalities) render regardless of Leaflet zoom level.
+
 ## Azure Environments (`c4b0a8: EPIC.AI`)
 
 Account: `Daniel.T.Truong@gov.bc.ca` | Tenant: `Government of BC` (`6fdb5200-3d0d-4a8a-b036-d3685e359adc`)

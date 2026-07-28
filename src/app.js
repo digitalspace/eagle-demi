@@ -83,21 +83,26 @@ app.get('/api/health/db', async (req, res) => {
 
 // Database Connection helper for serverless execution
 let connectionPromise = null;
-async function ensureDbConnected() {
+async function ensureDbConnected(retries = 2) {
   if (mongoose.connection.readyState === 1) return;
   if (!connectionPromise) {
     logger.info('Initiating connection to Central DEMI Azure Cosmos DB...');
     connectionPromise = mongoose.connect(config.cosmosDbUri, {
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 5000,
+      serverSelectionTimeoutMS: 15000,
+      connectTimeoutMS: 15000,
       family: 4,
       autoIndex: false
     }).then(conn => {
       logger.info('Successfully connected to Central DEMI Azure Cosmos DB');
       return conn;
-    }).catch(err => {
+    }).catch(async err => {
       connectionPromise = null;
       logger.error('Error connecting to Central DEMI Azure Cosmos DB:', { error: err.message, stack: err.stack });
+      if (retries > 0) {
+        logger.info(`Retrying MongoDB connection (${retries} retries remaining)...`);
+        await new Promise(r => setTimeout(r, 1000));
+        return ensureDbConnected(retries - 1);
+      }
       throw err;
     });
   }

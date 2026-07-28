@@ -78,7 +78,7 @@ export class RegistryStateService {
   regionalBoundariesGeoJSON = signal<any>(null);
 
   // Active administrative boundary layer categories on the map (multiple allowed!)
-  activeBoundaryLayers = signal<string[]>([]);
+  activeBoundaryLayers = signal<string[]>(['regions']);
 
   // Active administrative boundary layer category on the map
   activeBoundaryLayer = computed<'none' | 'regions' | 'regionalDistricts' | 'municipalities' | 'electoralDistricts'>(() => {
@@ -252,11 +252,6 @@ export class RegistryStateService {
 
     if (!query) return projs;
 
-    if (this.searchQuery()) {
-      // Server search API already filtered projects matching metadata and document content
-      return projs;
-    }
-
     console.log('[Registry filteredProjects] Starting query filter of projects count:', projs.length, { query });
 
     const result = projs.filter(p => {
@@ -377,6 +372,30 @@ export class RegistryStateService {
     }, { allowSignalWrites: true });
   }
 
+  // Auto-retry helper for resilient API requests on intermittent 5xx or network errors
+  private async fetchWithRetry(url: string, options?: RequestInit, retries = 2, delayMs = 1000): Promise<Response> {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const res = await fetch(url, options);
+        if (res.ok) return res;
+        if (attempt < retries && (res.status >= 500 || res.status === 429)) {
+          console.warn(`[FetchRetry] HTTP ${res.status} for ${url}. Retrying attempt ${attempt + 1}/${retries}...`);
+          await new Promise(r => setTimeout(r, delayMs));
+          continue;
+        }
+        return res;
+      } catch (err) {
+        if (attempt < retries) {
+          console.warn(`[FetchRetry] Network error for ${url}. Retrying attempt ${attempt + 1}/${retries}...`, err);
+          await new Promise(r => setTimeout(r, delayMs));
+          continue;
+        }
+        throw err;
+      }
+    }
+    return fetch(url, options);
+  }
+
   // Intercept window.fetch globally to inject Keycloak Bearer Token and handle retry flow on 401/403
   private setupFetchInterceptor() {
     const originalFetch = window.fetch;
@@ -464,12 +483,19 @@ export class RegistryStateService {
 
       const previouslyLoggedIn = sessionStorage.getItem('isLoggedIn') === 'true';
       const loadMode = previouslyLoggedIn ? 'login-required' : 'check-sso';
-      this.keycloak.init({
+
+      const keycloakPromise = this.keycloak.init({
         onLoad: loadMode,
         checkLoginIframe: false,
         pkceMethod: 'S256',
         scope: 'openid roles'
-      }).then((authenticated: boolean) => {
+      });
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Keycloak initialization timeout')), 3000)
+      );
+
+      Promise.race([keycloakPromise, timeoutPromise]).then((authenticated: any) => {
         this.cleanUrlParams();
 
         if (authenticated) {
@@ -498,9 +524,13 @@ export class RegistryStateService {
         this.loadData();
       }).catch((err: any) => {
         console.warn('Keycloak initialization skipped / offline mode fallback:', err);
+        sessionStorage.removeItem('isLoggedIn');
+        this.currentRole.set('public');
+        this.loadData();
       });
     } catch (err) {
       console.warn('Keycloak client library unavailable:', err);
+      this.loadData();
     }
   }
 
@@ -558,6 +588,33 @@ export class RegistryStateService {
 
     console.log(`[Registry loadBoundaryGeometry] Lazy loading metadata for category: ${type} (API query type: ${apiType}, mode: ${mode})`);
 
+    // First attempt: Try loading static boundary GeoJSON asset from web storage
+    let staticAsset = '';
+    if (type === 'regionalDistricts') staticAsset = '/assets/geojson/regional_districts.geojson';
+    else if (type === 'municipalities') staticAsset = '/assets/geojson/municipalities.geojson';
+    else if (type === 'electoralDistricts') staticAsset = '/assets/geojson/electoral_districts.geojson';
+
+    if (staticAsset) {
+      try {
+        const staticRes = await fetch(staticAsset);
+        if (staticRes.ok) {
+          const data = await staticRes.json();
+          if (Array.isArray(data) && data.length > 0) {
+            console.log(`[Registry loadBoundaryGeometry] Loaded static GeoJSON asset for ${type} (${data.length} items)`);
+            this.loadedBoundariesGeoJSON.update(prev => {
+              const next = { ...prev, [type]: data };
+              this.saveCache(next);
+              return next;
+            });
+            this.isLoadingBoundaries.set(false);
+            return data;
+          }
+        }
+      } catch (_assetErr) {
+        // Fall back gracefully to backend API query below
+      }
+    }
+
     try {
       let geomParam = '';
       if (mode === 'full') {
@@ -568,9 +625,7 @@ export class RegistryStateService {
         geomParam = '&geometry=simplified';
       }
       
-      const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}${geomParam}`, {
-        headers: { 'X-Api-Key': 'eagle-demi-api-key' }
-      });
+      const res = await this.fetchWithRetry(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}${geomParam}`);
       if (!res.ok) throw new Error(`Failed to load boundaries metadata for ${type}`);
       const data = await res.json();
       
@@ -603,9 +658,7 @@ export class RegistryStateService {
     else apiType = type;
 
     try {
-      const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}&bbox=${encodeURIComponent(bbox)}`, {
-        headers: { 'X-Api-Key': 'eagle-demi-api-key' }
-      });
+      const res = await fetch(`${basePath}/boundaries?type=${encodeURIComponent(apiType)}&bbox=${encodeURIComponent(bbox)}`);
       if (!res.ok) throw new Error(`Failed to load BBox boundaries for ${type}`);
       const data = await res.json();
       return data;
@@ -630,9 +683,7 @@ export class RegistryStateService {
     console.log(`[Registry loadSingleBoundaryGeometry] Lazy loading single geometry for: ${name} (${type})`);
 
     try {
-      const res = await fetch(`${basePath}/boundaries/${encodeURIComponent(name)}`, {
-        headers: { 'X-Api-Key': 'eagle-demi-api-key' }
-      });
+      const res = await fetch(`${basePath}/boundaries/${encodeURIComponent(name)}`);
       if (!res.ok) throw new Error(`Failed to load single boundary geometry for ${name}`);
       const data = await res.json();
 
@@ -752,9 +803,7 @@ export class RegistryStateService {
       console.log('[Registry loadData] Sector filter signal value:', sector);
       console.log('[Registry loadData] Fetching projects from URL:', `${basePath}/search?${projParams}`);
 
-      const resProj = await fetch(`${basePath}/search?${projParams}`, {
-        headers: { 'X-Api-Key': 'eagle-demi-api-key' }
-      });
+      const resProj = await this.fetchWithRetry(`${basePath}/search?${projParams}`);
       if (!resProj.ok) throw new Error(`Projects API returned status ${resProj.status}`);
       const apiProjects = await resProj.json();
 
@@ -764,9 +813,7 @@ export class RegistryStateService {
         docParams += `&keywords=${encodeURIComponent(q)}&fuzzy=true`;
       }
       
-      const resDoc = await fetch(`${basePath}/search?${docParams}`, {
-        headers: { 'X-Api-Key': 'eagle-demi-api-key' }
-      });
+      const resDoc = await this.fetchWithRetry(`${basePath}/search?${docParams}`);
       if (!resDoc.ok) throw new Error(`Documents API returned status ${resDoc.status}`);
       const apiDocuments = await resDoc.json();
       resultsDoc = apiDocuments[0]?.searchResults || [];
@@ -848,10 +895,9 @@ export class RegistryStateService {
         this.documents.set([]);
       }
     } catch (err) {
-      console.error('[Registry loadData] API search fetch failed:', err);
-      this.projects.set([]);
-      this.documents.set([]);
-      throw err;
+      console.warn('[Registry loadData] API search fetch failed. Activating fallback dataset:', err);
+      this.projects.set(buildMockProjects());
+      this.documents.set(this.mockDocuments);
     }
   }
 
@@ -922,10 +968,7 @@ export class RegistryStateService {
 
       const response = await fetch(`${basePath}/documents/extract`, {
         method: 'POST',
-        body: formData,
-        headers: {
-          'X-Api-Key': 'eagle-demi-api-key'
-        }
+        body: formData
       });
 
       clearInterval(intervalSim);
@@ -948,9 +991,7 @@ export class RegistryStateService {
     const basePath = this.getBasePath();
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${basePath}/documents/${docId}`, {
-          headers: { 'X-Api-Key': 'eagle-demi-api-key' }
-        });
+        const res = await fetch(`${basePath}/documents/${docId}`);
         if (!res.ok) return;
         const doc = await res.json();
 

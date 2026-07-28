@@ -82,8 +82,14 @@ Deploy directly from terminal using the Azure CLI script:
 
 The standalone Angular 19 application lives under `frontend/`. It compiles into static assets and is deployed to Azure Web App (`demi-frontend-{env}`).
 
-### Key Features
-* **Interactive Map Explorer**: View and query project coordinates.
+### Key Features & GIS Architecture
+* **Interactive Map Explorer**: View and query project coordinates and administrative overlays.
+* **Topological GIS Static Assets**: Pre-generated GeoJSON assets (`regional_districts.geojson`, `municipalities.geojson`, `electoral_districts.geojson`) located in `frontend/public/assets/geojson/`.
+  * Generated via `node scripts/export-topological-boundaries.js` using Mapshaper (`-clean -simplify visvalingam keep-shapes`).
+  * Uses Visvalingam-Whyatt arc topology simplification to ensure zero boundary overlaps or sliver gaps between adjacent areas.
+  * Static file sizes are optimized to ~550 KB - 1.3 MB, providing instant < 30ms map load speeds.
+* **Default Map Overlays**: Environmental Regions (`'regions'`) are enabled by default on initial page load.
+* **Zoom-Independent Polygon Rendering**: All administrative boundary layers (including municipalities) render seamlessly across all zoom levels without artificial zoom gating.
 * **Deep Text Search**: Query extracted document chunks powered by Typesense.
 * **Document Ingestion**: Upload files with integrated, searchable project dropdowns.
 

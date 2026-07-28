@@ -6,6 +6,11 @@ const { parseBboxPolygon } = require('../helpers/geo');
 
 exports.getBoundaries = async (req, res) => {
   try {
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+    } else if (typeof res.set === 'function') {
+      res.set('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+    }
     const { type, geometry, bbox } = req.query;
     
     let spatialQuery = {};

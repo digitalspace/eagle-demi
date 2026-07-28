@@ -550,17 +550,6 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       renderer: this.canvasRenderer,
       smoothFactor: 1.0, // Auto-simplifies geometry at lower zoom levels for premium performance
       style: (feature: any) => {
-        const currentZoom = this.map ? this.map.getZoom() : 13;
-        // Zoom gating: Municipalities only visible at Zoom > 6
-        if (type === 'municipalities' && currentZoom <= 6) {
-          return {
-            weight: 0,
-            fillOpacity: 0,
-            opacity: 0,
-            interactive: false
-          };
-        }
-
         const name = feature?.properties?.name;
         const filterValue = this.service.boundaryFilter() || 'all';
         const filterLayer = this.service.boundaryFilterLayer() || 'none';

@@ -1,6 +1,8 @@
 import { TestBed } from '@angular/core/testing';
 import { AppComponent } from './app.component';
 import { provideRouter } from '@angular/router';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { routes } from './app.routes';
 
 describe('AppComponent', () => {
@@ -8,7 +10,9 @@ describe('AppComponent', () => {
     await TestBed.configureTestingModule({
       imports: [AppComponent],
       providers: [
-        provideRouter(routes)
+        provideRouter(routes),
+        provideHttpClient(),
+        provideHttpClientTesting()
       ]
     }).compileComponents();
   });
