@@ -131,7 +131,6 @@ async function syncNrptiData(options = {}) {
       const totalPages = Math.ceil(totalCount / pageSize);
 
       if (results.length === 0) {
-        hasMore = false;
         break;
       }
 
@@ -219,7 +218,6 @@ async function syncNrptiData(options = {}) {
             },
             isPublished: true,
             read: ['public', 'sysadmin', 'staff', 'demi-admin'],
-            read: ['sysadmin', 'staff', 'public'],
             sources: {
               track: null,
               eagle: null,
@@ -284,8 +282,12 @@ async function syncNrptiData(options = {}) {
           documents: Array.isArray(item.documents) ? item.documents : [],
           sourceSystemRef: item.sourceSystemRef || 'nrpti',
           isPublished: true,
-          read: ['public', 'sysadmin', 'staff', 'demi-admin'],
-          read: Array.isArray(item.read) ? item.read : ['sysadmin', 'staff', 'public'],
+          // Respect the upstream ACL when NRPTI supplies one; otherwise default to the
+          // full role set. Previously these were two duplicate `read:` keys and the
+          // second silently won, so demi-admin was dropped from every record.
+          read: Array.isArray(item.read) && item.read.length > 0
+            ? item.read
+            : ['public', 'sysadmin', 'staff', 'demi-admin'],
           sourceData: item
         };
 

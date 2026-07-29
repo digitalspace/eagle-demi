@@ -23,6 +23,7 @@
 // Node 20+ provides fetch, FormData, Blob as globals — no import needed.
 // Native Cosmos DB / MinIO extraction helper
 const { PDFDocument } = require('pdf-lib');
+const { MongoClient } = require('mongodb');
 const Minio  = require('minio');
 const config = require('./config');
 const { chunkMarkdown } = require('./chunker');

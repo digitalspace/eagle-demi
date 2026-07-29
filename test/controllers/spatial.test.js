@@ -6,7 +6,6 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const Project = require('../../src/models/project');
-const Region = require('../../src/models/region');
 const Boundary = require('../../src/models/boundary');
 const projectController = require('../../src/controllers/project');
 

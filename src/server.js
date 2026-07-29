@@ -11,16 +11,10 @@ const server = app.listen(PORT, () => {
   logger.info(`DEMI Central API Server running on port ${PORT}`);
   logger.info(`OpenAPI documentation available at http://localhost:${PORT}/api-docs`);
 
-  // Start the self-contained Typesense Change Stream sync watcher in the background
-  if (process.env.NODE_ENV !== 'test') {
-    try {
-      const typesenseSync = require('./typesense/index');
-      typesenseSync.start();
-      logger.info('Self-contained DEMI Typesense sync watcher started.');
-    } catch (err) {
-      logger.error('Failed to start DEMI Typesense sync watcher:', { error: err.message, stack: err.stack });
-    }
-  }
+  // The Typesense change-stream watcher was removed. It could never run against Cosmos:
+  // it gated on db.command({hello:1}) reporting a replica-set name, which the Mongo API
+  // never returns, so it exited immediately on every boot. Typesense is kept current by
+  // the nightly full sync (alias swap); real-time sync returns with the Cosmos change feed.
 });
 
 // Handle Graceful Shutdown

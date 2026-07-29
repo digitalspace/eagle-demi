@@ -332,7 +332,14 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('Full sync failed:', err);
-  process.exit(1);
-});
+// Only run when invoked directly. This used to call main() at module scope with no exports,
+// so `require('../typesense/full-sync')` in nightly-sync.js kicked off a full Typesense
+// reindex as an import side effect AND yielded `fullSync === undefined`.
+if (require.main === module) {
+  main().catch(err => {
+    console.error('Full sync failed:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = { fullSync: main };

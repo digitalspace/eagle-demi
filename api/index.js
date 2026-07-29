@@ -5,7 +5,11 @@ const { Readable } = require('stream');
 const EventEmitter = require('events');
 
 async function handleExpress(request, context) {
-  return new Promise(async (resolve, reject) => {
+  // Not an async executor: a rejection thrown inside `new Promise(async ...)` is
+  // swallowed rather than surfacing, so the async work is hoisted into its own
+  // function and its rejection is wired to the promise explicitly.
+  return new Promise((resolve, reject) => {
+    (async () => {
     try {
       const urlObj = new URL(request.url);
       
@@ -102,6 +106,7 @@ async function handleExpress(request, context) {
         body: JSON.stringify({ error: err.message || 'Internal Server Error' })
       });
     }
+    })().catch(reject);
   });
 }
 

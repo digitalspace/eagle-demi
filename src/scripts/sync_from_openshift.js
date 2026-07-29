@@ -6,7 +6,6 @@ const { logger } = require('../utils/logger');
 // Load Repository Models
 const Project = require('../models/project');
 const Document = require('../models/document');
-const Region = require('../models/region');
 
 const OPENSHIFT_API_URL = process.env.OPENSHIFT_API_URL || 'https://eagle-demi-api-6cdc9e-dev.apps.silver.devops.gov.bc.ca/api';
 
@@ -49,13 +48,8 @@ async function runSync() {
   logger.info('=== Starting OpenShift -> Azure Cosmos DB Sync ===');
   await initCosmosClient();
 
-  await syncCollection(Region, '/regions', 'regions');
-  try {
-    const { seedBoundaries } = require('./seed-boundaries');
-    await seedBoundaries();
-  } catch (err) {
-    logger.error('Error seeding boundaries from OpenMaps WFS:', { error: err.message });
-  }
+  // Regions and boundary seeding removed: the regions collection is empty and the boundary
+  // seeder called Mongoose methods the repositories never had, so it could not have run.
   await syncCollection(Project, '/projects', 'projects');
   await syncCollection(Document, '/documents', 'documents');
 

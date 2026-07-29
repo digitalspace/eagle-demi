@@ -7,9 +7,8 @@ const MAX_REQUESTS = 300;     // 300 requests per minute per IP
 const isServerless = Boolean(process.env.FUNCTIONS_WORKER_RUNTIME || process.env.AZURE_FUNCTIONS_ENVIRONMENT);
 
 // Clean up stale entries periodically
-let cleanupTimer = null;
 if (!isServerless) {
-  cleanupTimer = setInterval(() => {
+  const cleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [ip, data] of hits.entries()) {
       if (now - data.startTime > WINDOW_MS) {
@@ -17,6 +16,7 @@ if (!isServerless) {
       }
     }
   }, 5 * 60 * 1000);
+  // unref so the interval never holds the process open on shutdown
   if (cleanupTimer && cleanupTimer.unref) {
     cleanupTimer.unref();
   }

@@ -7,7 +7,6 @@ const authMiddleware = require('../middleware/auth');
 const passiveAuthMiddleware = require('../middleware/passiveAuth');
 const projectController = require('../controllers/project');
 const documentController = require('../controllers/document');
-const regionController = require('../controllers/region');
 const boundaryController = require('../controllers/boundary');
 const recordController = require('../controllers/record');
 const wildfireController = require('../controllers/wildfire');
@@ -24,11 +23,11 @@ const configController = require('../controllers/config');
 router.get('/config', configController.getConfig);
 
 // Database Management & Seeding Routes
+// Removed: /db/import and /db/query (generic bulk-write and arbitrary-query endpoints over
+// any collection — nothing called them, and under the NoSQL API they would have to become a
+// SQL passthrough). /db/seed-boundaries removed with the dead boundary seeder.
 router.get('/db/stats', authMiddleware, dbController.getDbStats);
 router.post('/db/seed', authMiddleware, dbController.seedDatabase);
-router.post('/db/seed-boundaries', authMiddleware, dbController.seedBoundaries);
-router.post('/db/import', authMiddleware, dbController.importCollection);
-router.post('/db/query', authMiddleware, dbController.queryCollection);
 router.post('/sync', authMiddleware, dbController.seedDatabase);
 router.post('/admin/sync', authMiddleware, dbController.runNightlySyncHandler);
 router.post('/admin/sync/nrpti', authMiddleware, dbController.runNrptiSyncHandler);
@@ -66,12 +65,8 @@ router.post('/documents/extract', authMiddleware, upload.single('upfile'), docum
 router.put('/documents/:id', authMiddleware, documentController.updateDocument);
 router.delete('/documents/:id', authMiddleware, documentController.deleteDocument);
 
-// Regions Routes
-router.get('/regions', passiveAuthMiddleware, regionController.getRegions);
-router.get('/regions/:id', passiveAuthMiddleware, regionController.getRegion);
-router.post('/regions', authMiddleware, regionController.createRegion);
-router.put('/regions/:id', authMiddleware, regionController.updateRegion);
-router.delete('/regions/:id', authMiddleware, regionController.deleteRegion);
+// Regions routes removed — the collection is empty (0 items) and nothing consumed it.
+// Administrative geography is served by /boundaries.
 
 // Boundaries (Borders) Routes
 router.get('/boundaries', passiveAuthMiddleware, boundaryController.getBoundaries);
