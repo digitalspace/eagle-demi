@@ -38,4 +38,33 @@ function getClient() {
   return _client;
 }
 
-module.exports = { getClient };
+/**
+ * Remove a document from the search index.
+ *
+ * Called directly by the hard-delete path rather than relying on the change feed, which does
+ * not emit deletes in latest-version mode. Doing it explicitly is why the data model needs no
+ * soft-delete marker at all.
+ *
+ * Best-effort by design: a failure here must not fail the delete. The record is already gone
+ * from Cosmos, and the nightly full sync rebuilds the index from scratch with an alias swap,
+ * so a stale entry self-corrects within a day. Throwing would leave the caller unable to tell
+ * whether the delete happened.
+ *
+ * @returns {Promise<boolean>} true if removed, false if it was already absent or unreachable
+ */
+async function deleteFromIndex(collection, documentId) {
+  try {
+    await getClient().collections(collection).documents(String(documentId)).delete();
+    return true;
+  } catch (err) {
+    // 404 is the normal case for a document that was never indexed.
+    if (err && (err.httpStatus === 404 || err.name === 'ObjectNotFound')) return false;
+    console.warn(
+      `[Typesense] Could not remove ${collection}/${documentId} from the index ` +
+      `(${err.message}); the nightly full sync will reconcile it.`
+    );
+    return false;
+  }
+}
+
+module.exports = { getClient, deleteFromIndex };

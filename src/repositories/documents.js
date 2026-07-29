@@ -99,17 +99,34 @@ async function patchExtraction(id, projectId, fields) {
 }
 
 /**
- * Soft delete. The Cosmos change feed does not emit deletes in latest-version mode, so a hard
- * delete would leave the document in Typesense forever. Marking it and letting TTL reap the
- * item is Microsoft's documented pattern, and the Typesense sync already filters on isDeleted.
+ * Set publication state. This — NOT deletion — is how a document is hidden from the public
+ * and from proponents.
+ *
+ * `read[]` is authoritative, so publishing/unpublishing means adding or removing 'public'
+ * from it; `isPublished` is kept as the mirror. Privileged roles retain access either way.
+ *
+ * @param {string[]} secureRoles  roles that keep access when unpublished
  */
-async function softDelete(id, projectId, ttlSeconds = 604800) {
+async function setPublished(id, projectId, published, secureRoles) {
+  const read = published ? ['public', ...secureRoles] : [...secureRoles];
   return cosmos.patch(CONTAINER, String(id), String(projectId), [
-    { op: 'set', path: '/isDeleted', value: true },
-    { op: 'set', path: '/ttl', value: ttlSeconds }
+    { op: 'set', path: '/isPublished', value: Boolean(published) },
+    { op: 'set', path: '/read', value: read },
+    { op: 'set', path: '/updatedAt', value: new Date().toISOString() }
   ]);
 }
 
+/**
+ * Permanently remove the document record.
+ *
+ * Deliberately does NOT touch the stored blob. Hiding a document is `setPublished(false)`;
+ * this is for genuine removal of the record, and no request path is allowed to destroy a
+ * source file. Orphaned blobs are reclaimed by a separate audited job.
+ *
+ * The caller is responsible for removing the search-index entry — see
+ * controllers/nosql/document.js. That is done explicitly rather than via the change feed,
+ * which emits no deletes in latest-version mode.
+ */
 async function deleteById(id, projectId) {
   return cosmos.remove(CONTAINER, String(id), String(projectId));
 }
@@ -123,6 +140,6 @@ module.exports = {
   getById,
   upsert,
   patchExtraction,
-  softDelete,
+  setPublished,
   deleteById
 };

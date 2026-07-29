@@ -18,6 +18,9 @@ const extract = require('../../extract');
 const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+// Required as a module rather than destructured so the call is interceptable in tests —
+// otherwise a unit test would open a real Typesense connection and burn its retry schedule.
+const typesenseClient = require('../../typesense/typesenseClient');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -238,6 +241,47 @@ exports.updateDocument = async (req, res) => {
   }
 };
 
+/**
+ * Publish or unpublish. This is how a document is hidden from the public and from
+ * proponents — deletion is for genuine removal, not for hiding.
+ */
+exports.setDocumentPublished = async (req, res) => {
+  try {
+    const access = resolveAccess(req);
+    const existing = await documents.getById(access, req.params.id, req.query.project);
+    if (!existing) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const published = req.body.isPublished === true || req.body.isPublished === 'true';
+    const parentProject = await projects.getById(access, existing.projectId);
+
+    // A document still cannot out-rank its parent: publishing under a private project is a
+    // no-op that would otherwise silently expose it.
+    if (published && parentProject && !resolveDocumentAcl(parentProject, true).published) {
+      return res.status(409).json({
+        error: 'Cannot publish a document whose project is not published.'
+      });
+    }
+
+    const updated = await documents.setPublished(
+      existing.id, existing.projectId, published, SECURE_ROLES
+    );
+    return res.json(updated);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Permanently remove the document record and its search-index entry.
+ *
+ * The stored file is deliberately left in place — no request path may destroy a source
+ * document. Orphaned blobs are reclaimed by a separate audited job.
+ *
+ * The index entry is removed explicitly rather than through the change feed, which emits no
+ * deletes in latest-version mode. That is also why no soft-delete marker is needed.
+ */
 exports.deleteDocument = async (req, res) => {
   try {
     const access = resolveAccess(req);
@@ -246,10 +290,19 @@ exports.deleteDocument = async (req, res) => {
       return res.status(404).json({ error: 'Document not found' });
     }
 
-    // Soft delete: the change feed does not emit deletes in latest-version mode, so a hard
-    // delete would leave the document in Typesense indefinitely. TTL reaps the item later.
-    await documents.softDelete(existing.id, existing.projectId);
-    return res.json({ message: 'Document deleted successfully', deleted: existing });
+    await documents.deleteById(existing.id, existing.projectId);
+
+    // Best-effort: the record is already gone, and the nightly full sync reconciles the index
+    // via alias swap, so a failure here must not turn a successful delete into a 500.
+    const removedFromIndex = await typesenseClient.deleteFromIndex('documents', existing.id);
+
+    return res.json({
+      message: 'Document deleted successfully',
+      deleted: existing,
+      removedFromIndex,
+      // Stated in the response so it is obvious the file survives the record.
+      storedFileRetained: Boolean(existing.s3Key)
+    });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

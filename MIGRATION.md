@@ -111,8 +111,25 @@ Repository design notes:
   the `isPublished` mirror and could become publicly readable — the opposite of the point.
 - Paging uses **continuation tokens**, not skip/take: Cosmos has no efficient offset, so page
   N would cost as much as pages 1..N combined.
-- `documents.softDelete()` exists because the change feed does **not** emit deletes in
-  latest-version mode; a hard delete would strand the document in Typesense forever.
+### Deletion semantics (decided 2026-07-30 — supersedes the earlier soft delete)
+
+| Action | What it does |
+|---|---|
+| **Unpublish** (`PUT /documents/:id/published`) | Hides from public and proponents: `isPublished: false` and `read[]` loses `public`. **This is the hide mechanism.** |
+| **Hard delete** (`DELETE /documents/:id`) | Permanently removes the Cosmos item **and** the Typesense entry. |
+| **The stored blob** | **Never deleted by any request path.** Orphans are reclaimed by a separate audited job. |
+
+The index entry is removed **explicitly** rather than via the change feed (which emits no
+deletes in latest-version mode) — doing it directly is what makes a soft-delete marker
+unnecessary at all, removing that whole class of confusion.
+
+Index removal is **best-effort**: the record is already gone from Cosmos and the nightly full
+sync reconciles via alias swap, so a Typesense failure must not turn a successful delete into
+a 500. The response reports `removedFromIndex` and `storedFileRetained` so the outcome is
+explicit rather than implied.
+
+Publishing a document under an **unpublished project returns 409** — a document may never
+out-rank its parent.
 
 Notes for whoever picks this up:
 - `resolveAccess().projectScope` is the **seam** for project-scoped access. It returns null
@@ -178,9 +195,21 @@ every ACL read is a full scan; `/name` must be indexed or `ORDER BY` fails outri
 never blanks a populated Eagle value. Eagle-only projects included, flagged
 `sourceSystem: 'eagle'`.
 
-**NRPTI:** only ingest records whose `_epicProjectId` resolves to a project in the registry.
-Auto-seeding of unmatched NRPTI projects is removed, along with the entire fuzzy-matching
-apparatus (`normalizeProjectName` and its hardcoded "conuma coal"/"chetwynd" cases).
+**NRPTI: do not create projects from NRPTI at all.** Only ingest records whose
+`_epicProjectId` resolves to a project already in the registry; drop the rest rather than
+inventing a parent. The entire fuzzy-matching apparatus goes with it (`normalizeProjectName`
+and its hardcoded "conuma coal"/"chetwynd" cases).
+
+> **Verified 2026-07-30 — the 3,382 NRPTI-seeded "projects" are junk.** 0 have Track
+> provenance, 0 have Eagle provenance, all carry synthetic ids ≥ 8,000,000 from
+> `8000000 + hash % 1e6`, and **851 share a duplicate name**. Their names are cities and
+> watercourses, not EA projects: Kelowna, Victoria, Burnaby, Surrey, Prince George, Kamloops,
+> "Cawston / Keremeos Creek", "Cariboo River Provincial Park". The auto-seeder turned every
+> unmatched NRPTI `location`/`projectName` string into a project. **They are not re-seeded.**
+>
+> Consequence: the registry is **~392 real projects**, all published — so in practice **there
+> are no hidden projects**, and the 404-for-unauthorised path is unreachable. The ACL stays
+> because it still governs documents and future Track drafts (`isPublished: false`).
 
 **Boundaries** store simplified geometry only; full-resolution GeoJSON is a build artifact
 already emitted to `frontend/public/assets/geojson/` and already preferred by the frontend.

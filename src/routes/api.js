@@ -87,6 +87,11 @@ router.get('/documents/:id/download', passiveAuthMiddleware, documentController.
 router.post('/documents', authMiddleware, documentController.createDocument);
 router.post('/documents/extract', authMiddleware, upload.single('upfile'), documentController.extractDocument);
 router.put('/documents/:id', authMiddleware, documentController.updateDocument);
+// Publish / unpublish — the mechanism for hiding a document from public and proponents.
+// Deletion is for genuine removal, not for hiding. Only the NoSQL controller implements it.
+if (documentController.setDocumentPublished) {
+  router.put('/documents/:id/published', authMiddleware, documentController.setDocumentPublished);
+}
 router.delete('/documents/:id', authMiddleware, documentController.deleteDocument);
 
 // Regions routes removed — the collection is empty (0 items) and nothing consumed it.
