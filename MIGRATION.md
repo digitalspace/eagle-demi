@@ -57,14 +57,32 @@ window, making the overlap hours instead of weeks.
 |---|---|
 | `src/helpers/access-sql.js` | `resolveAccess` (3 tiers), `readClause`, `scopeClause`, `andClauses`, `visibilityFor`, `canRead` |
 | `src/db/cosmos-nosql.js` | `query`/`queryValue`/`readItem`/`create`/`upsert`/`replace`/`patch`/`remove`/`bulk`/`ping`, all fail-closed |
+| `src/repositories/_sql.js` | `eq`/`contains`/`selectWhere`/`countWhere`/`pageOptions` — visibility is always ANDed in, never optional |
+| `src/repositories/{projects,documents,records,boundaries,fragments}.js` | Named methods, each owning its SQL |
 | `test/helpers/access-sql.test.js` | Asserts **emitted SQL and params** per tier |
 | `test/db/cosmos-nosql.test.js` | Pins that a non-spec input **throws** rather than degrading |
+| `test/repositories/repositories.test.js` | Asserts the SQL each repository emits |
 
-`@azure/identity` added (the one new dependency). Tests **131/131**, lint 0 errors.
+`@azure/identity` added (the one new dependency). Tests **152/152**, lint 0 errors.
 
-**Still to do in Phase 2:** rewrite `src/models/*.js` as named repositories over
-`cosmos-nosql.js`, then move the controllers onto them; delete `BaseRepository`, the old
-`src/db/cosmos.js`, `src/helpers/access.js` and the `mongodb` dependency at cutover.
+**Still to do in Phase 2:** move the controllers onto the repositories. At cutover delete
+`BaseRepository`, `src/models/*.js`, `src/db/cosmos.js`, `src/helpers/access.js` and the
+`mongodb` dependency.
+
+Repository design notes:
+- **No generic `find(filter)`.** A filter-object interface is what let a broken translator
+  disable access control. Each method owns its SQL and cannot emit an unfiltered read.
+- **`countWhere` shares `selectWhere`**, so a count can never drift from its list predicate —
+  a count built from a different filter leaks the size of a set the caller cannot read.
+- **`boundaries` deliberately has no ACL predicate.** It is public reference data with no
+  `read[]`; applying the standard clause would match nothing and blank the map. Stated in the
+  file so it reads as a decision, not an omission.
+- **`fragments.put()` refuses an empty `read[]`.** A fragment with no ACL would fall back to
+  the `isPublished` mirror and could become publicly readable — the opposite of the point.
+- Paging uses **continuation tokens**, not skip/take: Cosmos has no efficient offset, so page
+  N would cost as much as pages 1..N combined.
+- `documents.softDelete()` exists because the change feed does **not** emit deletes in
+  latest-version mode; a hard delete would strand the document in Typesense forever.
 
 Notes for whoever picks this up:
 - `resolveAccess().projectScope` is the **seam** for project-scoped access. It returns null
