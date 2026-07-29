@@ -26,7 +26,11 @@ exports.getWildfires = async (req, res) => {
       }
     }
 
-    const wildfires = await Wildfire.find(filter).lean();
+    // No .lean() — Wildfire is a plain repository returning an array, not a Mongoose query.
+    // Note: a $near filter needs a geospatial index on Cosmos; without one queryContainer
+    // logs the rejection and returns [], so a location search degrades to "no results"
+    // rather than an error.
+    const wildfires = await Wildfire.find(filter);
 
     if (format === 'geojson') {
       return res.json({
@@ -60,8 +64,8 @@ exports.getWildfires = async (req, res) => {
 
 exports.syncWildfiresAdmin = async (req, res) => {
   try {
-    const db = Wildfire.db;
-    const result = await syncWildfiresData(db);
+    // syncWildfiresData() takes no arguments — it uses the shared repository directly.
+    const result = await syncWildfiresData();
     res.json({ success: true, result });
   } catch (err) {
     console.error('[Wildfire Controller] Admin sync error:', err);

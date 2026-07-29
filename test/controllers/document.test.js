@@ -223,6 +223,44 @@ test('Document Controller Tests', async (t) => {
     await documentController.extractDocument(req, res);
 
     assert.strictEqual(statusCode, 202);
-    assert.strictEqual(jsonResponse.message, 'File stored and extraction queued.');
+    assert.strictEqual(jsonResponse.message, 'File stored. Text extraction runs on the next scheduled extraction pass.');
+  });
+
+  await t.test('extractDocument sets a fail-closed read ACL and cannot out-rank its project', async (t2) => {
+    const mockFile = { path: '/tmp/test_upload.pdf', originalname: 'test_upload.pdf' };
+
+    t2.mock.method(extract, 'getMinioClient', () => ({
+      bucketExists: async () => true,
+      fPutObject: async () => {}
+    }));
+    t2.mock.method(fs.promises, 'unlink', async () => {});
+
+    let upserted;
+    t2.mock.method(Document, 'upsert', async (doc) => { upserted = doc; return doc; });
+
+    const run = async (parentProject, isPublished) => {
+      t2.mock.method(Project, 'findById', async () => parentProject);
+      const res = { status: () => res, json: () => res };
+      await documentController.extractDocument(
+        { file: { ...mockFile }, body: { project: '12345', isPublished } },
+        res
+      );
+      return upserted;
+    };
+
+    // Private project + requested public -> must NOT become public.
+    let doc = await run({ _id: '12345', read: ['sysadmin'], isPublished: false }, 'true');
+    assert.strictEqual(doc.isPublished, false, 'must not out-rank a private parent project');
+    assert.ok(!doc.read.includes('public'), 'read[] must not contain public');
+
+    // Public project + requested public -> public.
+    doc = await run({ _id: '12345', read: ['public', 'sysadmin'], isPublished: true }, 'true');
+    assert.strictEqual(doc.isPublished, true);
+    assert.ok(doc.read.includes('public'));
+
+    // Public project, publish not requested -> stays closed.
+    doc = await run({ _id: '12345', read: ['public', 'sysadmin'], isPublished: true }, undefined);
+    assert.strictEqual(doc.isPublished, false, 'defaults closed');
+    assert.ok(!doc.read.includes('public'));
   });
 });

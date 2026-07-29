@@ -99,6 +99,20 @@ node src/scripts/backfill-read-acl.js --dry-run   # counts only
 node src/scripts/backfill-read-acl.js
 ```
 
+Cosmos sits behind a private endpoint, so this must run **inside** the network — via the app's Kudu console (`https://demi-api-dev.scm.azurewebsites.net/api/command`) or Azure Cloud Shell. It cannot connect from a local machine.
+
+---
+
+## Document Storage & Downloads
+
+Binaries live in the BC Gov NRS object store — **`nrs.objectstore.gov.bc.ca`, bucket `asnpnn`** (S3-compatible, accessed with the `minio` client). Credentials come from the OpenShift secret `eagle-api-minio-keys` in namespace `6cdc9e-dev`.
+
+Required settings: `MINIO_HOST`, `MINIO_BUCKET_NAME`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, plus **`MINIO_PORT=443`** and **`MINIO_USE_SSL=true`**. `config.minioRegion` is pinned deliberately — without an explicit region the SDK performs a bucket-region lookup on every presign, which hangs for ~135 s before failing.
+
+**Downloads:** `GET /api/documents/:id/download` returns a 5-minute presigned URL, gated by the same `canRead(doc, roles)` ACL as the metadata read — a caller who cannot see the document cannot fetch its bytes.
+
+**Object key convention is `<projectId>/<file>`.** Uploads through `POST /api/documents/extract` follow it. Note that documents imported from EPIC carry legacy `s3Key` values such as `etl/<project-slug>/…`, which do **not** exist in this bucket — those records are metadata-only and their download links will 404 until the binaries are located or migrated.
+
 ---
 
 ## Azure Serverless Architecture

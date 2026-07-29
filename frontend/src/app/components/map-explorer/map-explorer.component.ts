@@ -26,6 +26,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   showWildfires = signal<boolean>(false);
 
+  isDownloading = signal<boolean>(false);
+  downloadError = signal<string | null>(null);
+
   // Custom searchable select signals per category
   activeDistrictQuery = signal<string>('');
   showDistrictDropdown = signal<boolean>(false);
@@ -200,6 +203,36 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     setTimeout(() => {
       this.initMap();
     }, 50);
+  }
+
+  /**
+   * Fetch a short-lived presigned URL for the selected document and open it.
+   * The API gates this by the same read ACL as the metadata, so a document the user cannot
+   * see returns 403 rather than a link.
+   */
+  async downloadSelectedDocument() {
+    const doc = this.service.selectedDocument();
+    if (!doc || this.isDownloading()) return;
+
+    this.isDownloading.set(true);
+    this.downloadError.set(null);
+    try {
+      const res = await fetch(`${this.service.getBasePath()}/documents/${doc.id}/download`);
+      if (!res.ok) {
+        const message = res.status === 403
+          ? 'You do not have permission to download this document.'
+          : `Could not prepare download (HTTP ${res.status}).`;
+        this.downloadError.set(message);
+        return;
+      }
+      const { url } = await res.json();
+      window.open(url, '_blank', 'noopener');
+    } catch (err) {
+      console.error('[MapExplorer] Download failed:', err);
+      this.downloadError.set('Could not reach the API to prepare the download.');
+    } finally {
+      this.isDownloading.set(false);
+    }
   }
 
   ngOnDestroy() {

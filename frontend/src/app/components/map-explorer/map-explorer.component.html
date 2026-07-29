@@ -638,17 +638,24 @@
         <div class="widget-text">
           <p style="margin-bottom: 0.5rem;"><strong>File Name:</strong> <code>{{ service.selectedDocument()?.documentFileName }}</code></p>
           <p style="margin-bottom: 0.5rem;"><strong>Associated Project:</strong> {{ service.selectedDocument()?.projectName }}</p>
-          <p style="margin-bottom: 0.5rem;"><strong>Record Number (ORCS):</strong> {{ service.selectedDocument()?.orcsCode }}</p>
+          @if (service.selectedDocument()?.orcsCode) {
+            <p style="margin-bottom: 0.5rem;"><strong>Record Number (ORCS):</strong> {{ service.selectedDocument()?.orcsCode }}</p>
+          }
           <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem;">
-            <a 
-              [href]="'https://dev.loginproxy.gov.bc.ca/auth/'" 
-              target="_blank"
-              class="tab-button active" 
-              style="font-size: 0.75rem; padding: 0.4rem; text-align: center; text-decoration: none; color: white;"
+            <button
+              type="button"
+              (click)="downloadSelectedDocument()"
+              [disabled]="isDownloading()"
+              class="tab-button active"
+              style="font-size: 0.75rem; padding: 0.4rem; text-align: center; color: white; cursor: pointer;"
             >
-              <i class="fa-solid fa-cloud-arrow-down"></i> Download S3 Source File
-            </a>
+              <i class="fa-solid fa-cloud-arrow-down"></i>
+              {{ isDownloading() ? 'Preparing download…' : 'Download Source File' }}
+            </button>
           </div>
+          @if (downloadError()) {
+            <p style="margin-top: 0.5rem; color: #ff4d4f; font-size: 0.75rem;">{{ downloadError() }}</p>
+          }
         </div>
       } @else {
         <div class="widget-title">

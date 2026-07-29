@@ -147,6 +147,38 @@ describe('RegistryStateService', () => {
     expect(service.filteredDocuments()).toEqual([]);
   });
 
+  // loadData used to swallow any API failure and substitute mock projects, so a broken
+  // backend rendered as a healthy demo full of fictional data. It must fail visibly.
+  describe('loadData failure handling', () => {
+    it('should surface an error and NOT substitute mock data when the API fails', async () => {
+      spyOn(window, 'fetch').and.rejectWith(new Error('network down'));
+
+      await service.loadData();
+
+      expect(service.projects()).toEqual([]);
+      expect(service.documents()).toEqual([]);
+      expect(service.loadError()).toBeTruthy();
+    });
+
+    it('should clear a previous error at the start of a new load', async () => {
+      spyOn(window, 'fetch').and.rejectWith(new Error('network down'));
+      await service.loadData();
+      expect(service.loadError()).toBeTruthy();
+
+      // A subsequent successful load must clear the banner. loadData fetches projects AND
+      // documents, so build a fresh Response per call — a body can only be read once.
+      (window.fetch as jasmine.Spy).and.callFake(async () =>
+        new Response(JSON.stringify([{ searchResults: [] }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      );
+      await service.loadData();
+
+      expect(service.loadError()).toBeNull();
+    });
+  });
+
   // The fetch interceptor used to decide "is this our API?" with url.includes(basePath).
   // With the '/api' fallback that matches any third-party URL containing those characters,
   // which would attach the user's Bearer token to it.

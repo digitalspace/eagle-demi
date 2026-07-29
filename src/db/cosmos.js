@@ -1,6 +1,6 @@
 'use strict';
 
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
 const config = require('../config');
 
 let mongoClientInstance = null;
@@ -136,10 +136,14 @@ async function getItem(containerName, id, partitionKey = id) {
 
     const strId = String(id);
     const numId = Number(id);
+    // Records imported from EPIC keep genuine ObjectId _ids, while DEMI-created records use
+    // string _ids. Matching only the string form made every imported document unreachable
+    // by id — /documents/:id and the download endpoint both 404'd on real data.
     const filter = {
       $or: [
         { _id: strId },
         { id: strId },
+        ...(ObjectId.isValid(strId) ? [{ _id: new ObjectId(strId) }] : []),
         ...(isNaN(numId) ? [] : [{ trackProjectId: numId }])
       ]
     };

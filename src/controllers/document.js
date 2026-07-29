@@ -11,6 +11,10 @@ const Project = require('../models/project');
 
 const { rolesFor, withReadFilter, canRead, SECURE_ROLES } = require('../helpers/access');
 
+// Presigned download links are deliberately short-lived — they carry no auth of their own,
+// so anyone holding the URL can fetch the object until it expires.
+const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
+
 exports.getDocuments = async (req, res) => {
   try {
     const roles = rolesFor(req);
@@ -27,6 +31,29 @@ exports.getDocuments = async (req, res) => {
   }
 };
 
+/**
+ * Resolve the ACL for a new document.
+ *
+ * Fail closed, and never let a document out-rank its parent project: a doc can only be
+ * public if the project is. Mirrors constrainToProject in typesense/transform.js.
+ *
+ * EVERY document write path must go through this — createDocument and extractDocument both
+ * do. extractDocument previously set only isPublished and no read[], which let an uploaded
+ * file be published under a private project.
+ */
+function resolveDocumentAcl(parentProject, isPublished) {
+  const requestedPublish = isPublished === true || isPublished === 'true';
+  const parentIsPublic = Array.isArray(parentProject.read) && parentProject.read.length > 0
+    ? parentProject.read.includes('public')
+    : parentProject.isPublished === true;
+  const published = requestedPublish && parentIsPublic;
+
+  return {
+    published,
+    read: published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]
+  };
+}
+
 exports.createDocument = async (req, res) => {
   try {
     const { project, displayName, s3Key, region, edrmsRecordNumber, orcsClassification, isPublished } = req.body;
@@ -40,13 +67,7 @@ exports.createDocument = async (req, res) => {
       return res.status(404).json({ error: `Parent Project with id ${project} not found.` });
     }
 
-    // Fail closed, and never let a document out-rank its parent project: a doc can only
-    // be public if the project is. Mirrors constrainToProject in typesense/transform.js.
-    const requestedPublish = isPublished === true || isPublished === 'true';
-    const parentIsPublic = Array.isArray(parentProject.read) && parentProject.read.length > 0
-      ? parentProject.read.includes('public')
-      : parentProject.isPublished === true;
-    const published = requestedPublish && parentIsPublic;
+    const acl = resolveDocumentAcl(parentProject, isPublished);
 
     const newDoc = {
       _id: String(Date.now()),
@@ -56,8 +77,8 @@ exports.createDocument = async (req, res) => {
       region: region || parentProject.region || '',
       edrmsRecordNumber: edrmsRecordNumber || '',
       orcsClassification: orcsClassification || '',
-      read: published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES],
-      isPublished: published
+      read: acl.read,
+      isPublished: acl.published
     };
 
     const saved = await Document.upsert(newDoc);
@@ -84,6 +105,48 @@ exports.getDocument = async (req, res) => {
     return res.json(doc);
   } catch (err) {
     return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Issue a short-lived presigned download URL for a document's stored file.
+ *
+ * Gated by the same read ACL as every other document read — a caller who cannot see the
+ * metadata must not be able to fetch the bytes. findById is a point read that bypasses the
+ * query filter, so canRead() is required here.
+ */
+exports.downloadDocument = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const roles = rolesFor(req);
+
+    const doc = await Document.findById(id);
+    if (!doc) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+    if (!canRead(doc, roles)) {
+      return res.status(403).json({ error: 'Access denied. Document is not published.' });
+    }
+    if (!doc.s3Key) {
+      return res.status(404).json({ error: 'Document has no stored file.' });
+    }
+
+    const minioClient = extract.getMinioClient();
+    const url = await minioClient.presignedGetObject(
+      config.minioBucket,
+      doc.s3Key,
+      DOWNLOAD_URL_TTL_SECONDS
+    );
+
+    return res.json({
+      url,
+      expiresIn: DOWNLOAD_URL_TTL_SECONDS,
+      fileName: doc.s3Key.split('/').pop(),
+      displayName: doc.displayName || null
+    });
+  } catch (err) {
+    console.error('[Document Controller] Presigned download failed:', err.message);
+    return res.status(500).json({ error: 'Failed to generate download link.' });
   }
 };
 
@@ -150,6 +213,8 @@ exports.extractDocument = async (req, res) => {
     await minioClient.fPutObject(config.minioBucket, objectPath, file.path);
     fs.promises.unlink(file.path).catch(() => {});
 
+    const acl = resolveDocumentAcl(parentProject, isPublished);
+
     const newDoc = {
       _id: String(Date.now()),
       project: String(project),
@@ -158,13 +223,16 @@ exports.extractDocument = async (req, res) => {
       region: region || parentProject.region || '',
       edrmsRecordNumber: edrmsRecordNumber || '',
       orcsClassification: orcsClassification || '',
-      isPublished: isPublished === 'true' || isPublished === true
+      read: acl.read,
+      isPublished: acl.published
     };
 
     const saved = await Document.upsert(newDoc);
 
+    // Honest wording: nothing is queued here. The file is stored and the record created;
+    // text extraction happens when the batch extractor (src/extract.js) next runs.
     return res.status(202).json({
-      message: 'File stored and extraction queued.',
+      message: 'File stored. Text extraction runs on the next scheduled extraction pass.',
       docId: String(saved._id)
     });
   } catch (err) {

@@ -59,6 +59,8 @@ const upload = multer({ dest: config.uploadDir });
 
 router.get('/documents', passiveAuthMiddleware, documentController.getDocuments);
 router.get('/documents/:id', passiveAuthMiddleware, documentController.getDocument);
+// Presigned download link — ACL-gated inside the controller, same as the metadata read.
+router.get('/documents/:id/download', passiveAuthMiddleware, documentController.downloadDocument);
 router.post('/documents', authMiddleware, documentController.createDocument);
 router.post('/documents/extract', authMiddleware, upload.single('upfile'), documentController.extractDocument);
 router.put('/documents/:id', authMiddleware, documentController.updateDocument);

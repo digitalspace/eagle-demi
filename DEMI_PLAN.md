@@ -180,24 +180,42 @@ Request increases to the **namespace `compute-long-running` `requests.cpu` quota
    - When TRACK syncs EAO project metadata, it reconciles against existing projects (including NRPTI-seeded projects).
 ---
 
-## Native Azure Cosmos DB SDK & Incremental Delta Sync Engine
+## Cosmos DB Repository Layer & Sync Engine
 
-### Architectural Evolution
-All legacy `mongoose` and `mongodb` drivers have been removed from `eagle-demi`. Database operations now execute through `@azure/cosmos` native SQL repository models (`src/db/cosmos.js` and `src/models/*.js`).
+> **Corrected 2026-07-29.** This section previously claimed the mongo drivers had been
+> removed in favour of `@azure/cosmos` native SQL models, and that a container app job
+> `demi-sync-job-dev` ran the nightly sync. **Neither was true**, and that discrepancy caused
+> a real production-shaped bug: someone wrote Cosmos-SQL-style `WHERE` strings against a
+> layer that was actually the MongoDB driver, then shimmed the two together with a substring
+> "translator" that silently discarded every predicate it didn't recognise — so all
+> `isPublished` access control was dead code that failed open. See
+> `ADR-004-Read-ACL-Authorization-Model` in the wiki.
 
-### Core Database Models (`src/models/`)
-- **`ProjectModel`**: Repository pattern for `projects` container. Partition key: `/id`.
-- **`DocumentModel`**: Repository pattern for `documents` container. Partition key: `/id`.
-- **`RecordModel`**: Repository pattern for `records` container. Partition key: `/id`.
-- **`BoundaryModel`**: Repository pattern for `boundaries` container. Partition key: `/id`.
-- **`RegionModel`**: Repository pattern for `regions` container. Partition key: `/id`.
-- **`WildfireModel`**: Repository pattern for `wildfires` container. Partition key: `/id`.
-- **`LogModel`**: Repository pattern for `logs` container. Partition key: `/id`.
-- **`SyncStateModel`**: Repository pattern for `sync_state` container. Partition key: `/id`. Stores high-water marks (`lastSyncedAt`).
+### Actual architecture
 
-### Incremental Delta Sync Engine (`src/scripts/incremental-sync.js`)
-- **High-Water Mark Persistence**: High-water marks (`lastSyncedAt`) are maintained in the `sync_state` container per source system (`openshift`, `nrpti`, `wildfire`).
-- **Delta Querying**: On each execution, only modified/new records since `lastSyncedAt` (`since`) are fetched and upserted into Azure Cosmos DB.
-- **Azure Container App Job (`demi-sync-job-dev`)**: Scheduled nightly (`0 2 * * *`) as an Azure Container App Job that scales to zero when idle, saving cloud compute costs while ensuring fresh data ingestion.
+**The database is Azure Cosmos DB using the MongoDB API** (account `demi-mongo-dev-*`,
+`kind: MongoDB`, capability `EnableMongo`, serverless, behind a private endpoint). The
+`mongodb` npm driver is therefore the correct and required client — `@azure/cosmos`, the
+NoSQL-API SDK, cannot connect to a Mongo-API account and is currently an unused dependency.
+
+Data access goes through `src/db/cosmos.js` and the thin repositories in `src/models/*.js`.
+These take **MongoDB filter objects**, not SQL strings; passing a string throws, so a filter
+that cannot be honoured can never silently become an unfiltered read. Collections:
+`projects`, `documents`, `records`, `administrative_boundaries`, `regions`, `wildfires`,
+`logs`. There are no partition keys — that is a NoSQL-API concept and does not apply here.
+
+Migrating to the NoSQL API would mean a new account, migrating ~4,100 projects and ~19,000
+documents, choosing partition keys, and rewriting the Typesense change-stream integration to
+use the change feed. It is a project, not a refactor, and is not currently planned.
+
+### Sync
+
+- **Nightly full sync** — Azure Functions **timer** `nightlySyncTimer` (`api/index.js`,
+  `0 0 2 * * *`) calls `runNightlySync` from `src/scripts/nightly-sync.js`. There is no
+  container app job.
+- **Incremental delta sync** — `src/scripts/incremental-sync.js` with high-water marks in
+  `sync_state` via `src/models/syncState.js`, per source (`openshift`, `nrpti`, `wildfire`).
+  **Built but not scheduled**: the only entry point is `npm run db:sync-incremental`. Either
+  point the timer at it or remove it.
 
 

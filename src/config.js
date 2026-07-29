@@ -42,6 +42,10 @@ const config = {
 
   minioHost:    process.env.MINIO_HOST       || 'localhost',
   minioPort:    parseInt(process.env.MINIO_PORT || '9000', 10),
+  // Pinning the region lets the SDK sign presigned URLs locally. Without it, the client
+  // performs a bucket-region lookup against MinIO on every presign — which hangs for
+  // ~135s from Azure before failing, since MinIO lives on OpenShift Silver.
+  minioRegion:  process.env.MINIO_REGION      || 'us-east-1',
   minioAccess:  process.env.MINIO_ACCESS_KEY || '',
   minioSecret:  process.env.MINIO_SECRET_KEY || '',
   minioBucket:  process.env.MINIO_BUCKET_NAME || 'uploads',

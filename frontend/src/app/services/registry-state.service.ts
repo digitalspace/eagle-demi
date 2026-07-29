@@ -128,6 +128,10 @@ export class RegistryStateService {
   // Loading state for administrative boundaries loading
   isLoadingBoundaries = signal<boolean>(false);
 
+  // Non-null when the last loadData() failed. The UI must show this rather than an
+  // innocent-looking empty list — an outage should never be mistaken for "no results".
+  loadError = signal<string | null>(null);
+
   // Computed alphabetical list of boundary names in active layer
   activeBoundaryNames = computed(() => {
     const bLayer = this.activeBoundaryLayer();
@@ -849,6 +853,8 @@ export class RegistryStateService {
 
   // Load datasets from Express api, falling back to rich mock data if empty/fails
   async loadData() {
+    this.loadError.set(null);
+
     const buildMockProjects = () => {
       return this.mockProjects.map(p => {
         const trackAttributes = {
@@ -1000,7 +1006,9 @@ export class RegistryStateService {
             displayName: displayName,
             documentFileName: fileFileName,
             documentType: 'PDF Document',
-            orcsCode: d.orcsClassification || '34800-20/MOCK',
+            // Never invent a record number — this rendered the literal '34800-20/MOCK' to
+            // users as "Record Number (ORCS)" for every document without a classification.
+            orcsCode: d.orcsClassification || '',
             projectId: projId,
             projectName: resolvedProjectName,
             gatingState: (d.isPublished === false) ? 'staged' : 'admitted',
@@ -1012,9 +1020,16 @@ export class RegistryStateService {
         this.documents.set([]);
       }
     } catch (err) {
-      console.warn('[Registry loadData] API search fetch failed. Activating fallback dataset:', err);
-      this.projects.set(buildMockProjects());
-      this.documents.set(this.mockDocuments);
+      // Do NOT silently substitute mock data here. Doing so made a broken backend render as
+      // a healthy demo full of fictional projects, masking outages and every other bug.
+      // Mocks are opt-in via USE_MOCK_DATA only; otherwise surface the failure.
+      console.error('[Registry loadData] API search fetch failed:', err);
+      this.projects.set([]);
+      this.documents.set([]);
+      this.loadError.set(
+        'Could not load registry data from the API. This is a connection or server error — ' +
+        'the list below is empty, not filtered.'
+      );
     }
   }
 
@@ -1139,7 +1154,16 @@ export class RegistryStateService {
 
   pollExtractionStatus(docId: string) {
     const basePath = this.getBasePath();
+    // Bounded. Extraction is a batch job that may not be running at all, and an unbounded
+    // poll left the UI pinned at 95% "Extracting..." forever with no way to tell the
+    // difference between slow and never.
+    const POLL_INTERVAL_MS = 2500;
+    const MAX_POLL_MS = 5 * 60 * 1000;
+    const maxAttempts = Math.ceil(MAX_POLL_MS / POLL_INTERVAL_MS);
+    let attempts = 0;
+
     const interval = setInterval(async () => {
+      attempts++;
       try {
         const res = await fetch(`${basePath}/documents/${docId}`);
         if (!res.ok) return;
@@ -1153,16 +1177,35 @@ export class RegistryStateService {
           clearInterval(interval);
           this.activeIngestion.set({ fileName: doc.displayName, progress: 100, status: 'Extraction complete!' });
           this.loadData();
-        } else if (doc.contentExtractionError) {
+          return;
+        }
+        if (doc.contentExtractionError) {
           clearInterval(interval);
           this.activeIngestion.set({ fileName: doc.displayName, progress: 100, status: `Extraction failed: ${doc.contentExtractionError}` });
-        } else {
-          this.activeIngestion.set({ fileName: doc.displayName, progress: currentProg, status: 'Extracting text layout with Docling...' });
+          return;
         }
+        if (attempts >= maxAttempts) {
+          clearInterval(interval);
+          this.activeIngestion.set({
+            fileName: doc.displayName,
+            progress: 100,
+            status: 'Upload succeeded, but text extraction has not completed. The file is stored and will be processed when the extraction job next runs.'
+          });
+          this.loadData();
+          return;
+        }
+        this.activeIngestion.set({ fileName: doc.displayName, progress: currentProg, status: 'Extracting text layout with Docling...' });
       } catch {
-        // Keep polling
+        if (attempts >= maxAttempts) {
+          clearInterval(interval);
+          this.activeIngestion.set({
+            fileName: '',
+            progress: 100,
+            status: 'Upload succeeded, but the extraction status could not be confirmed.'
+          });
+        }
       }
-    }, 2500);
+    }, POLL_INTERVAL_MS);
   }
 
   // Geospatial coordinate validation and healing helper

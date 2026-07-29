@@ -97,6 +97,8 @@ function getMinioClient() {
     useSSL:    config.minioSsl,
     accessKey: config.minioAccess,
     secretKey: config.minioSecret,
+    // Explicit region avoids a blocking bucket-region lookup on every presign.
+    region:    config.minioRegion,
   });
 }
 

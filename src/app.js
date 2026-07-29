@@ -81,14 +81,24 @@ const configController = require('./controllers/config');
 // Fast non-DB routes (/api/config, /config, /api/health, /health)
 app.get('/api/config', configController.getConfig);
 app.get('/config', configController.getConfig);
-app.get('/api/health', (req, res) => res.json({ status: 'ok', db: true }));
-app.get('/health', (req, res) => res.json({ status: 'ok', db: true }));
+// Liveness only — the process is up. Deliberately does NOT claim anything about the
+// database; it previously reported `db: true` unconditionally, so every probe stayed green
+// with no database configured at all.
+app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+// Readiness — actually reaches the database. initCosmosClient() RETURNS NULL rather than
+// throwing when unconfigured, so a truthy check is required; `try/catch` alone is not enough.
 app.get('/api/health/db', async (req, res) => {
   try {
-    initCosmosClient();
-    return res.json({ ok: true, driver: 'azure-cosmos-sdk' });
+    const db = initCosmosClient();
+    if (!db) {
+      return res.status(503).json({ ok: false, error: 'Database client is not configured.' });
+    }
+    await db.command({ ping: 1 });
+    return res.json({ ok: true, driver: 'cosmos-db-mongodb-api' });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(503).json({ ok: false, error: err.message });
   }
 });
 
