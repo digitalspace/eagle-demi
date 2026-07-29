@@ -46,6 +46,7 @@ async function runNightlySync() {
         projectSubType: tp.sub_type_name || '',
         centroid: { type: 'Point', coordinates: coords },
         isPublished: true,
+        read: ['public', 'sysadmin', 'staff', 'demi-admin'],
         sources: {
           track: tp,
           eagle: null,

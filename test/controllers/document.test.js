@@ -22,8 +22,11 @@ test('Document Controller Tests', async (t) => {
       { displayName: 'Doc 1', project: '12345', isPublished: true }
     ];
 
-    t.mock.method(Document, 'find', async (whereClause) => {
-      assert.strictEqual(whereClause, 'c.isPublished = true');
+    t.mock.method(Document, 'find', async (filter) => {
+      // Anonymous callers must be constrained by the read ACL, never handed a bare {}.
+      assert.ok(filter && typeof filter === 'object', 'filter must be a Mongo filter object');
+      assert.ok(Array.isArray(filter.$or), 'public read must apply an ACL $or clause');
+      assert.deepStrictEqual(filter.$or[0], { read: { $in: ['public'] } });
       return mockDocs;
     });
 
@@ -48,14 +51,18 @@ test('Document Controller Tests', async (t) => {
       { displayName: 'Unpublished Doc', project: '12346', isPublished: false }
     ];
 
-    t.mock.method(Document, 'find', async (whereClause) => {
-      assert.strictEqual(whereClause, '');
+    t.mock.method(Document, 'find', async (filter) => {
+      // Privileged roles read unfiltered.
+      assert.deepStrictEqual(filter, {});
       return mockDocs;
     });
 
+    // Roles come from the verified token via req.user — the controller no longer
+    // re-implements auth by sniffing headers.
     const req = {
       query: {},
-      header: (name) => name === 'X-Api-Key' ? 'eagle-demi-api-key' : null
+      user: { realm_access: { roles: ['sysadmin'] } },
+      header: () => null
     };
 
     let jsonResponse;

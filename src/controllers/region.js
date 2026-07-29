@@ -4,7 +4,7 @@ const Region = require('../models/region');
 
 exports.getRegions = async (req, res) => {
   try {
-    const regions = await Region.find('', [], { orderBy: 'c.name ASC' });
+    const regions = await Region.find({}, { sort: { name: 1 } });
     return res.json(regions);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -37,7 +37,7 @@ exports.getRegion = async (req, res) => {
     const { id } = req.params;
     let region = await Region.findById(id);
     if (!region) {
-      region = await Region.findOne('c.name = @name', [{ name: '@name', value: id }]);
+      region = await Region.findOne({ name: String(id) });
     }
     if (!region) {
       return res.status(404).json({ error: 'Region not found' });
@@ -53,7 +53,7 @@ exports.updateRegion = async (req, res) => {
     const { id } = req.params;
     let existing = await Region.findById(id);
     if (!existing) {
-      existing = await Region.findOne('c.name = @name', [{ name: '@name', value: id }]);
+      existing = await Region.findOne({ name: String(id) });
     }
     if (!existing) {
       return res.status(404).json({ error: 'Region not found' });
@@ -72,7 +72,7 @@ exports.deleteRegion = async (req, res) => {
     const { id } = req.params;
     let existing = await Region.findById(id);
     if (!existing) {
-      existing = await Region.findOne('c.name = @name', [{ name: '@name', value: id }]);
+      existing = await Region.findOne({ name: String(id) });
     }
     if (!existing) {
       return res.status(404).json({ error: 'Region not found' });

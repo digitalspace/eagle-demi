@@ -7,9 +7,12 @@ class BaseRepository {
     this.containerName = containerName;
   }
 
-  async find(whereClause = '', parameters = [], options = {}) {
-    const queryText = `SELECT * FROM c ${whereClause ? 'WHERE ' + whereClause : ''} ${options.orderBy ? 'ORDER BY ' + options.orderBy : ''}`;
-    return queryContainer(this.containerName, { query: queryText, parameters }, options);
+  /**
+   * @param {object} filter  MongoDB filter object (NOT a SQL string — see db/cosmos.js)
+   * @param {object} options { maxItemCount|limit, sort }
+   */
+  async find(filter = {}, options = {}) {
+    return queryContainer(this.containerName, filter, options);
   }
 
   async findById(id) {
@@ -17,8 +20,8 @@ class BaseRepository {
     return getItem(this.containerName, String(id));
   }
 
-  async findOne(whereClause, parameters = []) {
-    const results = await this.find(whereClause, parameters, { maxItemCount: 1 });
+  async findOne(filter = {}, options = {}) {
+    const results = await this.find(filter, { ...options, maxItemCount: 1 });
     return results && results.length > 0 ? results[0] : null;
   }
 
@@ -27,10 +30,23 @@ class BaseRepository {
     const now = new Date().toISOString();
     if (!doc.createdAt) doc.createdAt = now;
     doc.updatedAt = now;
-    if (!doc._id && !doc.id) {
-      doc._id = String(doc.trackProjectId || doc.nrptiId || Date.now());
+
+    if (this.containerName === 'projects') {
+      if (!doc.legacyEagleId && doc._id && isNaN(doc._id)) {
+        doc.legacyEagleId = String(doc._id);
+      }
+      const masterId = String(doc.trackProjectId || doc._id || doc.id || Date.now());
+      doc._id = masterId;
+      doc.id = masterId;
+      if (!doc.trackProjectId && !isNaN(masterId)) {
+        doc.trackProjectId = Number(masterId);
+      }
+    } else {
+      if (!doc._id && !doc.id) {
+        doc._id = String(doc.nrptiId || Date.now());
+      }
+      doc.id = String(doc._id || doc.id);
     }
-    doc.id = String(doc._id || doc.id);
     return upsertItem(this.containerName, doc);
   }
 
@@ -38,8 +54,8 @@ class BaseRepository {
     return deleteItem(this.containerName, String(id));
   }
 
-  async countDocuments(whereClause = '', parameters = []) {
-    return countContainer(this.containerName, whereClause, parameters);
+  async countDocuments(filter = {}) {
+    return countContainer(this.containerName, filter);
   }
 }
 

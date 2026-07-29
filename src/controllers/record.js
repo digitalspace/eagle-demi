@@ -1,6 +1,13 @@
 'use strict';
 
 const Record = require('../models/record');
+const { rolesFor, withReadFilter } = require('../helpers/access');
+
+// User input reaches $regex below — escape it so a crafted project name can neither
+// inject a pattern nor mount a ReDoS.
+function escapeRegex(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * Get compliance and enforcement records
@@ -8,28 +15,60 @@ const Record = require('../models/record');
 async function getRecords(req, res) {
   try {
     const { project, dataset, agency, page = 1, limit = 50 } = req.query;
-    const conditions = ['c.isPublished = true'];
-    const parameters = [];
+    const Project = require('../models/project');
 
     if (project) {
-      parameters.push({ name: '@proj', value: String(project) });
-      conditions.push('c.project = @proj');
+      let matchedProj = await Project.findById(project);
+      if (!matchedProj) {
+        const numId = isNaN(project) ? -1 : Number(project);
+        matchedProj = await Project.findOne({
+          $or: [
+            { trackProjectId: numId },
+            { legacyEagleId: String(project) },
+            { name: { $regex: `^${escapeRegex(String(project))}$`, $options: 'i' } }
+          ]
+        });
+      }
+
+      if (matchedProj) {
+        const folded = matchedProj.nrptiRecords || matchedProj.sources?.nrpti?.records;
+        if (folded && Array.isArray(folded) && folded.length > 0) {
+          let filtered = folded;
+          if (dataset) filtered = filtered.filter(r => (r.nrptiSchemaName || r.recordType) === dataset);
+          if (agency) filtered = filtered.filter(r => r.issuingAgency === agency);
+          return res.json({
+            success: true,
+            data: filtered,
+            pagination: {
+              total: filtered.length,
+              page: 1,
+              limit: limit ? parseInt(limit, 10) : 50,
+              pages: 1
+            }
+          });
+        }
+      }
     }
-    if (dataset) {
-      parameters.push({ name: '@ds', value: String(dataset) });
-      conditions.push('c.nrptiSchemaName = @ds');
+
+    const roles = rolesFor(req);
+    const criteria = {};
+
+    if (project) {
+      criteria.$or = [
+        { project: String(project) },
+        { projectName: { $regex: escapeRegex(String(project)), $options: 'i' } }
+      ];
     }
-    if (agency) {
-      parameters.push({ name: '@agency', value: String(agency) });
-      conditions.push('c.issuingAgency = @agency');
-    }
+    if (dataset) criteria.nrptiSchemaName = String(dataset);
+    if (agency) criteria.issuingAgency = String(agency);
 
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = parseInt(limit, 10) || 50;
-    const whereClause = conditions.join(' AND ');
+    const filter = withReadFilter(roles, criteria);
 
-    const records = await Record.find(whereClause, parameters, { maxItemCount: limitNum });
-    const total = await Record.countDocuments(whereClause, parameters);
+    const records = await Record.find(filter, { maxItemCount: limitNum });
+    // Count with the SAME filter so the total cannot leak hidden records.
+    const total = await Record.countDocuments(filter);
 
     res.json({
       success: true,
@@ -54,7 +93,7 @@ async function getRecord(req, res) {
     const { id } = req.params;
     let record = await Record.findById(id);
     if (!record) {
-      record = await Record.findOne('c.nrptiId = @id', [{ name: '@id', value: String(id) }]);
+      record = await Record.findOne({ nrptiId: String(id) });
     }
 
     if (!record) {

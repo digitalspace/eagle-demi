@@ -54,6 +54,53 @@ DEMI uses a multi-source hybrid project model (`sources.*` namespace):
 
 ---
 
+## Authentication & Authorization
+
+See [ADR-004: Read ACL Authorization Model](https://github.com/digitalspace/eagle-demi/wiki/ADR-004-Read-ACL-Authorization-Model) for the full rationale.
+
+### Authentication
+
+* **Keycloak (BC Gov loginproxy)**, realm `eao-epic`. Tokens are verified against JWKS with `RS256` pinned and the issuer checked — `src/helpers/auth.js`.
+* `KEYCLOAK_URL` / `KEYCLOAK_REALM` / `SSO_ISSUER` / `SSO_JWKSURI` **must** be set per environment (they are, in `azure/modules/api-web-app.bicep`). Without them the API falls back to the *dev* realm defaults in `src/config.js`.
+* **Service-to-service** calls use `X-Api-Key`, compared with `crypto.timingSafeEqual`. Keys come from configuration only — `config.doclingKey`, `DOCLING_API_KEY`, `ADMIN_API_KEY`. **Never hardcode a key literal**: this repository is public, so any literal in that list is a world-readable `sysadmin` credential.
+* Two middlewares: `middleware/auth.js` rejects (401/403); `middleware/passiveAuth.js` downgrades to anonymous but logs rejected credentials.
+
+### Authorization — the `read[]` ACL
+
+Records carry a `read[]` array of role names. A record is visible when `read[]` intersects the caller's roles. `isPublished` is kept as a mirror; `read[]` is authoritative.
+
+**All read paths must compose the visibility filter from `src/helpers/access.js`:**
+
+```js
+const { rolesFor, withReadFilter, canRead } = require('../helpers/access');
+
+const roles = rolesFor(req);                          // ['public'] + verified token roles
+const filter = withReadFilter(roles, { sector });     // combines with $and
+const rows = await Project.find(filter, { maxItemCount: 500 });
+
+// Point reads (findById) bypass the query filter — gate them explicitly:
+if (!canRead(doc, roles)) return res.status(403).json({ error: 'Access denied.' });
+```
+
+Privileged roles (`sysadmin`, `staff`, `demi-admin`) get an unfiltered `{}`. Roles are read **only** from the verified token (`req.user`), never from client-supplied headers or query parameters.
+
+### Query layer rules
+
+* `BaseRepository.find/findOne/countDocuments` and `db/cosmos.js` take **MongoDB filter objects**. Passing a SQL string throws — an untranslatable filter must never silently become an unfiltered read.
+* Counts must use the **same** filter as the read, or totals leak hidden records.
+* **Do not use `cursor.sort()`.** Cosmos DB for MongoDB rejects sorts on unindexed fields, and that error becomes an empty result set. Pass `options.sort` — `queryContainer` sorts in memory (per-page, after the limit).
+
+### Backfill
+
+Rows written before the ACL landed carry no `read[]`. `readFilter` has a documented legacy tier covering them. Run the backfill per environment, then remove that tier:
+
+```bash
+node src/scripts/backfill-read-acl.js --dry-run   # counts only
+node src/scripts/backfill-read-acl.js
+```
+
+---
+
 ## Azure Serverless Architecture
 
 - **Runtime**: Azure Functions v4 (`@azure/functions` v4 on Node.js 22, `Y1` Consumption Plan).

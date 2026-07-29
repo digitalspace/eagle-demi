@@ -12,11 +12,11 @@ const instance = new ProjectRepository();
 
 // Export singleton instance with static proxy methods for backward compatibility
 module.exports = {
-  find: (whereClause, parameters, options) => instance.find(whereClause, parameters, options),
+  find: (filter, options) => instance.find(filter, options),
   findById: (id) => instance.findById(id),
-  findOne: (whereClause, parameters) => instance.findOne(whereClause, parameters),
+  findOne: (filter, options) => instance.findOne(filter, options),
   upsert: (doc) => instance.upsert(doc),
   deleteById: (id) => instance.deleteById(id),
-  countDocuments: (whereClause, parameters) => instance.countDocuments(whereClause, parameters),
+  countDocuments: (filter) => instance.countDocuments(filter),
   instance
 };

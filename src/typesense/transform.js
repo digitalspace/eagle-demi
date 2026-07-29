@@ -26,17 +26,25 @@ function parseCentroid(c) {
 
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
+// Fail closed. A record with no explicit ACL and no explicit isPublished:true is NOT
+// public — matching eagle-typesense/src/transform.js. Defaulting to ['public'] here would
+// publish every malformed or partially-synced record to anonymous search.
 function extractRoles(doc) {
   if (Array.isArray(doc.read) && doc.read.length > 0) return doc.read;
-  if (doc && doc.isPublished !== false) return ['public'];
+  if (doc && doc.isPublished === true) return ['public'];
   return ['sysadmin'];
 }
 
+// A child can never out-rank its parent project. Missing project, empty project ACL, or an
+// empty intersection all collapse to ['sysadmin'], never to ['public'].
 function constrainToProject(childRoles, projectMeta) {
-  const pRead = (projectMeta && Array.isArray(projectMeta.read) && projectMeta.read.length > 0) ? projectMeta.read : ['public'];
+  const pRead = (projectMeta && Array.isArray(projectMeta.read) && projectMeta.read.length > 0)
+    ? projectMeta.read
+    : null;
+  if (!pRead) return ['sysadmin'];
   const projectSet = new Set(pRead);
   const intersected = childRoles.filter(role => projectSet.has(role));
-  return intersected.length > 0 ? intersected : ['public'];
+  return intersected.length > 0 ? intersected : ['sysadmin'];
 }
 
 function resolveStrict(val, listLookup) {

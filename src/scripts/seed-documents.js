@@ -147,6 +147,7 @@ async function seed() {
         documentSource: 'EAGLE Registry',
         read: ['public'],
         isPublished: true,
+        read: ['public', 'sysadmin', 'staff', 'demi-admin'],
         seedDoc: true,
         createdAt: new Date(),
         updatedAt: new Date()
@@ -165,6 +166,7 @@ async function seed() {
           pageNumber: pageIdx + 1,
           read: ['public'],
           isPublished: true,
+          read: ['public', 'sysadmin', 'staff', 'demi-admin'],
           seedDoc: true,
           createdAt: new Date(),
           updatedAt: new Date()

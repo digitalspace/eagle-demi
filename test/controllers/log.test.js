@@ -20,10 +20,10 @@ test('Log Controller Tests', async (t) => {
       { level: 'error', message: 'Second log', requestId: 'req-2' }
     ];
 
-    t.mock.method(Log, 'find', async (whereClause, parameters, options) => {
-      assert.strictEqual(whereClause, '');
+    t.mock.method(Log, 'find', async (filter, options) => {
+      assert.deepStrictEqual(filter, {});
       assert.strictEqual(options.maxItemCount, 100);
-      assert.strictEqual(options.orderBy, 'c.timestamp DESC');
+      assert.deepStrictEqual(options.sort, { timestamp: -1 });
       return mockLogs;
     });
 
@@ -54,11 +54,11 @@ test('Log Controller Tests', async (t) => {
       { level: 'error', message: 'Error log matching', requestId: 'req-abc' }
     ];
 
-    t.mock.method(Log, 'find', async (whereClause, parameters, options) => {
-      assert.ok(whereClause.includes('c.level = @level'));
-      assert.ok(whereClause.includes('c.requestId = @reqId'));
+    t.mock.method(Log, 'find', async (filter, options) => {
+      assert.strictEqual(filter.level, 'error');
+      assert.strictEqual(filter.requestId, 'req-abc');
       assert.strictEqual(options.maxItemCount, 10);
-      assert.strictEqual(options.orderBy, 'c.timestamp ASC');
+      assert.deepStrictEqual(options.sort, { timestamp: 1 });
       return mockLogs;
     });
 

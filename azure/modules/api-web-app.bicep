@@ -33,6 +33,14 @@ param typesenseApiKey string
 @description('Subnet ID for Virtual Network Integration')
 param apiSubnetId string = ''
 
+@description('Keycloak base URL for this environment (dev/test/prod loginproxy)')
+param keycloakUrl string = environmentName == 'prod'
+  ? 'https://loginproxy.gov.bc.ca/auth'
+  : (environmentName == 'test' ? 'https://test.loginproxy.gov.bc.ca/auth' : 'https://dev.loginproxy.gov.bc.ca/auth')
+
+@description('Keycloak realm')
+param keycloakRealm string = 'eao-epic'
+
 var apiAppName = 'demi-api-${environmentName}'
 var appServicePlanName = 'demi-plan-${environmentName}'
 var storageAccountName = take('demistg${environmentName}${uniqueString(resourceGroup().id)}', 24)
@@ -141,6 +149,34 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'TYPESENSE_API_KEY'
           value: typesenseApiKey
+        }
+        // Keycloak / SSO — MUST be pinned per environment. Without these the API falls
+        // back to src/config.js defaults, which point at the DEV realm, so a dev-realm
+        // token would be accepted as admin in test and prod.
+        {
+          name: 'KEYCLOAK_URL'
+          value: keycloakUrl
+        }
+        {
+          name: 'KEYCLOAK_REALM'
+          value: keycloakRealm
+        }
+        {
+          name: 'KEYCLOAK_ENABLED'
+          value: 'true'
+        }
+        {
+          name: 'SSO_ISSUER'
+          value: '${keycloakUrl}/realms/${keycloakRealm}'
+        }
+        {
+          name: 'SSO_JWKSURI'
+          value: '${keycloakUrl}/realms/${keycloakRealm}/protocol/openid-connect/certs'
+        }
+        // Browser CORS allowlist — unset previously meant "reflect any origin".
+        {
+          name: 'CORS_ORIGIN'
+          value: 'https://demi-frontend-${environmentName}.azurewebsites.net'
         }
         // Build & Deployment Configuration
         {

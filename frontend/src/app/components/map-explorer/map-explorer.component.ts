@@ -904,7 +904,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
             const ignition = props.IGNITION_DATE ? props.IGNITION_DATE.replace('Z', '') : '';
             const isNote = props.FIRE_OF_NOTE_IND === 'Y';
 
-            let popupContent = `
+            const popupContent = `
               <div style="font-family: sans-serif; padding: 4px; max-width: 250px;">
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 6px;">
                   <h4 style="margin: 0; color: #d90429; font-size: 0.95rem;">

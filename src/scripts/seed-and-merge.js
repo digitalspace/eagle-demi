@@ -10,11 +10,19 @@ async function run() {
   await initCosmosClient();
 
   try {
-    // 1. Load Track enriched metadata
-    const jsonPath = '/root/repos/track_projects_enriched.json';
-    console.log(`[Seed & Merge] Reading Track projects from: ${jsonPath}`);
-    if (!fs.existsSync(jsonPath)) {
-      throw new Error(`Enriched JSON file not found at ${jsonPath}`);
+    const path = require('path');
+    const candidatePaths = [
+      '/root/repos/track_projects_enriched.json',
+      path.join(__dirname, '../data/track_projects_enriched.json'),
+      path.join(__dirname, '../../src/data/track_projects_enriched.json'),
+      path.join(process.cwd(), 'src/data/track_projects_enriched.json'),
+      path.join(process.cwd(), 'track_projects_enriched.json')
+    ];
+    let jsonPath = candidatePaths.find(p => fs.existsSync(p));
+    console.log(`[Seed & Merge] Candidate paths checked:`, candidatePaths);
+    console.log(`[Seed & Merge] Resolved JSON path: ${jsonPath}`);
+    if (!jsonPath) {
+      throw new Error(`Enriched JSON file not found in any candidate path: ${candidatePaths.join(', ')}`);
     }
     const rawData = fs.readFileSync(jsonPath, 'utf8');
     const trackProjects = JSON.parse(rawData);
@@ -57,6 +65,7 @@ async function run() {
           trackAttributes: tp
         },
         isPublished: true,
+        read: ['public', 'sysadmin', 'staff', 'demi-admin'],
         sources: {
           track: tp,
           eagle: null,
@@ -68,13 +77,19 @@ async function run() {
       trackMergedCount++;
     }
 
+    console.log('\n[Seed & Merge] Running NRPTI Record Folding...');
+    const { recalculateAllProjectComplianceStats } = require('./sync-nrpti');
+    await recalculateAllProjectComplianceStats();
+
     console.log('\n[Seed & Merge] Complete!');
     console.log('=================================');
     console.log(`- Projects Seeded into Cosmos DB: ${trackMergedCount}`);
     console.log('=================================');
+    return { trackMergedCount };
 
   } catch (err) {
     console.error('[Seed & Merge] Fatal error:', err);
+    throw err;
   }
 }
 

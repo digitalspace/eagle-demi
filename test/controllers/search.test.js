@@ -28,8 +28,15 @@ test('Search Controller Tests', async (t) => {
       }
     ];
 
-    t.mock.method(Project, 'find', async (whereClause, parameters, options) => {
-      assert.strictEqual(whereClause, 'c.isPublished = true');
+    t.mock.method(Project, 'find', async (filter, options) => {
+      // Anonymous: ACL clause AND the track-provenance clause, combined with $and so
+      // neither can cancel the other out.
+      assert.ok(Array.isArray(filter.$and), 'expected combined $and filter');
+      assert.ok(filter.$and.some(c => Array.isArray(c.$or)), 'expected read ACL clause');
+      assert.ok(
+        filter.$and.some(c => c['sources.track']),
+        'expected track provenance clause'
+      );
       assert.strictEqual(options.maxItemCount, 10);
       return mockProjects;
     });
@@ -126,8 +133,9 @@ test('Search Controller Tests', async (t) => {
       }
     ];
 
-    t.mock.method(Document, 'find', async (whereClause) => {
-      assert.strictEqual(whereClause, 'c.isPublished = true');
+    t.mock.method(Document, 'find', async (filter) => {
+      assert.ok(Array.isArray(filter.$or), 'public document read must apply an ACL clause');
+      assert.deepStrictEqual(filter.$or[0], { read: { $in: ['public'] } });
       return mockDocuments;
     });
 

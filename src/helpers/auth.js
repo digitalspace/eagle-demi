@@ -1,8 +1,26 @@
 'use strict';
 
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
 const config = require('../config');
+
+/**
+ * Constant-time comparison of a presented API key against the configured keys.
+ * Never use `includes()`/`===` here — those leak key material through timing.
+ */
+function matchesConfiguredKey(presented, validKeys) {
+  const presentedBuf = Buffer.from(String(presented));
+  let matched = false;
+  for (const valid of validKeys) {
+    const validBuf = Buffer.from(String(valid));
+    // Compare every candidate (no early exit) so timing does not reveal which key matched.
+    if (presentedBuf.length === validBuf.length && crypto.timingSafeEqual(presentedBuf, validBuf)) {
+      matched = true;
+    }
+  }
+  return matched;
+}
 
 // Single shared JWKS client instance with caching
 const clientInstance = jwksClient({
@@ -32,18 +50,24 @@ function getKey(header, callback) {
  * @param {function} onFailure Callback when auth fails: fn(status, error)
  */
 function authenticate(req, onSuccess, onFailure) {
-  // 1. System-to-System API Key Check
+  // 1. System-to-System API Key Check.
+  // Keys come from configuration ONLY. Never hardcode a literal here — this repo is public,
+  // and any literal in this list is a world-readable unconditional sysadmin credential.
   const apiKey = req.header('X-Api-Key');
-  const expectedKey = config.doclingKey || process.env.DOCLING_API_KEY;
+  const validKeys = [
+    config.doclingKey,
+    process.env.DOCLING_API_KEY,
+    process.env.ADMIN_API_KEY
+  ].filter(Boolean);
 
-  if (expectedKey && apiKey && apiKey === expectedKey) {
+  if (apiKey && validKeys.length > 0 && matchesConfiguredKey(apiKey, validKeys)) {
     return onSuccess({
       preferred_username: 'internal-service',
       realm_access: { roles: ['sysadmin', 'staff', 'demi-admin'] }
     });
   }
 
-  // Testing fallback only
+  // Testing fallback only — guarded, and never reachable outside the test runner.
   if (process.env.NODE_ENV === 'test' && apiKey === 'eagle-demi-api-key') {
     return onSuccess({
       preferred_username: 'internal-service',
@@ -66,10 +90,12 @@ function authenticate(req, onSuccess, onFailure) {
         } catch (_err) {
           return onFailure(401, 'Unauthorized. Invalid Bearer token structure.');
         }
-      } else {
-        console.warn('[demi-api] Warning: keycloakEnabled is false in non-test environment.');
-        return onFailure(401, 'Unauthorized. Keycloak signature verification required.');
+        // Unverified token with no usable roles — fail rather than falling through to
+        // the JWKS path, which cannot succeed while keycloak is disabled.
+        return onFailure(401, 'Unauthorized. Invalid Bearer token structure.');
       }
+      console.warn('[demi-api] Warning: keycloakEnabled is false in non-test environment.');
+      return onFailure(401, 'Unauthorized. Keycloak signature verification required.');
     }
 
     try {

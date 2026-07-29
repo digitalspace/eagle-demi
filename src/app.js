@@ -31,27 +31,49 @@ const rateLimiterMiddleware = require('./middleware/rate-limiter');
 
 app.use(requestIdMiddleware);
 app.use(httpLoggerMiddleware);
-app.use('/api', rateLimiterMiddleware);
+// Rate limit ALL routes, not just /api — the router is mounted at both '/api' and '/'
+// below, so limiting only the prefix left the root-mounted duplicates (including
+// POST /db/import) completely unlimited.
+app.use(rateLimiterMiddleware);
 
 // Security & Body Parsing Middleware
 app.use(compression());
 app.use(helmet({ contentSecurityPolicy: false }));
-const allowedOrigins = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map(o => o.trim()) : '*';
+// CORS_ORIGIN is a comma-separated allowlist. It was unset in every deployed environment,
+// which silently meant "reflect ANY origin". Fall back to the known DEMI frontends rather
+// than to '*', so a missing env var narrows access instead of removing it entirely.
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://demi-frontend-dev.azurewebsites.net',
+  'https://demi-frontend-test.azurewebsites.net',
+  'https://demi-frontend-prod.azurewebsites.net',
+  'http://localhost:4200'
+];
+
+const corsOriginEnv = (process.env.CORS_ORIGIN || '').trim();
+const allowAnyOrigin = corsOriginEnv === '*';
+const allowedOrigins = corsOriginEnv && !allowAnyOrigin
+  ? corsOriginEnv.split(',').map(o => o.trim()).filter(Boolean)
+  : DEFAULT_ALLOWED_ORIGINS;
+
+if (!corsOriginEnv) {
+  logger.warn(
+    `CORS_ORIGIN is not set — falling back to the default DEMI frontend allowlist ` +
+    `(${allowedOrigins.join(', ')}). Set it explicitly per environment.`
+  );
+} else if (allowAnyOrigin) {
+  logger.warn('CORS_ORIGIN is "*" — every origin is allowed. Do not use this in production.');
+}
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins === '*' || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(null, false);
+    // Same-origin / non-browser callers send no Origin header.
+    if (!origin) return callback(null, true);
+    if (allowAnyOrigin) return callback(null, true);
+    return callback(null, allowedOrigins.includes(origin));
   }
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Serve standalone demo page on /, /admin, and /demo
-app.use('/', express.static(path.join(__dirname, '../public')));
-app.use('/admin', express.static(path.join(__dirname, '../public')));
-app.use('/demo', express.static(path.join(__dirname, '../public')));
 
 // Config controller
 const configController = require('./controllers/config');
@@ -93,6 +115,11 @@ try {
 // Mount Central API Routes (supports both /api prefix and direct routes)
 app.use('/api', apiRoutes);
 app.use('/', apiRoutes);
+
+// Serve standalone demo page on /, /admin, and /demo (after API routes)
+app.use('/', express.static(path.join(__dirname, '../public')));
+app.use('/admin', express.static(path.join(__dirname, '../public')));
+app.use('/demo', express.static(path.join(__dirname, '../public')));
 
 // Fallback to Angular SPA index.html for deep links
 app.get(['/map', '/search', '/intake'], (req, res) => {

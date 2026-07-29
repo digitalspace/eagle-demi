@@ -2,7 +2,7 @@ import { inject } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
 import { RegistryStateService } from '../services/registry-state.service';
 
-export const authGuard: CanActivateFn = (_route, _state) => {
+export const authGuard: CanActivateFn = async (_route, _state) => {
   const service = inject(RegistryStateService);
   const router = inject(Router);
 
@@ -10,11 +10,13 @@ export const authGuard: CanActivateFn = (_route, _state) => {
     return true;
   }
 
+  // Keycloak resolves asynchronously; deciding before it settles would reject valid admins
+  await service.authReady;
+
   if (service.isAuthenticated() && !service.isUnauthorized()) {
     return true;
   }
 
   // Redirect to Map Explorer if unauthorized or not logged in
-  router.navigate(['/map']);
-  return false;
+  return router.parseUrl('/map');
 };

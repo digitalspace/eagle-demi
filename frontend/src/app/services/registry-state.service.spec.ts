@@ -146,4 +146,48 @@ describe('RegistryStateService', () => {
     service.sectorFilter.set('Energy'); // 'p1' (Mining) is excluded from filteredProjectsNoQuery now
     expect(service.filteredDocuments()).toEqual([]);
   });
+
+  // The fetch interceptor used to decide "is this our API?" with url.includes(basePath).
+  // With the '/api' fallback that matches any third-party URL containing those characters,
+  // which would attach the user's Bearer token to it.
+  describe('isApiUrl', () => {
+    it('should not treat a third-party URL containing /api as our API', () => {
+      expect((service as any).isApiUrl('https://evil.example.com/api/steal')).toBe(false);
+      expect((service as any).isApiUrl('https://openmaps.gov.bc.ca/geo/pub/ows?service=WFS')).toBe(false);
+    });
+
+    it('should match same-origin API requests', () => {
+      const base = service.getBasePath();
+      expect((service as any).isApiUrl(base + '/search?dataset=Project')).toBe(true);
+    });
+
+    it('should not match a same-origin path that merely starts with the same characters', () => {
+      expect((service as any).isApiUrl(window.location.origin + '/apiary/not-ours')).toBe(false);
+    });
+  });
+
+  // Guards the Keycloak redirect-loop fix: routing is path-based (app.config.ts), so the
+  // hash never carries a route — cleanUrlParams must drop it entirely without touching
+  // pathname/search, since that's the only thing the OAuth response ever lands in.
+  describe('cleanUrlParams', () => {
+    let replaceStateSpy: jasmine.Spy;
+    const originalHash = window.location.hash;
+    const originalSearch = window.location.search;
+
+    beforeEach(() => {
+      replaceStateSpy = spyOn(window.history, 'replaceState');
+    });
+
+    afterEach(() => {
+      window.location.hash = originalHash;
+    });
+
+    it('should strip an OAuth hash fragment and leave pathname/search untouched', () => {
+      window.location.hash = '#state=abc&session_state=xyz&code=def';
+
+      (service as any).cleanUrlParams();
+
+      expect(replaceStateSpy).toHaveBeenCalledWith({}, document.title, window.location.pathname + originalSearch);
+    });
+  });
 });

@@ -22,12 +22,17 @@ test('Spatial Controller Tests', async (t) => {
       { name: 'Project South', centroid: { type: 'Point', coordinates: [-123.0, 49.0] } }
     ];
 
-    t.mock.method(Project, 'find', async (whereClause) => {
-      assert.strictEqual(whereClause, '');
+    t.mock.method(Project, 'find', async (filter) => {
+      // Privileged caller: no ACL clause, but the track-provenance filter still applies.
+      assert.deepStrictEqual(filter, { 'sources.track': { $exists: true, $ne: null } });
       return mockProjects;
     });
 
-    const req = { query: {}, header: (name) => name === 'X-Api-Key' ? 'eagle-demi-api-key' : null };
+    const req = {
+      query: {},
+      user: { realm_access: { roles: ['sysadmin'] } },
+      header: () => null
+    };
     let jsonResponse;
     const res = {
       json: (data) => {
@@ -51,11 +56,10 @@ test('Spatial Controller Tests', async (t) => {
       { name: 'Metro Project', centroid: { type: 'Point', coordinates: [-123.0, 49.5] } }
     ];
 
-    t.mock.method(Project, 'find', async (whereClause, parameters) => {
-      assert.ok(whereClause.includes('regionalDistrict = @rd'));
-      assert.ok(whereClause.includes('municipality = @muni'));
-      assert.ok(whereClause.includes('electoralDistrict = @ed'));
-      assert.strictEqual(parameters.length, 3);
+    t.mock.method(Project, 'find', async (filter) => {
+      assert.strictEqual(filter.regionalDistrict, rdName);
+      assert.strictEqual(filter.municipality, muniName);
+      assert.strictEqual(filter.electoralDistrict, edName);
       return mockFilteredProjects;
     });
 
@@ -65,7 +69,8 @@ test('Spatial Controller Tests', async (t) => {
         municipality: muniName,
         electoralDistrict: edName
       },
-      header: (name) => name === 'X-Api-Key' ? 'eagle-demi-api-key' : null
+      user: { realm_access: { roles: ['sysadmin'] } },
+      header: () => null
     };
     let jsonResponse;
     const res = {

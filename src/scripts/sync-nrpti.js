@@ -218,6 +218,7 @@ async function syncNrptiData(options = {}) {
               coordinates: [-123.3656, 48.4284]
             },
             isPublished: true,
+            read: ['public', 'sysadmin', 'staff', 'demi-admin'],
             read: ['sysadmin', 'staff', 'public'],
             sources: {
               track: null,
@@ -283,6 +284,7 @@ async function syncNrptiData(options = {}) {
           documents: Array.isArray(item.documents) ? item.documents : [],
           sourceSystemRef: item.sourceSystemRef || 'nrpti',
           isPublished: true,
+          read: ['public', 'sysadmin', 'staff', 'demi-admin'],
           read: Array.isArray(item.read) ? item.read : ['sysadmin', 'staff', 'public'],
           sourceData: item
         };
@@ -314,17 +316,18 @@ async function syncNrptiData(options = {}) {
 
 async function recalculateAllProjectComplianceStats() {
   console.log('[NRPTI Sync] Recalculating compliance stats across all records in Cosmos DB...');
-  const records = await Record.find('c.isPublished = true');
+  const records = await Record.find({ isPublished: true });
   
   const statsMap = new Map();
   for (const rec of records) {
     const pId = rec.project;
     if (!pId) continue;
     if (!statsMap.has(pId)) {
-      statsMap.set(pId, { total: 0, orders: 0, inspections: 0, tickets: 0, lastDate: null });
+      statsMap.set(pId, { total: 0, orders: 0, inspections: 0, tickets: 0, lastDate: null, records: [] });
     }
     const st = statsMap.get(pId);
     st.total++;
+    st.records.push(rec);
     const ds = rec.recordType || rec.nrptiSchemaName || '';
     if (ds === 'Order') st.orders++;
     if (ds === 'Inspection') st.inspections++;
@@ -335,20 +338,33 @@ async function recalculateAllProjectComplianceStats() {
     }
   }
 
-  console.log(`[NRPTI Sync] Aggregated compliance stats for ${statsMap.size} projects.`);
+  console.log(`[NRPTI Sync] Aggregated compliance stats for ${statsMap.size} project identifiers.`);
   for (const [pId, st] of statsMap.entries()) {
-    const proj = await Project.findById(pId);
+    let proj = await Project.findById(pId);
+    if (!proj) {
+      const escaped = String(pId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      proj = await Project.findOne({
+        $or: [
+          { legacyEagleId: String(pId) },
+          { trackProjectId: isNaN(pId) ? -1 : Number(pId) },
+          { name: { $regex: `^${escaped}$`, $options: 'i' } }
+        ]
+      });
+    }
     if (proj) {
       if (!proj.sources) proj.sources = {};
+      proj.nrptiRecords = st.records;
       proj.sources.nrpti = {
         recordCount: st.total,
         orderCount: st.orders,
         inspectionCount: st.inspections,
         ticketCount: st.tickets,
-        lastRecordDate: st.lastDate ? st.lastDate.toISOString() : null
+        complianceStatus: 'Active Monitoring',
+        lastRecordDate: st.lastDate ? st.lastDate.toISOString() : null,
+        records: st.records
       };
       await Project.upsert(proj);
-      console.log(`[NRPTI Sync] Updated project ${proj.name || pId} with ${st.total} NRPTI records.`);
+      console.log(`[NRPTI Sync] Folded ${st.total} NRPTI records into project: ${proj.name || pId} (${proj._id})`);
     }
   }
 }

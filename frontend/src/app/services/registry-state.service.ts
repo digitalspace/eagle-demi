@@ -44,6 +44,11 @@ export class RegistryStateService {
   }
 
   authEnabled = signal<boolean>(this.config.KEYCLOAK_ENABLED !== false);
+
+  // Resolves once initKeycloak() has settled, so route guards can wait for the real auth state
+  private resolveAuthReady!: () => void;
+  readonly authReady: Promise<void> = new Promise<void>(resolve => (this.resolveAuthReady = resolve));
+
   isAuthenticated = signal<boolean>(false);
   isUnauthorized = signal<boolean>(false);
   userName = signal<string>('');
@@ -337,7 +342,6 @@ export class RegistryStateService {
   constructor() {
     this.setupFetchInterceptor();
     this.initKeycloak();
-    this.loadData();
     this.loadRegionalBoundaries();
 
     // Debounce searchQuery updates to debouncedSearchQuery
@@ -371,6 +375,22 @@ export class RegistryStateService {
         this.debouncedSearchQuery.set(query);
       }, 250);
     }, { allowSignalWrites: true });
+
+    // Re-fetch whenever auth state changes. The API returns a different dataset to an
+    // authenticated admin than to the public, so reusing rows fetched under the previous
+    // credentials would leave stale (or over-privileged) data on screen after login/logout.
+    let lastAuthState: boolean | null = null;
+    effect(() => {
+      const authed = this.isAuthenticated();
+      if (lastAuthState === null) {
+        lastAuthState = authed;   // initial load is already handled by authSettled()
+        return;
+      }
+      if (lastAuthState !== authed) {
+        lastAuthState = authed;
+        this.loadData();
+      }
+    }, { allowSignalWrites: true });
   }
 
   // Auto-retry helper for resilient API requests on intermittent 5xx or network errors
@@ -395,6 +415,26 @@ export class RegistryStateService {
       }
     }
     return fetch(url, options);
+  }
+
+  /**
+   * Is this URL our own API?
+   *
+   * Compares origin + path prefix rather than doing `url.includes(basePath)`. That
+   * substring test was a credential-leak primitive: getBasePath() falls back to '/api',
+   * and `includes('/api')` matches ANY url containing those characters — including
+   * third-party hosts — which would attach the user's Bearer token to them.
+   */
+  private isApiUrl(url: string): boolean {
+    try {
+      const base = new URL(this.getBasePath(), window.location.origin);
+      const target = new URL(url, window.location.origin);
+      if (target.origin !== base.origin) return false;
+      const basePathname = base.pathname.replace(/\/$/, '');
+      return target.pathname === basePathname || target.pathname.startsWith(basePathname + '/');
+    } catch {
+      return false;
+    }
   }
 
   // Intercept window.fetch globally to inject Keycloak Bearer Token and handle retry flow on 401/403
@@ -425,21 +465,19 @@ export class RegistryStateService {
 
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : input.url);
-      const basePath = this.getBasePath();
+      const isApiRequest = this.isApiUrl(url);
 
-      if (url.includes(basePath)) {
-        console.log('[Fetch Interceptor] Targeting API:', url);
-        if (this.keycloak && this.keycloak.token) {
-          init = init || {};
-          setAuthHeader(init, this.keycloak.token);
-          console.log('[Fetch Interceptor] Authorization Bearer token successfully attached!');
-        }
+      if (isApiRequest && this.keycloak && this.keycloak.token) {
+        init = init || {};
+        setAuthHeader(init, this.keycloak.token);
       }
 
       try {
         let response = await originalFetch(input, init);
 
-        if ((response.status === 401 || response.status === 403) && this.keycloak) {
+        // Only refresh/retry for OUR api. A third-party 401 (e.g. the DataBC WFS layer)
+        // must never trigger a token refresh, let alone a replay carrying a fresh token.
+        if (isApiRequest && (response.status === 401 || response.status === 403) && this.keycloak) {
           if (!refreshPromise) {
             refreshPromise = this.keycloak.updateToken(30)
               .then((refreshed: any) => {
@@ -471,29 +509,73 @@ export class RegistryStateService {
     };
   }
 
-  // Keycloak check-sso initialization Flow
+  // Resolve the authReady gate and kick off the initial data load exactly once
+  private authSettled() {
+    if (this.resolveAuthReady) {
+      this.resolveAuthReady();
+      this.resolveAuthReady = null as any;
+      this.loadData();
+    }
+  }
+
+  // Keycloak initialization Flow
   private initKeycloak() {
-    if (!this.authEnabled()) return;
+    if (!this.authEnabled()) {
+      this.authSettled();
+      return;
+    }
 
     try {
+      // Path routing (see app.config.ts) never reads/writes location.hash, so Keycloak's
+      // default fragment response mode is safe here — matches eagle-admin's pattern.
+      const oauthParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.hash.replace(/^#/, '')) : new URLSearchParams();
+
+      // If URL contains an OAuth error (like error=login_required), clean URL immediately and run in public mode
+      if (oauthParams.has('error')) {
+        console.warn('[Keycloak] OAuth error parameter detected in URL. Cleaning URL and running in public mode.');
+        this.cleanUrlParams();
+        sessionStorage.removeItem('isLoggedIn');
+        localStorage.removeItem('isLoggedIn');
+        this.isAuthenticated.set(false);
+        this.currentRole.set('public');
+        this.authSettled();
+        return;
+      }
+
       this.keycloak = new Keycloak({
         url: this.config.KEYCLOAK_URL,
         realm: this.config.KEYCLOAK_REALM,
         clientId: this.config.KEYCLOAK_CLIENT_ID
       });
 
-      const previouslyLoggedIn = sessionStorage.getItem('isLoggedIn') === 'true';
-      const loadMode = previouslyLoggedIn ? 'login-required' : 'check-sso';
+      const cleanRedirectUri = typeof window !== 'undefined' ? (window.location.origin + window.location.pathname) : '';
+      const isOAuthCallback = oauthParams.has('code');
+      const previouslyLoggedIn = typeof sessionStorage !== 'undefined' && (sessionStorage.getItem('isLoggedIn') === 'true' || localStorage.getItem('isLoggedIn') === 'true');
 
+      if (!isOAuthCallback && !previouslyLoggedIn) {
+        console.log('[Keycloak] Public visitor detected; skipping SSO redirect and running in public mode.');
+        this.isAuthenticated.set(false);
+        this.currentRole.set('public');
+        this.authSettled();
+        return;
+      }
+
+      // keycloak-js processes a valid callback code unconditionally, before even looking at
+      // onLoad — but if that processing fails for any reason, onLoad is what decides what
+      // happens next: 'check-sso' retries via the silent iframe below; omitting onLoad
+      // (as a prior version of this code did) makes it give up silently with no error and no
+      // retry, which reads as "kicked to public for no reason". Always keep onLoad set.
       const keycloakPromise = this.keycloak.init({
-        onLoad: loadMode,
+        onLoad: 'check-sso',
         checkLoginIframe: false,
         pkceMethod: 'S256',
-        scope: 'openid roles'
+        scope: 'openid roles',
+        redirectUri: cleanRedirectUri,
+        silentCheckSsoRedirectUri: typeof window !== 'undefined' ? (window.location.origin + '/silent-check-sso.html') : undefined
       });
 
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Keycloak initialization timeout')), 3000)
+        setTimeout(() => reject(new Error('Keycloak initialization timeout')), 5000)
       );
 
       Promise.race([keycloakPromise, timeoutPromise]).then((authenticated: any) => {
@@ -519,33 +601,63 @@ export class RegistryStateService {
         } else {
           sessionStorage.removeItem('isLoggedIn');
           localStorage.removeItem('isLoggedIn');
+          this.isAuthenticated.set(false);
           this.currentRole.set('public');
         }
-        // Reload data after keycloak status is resolved to attach Bearer tokens properly
-        this.loadData();
+        // Load data only after keycloak status is resolved, so the Bearer token is attached
+        this.authSettled();
       }).catch((err: any) => {
-        console.warn('Keycloak initialization skipped / offline mode fallback:', err);
+        console.warn('[Keycloak] Keycloak initialization skipped / offline mode fallback:', err);
+        this.cleanUrlParams();
         sessionStorage.removeItem('isLoggedIn');
+        localStorage.removeItem('isLoggedIn');
+        this.isAuthenticated.set(false);
         this.currentRole.set('public');
-        this.loadData();
+        this.authSettled();
       });
     } catch (err) {
-      console.warn('Keycloak client library unavailable:', err);
-      this.loadData();
+      console.warn('[Keycloak] Keycloak client library unavailable:', err);
+      this.authSettled();
     }
   }
 
-  private cleanUrlParams() {
-    const url = new URL(window.location.href);
-    if (url.hash) {
-      const params = ['state', 'code', 'session_state', 'error'];
-      let hash = url.hash.substring(1);
-      params.forEach(p => {
-        const reg = new RegExp('[#&]' + p + '=([^&#]*)', 'i');
-        hash = hash.replace(reg, '');
-      });
-      window.history.replaceState({}, document.title, url.pathname + (hash ? '#' + hash : ''));
+  loginKeycloak() {
+    if (!this.keycloak) {
+      try {
+        this.keycloak = new Keycloak({
+          url: this.config.KEYCLOAK_URL,
+          realm: this.config.KEYCLOAK_REALM,
+          clientId: this.config.KEYCLOAK_CLIENT_ID
+        });
+      } catch (e) {
+        console.error('[Keycloak] Failed to create Keycloak client:', e);
+        return;
+      }
     }
+
+    const redirectUri = window.location.origin + window.location.pathname;
+
+    if (this.keycloak.authenticated !== undefined) {
+      this.keycloak.login({ redirectUri });
+    } else {
+      this.keycloak.init({
+        onLoad: 'login-required',
+        checkLoginIframe: false,
+        pkceMethod: 'S256',
+        scope: 'openid roles',
+        redirectUri
+      }).catch((err: any) => {
+        console.error('[Keycloak] Explicit login init failed:', err);
+        this.cleanUrlParams();
+      });
+    }
+  }
+
+  // Strip Keycloak's OAuth response out of the hash. Path routing (app.config.ts) never
+  // puts a route there, so the hash only ever holds OAuth junk — safe to drop entirely.
+  private cleanUrlParams() {
+    if (typeof window === 'undefined') return;
+    window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
   }
 
   async loadRegionalBoundaries() {
@@ -843,17 +955,21 @@ export class RegistryStateService {
           };
 
           return {
-            id: p._id,
+            _id: p._id,
+            id: p.id || p.trackProjectId || p._id,
+            trackProjectId: p.trackProjectId || p.id,
+            legacyEagleId: p.legacyEagleId || p._id,
             name: p.name || 'Unnamed Project',
             sector: (p.sector && p.sector !== 'Other') ? p.sector : (rawMetadata.type_name || rawMetadata.trackAttributes?.type_name || 'Other'),
             status: p.status || rawMetadata.trackAttributes?.project_state_name || 'Active',
-            legacyEagleId: p._id,
             centroid: this.parseCentroid(p.centroid),
             gatingState: (p.isPublished === false) ? 'staged' : 'admitted',
             region: p.region || 'British Columbia',
             description: this.generateFallbackDescription(p, rawMetadata),
             proponent: this.generateFallbackProponent(p, rawMetadata),
-            rawMetadata: rawMetadata
+            rawMetadata: rawMetadata,
+            sources: p.sources,
+            nrptiRecords: p.nrptiRecords
           };
         });
         this.projects.set(mappedProjects);
@@ -904,11 +1020,14 @@ export class RegistryStateService {
 
   // Set demo role and trigger login if required
   setDemoRole(role: 'public' | 'admin') {
-    if (role === 'admin' && this.authEnabled() && (!this.isAuthenticated() || this.isUnauthorized())) {
-      this.keycloak.login({
-        prompt: 'login',
-        redirectUri: window.location.origin
-      });
+    if (role === 'admin' && this.authEnabled() && this.isUnauthorized()) {
+      // Already authenticated but missing the required realm role — a fresh login
+      // round-trip won't change that, it'll just bounce straight back (feels like a loop).
+      console.warn('[Keycloak] Authenticated but missing required admin/staff role; staying public.');
+      return;
+    }
+    if (role === 'admin' && this.authEnabled() && !this.isAuthenticated()) {
+      this.loginKeycloak();
     } else {
       this.currentRole.set(role);
       this.resetSelection();

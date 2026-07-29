@@ -151,6 +151,8 @@ jobs:
                   dirs[:] = [d for d in dirs if d not in ['frontend', '.git', 'dist', '.angular']]
                   for file in files:
                       if file.endswith('.pyc') or file.endswith('.log'): continue
+                      # Never ship local secrets — app settings supply env vars in Azure.
+                      if file == '.env' or file.startswith('.env.'): continue
                       p = os.path.join(root, file)
                       z.write(p, os.path.relpath(p, '.'))
           "

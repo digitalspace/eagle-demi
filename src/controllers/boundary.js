@@ -8,23 +8,23 @@ exports.getBoundaries = async (req, res) => {
       res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
     }
     const { type, geometry } = req.query;
-    const conditions = [];
-    const parameters = [];
+    // Boundaries are reference geodata (regional districts, municipalities) — public by
+    // nature, so no read ACL applies here.
+    const filter = type ? { type: String(type) } : {};
+    let boundaries = await Boundary.find(filter, { sort: { name: 1 } });
 
-    if (type) {
-      parameters.push({ name: '@type', value: String(type) });
-      conditions.push('c.type = @type');
-    }
-
-    const whereClause = conditions.length > 0 ? conditions.join(' AND ') : '';
-    let boundaries = await Boundary.find(whereClause, parameters, { orderBy: 'c.name ASC' });
-
-    if (geometry === 'true') {
+    if (geometry === 'false') {
+      boundaries = boundaries.map(b => {
+        delete b.geometry;
+        delete b.simplifiedGeometry;
+        return b;
+      });
+    } else if (geometry === 'true') {
       boundaries = boundaries.map(b => {
         delete b.simplifiedGeometry;
         return b;
       });
-    } else if (geometry !== 'false') {
+    } else {
       boundaries = boundaries.map(b => {
         if (!b.simplifiedGeometry && b.geometry) {
           b.simplifiedGeometry = b.geometry;
@@ -68,7 +68,7 @@ exports.getBoundary = async (req, res) => {
     const { id } = req.params;
     let boundary = await Boundary.findById(id);
     if (!boundary) {
-      boundary = await Boundary.findOne('c.name = @name', [{ name: '@name', value: id }]);
+      boundary = await Boundary.findOne({ name: String(id) });
     }
     if (!boundary) {
       return res.status(404).json({ error: 'Boundary not found' });
@@ -84,7 +84,7 @@ exports.updateBoundary = async (req, res) => {
     const { id } = req.params;
     let existing = await Boundary.findById(id);
     if (!existing) {
-      existing = await Boundary.findOne('c.name = @name', [{ name: '@name', value: id }]);
+      existing = await Boundary.findOne({ name: String(id) });
     }
     if (!existing) {
       return res.status(404).json({ error: 'Boundary not found' });
@@ -103,7 +103,7 @@ exports.deleteBoundary = async (req, res) => {
     const { id } = req.params;
     let existing = await Boundary.findById(id);
     if (!existing) {
-      existing = await Boundary.findOne('c.name = @name', [{ name: '@name', value: id }]);
+      existing = await Boundary.findOne({ name: String(id) });
     }
     if (!existing) {
       return res.status(404).json({ error: 'Boundary not found' });

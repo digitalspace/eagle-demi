@@ -9,27 +9,18 @@ const extract = require('../extract');
 const Document = require('../models/document');
 const Project = require('../models/project');
 
-function isAdmin(req) {
-  if (req.user) {
-    const roles = req.user.realm_access?.roles || [];
-    return roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
-  }
-  const apiKey = req.header('X-Api-Key');
-  const expectedKey = process.env.DOCLING_API_KEY;
-  if (expectedKey && apiKey && apiKey === expectedKey) return true;
-  if (process.env.NODE_ENV === 'test' && apiKey === 'eagle-demi-api-key') return true;
-  return false;
-}
+const { rolesFor, withReadFilter, canRead, SECURE_ROLES } = require('../helpers/access');
 
 exports.getDocuments = async (req, res) => {
   try {
-    const isAuth = isAdmin(req);
-    const conditions = [];
-    if (!isAuth) {
-      conditions.push('c.isPublished = true');
-    }
-    const whereClause = conditions.length > 0 ? conditions.join(' AND ') : '';
-    const documents = await Document.find(whereClause);
+    const roles = rolesFor(req);
+    const { project } = req.query;
+    const criteria = project ? { project: String(project) } : null;
+
+    // Cap the page size — this endpoint previously returned the entire collection
+    // (18k+ documents) in a single unpaginated response.
+    const pageSize = Math.min(parseInt(req.query.pageSize || '1000', 10), 5000);
+    const documents = await Document.find(withReadFilter(roles, criteria), { maxItemCount: pageSize });
     return res.json(documents);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -49,6 +40,14 @@ exports.createDocument = async (req, res) => {
       return res.status(404).json({ error: `Parent Project with id ${project} not found.` });
     }
 
+    // Fail closed, and never let a document out-rank its parent project: a doc can only
+    // be public if the project is. Mirrors constrainToProject in typesense/transform.js.
+    const requestedPublish = isPublished === true || isPublished === 'true';
+    const parentIsPublic = Array.isArray(parentProject.read) && parentProject.read.length > 0
+      ? parentProject.read.includes('public')
+      : parentProject.isPublished === true;
+    const published = requestedPublish && parentIsPublic;
+
     const newDoc = {
       _id: String(Date.now()),
       project: String(project),
@@ -57,7 +56,8 @@ exports.createDocument = async (req, res) => {
       region: region || parentProject.region || '',
       edrmsRecordNumber: edrmsRecordNumber || '',
       orcsClassification: orcsClassification || '',
-      isPublished: isPublished !== undefined ? Boolean(isPublished) : false
+      read: published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES],
+      isPublished: published
     };
 
     const saved = await Document.upsert(newDoc);
@@ -70,14 +70,14 @@ exports.createDocument = async (req, res) => {
 exports.getDocument = async (req, res) => {
   try {
     const { id } = req.params;
-    const isAuth = isAdmin(req);
+    const roles = rolesFor(req);
 
     const doc = await Document.findById(id);
     if (!doc) {
       return res.status(404).json({ error: 'Document not found' });
     }
 
-    if (!isAuth && !doc.isPublished) {
+    if (!canRead(doc, roles)) {
       return res.status(403).json({ error: 'Access denied. Document is not published.' });
     }
 
