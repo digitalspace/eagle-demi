@@ -32,6 +32,7 @@ router.post('/db/query', authMiddleware, dbController.queryCollection);
 router.post('/sync', authMiddleware, dbController.seedDatabase);
 router.post('/admin/sync', authMiddleware, dbController.runNightlySyncHandler);
 router.post('/admin/sync/nrpti', authMiddleware, dbController.runNrptiSyncHandler);
+router.post('/admin/seed-track', authMiddleware, dbController.seedTrackDatabase);
 
 // Search Route
 router.get('/search', passiveAuthMiddleware, searchController.search);

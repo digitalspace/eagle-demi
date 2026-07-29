@@ -41,17 +41,19 @@ async function getDbStats(req, res) {
  */
 async function seedDatabase(req, res) {
   try {
+    const { run: runSeedAndMerge } = require('../scripts/seed-and-merge');
     const isAsync = req.query.async === 'true';
     if (isAsync) {
-      runSync().catch((err) => console.error('Background seed error:', err));
+      runSync().then(() => runSeedAndMerge()).catch((err) => console.error('Background seed error:', err));
       return res.json({
         success: true,
-        message: 'Database seed/sync triggered in background from OpenShift API.'
+        message: 'Database seed/sync triggered in background.'
       });
     }
 
     console.log(' Starting database seed/sync...');
     await runSync();
+    const mergeStats = await runSeedAndMerge();
     const stats = {};
     for (const [name, model] of Object.entries(models)) {
       stats[name] = await model.countDocuments();
@@ -60,7 +62,8 @@ async function seedDatabase(req, res) {
     res.json({
       success: true,
       message: 'Database seed/sync completed successfully.',
-      stats
+      stats,
+      mergeStats
     });
   } catch (err) {
     console.error('Seed database error:', err);
@@ -239,9 +242,34 @@ async function runNrptiSyncHandler(req, res) {
   }
 }
 
+/**
+ * Trigger Track project seeding & NRPTI record folding explicitly
+ */
+async function seedTrackDatabase(req, res) {
+  try {
+    const { run: runSeedAndMerge } = require('../scripts/seed-and-merge');
+    console.log('[dbController] Starting track project seed and merge...');
+    const mergeStats = await runSeedAndMerge();
+    const stats = {};
+    for (const [name, model] of Object.entries(models)) {
+      stats[name] = await model.countDocuments();
+    }
+    return res.json({
+      success: true,
+      message: 'Track projects seeded and NRPTI records folded successfully.',
+      mergeStats,
+      stats
+    });
+  } catch (err) {
+    console.error('[dbController] Track seed error:', err);
+    return res.status(500).json({ success: false, error: err.message, stack: err.stack });
+  }
+}
+
 module.exports = {
   getDbStats,
   seedDatabase,
+  seedTrackDatabase,
   seedBoundaries: seedBoundariesHandler,
   importCollection,
   queryCollection,

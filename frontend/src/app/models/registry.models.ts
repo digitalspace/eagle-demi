@@ -18,9 +18,10 @@ export interface Project {
   sources?: {
     track?: any;
     eagle?: any;
-    nrpti?: { recordCount?: number; orderCount?: number; inspectionCount?: number; ticketCount?: number; count?: number; records?: any[] };
+    nrpti?: { recordCount?: number; orderCount?: number; inspectionCount?: number; ticketCount?: number; count?: number; records?: any[]; complianceStatus?: string; lastRecordDate?: string };
     wildfire?: { count?: number; activeNearby?: boolean; nearestDistanceKm?: number; wildfires?: any[] };
   };
+  nrptiRecords?: any[];
 }
 
 export interface Document {

@@ -4,15 +4,17 @@ import sys
 import zipfile
 
 def package_api(repo_root, zip_path):
-    exclude_dirs = {".git", "frontend", ".angular", "dist", "coverage", ".deploy_archives", "tmp", "__pycache__"}
-    exclude_extensions = {".zip", ".tar.gz", ".map", ".md", ".png", ".jpg"}
-    exclude_subdirs = {"test", "tests", "docs", "examples", "example", ".github"}
+    root_exclude_dirs = {".git", "frontend", ".angular", "dist", "coverage", ".deploy_archives", "tmp", "__pycache__"}
+    exclude_extensions = {".zip", ".tar.gz", ".map", ".md"}
 
     print(f"Packaging {repo_root} -> {zip_path}...")
     count = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         for root, dirs, files in os.walk(repo_root):
-            dirs[:] = [d for d in dirs if d not in exclude_dirs and d not in exclude_subdirs]
+            rel_root = os.path.relpath(root, repo_root)
+            if rel_root == ".":
+                dirs[:] = [d for d in dirs if d not in root_exclude_dirs]
+
             for file in files:
                 if any(file.endswith(ext) for ext in exclude_extensions):
                     continue
