@@ -148,7 +148,11 @@ jobs:
           import zipfile, os
           with zipfile.ZipFile('/tmp/api.zip', 'w', zipfile.ZIP_DEFLATED) as z:
               for root, dirs, files in os.walk('.'):
-                  dirs[:] = [d for d in dirs if d not in ['frontend', '.git', 'dist', '.angular']]
+                  # Prune ONLY at the repo root. Excluding these names at every depth also
+                  # removed node_modules/**/dist (e.g. @mongodb-js/saslprep), which ships a
+                  # broken app that 500s on every request.
+                  if os.path.normpath(root) == '.':
+                      dirs[:] = [d for d in dirs if d not in ['frontend', '.git', 'dist', '.angular']]
                   for file in files:
                       if file.endswith('.pyc') or file.endswith('.log'): continue
                       # Never ship local secrets — app settings supply env vars in Azure.
