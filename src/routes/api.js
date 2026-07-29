@@ -5,10 +5,34 @@ const router = express.Router();
 
 const authMiddleware = require('../middleware/auth');
 const passiveAuthMiddleware = require('../middleware/passiveAuth');
-const projectController = require('../controllers/project');
-const documentController = require('../controllers/document');
-const boundaryController = require('../controllers/boundary');
-const recordController = require('../controllers/record');
+
+// ── Data-layer selection ─────────────────────────────────────────────────────
+// The single switch between the MongoDB-API controllers and the Cosmos NoSQL ones. The two
+// take fundamentally different inputs (Mongo filter objects vs an access context), so they
+// are NOT abstracted behind a common interface — an adapter over both is precisely the shape
+// that let a half-working translator disable access control in this codebase.
+//
+// One conditional at the router keeps dev running on Mongo until COSMOS_ENDPOINT is set.
+// At cutover, setting that variable flips every route at once; the legacy controllers and
+// this branch are deleted together in the final phase.
+const USE_NOSQL = Boolean(process.env.COSMOS_ENDPOINT);
+
+const projectController = USE_NOSQL
+  ? require('../controllers/nosql/project')
+  : require('../controllers/project');
+const documentController = USE_NOSQL
+  ? require('../controllers/nosql/document')
+  : require('../controllers/document');
+const boundaryController = USE_NOSQL
+  ? require('../controllers/nosql/boundary')
+  : require('../controllers/boundary');
+const recordController = USE_NOSQL
+  ? require('../controllers/nosql/record')
+  : require('../controllers/record');
+
+if (USE_NOSQL) {
+  console.log('[routes] Cosmos NoSQL data layer active (COSMOS_ENDPOINT is set).');
+}
 const wildfireController = require('../controllers/wildfire');
 const searchController = require('../controllers/search');
 const logController = require('../controllers/log');

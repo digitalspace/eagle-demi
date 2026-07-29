@@ -31,7 +31,7 @@ and `contentExtracted: true` flags with no chunks behind them.
 |---|---|---|
 | **0 — Delete unreachable code** | ✅ done (`99889e6`) | −1,536 lines; 5 latent bugs fixed; lint 0 errors |
 | **1 — Infrastructure (templates)** | ✅ written, ⏸ **not deployed** (`d8438a2`) | Deployment deferred on cost — see below |
-| **2 — Data access + authorization** | 🔨 in progress | Foundation done; repositories + controllers remain |
+| **2 — Data access + authorization** | ✅ done (`09b35f1`, `d6de8a6`, `+1`) | Client, repositories, controllers, router switch |
 | **3 — Merge engine** | ⬜ todo | Track ⊕ Eagle field precedence + identity resolver |
 | **4 — Seed** | ⬜ todo | Track → Eagle → documents → NRPTI → boundaries |
 | **5 — Cut over** | ⬜ todo | Swap app settings, `stop` then `start` |
@@ -63,11 +63,41 @@ window, making the overlap hours instead of weeks.
 | `test/db/cosmos-nosql.test.js` | Pins that a non-spec input **throws** rather than degrading |
 | `test/repositories/repositories.test.js` | Asserts the SQL each repository emits |
 
-`@azure/identity` added (the one new dependency). Tests **152/152**, lint 0 errors.
+| `src/controllers/nosql/{project,document,record,boundary}.js` | Thin HTTP layer over the repositories |
+| `test/controllers/nosql-controllers.test.js` | Tier resolution, partition-key protection, parent-ACL rule, route parity |
 
-**Still to do in Phase 2:** move the controllers onto the repositories. At cutover delete
-`BaseRepository`, `src/models/*.js`, `src/db/cosmos.js`, `src/helpers/access.js` and the
-`mongodb` dependency.
+`@azure/identity` added (the one new dependency). Tests **166/166**, lint 0 errors.
+
+### 🔑 The cutover switch
+
+`src/routes/api.js` picks the controller set from **one** conditional:
+
+```js
+const USE_NOSQL = Boolean(process.env.COSMOS_ENDPOINT);
+```
+
+Unset today, so dev still runs on Mongo and is unaffected. **Setting `COSMOS_ENDPOINT` flips
+every route at once** — that is the whole of Phase 5's code change.
+
+The two controller sets are deliberately **not** abstracted behind a common interface: they
+take fundamentally different inputs (Mongo filter objects vs an access context), and an
+adapter over both is precisely the shape that let a half-working translator disable access
+control here before. A test asserts both paths expose the identical route surface, so the
+switch cannot silently add or drop an endpoint.
+
+**Remaining for cutover:** delete `src/models/*.js`, `src/db/cosmos.js`,
+`src/helpers/access.js`, the legacy controllers, the `USE_NOSQL` branch, and `mongodb`.
+
+Controller notes:
+- A hidden project returns **404, not 403** — a 403 would confirm the id exists.
+- Update paths refuse to reassign a partition key (`id` on projects, `projectId` on documents,
+  `type` on boundaries): in Cosmos that is a delete-and-reinsert, not an update.
+- `resolveDocumentAcl()` is used by **both** document write paths. The Mongo version had it in
+  `createDocument` only, so an intake upload could be published under a private project.
+- `deleteDocument` is a **soft delete**. The change feed emits no deletes in latest-version
+  mode, so a hard delete would strand the document in Typesense forever.
+- `getProjectFragments` is the read path for independently-ACL'd fragments; a caller lacking
+  the roles gets fewer items, never a stripped object.
 
 Repository design notes:
 - **No generic `find(filter)`.** A filter-object interface is what let a broken translator
