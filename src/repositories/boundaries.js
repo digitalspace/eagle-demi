@@ -81,7 +81,7 @@ async function bulkUpsertForType(type, boundaries) {
     partitionKey: String(type),
     resourceBody
   }));
-  return cosmos.bulk(CONTAINER, operations);
+  return cosmos.bulkVerified(CONTAINER, operations);
 }
 
 async function deleteById(id, type) {

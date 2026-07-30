@@ -222,7 +222,10 @@ async function seed(argv = [], deps = {}) {
     const buffers = new Map();          // projectId -> pending transformed docs
     const perProject = new Map();       // projectId -> total transformed
     const unresolvedRefs = new Set();
-    const stats = { fetched: 0, built: 0, unresolved: 0, noKey: 0, written: 0 };
+    const stats = { fetched: 0, built: 0, unresolved: 0, noKey: 0, written: 0, writeFailed: 0 };
+    const writeStatus = {};
+    const seenIds = new Set();
+    let duplicateIds = 0;
     let gateFailures = [];
 
     const flush = async (projectId, docs) => {
@@ -230,8 +233,15 @@ async function seed(argv = [], deps = {}) {
       // 60,661 documents just to check them is what streaming exists to avoid.
       gateFailures.push(...verifyItems(docs, 'documents', 'projectId'));
       if (args.live) {
-        await repos.documents.bulkUpsertForProject(projectId, docs);
-        stats.written += docs.length;
+        // Count what LANDED, never what was sent. Cosmos bulk returns a per-operation status and
+        // does not throw on partial failure; counting sent operations reported 60,578 written
+        // when only 56,317 existed.
+        const r = await repos.documents.bulkUpsertForProject(projectId, docs);
+        stats.written += r.succeeded;
+        stats.writeFailed += r.failed;
+        for (const [code, n] of Object.entries(r.statusCounts)) {
+          writeStatus[code] = (writeStatus[code] || 0) + n;
+        }
       }
     };
 
@@ -253,6 +263,10 @@ async function seed(argv = [], deps = {}) {
 
         const transformed = transform.transformDocument(doc, projectId, listLookup, { now });
         if (!transformed.s3Key) stats.noKey++;
+        // id is unique per PARTITION in Cosmos, so a repeat within one project silently
+        // overwrites. Counted so a shortfall is attributable rather than mysterious.
+        const key = `${projectId}|${transformed.id}`;
+        if (seenIds.has(key)) duplicateIds++; else seenIds.add(key);
         stats.built++;
         perProject.set(projectId, (perProject.get(projectId) || 0) + 1);
 
@@ -290,9 +304,25 @@ async function seed(argv = [], deps = {}) {
       built: stats.built,
       droppedUnresolvable: stats.unresolved,
       withoutObjectKey: stats.noKey,
+      duplicateIds,
       projects: perProject.size,
-      written: stats.written
+      written: stats.written,
+      writeFailed: stats.writeFailed,
+      writeStatus
     };
+    if (duplicateIds) {
+      summary.failures.push(`${duplicateIds} documents share an (projectId, id) pair — ` +
+        'later writes silently overwrote earlier ones');
+    }
+    if (stats.writeFailed) {
+      summary.failures.push(`${stats.writeFailed} document writes FAILED after retries ` +
+        `(status counts: ${JSON.stringify(writeStatus)})`);
+    }
+    if (args.live && stats.written !== stats.built) {
+      summary.failures.push(
+        `document count mismatch: built ${stats.built} but only ${stats.written} were confirmed ` +
+        'written');
+    }
     // Deduplicated: a per-item fault repeats once per batch, which would otherwise print
     // hundreds of identical lines.
     summary.failures.push(...new Set(gateFailures.map(f => f.replace(/^\d+ /, 'some '))));

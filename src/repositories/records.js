@@ -89,7 +89,7 @@ async function bulkUpsertForProject(projectId, records) {
     partitionKey: String(projectId),
     resourceBody
   }));
-  return cosmos.bulk(CONTAINER, operations);
+  return cosmos.bulkVerified(CONTAINER, operations);
 }
 
 module.exports = {

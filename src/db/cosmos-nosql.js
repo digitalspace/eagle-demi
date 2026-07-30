@@ -274,6 +274,45 @@ async function bulk(containerName, operations) {
 }
 
 /**
+ * Bulk write that VERIFIES each operation and retries what Cosmos rejected.
+ *
+ * `bulk()` returns a per-operation status code and does not throw on a partial failure. Ignoring
+ * that is how a seed silently under-writes: the first document seed reported 60,578 written while
+ * only 56,317 landed, because the caller counted what it SENT. On serverless the usual cause is
+ * 429 (throttling), which is retryable — so failures are retried with backoff rather than merely
+ * counted.
+ *
+ * @returns {{succeeded: number, failed: number, statusCounts: object}}
+ */
+async function bulkVerified(containerName, operations, opts = {}) {
+  const maxAttempts = opts.maxAttempts || 4;
+  const statusCounts = {};
+  let pending = operations;
+  let succeeded = 0;
+
+  for (let attempt = 1; attempt <= maxAttempts && pending.length > 0; attempt++) {
+    const results = await bulk(containerName, pending);
+    const retry = [];
+
+    results.forEach((r, i) => {
+      const code = r && r.statusCode;
+      statusCounts[code] = (statusCounts[code] || 0) + 1;
+      if (code >= 200 && code < 300) succeeded++;
+      else retry.push(pending[i]);
+    });
+
+    pending = retry;
+    if (pending.length > 0 && attempt < maxAttempts) {
+      // Linear backoff. 429 carries retryAfterInMs, but the bulk response does not surface it
+      // per-operation reliably, so this stays simple and generous.
+      await new Promise(r => setTimeout(r, 1000 * attempt));
+    }
+  }
+
+  return { succeeded, failed: pending.length, statusCounts };
+}
+
+/**
  * Readiness probe. Cheap metadata read that proves both the endpoint and the credential work.
  */
 async function ping() {
@@ -299,5 +338,6 @@ module.exports = {
   patch,
   remove,
   bulk,
+  bulkVerified,
   ping
 };

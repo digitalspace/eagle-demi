@@ -99,7 +99,7 @@ async function bulkUpsertForProject(projectId, docs) {
     partitionKey: String(projectId),
     resourceBody
   }));
-  return cosmos.bulk(CONTAINER, operations);
+  return cosmos.bulkVerified(CONTAINER, operations);
 }
 
 async function patchExtraction(id, projectId, fields) {

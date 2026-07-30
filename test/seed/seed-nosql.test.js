@@ -286,14 +286,24 @@ test('seed() end to end with stubbed sources', async (t) => {
       written,
       repos: {
         projects: { upsert: async (p) => { written.projects.push(p); return p; } },
+        // Returns the verified shape: the seeder must count what LANDED, not what it sent.
         documents: {
-          bulkUpsertForProject: async (pid, docs) => { written.documents.push([pid, docs]); }
+          bulkUpsertForProject: async (pid, docs) => {
+            written.documents.push([pid, docs]);
+            return { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } };
+          }
         },
         records: {
-          bulkUpsertForProject: async (pid, recs) => { written.records.push([pid, recs]); }
+          bulkUpsertForProject: async (pid, recs) => {
+            written.records.push([pid, recs]);
+            return { succeeded: recs.length, failed: 0, statusCounts: { 201: recs.length } };
+          }
         },
         boundaries: {
-          bulkUpsertForType: async (type, items) => { written.boundaries.push([type, items]); }
+          bulkUpsertForType: async (type, items) => {
+            written.boundaries.push([type, items]);
+            return { succeeded: items.length, failed: 0, statusCounts: { 201: items.length } };
+          }
         },
         fragments: {
           put: async (pid, type, data, read) => { written.fragments.push({ pid, type, data, read }); }
@@ -491,6 +501,42 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(data.recordCount, 250);
     assert.strictEqual(data.inspectionCount, 125);
     assert.strictEqual(data.orderCount, 125);
+  });
+
+  await t.test('a partial bulk failure is REPORTED, not counted as written', async () => {
+    // Cosmos bulk returns a per-operation status and does not throw on partial failure. The first
+    // real seed reported 60,578 documents written when only 56,317 existed, because the seeder
+    // counted operations it had SENT.
+    const { repos, written } = makeRepos();
+    repos.documents.bulkUpsertForProject = async (pid, docs) => {
+      written.documents.push([pid, docs]);
+      return { succeeded: docs.length - 1, failed: 1, statusCounts: { 201: docs.length - 1, 429: 1 } };
+    };
+
+    const summary = await seed(['--live', '--only', 'documents'],
+      { sources: stubSources, repos, now: NOW });
+
+    assert.strictEqual(summary.stages.documents.built, 2);
+    assert.strictEqual(summary.stages.documents.written, 1, 'counts confirmed writes only');
+    assert.strictEqual(summary.stages.documents.writeFailed, 1);
+    assert.match(summary.failures.join(' '), /document writes FAILED after retries/);
+    assert.match(summary.failures.join(' '), /count mismatch: built 2 but only 1 were confirmed/);
+  });
+
+  await t.test('duplicate (projectId, id) pairs are detected', async () => {
+    // id is unique per PARTITION in Cosmos, so a repeat within one project silently overwrites.
+    const dupSource = {
+      ...stubSources,
+      streamEagleDocuments: async (onPage) => {
+        await onPage([eagleDoc('same', matchedGuid), eagleDoc('same', matchedGuid)], 2, 2);
+        return { count: 2, total: 2 };
+      }
+    };
+    const { repos } = makeRepos();
+    const summary = await seed(['--only', 'documents'], { sources: dupSource, repos, now: NOW });
+
+    assert.strictEqual(summary.stages.documents.duplicateIds, 1);
+    assert.match(summary.failures.join(' '), /share an \(projectId, id\) pair/);
   });
 
   await t.test('--limit-documents bounds a trial run', async () => {
