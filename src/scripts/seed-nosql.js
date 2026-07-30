@@ -10,11 +10,11 @@
  * Order matters: projects first, because every other container partitions by a canonical project
  * id that only the merged registry can supply.
  *
- *   1. Track (382) merged with Eagle (359)   -> projects       ~392
- *   2. Eagle documents                       -> documents      ~60,661
- *   3. NRPTI records, resolvable only        -> records
- *   4. NRPTI aggregate per project           -> project_fragments
- *   5. Static boundary exports (281)         -> boundaries
+ *   1. Track (382) merged with Eagle (359)   -> projects       393
+ *   2. Eagle documents                       -> documents      60,578
+ *   3. Static boundary exports               -> boundaries     281
+ *
+ * `records` (NRPTI) is a valid stage but NOT in the default set — see DEFAULT_STAGES.
  *
  * **DRY RUN BY DEFAULT.** `--live` is required to write anything. Verification gates run in both
  * modes, so a dry run is a genuine pre-flight check and not just a preview.
@@ -22,6 +22,8 @@
  * Usage:
  *   node src/scripts/seed-nosql.js [--live] [--only projects,documents,records,boundaries]
  *                                 [--limit-documents N]
+ *
+ * Without --only, runs DEFAULT_STAGES: projects, documents, boundaries.
  *
  * Run it INSIDE the network via the Kudu command API, detached with a log file — Cosmos is behind
  * a private endpoint, and `/api/command` is synchronous and will time out on a 60k-document seed.
@@ -37,7 +39,27 @@ const recordsRepo = require('../repositories/records');
 const boundariesRepo = require('../repositories/boundaries');
 const fragmentsRepo = require('../repositories/fragments');
 
+/** Every stage `--only` accepts. */
 const ALL_STAGES = ['projects', 'documents', 'records', 'boundaries'];
+
+/**
+ * What runs when `--only` is not given.
+ *
+ * **`records` is deliberately excluded.** DEMI's remit right now is projects and documents, and
+ * NRPTI records are neither — they are compliance and enforcement *events* (67,287 Inspections,
+ * 29,555 Tickets, 1,086 Orders, 891 AdministrativePenalties, 611 Certificates).
+ *
+ * They do carry `documents: [...]` references, which would make them worth having, except those
+ * ids are not reachable: NRPTI's public API returns nothing for `dataset=Document`, an empty set
+ * for `RecordDocument`, and 404 for `/api/public/document/<id>`. Dead ends.
+ *
+ * And only **2,238 of 99,430 (2.25%)** resolve to a project in the registry at all, because NRPTI
+ * covers all BC natural-resource compliance rather than only EA'd projects.
+ *
+ * So the stage costs ~40 minutes of upstream fetching per seed for data outside the current remit.
+ * The code stays and is tested — run `--only records` when compliance data matters.
+ */
+const DEFAULT_STAGES = ['projects', 'documents', 'boundaries'];
 
 /** Who may see a project's NRPTI compliance aggregate. Its own item, so its own ACL. */
 const NRPTI_FRAGMENT_ROLES = ['sysadmin', 'staff', 'demi-admin', 'compliance'];
@@ -54,7 +76,7 @@ const NRPTI_FRAGMENT_ROLES = ['sysadmin', 'staff', 'demi-admin', 'compliance'];
 const FLUSH_THRESHOLD = 100;
 
 function parseArgs(argv) {
-  const args = { live: false, only: ALL_STAGES, limitDocuments: Infinity };
+  const args = { live: false, only: DEFAULT_STAGES, limitDocuments: Infinity };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
@@ -428,6 +450,7 @@ async function seed(argv = [], deps = {}) {
 
 module.exports = {
   ALL_STAGES,
+  DEFAULT_STAGES,
   NRPTI_FRAGMENT_ROLES,
   FLUSH_THRESHOLD,
   parseArgs,

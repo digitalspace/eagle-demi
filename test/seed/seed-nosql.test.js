@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  parseArgs, verifyProjects, verifyItems, seed, ALL_STAGES, NRPTI_FRAGMENT_ROLES
+  parseArgs, verifyProjects, verifyItems, seed, ALL_STAGES, DEFAULT_STAGES, NRPTI_FRAGMENT_ROLES
 } = require('../../src/scripts/seed-nosql');
 const { unwrapSearchResponse, fetchAllPages, PAGE_SIZE } = require('../../src/seed/sources');
 const trackProjects = require('../../src/data/track_projects_enriched.json');
@@ -14,10 +14,23 @@ const trackProjects = require('../../src/data/track_projects_enriched.json');
 const NOW = '2026-07-30T00:00:00.000Z';
 
 test('parseArgs — writes require an explicit flag', async (t) => {
-  await t.test('defaults to a dry run over every stage', () => {
-    const args = parseArgs([]);
-    assert.strictEqual(args.live, false, 'a 60k-document seed must not start by accident');
-    assert.deepStrictEqual(args.only, ALL_STAGES);
+  await t.test('defaults to a dry run', () => {
+    assert.strictEqual(parseArgs([]).live, false,
+      'a 60k-document seed must not start by accident');
+  });
+
+  await t.test('records is NOT in the default stages', () => {
+    // NRPTI records are compliance EVENTS, not projects or documents. Their document references
+    // are unreachable through NRPTI's public API, and only 2.25% resolve to a project in the
+    // registry — so the stage costs ~40 minutes of fetching for data outside the current remit.
+    assert.deepStrictEqual(parseArgs([]).only, ['projects', 'documents', 'boundaries']);
+    assert.deepStrictEqual(DEFAULT_STAGES, ['projects', 'documents', 'boundaries']);
+    assert.ok(!DEFAULT_STAGES.includes('records'));
+  });
+
+  await t.test('records is still a VALID stage — the code is kept, not deleted', () => {
+    assert.ok(ALL_STAGES.includes('records'));
+    assert.deepStrictEqual(parseArgs(['--only', 'records']).only, ['records']);
   });
 
   await t.test('--only selects stages', () => {
@@ -291,7 +304,8 @@ test('seed() end to end with stubbed sources', async (t) => {
 
   await t.test('a dry run writes NOTHING but still verifies', async () => {
     const { written, repos } = makeRepos();
-    const summary = await seed([], { sources: stubSources, repos, now: NOW });
+    const summary = await seed(['--only', 'projects,documents,records,boundaries'],
+      { sources: stubSources, repos, now: NOW });
 
     assert.strictEqual(summary.mode, 'dry-run');
     assert.deepStrictEqual(summary.failures, []);
@@ -306,7 +320,9 @@ test('seed() end to end with stubbed sources', async (t) => {
 
   await t.test('a live run writes every stage', async () => {
     const { written, repos } = makeRepos();
-    const summary = await seed(['--live'], { sources: stubSources, repos, now: NOW });
+    // Explicit --only: records is not in the default set, and this asserts every stage works.
+    const summary = await seed(['--live', '--only', 'projects,documents,records,boundaries'],
+      { sources: stubSources, repos, now: NOW });
 
     assert.strictEqual(summary.mode, 'live');
     assert.deepStrictEqual(summary.failures, []);
@@ -340,7 +356,8 @@ test('seed() end to end with stubbed sources', async (t) => {
 
   await t.test('NO project is created from NRPTI, and unresolvable records are dropped', async () => {
     const { written, repos } = makeRepos();
-    const summary = await seed(['--live'], { sources: stubSources, repos, now: NOW });
+    const summary = await seed(['--live', '--only', 'projects,records'],
+      { sources: stubSources, repos, now: NOW });
 
     assert.strictEqual(summary.stages.records.fetched, 3);
     assert.strictEqual(summary.stages.records.built, 2);
