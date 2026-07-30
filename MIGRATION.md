@@ -137,21 +137,102 @@ Verified against live data 2026-07-30: **0 items without `read[]`, 0 `isPublishe
 across all 393 projects and 60,578 documents. That is the gate that licenses deleting the legacy
 no-ACL tier below.
 
-### A. Extraction — the biggest functional gap (highest value)
+### A. Extraction — in progress 2026-07-30
 
-`document_chunks` has never held data, so Deep Search is metadata-only — which is the product's
-whole point. Two separate problems:
+`document_chunks` had never held data, so Deep Search was metadata-only — which is the product's
+whole point. The ingest path is now built and live on dev; the corpus backfill is running.
 
-1. **Nothing schedules it.** `src/extract.js` only runs under `require.main === module`.
-2. **It is still on the Mongo layer** — `MongoClient`, `src/models/*`, `db.collection('epic')`.
+**Shape:** an extraction host posts MARKDOWN to `POST /documents/:id/chunks`; the server chunks it
+(`src/chunker.js` stays the only chunking implementation) and copies `read[]` from the **live**
+document, so an extraction host can never widen a document's visibility. Chunk ids are
+deterministic (`<documentId>::p<page>::c<index>`) and `chunks.replaceForDocument` reconciles, so the
+route is idempotent and a killed backfill just restarts. `SOURCES.DocumentChunk` is live in
+`full-sync-nosql.js`, and `dataset=DocumentChunk` is wired through search and the frontend.
 
-Work: port `extract.js` to the NoSQL repositories with `systemAccess()`; add a `chunks` repository
-(the container already exists, partitioned `/documentId`); schedule it as a Functions timer or a
-detached job; then flip `SOURCES.DocumentChunk` in `full-sync-nosql.js` from skipped to live — that
-transform is already written and tested.
+**The backfill runs off-platform on a one-off GPU host** — an ordinary API client using the same
+public endpoints and admin key any client would. `GET /documents/:id/download` returns a presigned
+URL, so document bytes go straight from the object store and never transit Azure. Nothing about
+DEMI knows the host exists, and no repo file, template or app setting references it.
 
-Watch: extraction is memory-hungry and the container has ~330 MB free (see the OOM note). It
-already batches PDFs at 10 pages for this reason.
+**How Azure extracts documents for NEW projects is deliberately deferred.** `src/extract.js` stays
+for that reason — it is the only in-repo docling client and PDF page-batching code. Do not delete
+it as dead code. Priced 2026-07-30 and rejected for now: Container Apps serverless GPU in
+canadacentral is **T4 $0.317/hr, A100 $2.29/hr**, and `demi-ca-env-dev` is Consumption-only, so GPU
+needs a whole new workload-profiles environment.
+
+**Measured on 326 converted documents (2026-07-30) — these supersede an earlier 200-document table
+that was taken on a single converter thread and was wrong in every row.** The sample's byte
+distribution matches the corpus (mean 2.65 MB vs corpus 2.68 MB), so scaling by the mean holds.
+
+| | |
+|---|---|
+| Conversion time | median **4.7 s**, mean **21.1 s**, max **227 s** — a long tail of large scanned PDFs |
+| Full corpus at that rate | **354 converter-hours → ~7.4 days** at `CONVERTERS=2` |
+| Concurrency | **`CONVERTERS=3` OOM-killed the 16 GiB host at 15.9 GB peak** — docling holds page images for the whole document, so RAM scales with page count. Settled at **2**, plus a semaphore serialising documents over 8 MB |
+| Markdown per document | median **6.8 K**, mean **78 K characters** |
+| Work list | **60,391 documents / 161.8 GB** — 59,752 PDF (98.9%), 639 other |
+| Document sizes | median **0.29 MB**, p90 **6.4 MB**, p99 **37 MB**, max **1.26 GB** |
+| Projected corpus | **~4.7 G characters → ~1.9M chunks** at `TARGET_CHUNK_SIZE=2500` |
+
+**GPU throughput is not the bottleneck — routing is.** The converter ran `do_ocr=True` on every
+PDF, so digital PDFs with a perfectly good text layer were pushed through RapidOCR anyway. The
+extraction host now routes first: a `pypdfium2` text-layer probe sends digital PDFs down a
+CPU-only path, and only image formats and text-poor PDFs reach the GPU. The router is deliberately
+biased toward OCR — mis-routing a scan silently drops the document out of a lexical index, which is
+far worse than spending GPU time on a digital PDF. `msg`/`zip`/`rtf`/legacy `doc` (65 documents)
+have no docling reader and are recorded as extraction errors without being downloaded.
+
+**Typesense is the real ceiling.** It holds its index in RAM. The container is **live at 2.0 vCPU /
+4 GiB** — note `azure/modules/container-apps.bicep` still declares **1.0 vCPU / 2.0Gi**, so
+deploying that template today would *downsize* it. ~1.9M chunks is 5-6 GB and needs **4.0 vCPU /
+8.0Gi**, which is the maximum on a Consumption environment (the CPU:memory ratio is locked at 1:2
+and `demi-ca-env-dev` has `workloadProfiles: null`). If that still is not enough, the lever is
+`TARGET_CHUNK_SIZE` 2500 → 4000 (~1.9M rows → ~1.2M). The chunk schema was already cut to only what
+is searched (`content` for `query_by`, `allowed_roles` for `filter_by`, `documentId` for delete
+cleanup — everything else is stored but `index: false`, and `centroid` and the unpopulated
+`embedding` float[768] are gone, the latter a 9 GB liability the moment anyone fills it in).
+`TYPESENSE_MIN_FREE_GIB` is a **disk** pre-flight (0.1 from the app setting, 1 hardcoded in the
+`typesense:sync-nosql` script) — it will **not** catch an OOM either way.
+
+**The nightly full sync cannot carry this volume.** The Function App is Y1 Consumption and
+`host.json` pins `functionTimeout: 00:10:00`, a hard ceiling on Y1. Syncing 1.9M chunks is ~19,000
+Cosmos reads plus ~19,000 Typesense imports, and the orphan purge in `full-sync-nosql.js` only runs
+at *start*, so every timed-out run abandons a `document_chunks_<timestamp>` collection eating
+Typesense RAM and the Azure Files share. The backfill's own sync is therefore a **one-off** run of
+`npm run typesense:sync-nosql` inside the app container over the App Service SSH tunnel (same
+recipe as the Cosmos scripts above), with `nightlySyncTimer` disabled for the duration. Making the
+*recurring* sync viable at this corpus size is open follow-up work.
+
+**Fixed on the way (both live on dev):**
+
+- **`DOCLING_API_KEY` was DEMI's only admin credential.** `src/helpers/auth.js` had it in
+  `validKeys`, so the secret DEMI sends OUTBOUND to docling was simultaneously an INBOUND sysadmin
+  credential — a logged request header or a compromised extraction host was full admin. Split out
+  to `ADMIN_API_KEY`; the old key now 401s.
+- **Every POST/PUT/PATCH in the API was returning HTTP 500 with an empty body.** `api/index.js`
+  hands Express a hand-built `req`; Express reparents it onto `http.IncomingMessage.prototype`,
+  whose `_destroy()` calls `this.socket.destroy()`. With `socket` a plain `{remoteAddress}` object,
+  reaching EOF threw `TypeError: this.socket.destroy is not a function` **from a microtask** — past
+  every try/catch — killing the Node worker, which the Functions host silently respawned. GET hid
+  it completely because nothing reads the body. Fixed with `autoDestroy: false` plus a real
+  EventEmitter socket stub; regression test in `test/routes/functions-adapter.test.js`.
+
+#### ⚠️ Backfill in flight — do not
+
+Delete this block when the corpus is done and the extraction host is decommissioned.
+
+- **Do not re-enable `nightlySyncTimer`.** It is disabled via the app setting
+  `AzureWebJobs.nightlySyncTimer.Disabled=true` until the one-off sync has run. Every nightly run
+  at this volume times out at 10 minutes and orphans a `document_chunks_<timestamp>` collection.
+- **Do not `az deployment` `azure/main.bicep`** until the Typesense sizing change lands — the
+  template still says 1.0 vCPU / 2.0Gi and would downsize the live 2.0 / 4 GiB container.
+- **Do not change `TARGET_CHUNK_SIZE`, `MAX_CHUNK_SIZE` or `OVERLAP_SIZE` while ingest is
+  running.** Chunk ids are derived from the split, so a mid-run change orphans every chunk already
+  written instead of reconciling with it.
+- **Do not stop/start `demi-api-dev` casually.** The extraction host retries with backoff so a
+  restart costs seconds rather than documents, but a deploy mid-run still costs time.
+- Ingest is safe to interrupt at any point: `POST /documents/:id/chunks` is idempotent and the host
+  resumes from its own on-disk state, not from an API query.
 
 ### B. Phase 8 — decommission the MongoDB-API account
 
