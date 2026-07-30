@@ -196,27 +196,50 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
 });
 
 test('router selects the data layer from COSMOS_ENDPOINT', async (t) => {
-  const load = (endpoint) => {
+  const load = (enabled) => {
     const key = require.resolve('../../src/routes/api');
     delete require.cache[key];
-    const prev = process.env.COSMOS_ENDPOINT;
-    if (endpoint) process.env.COSMOS_ENDPOINT = endpoint;
-    else delete process.env.COSMOS_ENDPOINT;
+    const prev = process.env.USE_COSMOS_NOSQL;
+    if (enabled) process.env.USE_COSMOS_NOSQL = 'true';
+    else delete process.env.USE_COSMOS_NOSQL;
 
     const router = require('../../src/routes/api');
     const paths = router.stack.filter(l => l.route).map(l => `${l.route.path}`).sort();
 
-    if (prev === undefined) delete process.env.COSMOS_ENDPOINT;
-    else process.env.COSMOS_ENDPOINT = prev;
+    if (prev === undefined) delete process.env.USE_COSMOS_NOSQL;
+    else process.env.USE_COSMOS_NOSQL = prev;
     delete require.cache[key];
     return paths;
   };
 
+  await t.test('the switch is NOT inferred from COSMOS_ENDPOINT', () => {
+    // COSMOS_ENDPOINT is already set on the deployed app and points at the MongoDB-API
+    // account. Keying the data layer off it silently activated the NoSQL controllers against
+    // an account that does not speak SQL. A mode switch must be explicit.
+    const key = require.resolve('../../src/routes/api');
+    const prevEndpoint = process.env.COSMOS_ENDPOINT;
+    const prevFlag = process.env.USE_COSMOS_NOSQL;
+
+    delete require.cache[key];
+    process.env.COSMOS_ENDPOINT = 'https://anything.documents.azure.com:443/';
+    delete process.env.USE_COSMOS_NOSQL;
+    const router = require('../../src/routes/api');
+    const paths = router.stack.filter(l => l.route).map(l => l.route.path);
+
+    assert.ok(!paths.includes('/documents/:id/published'),
+      'COSMOS_ENDPOINT alone must NOT activate the NoSQL layer');
+
+    if (prevEndpoint === undefined) delete process.env.COSMOS_ENDPOINT;
+    else process.env.COSMOS_ENDPOINT = prevEndpoint;
+    if (prevFlag !== undefined) process.env.USE_COSMOS_NOSQL = prevFlag;
+    delete require.cache[key];
+  });
+
   await t.test('the NoSQL path never DROPS a route', () => {
     // The invariant that matters: switching the data layer must not silently remove an
     // endpoint clients depend on. Adding one is fine and expected.
-    const legacy = load(null);
-    const nosql = new Set(load('https://example.documents.azure.com:443/'));
+    const legacy = load(false);
+    const nosql = new Set(load(true));
 
     const missing = legacy.filter(p => !nosql.has(p));
     assert.deepStrictEqual(missing, [], 'these routes disappear under the NoSQL layer');
@@ -225,7 +248,7 @@ test('router selects the data layer from COSMOS_ENDPOINT', async (t) => {
   await t.test('publish/unpublish exists only on the NoSQL path, by design', () => {
     // Hiding a document is a publication change, not a deletion. The legacy Mongo controller
     // has no equivalent, so the route is added conditionally rather than 501-ing.
-    assert.ok(load('https://example.documents.azure.com:443/').includes('/documents/:id/published'));
-    assert.ok(!load(null).includes('/documents/:id/published'));
+    assert.ok(load(true).includes('/documents/:id/published'));
+    assert.ok(!load(false).includes('/documents/:id/published'));
   });
 });

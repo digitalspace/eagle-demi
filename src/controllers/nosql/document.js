@@ -21,6 +21,7 @@ const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 // Required as a module rather than destructured so the call is interceptable in tests —
 // otherwise a unit test would open a real Typesense connection and burn its retry schedule.
 const typesenseClient = require('../../typesense/typesenseClient');
+const { resolveObjectKey } = require('../../storage/objectKey');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -91,9 +92,11 @@ exports.downloadDocument = async (req, res) => {
     }
 
     const minioClient = extract.getMinioClient();
+    // The recorded key is relative to the prod bucket; non-prod buckets nest that copy one
+    // level deeper. Without this the presigned URL is well-formed but 404s.
     const url = await minioClient.presignedGetObject(
       config.minioBucket,
-      doc.s3Key,
+      resolveObjectKey(doc.s3Key),
       DOWNLOAD_URL_TTL_SECONDS
     );
 

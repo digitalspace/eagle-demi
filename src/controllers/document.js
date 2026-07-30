@@ -10,6 +10,7 @@ const Document = require('../models/document');
 const Project = require('../models/project');
 
 const { rolesFor, withReadFilter, canRead, SECURE_ROLES } = require('../helpers/access');
+const { resolveObjectKey } = require('../storage/objectKey');
 
 // Presigned download links are deliberately short-lived — they carry no auth of their own,
 // so anyone holding the URL can fetch the object until it expires.
@@ -132,9 +133,11 @@ exports.downloadDocument = async (req, res) => {
     }
 
     const minioClient = extract.getMinioClient();
+    // The recorded key is relative to the prod bucket; non-prod buckets nest that copy one
+    // level deeper. Without this the presigned URL is well-formed but 404s.
     const url = await minioClient.presignedGetObject(
       config.minioBucket,
-      doc.s3Key,
+      resolveObjectKey(doc.s3Key),
       DOWNLOAD_URL_TTL_SECONDS
     );
 

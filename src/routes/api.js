@@ -12,10 +12,15 @@ const passiveAuthMiddleware = require('../middleware/passiveAuth');
 // are NOT abstracted behind a common interface — an adapter over both is precisely the shape
 // that let a half-working translator disable access control in this codebase.
 //
-// One conditional at the router keeps dev running on Mongo until COSMOS_ENDPOINT is set.
-// At cutover, setting that variable flips every route at once; the legacy controllers and
-// this branch are deleted together in the final phase.
-const USE_NOSQL = Boolean(process.env.COSMOS_ENDPOINT);
+// The flag is a DEDICATED variable, deliberately not inferred from COSMOS_ENDPOINT.
+// COSMOS_ENDPOINT is already set on the deployed app by the original Bicep and points at the
+// MongoDB-API account, so keying off it silently activated the NoSQL controllers against an
+// account that does not speak SQL — every switched route 500'd while unswitched ones kept
+// working. A mode switch must be explicit, never a side effect of unrelated config.
+//
+// At cutover set USE_COSMOS_NOSQL=true; the legacy controllers and this branch are deleted
+// together in the final phase.
+const USE_NOSQL = process.env.USE_COSMOS_NOSQL === 'true';
 
 const projectController = USE_NOSQL
   ? require('../controllers/nosql/project')
@@ -31,7 +36,7 @@ const recordController = USE_NOSQL
   : require('../controllers/record');
 
 if (USE_NOSQL) {
-  console.log('[routes] Cosmos NoSQL data layer active (COSMOS_ENDPOINT is set).');
+  console.log('[routes] Cosmos NoSQL data layer active (USE_COSMOS_NOSQL=true).');
 }
 const wildfireController = require('../controllers/wildfire');
 const searchController = require('../controllers/search');

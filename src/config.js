@@ -50,6 +50,16 @@ const config = {
   minioSecret:  process.env.MINIO_SECRET_KEY || '',
   minioBucket:  process.env.MINIO_BUCKET_NAME || 'uploads',
   minioSsl:     process.env.MINIO_USE_SSL === 'true',
+  // Path segment prepended to every stored object key.
+  //
+  // Documents carry the key eagle-api recorded against the PROD bucket (`etl/<slug>/<file>`).
+  // Non-prod buckets hold a copy of prod nested one level down, under a prefix named after
+  // the prod bucket — e.g. dev's bucket `asnpnn` contains `ozwdez/etl/...`. So the stored
+  // metadata and the actual layout differ by exactly one segment, per environment.
+  //
+  // Empty in prod, `ozwdez/` in dev. Set MINIO_KEY_PREFIX per environment.
+  // This disappears once documents move to Azure Blob with a single clean key layout.
+  minioKeyPrefix: process.env.MINIO_KEY_PREFIX || '',
 
   doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
   doclingKey:   process.env.DOCLING_API_KEY  || '',
