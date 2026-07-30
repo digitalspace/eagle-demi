@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 set -e
 
-# Azure Deployment Script for DEMI (API, Frontend, and Container App Job)
-# Usage: ./scripts/deploy-azure.sh [all|api|frontend|job] [resource_group]
+# Azure Deployment Script for DEMI (API and Frontend)
+# Usage: ./scripts/deploy-azure.sh [all|api|frontend] [resource_group]
+#
+# There is deliberately no `job` target. It used to create a Container App Job running
+# mcr.microsoft.com/azuredocs/aci-helloworld on a 2am cron, plus a SECOND Container Apps
+# environment (demi-container-env-dev, not the real demi-ca-env-dev) — billable resources that
+# did nothing. The nightly sync is the Functions timer `nightlySyncTimer`.
 
 TARGET="${1:-all}"
 RESOURCE_GROUP="${2:-c4b0a8-dev-rg}"
 API_APP_NAME="${API_APP_NAME:-demi-api-dev}"
 FRONTEND_APP_NAME="${FRONTEND_APP_NAME:-demi-frontend-dev}"
-JOB_NAME="${JOB_NAME:-demi-sync-job-dev}"
-CONTAINER_ENV_NAME="${CONTAINER_ENV_NAME:-demi-container-env-dev}"
-LOCATION="${LOCATION:-canadacentral}"
 export REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 GREEN='\033[0;32m'
@@ -80,39 +82,6 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
   echo -e "${GREEN}✓ Frontend successfully deployed to https://${FRONTEND_APP_NAME}.azurewebsites.net${NC}"
 }
 
-deploy_job() {
-  echo -e "\n${BLUE}[1/2] Checking Azure Container Apps Environment ${YELLOW}${CONTAINER_ENV_NAME}${NC}..."
-  if ! az containerapp env show --name "$CONTAINER_ENV_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
-    echo -e "${YELLOW}Creating Container App Environment ${CONTAINER_ENV_NAME}...${NC}"
-    az containerapp env create \
-      --name "$CONTAINER_ENV_NAME" \
-      --resource-group "$RESOURCE_GROUP" \
-      --location "$LOCATION"
-  fi
-
-  echo -e "\n${BLUE}[2/2] Deploying Container App Job ${YELLOW}${JOB_NAME}${NC} (Cron: '0 2 * * *' nightly scale-to-zero)..."
-  if az containerapp job show --name "$JOB_NAME" --resource-group "$RESOURCE_GROUP" >/dev/null 2>&1; then
-    az containerapp job update \
-      --name "$JOB_NAME" \
-      --resource-group "$RESOURCE_GROUP" \
-      --cron-expression "0 2 * * *"
-  else
-    az containerapp job create \
-      --name "$JOB_NAME" \
-      --resource-group "$RESOURCE_GROUP" \
-      --environment "$CONTAINER_ENV_NAME" \
-      --trigger-type "Schedule" \
-      --cron-expression "0 2 * * *" \
-      --replica-timeout 3600 \
-      --replica-retry-limit 3 \
-      --image "mcr.microsoft.com/azuredocs/aci-helloworld:latest" \
-      --cpu "0.5" \
-      --memory "1.0Gi"
-  fi
-
-  echo -e "${GREEN}✓ Container App Job ${JOB_NAME} successfully configured!${NC}"
-}
-
 case "$TARGET" in
   api)
     deploy_api
@@ -120,16 +89,12 @@ case "$TARGET" in
   frontend)
     deploy_frontend
     ;;
-  job)
-    deploy_job
-    ;;
   all)
     deploy_api
     deploy_frontend
-    deploy_job
     ;;
   *)
-    echo -e "${RED}Invalid target '$TARGET'. Supported targets: all, api, frontend, job${NC}"
+    echo -e "${RED}Invalid target '$TARGET'. Supported targets: all, api, frontend${NC}"
     exit 1
     ;;
 esac
