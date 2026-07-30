@@ -42,6 +42,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const projectsRepo = require('../repositories/projects');
 const documentsRepo = require('../repositories/documents');
 const recordsRepo = require('../repositories/records');
+const chunksRepo = require('../repositories/chunks');
 
 /** Cosmos page size. Chunks carry a large `content` field, so they page smaller. */
 const PAGE_SIZES = { DocumentChunk: 100, default: 500 };
@@ -49,19 +50,12 @@ const PAGE_SIZES = { DocumentChunk: 100, default: 500 };
 /** Typesense import batch size. */
 const BATCH_SIZES = { DocumentChunk: 100, default: 500 };
 
-/**
- * Where each schema's items come from.
- *
- * `DocumentChunk` has NO source: extraction has never run, there is no chunks container, and
- * `document_chunks` is indexed but never queried (Deep Search is metadata-only). It is listed
- * with a null repo so the sync reports it as skipped rather than silently omitting a schema —
- * which is how the old three-way probe came to exist in the first place.
- */
+/** Where each schema's items come from. */
 const SOURCES = {
   Project: { repo: projectsRepo },
   Document: { repo: documentsRepo },
   Record: { repo: recordsRepo },
-  DocumentChunk: { repo: null, reason: 'no chunks container — extraction has never run' }
+  DocumentChunk: { repo: chunksRepo }
 };
 
 /** Projects must be indexed first: children denormalise the project name, region and ACL. */
@@ -132,6 +126,30 @@ async function* pageAll(repo, access, pageSize) {
     if (result.items.length > 0) yield result.items;
     continuationToken = result.continuationToken;
   } while (continuationToken);
+}
+
+/**
+ * Parent metadata and ACL for every document, keyed by id.
+ *
+ * Only the six fields transformDocumentChunk actually reads are retained — holding whole document
+ * items would multiply the footprint for no gain. Reuses documentsRepo.listVisible and the existing
+ * pageAll generator, so nothing accumulates beyond the Map itself.
+ */
+async function buildDocumentLookup(repo, access) {
+  const lookup = new Map();
+  for await (const items of pageAll(repo, access, PAGE_SIZES.default)) {
+    for (const doc of items) {
+      lookup.set(String(doc.id), {
+        type: doc.type,
+        milestone: doc.milestone,
+        datePosted: doc.datePosted,
+        region: doc.region,
+        displayName: doc.displayName || doc.documentFileName,
+        read: doc.read
+      });
+    }
+  }
+  return lookup;
 }
 
 async function syncSchema(typesense, schemaName, schema, ctx) {
@@ -260,6 +278,7 @@ async function fullSync(opts = {}) {
   if (repos.projects) SOURCES.Project.repo = repos.projects;
   if (repos.documents) SOURCES.Document.repo = repos.documents;
   if (repos.records) SOURCES.Record.repo = repos.records;
+  if (repos.chunks) SOURCES.DocumentChunk.repo = repos.chunks;
 
   console.log('Starting full sync (Cosmos NoSQL -> Typesense):', new Date().toISOString());
 
@@ -269,8 +288,8 @@ async function fullSync(opts = {}) {
   // readClause like any other caller rather than bypassing the predicate — see systemAccess.
   const access = systemAccess();
 
-  // ~393 projects, so this is cheap. There is deliberately NO document lookup built up front:
-  // it would be 60,578 entries held for the benefit of a chunk sync that has no data.
+  // ~393 projects, so this is cheap. The document lookup is NOT built here — it is ~60,578
+  // entries and only the chunk sync needs it, so it is built lazily below and dropped after.
   const projectPage = await SOURCES.Project.repo.listVisible(access, { pageSize: 1000 });
   const lookups = { projects: buildProjectLookup(projectPage.items), documents: new Map() };
   console.log(`Project lookup: ${lookups.projects.size} entries`);
@@ -289,7 +308,31 @@ async function fullSync(opts = {}) {
   for (const schemaName of SYNC_ORDER) {
     const schema = SCHEMAS[schemaName];
     if (!schema) continue;
+
+    // Chunks denormalise their parent document's metadata AND inherit its ACL, which is read
+    // LIVE here rather than snapshotted onto each chunk — that is what makes an unpublish
+    // propagate for free instead of needing a fan-out patch across every chunk.
+    // Built lazily so ~40 MB is not held during the much heavier Document pass.
+    if (schemaName === 'DocumentChunk' && SOURCES.DocumentChunk.repo) {
+      lookups.documents = await buildDocumentLookup(SOURCES.Document.repo, access);
+      const heapMb = Math.round(process.memoryUsage().heapUsed / 1048576);
+      console.log(`\nDocument lookup: ${lookups.documents.size} entries (heap ${heapMb} MB)`);
+
+      if (lookups.documents.size === 0) {
+        // Same reasoning as the project guard: every chunk inherits its parent's ACL from this
+        // map, so an empty one would index document text with no visibility constraint at all.
+        throw new Error(
+          'Document lookup is empty — refusing to sync chunks. Every chunk inherits its parent ' +
+          "document's ACL and metadata from this lookup, so an empty lookup would index " +
+          'extracted text with no parent constraint.'
+        );
+      }
+    }
+
     results.push(await syncSchema(typesense, schemaName, schema, { access, lookups }));
+
+    // Release the lookup as soon as the only consumer is done with it.
+    if (schemaName === 'DocumentChunk') lookups.documents = new Map();
   }
 
   console.log('\nFull sync complete:', new Date().toISOString());

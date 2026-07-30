@@ -200,6 +200,59 @@ exports.search = async (req, res) => {
         console.error('[search] Document Cosmos DB fallback failed:', cosmosErr.message);
         return res.json([{ searchResults: [] }]);
       }
+    } else if (dataset === 'DocumentChunk') {
+      // Deep Search over extracted document TEXT.
+      //
+      // Typesense only, with NO Cosmos fallback — full text lives exclusively in the index, and a
+      // fallback that fires on an empty result is precisely how the deleted `epic`-collection
+      // workarounds came to exist: it turns "extraction has not run" into "silently search
+      // something else". An empty result here means no chunks matched, and says so.
+      if (!keywords) {
+        return res.json([{ searchResults: [] }]);
+      }
+
+      const TYPESENSE_BASE_URL = getTypesenseBaseUrl();
+      const TYPESENSE_API_KEY = process.env.TYPESENSE_API_KEY || 'local-dev-key';
+
+      const filterBy = [];
+      if (accessContext.typesenseFilter) {
+        filterBy.push(accessContext.typesenseFilter);
+      }
+
+      const typesenseUrl = `${TYPESENSE_BASE_URL}/collections/document_chunks/documents/search?q=${encodeURIComponent(keywords)}&query_by=content&num_typos=${fuzzy ? 2 : 0}&prefix=false&highlight_full_fields=content&per_page=${typesensePageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
+
+      try {
+        const typesenseRes = await fetch(typesenseUrl, {
+          headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY }
+        });
+        if (!typesenseRes.ok) {
+          console.warn(`[search] Typesense chunk search HTTP ${typesenseRes.status}`);
+          return res.json([{ searchResults: [] }]);
+        }
+
+        const data = await typesenseRes.json();
+        const mappedChunks = (data.hits || []).map(hit => {
+          const chunk = hit.document;
+          const highlight = (hit.highlights || []).find(h => h.field === 'content');
+          return {
+            _id: String(chunk.id),
+            documentId: String(chunk.documentId || ''),
+            project: String(chunk.projectId || ''),
+            projectName: chunk.projectName || 'Associated Project',
+            documentName: chunk.documentName || 'Untitled Document',
+            documentType: chunk.documentType || 'PDF Document',
+            pageNumber: chunk.pageNumber ?? 0,
+            content: chunk.content || '',
+            // The matched span, so the UI can show why this hit matched without re-searching.
+            snippet: (highlight && (highlight.snippet || highlight.value)) || '',
+            read: chunk.allowed_roles || ['public']
+          };
+        });
+        return res.json([{ searchResults: mappedChunks }]);
+      } catch (err) {
+        console.error('[search] Chunk Typesense query failed:', err.message);
+        return res.json([{ searchResults: [] }]);
+      }
     } else {
       return res.status(400).json({ error: `Invalid or unsupported dataset: ${dataset}` });
     }

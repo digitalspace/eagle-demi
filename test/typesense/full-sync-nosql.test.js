@@ -226,6 +226,14 @@ test('fullSync', async (t) => {
     ], 500),
     records: fakeRepo([
       { id: 'r1', projectId: '207', dataset: 'Order', recordName: 'Order 1', read: ['public'] }
+    ], 500),
+    chunks: fakeRepo([
+      { id: 'd1::p0::c0', documentId: 'd1', projectId: '207', pageNumber: 0, chunkIndex: 0,
+        content: 'text from a public document', read: ['public'] },
+      // Snapshot says public; the LIVE parent d2 is staff-only. The transform must follow the
+      // parent, not the snapshot — that is the whole reason the ACL is not denormalised.
+      { id: 'd2::p0::c0', documentId: 'd2', projectId: '207', pageNumber: 0, chunkIndex: 0,
+        content: 'text from an unpublished document', read: ['public'] }
     ], 500)
   });
 
@@ -269,17 +277,60 @@ test('fullSync', async (t) => {
     assert.ok(!d2.allowed_roles.includes('public'));
   });
 
-  await t.test('DocumentChunk is reported as skipped, not silently omitted', async () => {
-    // The old code responded to a missing chunk source with a three-way collection probe. Saying
-    // "skipped, and why" is how that class of workaround stays deleted.
+  await t.test('DocumentChunk is indexed and its alias swapped', async () => {
     const ts = fakeTypesense();
     const results = await fullSync({ typesense: ts, repos: repos() });
 
     const chunk = results.find(r => r.schemaName === 'DocumentChunk');
-    assert.ok(chunk.skipped);
-    assert.strictEqual(chunk.imported, 0);
-    assert.ok(!ts.state.aliases.has('document_chunks'), 'no empty alias created');
-    assert.match(SOURCES.DocumentChunk.reason, /extraction has never run/);
+    assert.ok(!chunk.skipped, 'chunks are a live source now that extraction runs');
+    assert.strictEqual(chunk.imported, 2);
+    assert.ok(ts.state.aliases.has('document_chunks'), 'alias swapped to the new collection');
+    assert.ok(SOURCES.DocumentChunk.repo, 'chunk source is wired');
+  });
+
+  await t.test('a chunk inherits its LIVE parent ACL, not the snapshot on the chunk', async () => {
+    // d2 is staff-only but its chunk carries read:['public'] — a snapshot that went stale when the
+    // document was unpublished. Reading the parent live is what makes an unpublish propagate
+    // without rewriting a single chunk.
+    const ts = fakeTypesense();
+    await fullSync({ typesense: ts, repos: repos() });
+
+    const collection = ts.state.aliases.get('document_chunks');
+    const indexed = ts.state.imported.get(collection);
+
+    const fromPublic = indexed.find(c => c.documentId === 'd1');
+    const fromUnpublished = indexed.find(c => c.documentId === 'd2');
+
+    assert.deepStrictEqual(fromPublic.allowed_roles, ['public']);
+    assert.deepStrictEqual(fromUnpublished.allowed_roles, ['staff'],
+      'stale public snapshot must NOT make unpublished text searchable');
+    assert.ok(!fromUnpublished.allowed_roles.includes('public'));
+  });
+
+  await t.test('the document lookup is built, and carries parent metadata onto chunks', async () => {
+    const ts = fakeTypesense();
+    await fullSync({ typesense: ts, repos: repos() });
+
+    const collection = ts.state.aliases.get('document_chunks');
+    const indexed = ts.state.imported.get(collection);
+    const c1 = indexed.find(c => c.documentId === 'd1');
+
+    // documentName comes only from the lookup; an empty Map would silently drop it.
+    assert.strictEqual(c1.documentName, 'Doc 1');
+    assert.strictEqual(c1.projectName, 'Nicomen Wind');
+  });
+
+  await t.test('an EMPTY document lookup aborts the chunk sync', async () => {
+    // Same failure mode as the empty project lookup: every chunk inherits its parent's ACL from
+    // this map, so an empty one would index document text with no visibility constraint.
+    const ts = fakeTypesense();
+    const r = repos();
+    r.documents = fakeRepo([], 500);
+
+    await assert.rejects(
+      () => fullSync({ typesense: ts, repos: r }),
+      /Document lookup is empty/
+    );
   });
 
   await t.test('an EMPTY project lookup aborts the whole sync', async () => {

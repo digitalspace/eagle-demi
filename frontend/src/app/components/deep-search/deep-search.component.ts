@@ -27,8 +27,10 @@ export class DeepSearchComponent implements OnInit {
     this.service.projects.set(null);
     if (value) {
       this.service.documents.set(null);
+      this.service.documentChunks.set(null);
     } else {
       this.service.documents.set([]);
+      this.service.documentChunks.set([]);
     }
 
     if (this.searchDebounceTimer) {

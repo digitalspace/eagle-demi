@@ -190,11 +190,11 @@ function transformRecord(record, projectLookup) {
 }
 
 /**
- * A chunk of extracted document text.
+ * A chunk of extracted document text — the unit Deep Search matches on.
  *
- * No chunks exist yet — extraction has never run, and `document_chunks` is indexed but never
- * queried (Deep Search is metadata-only). Kept so the pipeline is complete when extraction
- * lands, and so the sync does not silently skip a schema.
+ * Chunks arrive via POST /documents/:id/chunks and are queried as `dataset=DocumentChunk`.
+ * Expect roughly 50 per document, so this runs a few million times per full sync: keep it
+ * allocation-light and never let it reach back into Cosmos.
  */
 function transformDocumentChunk(chunk, projectLookup, documentLookup) {
   const projectId = str(chunk.projectId);
@@ -228,7 +228,8 @@ function transformDocumentChunk(chunk, projectLookup, documentLookup) {
     ...(str(parent && (parent.displayName || parent.documentFileName)) &&
       { documentName: str(parent.displayName || parent.documentFileName) }),
     ...(projectMeta && str(projectMeta.name) && { projectName: str(projectMeta.name) }),
-    ...(projectMeta && projectMeta.centroid && { centroid: projectMeta.centroid }),
+    // No centroid: nothing geo-searches chunks, and a stored-but-unused pair of floats is
+    // multiplied by three million rows.
     allowed_roles: constrainToProject(inherited, projectMeta)
   };
 }

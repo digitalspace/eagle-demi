@@ -1,5 +1,5 @@
 import { Injectable, signal, computed, effect, untracked, inject } from '@angular/core';
-import { Project, Document } from '../models/registry.models';
+import { Project, Document, DocumentChunk } from '../models/registry.models';
 import { MOCK_PROJECTS, MOCK_DOCUMENTS } from '../mocks/mock-registry.data';
 import { ConfigService, AppConfig } from './config.service';
 
@@ -71,6 +71,9 @@ export class RegistryStateService {
   // Datasets (using Signals - null representing loading sentinel)
   projects = signal<Project[] | null>(null);
   documents = signal<Document[] | null>(null);
+  // Matches inside extracted document TEXT — this is what makes Deep Search "deep" rather than
+  // a metadata search. Populated only when there is a query; null is the loading sentinel.
+  documentChunks = signal<DocumentChunk[] | null>(null);
 
   // Selected Items (using Signals)
   selectedProject = signal<Project | null>(null);
@@ -899,6 +902,9 @@ export class RegistryStateService {
       console.log('[Registry] Standalone demo mode active. Loading mock dataset.');
       this.projects.set(buildMockProjects());
       this.documents.set(this.mockDocuments);
+      // No mock chunks: extracted text has no fixture, and [] reads as "none" rather than
+      // hanging on the loading sentinel forever.
+      this.documentChunks.set([]);
       return;
     }
 
@@ -936,6 +942,38 @@ export class RegistryStateService {
       if (!resDoc.ok) throw new Error(`Documents API returned status ${resDoc.status}`);
       const apiDocuments = await resDoc.json();
       resultsDoc = apiDocuments[0]?.searchResults || [];
+
+      // Full-text matches from inside the documents. Only meaningful with a query, and a failure
+      // here must not take the whole page down — metadata results are still worth showing.
+      if (q) {
+        this.documentChunks.set(null);
+        try {
+          const chunkParams = `dataset=DocumentChunk&pageSize=50&keywords=${encodeURIComponent(q)}&fuzzy=true`;
+          const resChunk = await this.fetchWithRetry(`${basePath}/search?${chunkParams}`);
+          if (resChunk.ok) {
+            const apiChunks = await resChunk.json();
+            const resultsChunk = apiChunks[0]?.searchResults || [];
+            this.documentChunks.set(resultsChunk.map((c: any) => ({
+              id: String(c._id),
+              documentId: String(c.documentId || ''),
+              projectId: c.project || '',
+              projectName: c.projectName || 'Associated Project',
+              documentName: c.documentName || 'Untitled Document',
+              documentType: c.documentType || 'PDF Document',
+              pageNumber: Number(c.pageNumber) || 0,
+              content: c.content || '',
+              snippet: c.snippet || ''
+            })));
+          } else {
+            this.documentChunks.set([]);
+          }
+        } catch (chunkErr) {
+          console.warn('[Registry] Full-text chunk search failed:', chunkErr);
+          this.documentChunks.set([]);
+        }
+      } else {
+        this.documentChunks.set([]);
+      }
 
       const resultsProj = apiProjects[0]?.searchResults || [];
 

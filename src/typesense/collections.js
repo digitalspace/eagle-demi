@@ -61,24 +61,33 @@ const PROJECT_SCHEMA = {
   ],
 };
 
+// Roughly 50 chunks per document, so this collection is ~3M rows against a ~60k-row `documents`
+// collection — two orders of magnitude more. Typesense holds its index in RAM, so every `index`,
+// `facet`, `sort` and `range_index` flag here is paid three million times over.
+//
+// Only `content` (query_by), `allowed_roles` (filter_by) and `documentId` (chunk cleanup on
+// delete) are ever searched — see the DocumentChunk branch of src/controllers/search.js, which
+// passes no sort_by and no facet_by. Everything else is display data the hit already carries, so
+// it is stored and returned but not indexed. Re-adding a flag is one line and takes effect on the
+// next full sync, so nothing here is a one-way door.
 const DOCUMENT_CHUNKS_SCHEMA = {
   name: 'document_chunks',
   fields: [
     { name: 'id',           type: 'string' },
     { name: 'content',      type: 'string',  index: true },
     { name: 'documentId',   type: 'string',  facet: true },
-    { name: 'projectId',    type: 'string',  facet: true },
-    { name: 'pageNumber',   type: 'int32',   sort: true },
-    { name: 'documentType', type: 'string',  facet: true,  index: true,  optional: true },
-    { name: 'milestone',    type: 'string',  facet: true,  index: true,  optional: true },
-    { name: 'datePosted',   type: 'int64',   sort: true,   range_index: true,  optional: true },
-    { name: 'region',       type: 'string',  facet: true,  optional: true },
+    { name: 'projectId',    type: 'string',  index: false, optional: true },
+    { name: 'pageNumber',   type: 'int32',   index: false, optional: true },
+    { name: 'documentType', type: 'string',  index: false, optional: true },
+    { name: 'milestone',    type: 'string',  index: false, optional: true },
+    { name: 'datePosted',   type: 'int64',   index: false, optional: true },
+    { name: 'region',       type: 'string',  index: false, optional: true },
     { name: 'chunkIndex',   type: 'int32',   index: false, optional: true },
-    { name: 'documentName', type: 'string',  index: true,  sort: true,   optional: true },
-    { name: 'projectName',  type: 'string',  index: true,  optional: true },
+    { name: 'documentName', type: 'string',  index: false, optional: true },
+    { name: 'projectName',  type: 'string',  index: false, optional: true },
     { name: 'allowed_roles',  type: 'string[]', facet: true,  optional: true },
-    { name: 'centroid',       type: 'geopoint',              optional: true },
-    { name: 'embedding',      type: 'float[]', num_dim: 768, optional: true },
+    // No `centroid` and no `embedding`: nothing geo-searches chunks, and an unpopulated
+    // float[768] is a 3 KB/row liability the moment anyone fills it in — 9 GB across the corpus.
   ],
 };
 

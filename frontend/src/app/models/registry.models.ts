@@ -35,3 +35,19 @@ export interface Document {
   gatingState: 'admitted' | 'staged';
   textSnippet: string;
 }
+
+/**
+ * A passage of extracted text from inside a document — the unit Deep Search matches on.
+ * `snippet` is Typesense's highlighted span; `content` is the whole passage it came from.
+ */
+export interface DocumentChunk {
+  id: string;
+  documentId: string;
+  projectId: string | number;
+  projectName: string;
+  documentName: string;
+  documentType: string;
+  pageNumber: number;
+  content: string;
+  snippet: string;
+}

@@ -67,4 +67,30 @@ async function deleteFromIndex(collection, documentId) {
   }
 }
 
-module.exports = { getClient, deleteFromIndex };
+/**
+ * Remove every indexed chunk of a document in one call.
+ *
+ * By filter rather than by id: a document has an unbounded number of chunks and their ids are only
+ * derivable from data that has just been deleted from Cosmos. Best-effort like deleteFromIndex —
+ * the nightly full sync reconciles via alias swap, so this must not fail a successful delete.
+ *
+ * @returns {number} chunks removed, or 0 if the call failed or nothing was indexed.
+ */
+async function deleteChunksForDocument(documentId) {
+  try {
+    const result = await getClient()
+      .collections('document_chunks')
+      .documents()
+      .delete({ filter_by: `documentId:=${String(documentId)}` });
+    return (result && result.num_deleted) || 0;
+  } catch (err) {
+    if (err && (err.httpStatus === 404 || err.name === 'ObjectNotFound')) return 0;
+    console.warn(
+      `[Typesense] Could not remove chunks for document ${documentId} ` +
+      `(${err.message}); the nightly full sync will reconcile them.`
+    );
+    return 0;
+  }
+}
+
+module.exports = { getClient, deleteFromIndex, deleteChunksForDocument };
