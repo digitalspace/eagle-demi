@@ -28,6 +28,13 @@ def package_api(repo_root, zip_path):
             for file in files:
                 if any(file.endswith(ext) for ext in exclude_extensions):
                     continue
+                # Never ship .env. App settings supply every variable in Azure, so a packaged .env
+                # is pure liability: it carried MONGODB_PASSWORD, TYPESENSE_API_KEY, MINIO_SECRET_KEY
+                # and DOCLING_API_KEY into /home/site/wwwroot/.env world-readable. Matched at every
+                # depth, not just the repo root, and by name rather than extension — ".env" has no
+                # extension to filter on. The CI workflows already do this; this is the missing half.
+                if file == ".env" or file.startswith(".env."):
+                    continue
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, repo_root)
                 z.write(full_path, rel_path)
