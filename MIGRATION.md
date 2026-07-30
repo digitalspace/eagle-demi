@@ -139,11 +139,38 @@ no-ACL tier below.
 
 ### A. Extraction — in progress 2026-07-30
 
-#### 🛑 STOP — the deployed API is running the OLD chunker (found 2026-07-30, measured on live dev)
+#### ✅ RESOLVED 2026-07-30 — old chunker redeployed, stale chunks purged
 
-**`demi-api-dev` has never been redeployed with the accumulating chunker.** The running backfill is
-writing per-paragraph chunks, and the numbers below that depend on `TARGET_CHUNK_SIZE` are
-projections of code that is not in production.
+`4cf1c71` is deployed to `demi-api-dev` (Kudu `status: 4`), `stop`/`start` applied. Verified by
+**content**, not mtime — the zip carries source mtimes, which is what made the original diagnosis
+need a content check in the first place:
+
+| Check | Result |
+|---|---|
+| `grep -c TARGET_CHUNK_SIZE wwwroot/src/chunker.js` | **3** (was 0) |
+| `wwwroot/src/config.js` | `targetChunkSize` present, default 2500 |
+| `wwwroot/.env` | **absent** — the packaging leak is closed |
+| chunks in Cosmos | **0** |
+| documents `contentExtracted: true` | **0** · `false`: **60,578** — the whole corpus is back in the work list |
+| Typesense `document_chunks` | **0** |
+
+Purge ran via `src/scripts/purge-extraction.js` (dry run first): **187 documents, 9,500 chunks, 0
+failures**, reconciling exactly with both the independently-reported 187 and the 9,500 counted in
+Typesense. `_purgewrap.js` is left in `wwwroot` alongside `_syncwrap.js` for a re-run.
+
+**`config-zip` merges rather than clean-deploys** — `_syncwrap.js` survived the redeploy. Worth
+knowing before anyone plans around losing it; equally, a file deleted from the repo will **not**
+disappear from `wwwroot` on deploy.
+
+**Re-extraction is a real reconversion, not a replay.** None of the 187 documents have markdown on
+disk — the phase-0 design posted inline and never wrote `out/*.md` — so those documents go back
+through the GPU rather than being re-posted from cache.
+
+The original finding, kept because the reasoning is what justifies the corpus sizing below:
+
+**`demi-api-dev` had never been redeployed with the accumulating chunker.** The backfill was
+writing per-paragraph chunks, and the numbers below that depend on `TARGET_CHUNK_SIZE` were
+projections of code that was not in production.
 
 Verified over the App Service SSH tunnel:
 
@@ -185,10 +212,8 @@ The "~1.9M chunks is 5-6 GB and needs 4.0 vCPU / 8.0Gi" figure further down assu
 chunker. On what is actually deployed the row count is ~4.8x that, and per-chunk overhead clears
 the 8 GiB Consumption ceiling before any text is counted.
 
-**Fix now, not later.** A chunker change orphans every chunk already written (chunk ids derive from
-the split), which is the argument for doing it on day 0 rather than day 7. Deploy `092c0d4`, drop
-the chunks written so far, and reset `contentExtracted`/`contentPageCount`/`contentExtractedAt` on
-those documents so they re-enter the work list.
+**Fixed on day 0 rather than day 7** — a chunker change orphans every chunk already written, since
+chunk ids derive from the split. Done: see the RESOLVED table above.
 
 **Two corrections to the paragraph above, verified 2026-07-30 11:55 local.** They make the fix
 cheaper, not more expensive:
@@ -197,7 +222,9 @@ cheaper, not more expensive:
   stamped `2026-07-30T17:0x` UTC — this morning's phase-0 design, which posted each document as it
   converted. The current split-phase backfill has ingested **nothing**: `sent/`, `dead/` and
   `ingest.jsonl` do not exist on the extraction host. So there is no "0.3% done" to preserve and
-  nothing to restart — dropping all 187 costs one re-ingest of markdown that is already on disk.
+  nothing to restart. **Correction to an earlier version of this line: the markdown is NOT on
+  disk** — phase 0 posted inline and never wrote `out/*.md`, so the 187 go back through the GPU as
+  a real reconversion rather than a replay. Still the right call at 187 of 60,391, but not free.
 - **The extraction host must not be touched.** Its `worker.py` is mid-change (a routing stage that
   keeps digital PDFs off the GPU) and a validation run is live on it right now.
   `gpu-extractor.service` is stopped **deliberately**, not crashed.
@@ -206,8 +233,8 @@ cheaper, not more expensive:
 
 | Owner | Scope |
 |---|---|
-| Azure / API session | Deploy `092c0d4` (`stop`+`start`, not `restart`), purge the 187 documents' chunks and reset their extraction flags, commit the `FACET_BY.DocumentChunk` fix |
-| Extraction session | LXC 109 only — `worker.py`, `ingest.py`, `gpu-extractor.service`. Ingest stays stopped until the redeploy lands |
+| Azure / API session | ✅ **done 2026-07-30.** Deployed `4cf1c71` (`stop`+`start`), purged 187 documents / 9,500 chunks and reset their extraction flags, committed the `FACET_BY.DocumentChunk` fix — plus the `.env` packaging fix found on the way |
+| Extraction session | LXC 109 only — `worker.py`, `ingest.py`, `gpu-extractor.service`. **Ingest is now unblocked** |
 
 The redeploy is the **gate on starting ingest at all**: on the deployed chunker the corpus is
 ~9.1M chunks and per-chunk overhead alone clears the 8 GiB Consumption ceiling, so starting ingest
@@ -308,12 +335,28 @@ Typesense RAM and the Azure Files share. The backfill's own sync is therefore a 
 recipe as the Cosmos scripts above), with `nightlySyncTimer` disabled for the duration. Making the
 *recurring* sync viable at this corpus size is open follow-up work.
 
-**Also corrected (uncommitted, not deployed):** `FACET_BY.DocumentChunk` in
+#### Secret rotation — split by blast radius, not deferred wholesale
+
+`/home/site/wwwroot/.env` shipped in every deploy from 2026-07-24 until `639269b`, mode
+`rwxrwxrwx`. `scripts/package-api.py` had no `.env` exclusion; the CI workflows did, but CI is dead
+on the missing `AZURE_CLIENT_ID`, so the script was the only live path. **Never committed**
+(`.gitignore:5`, confirmed across all history) — a packaging leak, not a repo one — and no
+entrypoint loads `dotenv`, so the file was inert on disk. All four settings still exist on
+`demi-api-dev`: `MINIO_SECRET_KEY`, `TYPESENSE_API_KEY`, `DOCLING_API_KEY`, `ADMIN_API_KEY`.
+
+| Key | When | Why |
+|---|---|---|
+| `DOCLING_API_KEY` | **now** | It was a live *inbound* sysadmin credential until `4bddede` split `ADMIN_API_KEY` out. The extraction host does not use it |
+| `MINIO_SECRET_KEY` | **hold until extraction finishes** | It signs the presigned download URLs the extraction host fetches document bytes with — rotating mid-run breaks the backfill |
+| `TYPESENSE_API_KEY` | whenever | |
+| `MONGODB_PASSWORD` | whenever | Legacy layer only; goes away entirely at Phase 8 |
+
+**Also corrected:** `FACET_BY.DocumentChunk` in
 `src/typesense/collections.js` read `'documentType,projectId,region'` — all three are
 `index: false` on `DOCUMENT_CHUNKS_SCHEMA`, and Typesense rejects a `facet_by` naming an unindexed
 field, failing the whole search. It never fired only because the DocumentChunk branch of
 `search.js` passes no `facet_by`, so the first person to wire faceting up would have inherited the
-break. Now `''`, with the reasoning inline. The only facetable fields on that schema are
+break. Now `''` (`7946942`), with the reasoning inline. The only facetable fields on that schema are
 `documentId` and `allowed_roles`, neither of which is a user-facing facet.
 
 **Fixed on the way (both live on dev):**
