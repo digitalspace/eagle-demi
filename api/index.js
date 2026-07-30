@@ -20,7 +20,14 @@ async function handleExpress(request, context) {
       }
 
       // 1. Construct Node.js Readable stream as req
+      //
+      // autoDestroy:false is load-bearing. Express reparents this object onto
+      // http.IncomingMessage.prototype, whose _destroy() calls `this.socket.destroy()`. With the
+      // default autoDestroy, reaching EOF fires that from a microtask the try/catch below cannot
+      // see — so every request Express parsed a body for killed the worker and the Functions host
+      // answered 500 with an empty body. GET was unaffected only because nothing read the stream.
       const req = new Readable({
+        autoDestroy: false,
         read() {
           if (bodyBuffer) {
             this.push(bodyBuffer);
@@ -36,14 +43,29 @@ async function handleExpress(request, context) {
         headers[key.toLowerCase()] = value;
       }
 
+      // A real EventEmitter, not a bare object: on-finished (used by body-parser's error path,
+      // and by anything else that wants to know when a request ended) calls socket.on(), and
+      // Node's IncomingMessage internals call socket.destroy()/setTimeout(). A plain
+      // {remoteAddress} throws on all three, and always from somewhere uncatchable.
+      const socket = Object.assign(new EventEmitter(), {
+        remoteAddress: headers['x-forwarded-for'] || '127.0.0.1',
+        readable: false,
+        writable: false,
+        destroyed: false,
+        destroy() { this.destroyed = true; },
+        setTimeout() { return this; },
+        unref() { return this; },
+        ref() { return this; }
+      });
+
       Object.assign(req, {
         method: request.method,
         url: urlObj.pathname + urlObj.search,
         originalUrl: urlObj.pathname + urlObj.search,
         headers: headers,
         query: Object.fromEntries(urlObj.searchParams.entries()),
-        socket: { remoteAddress: headers['x-forwarded-for'] || '127.0.0.1' },
-        connection: { remoteAddress: headers['x-forwarded-for'] || '127.0.0.1' }
+        socket,
+        connection: socket
       });
 
       // 2. Construct ServerResponse event emitter as res
