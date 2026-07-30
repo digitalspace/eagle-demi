@@ -89,6 +89,19 @@ async function upsert(document) {
  * Record the outcome of an extraction run. Partial update: it must not disturb the ACL,
  * publication state or anything the seeders wrote.
  */
+/**
+ * Bulk write for the seeder. All documents must belong to the SAME project, since that is the
+ * partition key — the seeder groups by project before calling this.
+ */
+async function bulkUpsertForProject(projectId, docs) {
+  const operations = docs.map(resourceBody => ({
+    operationType: 'Upsert',
+    partitionKey: String(projectId),
+    resourceBody
+  }));
+  return cosmos.bulk(CONTAINER, operations);
+}
+
 async function patchExtraction(id, projectId, fields) {
   const ops = Object.entries(fields).map(([key, value]) => ({
     op: 'set',
@@ -139,6 +152,7 @@ module.exports = {
   countVisible,
   getById,
   upsert,
+  bulkUpsertForProject,
   patchExtraction,
   setPublished,
   deleteById

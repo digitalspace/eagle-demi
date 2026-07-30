@@ -236,13 +236,29 @@ async function remove(containerName, id, partitionKey) {
 }
 
 /**
+ * Cosmos rejects a bulk request with more than 100 operations. Chunking is done HERE rather than
+ * at each call site because the seeder handles a project with 8,000+ documents in one partition —
+ * a caller that forgot would fail only on the large projects, i.e. in production and not in a
+ * test.
+ */
+const BULK_MAX_OPERATIONS = 100;
+
+/**
  * Bulk write. All operations must target the SAME partition key value.
- * Used by the seeders; batches of ~100 keep each request well inside limits.
+ *
+ * Splits into 100-operation requests and concatenates the responses, so the return value has one
+ * entry per input operation in input order regardless of how it was chunked.
  */
 async function bulk(containerName, operations) {
   const container = getContainer(containerName);
   if (!container || !operations.length) return [];
-  return container.items.bulk(operations);
+
+  const results = [];
+  for (let i = 0; i < operations.length; i += BULK_MAX_OPERATIONS) {
+    const chunk = operations.slice(i, i + BULK_MAX_OPERATIONS);
+    results.push(...await container.items.bulk(chunk));
+  }
+  return results;
 }
 
 /**
@@ -257,6 +273,7 @@ async function ping() {
 
 module.exports = {
   DATABASE_ID,
+  BULK_MAX_OPERATIONS,
   initCosmosClient,
   getDatabase,
   getContainer,
