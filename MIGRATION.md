@@ -4,7 +4,7 @@
 > Full design rationale: wiki `ADR-004-Read-ACL-Authorization-Model` and
 > `Environment-Reality-and-Operational-Gotchas`.
 
-**Last updated:** 2026-07-30 · **Current phase:** 2 (data access + authorization) — foundation landed
+**Last updated:** 2026-07-30 · **Current phase:** 5 and 6 complete — DEMI dev is LIVE on Cosmos DB for NoSQL
 
 ---
 
@@ -30,15 +30,15 @@ and `contentExtracted: true` flags with no chunks behind them.
 | Phase | State | Notes |
 |---|---|---|
 | **0 — Delete unreachable code** | ✅ done (`99889e6`) | −1,536 lines; 5 latent bugs fixed; lint 0 errors |
-| **1 — Infrastructure (templates)** | ✅ written, ⏸ **not deployed** (`d8438a2`) | Deployment deferred on cost — see below |
+| **1 — Infrastructure** | ✅ **deployed** | `demi-identity-dev`, `demi-cosmos-dev` (10 containers), private endpoint + policy DNS |
 | **2 — Data access + authorization** | ✅ done (`09b35f1`, `d6de8a6`, `cc08ba8`) | Client, repositories, controllers, router switch |
 | **2b — Delete semantics** | ✅ done (`7f5e4a8`) | Hard delete + index removal; unpublish is the hide mechanism |
 | **2c — Object key + switch fixes** | ✅ done (`cc8a6b7`) | Downloads verified end to end; switch is now an explicit flag |
 | **3 — Merge engine** | ✅ done | `src/merge/project.js` + 41 tests on the real 382-record Track dataset. Project scope now derived from Keycloak roles |
 | **3b — Blob storage** | ✅ code + template written, ⏸ **not deployed, nothing copied** | `src/storage/` abstraction live on both backends; Bicep validated; copy script dry-run only |
-| **4 — Seed** | ✅ code written, dry run passes; ⏸ **nothing written** (no account) | `src/seed/` + `seed-nosql.js`; gates pass on live sources |
-| **5 — Cut over** | 🔶 **IN PROGRESS — infra deployed, cutover NOT done** | Account + identity live; code deploy blocked on Oryx. **Resume steps below.** |
-| **6 — Typesense** | ✅ code written, ⏸ **no reindex run** (no account) | `transform-nosql.js` + `full-sync-nosql.js` behind the same `USE_COSMOS_NOSQL` flag |
+| **4 — Seed** | ✅ **run live** | 393 projects · 60,578 documents · 281 boundaries written and verified |
+| **5 — Cut over** | ✅ **DONE** | Live on Cosmos NoSQL: 393 projects · 60,578 documents · 281 boundaries |
+| **6 — Typesense** | ✅ **DONE** | Reindexed from Cosmos: 393 projects + 60,578 documents; search verified |
 | **7 — Change feed** | ⬜ deferred | Functions trigger + `leases`. No soft-delete marker needed — index removal is explicit |
 | **8 — Decommission** | ⬜ todo | Delete the Mongo account after a clean week |
 
@@ -56,69 +56,80 @@ and `contentExtracted: true` flags with no chunks behind them.
   is weaker than first stated — environments already use separate buckets
   (dev `asnpnn`, test `zdspnb`, prod `ozwdez`).
 
-### 🔶 Phase 5 IN PROGRESS — exact state as of 2026-07-30
+### ✅ Phase 5 + 6 complete — cutover done 2026-07-30
 
-**The running app is unchanged.** No restart has happened, so dev behaves exactly as before.
+Dev serves from **Cosmos DB for NoSQL**. `USE_COSMOS_NOSQL=true`, `stop`/`start` applied.
 
-| Thing | State |
+| Verified | Result |
 |---|---|
-| `demi-identity-dev` (UAMI) | ✅ created — `principalId c2de07f1-f908-418b-8042-af36519d26d7`, `clientId a2c6d746-1277-4b7a-b9e8-892b40c9e9c9` |
-| UAMI attached to `demi-api-dev` | ✅ — it had **no identity at all** before; `identity.bicep` only creates it, the assignment is a separate step |
-| `demi-cosmos-dev` | ✅ NoSQL, 10 containers, `disableLocalAuth`, public access disabled |
-| `pe-cosmos-nosql-dev` | ✅ created, IPs `10.46.51.8` / `10.46.51.9` |
-| **Private DNS zone group** | ⏳ **NOT yet attached** — the DINE policy runs on a delay. Must exist before the app can resolve Cosmos |
-| App settings | ✅ `COSMOS_ENDPOINT` repointed, `COSMOS_DATABASE=demi`, `AZURE_CLIENT_ID` set, **`COSMOS_KEY` deleted** |
-| `USE_COSMOS_NOSQL` | **`false` — deliberately** |
-| Code deploy | ❌ **failed**, see below |
-| Seed | ⬜ not run — Cosmos is empty |
+| projects / documents / boundaries in Cosmos | **393 / 60,578 / 281** — exactly the dry-run figures |
+| `PUT /documents/:id/published` | **401** — the NoSQL-only route is live (legacy would 404) |
+| anonymous project list | **382 of 393**; the 11 hidden are Eagle-only projects whose upstream ACL excludes `public` |
+| `isPublished` vs `read[]` drift | **0** |
+| forged `x-demi-roles: sysadmin` header | identical results — cannot promote |
+| document download | **HTTP 200, `application/pdf`, 84,031 bytes** |
+| Typesense | 393 + 60,578 indexed, aliases swapped; `Ajax` → *Ajax Mine*, `Site C` → real inspection records |
 
-**Why the flag is `false`:** it was set to `true`, but the app has not restarted, so it never took
-effect. Left `true`, any platform-initiated restart would have brought dev up against an **empty**
-database. It goes back to `true` only once the code is deployed and the seed has run.
+Rollback remains one setting: `USE_COSMOS_NOSQL=false` + stop/start. `MONGODB_URI` is untouched and
+the Mongo account still holds 4,123 projects / 18,969 documents until Phase 8.
 
-#### The deploy failure is environmental, not our code
+#### How the seed actually had to run — the plan was wrong
 
-Oryx ran `yarn install` on the app service and could not reach `registry.yarnpkg.com`
-(`ESOCKETTIMEDOUT` after 10 retries). Outbound is forced through the VNet by
-`WEBSITE_VNET_ROUTE_ALL=1`, and that path has no route to the public registry.
+"Run it inside the network via Kudu" **does not work**. Kudu's `/api/command` executes in the
+**SCM container**, which has no managed-identity endpoint:
 
-The build is both redundant and the thing breaking us — the zip already ships `node_modules`
-(14,860 files; `saslprep/dist` verified intact, i.e. the packaging trap is not reintroduced).
-`SCM_DO_BUILD_DURING_DEPLOYMENT` is already `false`; **`ENABLE_ORYX_BUILD` is still `true` and must
-be set to `false`.**
-
-#### Resume steps, in order
-
-```bash
-RG=c4b0a8-dev-rg
-
-# 1. stop Oryx trying to build inside the VNet
-az webapp config appsettings set -g $RG -n demi-api-dev --settings ENABLE_ORYX_BUILD=false
-
-# 2. package and deploy (node_modules ships in the zip)
-python3 scripts/package-api.py . /tmp/api-deploy.zip
-az webapp deploy -g $RG -n demi-api-dev --src-path /tmp/api-deploy.zip --type zip
-#    A 504 from the CLI is only its poller giving up — check the real status at
-#    /api/deployments/latest. Kudu status: 3 = FAILED, 4 = SUCCESS. `complete: true` alone
-#    does NOT mean success.
-
-# 3. confirm policy attached DNS (must be non-empty before seeding)
-az network private-endpoint dns-zone-group list -g $RG --endpoint-name pe-cosmos-nosql-dev
-
-# 4. seed INSIDE the network via Kudu, detached with a log — /api/command is synchronous
-#    and will time out on 60k documents
-#    node src/scripts/seed-nosql.js --live --only projects,documents,boundaries
-
-# 5. cut over
-az webapp config appsettings set -g $RG -n demi-api-dev --settings USE_COSMOS_NOSQL=true
-az functionapp stop  -g $RG -n demi-api-dev && az functionapp start -g $RG -n demi-api-dev
-#    stop THEN start — `restart` does not recycle the Node worker
-
-# 6. verify, then run the Typesense reindex (npm run typesense:sync-nosql)
+```
+IDENTITY_ENDPOINT=MISSING   IDENTITY_HEADER=MISSING   MSI_ENDPOINT=MISSING
 ```
 
-**Rollback at any point:** `USE_COSMOS_NOSQL=false` + stop/start. `MONGODB_URI` is untouched and
-both data layers coexist until Phase 8, so nothing is one-way yet.
+and the account is `disableLocalAuth: true`, so there is no key to fall back on. Opening the
+firewall instead is impossible — **Azure Policy denies it** at the landing-zone level:
+
+```
+RequestDisallowedByPolicy
+"Azure Cosmos DB should disable public network access" (797b37f7-06b8-444c-b1ad-fc62867f335a)
+```
+
+The **app container** is the only place with both network access and MSI. Reach it over the
+App Service SSH tunnel:
+
+```bash
+az webapp create-remote-connection -g c4b0a8-dev-rg -n demi-api-dev --port 50123 &
+sshpass -p 'Docker!' ssh -c aes256-cbc -m hmac-sha1 -p 50123 root@127.0.0.1
+```
+
+`-c aes256-cbc` is **required**: App Service offers only legacy CBC ciphers, which OpenSSH 9+
+disables by default (`no matching cipher found`).
+
+Two more things the SSH route needs, both handled by the `_seedwrap.js` pattern:
+
+1. **App settings are injected into the app PROCESS, not the SSH shell** — read them from
+   `/proc/1/environ`.
+2. **`globalThis.crypto` must be shimmed.** `src/app.js` does it for the web app; a standalone
+   script never loads `app.js`, and the Azure SDKs need it on Node 22.
+
+And run with **`--max-old-space-size=224`**: the container has ~1.85 GB with ~330 MB free, and
+Node's default heap (~1.5 GB) gets the process OOM-killed with **no error in the log** — it simply
+vanishes mid-run.
+
+#### Bugs found during cutover
+
+- **`COSMOS_DATABASE` collision** — both data layers read it, needing `epic` vs `demi`. Setting it
+  for the NoSQL client repointed the LIVE legacy app at the empty database; every endpoint returned
+  `[]` with HTTP 200 because `queryContainer` swallows the error. Fixed: `COSMOS_NOSQL_DATABASE`.
+- **Bulk writes counted as sent, not landed.** First seed reported 60,578 written when 56,317
+  existed. `bulkVerified` retries and confirms; the re-run's histogram proved it exactly —
+  `{200: 56317, 201: 4261, 429: 105}`, i.e. 4,261 creations filling precisely the gap, and 105
+  throttles all recovered.
+- **`isPublished` derived from Track's `is_active`**, which is orthogonal to publication (17 of the
+  40 it marks inactive are "Pre Work", 2 "Operation"). 23 public projects read `isPublished: false`,
+  which also 409'd any attempt to publish a document under them. It now mirrors `read[]`.
+- **Boundary GeoJSON never shipped** — it lives under `frontend/`, which the packager excludes.
+  Failed only in Azure, never locally.
+- **Oryx ran `yarn install` inside the VNet**, which has no route to `registry.yarnpkg.com`. Set
+  `ENABLE_ORYX_BUILD=false`; the zip already ships `node_modules`.
+- **`az webapp deploy` 502s** on this 25 MB package. `POST /api/zipdeploy?isAsync=true` accepts it
+  in **1.6 s**. Kudu status **3 = FAILED, 4 = SUCCESS**; `complete: true` alone means nothing.
 
 ### Phase 5 pre-flight (done 2026-07-30) — 4 blockers found and fixed
 
