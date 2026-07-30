@@ -1,189 +1,222 @@
 # eagle-demi
 
-DEMI (Document Extraction & Machine Intelligence) for EPIC on Azure Serverless. 
+DEMI (Document Extraction & Machine Intelligence) for EPIC, on Azure serverless.
 
 This repository houses:
-1. **demi-api**: Central, authoritative REST API and geospatial search engine for projects, documents, and administrative boundaries running as an Azure Function App (`@azure/functions` v4 on Node.js 22).
-2. **eagle-demi-worker**: Background worker calling `docling-serve` for PDF/DOCX page-level chunk extraction.
-3. **demi-frontend**: Angular 19 document intake frontend deployed to Azure App Service / Static Web App.
+
+1. **demi-api** — the authoritative REST API and geospatial search service for projects, documents,
+   chunks and administrative boundaries, running as an Azure Function App (`@azure/functions` v4 on
+   Node.js 22).
+2. **demi-frontend** — the Angular document intake and search frontend, deployed to an Azure Web
+   App.
+
+> **Status: dev only.** No test or prod environment exists yet. `MIGRATION.md` is the living
+> source of truth for architecture, environment reality and operational gotchas — when this file
+> and that one disagree, `MIGRATION.md` is right.
 
 ---
 
-## Central API Server (demi-api)
+## Local development
 
-The Node.js server acts as the master directory of truth. It manages projects, documents, and administrative regions in Cosmos DB for NoSQL.
-
-### Setup and Local Execution
-
-1. Install dependencies:
-   ```bash
-   yarn install
-   ```
-
-2. Start the API Server locally (runs on port `3000` by default):
-   ```bash
-   yarn start
-   ```
-
-3. Seed administrative boundaries and retroactively tag existing projects:
-   ```bash
-   node src/scripts/seed-boundaries.js
-   ```
-
-4. Run NRPTI Compliance & Enforcement sync (merges with existing projects or auto-seeds new ones):
-   ```bash
-   NODE_PATH=node_modules node -r dotenv/config src/scripts/sync-nrpti.js
-   ```
-
-5. View Swagger API documentation:
-   * **URL**: `http://localhost:3000/api-docs`
-
----
-
-## Multi-Source Project Integration & Auto-Seeding
-
-DEMI uses a multi-source hybrid project model (`sources.*` namespace):
-* **`sources.track`**: Master EAO project attributes from EPIC.track (`epictrack-api`).
-* **`sources.eagle`**: Legacy EAGLE portal project records.
-* **`sources.nrpti`**: Public compliance & enforcement records from NRPTI API (`Order`, `Inspection`, `Ticket`, etc.).
-
-### NRPTI Reconciliation Workflow (`src/scripts/sync-nrpti.js`)
-1. **Matching**: NRPTI records match existing projects via `_epicProjectId`, exact name, or fuzzy normalized name (`normalizeProjectName`).
-2. **Auto-Seeding**: When an NRPTI record refers to a project not yet in DEMI, a new `Project` document is **auto-seeded** with `sources.nrpti` metrics and `sources.track: null`.
-3. **TRACK Reconciliation**: When TRACK syncs EAO metadata, it enriches any existing NRPTI-seeded project documents with `sources.track` attributes, completing the composite record while preserving all C&E record links.
-
----
-
-## Authentication & Authorization
-
-See [ADR-004: Read ACL Authorization Model](https://github.com/digitalspace/eagle-demi/wiki/ADR-004-Read-ACL-Authorization-Model) for the full rationale.
-
-### Authentication
-
-* **Keycloak (BC Gov loginproxy)**, realm `eao-epic`. Tokens are verified against JWKS with `RS256` pinned and the issuer checked — `src/helpers/auth.js`.
-* `KEYCLOAK_URL` / `KEYCLOAK_REALM` / `SSO_ISSUER` / `SSO_JWKSURI` **must** be set per environment (they are, in `azure/modules/api-web-app.bicep`). Without them the API falls back to the *dev* realm defaults in `src/config.js`.
-* **Service-to-service** calls use `X-Api-Key`, compared with `crypto.timingSafeEqual`. Keys come from configuration only — `config.doclingKey`, `DOCLING_API_KEY`, `ADMIN_API_KEY`. **Never hardcode a key literal**: this repository is public, so any literal in that list is a world-readable `sysadmin` credential.
-* Two middlewares: `middleware/auth.js` rejects (401/403); `middleware/passiveAuth.js` downgrades to anonymous but logs rejected credentials.
-
-### Authorization — the `read[]` ACL
-
-Records carry a `read[]` array of role names. A record is visible when `read[]` intersects the caller's roles. `isPublished` is kept as a mirror; `read[]` is authoritative.
-
-**All read paths must compose the visibility filter from `src/helpers/access.js`:**
-
-```js
-const { rolesFor, withReadFilter, canRead } = require('../helpers/access');
-
-const roles = rolesFor(req);                          // ['public'] + verified token roles
-const filter = withReadFilter(roles, { sector });     // combines with $and
-const rows = await Project.find(filter, { maxItemCount: 500 });
-
-// Point reads (findById) bypass the query filter — gate them explicitly:
-if (!canRead(doc, roles)) return res.status(403).json({ error: 'Access denied.' });
+```bash
+yarn install
+yarn start            # Express on :3000
 ```
 
-Privileged roles (`sysadmin`, `staff`, `demi-admin`) get an unfiltered `{}`. Roles are read **only** from the verified token (`req.user`), never from client-supplied headers or query parameters.
+Swagger: `http://localhost:3000/api-docs`
+
+Most database scripts cannot run from a laptop: Cosmos sits behind a private endpoint **and is
+keyless**, so they must execute inside the app container over the App Service SSH tunnel — not
+Kudu, whose SCM container has no managed-identity endpoint, and not by opening the firewall, which
+Azure Policy forbids. `MIGRATION.md` has the full recipe and the four things it needs.
+
+```bash
+npm run db:seed-nosql            # dry run by default; --live to write
+npm run db:purge-extraction      # dry run by default; --live to write
+npm run typesense:sync-nosql
+```
+
+---
+
+## Architecture
+
+| | |
+|---|---|
+| API | Azure Functions v4, Node 22, `Y1` Consumption, `expressApi` catch-all |
+| Database | **Azure Cosmos DB for NoSQL** (`@azure/cosmos`), account `demi-cosmos-dev` |
+| Search | Typesense on Azure Container Apps (`demi-typesense-dev`) |
+| Object store | `nrs.objectstore.gov.bc.ca`, bucket `asnpnn` (S3-compatible, `minio` client) |
+| Frontend | Angular, built to `frontend/dist`, served by `pm2 serve --spa` |
+| IaC | Bicep — `azure/main.bicep`, `azure/modules/` |
+
+**The database is keyless.** The account sets `disableLocalAuth`, so there is no connection key:
+auth is Entra managed identity via `AZURE_CLIENT_ID`, configured with `COSMOS_ENDPOINT` and
+`COSMOS_NOSQL_DATABASE`.
+
+**`COSMOS_DATABASE` belongs to the legacy MongoDB-API client** and must stay `epic`. The two data
+layers coexist behind `USE_COSMOS_NOSQL` until the Mongo account is decommissioned at Phase 8 — it
+is the rollback path. Consequently `src/db/cosmos.js`, `src/models/*.js`, `src/helpers/access.js`
+and the legacy controllers are all still present and still required; **do not delete them as dead
+code**, and note that NoSQL CRUD lives in `src/repositories/*`, not in `src/models/*`.
+
+Some notable implementation details:
+
+- **`api/index.js`** converts Azure Functions v4 `HttpRequest` objects into Node `Readable` streams
+  and hands them to Express directly, with no proxy adapter.
+- **`src/middleware/rate-limiter.js`** switches to `inlineCleanup` when `isServerless`, avoiding
+  `setInterval` timers that leak across execution freeze cycles.
+- **Nightly sync** is the Azure Functions timer `nightlySyncTimer`. It is currently disabled while
+  the chunk corpus is backfilled — see `MIGRATION.md` §A.
+- **GeoJSON is `[longitude, latitude]`**; the Typesense sync swaps to `[latitude, longitude]`.
+
+---
+
+## Text extraction and chunks
+
+Documents are converted to markdown **off-platform** and posted back:
+
+```
+POST /api/documents/:id/chunks     { markdown }  |  { error }
+```
+
+The server chunks the markdown (`src/chunker.js` is the only chunking implementation) and copies
+`read[]` from the **live** document, so an extraction host can never widen a document's visibility.
+Chunk ids are deterministic (`<documentId>::p<page>::c<index>`) and `chunks.replaceForDocument`
+reconciles, so the route is idempotent and an interrupted backfill simply restarts.
+
+**Nothing inside Azure extracts text today.** `src/extract.js` is the only in-repo docling client
+and PDF page-batching code and runs only under `require.main === module`; extraction for new
+projects is deliberately deferred, not cancelled. Do not delete it as dead code. `MIGRATION.md` §A
+has the reasoning and the pricing that deferred it.
+
+---
+
+## Authentication & authorization
+
+See [ADR-004: Read ACL Authorization Model](https://github.com/digitalspace/eagle-demi/wiki/ADR-004-Read-ACL-Authorization-Model)
+for the full rationale.
+
+**Authentication.** Keycloak (BC Gov loginproxy), realm `eao-epic`. Tokens are verified against
+JWKS with `RS256` pinned and the issuer checked (`src/helpers/auth.js`). `KEYCLOAK_URL`,
+`KEYCLOAK_REALM`, `SSO_ISSUER` and `SSO_JWKSURI` must be set per environment — they are, in
+`azure/modules/api-web-app.bicep`. Without them the API falls back to *dev* realm defaults.
+
+Service-to-service calls use `X-Api-Key`, compared with `crypto.timingSafeEqual`, against
+`ADMIN_API_KEY`. **Never hardcode a key literal** — this repository is public, so a literal there
+is a world-readable `sysadmin` credential. (`DOCLING_API_KEY` was exactly that until it was split
+out; it is now outbound-only and 401s inbound.)
+
+**Authorization — the `read[]` ACL.** Records carry a `read[]` array of role *types*. A record is
+visible when `read[]` intersects the caller's roles. `read[]` is authoritative; `isPublished` is a
+mirror of it, never an independent signal.
+
+```js
+const { resolveAccess, visibilityFor, canRead } = require('../helpers/access-sql');
+
+const access = resolveAccess(req);                 // tier + roles + projectScope
+const rows   = await documents.listVisible(access, { projectId });
+
+// Point reads bypass the query predicate — gate them explicitly:
+if (!canRead(doc, access, 'projectId')) return res.status(404).json({ error: 'Not found' });
+```
+
+A hidden record returns **404, not 403** — a 403 would confirm the id exists.
+
+Project scope is a second, orthogonal dimension: it arrives as Keycloak roles prefixed `project:`
+(`project:207`) and rides the partition key. `rolesFor()` strips `project:*` from the role list so
+a project id can never enter the `read[]` clause.
+
+`systemAccess()` is the only context that reads past ACLs (the Typesense sync). It takes no
+arguments, so it cannot be derived from a request, and it resolves *through* the same predicate
+rather than bypassing it.
 
 ### Query layer rules
 
-* `src/db/cosmos-nosql.js` takes **query specs** — `{query, parameters}` — and throws on anything else. There is deliberately no Mongo→SQL translator: one that handles most operators fails OPEN on the rest, which is how access control was disabled here previously. `BaseRepository` was deleted in Phase 2.
-* Counts must use the **same** filter as the read, or totals leak hidden records.
-* **Index before you sort.** Cosmos rejects `ORDER BY` on an unindexed path; add it to `azure/modules/cosmos-nosql.bicep` first. (The legacy Mongo layer has the same trap with `cursor.sort()`, where the error becomes an empty result set.)
+- `src/db/cosmos-nosql.js` takes **query specs** — `{query, parameters}` — and throws on anything
+  else. There is deliberately no Mongo→SQL translator: one handling most operators fails **open**
+  on the rest, which is how access control was disabled here once already.
+- Counts must use the **same** predicate as the read, or totals leak hidden records.
+- **Index before you sort.** Cosmos rejects `ORDER BY` on an unindexed path; add it to
+  `azure/modules/cosmos-nosql.bicep` first.
 
-### Backfill
+---
 
-Rows written before the ACL landed carry no `read[]`. `readFilter` has a documented legacy tier covering them. Run the backfill per environment, then remove that tier:
+## Document storage & downloads
+
+Always go through **`src/storage/`** — four operations (`getBuffer`, `getDownloadUrl`, `putFile`,
+`describe`). Never touch a backend client directly; reaching past this module previously produced
+two bugs at once.
+
+Backend is chosen by an explicit `STORAGE_BACKEND` (`minio` | `azure`); an unknown value throws at
+load. It is never inferred from whichever credentials happen to be present.
+
+MinIO settings: `MINIO_HOST`, `MINIO_BUCKET_NAME`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, plus
+**`MINIO_PORT=443`**, **`MINIO_USE_SSL=true`** and a pinned region — without an explicit region the
+SDK does a bucket-region lookup on every presign that hangs ~135 s before failing. Dev also needs
+**`MINIO_KEY_PREFIX=ozwdez`**: the bucket holds a nested copy of prod, so recorded keys sit one
+segment deeper. The prefix is applied inside the backend; callers pass the recorded `s3Key`.
+
+**Downloads:** `GET /api/documents/:id/download` returns a 5-minute presigned URL, gated by the
+same ACL as the metadata read — a caller who cannot see a document cannot fetch its bytes.
+
+---
+
+## Project data model
+
+Projects are a merge of two upstream sources, keyed by the Track project id:
+
+- **`sources.track`** — EAO project attributes from EPIC.track (`epictrack-api`), authoritative.
+- **`sources.eagle`** — legacy EAGLE portal records, which fill gaps Track does not carry.
+
+Track wins and Eagle fills gaps, via an explicit field map rather than an object spread — a spread
+overwrites with `undefined` and silently erases data. `src/merge/project.js` holds the rules and is
+pure, because merge bugs are silent.
+
+**Projects are never created from NRPTI.** Compliance records whose `_epicProjectId` does not
+resolve to a project already in the registry are dropped and counted, never given an invented
+parent. Auto-seeding them is what produced 3,382 synthetic project rows in the old database.
+
+---
+
+## Deployment
 
 ```bash
-node src/scripts/backfill-read-acl.js --dry-run   # counts only
-node src/scripts/backfill-read-acl.js
+./scripts/deploy-azure.sh all       c4b0a8-dev-rg    # API + frontend
+./scripts/deploy-azure.sh api       c4b0a8-dev-rg
+./scripts/deploy-azure.sh frontend  c4b0a8-dev-rg
 ```
 
-Cosmos sits behind a private endpoint **and is keyless**, so scripts must run inside the **app
-container** — not Kudu. Kudu's `/api/command` runs in the SCM container, which has no
-managed-identity endpoint, and Azure Policy forbids opening the firewall. Use the App Service SSH
-tunnel; see `MIGRATION.md` for the full recipe.
+GitHub Actions workflows exist for dev/test/prod (`.github/workflows/azure-deploy-*.yaml`) but
+**CI cannot currently authenticate** — `AZURE_CLIENT_ID` is missing from repo secrets. The script
+above is the working path.
+
+Things that will cost you time if you rediscover them:
+
+- **`az functionapp restart` does not recycle the Node worker.** Use `stop` then `start`.
+- **`ENABLE_ORYX_BUILD` must stay `false`** — Oryx runs `yarn install` inside the VNet, which has
+  no route to the registry. The zip already ships `node_modules`.
+- **Never ship `.env`.** App settings supply every variable in Azure.
+- **Verify a deploy by content, not mtime.** The package carries source mtimes, so an old file can
+  look freshly deployed.
 
 ---
 
-## Document Storage & Downloads
+## Frontend
 
-Binaries live in the BC Gov NRS object store — **`nrs.objectstore.gov.bc.ca`, bucket `asnpnn`** (S3-compatible, accessed with the `minio` client). Credentials come from the OpenShift secret `eagle-api-minio-keys` in namespace `6cdc9e-dev`.
+Angular app under `frontend/`, built to `frontend/dist`.
 
-Required settings: `MINIO_HOST`, `MINIO_BUCKET_NAME`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, plus **`MINIO_PORT=443`** and **`MINIO_USE_SSL=true`**. `config.minioRegion` is pinned deliberately — without an explicit region the SDK performs a bucket-region lookup on every presign, which hangs for ~135 s before failing.
-
-**Downloads:** `GET /api/documents/:id/download` returns a 5-minute presigned URL, gated by the same `canRead(doc, roles)` ACL as the metadata read — a caller who cannot see the document cannot fetch its bytes.
-
-**Object key convention is `<projectId>/<file>`.** Uploads through `POST /api/documents/extract` follow it. Note that documents imported from EPIC carry legacy `s3Key` values such as `etl/<project-slug>/…`, which do **not** exist in this bucket — those records are metadata-only and their download links will 404 until the binaries are located or migrated.
-
----
-
-## Azure Serverless Architecture
-
-- **Runtime**: Azure Functions v4 (`@azure/functions` v4 on Node.js 22, `Y1` Consumption Plan).
-- **Native Stream Adapter (`api/index.js`)**: Converts Azure Functions v4 `HttpRequest` objects into Node.js `Readable` streams and bridges them directly into Express route handlers without external socket or proxy adapter overhead.
-- **Serverless-Safe Rate Limiter (`src/middleware/rate-limiter.js`)**: Dynamically switches to `inlineCleanup` mode when `isServerless` is true, avoiding background `setInterval` timers that lock process state or leak memory during execution freeze cycles.
-- **Atomic Deployment (`WEBSITE_RUN_FROM_PACKAGE=1`)**: Packages the API into a read-only zip archive mounted directly at `/home/site/wwwroot/` for zero-downtime, instant cold starts.
-- **Database**: Azure Cosmos DB for **NoSQL** (`@azure/cosmos`), account `demi-cosmos-dev`.
-  - **Keyless.** The account sets `disableLocalAuth`, so there is no key: auth is Entra managed
-    identity via `AZURE_CLIENT_ID`. Configured with `COSMOS_ENDPOINT` and `COSMOS_NOSQL_DATABASE`.
-  - `COSMOS_DATABASE` belongs to the LEGACY MongoDB-API client and must stay `epic`. The two
-    layers coexist until the Mongo account is decommissioned.
-  - Native repository models (`src/db/cosmos.js` and `src/models/*.js`) handle all CRUD operations with `/id` partition keys.
-  - Legacy `mongoose` and `mongodb` dependencies have been completely removed.
-- **Nightly sync**: the Azure Functions timer `nightlySyncTimer`. There is no Container App Job — `demi-sync-job-{env}` has never existed.
-- **Search Engine**: Azure Container Apps hosting Typesense (`demi-typesense-{env}`).
-- **Auth**: Dual-layered validation in `src/middleware/auth.js`. Supports `X-Api-Key` for system-to-system integration and Keycloak `Bearer` tokens.
-- **Geospatial Order**: GeoJSON requires `[longitude, latitude]`. Downstream sync engines swap coordinates to `[latitude, longitude]` for search indexes.
+- **Interactive map explorer** over project coordinates and administrative overlays.
+- **Static boundary GeoJSON** — `regional_districts.geojson`, `municipalities.geojson`,
+  `electoral_districts.geojson` in `frontend/public/assets/geojson/`, checked in. Regenerate with
+  `node scripts/export-topological-boundaries.js`, which uses Mapshaper Visvalingam-Whyatt arc
+  simplification so adjacent areas share edges with no slivers or overlaps. These files are also
+  read at seed time by `src/seed/sources.js`, and `scripts/package-api.py` hard-fails without them.
+- **Deep text search** over extracted document chunks, via Typesense.
 
 ---
 
-## IaC & Deployment Workflows
+## Related repositories
 
-Infrastructure is defined via Bicep (`azure/main.bicep` and `azure/modules/`).
-
-### Direct Deployment Script
-
-Deploy directly from terminal using the Azure CLI script:
-
-```bash
-# Deploy both API and Frontend to Dev
-./scripts/deploy-azure.sh all c4b0a8-dev-rg
-
-# Deploy API Function App only
-./scripts/deploy-azure.sh api c4b0a8-dev-rg
-
-# Deploy Frontend Web App only
-./scripts/deploy-azure.sh frontend c4b0a8-dev-rg
-```
-
-### GitHub Actions Workflows
-
-* **Dev Environment**: Automatic deployment on push to `main` via `.github/workflows/azure-deploy-dev.yaml`.
-* **Test Environment**: Trigger manually via `.github/workflows/azure-deploy-test.yaml`.
-* **Prod Environment**: Trigger manually via `.github/workflows/azure-deploy-prod.yaml`.
-
----
-
-## Document Intake Frontend (frontend)
-
-The standalone Angular 19 application lives under `frontend/`. It compiles into static assets and is deployed to Azure Web App (`demi-frontend-{env}`).
-
-### Key Features & GIS Architecture
-* **Interactive Map Explorer**: View and query project coordinates and administrative overlays.
-* **Topological GIS Static Assets**: Pre-generated GeoJSON assets (`regional_districts.geojson`, `municipalities.geojson`, `electoral_districts.geojson`) located in `frontend/public/assets/geojson/`.
-  * Generated via `node scripts/export-topological-boundaries.js` using Mapshaper (`-clean -simplify visvalingam keep-shapes`).
-  * Uses Visvalingam-Whyatt arc topology simplification to ensure zero boundary overlaps or sliver gaps between adjacent areas.
-  * Static file sizes are optimized to ~550 KB - 1.3 MB, providing instant < 30ms map load speeds.
-* **Default Map Overlays**: Environmental Regions (`'regions'`) are enabled by default on initial page load.
-* **Zoom-Independent Polygon Rendering**: All administrative boundary layers (including municipalities) render seamlessly across all zoom levels without artificial zoom gating.
-* **Deep Text Search**: Query extracted document chunks powered by Typesense.
-* **Document Ingestion**: Upload files with integrated, searchable project dropdowns.
-
----
-
-## Related Repositories
-
-- [eagle-api](https://github.com/bcgov/eagle-api) — Reads read-only cached project/document entries
-- [eagle-typesense](https://github.com/digitalspace/eagle-typesense) — Syncs DocumentChunks from MongoDB to Typesense
-
+- [eagle-api](https://github.com/bcgov/eagle-api) — reads read-only cached project/document entries
+- [eagle-typesense](https://github.com/digitalspace/eagle-typesense) — the EAGLE-side Typesense sync
+  (DEMI syncs its own index from Cosmos via `src/typesense/full-sync-nosql.js`)
