@@ -134,6 +134,25 @@ function projectScopeFor(req) {
 }
 
 /**
+ * Access context for an internal job that must read EVERY item regardless of ACL — the Typesense
+ * full sync and the extraction worker.
+ *
+ * Deliberately built from the normal privileged tier rather than a bypass flag: it goes through
+ * `readClause` like every other caller and simply resolves to `true`. A separate "skip the
+ * predicate" path is exactly the shape that let a half-working translator disable access control
+ * in this codebase, and it would not be covered by the SQL-asserting tests.
+ *
+ * Safe for the search index because Typesense enforces visibility itself, at query time, via
+ * scoped search keys embedding `filter_by: allowed_roles:=[...]`. The sync's job is to copy the
+ * ACL into `allowed_roles`, which it cannot do for rows it is not allowed to read.
+ *
+ * NEVER derive this from a request. It takes no arguments for that reason.
+ */
+function systemAccess() {
+  return { tier: TIER.PRIVILEGED, roles: [...PUBLIC_ROLES, ...SECURE_ROLES], projectScope: null };
+}
+
+/**
  * The visibility predicate for these roles, as a SQL fragment plus bound parameters.
  *
  * Privileged callers short-circuit to `true` — the same code path returning a wider filter,
@@ -277,6 +296,7 @@ module.exports = {
   rolesFor,
   isPrivileged,
   resolveAccess,
+  systemAccess,
   projectScopeFor,
   readClause,
   scopeClause,

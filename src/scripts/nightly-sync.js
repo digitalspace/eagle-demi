@@ -4,7 +4,13 @@ const fs = require('fs');
 const { initCosmosClient } = require('../db/cosmos');
 const Project = require('../models/project');
 const Document = require('../models/document');
-const { fullSync } = require('../typesense/full-sync');
+// Same explicit switch as src/routes/api.js. The two syncs read from entirely different data
+// layers, so they are NOT abstracted behind a shared interface — an adapter over both is the shape
+// that let a half-working translator disable access control here. Deleted together with the legacy
+// controllers at cutover.
+const { fullSync } = process.env.USE_COSMOS_NOSQL === 'true'
+  ? require('../typesense/full-sync-nosql')
+  : require('../typesense/full-sync');
 const { syncNrptiData } = require('./sync-nrpti');
 const { syncWildfiresData } = require('./sync-wildfires');
 
