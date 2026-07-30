@@ -137,7 +137,14 @@ const QUERY_BY = {
 const FACET_BY = {
   Document:            'type,milestone,documentAuthorType,projectPhase,legislation,documentSource,region',
   Project:             'region,status,currentPhaseName,eacDecision,type,sector,regionalDistrict,electoralDistrict,municipality',
-  DocumentChunk:       'documentType,projectId,region',
+  // Deliberately empty. This previously read 'documentType,projectId,region', none of which are
+  // facetable — all three are `index: false` on DOCUMENT_CHUNKS_SCHEMA, and Typesense rejects a
+  // facet_by naming an unindexed field, failing the whole search. It never fired only because the
+  // DocumentChunk branch of search.js passes no facet_by, so the first person to wire faceting up
+  // would have inherited the break. The only facetable fields here are `documentId` and
+  // `allowed_roles`, neither of which is a user-facing facet. Faceting chunks means paying an
+  // index flag three million times over — see the schema comment; decide that deliberately.
+  DocumentChunk:       '',
   Record:              'nrptiSchemaName,issuingAgency,projectId',
 };
 
