@@ -32,7 +32,15 @@ exports.getBoundaries = async (req, res) => {
 
 exports.getBoundary = async (req, res) => {
   try {
-    const boundary = await boundaries.getById(req.params.id, req.query.type);
+    // Falls back to a NAME lookup, matching the Mongo controller. The frontend calls
+    // `/boundaries/<name>` from loadSingleBoundaryGeometry — dropping the fallback made every
+    // boundary selection issue a request that 404s. It still rendered, because the list response
+    // carries simplifiedGeometry and the caller falls back to it, so the only visible symptom was
+    // a failing request per selection.
+    let boundary = await boundaries.getById(req.params.id, req.query.type);
+    if (!boundary) {
+      boundary = await boundaries.getByName(String(req.params.id), req.query.type);
+    }
     if (!boundary) {
       return res.status(404).json({ error: 'Boundary not found' });
     }

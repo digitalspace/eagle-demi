@@ -121,6 +121,23 @@ function assertQuerySpec(spec, containerName) {
 }
 
 /**
+ * Cosmos system fields that are pure internals. Stripped before anything leaves this module.
+ *
+ * `_self` and `_rid` disclose the internal resource path (`dbs/…/colls/…/docs/…`), `_attachments`
+ * and `_ts` are noise, and on a 60,578-document corpus they are dead weight in every response.
+ *
+ * `_etag` is deliberately KEPT: it is the optimistic-concurrency token that `replace()` takes, so
+ * removing it would quietly make safe concurrent writes impossible.
+ */
+const INTERNAL_FIELDS = ['_rid', '_self', '_attachments', '_ts'];
+
+function stripInternals(item) {
+  if (!item || typeof item !== 'object') return item;
+  for (const f of INTERNAL_FIELDS) delete item[f];
+  return item;
+}
+
+/**
  * Run a query.
  *
  * @param {string} containerName
@@ -149,7 +166,7 @@ async function query(containerName, spec, options = {}) {
     : await iterator.fetchAll();
 
   return {
-    items: response.resources || [],
+    items: (response.resources || []).map(stripInternals),
     continuationToken: response.continuationToken,
     requestCharge: response.requestCharge || 0
   };
@@ -177,7 +194,7 @@ async function readItem(containerName, id, partitionKey) {
 
   try {
     const { resource } = await container.item(String(id), partitionKey).read();
-    return resource || null;
+    return resource ? stripInternals(resource) : null;
   } catch (err) {
     if (err.code === 404) return null;
     throw err;
@@ -324,6 +341,8 @@ async function ping() {
 
 module.exports = {
   DATABASE_ID,
+  INTERNAL_FIELDS,
+  stripInternals,
   BULK_MAX_OPERATIONS,
   initCosmosClient,
   getDatabase,
