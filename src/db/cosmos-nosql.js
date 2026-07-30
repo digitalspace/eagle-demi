@@ -22,7 +22,19 @@ const { CosmosClient } = require('@azure/cosmos');
 let clientInstance = null;
 let databaseInstance = null;
 
-const DATABASE_ID = process.env.COSMOS_DATABASE || 'demi';
+/**
+ * The NoSQL database name, from a DEDICATED variable.
+ *
+ * It must NOT be `COSMOS_DATABASE`: the legacy Mongo-API client reads that same variable
+ * (src/db/cosmos.js) and needs a DIFFERENT value — `epic` there, `demi` here. Both layers run
+ * side by side until cutover, so one variable cannot serve both. Setting `COSMOS_DATABASE=demi`
+ * for this client silently repointed the LIVE legacy app at the new, empty database: every
+ * endpoint returned `[]` with HTTP 200, because queryContainer swallows the error.
+ *
+ * Same lesson as USE_COSMOS_NOSQL — never let one layer's config decide another layer's
+ * behaviour. The default is correct for every environment, so it normally needs no setting.
+ */
+const DATABASE_ID = process.env.COSMOS_NOSQL_DATABASE || 'demi';
 
 /**
  * Singleton client. The SDK pools connections and caches metadata per instance, so creating
