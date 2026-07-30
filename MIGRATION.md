@@ -318,7 +318,18 @@ cleanup — everything else is stored but `index: false`, and `centroid` and the
 `TYPESENSE_MIN_FREE_GIB` is a **disk** pre-flight (0.1 from the app setting, 1 hardcoded in the
 `typesense:sync-nosql` script) — it will **not** catch an OOM either way.
 
-**When a RAM pre-flight is added, it must not be built on `system_memory_*`.** Measured on live dev,
+**A RAM pre-flight now exists** — `memoryPreflight()` in `full-sync-nosql.js`, run beside
+`diskPreflight` at the top of `fullSync`. It reads `typesense_memory_resident_bytes`, doubles it
+for the alias swap (which holds the old and new collections at once, same reasoning as the disk
+check) and aborts if that exceeds the configured ceiling.
+
+**It needs `TYPESENSE_MEMORY_LIMIT_GIB` set as an app setting, and deliberately refuses to guess.**
+Nothing in the metrics endpoint exposes the cgroup limit, so with the variable unset the check logs
+a loud SKIP rather than inventing a number. Set it to whatever the container is actually sized at —
+**4 today, 8 once `46fdce5`'s bicep is deployed.** Not set yet: the value has to track the sizing
+decision, which is the Typesense owner's call, not this session's.
+
+**It must not be built on `system_memory_*`.** Measured on live dev,
 `/metrics.json` reports `system_memory_total_bytes` = **16.77 GB** — that is the underlying node, not
 the 4 GiB container limit, so a guard using it would be wrong by 4x in the unsafe direction. Only
 `typesense_memory_resident_bytes` is meaningful, checked against a *configured* ceiling. Live
@@ -328,12 +339,22 @@ against the 468 MB recorded before any chunks, that implies ~4 KB per chunk rath
 
 **The nightly full sync cannot carry this volume.** The Function App is Y1 Consumption and
 `host.json` pins `functionTimeout: 00:10:00`, a hard ceiling on Y1. Syncing 1.9M chunks is ~19,000
-Cosmos reads plus ~19,000 Typesense imports, and the orphan purge in `full-sync-nosql.js` only runs
-at *start*, so every timed-out run abandons a `document_chunks_<timestamp>` collection eating
-Typesense RAM and the Azure Files share. The backfill's own sync is therefore a **one-off** run of
-`npm run typesense:sync-nosql` inside the app container over the App Service SSH tunnel (same
-recipe as the Cosmos scripts above), with `nightlySyncTimer` disabled for the duration. Making the
-*recurring* sync viable at this corpus size is open follow-up work.
+Cosmos reads plus ~3,800 Typesense imports at the 500-row batch size. The backfill's own sync is
+therefore a **one-off** run of `npm run typesense:sync-nosql` inside the app container over the App
+Service SSH tunnel (same recipe as the Cosmos scripts above), with `nightlySyncTimer` disabled for
+the duration. Making the *recurring* sync viable at this corpus size is open follow-up work — a
+Container App Job on the existing `demi-ca-env-dev` is the obvious candidate, since jobs have no
+10-minute ceiling and `nightly-sync.js` is already standalone.
+
+**Orphan collections on a failed run — half-fixed 2026-07-30.** The purge in `full-sync-nosql.js`
+ran only at sync *start*, so a failure left a `document_chunks_<timestamp>` collection eating
+Typesense RAM and the Azure Files share until the next run. `syncSchema` now drops its own partial
+collection when the sync throws, and leaves the alias pointing at the old one — a failed sync no
+longer takes the live index down or strands a multi-GB collection. **It cannot help a SIGKILL**: a
+Y1 timeout runs no JS on the way out, so the entry purge stays as the backstop and both now exist
+deliberately. Worth noting the entry purge already bounded this at *one* stale collection rather
+than an unbounded pile, since each run purges the previous run's orphan; what it could not do was
+reclaim the space before the next sync.
 
 #### Secret rotation — split by blast radius, not deferred wholesale
 
