@@ -51,7 +51,10 @@ function rolesFor(req) {
   const tokenRoles = req && req.user && req.user.realm_access && req.user.realm_access.roles;
   if (Array.isArray(tokenRoles)) {
     for (const r of tokenRoles) {
-      if (r) roles.add(r);
+      // `project:*` roles are the OTHER dimension — they scope the partition key, not read[].
+      // Leaving them in would put project ids into the read[] IN list, which is exactly the
+      // conflation of the two dimensions this module exists to prevent.
+      if (r && !String(r).startsWith(PROJECT_ROLE_PREFIX)) roles.add(r);
     }
   }
   return Array.from(roles);
@@ -84,14 +87,50 @@ function resolveAccess(req) {
 }
 
 /**
+ * Prefix marking a Keycloak role as a project scope rather than a role type.
+ *
+ * Keycloak dictates all roles, so scope has to arrive in the token — there is no separate
+ * membership store. But a BARE role name cannot be classified: given `ajax`, nothing
+ * distinguishes "scoped to the Ajax project" from a role type like `staff` or `compliance`.
+ * Guessing would be a security bug in whichever direction it guessed. So scope is explicit:
+ *
+ *   project:207        -> scoped to project 207
+ *   project:eagle-abc  -> scoped to an Eagle-only project
+ *   staff, compliance  -> role types, land in read[] matching
+ *
+ * The value after the prefix is a CANONICAL project id (the partition key), not a name. That
+ * keeps this synchronous and lookup-free, which matters because it runs on every request.
+ * ponytail: id-only. Accepting a project NAME would need a slug→id map loaded from the
+ * registry; add a cached lookup here if operators find ids unusable.
+ */
+const PROJECT_ROLE_PREFIX = 'project:';
+
+/**
  * Project ids this caller is scoped to, or null for "not project-scoped".
  *
- * Returns null today. Deliberately a separate function so wiring up membership is a one-place
- * change. An empty array is meaningful and distinct from null: scoped to nothing.
+ * An empty array is meaningful and distinct from null: scoped to nothing, which `scopeClause`
+ * renders as `false`. That only arises from an explicit `projectScope: []`, never from a token
+ * that simply carries no project roles — that caller is not scoped at all.
  */
 function projectScopeFor(req) {
-  const scope = req && req.user && req.user.projectScope;
-  return Array.isArray(scope) ? scope.map(String) : null;
+  const user = req && req.user;
+  if (!user) return null;
+
+  // An explicit projectScope on the verified token wins — the seam for a future claim that
+  // carries ids directly rather than encoding them in role names.
+  if (Array.isArray(user.projectScope)) return user.projectScope.map(String);
+
+  const tokenRoles = user.realm_access && user.realm_access.roles;
+  if (!Array.isArray(tokenRoles)) return null;
+
+  const scope = [];
+  for (const role of tokenRoles) {
+    if (typeof role !== 'string' || !role.startsWith(PROJECT_ROLE_PREFIX)) continue;
+    const id = role.slice(PROJECT_ROLE_PREFIX.length).trim();
+    if (id && !scope.includes(id)) scope.push(id);
+  }
+
+  return scope.length > 0 ? scope : null;
 }
 
 /**
@@ -234,6 +273,7 @@ module.exports = {
   SECURE_ROLES,
   TIER,
   PARTITION_FANOUT_LIMIT,
+  PROJECT_ROLE_PREFIX,
   rolesFor,
   isPrivileged,
   resolveAccess,

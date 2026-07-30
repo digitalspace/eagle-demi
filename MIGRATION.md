@@ -31,13 +31,30 @@ and `contentExtracted: true` flags with no chunks behind them.
 |---|---|---|
 | **0 — Delete unreachable code** | ✅ done (`99889e6`) | −1,536 lines; 5 latent bugs fixed; lint 0 errors |
 | **1 — Infrastructure (templates)** | ✅ written, ⏸ **not deployed** (`d8438a2`) | Deployment deferred on cost — see below |
-| **2 — Data access + authorization** | ✅ done (`09b35f1`, `d6de8a6`, `+1`) | Client, repositories, controllers, router switch |
-| **3 — Merge engine** | ⬜ todo | Track ⊕ Eagle field precedence + identity resolver |
-| **4 — Seed** | ⬜ todo | Track → Eagle → documents → NRPTI → boundaries |
-| **5 — Cut over** | ⬜ todo | Swap app settings, `stop` then `start` |
+| **2 — Data access + authorization** | ✅ done (`09b35f1`, `d6de8a6`, `cc08ba8`) | Client, repositories, controllers, router switch |
+| **2b — Delete semantics** | ✅ done (`7f5e4a8`) | Hard delete + index removal; unpublish is the hide mechanism |
+| **2c — Object key + switch fixes** | ✅ done (`cc8a6b7`) | Downloads verified end to end; switch is now an explicit flag |
+| **3 — Merge engine** | ✅ done | `src/merge/project.js` + 41 tests on the real 382-record Track dataset. Project scope now derived from Keycloak roles |
+| **3b — Blob storage** | ⬜ **NEXT**, low urgency | Dev bucket already holds the full corpus (see below), so this is an architecture choice, not a prerequisite |
+| **4 — Seed** | ⬜ todo | Track → Eagle merge → documents → NRPTI (linked only) → boundaries |
+| **5 — Cut over** | ⬜ todo | Set `USE_COSMOS_NOSQL=true` + `COSMOS_*`; `stop` then `start` |
 | **6 — Typesense** | ⬜ todo | Strip `epic`/List/PCP lookups, export real `fullSync()` |
-| **7 — Change feed** | ⬜ deferred | Soft delete + TTL + Functions trigger |
+| **7 — Change feed** | ⬜ deferred | Functions trigger + `leases`. No soft-delete marker needed — index removal is explicit |
 | **8 — Decommission** | ⬜ todo | Delete the Mongo account after a clean week |
+
+### Open decisions blocking nothing yet
+
+- ~~**Where project membership comes from**~~ **Closed 2026-07-30: Keycloak, via role names.**
+  Keycloak dictates all roles, so there is no separate membership store. Scope arrives as roles
+  prefixed `project:` — `project:207` scopes the caller to project 207. The prefix is required
+  because a bare role name cannot be classified: given `ajax`, nothing distinguishes "scoped to
+  the Ajax project" from a role type like `staff`, and guessing would be a security bug either
+  way. `project:*` roles are stripped from the `read[]` role list so the two dimensions never
+  mix. The value is a canonical project id, keeping `resolveAccess` synchronous and lookup-free.
+  Accepting a project *name* would need a cached slug→id map — noted, not built.
+- **Whether to move prod document storage to Azure.** Dev only is planned. The safety argument
+  is weaker than first stated — environments already use separate buckets
+  (dev `asnpnn`, test `zdspnb`, prod `ozwdez`).
 
 ### Why Phase 1 is written but not deployed
 
@@ -132,9 +149,9 @@ Publishing a document under an **unpublished project returns 409** — a documen
 out-rank its parent.
 
 Notes for whoever picks this up:
-- `resolveAccess().projectScope` is the **seam** for project-scoped access. It returns null
-  today; populating `req.user.projectScope` is the only change needed to activate the scoped
-  tier — every query inherits the restriction automatically.
+- `resolveAccess().projectScope` is **live**: it reads `project:<id>` roles from the Keycloak
+  token (or an explicit `req.user.projectScope`). Adding a scoped user is a Keycloak role
+  assignment — no code change. Every query inherits the restriction automatically.
 - `patch()` is capped at 10 ops by Cosmos and guarded. Use it for partial updates; `upsert()`
   REPLACES the whole item and will erase fields written by another path.
 - Point reads bypass the query predicate, so `canRead()` is **mandatory** after `readItem()`.
@@ -153,7 +170,29 @@ Notes for whoever picks this up:
 | **epic.submit** | No integration exists. Future work |
 
 **Join:** 348 of 354 Track `epic_guid`s match an Eagle project · 28 Track-only · 6 dangle ·
-~10 Eagle-only → **~392 real projects** (vs 4,123 rows today).
+~10 Eagle-only → **~392 real projects** (vs 4,123 rows today). `buildRegistry` asserts exactly
+these counts against the checked-in Track dataset, so upstream drift fails a test.
+
+**Track coordinate defects (found by the Phase 3 tests, not by inspection):** 7 of 382 records
+carry a **positive longitude** — a dropped minus sign. BC longitude is always negative, so
+`validCoordinates` negates and re-validates against a BC bounding box, recovering 6. The 7th,
+`Sparwood Wells #04` (id 358, lat 45.861 lng 53.354), is unrecoverable — Sparwood is at ~49.7,
+-114.9, so both values are wrong. It gets **no centroid** rather than an invented one. Without
+the sign repair, Zincton plots in Uzbekistan.
+
+### Documents — no copy needed (measured 2026-07-30)
+
+| Environment | Document records | Bucket |
+|---|---|---|
+| eagle **dev** | **60,661** | `asnpnn` |
+| eagle test | 55,845 | `zdspnb` |
+| eagle prod | 61,428 | `ozwdez` |
+
+Dev has **more** documents than test, contrary to assumption — 99% of prod. The dev bucket
+`asnpnn` holds **92,809 objects / 242.6 GB**, of which **92,472 sit under a prefix named
+`ozwdez`** (a full prod copy — hence `minioKeyPrefix`). A blob-coverage check on 100 dev
+documents found **100% present, 0 missing**. So DEMI can be tested against the full corpus
+today with no copy, and Phase 3b is an architecture choice rather than a prerequisite.
 
 ### Current database (to be replaced)
 
@@ -189,11 +228,31 @@ every ACL read is a full scan; `/name` must be indexed or `ORDER BY` fails outri
 
 ### Identity & merge
 
+**Implemented in `src/merge/project.js` (Phase 3).** Pure functions, no I/O — merge bugs are
+silent, so every rule is data and tested as data.
+
 `id` = `String(track_project_id)`. Cross-refs on every project: `trackProjectId`, `eagleId`
 (from Track `epic_guid`, or the Eagle `_id` for eagle-only), `sourceSystem`.
-**Track wins, Eagle fills gaps** — an explicit field-precedence map, so an empty Track field
-never blanks a populated Eagle value. Eagle-only projects included, flagged
-`sourceSystem: 'eagle'`.
+**Track wins, Eagle fills gaps** — `TRACK_PRECEDENCE`, an explicit `[target, trackField,
+eagleField]` map. It is a map rather than `{...eagle, ...track}` precisely because a spread
+overwrites with `undefined` and would silently erase data: 12 real Track records have no
+`abbreviation`, 1 has no `description`, 1 no `address`, 1 no `project_state_name`.
+Eagle-only projects are included, flagged `sourceSystem: 'eagle'`, keyed `eagle-<eagleId>`.
+
+| Function | Role |
+|---|---|
+| `mergeTrackProject(track, eagle)` | one merged item; throws without a `track_project_id` |
+| `mergeEagleOnlyProject(eagle)` | an Eagle project Track never referenced |
+| `buildRegistry(track[], eagle[])` | `{projects, report}` — the report is the point, it proves nothing was dropped |
+| `buildProjectIndex(projects).resolve(ref)` | `_epicProjectId` / Track id → canonical id, or **null** |
+| `validCoordinates` / `normalizeCentroid` | GeoJSON `[lng, lat]`, sign repair, BC bbox validation |
+| `resolveProjectAcl(eagle, isPublished)` | preserves an upstream `read[]`; fails closed otherwise |
+
+`resolve()` returning null is load-bearing: an unresolvable NRPTI record is **dropped**, never
+given a fabricated parent. That is what replaces the fuzzy name matching.
+
+Raw payloads are retained under `sources.track` / `sources.eagle` (unindexed) so a re-merge
+never re-fetches upstream and any field is traceable to its origin. Never read by the API.
 
 **NRPTI: do not create projects from NRPTI at all.** Only ingest records whose
 `_epicProjectId` resolves to a project already in the registry; drop the rest rather than
@@ -223,6 +282,24 @@ Two **orthogonal** dimensions — this is the scaling decision:
   150 roles and every read becoming a cross-partition ACL scan.
 - **Project scope rides the partition key.** It is already the partition boundary, so it
   costs nothing extra.
+
+**Scope comes from Keycloak role names** (decided 2026-07-30 — Keycloak dictates all roles, so
+there is no separate membership store):
+
+```
+project:207        -> scoped to project 207 (a canonical project id = the partition key)
+staff, compliance  -> role TYPES, matched against read[]
+```
+
+The `project:` prefix is **required**. A bare role name cannot be classified — given `ajax`,
+nothing distinguishes "scoped to the Ajax project" from a role type, and guessing would be a
+security bug in whichever direction it guessed. `rolesFor()` strips `project:*` from the role
+list so a project id can never land in the `read[]` `IN` clause. No project role at all means
+**not scoped** (public tier), which is distinct from an explicit `projectScope: []` meaning
+**scoped to nothing** (`scopeClause` → `false`). Privileged roles ignore scope entirely.
+
+Scope values are ids, not names, which keeps `resolveAccess` synchronous and lookup-free on
+every request. A cached slug→id map would be needed to accept names — noted, not built.
 
 `readClause(roles)` is the only place a visibility predicate is built:
 
