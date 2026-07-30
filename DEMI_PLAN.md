@@ -182,40 +182,21 @@ Request increases to the **namespace `compute-long-running` `requests.cpu` quota
 
 ## Cosmos DB Repository Layer & Sync Engine
 
-> **Corrected 2026-07-29.** This section previously claimed the mongo drivers had been
-> removed in favour of `@azure/cosmos` native SQL models, and that a container app job
-> `demi-sync-job-dev` ran the nightly sync. **Neither was true**, and that discrepancy caused
-> a real production-shaped bug: someone wrote Cosmos-SQL-style `WHERE` strings against a
-> layer that was actually the MongoDB driver, then shimmed the two together with a substring
-> "translator" that silently discarded every predicate it didn't recognise — so all
-> `isPublished` access control was dead code that failed open. See
-> `ADR-004-Read-ACL-Authorization-Model` in the wiki.
-
-### Actual architecture
-
-**The database is Azure Cosmos DB using the MongoDB API** (account `demi-mongo-dev-*`,
-`kind: MongoDB`, capability `EnableMongo`, serverless, behind a private endpoint). The
-`mongodb` npm driver is therefore the correct and required client — `@azure/cosmos`, the
-NoSQL-API SDK, cannot connect to a Mongo-API account and is currently an unused dependency.
-
-Data access goes through `src/db/cosmos.js` and the thin repositories in `src/models/*.js`.
-These take **MongoDB filter objects**, not SQL strings; passing a string throws, so a filter
-that cannot be honoured can never silently become an unfiltered read. Collections:
-`projects`, `documents`, `records`, `administrative_boundaries`, `regions`, `wildfires`,
-`logs`. There are no partition keys — that is a NoSQL-API concept and does not apply here.
-
-Migrating to the NoSQL API would mean a new account, migrating ~4,100 projects and ~19,000
-documents, choosing partition keys, and rewriting the Typesense change-stream integration to
-use the change feed. It is a project, not a refactor, and is not currently planned.
-
-### Sync
-
-- **Nightly full sync** — Azure Functions **timer** `nightlySyncTimer` (`api/index.js`,
-  `0 0 2 * * *`) calls `runNightlySync` from `src/scripts/nightly-sync.js`. There is no
-  container app job.
-- **Incremental delta sync** — `src/scripts/incremental-sync.js` with high-water marks in
-  `sync_state` via `src/models/syncState.js`, per source (`openshift`, `nrpti`, `wildfire`).
-  **Built but not scheduled**: the only entry point is `npm run db:sync-incremental`. Either
-  point the timer at it or remove it.
+> **Superseded 2026-07-30 — DEMI now runs on Cosmos DB for NoSQL.** See `MIGRATION.md`.
+>
+> History, because it explains a real bug class: this section once claimed the mongo drivers had
+> been removed for `@azure/cosmos` native SQL models and that a container app job
+> `demi-sync-job-dev` ran the nightly sync. Neither was true at the time, and the gap caused
+> Cosmos-SQL `WHERE` strings to be written against what was actually the MongoDB driver, bridged
+> by a substring "translator" that silently discarded every predicate it did not recognise — so
+> all `isPublished` access control was dead code that failed open.
+>
+> The migration has since actually happened (cutover 2026-07-30): `demi-cosmos-dev`, NoSQL API,
+> keyless managed identity, 393 projects / 60,578 documents / 281 boundaries, with the MongoDB-API
+> account retained only as the rollback path until Phase 8.
+>
+> The NRPTI auto-seeding described above is **no longer done** — it produced 3,382 synthetic
+> project rows named after cities and watercourses. Records now ingest only when `_epicProjectId`
+> resolves to a project already in the registry, and NRPTI is not in the default seed at all.
 
 

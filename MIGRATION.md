@@ -131,6 +131,61 @@ vanishes mid-run.
 - **`az webapp deploy` 502s** on this 25 MB package. `POST /api/zipdeploy?isAsync=true` accepts it
   in **1.6 s**. Kudu status **3 = FAILED, 4 = SUCCESS**; `complete: true` alone means nothing.
 
+## Remaining work
+
+Verified against live data 2026-07-30: **0 items without `read[]`, 0 `isPublished`/`read[]` drift**
+across all 393 projects and 60,578 documents. That is the gate that licenses deleting the legacy
+no-ACL tier below.
+
+### A. Extraction — the biggest functional gap (highest value)
+
+`document_chunks` has never held data, so Deep Search is metadata-only — which is the product's
+whole point. Two separate problems:
+
+1. **Nothing schedules it.** `src/extract.js` only runs under `require.main === module`.
+2. **It is still on the Mongo layer** — `MongoClient`, `src/models/*`, `db.collection('epic')`.
+
+Work: port `extract.js` to the NoSQL repositories with `systemAccess()`; add a `chunks` repository
+(the container already exists, partitioned `/documentId`); schedule it as a Functions timer or a
+detached job; then flip `SOURCES.DocumentChunk` in `full-sync-nosql.js` from skipped to live — that
+transform is already written and tested.
+
+Watch: extraction is memory-hungry and the container has ~330 MB free (see the OOM note). It
+already batches PDFs at 10 pages for this reason.
+
+### B. Phase 8 — decommission the MongoDB-API account
+
+**Not before a clean week on NoSQL.** The Mongo account is the rollback path and still holds 4,123
+projects / 18,969 documents.
+
+Then, in order: delete `src/db/cosmos.js`, `src/models/*`, `src/controllers/{project,document,record,boundary}.js`,
+`src/helpers/access.js`, `src/typesense/{full-sync,transform}.js`,
+`src/scripts/{seed-and-merge,sync_from_openshift,backfill-read-acl}.js`; collapse the
+`USE_COSMOS_NOSQL` branch in `routes/api.js` and `nightly-sync.js`; drop the `mongodb` dependency;
+delete the `MONGODB_*` and `COSMOS_DATABASE` app settings; delete the account **and its private
+endpoint** (the endpoint is the only flat recurring charge, ~$7/mo).
+
+`readFilter` tier 3 — the no-`read[]` fallback — goes with it. The gate above is now met.
+
+### C. Phase 3b — document storage on Azure Blob (optional)
+
+Code and Bicep are written and validated; **nothing is deployed or copied**. Not urgent: the dev
+MinIO bucket already has 100% blob coverage for all 60,578 documents. ~200 GB Cool LRS is ~$2.20/mo
+plus ~$0.35 one-time. The argument for doing it is per-environment isolation, not cost.
+
+### D. Phase 7 — change feed (deferred by design)
+
+Nightly full sync is the backstop and works. Add when index staleness within a day actually matters.
+
+### E. Verification not yet exercised live
+
+- **Scoped and fragment access tiers** — unit-tested only; no scoped Keycloak role exists yet.
+  Create a `project:<id>` role on a test user to exercise it end to end.
+- **Boundary rendering at all three frontend fidelities** — the API contract is verified
+  (`/boundaries` and `/boundaries/<name>` both 200), the visual result is not.
+
+---
+
 ### Phase 5 pre-flight (done 2026-07-30) — 4 blockers found and fixed
 
 All three modules now return `status: Succeeded, error: None` from

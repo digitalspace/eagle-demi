@@ -11,7 +11,7 @@ This repository houses:
 
 ## Central API Server (demi-api)
 
-The Node.js server acts as the master directory of truth. It manages projects, documents, and administrative regions with native geospatial MongoDB / Cosmos DB queries.
+The Node.js server acts as the master directory of truth. It manages projects, documents, and administrative regions in Cosmos DB for NoSQL.
 
 ### Setup and Local Execution
 
@@ -86,9 +86,9 @@ Privileged roles (`sysadmin`, `staff`, `demi-admin`) get an unfiltered `{}`. Rol
 
 ### Query layer rules
 
-* `BaseRepository.find/findOne/countDocuments` and `db/cosmos.js` take **MongoDB filter objects**. Passing a SQL string throws — an untranslatable filter must never silently become an unfiltered read.
+* `src/db/cosmos-nosql.js` takes **query specs** — `{query, parameters}` — and throws on anything else. There is deliberately no Mongo→SQL translator: one that handles most operators fails OPEN on the rest, which is how access control was disabled here previously. `BaseRepository` was deleted in Phase 2.
 * Counts must use the **same** filter as the read, or totals leak hidden records.
-* **Do not use `cursor.sort()`.** Cosmos DB for MongoDB rejects sorts on unindexed fields, and that error becomes an empty result set. Pass `options.sort` — `queryContainer` sorts in memory (per-page, after the limit).
+* **Index before you sort.** Cosmos rejects `ORDER BY` on an unindexed path; add it to `azure/modules/cosmos-nosql.bicep` first. (The legacy Mongo layer has the same trap with `cursor.sort()`, where the error becomes an empty result set.)
 
 ### Backfill
 
@@ -99,7 +99,10 @@ node src/scripts/backfill-read-acl.js --dry-run   # counts only
 node src/scripts/backfill-read-acl.js
 ```
 
-Cosmos sits behind a private endpoint, so this must run **inside** the network — via the app's Kudu console (`https://demi-api-dev.scm.azurewebsites.net/api/command`) or Azure Cloud Shell. It cannot connect from a local machine.
+Cosmos sits behind a private endpoint **and is keyless**, so scripts must run inside the **app
+container** — not Kudu. Kudu's `/api/command` runs in the SCM container, which has no
+managed-identity endpoint, and Azure Policy forbids opening the firewall. Use the App Service SSH
+tunnel; see `MIGRATION.md` for the full recipe.
 
 ---
 
@@ -121,11 +124,14 @@ Required settings: `MINIO_HOST`, `MINIO_BUCKET_NAME`, `MINIO_ACCESS_KEY`, `MINIO
 - **Native Stream Adapter (`api/index.js`)**: Converts Azure Functions v4 `HttpRequest` objects into Node.js `Readable` streams and bridges them directly into Express route handlers without external socket or proxy adapter overhead.
 - **Serverless-Safe Rate Limiter (`src/middleware/rate-limiter.js`)**: Dynamically switches to `inlineCleanup` mode when `isServerless` is true, avoiding background `setInterval` timers that lock process state or leak memory during execution freeze cycles.
 - **Atomic Deployment (`WEBSITE_RUN_FROM_PACKAGE=1`)**: Packages the API into a read-only zip archive mounted directly at `/home/site/wwwroot/` for zero-downtime, instant cold starts.
-- **Database**: Azure Cosmos DB (Native `@azure/cosmos` SQL SDK).
-  - Configured with `COSMOSDB_URI`, `COSMOSDB_DATABASE`, and `COSMOSDB_KEY`.
+- **Database**: Azure Cosmos DB for **NoSQL** (`@azure/cosmos`), account `demi-cosmos-dev`.
+  - **Keyless.** The account sets `disableLocalAuth`, so there is no key: auth is Entra managed
+    identity via `AZURE_CLIENT_ID`. Configured with `COSMOS_ENDPOINT` and `COSMOS_NOSQL_DATABASE`.
+  - `COSMOS_DATABASE` belongs to the LEGACY MongoDB-API client and must stay `epic`. The two
+    layers coexist until the Mongo account is decommissioned.
   - Native repository models (`src/db/cosmos.js` and `src/models/*.js`) handle all CRUD operations with `/id` partition keys.
   - Legacy `mongoose` and `mongodb` dependencies have been completely removed.
-- **Incremental Delta Sync Engine**: Azure Container App Job (`demi-sync-job-{env}`) scheduled nightly (`0 2 * * *`), utilizing `sync_state` high-water mark timestamps (`lastSyncedAt`) to perform efficient delta ingestion across NRPTI, Wildfires, and Track sources.
+- **Nightly sync**: the Azure Functions timer `nightlySyncTimer`. There is no Container App Job — `demi-sync-job-{env}` has never existed.
 - **Search Engine**: Azure Container Apps hosting Typesense (`demi-typesense-{env}`).
 - **Auth**: Dual-layered validation in `src/middleware/auth.js`. Supports `X-Api-Key` for system-to-system integration and Keycloak `Bearer` tokens.
 - **Geospatial Order**: GeoJSON requires `[longitude, latitude]`. Downstream sync engines swap coordinates to `[latitude, longitude]` for search indexes.
