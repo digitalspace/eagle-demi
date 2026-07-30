@@ -185,6 +185,31 @@ async function syncSchema(typesense, schemaName, schema, ctx) {
     typesense, alias, new Set([oldCollection, newCollection].filter(Boolean))
   );
 
+  try {
+    return await buildAndSwap(typesense, schemaName, { alias, newCollection, oldCollection }, ctx);
+  } catch (err) {
+    // Drop the half-built collection on the way out. The entry purge above only reconciles on the
+    // NEXT run of this schema, so without this a failed chunk sync leaves a multi-GB collection
+    // resident in Typesense RAM until someone runs the sync again — and RAM is the binding
+    // resource here. The 80%-guard below already did this for its own case; this covers the rest.
+    //
+    // This cannot help a SIGKILL (a Y1 function timeout runs no JS). The entry purge remains the
+    // backstop for that, which is why both exist.
+    try {
+      await typesense.collections(newCollection).delete();
+      console.warn(`[${schemaName}] sync failed — dropped partial collection ${newCollection}`);
+    } catch { /* best effort: the throw below is the real outcome */ }
+    throw err;
+  }
+}
+
+/**
+ * Fill `newCollection` and swap the alias onto it. Split out of syncSchema only so a failure has
+ * somewhere to catch — the partial collection has to be dropped, and wrapping fifty lines in a
+ * try block to say that reads worse than a named function.
+ */
+async function buildAndSwap(typesense, schemaName, { alias, newCollection, oldCollection }, ctx) {
+  const source = SOURCES[schemaName];
   const pageSize = PAGE_SIZES[schemaName] ?? PAGE_SIZES.default;
   const batchSize = BATCH_SIZES[schemaName] ?? BATCH_SIZES.default;
 
@@ -279,6 +304,58 @@ async function diskPreflight(typesense) {
   }
 }
 
+/**
+ * Verify Typesense has RAM for a swap. Disk is not the binding resource — Typesense holds every
+ * INDEXED field in memory, so a chunk corpus runs out of RAM long before it runs out of disk, and
+ * `diskPreflight` above will happily wave that through.
+ *
+ * **`system_memory_total_bytes` is the wrong number and must not be used here.** Measured on the
+ * live dev container it reports **16.77 GB** — the underlying Container Apps node, not the 4 GiB
+ * the container is actually limited to. A guard built on it is wrong by 4x in the unsafe
+ * direction. `typesense_memory_resident_bytes` is what Typesense itself holds; the ceiling has to
+ * be supplied, because nothing in the metrics endpoint exposes the cgroup limit.
+ *
+ * The 2x factor is the same one diskPreflight uses and for the same reason: an alias swap holds
+ * the old and new collections at once.
+ */
+async function memoryPreflight(typesense) {
+  const limitGiB = parseFloat(process.env.TYPESENSE_MEMORY_LIMIT_GIB || '');
+  if (!Number.isFinite(limitGiB) || limitGiB <= 0) {
+    console.warn(
+      'Memory pre-flight SKIPPED: set TYPESENSE_MEMORY_LIMIT_GIB to the container memory limit ' +
+      '(azure/modules/container-apps.bicep). It cannot be inferred — system_memory_total_bytes ' +
+      'reports the host node, not the container, and would overstate headroom several times over.'
+    );
+    return;
+  }
+
+  try {
+    const metrics = await typesense.metrics.retrieve();
+    const resident = Number(metrics.typesense_memory_resident_bytes);
+    if (!Number.isFinite(resident) || resident <= 0) {
+      console.warn('Memory pre-flight skipped (metrics unusable)');
+      return;
+    }
+
+    const residentGiB = resident / (1024 ** 3);
+    const peakGiB = residentGiB * 2;
+    console.log(`Memory pre-flight: ${residentGiB.toFixed(2)} GiB resident, ` +
+      `~${peakGiB.toFixed(2)} GiB peak during swap, limit ${limitGiB} GiB`);
+
+    if (peakGiB > limitGiB) {
+      throw new Error(
+        `Pre-flight memory check failed: ${residentGiB.toFixed(2)} GiB resident implies ` +
+        `~${peakGiB.toFixed(2)} GiB during the alias swap, over the ${limitGiB} GiB limit. ` +
+        'An OOM here kills the container mid-sync with no error in the log. Raise the container ' +
+        'memory, or cut the row count with TARGET_CHUNK_SIZE — more disk will not help.'
+      );
+    }
+  } catch (err) {
+    if (err.message.startsWith('Pre-flight')) throw err;
+    console.warn(`Memory pre-flight skipped (metrics unavailable): ${err.message}`);
+  }
+}
+
 async function fullSync(opts = {}) {
   const typesense = opts.typesense || getClient();
   const repos = opts.repos || {};
@@ -290,6 +367,7 @@ async function fullSync(opts = {}) {
   console.log('Starting full sync (Cosmos NoSQL -> Typesense):', new Date().toISOString());
 
   await diskPreflight(typesense);
+  await memoryPreflight(typesense);
 
   // The one access context that reads every item regardless of ACL. It resolves through
   // readClause like any other caller rather than bypassing the predicate — see systemAccess.
@@ -358,6 +436,7 @@ module.exports = {
   pageAll,
   importBatch,
   purgeOrphanCollections,
+  memoryPreflight,
   diskPreflight,
   syncSchema
 };

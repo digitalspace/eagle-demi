@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  fullSync, pageAll, importBatch, diskPreflight, SYNC_ORDER, SOURCES
+  fullSync, pageAll, importBatch, diskPreflight, memoryPreflight, syncSchema, SYNC_ORDER, SOURCES
 } = require('../../src/typesense/full-sync-nosql');
 const { systemAccess, TIER } = require('../../src/helpers/access-sql');
 const { readClause, visibilityFor } = require('../../src/helpers/access-sql');
@@ -214,6 +214,98 @@ test('diskPreflight', async (t) => {
 
   await t.test('unusable metrics warn but do not abort', async () => {
     await diskPreflight(fakeTypesense({ metrics: { system_disk_total_bytes: 0 } }));
+  });
+});
+
+test('memoryPreflight', async (t) => {
+  const withLimit = async (gib, fn) => {
+    const prev = process.env.TYPESENSE_MEMORY_LIMIT_GIB;
+    if (gib === undefined) delete process.env.TYPESENSE_MEMORY_LIMIT_GIB;
+    else process.env.TYPESENSE_MEMORY_LIMIT_GIB = String(gib);
+    try { await fn(); } finally {
+      if (prev === undefined) delete process.env.TYPESENSE_MEMORY_LIMIT_GIB;
+      else process.env.TYPESENSE_MEMORY_LIMIT_GIB = prev;
+    }
+  };
+  const resident = gib => fakeTypesense({
+    metrics: { typesense_memory_resident_bytes: gib * 1024 ** 3 }
+  });
+
+  await t.test('passes when the swap fits', async () => {
+    // 1 GiB resident -> ~2 GiB peak, inside 8.
+    await withLimit(8, () => memoryPreflight(resident(1)));
+  });
+
+  await t.test('aborts when the swap would exceed the limit', async () => {
+    // 3 GiB resident -> ~6 GiB peak, over a 4 GiB container. An OOM here kills the container
+    // mid-sync with nothing in the log, which is exactly what this guard exists to prevent.
+    await withLimit(4, () =>
+      assert.rejects(() => memoryPreflight(resident(3)), /Pre-flight memory check failed/));
+  });
+
+  await t.test('skips, loudly, when no limit is configured', async () => {
+    // It must not guess. system_memory_total_bytes reports the Container Apps NODE — measured at
+    // 16.77 GB against a 4 GiB container — so inferring the ceiling would overstate headroom 4x.
+    await withLimit(undefined, () => memoryPreflight(resident(99)));
+  });
+
+  await t.test('ignores system_memory_total_bytes entirely', async () => {
+    // Same numbers as the live container: a host claiming 16 GiB, a container limited to 4, and
+    // 3 GiB resident. Reading the host figure would pass this; reading the right one fails it.
+    const ts = fakeTypesense({
+      metrics: {
+        system_memory_total_bytes: 16.77 * 1024 ** 3,
+        system_memory_used_bytes: 4 * 1024 ** 3,
+        typesense_memory_resident_bytes: 3 * 1024 ** 3
+      }
+    });
+    await withLimit(4, () => assert.rejects(() => memoryPreflight(ts), /Pre-flight memory/));
+  });
+
+  await t.test('missing or unusable metrics warn but do not abort', async () => {
+    await withLimit(8, () => memoryPreflight({ metrics: { retrieve: async () => { throw new Error('404'); } } }));
+    await withLimit(8, () => memoryPreflight(fakeTypesense({ metrics: {} })));
+  });
+});
+
+test('a failed sync drops its half-built collection', async (t) => {
+  const schema = { name: 'documents', fields: [{ name: 'id', type: 'string' }] };
+
+  // SOURCES is module state shared with every other test in this file — put it back.
+  const realDocumentRepo = SOURCES.Document.repo;
+  t.after(() => { SOURCES.Document.repo = realDocumentRepo; });
+
+  await t.test('partial collection is deleted rather than left resident', async () => {
+    // The entry purge only reconciles on the NEXT run of this schema, so without this a failed
+    // chunk sync leaves a multi-GB collection in Typesense RAM until someone syncs again.
+    const ts = fakeTypesense();
+    const boom = { listVisible: async () => { throw new Error('cosmos exploded'); } };
+    SOURCES.Document.repo = boom;
+
+    await assert.rejects(
+      () => syncSchema(ts, 'Document', schema, { access: systemAccess(), lookups: { projects: new Map(), documents: new Map() } }),
+      /cosmos exploded/
+    );
+
+    const created = ts.state.deleted.filter(n => n.startsWith('documents_'));
+    assert.strictEqual(created.length, 1, 'the timestamped collection should have been dropped');
+    assert.ok(!ts.state.collections.has(created[0]), 'and gone from Typesense');
+  });
+
+  await t.test('the alias is left pointing at the old collection', async () => {
+    // A failed sync must not take the live index down with it.
+    const ts = fakeTypesense({
+      existing: [['documents_20260101000000', { num_documents: 10 }]],
+      aliases: [['documents', 'documents_20260101000000']]
+    });
+    SOURCES.Document.repo = { listVisible: async () => { throw new Error('nope'); } };
+
+    await assert.rejects(() => syncSchema(ts, 'Document', schema, {
+      access: systemAccess(), lookups: { projects: new Map(), documents: new Map() }
+    }));
+
+    assert.strictEqual(ts.state.aliases.get('documents'), 'documents_20260101000000');
+    assert.deepStrictEqual(ts.state.aliasSwaps, []);
   });
 });
 

@@ -116,7 +116,13 @@ resource typesenseContainerApp 'Microsoft.App/containerApps@2023-05-01' = {
           // 4 vCPU / 8 GiB is the ceiling on a Consumption environment: the CPU:memory ratio is
           // locked at 1:2 and `demi-ca-env-dev` has no workload profiles. If the index outgrows
           // this, the lever is TARGET_CHUNK_SIZE (2500 -> 4000 takes ~1.9M rows to ~1.2M), not
-          // more memory. Measure `typesense_memory_used_bytes` before assuming.
+          // more memory.
+          //
+          // Measure with `typesense_memory_resident_bytes` from /metrics.json — there is no
+          // `typesense_memory_used_bytes` field, and `system_memory_total_bytes` is the Container
+          // Apps NODE (16.77 GB measured against a 4 GiB container), not this limit. Keep
+          // TYPESENSE_MEMORY_LIMIT_GIB on the Function App in step with the value below; the
+          // sync's memory pre-flight reads it and skips entirely when it is unset.
           resources: {
             cpu: json('4.0')
             memory: '8.0Gi'
