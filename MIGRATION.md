@@ -236,10 +236,11 @@ cheaper, not more expensive:
 | Azure / API session | ✅ **done 2026-07-30.** Deployed `4cf1c71` (`stop`+`start`), purged 187 documents / 9,500 chunks and reset their extraction flags, committed the `FACET_BY.DocumentChunk` fix — plus the `.env` packaging fix found on the way |
 | Extraction session | LXC 109 only — `worker.py`, `ingest.py`, `gpu-extractor.service`. **Ingest is now unblocked** |
 
-The redeploy is the **gate on starting ingest at all**: on the deployed chunker the corpus is
-~9.1M chunks and per-chunk overhead alone clears the 8 GiB Consumption ceiling, so starting ingest
-first would write 9M rows that have to be thrown away. The 4.0 vCPU / 8.0Gi sizing below is only
-valid once `092c0d4` is live.
+The redeploy was the **gate on starting ingest at all** — on the old chunker the corpus was ~9.1M
+chunks and per-chunk overhead alone cleared the 8 GiB ceiling, so ingesting first would have
+written 9M rows destined for the bin. **Gate satisfied 2026-07-30**: `4cf1c71` is live, verified by
+content, and ingest is running (2,951 characters/chunk measured on the wire, against 514 on the old
+build). Typesense sizing is now a separate open question — see the MEASURED block at the top of §A.
 
 `nightlySyncTimer` is already disabled (`AzureWebJobs.nightlySyncTimer.Disabled=true`, applied and
 recycled 2026-07-30) — leave it that way.
@@ -290,10 +291,41 @@ far worse than spending GPU time on a digital PDF. `msg`/`zip`/`rtf`/legacy `doc
 have no docling reader and are recorded as extraction errors without being downloaded.
 
 **Typesense is the real ceiling.** It holds its index in RAM. The container is **live at 2.0 vCPU /
-4 GiB** — note `azure/modules/container-apps.bicep` still declares **1.0 vCPU / 2.0Gi**, so
-deploying that template today would *downsize* it. ~1.9M chunks is 5-6 GB and needs **4.0 vCPU /
-8.0Gi**, which is the maximum on a Consumption environment (the CPU:memory ratio is locked at 1:2
-and `demi-ca-env-dev` has `workloadProfiles: null`).
+4 GiB**; `azure/modules/container-apps.bicep` declares **4.0 vCPU / 8.0Gi** as of `46fdce5`, which
+is the maximum on a Consumption environment (the CPU:memory ratio is locked at 1:2 and
+`demi-ca-env-dev` has `workloadProfiles: null`). It had declared 1.0/2.0Gi, *below* what was
+deployed, so the template was a downsizing hazard until that commit.
+
+The "~1.9M chunks is 5-6 GB" that motivated 4.0/8.0Gi is **superseded** — see the two blocks
+immediately below. The real corpus is 2.92M chunks / 8.61 GB of indexed text, which 8 GiB does not
+hold.
+
+#### 🛑 MEASURED 2026-07-30 — the corpus does not fit Consumption at all
+
+The re-derivation below was right to distrust the 5-6 GB, and the real numbers are worse than its
+2x. These are **measured from 1,656 documents actually ingested through the deployed accumulating
+chunker**, not projected:
+
+| | Assumed | Measured |
+|---|---|---|
+| chunks per document | ~31 | **48.1** |
+| characters per chunk | 2,500 | 2,951 |
+| **corpus chunks** | ~1.9M | **2.92M** |
+| **indexed text (`content`)** | 4.7 GB | **8.61 GB** |
+
+The earlier 78 K characters/document came from an early sample biased toward the text path; the
+real mean is **142 KB/document**. At Typesense's documented 2-3x against searched fields that is
+**17-26 GB**, and even the favourable 1.5x is ~12.9 GB. **8 GiB is the Consumption ceiling, so
+`46fdce5`'s 4.0/8.0Gi is insufficient rather than merely tight.** Raising the container is no
+longer a lever — the options are a workload-profiles environment or indexing less of the corpus.
+
+Extraction and ingest are unaffected and continue: chunks in Cosmos are the durable artefact, and
+what goes into Typesense is a separate decision made against this table.
+
+**One correction to the measurement below.** The "~4 KB per chunk" from 507.9 MB against a 468 MB
+baseline was taken over **old-chunker rows at 514 characters**. Per-chunk cost does not transfer
+across a 4.5x change in chunk size — the meaningful unit is RAM per *character* of indexed text.
+That 39.9 MB delta is also within noise on a 500 MB base, which the note already says.
 
 **Re-derive the 5-6 GB before committing to 4.0/8.0Gi — it looks optimistic by ~2x.** Typesense's
 own rule (`typesense.org/docs/guide/system-requirements`) is **2x-3x RAM against the size of the
@@ -401,14 +433,14 @@ Delete this block when the corpus is done and the extraction host is decommissio
 - **Do not re-enable `nightlySyncTimer`.** It is disabled via the app setting
   `AzureWebJobs.nightlySyncTimer.Disabled=true` until the one-off sync has run. Every nightly run
   at this volume times out at 10 minutes and orphans a `document_chunks_<timestamp>` collection.
-- **Do not `az deployment` `azure/main.bicep`** until the Typesense sizing change lands — the
-  template still says 1.0 vCPU / 2.0Gi and would downsize the live 2.0 / 4 GiB container.
+- **`azure/main.bicep` now declares 4.0 vCPU / 8.0Gi (`46fdce5`), not the old 1.0/2.0Gi** — the
+  downsizing hazard is gone. Deploying it would *raise* the live 2.0/4 GiB container. Hold anyway
+  until the sizing question is settled: per the MEASURED block at the top of §A, 8 GiB does not fit
+  the corpus either, so deploying it buys headroom without solving anything.
 - **Do not change `TARGET_CHUNK_SIZE`, `MAX_CHUNK_SIZE` or `OVERLAP_SIZE` while ingest is
   running.** Chunk ids are derived from the split, so a mid-run change orphans every chunk already
-  written instead of reconciling with it. **Superseded in one direction by the STOP block at the
-  top of §A:** the deployed chunker is the pre-accumulation one, so the split is already wrong and
-  the chunks already written are already the thing this rule protects. Deploy `092c0d4` and
-  re-ingest the 178 documents now, while that is minutes rather than days.
+  written instead of reconciling with it. (The earlier exception to this rule is spent — the
+  accumulating chunker is deployed and the stale chunks were purged.)
 - **Do not stop/start `demi-api-dev` casually.** The extraction host retries with backoff so a
   restart costs seconds rather than documents, but a deploy mid-run still costs time.
 - Ingest is safe to interrupt at any point: `POST /documents/:id/chunks` is idempotent and the host
@@ -427,6 +459,39 @@ delete the `MONGODB_*` and `COSMOS_DATABASE` app settings; delete the account **
 endpoint** (the endpoint is the only flat recurring charge, ~$7/mo).
 
 `readFilter` tier 3 — the no-`read[]` fallback — goes with it. The gate above is now met.
+
+#### ⚠️ That list is incomplete, and following it literally takes the app down
+
+Verified 2026-07-30. **Seven more files depend on `src/models/*` and are not named above.** Deleting
+`src/models/*` without them does not break a route — it breaks **boot**:
+
+```
+src/app.js  ->  src/utils/logger.js:6  ->  require('../models/log')  ->  src/db/cosmos.js
+```
+
+`src/utils/logger.js` is loaded by `src/app.js`, `src/server.js`, `src/middleware/request-id.js`
+and `src/middleware/http-logger.js` — the core boot path, none of it legacy. That one is the
+blocker; it needs its `LogModel` write path moved to a repository (or dropped) *before* anything
+else in Phase 8 happens.
+
+The other six are required **unconditionally** by `src/routes/api.js:41-48`, outside the
+`USE_COSMOS_NOSQL` branch, so they are live on the NoSQL path today while still reading through
+the Mongo layer:
+
+| File | Legacy dependency |
+|---|---|
+| `src/utils/logger.js` | `../models/log` — **boot path, fix first** |
+| `src/controllers/search.js` | `../models/{project,document}`, `../helpers/access` |
+| `src/controllers/db.js` | `../models/{project,document,boundary,record}` |
+| `src/controllers/log.js` | `../models/log` |
+| `src/controllers/wildfire.js` | `../models/wildfire` |
+| `src/scripts/sync-nrpti.js` | `../models/{record,project}`, `../db/cosmos` |
+| `src/scripts/sync-wildfires.js` | `../models/{wildfire,project}`, `../db/cosmos` |
+
+Note `src/controllers/search.js` is the DocumentChunk search path, so it is not optional. These
+need porting to `src/repositories/*` and `access-sql.js`, not deleting — which makes Phase 8
+meaningfully larger than "delete a list of files". Also unrelated but adjacent:
+`src/models/syncState.js` has zero requires anywhere and can simply go.
 
 ### C. Phase 3b — document storage on Azure Blob (optional)
 
