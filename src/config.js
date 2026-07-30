@@ -61,6 +61,20 @@ const config = {
   // This disappears once documents move to Azure Blob with a single clean key layout.
   minioKeyPrefix: process.env.MINIO_KEY_PREFIX || '',
 
+  // Which object-storage backend serves documents: 'minio' or 'azure'.
+  //
+  // Explicit, never inferred from whichever credentials happen to be present. Inferring a mode
+  // switch from unrelated config is how COSMOS_ENDPOINT silently activated the wrong data layer
+  // on deploy. An unknown value throws at load rather than falling back — see src/storage/.
+  storageBackend: process.env.STORAGE_BACKEND || 'minio',
+
+  // Azure Blob backend. Keyless: auth is Entra managed identity, so there is no account key
+  // here to leak or rotate. Each environment gets its OWN container, which is what makes
+  // "dev accidentally points at prod storage" structurally impossible rather than merely
+  // discouraged — so there is no key-prefix equivalent.
+  azureStorageAccount:   process.env.AZURE_STORAGE_ACCOUNT || '',
+  azureStorageContainer: process.env.AZURE_STORAGE_CONTAINER || '',
+
   doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
   doclingKey:   process.env.DOCLING_API_KEY  || '',
 

@@ -35,7 +35,7 @@ and `contentExtracted: true` flags with no chunks behind them.
 | **2b — Delete semantics** | ✅ done (`7f5e4a8`) | Hard delete + index removal; unpublish is the hide mechanism |
 | **2c — Object key + switch fixes** | ✅ done (`cc8a6b7`) | Downloads verified end to end; switch is now an explicit flag |
 | **3 — Merge engine** | ✅ done | `src/merge/project.js` + 41 tests on the real 382-record Track dataset. Project scope now derived from Keycloak roles |
-| **3b — Blob storage** | ⬜ **NEXT**, low urgency | Dev bucket already holds the full corpus (see below), so this is an architecture choice, not a prerequisite |
+| **3b — Blob storage** | ✅ code + template written, ⏸ **not deployed, nothing copied** | `src/storage/` abstraction live on both backends; Bicep validated; copy script dry-run only |
 | **4 — Seed** | ⬜ todo | Track → Eagle merge → documents → NRPTI (linked only) → boundaries |
 | **5 — Cut over** | ⬜ todo | Set `USE_COSMOS_NOSQL=true` + `COSMOS_*`; `stop` then `start` |
 | **6 — Typesense** | ⬜ todo | Strip `epic`/List/PCP lookups, export real `fullSync()` |
@@ -148,10 +148,80 @@ explicit rather than implied.
 Publishing a document under an **unpublished project returns 409** — a document may never
 out-rank its parent.
 
+### Object storage (Phase 3b — code written, nothing deployed or copied)
+
+`src/storage/` is the single entry point. **Four operations**, because that is all the
+application does with stored files:
+
+```
+getBuffer(key)                  -> Buffer            (extraction)
+getDownloadUrl(key, opts)       -> short-lived URL   (download endpoint)
+putFile(key, filePath, ctype)   -> stored key        (upload)
+describe()                      -> non-secret info   (logs, health)
+```
+
+No bucket, container, or client escapes the module. Backend is chosen by an **explicit**
+`STORAGE_BACKEND` (`minio` | `azure`); an unknown value **throws at load**. Not inferred from
+whichever credentials are present — that is how `COSMOS_ENDPOINT` silently activated the wrong
+data layer on deploy.
+
+**A real bug this fixed.** `extract.js` read `doc.s3Key` **raw**, with no environment key
+prefix, so every extraction in dev fetched a key that 404s — the identical bug the download
+endpoint already had and had fixed at its own call site. Meanwhile both HTTP controllers were
+importing the *batch extraction script* purely to borrow its MinIO client. One cause: no single
+owner of the storage path. The prefix now lives inside the MinIO backend, where no caller can
+forget it.
+
+Verified end to end against real dev storage after the rewire: `etl/29694-marshall-road-…pdf`
+→ **638,034 bytes, `application/pdf`, `%PDF-1.4`**, byte-identical via `getDownloadUrl` and
+`getBuffer`. The `getBuffer` path is the one that was previously broken.
+
+| | MinIO | Azure Blob |
+|---|---|---|
+| Auth | access key + secret | **Entra managed identity, no keys** (`allowSharedKeyAccess: false`) |
+| Environment isolation | one bucket, nested `ozwdez/` prefix | **one container per environment** |
+| Download URL | presigned GET | **user delegation SAS**, `sp=r`, https-only |
+| Container creation | on demand | **never** — comes from Bicep |
+
+Per-environment containers are the actual safety win. Dev's `MINIO_HOST` is one env-var edit
+from prod storage today; a container reachable only by that environment's identity makes the
+mistake impossible rather than discouraged. That also removes the need for a key prefix, so the
+recorded `s3Key` becomes the blob name verbatim.
+
+**Three gotchas worth not rediscovering:**
+
+- **`Storage Blob Delegator` is required** and is *not* implied by `Storage Blob Data
+  Contributor`. Without it `getUserDelegationKey` fails, and with shared-key access disabled a
+  user delegation SAS is the only way to sign a download link — so every download breaks.
+- **The delegation key's `signedStartsOn`/`signedExpiresOn` must be `Date` objects.** The
+  generated mapper types them as `String`, but `generateBlobSASQueryParameters` calls
+  `toISOString()` on them. `BlobServiceClient.getUserDelegationKey` bridges the two internally,
+  so only hand-built keys hit this.
+- **The delegation key is cached for 30 min** (valid up to 7 days). Uncached, every download
+  adds a round trip; cached too long, it silently produces SAS URLs that fail authentication.
+
+`azure/modules/document-storage.bicep` — validated (`az bicep build`, exit 0), **standalone,
+not wired into `main.bicep`**, same as the Phase 1 modules. A separate account from the
+`demistg*` Function-host one, because that account's keys are listed by the runtime and so
+cannot have shared-key access disabled. Cool LRS, blob + container soft delete 30 d,
+versioning on, `publicAccess: 'None'`, RBAC scoped to the **container**. No key output.
+
+`src/scripts/copy-blobs-to-azure.js` — **dry run by default**; `--live` is required to write
+anything. Resumable: a destination blob of matching size is skipped, a truncated one is
+recopied, and a short write throws rather than reporting success. The MinIO **write** operation
+is not imported at all, and a test greps the compiled-away-comments source to keep it that way
+— the source is never written to.
+
+**Nothing has been deployed and nothing has been copied.** ~200 GB Cool LRS is ~$2.20/mo plus
+~$0.35 one-time in write operations, and dev already holds the full corpus in MinIO, so this
+waits on an explicit go-ahead.
+
 Notes for whoever picks this up:
 - `resolveAccess().projectScope` is **live**: it reads `project:<id>` roles from the Keycloak
   token (or an explicit `req.user.projectScope`). Adding a scoped user is a Keycloak role
   assignment — no code change. Every query inherits the restriction automatically.
+- **Never call a storage backend directly.** Go through `src/storage/`. Reaching past it is what
+  produced the raw-`s3Key` extraction bug and the controllers importing `extract.js`.
 - `patch()` is capped at 10 ops by Cosmos and guarded. Use it for partial updates; `upsert()`
   REPLACES the whole item and will erase fields written by another path.
 - Point reads bypass the query predicate, so `canRead()` is **mandatory** after `readItem()`.

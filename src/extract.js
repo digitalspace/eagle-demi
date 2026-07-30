@@ -24,8 +24,8 @@
 // Native Cosmos DB / MinIO extraction helper
 const { PDFDocument } = require('pdf-lib');
 const { MongoClient } = require('mongodb');
-const Minio  = require('minio');
 const config = require('./config');
+const storage = require('./storage');
 const { chunkMarkdown } = require('./chunker');
 
 // Pages per batch when pre-splitting large PDFs (caps peak worker memory)
@@ -89,34 +89,10 @@ function resolveLabel(val, listLookup) {
   return s;
 }
 
-// ── MinIO helper ──────────────────────────────────────────────────────────────
-
-function getMinioClient() {
-  return new Minio.Client({
-    endPoint:  config.minioHost,
-    port:      config.minioPort,
-    useSSL:    config.minioSsl,
-    accessKey: config.minioAccess,
-    secretKey: config.minioSecret,
-    // Explicit region avoids a blocking bucket-region lookup on every presign.
-    region:    config.minioRegion,
-  });
-}
-
-/**
- * Download a MinIO object and return it as a Buffer.
- */
-async function downloadFromMinio(minioClient, objectPath) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    minioClient.getObject(config.minioBucket, objectPath, (err, stream) => {
-      if (err) return reject(err);
-      stream.on('data', chunk => chunks.push(chunk));
-      stream.on('end',  ()    => resolve(Buffer.concat(chunks)));
-      stream.on('error', reject);
-    });
-  });
-}
+// Object storage lives in src/storage/. It used to live here, and the HTTP controllers
+// imported this batch script purely to borrow its client — while this script read `s3Key`
+// without the environment key prefix, so every extraction in dev fetched a key that 404s.
+// Both problems were the same problem: no single owner of the storage path.
 
 // ── docling-serve helper ──────────────────────────────────────────────────────
 
@@ -254,7 +230,7 @@ async function markDocument(db, docId, pageCount, error) {
 
 // ── Core per-document logic ───────────────────────────────────────────────────
 
-async function processDocument(db, minioClient, doc, projectLookup, listLookup) {
+async function processDocument(db, doc, projectLookup, listLookup) {
   const docId      = doc._id.toString();
   const objectPath = doc.s3Key;
 
@@ -264,7 +240,7 @@ async function processDocument(db, minioClient, doc, projectLookup, listLookup) 
   }
 
   try {
-    const buffer   = await downloadFromMinio(minioClient, objectPath);
+    const buffer   = await storage.getBuffer(objectPath);
     const filename = doc.documentFileName || objectPath.split('/').pop() || 'document';
     const markdown = await splitAndExtract(buffer, filename);
     const chunks   = chunkMarkdown(markdown);
@@ -335,7 +311,7 @@ async function main() {
     ]);
 
     // ── Process in batches ──────────────────────────────────────────────────
-    const minio = getMinioClient();
+    console.log(`Storage: ${JSON.stringify(storage.describe())}`);
     const cursor = col.find(filter, {
       projection: {
         _id: 1, s3Key: 1, project: 1,
@@ -348,7 +324,7 @@ async function main() {
 
     while (await cursor.hasNext()) {
       const doc = await cursor.next();
-      const result = await processDocument(db, minio, doc, projectLookup, listLookup);
+      const result = await processDocument(db, doc, projectLookup, listLookup);
       if (result.status === 'ok')      { ok++;      console.log(`  ✓ ${result.docId} — ${result.chunks} chunks`); }
       else if (result.status === 'skipped') { skipped++; console.log(`  - ${result.docId} — skipped: ${result.reason}`); }
       else                             { errors++;  console.error(`  ✗ ${result.docId} — ${result.reason}`); }
@@ -361,8 +337,6 @@ async function main() {
 }
 
 module.exports = {
-  getMinioClient,
-  downloadFromMinio,
   splitAndExtract,
   replaceChunks,
   markDocument,

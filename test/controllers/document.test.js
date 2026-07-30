@@ -5,7 +5,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
-const extract = require('../../src/extract');
+const storage = require('../../src/storage');
 
 const Document = require('../../src/models/document');
 const Project = require('../../src/models/project');
@@ -178,7 +178,7 @@ test('Document Controller Tests', async (t) => {
     assert.strictEqual(upsertedDoc.displayName, reqBody.displayName);
   });
 
-  await t.test('extractDocument uploads to MinIO and queues extraction task', async () => {
+  await t.test('extractDocument stores the file and queues extraction', async () => {
     const mockProject = { _id: '12345', region: 'Thompson-Okanagan' };
     const mockFile = {
       path: '/tmp/test_upload.pdf',
@@ -194,13 +194,13 @@ test('Document Controller Tests', async (t) => {
       return mockProject;
     });
 
-    const mockMinioClient = {
-      bucketExists: async () => true,
-      fPutObject: async (bucket, path, filepath) => {
-        assert.strictEqual(filepath, mockFile.path);
-      }
-    };
-    t.mock.method(extract, 'getMinioClient', () => mockMinioClient);
+    // Mocked at the storage seam, not at a MinIO client: the controller no longer knows
+    // which backend is active, which is the point of src/storage/.
+    let storedKey, storedPath;
+    t.mock.method(storage, 'putFile', async (key, filePath) => {
+      storedKey = key; storedPath = filePath;
+      return key;
+    });
     t.mock.method(fs.promises, 'unlink', async () => {});
 
     t.mock.method(Document, 'upsert', async (doc) => doc);
@@ -224,15 +224,14 @@ test('Document Controller Tests', async (t) => {
 
     assert.strictEqual(statusCode, 202);
     assert.strictEqual(jsonResponse.message, 'File stored. Text extraction runs on the next scheduled extraction pass.');
+    assert.strictEqual(storedPath, mockFile.path);
+    assert.ok(storedKey.startsWith('12345/'), 'stored under the project id');
   });
 
   await t.test('extractDocument sets a fail-closed read ACL and cannot out-rank its project', async (t2) => {
     const mockFile = { path: '/tmp/test_upload.pdf', originalname: 'test_upload.pdf' };
 
-    t2.mock.method(extract, 'getMinioClient', () => ({
-      bucketExists: async () => true,
-      fPutObject: async () => {}
-    }));
+    t2.mock.method(storage, 'putFile', async (key) => key);
     t2.mock.method(fs.promises, 'unlink', async () => {});
 
     let upserted;

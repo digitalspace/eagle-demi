@@ -3,14 +3,12 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const config = require('../config');
-const extract = require('../extract');
+const storage = require('../storage');
 
 const Document = require('../models/document');
 const Project = require('../models/project');
 
 const { rolesFor, withReadFilter, canRead, SECURE_ROLES } = require('../helpers/access');
-const { resolveObjectKey } = require('../storage/objectKey');
 
 // Presigned download links are deliberately short-lived — they carry no auth of their own,
 // so anyone holding the URL can fetch the object until it expires.
@@ -132,19 +130,19 @@ exports.downloadDocument = async (req, res) => {
       return res.status(404).json({ error: 'Document has no stored file.' });
     }
 
-    const minioClient = extract.getMinioClient();
-    // The recorded key is relative to the prod bucket; non-prod buckets nest that copy one
-    // level deeper. Without this the presigned URL is well-formed but 404s.
-    const url = await minioClient.presignedGetObject(
-      config.minioBucket,
-      resolveObjectKey(doc.s3Key),
-      DOWNLOAD_URL_TTL_SECONDS
-    );
+    const fileName = doc.s3Key.split('/').pop();
+    // The storage layer owns key resolution and expiry. It used to be done here, with the
+    // client borrowed from the extraction script — which is how extract.js came to read keys
+    // without the environment prefix while this path applied it.
+    const url = await storage.getDownloadUrl(doc.s3Key, {
+      expirySeconds: DOWNLOAD_URL_TTL_SECONDS,
+      fileName
+    });
 
     return res.json({
       url,
       expiresIn: DOWNLOAD_URL_TTL_SECONDS,
-      fileName: doc.s3Key.split('/').pop(),
+      fileName,
       displayName: doc.displayName || null
     });
   } catch (err) {
@@ -207,13 +205,10 @@ exports.extractDocument = async (req, res) => {
     const randomizedName = crypto.randomBytes(16).toString('hex') + (fileExtension ? '.' + fileExtension : '');
     const objectPath = path.posix.join(project.toString(), randomizedName);
 
-    const minioClient = extract.getMinioClient();
-    const exists = await minioClient.bucketExists(config.minioBucket);
-    if (!exists) {
-      await minioClient.makeBucket(config.minioBucket);
-    }
-
-    await minioClient.fPutObject(config.minioBucket, objectPath, file.path);
+    // `objectPath` is recorded as-is: the storage layer may store it under an environment
+    // prefix, but the metadata must stay environment-independent or the record breaks when
+    // copied between environments.
+    await storage.putFile(objectPath, file.path, file.mimetype);
     fs.promises.unlink(file.path).catch(() => {});
 
     const acl = resolveDocumentAcl(parentProject, isPublished);
