@@ -16,7 +16,9 @@ const storage = require('../../storage');
 
 const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
-const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+const chunks = require('../../repositories/chunks');
+const { chunkMarkdown } = require('../../chunker');
+const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 // Required as a module rather than destructured so the call is interceptable in tests —
 // otherwise a unit test would open a real Typesense connection and burn its retry schedule.
 const typesenseClient = require('../../typesense/typesenseClient');
@@ -46,8 +48,15 @@ exports.getDocuments = async (req, res) => {
   try {
     const access = resolveAccess(req);
 
+    // `extracted` is opt-in and tri-state: absent means "don't filter". Only the exact strings
+    // are honoured, so a typo cannot silently become `false` and hide the extracted corpus.
+    let extracted;
+    if (req.query.extracted === 'false') extracted = false;
+    if (req.query.extracted === 'true') extracted = true;
+
     const { items, continuationToken } = await documents.listVisible(access, {
       projectId: req.query.project,
+      extracted,
       pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 5000),
       continuationToken: req.query.continuationToken
     });
@@ -290,18 +299,118 @@ exports.deleteDocument = async (req, res) => {
 
     await documents.deleteById(existing.id, existing.projectId);
 
+    // The document's extracted text has to go with it. Without this the chunks survive in Cosmos
+    // and the next nightly full sync re-indexes the complete text of a deleted document — the
+    // exact thing "a chunk must never be findable when its document is not" forbids.
+    let removedChunks = 0;
+    try {
+      const result = await chunks.removeForDocument(systemAccess(), existing.id);
+      removedChunks = result.succeeded || 0;
+    } catch (err) {
+      console.error('[Document Controller] Chunk removal failed:', err.message);
+    }
+
     // Best-effort: the record is already gone, and the nightly full sync reconciles the index
     // via alias swap, so a failure here must not turn a successful delete into a 500.
     const removedFromIndex = await typesenseClient.deleteFromIndex('documents', existing.id);
+    const removedChunksFromIndex =
+      await typesenseClient.deleteChunksForDocument(existing.id);
 
     return res.json({
       message: 'Document deleted successfully',
       deleted: existing,
       removedFromIndex,
+      removedChunks,
+      removedChunksFromIndex,
       // Stated in the response so it is obvious the file survives the record.
       storedFileRetained: Boolean(existing.s3Key)
     });
   } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+/**
+ * Ingest extracted text for a document: POST /documents/:id/chunks  { markdown }
+ *
+ * The extraction host sends MARKDOWN, not chunks. Splitting stays here so `src/chunker.js` remains
+ * the single implementation — an external worker never decides how text is divided, and the
+ * payload is the same size either way.
+ *
+ * It also never supplies an ACL. `read[]` is copied from the LIVE document on every call, so a
+ * compromised or buggy extraction host cannot widen a document's visibility, and a chunk cannot
+ * out-rank its parent. This is why the route takes a document id rather than chunk objects.
+ *
+ * Idempotent: chunk ids are deterministic and replaceForDocument reconciles, so re-posting the
+ * same markdown is a no-op and a killed backfill can simply be restarted.
+ */
+exports.ingestChunks = async (req, res) => {
+  try {
+    const access = resolveAccess(req);
+    const doc = await documents.getById(access, req.params.id, req.query.project);
+    if (!doc) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const { markdown, error } = req.body || {};
+
+    // A failed extraction reports itself rather than going silent, so --retry-failed can find it.
+    if (error) {
+      await documents.patchExtraction(doc.id, doc.projectId, {
+        contentExtracted: true,
+        contentExtractedAt: new Date().toISOString(),
+        contentPageCount: 0,
+        contentExtractionError: String(error).slice(0, 500),
+        extractionMethod: 'docling'
+      });
+      return res.json({ id: doc.id, chunks: 0, recordedError: true });
+    }
+
+    if (typeof markdown !== 'string') {
+      return res.status(400).json({ error: 'markdown (string) or error (string) is required' });
+    }
+
+    const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : [...SECURE_ROLES];
+
+    const items = chunkMarkdown(markdown).map(({ pageNumber, chunkIndex, content }) => ({
+      id: chunks.chunkId(doc.id, pageNumber, chunkIndex),
+      documentId: String(doc.id),
+      projectId: String(doc.projectId),
+      pageNumber,
+      chunkIndex,
+      content,
+      read,
+      extractedAt: new Date().toISOString()
+    }));
+
+    // systemAccess() so reconciliation sees every pre-existing chunk. A caller-scoped read could
+    // miss chunks it may not see and then leave them orphaned behind the new set.
+    const result = await chunks.replaceForDocument(systemAccess(), doc.id, items);
+
+    // bulkVerified REPORTS partial failure, it does not throw. Ignoring `failed` is exactly the bug
+    // that once reported 60,578 documents written when 56,317 landed — here it would mark a
+    // document extracted while part of its text is missing, and the work list would never offer it
+    // again. Record the failure and 500 so the worker retries the whole document.
+    if (result && result.failed) {
+      const detail = `chunk write incomplete: ${result.failed} of ${items.length} failed ` +
+        `(${JSON.stringify(result.statusCounts)})`;
+      await documents.patchExtraction(doc.id, doc.projectId, {
+        contentExtractionError: detail.slice(0, 500)
+      });
+      return res.status(500).json({ error: detail });
+    }
+
+    await documents.patchExtraction(doc.id, doc.projectId, {
+      contentExtracted: true,
+      contentExtractedAt: new Date().toISOString(),
+      contentPageCount: items.length,
+      contentExtractionError: null,
+      extractionMethod: 'docling'
+    });
+
+    return res.json({ id: doc.id, chunks: items.length });
+  } catch (err) {
+    console.error('[Document Controller] Chunk ingest failed:', err.message);
     return res.status(500).json({ error: err.message });
   }
 };

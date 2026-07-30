@@ -97,6 +97,18 @@ router.put('/documents/:id', authMiddleware, documentController.updateDocument);
 if (documentController.setDocumentPublished) {
   router.put('/documents/:id/published', authMiddleware, documentController.setDocumentPublished);
 }
+// Extracted-text ingest. The body is markdown for a whole document.
+//
+// No route-level body parser: app.js already applies express.json({limit:'10mb'}) globally and
+// body-parser sets req._body, so a second instance here would silently no-op — it never raised the
+// limit it appeared to raise. 10mb of markdown is ~10M characters, far past any real document; a
+// document that does exceed it gets a 413 the worker records as an extraction error.
+//
+// The caller supplies text only — never an ACL: read[] is copied from the live document inside
+// the controller, so an extraction host cannot widen a document's visibility.
+if (documentController.ingestChunks) {
+  router.post('/documents/:id/chunks', authMiddleware, documentController.ingestChunks);
+}
 router.delete('/documents/:id', authMiddleware, documentController.deleteDocument);
 
 // Regions routes removed — the collection is empty (0 items) and nothing consumed it.

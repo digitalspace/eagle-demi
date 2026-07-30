@@ -10,6 +10,7 @@ const projects = require('../../src/repositories/projects');
 const documents = require('../../src/repositories/documents');
 const records = require('../../src/repositories/records');
 const fragments = require('../../src/repositories/fragments');
+const chunks = require('../../src/repositories/chunks');
 const { TIER } = require('../../src/helpers/access-sql');
 
 const PUBLIC = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null };
@@ -196,5 +197,112 @@ test('fragments repository', async (t) => {
     }));
     assert.strictEqual(await fragments.get(PUBLIC, '207', 'nrpti'), null);
     assert.ok(await fragments.get(ADMIN, '207', 'nrpti'));
+  });
+});
+
+test('chunks repository', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('anonymous list applies the ACL predicate', async () => {
+    const calls = captureQuery(t);
+    await chunks.listVisible(PUBLIC, {});
+
+    const { spec, container } = calls[0];
+    assert.strictEqual(container, 'chunks');
+    assert.match(spec.query, /^SELECT \* FROM c WHERE /);
+    assert.match(spec.query, /EXISTS\(SELECT VALUE r FROM r IN c\.read/);
+  });
+
+  await t.test('privileged list is unrestricted — the Typesense sync source', async () => {
+    const calls = captureQuery(t);
+    await chunks.listVisible(ADMIN, {});
+    assert.match(calls[0].spec.query, /WHERE true/);
+  });
+
+  // THE regression test for this repository. `chunks` is the only container whose partition key
+  // is not the project, and visibilityFor() uses its argument for BOTH the partition key and the
+  // project-scope field. Scoping on 'documentId' would compare PROJECT ids against DOCUMENT ids
+  // and silently match nothing — invisible today because only systemAccess() reads chunks.
+  await t.test('scoped callers are restricted on projectId, NEVER on documentId', async () => {
+    const calls = captureQuery(t);
+    await chunks.listVisible(SCOPED, {});
+
+    const { spec } = calls[0];
+    assert.match(spec.query, /c\.projectId IN \(/, 'scope must ride projectId');
+    assert.ok(!/c\.documentId IN \(/.test(spec.query),
+      'scope must NOT be applied to the partition key');
+    assert.ok(spec.parameters.some(p => p.value === '207'));
+  });
+
+  await t.test('a documentId filter is bound and becomes a single-partition read', async () => {
+    const calls = captureQuery(t);
+    await chunks.listVisible(ADMIN, { documentId: 'd1' });
+
+    const { spec, options } = calls[0];
+    assert.match(spec.query, /c\.documentId = @documentId/);
+    assert.ok(spec.parameters.some(p => p.name === '@documentId' && p.value === 'd1'));
+    assert.strictEqual(options.partitionKey, 'd1', 'must target the documentId partition');
+  });
+
+  await t.test('a hostile documentId is bound, never interpolated', async () => {
+    const calls = captureQuery(t);
+    await chunks.listVisible(ADMIN, { documentId: "x' OR 1=1 --" });
+    assert.ok(!calls[0].spec.query.includes('OR 1=1'));
+  });
+
+  await t.test('chunkId is deterministic, so re-extraction upserts instead of duplicating', () => {
+    assert.strictEqual(chunks.chunkId('d1', 3, 7), 'd1::p3::c7');
+    assert.strictEqual(chunks.chunkId('d1', 3, 7), chunks.chunkId('d1', 3, 7));
+    assert.notStrictEqual(chunks.chunkId('d1', 3, 7), chunks.chunkId('d1', 3, 8));
+  });
+
+  await t.test('replaceForDocument upserts new chunks and deletes only the surplus', async (tt) => {
+    tt.mock.method(cosmos, 'query', async () => ({
+      items: ['d1::p0::c0', 'd1::p0::c1', 'd1::p0::c2'], continuationToken: undefined
+    }));
+    let ops = null;
+    tt.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
+      ops = operations;
+      return { succeeded: operations.length, failed: 0, statusCounts: {} };
+    });
+    // bulk does not throw on partial failure — using it here is the bug that reported 60,578
+    // writes when 56,317 landed.
+    tt.mock.method(cosmos, 'bulk', async () => assert.fail('must use bulkVerified, not bulk'));
+
+    await chunks.replaceForDocument(ADMIN, 'd1', [
+      { id: 'd1::p0::c0', documentId: 'd1', projectId: '207', content: 'a', read: ['public'] },
+      { id: 'd1::p0::c1', documentId: 'd1', projectId: '207', content: 'b', read: ['public'] }
+    ]);
+
+    const upserts = ops.filter(o => o.operationType === 'Upsert');
+    const deletes = ops.filter(o => o.operationType === 'Delete');
+    assert.strictEqual(upserts.length, 2);
+    assert.deepStrictEqual(deletes.map(d => d.id), ['d1::p0::c2'], 'only the surplus is removed');
+    assert.ok(ops.every(o => o.partitionKey === 'd1'), 'one partition, so one bulk request');
+  });
+
+  await t.test('a chunk with no read[] is refused — it would fall back to isPublished', async (tt) => {
+    tt.mock.method(cosmos, 'query', async () => ({ items: [], continuationToken: undefined }));
+    await assert.rejects(
+      () => chunks.replaceForDocument(ADMIN, 'd1', [
+        { id: 'd1::p0::c0', documentId: 'd1', projectId: '207', content: 'a', read: [] }
+      ]),
+      /non-empty read/
+    );
+  });
+
+  await t.test('removeForDocument deletes every chunk of the document', async (tt) => {
+    tt.mock.method(cosmos, 'query', async () => ({
+      items: ['d1::p0::c0', 'd1::p0::c1'], continuationToken: undefined
+    }));
+    let ops = null;
+    tt.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
+      ops = operations;
+      return { succeeded: operations.length, failed: 0, statusCounts: {} };
+    });
+
+    await chunks.removeForDocument(ADMIN, 'd1');
+    assert.strictEqual(ops.length, 2);
+    assert.ok(ops.every(o => o.operationType === 'Delete' && o.partitionKey === 'd1'));
   });
 });

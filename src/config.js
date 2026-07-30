@@ -78,9 +78,14 @@ const config = {
   doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
   doclingKey:   process.env.DOCLING_API_KEY  || '',
 
-  maxChunkSize: parseInt(process.env.MAX_CHUNK_SIZE || '4000', 10),
-  minChunkSize: parseInt(process.env.MIN_CHUNK_SIZE || '100',  10),
-  overlapSize:  parseInt(process.env.OVERLAP_SIZE   || '200',  10),
+  // Chunk sizing is the main lever on Typesense RAM: the index is held in memory and per-chunk
+  // overhead dominates the text itself (~1.1 KB of RAM for a 601-character chunk, measured).
+  // Paragraphs accumulate to TARGET before a chunk is emitted; MAX is the hard split point and
+  // MIN is only the floor below which a trailing fragment is folded into the previous chunk.
+  maxChunkSize:    parseInt(process.env.MAX_CHUNK_SIZE    || '4000', 10),
+  targetChunkSize: parseInt(process.env.TARGET_CHUNK_SIZE || '2500', 10),
+  minChunkSize:    parseInt(process.env.MIN_CHUNK_SIZE    || '100',  10),
+  overlapSize:     parseInt(process.env.OVERLAP_SIZE      || '200',  10),
 
   // Docling request timeout in ms (large docs can take minutes)
   doclingTimeout: parseInt(process.env.DOCLING_TIMEOUT_MS || '300000', 10),

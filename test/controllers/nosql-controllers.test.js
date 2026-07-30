@@ -10,6 +10,7 @@ const documents = require('../../src/repositories/documents');
 const typesenseClient = require('../../src/typesense/typesenseClient');
 const projectController = require('../../src/controllers/nosql/project');
 const documentController = require('../../src/controllers/nosql/document');
+const chunksRepo = require('../../src/repositories/chunks');
 const { TIER } = require('../../src/helpers/access-sql');
 
 function mockRes() {
@@ -250,5 +251,150 @@ test('router selects the data layer from COSMOS_ENDPOINT', async (t) => {
     // has no equivalent, so the route is added conditionally rather than 501-ing.
     assert.ok(load(true).includes('/documents/:id/published'));
     assert.ok(!load(false).includes('/documents/:id/published'));
+  });
+});
+
+test('chunk ingest route', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const DOC = { id: 'd1', projectId: '207', read: ['staff', 'sysadmin'], isPublished: false };
+
+  function stubDoc(t, doc = DOC) {
+    t.mock.method(documents, 'getById', async () => doc);
+    t.mock.method(documents, 'patchExtraction', async () => ({}));
+  }
+
+  await t.test('the ACL comes from the LIVE document, never from the request', async () => {
+    // The whole reason this route takes a document id and markdown rather than chunk objects: a
+    // compromised or buggy extraction host must not be able to widen a document's visibility.
+    stubDoc(t);
+    let written = null;
+    t.mock.method(chunksRepo, 'replaceForDocument', async (access, id, items) => {
+      written = items;
+      return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+
+    await documentController.ingestChunks(
+      { params: { id: 'd1' }, query: {}, body: { markdown: 'x'.repeat(200), read: ['public'] },
+        user: ADMIN_USER },
+      mockRes()
+    );
+
+    assert.ok(written.length > 0);
+    for (const chunk of written) {
+      assert.deepStrictEqual(chunk.read, ['staff', 'sysadmin'],
+        'a caller-supplied read[] must be ignored entirely');
+      assert.ok(!chunk.read.includes('public'));
+    }
+  });
+
+  await t.test('chunk ids are deterministic, so a re-post is idempotent', async () => {
+    stubDoc(t);
+    const runs = [];
+    t.mock.method(chunksRepo, 'replaceForDocument', async (access, id, items) => {
+      runs.push(items.map(i => i.id));
+      return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+
+    const req = () => ({
+      params: { id: 'd1' }, query: {}, body: { markdown: 'y'.repeat(300) }, user: ADMIN_USER
+    });
+    await documentController.ingestChunks(req(), mockRes());
+    await documentController.ingestChunks(req(), mockRes());
+
+    assert.deepStrictEqual(runs[0], runs[1], 're-posting the same markdown yields the same ids');
+  });
+
+  await t.test('records the chunk count and clears the error on the document', async () => {
+    stubDoc(t);
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async () => ({ succeeded: 1 }));
+
+    const res = mockRes();
+    await documentController.ingestChunks(
+      { params: { id: 'd1' }, query: {}, body: { markdown: 'z'.repeat(200) }, user: ADMIN_USER },
+      res
+    );
+
+    assert.strictEqual(patched.contentExtracted, true);
+    assert.strictEqual(patched.contentExtractionError, null);
+    assert.ok(patched.contentPageCount >= 1);
+    // Five fields — cosmos.patch throws a RangeError above ten operations.
+    assert.ok(Object.keys(patched).length <= 10);
+    assert.strictEqual(res.body.chunks, patched.contentPageCount);
+  });
+
+  await t.test('a PARTIAL chunk write fails the request instead of claiming success', async () => {
+    // bulkVerified reports partial failure, it does not throw. Trusting the call rather than its
+    // report is how a sync once claimed 60,578 writes against 56,317 rows. Here it would mark a
+    // document extracted with part of its text missing — and `extracted=false` would never offer
+    // it again, so the gap would be permanent and invisible.
+    stubDoc(t);
+    const patches = [];
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patches.push(fields); return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async (access, id, items) =>
+      ({ succeeded: items.length - 1, failed: 1, statusCounts: { 201: items.length - 1, 429: 1 } }));
+
+    const res = mockRes();
+    await documentController.ingestChunks(
+      { params: { id: 'd1' }, query: {}, body: { markdown: 'q'.repeat(9000) }, user: ADMIN_USER },
+      res
+    );
+
+    assert.strictEqual(res.statusCode, 500, 'a partial write must not return success');
+    assert.ok(/incomplete/i.test(res.body.error));
+    assert.ok(patches.length > 0 && patches[patches.length - 1].contentExtractionError,
+      'the failure has to land on the document so it is findable later');
+    assert.ok(!patches.some(p => p.contentExtracted === true),
+      'a document with missing chunks must never be marked extracted');
+  });
+
+  await t.test('a reported extraction error is recorded, not swallowed', async () => {
+    stubDoc(t);
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async () =>
+      assert.fail('a failed extraction must not write chunks'));
+
+    const res = mockRes();
+    await documentController.ingestChunks(
+      { params: { id: 'd1' }, query: {}, body: { error: 'docling timed out' }, user: ADMIN_USER },
+      res
+    );
+
+    assert.strictEqual(patched.contentPageCount, 0);
+    assert.match(patched.contentExtractionError, /docling timed out/);
+    assert.strictEqual(res.body.recordedError, true);
+  });
+
+  await t.test('a document the caller cannot see is 404, and writes nothing', async () => {
+    t.mock.method(documents, 'getById', async () => null);
+    t.mock.method(chunksRepo, 'replaceForDocument', async () =>
+      assert.fail('must not write chunks for an invisible document'));
+
+    const res = mockRes();
+    await documentController.ingestChunks(
+      { params: { id: 'nope' }, query: {}, body: { markdown: 'x' }, user: ADMIN_USER }, res
+    );
+    assert.strictEqual(res.statusCode, 404);
+  });
+
+  await t.test('a missing markdown body is rejected rather than clearing the chunks', async () => {
+    stubDoc(t);
+    t.mock.method(chunksRepo, 'replaceForDocument', async () =>
+      assert.fail('an empty body must not wipe a document\'s extracted text'));
+
+    const res = mockRes();
+    await documentController.ingestChunks(
+      { params: { id: 'd1' }, query: {}, body: {}, user: ADMIN_USER }, res
+    );
+    assert.strictEqual(res.statusCode, 400);
   });
 });
