@@ -139,6 +139,86 @@ no-ACL tier below.
 
 ### A. Extraction — in progress 2026-07-30
 
+#### 🛑 STOP — the deployed API is running the OLD chunker (found 2026-07-30, measured on live dev)
+
+**`demi-api-dev` has never been redeployed with the accumulating chunker.** The running backfill is
+writing per-paragraph chunks, and the numbers below that depend on `TARGET_CHUNK_SIZE` are
+projections of code that is not in production.
+
+Verified over the App Service SSH tunnel:
+
+```
+/home/site/wwwroot/src/chunker.js   mtime 2026-06-04, grep -c TARGET_CHUNK_SIZE = 0
+/home/site/wwwroot/src/config.js    mtime 2026-07-30 01:40, has maxChunkSize only
+no MAX_CHUNK_SIZE / TARGET_CHUNK_SIZE / OVERLAP_SIZE app settings — defaults apply
+```
+
+The accumulation landed in `eea68d3` and is pushed (`092c0d4`); it was never deployed.
+
+**Measured on the live index — 9,500 chunks across 178 documents:**
+
+| | |
+|---|---|
+| Chunk length | mean **514** characters, median **292**, p90 1,254, max 4,000 (= `MAX_CHUNK_SIZE`) |
+| Per document | mean **53.4** chunks, mean **27,432** characters |
+| Single-chunk documents | 12 of 178 (6.7%) |
+
+514 is the per-paragraph shape — it matches the ~601 characters `chunkMarkdown`'s own docstring
+cites as the behaviour the accumulation replaced. If accumulation were live, a 27 K-character
+document would emit ~11 chunks, not 53.
+
+**The same old file has a second defect.** It filters `s.length >= MIN_CHUNK_SIZE` **before**
+merging, so headings, table rows and short lines are dropped and never reach the index — exactly
+what the rewritten `chunkMarkdown` comment warns about ("silently deleted headings, table rows and
+short lines from the indexed text"). Every document ingested so far has holes in it, not merely
+over-fine chunking.
+
+**What it does to the sizing plan below:**
+
+| | Deployed (old) | Committed (new) |
+|---|---|---|
+| Characters per chunk | **514, measured** | ~2,500 |
+| Corpus at ~4.7 G characters | **~9.1M chunks** | ~1.9M chunks |
+| × ~1.1 KB/chunk overhead | **~10 GB, overhead alone** | ~2.1 GB |
+
+The "~1.9M chunks is 5-6 GB and needs 4.0 vCPU / 8.0Gi" figure further down assumes the committed
+chunker. On what is actually deployed the row count is ~4.8x that, and per-chunk overhead clears
+the 8 GiB Consumption ceiling before any text is counted.
+
+**Fix now, not later.** A chunker change orphans every chunk already written (chunk ids derive from
+the split), which is the argument for doing it on day 0 rather than day 7. Deploy `092c0d4`, drop
+the chunks written so far, and reset `contentExtracted`/`contentPageCount`/`contentExtractedAt` on
+those documents so they re-enter the work list.
+
+**Two corrections to the paragraph above, verified 2026-07-30 11:55 local.** They make the fix
+cheaper, not more expensive:
+
+- **The chunks are not the backfill's.** `contentExtracted=true` is set on **187** documents, all
+  stamped `2026-07-30T17:0x` UTC — this morning's phase-0 design, which posted each document as it
+  converted. The current split-phase backfill has ingested **nothing**: `sent/`, `dead/` and
+  `ingest.jsonl` do not exist on the extraction host. So there is no "0.3% done" to preserve and
+  nothing to restart — dropping all 187 costs one re-ingest of markdown that is already on disk.
+- **The extraction host must not be touched.** Its `worker.py` is mid-change (a routing stage that
+  keeps digital PDFs off the GPU) and a validation run is live on it right now.
+  `gpu-extractor.service` is stopped **deliberately**, not crashed.
+
+**Ownership while this is in flight** — so the two halves do not collide:
+
+| Owner | Scope |
+|---|---|
+| Azure / API session | Deploy `092c0d4` (`stop`+`start`, not `restart`), purge the 187 documents' chunks and reset their extraction flags, commit the `FACET_BY.DocumentChunk` fix |
+| Extraction session | LXC 109 only — `worker.py`, `ingest.py`, `gpu-extractor.service`. Ingest stays stopped until the redeploy lands |
+
+The redeploy is the **gate on starting ingest at all**: on the deployed chunker the corpus is
+~9.1M chunks and per-chunk overhead alone clears the 8 GiB Consumption ceiling, so starting ingest
+first would write 9M rows that have to be thrown away. The 4.0 vCPU / 8.0Gi sizing below is only
+valid once `092c0d4` is live.
+
+`nightlySyncTimer` is already disabled (`AzureWebJobs.nightlySyncTimer.Disabled=true`, applied and
+recycled 2026-07-30) — leave it that way.
+
+---
+
 `document_chunks` had never held data, so Deep Search was metadata-only — which is the product's
 whole point. The ingest path is now built and live on dev; the corpus backfill is running.
 
@@ -186,13 +266,38 @@ have no docling reader and are recorded as extraction errors without being downl
 4 GiB** — note `azure/modules/container-apps.bicep` still declares **1.0 vCPU / 2.0Gi**, so
 deploying that template today would *downsize* it. ~1.9M chunks is 5-6 GB and needs **4.0 vCPU /
 8.0Gi**, which is the maximum on a Consumption environment (the CPU:memory ratio is locked at 1:2
-and `demi-ca-env-dev` has `workloadProfiles: null`). If that still is not enough, the lever is
-`TARGET_CHUNK_SIZE` 2500 → 4000 (~1.9M rows → ~1.2M). The chunk schema was already cut to only what
+and `demi-ca-env-dev` has `workloadProfiles: null`).
+
+**Re-derive the 5-6 GB before committing to 4.0/8.0Gi — it looks optimistic by ~2x.** Typesense's
+own rule (`typesense.org/docs/guide/system-requirements`) is **2x-3x RAM against the size of the
+fields you search on**, and unindexed fields genuinely live on disk and cost nothing, which is what
+makes the schema cut below load-bearing. The only searched chunk field is `content`: ~4.7 G
+characters plus overlap duplication ≈ **~5.1 GB**, so the documented range is **~10-15 GB** and even
+a favourable 1.5x (heavily repetitive EA vocabulary, the low end the docs describe) is ~7.6 GB —
+the cap, with no headroom and 468 MB already resident. Measure the real multiplier from
+`typesense_memory_resident_bytes` at two different chunk counts rather than extrapolating; if it
+lands above ~1.5x, Consumption has nothing left and the options are a workload-profiles environment
+(a new env — the same conclusion already reached for serverless GPU) or indexing less of the corpus.
+
+**`TARGET_CHUNK_SIZE` 2500 → 4000 is not the lever it looks like.** It takes ~1.9M rows to ~1.2M,
+but the indexed *text* is nearly unchanged — it removes per-row overhead and ~3% of the corpus in
+overlap. It cannot close a multi-GB gap. Sharding is not a lever either: the docs frame splitting a
+collection as a response-time optimisation, and every shard still sits in RAM on the same node.
+
+The chunk schema was already cut to only what
 is searched (`content` for `query_by`, `allowed_roles` for `filter_by`, `documentId` for delete
 cleanup — everything else is stored but `index: false`, and `centroid` and the unpopulated
 `embedding` float[768] are gone, the latter a 9 GB liability the moment anyone fills it in).
 `TYPESENSE_MIN_FREE_GIB` is a **disk** pre-flight (0.1 from the app setting, 1 hardcoded in the
 `typesense:sync-nosql` script) — it will **not** catch an OOM either way.
+
+**When a RAM pre-flight is added, it must not be built on `system_memory_*`.** Measured on live dev,
+`/metrics.json` reports `system_memory_total_bytes` = **16.77 GB** — that is the underlying node, not
+the 4 GiB container limit, so a guard using it would be wrong by 4x in the unsafe direction. Only
+`typesense_memory_resident_bytes` is meaningful, checked against a *configured* ceiling. Live
+reading 2026-07-30: **507.9 MB** resident holding 393 projects, 60,578 documents and 9,500 chunks —
+against the 468 MB recorded before any chunks, that implies ~4 KB per chunk rather than the assumed
+1.1 KB. The baseline is soft, so treat it as a reason to re-measure cleanly, not as a number.
 
 **The nightly full sync cannot carry this volume.** The Function App is Y1 Consumption and
 `host.json` pins `functionTimeout: 00:10:00`, a hard ceiling on Y1. Syncing 1.9M chunks is ~19,000
@@ -202,6 +307,14 @@ Typesense RAM and the Azure Files share. The backfill's own sync is therefore a 
 `npm run typesense:sync-nosql` inside the app container over the App Service SSH tunnel (same
 recipe as the Cosmos scripts above), with `nightlySyncTimer` disabled for the duration. Making the
 *recurring* sync viable at this corpus size is open follow-up work.
+
+**Also corrected (uncommitted, not deployed):** `FACET_BY.DocumentChunk` in
+`src/typesense/collections.js` read `'documentType,projectId,region'` — all three are
+`index: false` on `DOCUMENT_CHUNKS_SCHEMA`, and Typesense rejects a `facet_by` naming an unindexed
+field, failing the whole search. It never fired only because the DocumentChunk branch of
+`search.js` passes no `facet_by`, so the first person to wire faceting up would have inherited the
+break. Now `''`, with the reasoning inline. The only facetable fields on that schema are
+`documentId` and `allowed_roles`, neither of which is a user-facing facet.
 
 **Fixed on the way (both live on dev):**
 
@@ -228,7 +341,10 @@ Delete this block when the corpus is done and the extraction host is decommissio
   template still says 1.0 vCPU / 2.0Gi and would downsize the live 2.0 / 4 GiB container.
 - **Do not change `TARGET_CHUNK_SIZE`, `MAX_CHUNK_SIZE` or `OVERLAP_SIZE` while ingest is
   running.** Chunk ids are derived from the split, so a mid-run change orphans every chunk already
-  written instead of reconciling with it.
+  written instead of reconciling with it. **Superseded in one direction by the STOP block at the
+  top of §A:** the deployed chunker is the pre-accumulation one, so the split is already wrong and
+  the chunks already written are already the thing this rule protects. Deploy `092c0d4` and
+  re-ingest the 178 documents now, while that is minutes rather than days.
 - **Do not stop/start `demi-api-dev` casually.** The extraction host retries with backoff so a
   restart costs seconds rather than documents, but a deploy mid-run still costs time.
 - Ingest is safe to interrupt at any point: `POST /documents/:id/chunks` is idempotent and the host
