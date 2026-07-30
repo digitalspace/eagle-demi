@@ -4,11 +4,21 @@ import sys
 import zipfile
 
 def package_api(repo_root, zip_path):
+    # Pruned at the REPO ROOT ONLY. Excluding "dist" at every depth also strips
+    # node_modules/**/dist (e.g. @mongodb-js/saslprep) and ships an app that 500s on every
+    # request. Do not reintroduce that.
     root_exclude_dirs = {".git", "frontend", ".angular", "dist", "coverage", ".deploy_archives", "tmp", "__pycache__"}
     exclude_extensions = {".zip", ".tar.gz", ".map", ".md"}
 
+    # The boundary seeder reads the checked-in GeoJSON exports, which live under frontend/ because
+    # the frontend serves them too. `frontend` is otherwise excluded, so without this the seed
+    # fails with ENOENT on regional_districts.geojson only when run in Azure — never locally.
+    # Kept as one source rather than a second copy under src/data, which would drift.
+    include_subpaths = {os.path.join("frontend", "public", "assets", "geojson")}
+
     print(f"Packaging {repo_root} -> {zip_path}...")
     count = 0
+    extra = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         for root, dirs, files in os.walk(repo_root):
             rel_root = os.path.relpath(root, repo_root)
@@ -22,7 +32,22 @@ def package_api(repo_root, zip_path):
                 rel_path = os.path.relpath(full_path, repo_root)
                 z.write(full_path, rel_path)
                 count += 1
-    print(f"Packaged {count} files into {zip_path}")
+
+        for sub in sorted(include_subpaths):
+            sub_abs = os.path.join(repo_root, sub)
+            if not os.path.isdir(sub_abs):
+                raise SystemExit(f"ERROR: required data directory is missing: {sub}")
+            for root, _dirs, files in os.walk(sub_abs):
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    rel_path = os.path.relpath(full_path, repo_root)
+                    z.write(full_path, rel_path)
+                    count += 1
+                    extra += 1
+            if extra == 0:
+                raise SystemExit(f"ERROR: required data directory is empty: {sub}")
+
+    print(f"Packaged {count} files into {zip_path} ({extra} from re-included data dirs)")
 
 if __name__ == "__main__":
     root = sys.argv[1] if len(sys.argv) > 1 else "."
