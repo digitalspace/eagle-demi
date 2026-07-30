@@ -47,8 +47,15 @@ const chunksRepo = require('../repositories/chunks');
 /** Cosmos page size. Chunks carry a large `content` field, so they page smaller. */
 const PAGE_SIZES = { DocumentChunk: 100, default: 500 };
 
-/** Typesense import batch size. */
-const BATCH_SIZES = { DocumentChunk: 100, default: 500 };
+/**
+ * Typesense import batch size.
+ *
+ * Chunks import in 500s, not 100s: at ~1.9M rows the difference is ~3,800 requests instead of
+ * ~19,000, and the run has to fit a manual session rather than the 10-minute Y1 function timeout.
+ * 500 chunks is ~1.25 MB per request, which is comfortable inside the 224 MB heap the app
+ * container runs with.
+ */
+const BATCH_SIZES = { DocumentChunk: 500, default: 500 };
 
 /** Where each schema's items come from. */
 const SOURCES = {
