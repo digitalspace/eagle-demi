@@ -227,9 +227,6 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
             path: '/isPublished/?'
           }
           {
-            path: '/isDeleted/?'
-          }
-          {
             path: '/contentExtracted/?'
           }
           {
@@ -277,7 +274,11 @@ resource recordsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
             path: '/read/[]/?'
           }
           {
-            path: '/nrptiSchemaName/?'
+            // `dataset` is the DEMI field (seed/transform.js writes it from NRPTI's
+            // `_schemaName`). `nrptiSchemaName` is only the TYPESENSE index field name — indexing
+            // it here would index a property no item has, while the field the repository actually
+            // filters on stayed unindexed and scanned.
+            path: '/dataset/?'
           }
           {
             path: '/issuingAgency/?'
@@ -321,9 +322,6 @@ resource chunksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
           }
           {
             path: '/read/[]/?'
-          }
-          {
-            path: '/isDeleted/?'
           }
         ]
         excludedPaths: noIndex

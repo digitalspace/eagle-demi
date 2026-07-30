@@ -42,14 +42,10 @@ param retentionDays int = 30
 @description('Resource id of the subnet for the private endpoint. Empty disables it.')
 param peSubnetId string = ''
 
-@description('Resource id of the VNet for private DNS linking. Empty disables it.')
-param vnetId string = ''
-
 // Storage account names are 3-24 chars, lowercase alphanumeric only.
 var storageAccountName = take('demidocs${environmentName}${uniqueString(resourceGroup().id)}', 24)
 var containerName = 'documents-${environmentName}'
 var privateEndpointName = 'demi-docs-pe-${environmentName}'
-var privateDnsZoneName = 'privatelink.blob${environment().suffixes.storage}'
 
 // Built-in role definition ids. Data-plane roles for blob storage are NOT usable through the
 // control plane, so they must be assigned here.
@@ -167,8 +163,23 @@ resource humanBlobReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 }
 
 // ── Private networking ───────────────────────────────────────────────────────
-// groupIds is 'blob'. The DNS zone name is derived from environment().suffixes.storage rather
-// than hardcoded, since it differs by cloud.
+// groupIds is 'blob'.
+//
+// **NO private DNS zone, VNet link or DNS zone group is created here — deliberately.**
+//
+// Verified against the deployed environment 2026-07-30: the existing `demi-mongo-pe` carries a
+// DNS zone group named **`deployedByPolicy`** whose zone lives in a *different subscription*
+// (`bcgov-managed-lz-live-dns`). BC Gov's managed landing zone attaches private DNS through an
+// Azure Policy deploy-if-not-exists, using centrally-managed zones.
+//
+// Creating our own would have broken the deployment three ways:
+//   1. the VNet is in `c4b0a8-dev-networking`, a resource group this workload identity cannot even
+//      list — so `virtualNetworkLinks` would fail on authorization;
+//   2. it would produce a second zone for the same name, competing with the platform's;
+//   3. policy adds its own zone group to every new private endpoint regardless.
+//
+// Create the endpoint and let policy wire the DNS, exactly as the Mongo endpoint already does.
+// The `vnetId` parameter and zone-name variable are gone with the resources that used them.
 
 resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!empty(peSubnetId)) {
   name: privateEndpointName
@@ -184,40 +195,6 @@ resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!
         properties: {
           privateLinkServiceId: documentStorage.id
           groupIds: ['blob']
-        }
-      }
-    ]
-  }
-}
-
-resource privateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = if (!empty(peSubnetId) && !empty(vnetId)) {
-  name: privateDnsZoneName
-  location: 'global'
-  tags: tags
-}
-
-resource privateDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (!empty(peSubnetId) && !empty(vnetId)) {
-  parent: privateDnsZone
-  name: '${privateDnsZoneName}-link'
-  location: 'global'
-  tags: tags
-  properties: {
-    registrationEnabled: false
-    virtualNetwork: {
-      id: vnetId
-    }
-  }
-}
-
-resource privateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-09-01' = if (!empty(peSubnetId) && !empty(vnetId)) {
-  parent: privateEndpoint
-  name: 'default'
-  properties: {
-    privateDnsZoneConfigs: [
-      {
-        name: 'blob-config'
-        properties: {
-          privateDnsZoneId: privateDnsZone.id
         }
       }
     ]

@@ -22,7 +22,10 @@ const PARTITION_FIELD = 'projectId';
 function buildCriteria({ projectId, dataset, agency, projectName }) {
   const criteria = [];
   if (projectId) criteria.push(eq('projectId', String(projectId), '@projectId'));
-  if (dataset) criteria.push(eq('nrptiSchemaName', String(dataset), '@dataset'));
+  // `dataset` is the DEMI field name (seed/transform.js writes it from NRPTI's `_schemaName`).
+  // `nrptiSchemaName` is only the TYPESENSE index field name — filtering on it here matched
+  // nothing, because no Cosmos item has that property.
+  if (dataset) criteria.push(eq('dataset', String(dataset), '@dataset'));
   if (agency) criteria.push(eq('issuingAgency', String(agency), '@agency'));
 
   // CONTAINS with the case-insensitive flag, not RegexMatch: caller input never becomes a

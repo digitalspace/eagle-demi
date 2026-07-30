@@ -36,9 +36,9 @@ and `contentExtracted: true` flags with no chunks behind them.
 | **2c — Object key + switch fixes** | ✅ done (`cc8a6b7`) | Downloads verified end to end; switch is now an explicit flag |
 | **3 — Merge engine** | ✅ done | `src/merge/project.js` + 41 tests on the real 382-record Track dataset. Project scope now derived from Keycloak roles |
 | **3b — Blob storage** | ✅ code + template written, ⏸ **not deployed, nothing copied** | `src/storage/` abstraction live on both backends; Bicep validated; copy script dry-run only |
-| **4 — Seed** | ⬜ todo | Track → Eagle merge → documents → NRPTI (linked only) → boundaries |
-| **5 — Cut over** | ⬜ todo | Set `USE_COSMOS_NOSQL=true` + `COSMOS_*`; `stop` then `start` |
-| **6 — Typesense** | ⬜ todo | Strip `epic`/List/PCP lookups, export real `fullSync()` |
+| **4 — Seed** | ✅ code written, dry run passes; ⏸ **nothing written** (no account) | `src/seed/` + `seed-nosql.js`; gates pass on live sources |
+| **5 — Cut over** | ⬜ **pre-flight done, awaiting cost approval** | All 3 modules `what-if` clean against the live RG; 4 blockers found and fixed — see below |
+| **6 — Typesense** | ✅ code written, ⏸ **no reindex run** (no account) | `transform-nosql.js` + `full-sync-nosql.js` behind the same `USE_COSMOS_NOSQL` flag |
 | **7 — Change feed** | ⬜ deferred | Functions trigger + `leases`. No soft-delete marker needed — index removal is explicit |
 | **8 — Decommission** | ⬜ todo | Delete the Mongo account after a clean week |
 
@@ -55,6 +55,71 @@ and `contentExtracted: true` flags with no chunks behind them.
 - **Whether to move prod document storage to Azure.** Dev only is planned. The safety argument
   is weaker than first stated — environments already use separate buckets
   (dev `asnpnn`, test `zdspnb`, prod `ozwdez`).
+
+### Phase 5 pre-flight (done 2026-07-30) — 4 blockers found and fixed
+
+All three modules now return `status: Succeeded, error: None` from
+`az deployment group what-if` against the **live** `c4b0a8-dev-rg`:
+
+| Module | Creates |
+|---|---|
+| `identity.bicep` | `demi-identity-dev` (1 resource) |
+| `cosmos-nosql.bicep` | account + `demi` database + **10 containers** + 1 `sqlRoleAssignment` + PE |
+| `document-storage.bicep` | account + blobService + `documents-dev` container + 2 role assignments + PE |
+
+**Blocker 1 — private DNS would have failed the deployment.** `document-storage.bicep` created its
+own private DNS zone, VNet link and zone group. The deployed environment says otherwise: the
+existing `demi-mongo-pe` carries a zone group named **`deployedByPolicy`** whose zone lives in a
+*different subscription* (`bcgov-managed-lz-live-dns`). BC Gov's managed landing zone attaches
+private DNS by Azure Policy. Our own version would have (a) failed on `virtualNetworkLinks`, since
+the VNet is in `c4b0a8-dev-networking` which this identity cannot even list, (b) created a second
+zone competing with the platform's, and (c) been redundant, because policy adds its own group to
+every new endpoint. **Now creates the endpoint only and lets policy wire DNS.** `cosmos-nosql.bicep`
+was already correct.
+
+**Blocker 2 — `dataset` vs `nrptiSchemaName`.** The seed writes `dataset` (from NRPTI's
+`_schemaName`); `records.buildCriteria` filtered `nrptiSchemaName`, which is the **Typesense** field
+name. No Cosmos item has that property, so `GET /api/records?dataset=Inspection` matched nothing —
+and the Bicep indexed the same wrong path, so the field actually filtered on stayed unindexed and
+scanned. Both fixed.
+
+**Blocker 3 — the network is not what `azure/main.bicep` describes.** There is **no VNet in the
+resource group**; `azure/modules/vnet.bicep` was never deployed. The real subnet is the platform
+vWAN spoke:
+
+```
+/subscriptions/…/resourceGroups/c4b0a8-dev-networking/providers/Microsoft.Network/
+  virtualNetworks/c4b0a8-dev-vwan-spoke/subnets/c4b0a8-dev-cond-ext-pe-subnet
+```
+
+Pass that as `peSubnetId`. Do not deploy `main.bicep` expecting it to build networking.
+
+**Blocker 4 — `COSMOS_ENDPOINT` is already set, pointing at the Mongo account**, and `COSMOS_KEY`
+exists. The new account has `disableLocalAuth: true`, so there is no key. These must be
+**repointed and deleted**, not merely added to — this is the same stale-config trap that made
+`Boolean(process.env.COSMOS_ENDPOINT)` silently activate the wrong data layer.
+
+#### App settings delta on `demi-api-dev`
+
+| Setting | Action |
+|---|---|
+| `COSMOS_ENDPOINT` | **repoint** to `https://demi-cosmos-dev.documents.azure.com:443/` |
+| `COSMOS_KEY` | **delete** — no key exists on the new account |
+| `AZURE_CLIENT_ID` | **add** — the UAMI client id, selects the identity |
+| `USE_COSMOS_NOSQL` | **add** `true` — the only switch that activates the new layer |
+| `COSMOS_DATABASE` | already `demi`, verify |
+| `STORAGE_BACKEND` | leave unset (defaults to `minio`) — blobs are not copied yet |
+| `MINIO_*` | **keep** — still the live object store |
+| `MONGODB_URI`, `MONGODB_DATABASE` | **keep until Phase 8** — the rollback path |
+| `WEBSITE_VNET_ROUTE_ALL`, `WEBSITE_DNS_SERVER` | already set; required for private-endpoint DNS |
+
+**Rollback is one setting:** `USE_COSMOS_NOSQL=false` plus `stop`/`start`. Both data layers coexist
+by design until Phase 8, so nothing is one-way until the Mongo account is deleted.
+
+Also verified: the deploy package includes `src/seed/`, `src/merge/`, `src/storage/`,
+`src/typesense/*-nosql.js` and `seed-nosql.js` (`package-api.py` prunes only at the repo root), so
+the seed can run inside the network via Kudu. **No user-assigned identity exists yet**, so
+`identity.bicep` must deploy first — its `principalId` feeds the other two modules.
 
 ### Why Phase 1 is written but not deployed
 
@@ -236,7 +301,7 @@ Notes for whoever picks this up:
 |---|---|
 | **Track** (`src/data/track_projects_enriched.json`, checked in) | **382 projects.** `track_project_id` is authoritative identity. **354 carry `epic_guid`** = the Eagle project `_id` |
 | **Eagle** (`eagle-dev…/api/public/search`) | **359 projects** with 60+ fields Track lacks (`eaStatus`, `eacDecision`, `phaseHistory`, `legislation`, contacts, CAC). **60,661 documents.** Carries no Track id — the join is one-directional |
-| **NRPTI** (`nrpti-api…/api/public/search`) | 67,287 Inspections alone. **`_epicProjectId` populated on 200/200 sampled** — deterministic link to an Eagle project |
+| **NRPTI** (`nrpti-api…/api/public/search`) | **99,430** across 5 datasets. `_epicProjectId` is a deterministic link to an Eagle project **when present — but it usually is not.** See below |
 | **epic.submit** | No integration exists. Future work |
 
 **Join:** 348 of 354 Track `epic_guid`s match an Eagle project · 28 Track-only · 6 dangle ·
@@ -343,6 +408,94 @@ and its hardcoded "conuma coal"/"chetwynd" cases).
 **Boundaries** store simplified geometry only; full-resolution GeoJSON is a build artifact
 already emitted to `frontend/public/assets/geojson/` and already preferred by the frontend.
 
+### The seed (Phase 4 — code written, dry run passes, nothing written)
+
+`src/seed/sources.js` (all I/O) + `src/seed/transform.js` (pure) + `src/scripts/seed-nosql.js`
+(orchestrator). **Dry run by default**; `--live` required to write. The gates run in *both*
+modes, so a dry run is a real pre-flight check and works from outside the private endpoint.
+
+```
+node src/scripts/seed-nosql.js [--live] [--only projects,documents,records,boundaries]
+                               [--limit-documents N]
+```
+
+Order is forced: projects first, because every other container partitions by a canonical project
+id only the merged registry can supply. `--only` still *builds* the registry even when projects
+are not written — a stale index would misfile documents into the wrong partition.
+
+**Live dry run against real sources, 2026-07-30:**
+
+```
+projects    382 Track + 359 Eagle → 348 matched · 28 no epic_guid · 6 dangling · 11 Eagle-only = 393
+documents   60,661 fetched → 60,578 built across 357 projects · 83 dropped · 0 without an object key
+boundaries  281: Regional District 28 · Municipality 160 · Electoral District 93
+Verification passed
+```
+
+**393**, not the estimated ~392 — 11 Eagle-only, not 10. Boundaries are **281 from the static
+exports**, not the 244 currently in the database. **83 documents dropped** (0.14% across 19
+distinct project refs), not the ~60 extrapolated from a 2,961-document sample.
+
+The `60,661` fetched matches the upstream `searchResultsTotal` exactly, which is what the
+truncation guard checks.
+
+#### Streaming, because the accumulating version did not fit the host
+
+The first implementation held all 60,661 raw payloads **plus** their transformed forms: peak RSS
+**252 MB by document 45,000 and still climbing**, against a Y1 Consumption plan with 1.5 GB.
+
+Documents and records now stream — `fetchAllPages({accumulate: false})` never builds the array,
+and the orchestrator buffers per project and flushes at `FLUSH_THRESHOLD = 100` (the Cosmos bulk
+limit, so a full buffer is exactly one request). Measured peak: **123 MB, flat**, with identical
+output — same 60,661 / 60,578 / 83 / 357 / 0.
+
+Two consequences worth knowing:
+
+- **The NRPTI aggregate is folded incrementally** (`emptySummary` + `accumulateRecord`), because
+  it needs every record but the records are no longer retained. A test asserts
+  incremental == whole-list; a divergence there would silently make the aggregate disagree with
+  the data it summarises.
+- **The page handler is awaited.** Without that the flush-per-page backpressure disappears and
+  memory grows unbounded anyway, which is the bug this change exists to prevent. Asserted by test.
+
+Progress is reported **per page, not per dataset**. Inspection alone is 673 pages, and a
+per-dataset callback emitted nothing for ~20 minutes — indistinguishable from a hung process.
+
+#### Source facts that changed the transform (all measured, 2,961-document sample)
+
+| Finding | Consequence |
+|---|---|
+| **`s3Key` is null on 100% of Eagle documents; `internalURL` holds the key** | Reading `s3Key` would seed 60,661 records with no downloadable file |
+| **`isPublished` is true on only 66% of documents that are unambiguously public by `read[]`** | `isPublished` is **derived** from `read[]`, never copied. Copying it would hide a third of the corpus |
+| `internalSize` is a number OR a numeric string (261 of 2,961 were strings) | coerced via `toNumber` |
+| `contentExtracted` is true on 99% upstream, but DEMI has no chunk data at all | **reset to false**; importing it tells the extractor there is nothing to do |
+| ~**0.1%** of documents reference a project absent from the public 359 (2024/2025 ObjectIds — unpublished) | dropped **and counted**; a silent drop looks like a complete corpus |
+| `pageSize` is **capped at 100** regardless of what is requested | asking for 1000 silently reads a tenth of the data while appearing to work |
+| Eagle `type`/`milestone`/`projectPhase` are ObjectId refs into a 213-item `List` | resolved to labels at seed time; an unresolvable ref keeps its raw value rather than becoming null |
+| NRPTI uses a **different role vocabulary** (`admin:nrced`, `admin:lng`, `admin:bcmi`) | `read[]` preserved verbatim — these are still role types, and privileged callers short-circuit to `true` anyway |
+
+#### Safety properties
+
+- **`fetchAllPages` throws on a short count.** A mid-run upstream hiccup returning a partial page
+  would otherwise read as end-of-data and quietly seed 40k fewer documents — and the result would
+  look complete. Verified against the reported `searchResultsTotal`.
+- **An unexpected response envelope throws** rather than reading as zero results and seeding an
+  empty database.
+- **Gates fail the run with a non-zero exit**: synthetic `trackProjectId >= 8,000,000`, >20
+  duplicate names, duplicate ids, any item with no `read[]`, any item with no partition key, and
+  any item whose `isPublished` has drifted from `read[]`.
+- **`items.bulk` is chunked at 100 inside `cosmos-nosql.js`**, not at the call sites. Cosmos
+  rejects more, and a caller that forgot would fail only on the large projects — i.e. in
+  production, not in a test.
+- The NRPTI aggregate is written to **`project_fragments`** as its own item with
+  `read: ['sysadmin','staff','demi-admin','compliance']`. That is simultaneously the 2 MB fix and
+  the fragment-ACL mechanism.
+
+`src/scripts/seed-documents.js` was **deleted**: it was hand-written fake documents with fake
+chunk text ("Northern Red-legged Frog…"), not a seeder, and had no dependents. The Mongo-era
+`seed-and-merge.js` and `sync_from_openshift.js` stay until Phase 5, when they are deleted with
+the legacy controllers that still import them.
+
 ### Authorization
 
 Two **orthogonal** dimensions — this is the scaling decision:
@@ -390,6 +543,75 @@ and no row-level security. Resource tokens can scope to a partition key but are 
 (incompatible with `disableLocalAuth`), expire in 1–5 h, and cannot express role types or
 fragments. The browser never touches Cosmos, so the API is already the trust boundary.
 **Keycloak stays for user identity; Entra managed identity is only for app→Cosmos.**
+
+### Typesense (Phase 6 — code written, no reindex run)
+
+`src/typesense/transform-nosql.js` + `full-sync-nosql.js`, selected by the **same**
+`USE_COSMOS_NOSQL` flag as the router (`nightly-sync.js` branches on it). The Mongo-era pair stays
+until cutover and is deleted with the legacy controllers.
+
+The old transform could not be adapted — it reads fields the NoSQL model does not have:
+
+| Mongo-era | DEMI NoSQL |
+|---|---|
+| `_id` | `id` |
+| `doc.project` | `doc.projectId` (already the canonical Track id) |
+| `legislation_2018` / `_2002` / `_1996` blocks | flat merged fields (precedence resolved at seed) |
+| `type`/`milestone` as ObjectId refs into `List` | already resolved to **labels** at seed time |
+| `sources.nrpti.recordCount` | `project_fragments`, behind its own ACL |
+
+#### Deleted rather than ported — each would have broken the first real sync
+
+- **The `List` lookup and its `MIN_LOOKUP_SIZE` guard.** DEMI has no `List` collection, so the
+  lookup returns an empty Map and the guard (`>= 50` in production) **hard-aborts every production
+  sync**.
+- **The PCP lookup**, plus `transformRecentActivity` and `transformProjectNotification`. Those two
+  are in `TRANSFORMS` but **not in `SCHEMAS`**, and the sync iterates `SCHEMAS` — unreachable dead
+  code, and the lookup existed only to feed them.
+- **The `epic` collection fallbacks.** Each schema probed `projects`/`documents`, then on a **zero
+  count** re-queried a catch-all `epic` collection by `_schemaName`. A fallback that fires on an
+  empty result turns "the seed failed" into "silently indexed something else".
+- **The three-way chunk probe** (`document_chunks` → `documentchunks` → `epic`) — a workaround for
+  two writers disagreeing on a collection name.
+- **The `test`-database fallback.** Connecting to a *different database* because the configured one
+  looked empty is how a dev sync ends up indexing another environment's data.
+
+Kept because each earns its place: the alias swap, orphan purge, disk pre-flight, the
+80%-of-previous count guard, and the import retry.
+
+#### Two security decisions
+
+**`systemAccess()`** (new, in `access-sql.js`) is the one context that reads every item regardless
+of ACL. It is built from the normal privileged tier and resolves to `true` **through `readClause`**
+— not a bypass flag, because a "skip the predicate" path is exactly what disabled access control
+here before, and it would not be covered by the SQL-asserting tests. It takes **no arguments**, so
+it can never be derived from a request. Safe for the index because Typesense enforces visibility
+itself at query time via scoped search keys embedding `filter_by: allowed_roles:=[...]`; the sync's
+only security duty is to copy `read[]` into `allowed_roles` faithfully. A test asserts every
+repository read in a full sync uses the privileged tier — a non-privileged one would silently index
+a subset.
+
+**`nrptiRecordCount` is no longer emitted** onto the project index. The compliance aggregate now
+lives in `project_fragments` behind a `compliance` ACL, and the project document is public — so
+copying the count there would leak restricted data through search no matter what the fragment's ACL
+said. It has **zero consumers** in the frontend, so nothing regresses.
+
+Also enforced in the transform, not just at write time: a child's `allowed_roles` is **intersected**
+with its project's (`constrainToProject`), and a chunk inherits its **parent document's**
+visibility — a chunk is a fragment of a document, so its text must never be findable when the
+document is not. The index is a second copy of the data; a stale or hand-edited child would
+otherwise be searchable beyond its project.
+
+An **empty project lookup aborts the sync** rather than proceeding: every child denormalises the
+project name, region and ACL, so an empty lookup would index the whole corpus with no project
+context. That is the same failure the deleted fallbacks used to paper over.
+
+`allowed_roles` fails closed — an item with no `read[]` and no explicit `isPublished: true` gets
+`[]` (matches nothing), never `['public']`.
+
+A test asserts **every field the transforms emit is declared in `collections.js`**: Typesense
+rejects an unknown field and fails the entire batch, so a drift between transform and schema would
+break a reindex at import time rather than at review time.
 
 ### Data access
 
