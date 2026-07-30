@@ -59,14 +59,31 @@ async function getById(id, type) {
   return items[0] || null;
 }
 
+/**
+ * Look up a boundary by name.
+ *
+ * `type` is OPTIONAL. It is the partition key, so supplying it makes this a single-partition
+ * query — but the frontend calls `/boundaries/<name>` with no type at all, and requiring it turned
+ * `type` into the string "undefined", which matches nothing and 404s every time. With only 281
+ * items across 3 partitions, the cross-partition fallback is cheap.
+ */
 async function getByName(name, type) {
-  const { items } = await cosmos.query(CONTAINER, {
-    query: 'SELECT * FROM c WHERE c.type = @type AND c.name = @name',
-    parameters: [
-      { name: '@type', value: String(type) },
-      { name: '@name', value: String(name) }
-    ]
-  }, { partitionKey: String(type), maxItemCount: 1 });
+  const scoped = type !== undefined && type !== null && String(type) !== '';
+
+  const spec = scoped
+    ? {
+      query: 'SELECT * FROM c WHERE c.type = @type AND c.name = @name',
+      parameters: [{ name: '@type', value: String(type) }, { name: '@name', value: String(name) }]
+    }
+    : {
+      query: 'SELECT * FROM c WHERE c.name = @name',
+      parameters: [{ name: '@name', value: String(name) }]
+    };
+
+  const options = { maxItemCount: 1 };
+  if (scoped) options.partitionKey = String(type);
+
+  const { items } = await cosmos.query(CONTAINER, spec, options);
   return items[0] || null;
 }
 
