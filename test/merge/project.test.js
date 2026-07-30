@@ -173,31 +173,44 @@ test('centroid normalisation', async (t) => {
 
 test('ACL — the merge never widens visibility', async (t) => {
   await t.test('an existing Eagle read[] is preserved verbatim', () => {
-    const acl = resolveProjectAcl({ read: ['sysadmin', 'compliance'] }, true);
+    const acl = resolveProjectAcl({ read: ['sysadmin', 'compliance'] });
     assert.deepStrictEqual(acl, ['sysadmin', 'compliance']);
-    assert.ok(!acl.includes('public'), 'publishing must not widen an upstream restriction');
+    assert.ok(!acl.includes('public'), 'the merge must never widen an upstream restriction');
   });
 
-  await t.test('no read[] + published -> public plus the secure roles', () => {
-    const acl = resolveProjectAcl(null, true);
+  await t.test('a Track project with no Eagle match is public', () => {
+    // track_projects_enriched.json is the public EA registry — it is committed to a public
+    // repository — and carries no draft or publication flag.
+    const acl = resolveProjectAcl(null);
     assert.ok(acl.includes('public'));
     for (const r of SECURE_ROLES) assert.ok(acl.includes(r));
   });
 
-  await t.test('no read[] + unpublished -> fails closed', () => {
-    const acl = resolveProjectAcl(null, false);
-    assert.ok(!acl.includes('public'));
-    assert.deepStrictEqual(acl, SECURE_ROLES);
-  });
-
   await t.test('an empty read[] array is treated as absent, not as deny-all', () => {
-    assert.ok(resolveProjectAcl({ read: [] }, true).includes('public'));
+    assert.ok(resolveProjectAcl({ read: [] }).includes('public'));
   });
 
-  await t.test('is_active false marks a Track draft unpublished and non-public', () => {
+  await t.test('isPublished MIRRORS read[] — it is never an independent signal', () => {
+    // It used to be `track.is_active !== false`, conflating a Track-internal record flag with
+    // publication. 23 projects (Ajax Mine, Aurora LNG Digby Island) then read isPublished:false
+    // while Eagle's ACL correctly made them public. Nothing leaked, but the mirror lied — and
+    // setDocumentPublished 409s on an unpublished parent, so no document could be published
+    // under any of them.
+    const restricted = mergeTrackProject(TRACK_207, { _id: 'x', read: ['sysadmin'] }, OPTS);
+    assert.strictEqual(restricted.isPublished, false);
+    assert.ok(!restricted.read.includes('public'));
+
+    const open = mergeTrackProject(TRACK_207, { _id: 'x', read: ['public', 'staff'] }, OPTS);
+    assert.strictEqual(open.isPublished, true);
+  });
+
+  await t.test('is_active does NOT affect visibility, and is still carried through', () => {
+    // Of the 40 Track projects it marks inactive, 17 are "Pre Work", 8 "Under Work" and 2
+    // "Operation" — it is orthogonal to both publication and lifecycle stage.
     const merged = mergeTrackProject({ ...TRACK_207, is_active: false }, null, OPTS);
-    assert.strictEqual(merged.isPublished, false);
-    assert.ok(!merged.read.includes('public'));
+    assert.strictEqual(merged.isPublished, true, 'a closed project is still public');
+    assert.ok(merged.read.includes('public'));
+    assert.strictEqual(merged.isActive, false, 'the flag itself is preserved');
   });
 });
 

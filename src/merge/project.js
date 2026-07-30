@@ -120,15 +120,18 @@ function normalizeCentroid(track, eagle) {
 /**
  * The ACL for a merged project.
  *
- * Eagle already carries a `read[]` in the EPIC role-type vocabulary; preserve it when present
- * so an upstream restriction is not widened by the merge. Otherwise derive from publication
- * state. Always fail closed — never default to public.
+ * Eagle already carries a `read[]` in the EPIC role-type vocabulary; preserve it when present so
+ * an upstream restriction is never widened by the merge.
+ *
+ * With no Eagle match, a Track project is PUBLIC. `track_projects_enriched.json` is the public EA
+ * project registry — it is committed to a public repository — so every project in it is public
+ * information. There is no draft or publication flag in that data to distinguish otherwise.
  */
-function resolveProjectAcl(eagle, isPublished) {
+function resolveProjectAcl(eagle) {
   if (eagle && Array.isArray(eagle.read) && eagle.read.length > 0) {
     return eagle.read;
   }
-  return isPublished ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES];
+  return ['public', ...SECURE_ROLES];
 }
 
 /**
@@ -147,8 +150,19 @@ function mergeTrackProject(track, eagle, opts = {}) {
   const now = opts.now || new Date().toISOString();
   const id = String(track.track_project_id);
 
-  // Track projects are published; drafts arrive as is_active false per the DFL rules.
-  const isPublished = track.is_active !== false;
+  // isPublished MIRRORS the ACL — it is never an independent signal.
+  //
+  // It used to be `track.is_active !== false`, which conflated two unrelated things. `is_active`
+  // is a Track-internal record flag, not a publication or lifecycle state: of the 40 projects it
+  // marks inactive, 17 are "Pre Work", 8 "Under Work" and 2 "Operation", while only 12 of the 109
+  // "Closed" projects carry it. That produced 23 projects — Ajax Mine, Aurora LNG Digby Island —
+  // reading `isPublished: false` while Eagle's ACL correctly made them publicly visible. Nothing
+  // leaked, but the mirror lied, and setDocumentPublished 409s against an unpublished parent, so
+  // no document could be published under any of them.
+  //
+  // `is_active` is still carried through, as `isActive` via TRACK_PRECEDENCE.
+  const read = resolveProjectAcl(eagle);
+  const isPublished = read.includes('public');
 
   const merged = {
     id,
@@ -156,7 +170,7 @@ function mergeTrackProject(track, eagle, opts = {}) {
     eagleId: hasValue(track.epic_guid) ? String(track.epic_guid) : null,
     sourceSystem: 'track',
     isPublished,
-    read: resolveProjectAcl(eagle, isPublished),
+    read,
     updatedAt: now
   };
 
@@ -205,7 +219,10 @@ function mergeEagleOnlyProject(eagle, opts = {}) {
 
   const now = opts.now || new Date().toISOString();
   const eagleId = String(eagle._id);
-  const isPublished = eagle.activeStatus !== false;
+
+  // Same rule as the Track path: the flag mirrors the ACL rather than a separate status field.
+  const read = resolveProjectAcl(eagle);
+  const isPublished = read.includes('public');
 
   const merged = {
     id: `eagle-${eagleId}`,
@@ -213,7 +230,7 @@ function mergeEagleOnlyProject(eagle, opts = {}) {
     eagleId,
     sourceSystem: 'eagle',
     isPublished,
-    read: resolveProjectAcl(eagle, isPublished),
+    read,
     updatedAt: now
   };
 
