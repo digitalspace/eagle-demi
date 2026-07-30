@@ -2,7 +2,9 @@
 
 process.env.NODE_ENV = 'test';
 // Deliberately NOT one of the formerly-hardcoded literals.
-process.env.DOCLING_API_KEY = 'configured-key-for-tests';
+process.env.ADMIN_API_KEY = 'configured-key-for-tests';
+// The OUTBOUND docling secret. It must never authenticate an inbound request — see below.
+process.env.DOCLING_API_KEY = 'outbound-docling-secret';
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -29,7 +31,7 @@ test('Hardcoded admin API keys are rejected (regression: public-repo credential 
     });
   }
 
-  await t.test('still accepts the key supplied via configuration', () => {
+  await t.test('still accepts ADMIN_API_KEY, the one configured admin credential', () => {
     let user = null;
     authenticate(
       reqWithKey('configured-key-for-tests'),
@@ -38,6 +40,19 @@ test('Hardcoded admin API keys are rejected (regression: public-repo credential 
     );
     assert.ok(user);
     assert.ok(user.realm_access.roles.includes('sysadmin'));
+  });
+
+  await t.test('DOCLING_API_KEY does NOT authenticate — an outbound secret is not a credential', () => {
+    // It used to be in validKeys, so the value DEMI sends TO docling as an X-Api-Key header also
+    // granted sysadmin when sent back AT us. A logged header or a compromised extraction host was
+    // therefore full admin.
+    let failureStatus = null;
+    authenticate(
+      reqWithKey('outbound-docling-secret'),
+      () => assert.fail('the outbound docling secret was accepted as an inbound credential'),
+      (status) => { failureStatus = status; }
+    );
+    assert.strictEqual(failureStatus, 401);
   });
 });
 

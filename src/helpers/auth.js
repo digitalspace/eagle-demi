@@ -53,12 +53,13 @@ function authenticate(req, onSuccess, onFailure) {
   // 1. System-to-System API Key Check.
   // Keys come from configuration ONLY. Never hardcode a literal here — this repo is public,
   // and any literal in this list is a world-readable unconditional sysadmin credential.
+  //
+  // ADMIN_API_KEY only. `DOCLING_API_KEY` used to be in this list, which made the secret DEMI
+  // sends OUTBOUND to docling (as an X-Api-Key header) simultaneously an INBOUND credential
+  // granting sysadmin. A logged request header or a compromised extraction host was therefore
+  // full admin. An outbound secret must never be an inbound one.
   const apiKey = req.header('X-Api-Key');
-  const validKeys = [
-    config.doclingKey,
-    process.env.DOCLING_API_KEY,
-    process.env.ADMIN_API_KEY
-  ].filter(Boolean);
+  const validKeys = [process.env.ADMIN_API_KEY].filter(Boolean);
 
   if (apiKey && validKeys.length > 0 && matchesConfiguredKey(apiKey, validKeys)) {
     return onSuccess({
