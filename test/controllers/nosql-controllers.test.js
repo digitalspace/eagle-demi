@@ -7,7 +7,7 @@ const assert = require('node:assert');
 
 const projects = require('../../src/repositories/projects');
 const documents = require('../../src/repositories/documents');
-const typesenseClient = require('../../src/typesense/typesenseClient');
+const aiSearch = require('../../src/search/ai-search');
 const projectController = require('../../src/controllers/nosql/project');
 const documentController = require('../../src/controllers/nosql/document');
 const chunksRepo = require('../../src/repositories/chunks');
@@ -137,7 +137,8 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
   });
 
   await t.test('delete removes the record but NEVER the stored file', async () => {
-    t.mock.method(typesenseClient, 'deleteFromIndex', async () => true);
+    t.mock.method(aiSearch, 'deleteFromIndex', async () => 1);
+    t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 0);
     t.mock.method(documents, 'getById', async () => ({
       id: 'd1', projectId: '207', s3Key: 'etl/thing.pdf'
     }));
@@ -150,20 +151,22 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     assert.ok(deleted, 'the record is genuinely removed, not just flagged');
     assert.strictEqual(res.body.storedFileRetained, true,
       'no request path may destroy a source document — orphans are reaped by an audited job');
-    assert.strictEqual(res.body.removedFromIndex, true);
+    assert.strictEqual(res.body.removedFromSearch, 1);
   });
 
   await t.test('a failed index removal does not fail the delete', async () => {
-    // The record is already gone from Cosmos, and the nightly full sync reconciles the index
-    // via alias swap. Throwing here would leave the caller unable to tell what happened.
-    t.mock.method(typesenseClient, 'deleteFromIndex', async () => false);
+    // The record is already gone from Cosmos. Throwing here would leave the caller unable to tell
+    // what happened — and with no nightly full sync left to reconcile it, the response is now the
+    // ONLY signal that the row is still searchable.
+    t.mock.method(aiSearch, 'deleteFromIndex', async () => 0);
+    t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 0);
     t.mock.method(documents, 'getById', async () => ({ id: 'd1', projectId: '207' }));
     t.mock.method(documents, 'deleteById', async () => true);
 
     const res = mockRes();
     await documentController.deleteDocument({ params: { id: 'd1' }, query: {} }, res);
     assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(res.body.removedFromIndex, false);
+    assert.strictEqual(res.body.removedFromSearch, 0);
   });
 
   await t.test('unpublish hides without deleting; read[] loses public', async () => {
@@ -325,6 +328,97 @@ test('chunk ingest route', async (t) => {
     // Five fields — cosmos.patch throws a RangeError above ten operations.
     assert.ok(Object.keys(patched).length <= 10);
     assert.strictEqual(res.body.chunks, patched.contentPageCount);
+  });
+
+  // Provenance exists because the extraction host ROUTES: a text-layer probe keeps digital PDFs on
+  // a CPU path and only text-poor ones reach OCR. Without recording which, a text-layer artefact
+  // and an OCR error are indistinguishable afterwards, and no claim about OCR quality can be
+  // evidenced or disproved.
+  await t.test('extraction provenance round-trips onto the document when supplied', async () => {
+    stubDoc(t);
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async () => ({ succeeded: 1 }));
+
+    await documentController.ingestChunks({
+      params: { id: 'd1' },
+      query: {},
+      body: {
+        markdown: 'z'.repeat(200),
+        extraction: {
+          path: 'ocr',
+          engine: 'rapidocr',
+          doclingVersion: '2.55.0',
+          options: { force_ocr: false, images_scale: 2 },
+          at: '2026-07-31T21:00:00.000Z'
+        }
+      },
+      user: ADMIN_USER
+    }, mockRes());
+
+    assert.strictEqual(patched.extraction.path, 'ocr');
+    assert.strictEqual(patched.extraction.engine, 'rapidocr');
+    assert.strictEqual(patched.extraction.doclingVersion, '2.55.0');
+    assert.strictEqual(patched.extraction.at, '2026-07-31T21:00:00.000Z');
+    assert.ok(patched.extraction.options.includes('force_ocr'));
+    // cosmos.patch throws a RangeError above ten operations.
+    assert.ok(Object.keys(patched).length <= 10);
+  });
+
+  // Absent provenance must stay ABSENT rather than becoming an empty object: "no field" is the
+  // honest signal for the ~80k rows written before this existed, and an empty object would read
+  // as "provenance recorded, path unknown", which is a different and false statement.
+  await t.test('the field is omitted entirely when the host sends nothing', async () => {
+    stubDoc(t);
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async () => ({ succeeded: 1 }));
+
+    await documentController.ingestChunks(
+      { params: { id: 'd1' }, query: {}, body: { markdown: 'z'.repeat(200) }, user: ADMIN_USER },
+      mockRes()
+    );
+
+    assert.ok(!('extraction' in patched), 'no provenance means no field');
+  });
+
+  // The extraction host is a separate externally-run process, and this object is written verbatim
+  // onto a document the API then serves — the same distrust the ACL gets.
+  await t.test('provenance from the host is whitelisted and bounded', async () => {
+    stubDoc(t);
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, projectId, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'replaceForDocument', async () => ({ succeeded: 1 }));
+
+    await documentController.ingestChunks({
+      params: { id: 'd1' },
+      query: {},
+      body: {
+        markdown: 'z'.repeat(200),
+        extraction: {
+          path: 'something-else',
+          engine: 'e'.repeat(5000),
+          options: { blob: 'x'.repeat(5000) },
+          injected: 'must not survive'
+        }
+      },
+      user: ADMIN_USER
+    }, mockRes());
+
+    // An unrecognised path is recorded as 'unknown', not dropped: knowing the host claimed
+    // something we do not understand beats silently recording nothing.
+    assert.strictEqual(patched.extraction.path, 'unknown');
+    assert.strictEqual(patched.extraction.engine.length, 60);
+    assert.ok(patched.extraction.options.length <= 500);
+    assert.ok(!('injected' in patched.extraction), 'unknown keys must not be persisted');
+    // Cosmos bills by document size, so an unbounded field is paid for on every read.
+    assert.ok(JSON.stringify(patched.extraction).length < 800);
   });
 
   await t.test('a PARTIAL chunk write fails the request instead of claiming success', async () => {

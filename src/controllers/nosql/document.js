@@ -19,9 +19,7 @@ const projects = require('../../repositories/projects');
 const chunks = require('../../repositories/chunks');
 const { chunkMarkdown } = require('../../chunker');
 const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
-// Required as a module rather than destructured so the call is interceptable in tests —
-// otherwise a unit test would open a real Typesense connection and burn its retry schedule.
-const typesenseClient = require('../../typesense/typesenseClient');
+const aiSearch = require('../../search/ai-search');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -310,18 +308,27 @@ exports.deleteDocument = async (req, res) => {
       console.error('[Document Controller] Chunk removal failed:', err.message);
     }
 
-    // Best-effort: the record is already gone, and the nightly full sync reconciles the index
-    // via alias swap, so a failure here must not turn a successful delete into a 500.
-    const removedFromIndex = await typesenseClient.deleteFromIndex('documents', existing.id);
-    const removedChunksFromIndex =
-      await typesenseClient.deleteChunksForDocument(existing.id);
+    // Best-effort, and the ONLY thing that removes this document from search: the indexer's
+    // high-water mark never sees a delete, so without these two calls a deleted document stays
+    // findable — by name, and by its text — indefinitely. A failure here must still not turn a
+    // successful delete into a 500, so it is reported in the response instead.
+    const removedFromSearch =
+      await aiSearch.deleteFromIndex(aiSearch.indexes().documents, existing.id);
+
+    // AI Search is NOT the same "best-effort" as Typesense above, and the difference matters.
+    // Typesense has a nightly full sync that reconciles whatever this misses; the AI Search
+    // indexer runs on a high-water mark over `_ts`, which cannot see deletes AT ALL (measured:
+    // a run immediately after a hard delete processed 0 items). This call is the only thing that
+    // removes the text of a deleted document from search. It still must not fail the request —
+    // the record is already gone — so the client is told what happened instead.
+    const removedChunksFromSearch = await aiSearch.deleteChunksForDocument(existing.id);
 
     return res.json({
       message: 'Document deleted successfully',
       deleted: existing,
-      removedFromIndex,
       removedChunks,
-      removedChunksFromIndex,
+      removedChunksFromSearch,
+      removedFromSearch,
       // Stated in the response so it is obvious the file survives the record.
       storedFileRetained: Boolean(existing.s3Key)
     });
@@ -343,7 +350,50 @@ exports.deleteDocument = async (req, res) => {
  *
  * Idempotent: chunk ids are deterministic and replaceForDocument reconciles, so re-posting the
  * same markdown is a no-op and a killed backfill can simply be restarted.
+ *
+ * `extraction` is OPTIONAL provenance describing how the text was produced. It exists because the
+ * extraction host routes each document — a `pypdfium2` text-layer probe keeps digital PDFs on a
+ * CPU path and only sends text-poor ones to OCR (MIGRATION.md §A) — and that decision used to be
+ * discarded. Without it, a text-layer artefact and an OCR error are indistinguishable after the
+ * fact, so "the OCR is bad" cannot be evidenced or disproved. Absent on every row written before
+ * this existed, which is itself the honest signal for "unknown path".
  */
+/** Paths the router can take. Anything else is recorded as 'unknown' rather than trusted. */
+const EXTRACTION_PATHS = ['ocr', 'text'];
+
+/**
+ * Normalise the optional `extraction` provenance from the extraction host.
+ *
+ * Whitelisted and length-capped for the same reason the ACL is never taken from this payload: the
+ * host is a separate, externally-run process, and this object is written verbatim onto a document
+ * that the API then serves. An unbounded `options` blob would also be an unbounded write — Cosmos
+ * bills by document size, and a runaway field would be paid for on every read of that document.
+ *
+ * Returns null when there is nothing usable, so callers can omit the field entirely rather than
+ * writing an empty object that later reads as "provenance recorded".
+ */
+function sanitizeExtraction(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+
+  const str = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+
+  const out = {
+    // An unrecognised path is 'unknown', NOT dropped: knowing the host claimed something we do not
+    // understand is worth more than silently recording nothing.
+    path: EXTRACTION_PATHS.includes(raw.path) ? raw.path : 'unknown',
+    engine: str(raw.engine, 60),
+    doclingVersion: str(raw.doclingVersion, 40),
+    // Free-form knobs, but bounded. JSON.stringify so a nested object cannot smuggle in depth.
+    options: raw.options === undefined ? undefined : String(JSON.stringify(raw.options)).slice(0, 500),
+    at: str(raw.at, 40) || new Date().toISOString()
+  };
+
+  for (const key of Object.keys(out)) {
+    if (out[key] === undefined) delete out[key];
+  }
+  return out;
+}
+
 exports.ingestChunks = async (req, res) => {
   try {
     const access = resolveAccess(req);
@@ -352,16 +402,20 @@ exports.ingestChunks = async (req, res) => {
       return res.status(404).json({ error: 'Document not found' });
     }
 
-    const { markdown, error } = req.body || {};
+    const { markdown, error, extraction } = req.body || {};
+    const provenance = sanitizeExtraction(extraction);
 
     // A failed extraction reports itself rather than going silent, so --retry-failed can find it.
+    // Provenance is recorded for failures too: which path failed is exactly what a retry policy
+    // needs to know.
     if (error) {
       await documents.patchExtraction(doc.id, doc.projectId, {
         contentExtracted: true,
         contentExtractedAt: new Date().toISOString(),
         contentPageCount: 0,
         contentExtractionError: String(error).slice(0, 500),
-        extractionMethod: 'docling'
+        extractionMethod: 'docling',
+        ...(provenance ? { extraction: provenance } : {})
       });
       return res.json({ id: doc.id, chunks: 0, recordedError: true });
     }
@@ -405,10 +459,11 @@ exports.ingestChunks = async (req, res) => {
       contentExtractedAt: new Date().toISOString(),
       contentPageCount: items.length,
       contentExtractionError: null,
-      extractionMethod: 'docling'
+      extractionMethod: 'docling',
+      ...(provenance ? { extraction: provenance } : {})
     });
 
-    return res.json({ id: doc.id, chunks: items.length });
+    return res.json({ id: doc.id, chunks: items.length, extraction: provenance || null });
   } catch (err) {
     console.error('[Document Controller] Chunk ingest failed:', err.message);
     return res.status(500).json({ error: err.message });
