@@ -39,6 +39,7 @@ and `contentExtracted: true` flags with no chunks behind them.
 | **4 — Seed** | ✅ **run live** | 393 projects · 60,578 documents · 281 boundaries written and verified |
 | **5 — Cut over** | ✅ **DONE** | Live on Cosmos NoSQL: 393 projects · 60,578 documents · 281 boundaries |
 | **6 — Typesense** | ✅ **DONE** | Reindexed from Cosmos: 393 projects + 60,578 documents; search verified |
+| **F — Cosmos full-text search** | ✅ stages 1-3 **deployed and validated on dev** | `chunks_fts` live, `chunks.searchText` + count pre-flight, `search.js` swapped, `GET /admin/index-progress` added. Probe set passes 0.3-0.9s. **Stage 4 backfill is next and is mandatory** |
 | **7 — Change feed** | ⬜ deferred | Functions trigger + `leases`. No soft-delete marker needed — index removal is explicit |
 | **8 — Decommission** | ⬜ todo | Delete the Mongo account after a clean week |
 
@@ -319,6 +320,14 @@ real mean is **142 KB/document**. At Typesense's documented 2-3x against searche
 `46fdce5`'s 4.0/8.0Gi is insufficient rather than merely tight.** Raising the container is no
 longer a lever — the options are a workload-profiles environment or indexing less of the corpus.
 
+> **RESOLVED 2026-07-30 — a third option won: leave Typesense entirely.** The measurements above
+> are what justified the decision, so they are kept rather than deleted. The chunk corpus moves to
+> **Cosmos DB NoSQL native full-text search**, where the text already lives, at a measured
+> **~$8-9/mo** against ~$700/mo for the only Typesense configuration that fits. Typesense is then
+> removed completely, metadata search included. **See §F for the full architecture, the spike
+> evidence, and four undocumented silent-failure traps.** Neither a workload-profiles environment
+> nor a reduced corpus is needed.
+
 Extraction and ingest are unaffected and continue: chunks in Cosmos are the durable artefact, and
 what goes into Typesense is a separate decision made against this table.
 
@@ -337,6 +346,8 @@ the cap, with no headroom and 468 MB already resident. Measure the real multipli
 `typesense_memory_resident_bytes` at two different chunk counts rather than extrapolating; if it
 lands above ~1.5x, Consumption has nothing left and the options are a workload-profiles environment
 (a new env — the same conclusion already reached for serverless GPU) or indexing less of the corpus.
+**Superseded 2026-07-30 — see the RESOLVED note above and §F: the corpus leaves Typesense entirely,
+so this sizing question is closed rather than answered.**
 
 **`TARGET_CHUNK_SIZE` 2500 → 4000 is not the lever it looks like.** It takes ~1.9M rows to ~1.2M,
 but the indexed *text* is nearly unchanged — it removes per-row overhead and ~3% of the corpus in
@@ -368,6 +379,13 @@ the 4 GiB container limit, so a guard using it would be wrong by 4x in the unsaf
 reading 2026-07-30: **507.9 MB** resident holding 393 projects, 60,578 documents and 9,500 chunks —
 against the 468 MB recorded before any chunks, that implies ~4 KB per chunk rather than the assumed
 1.1 KB. The baseline is soft, so treat it as a reason to re-measure cleanly, not as a number.
+
+> **Correction, verified 2026-07-31: the plan is `demi-plan-dev`, B1 Basic — 1 vCPU / 1.75 GB, a
+> SINGLE worker — not Y1 Consumption.** `az appservice plan list` confirms it. That changes two
+> things. The 10-minute timeout is `host.json` configuration, **not** a platform ceiling, so it can
+> simply be raised; the Container App Job below is no longer forced. And one vCPU with one worker
+> means a single blocked request takes down *every* endpoint, which is exactly what the ranked-query
+> defect did. Treat "Y1 Consumption" anywhere in this document as wrong.
 
 **The nightly full sync cannot carry this volume.** The Function App is Y1 Consumption and
 `host.json` pins `functionTimeout: 00:10:00`, a hard ceiling on Y1. Syncing 1.9M chunks is ~19,000
@@ -510,6 +528,199 @@ Nightly full sync is the backstop and works. Add when index staleness within a d
 - **Boundary rendering at all three frontend fidelities** — the API contract is verified
   (`/boundaries` and `/boundaries/<name>` both 200), the visual result is not.
 
+### F. Search architecture — Typesense → Cosmos DB full-text search
+
+**Decided 2026-07-30. Typesense is being removed entirely and replaced by Cosmos DB NoSQL native
+full-text search.** Both halves were validated against live data before committing; the spike
+results below are the evidence, and re-deriving them costs a session several hours.
+
+#### Why Typesense cannot do this job
+
+Measured on the real corpus: **2.92M chunks / 8.61 GB of indexed `content`** (48.1 chunks/doc,
+2,951 chars/chunk).
+
+- **Indexed fields are RAM-only.** There is no on-disk mode for searchable fields. Unindexed fields
+  live on disk and cost nothing — which is why the chunk schema was already cut to `content` +
+  `allowed_roles` + `documentId` — but `content` is the whole problem and cannot be unindexed.
+- **Clustering is replication, not sharding.** Typesense's own docs: "data is automatically and
+  continuously replicated across all nodes." A 3-node cluster is 3× the RAM, not a third each.
+  `union` (v28+) merges collections but they still live on one node.
+- Typesense's sizing rule is **2-3× RAM against searched-field size** → **17-26 GB**. The Container
+  Apps Consumption ceiling is **8 GiB** (CPU:memory locked 1:2, `demi-ca-env-dev` has no workload
+  profiles). So `46fdce5`'s 4.0/8.0Gi is not tight, it is **insufficient**, and a bigger container
+  is not a lever.
+
+**Chunks are already durable in Cosmos** — `src/controllers/nosql/document.js:375-384` writes the
+full `content` into the `chunks` container; `azure/modules/cosmos-nosql.bicep` simply does not index
+it. So the text can be searched where it already lives.
+
+#### Cost, from the Azure retail pricing API (canadacentral, 2026-07-30)
+
+| Option | Monthly | Holds 8.61 GB? |
+|---|---|---|
+| Typesense today (2 vCPU / 4 GiB) | ~$63 | No — 468 MB of metadata only |
+| Typesense 4 vCPU / 8 GiB (`46fdce5`) | ~$126 | **No** |
+| Typesense Dedicated D8 (8 vCPU / 32 GiB) | **~$700** | Yes |
+| Azure AI Search Basic (15 GB) | ~$81 | Yes |
+| **Cosmos FTS** | **~$8-9 measured** | Yes |
+
+Measured: **6.24 KB/chunk including index** → 2.92M ≈ **18.2 GB ≈ $5.01/mo** at $0.275/GB-month.
+A ranked chunk query is **~25 RU** at 37,797 rows; at 5× growth, 100k searches/month ≈ **$3.44/mo**
+at $0.275/1M RU. Dedicated Container Apps bills per profile vCPU *and* GiB *and* a flat $73/mo
+plan-management charge — hence the ~$700.
+
+#### Spike results — capability (12 rows) and scale (37,797 real chunks)
+
+| Test | Result |
+|---|---|
+| `FULLTEXTCONTAINS` exact / fuzzy `{term,distance}` | works · ~3 RU |
+| **`FULLTEXTSCORE` with the fuzzy object** in `ORDER BY RANK` | **works** |
+| `FULLTEXTCONTAINSALL`, stemming (`assess` → "assessed") | works |
+| **ACL predicate composed into the same `WHERE`** | **works** · 3.06 RU |
+| ACL **excludes** (anonymous, private term) / **admits** (privileged) | **0 hits / 5 hits** ✅ |
+| Ranked real terms (`river`, `hydro`, `proponent`) | 20 hits · 24.6-26.5 RU · 182-964ms |
+| Rare term (`sacrifice`, 9 occurrences) | 16 hits · 9.43 RU · 215ms |
+| Fuzzy on real typos (`rivver`, `propnent`, `climat`) | all 20 hits · 7.2-7.6 RU · ~100ms |
+| Stopword-only (`the and of`) | **0 hits** ✅ — not the whole corpus |
+| Phrase (`peace river`) | 20 hits · 30.94 RU · 678ms |
+
+Fuzzy proven genuine, not accidental: on the typo `enviromental`, plain string **0 hits**,
+`distance:0` **0 hits**, `distance:1` and `:2` **4 hits**. **No preview enrollment was required.**
+`@azure/cosmos` 4.10.0 already types and accepts `fullTextPolicy` / `fullTextIndexes`.
+
+**Metadata search** (live containers, no FTS policy — pure `STARTSWITH`/`CONTAINS`): 393 projects
+3-6.5 RU / 61-70ms; 60,578 documents `STARTSWITH` 9.23 RU / 75ms, `CONTAINS` 67.7 RU / 81ms,
+multi-field OR + ACL 39.3 RU / 62ms, project-scoped 15.1 RU / **34ms**.
+
+#### ⚠️ Six silent-failure traps — none errors, all return zero
+
+**None of these is documented by Microsoft. Each cost real time to isolate.**
+
+1. **`fetchNext()` returns empty early pages for ranked queries.** Measured: `fetchAll` → 5 hits /
+   24.72 RU; one `fetchNext` → **0 hits / 4.83 RU with `hasMoreResults: true`**; draining 3 pages →
+   5 hits. **`src/db/cosmos-nosql.js:query()` runs exactly one `fetchNext()` whenever
+   `maxItemCount` is set**, so every repository method built on it returns nothing for a ranked
+   query. This produced three wrong diagnoses during the spike. A ranked path that drains the
+   iterator is required.
+2. **Index lag after a bulk load.** Ranked queries return 0 until
+   `x-ms-documentdb-collection-index-transformation-progress` (container read with
+   `populateQuotaInfo`) reaches **100**. `FULLTEXTCONTAINS` masks it by scanning; `ORDER BY RANK`
+   cannot. **Poll it before any cutover.**
+3. **`distance: 3` returns 0 rows and does not error.** The documented max is 2. Clamp in the
+   repository.
+4. **`ORDER BY RANK` without a `WHERE` returns everything**, ranked but unfiltered.
+5. **A ranked query matching ZERO rows against a POPULATED container blocks the Node event loop.**
+   Found 2026-07-31, and it is the worst of the five. `FULLTEXTCONTAINSALL` + `ORDER BY RANK` that
+   matches nothing spins **synchronously** inside the SDK's client-side merge: the whole app stops
+   answering — `/api/config` included — for minutes, with no error, no crash, no container restart,
+   and nothing in any log. It then recovers on its own, which makes it look like a network fault.
+   Verified at index-transformation progress **100**, so it is not the index-lag trap above, and it
+   reproduces with `fuzzy=false`, so it is GA surface, not preview.
+
+   **No client-side timeout can defend against it.** `AbortSignal.timeout()` and an elapsed-time
+   check between pages are both timers, and a blocked event loop runs no timers — two fixes built
+   on that premise were deployed and failed. The only defence is to not issue the query:
+   `chunks.searchText` now runs a COUNT with the **identical** predicate and no `ORDER BY RANK`
+   first (via `countWhere`, so the two can never drift), and returns empty on zero. Measured after
+   the fix: every probe 0.3-0.9s with the app healthy throughout.
+6. **Fuzzy `{term, distance}` returns ZERO rows on this account.** Microsoft document fuzzy search
+   as **early preview**, requiring enrolment in *New features for full-text Search*, which
+   `demi-cosmos-dev` does not have — contradicting the "No preview enrollment was required" note
+   above, which was true only of base full-text search. This nearly shipped as a blank feature:
+   the frontend sends `fuzzy=true` on **every** Deep Search
+   (`registry-state.service.ts`), so honouring the flag returned nothing at all. Fuzzy is now off
+   unless `COSMOS_FTS_FUZZY=true` and degrades to exact matching, which still stems natively
+   ("assess" finds "assessed"). Enable the flag only after enrolling and verifying against live data.
+
+Also: **container creation is control-plane** — the app's managed identity gets
+`403 ... cannot be authorized by AAD token in data plane`. Containers come from ARM/Bicep only.
+And **full-text and vector policies are immutable**, so enabling FTS means a *new* container plus a
+copy — which is why the timing matters.
+
+#### Consequences for the design
+
+- **Ranked queries cannot page by continuation token** → chunk search is TOP-N, no pagination.
+  That is what the current API already does (250 max, page 1), so the contract is unaffected.
+- **Ranked chunk queries are 182-964ms**, against Typesense's tens of ms. Fine for submit-driven
+  search, and `deep-search.component.ts` already debounces at **300 ms** (`onSearchInput` clears and
+  re-sets `searchDebounceTimer`). An earlier version of this line claimed there was no debounce and
+  that adding one was mandatory — there is, and no frontend change is needed for latency.
+- **`CONTAINS` matches mid-word.** Query `env` returned "G**renv**ille to Kincolith Road". Typesense
+  `prefix=true` is a *token* prefix; `STARTSWITH` is *field* start; neither is a drop-in. Token
+  behaviour needs `STARTSWITH(f,q) OR CONTAINS(f,' '+q)`.
+- Declare the **vector policy at container creation, unpopulated** — it is immutable, so declaring
+  costs nothing and omitting forces another rebuild when AI search arrives. Retrieval itself stays
+  lexical; AI is a summarizer over the final top-N only.
+
+#### Stage sequence
+
+0. ✅ Capability spike · ✅ Scale spike — both passed 2026-07-30.
+1. ✅ **Code written 2026-07-30, not yet deployed.** `chunks_fts` in
+   `azure/modules/cosmos-nosql.bicep` — FTS policy on `/content`, vector policy declared
+   unpopulated, same `/documentId` partition key. That one resource pins **`@2025-10-15`**, the
+   earliest API version carrying `fullTextPolicy` and `indexingPolicy.fullTextIndexes`; on the
+   file's own `@2024-11-15` bicep reports them as **BCP037 warnings, not errors**, so they would be
+   dropped from the deployment and the container would come out unsearchable with nothing failing.
+   `az bicep build` is clean.
+2. ✅ **Code written 2026-07-30.** `chunks.searchText()` composes `visibilityFor` +
+   `FULLTEXTCONTAINSALL` (or per-term `FULLTEXTCONTAINS` with the fuzzy object) + `ORDER BY RANK
+   FULLTEXTSCORE`. `src/db/cosmos-nosql.js` was **not** touched: `TOP @top` bounds the result in
+   SQL and the call omits `maxItemCount`, which takes the existing `fetchAll()` branch and sidesteps
+   trap 1 without changing continuation-token behaviour for the other repositories.
+   `CONTAINER` in `src/repositories/chunks.js` now reads `chunks_fts` — that constant **is** the
+   write repoint, and `ingest.py` needs no change because the route decides nothing.
+3. ✅ **Code written 2026-07-30.** `DocumentChunk` branch of `src/controllers/search.js` now reads
+   Cosmos. Response contract unchanged. Chunks carry no labels, so `documents.listByIds` and
+   `projects.listByIds` (both new, both under the CALLER's access) hydrate `documentName` /
+   `documentType` / `projectName`, and `buildSnippet` replaces Typesense highlighting — escaping
+   first and marking after, because the frontend renders it with `[innerHTML]`.
+   **Validated on dev 2026-07-31**, one throwaway document, probe set with a health check after
+   every probe: exact 1 hit / zero-match 0 / fuzzy-degraded 0 / fuzzy-flag-with-real-term 1 /
+   stemming 1 / stopwords 0 / both-terms 1 / one-absent 0, all **0.3-0.9s, app healthy throughout**.
+   Two account facts found on the way: base full-text needs **no** account capability, but a
+   **vector policy requires `EnableNoSQLVectorSearch`**, which is not enabled — the container
+   deployment fails outright with it declared. The vector policy was therefore dropped from
+   `azure/modules/cosmos-nosql.bicep`, so adding embeddings later means a THIRD container and
+   another full copy. Enabling the capability is an account-level, effectively one-way change.
+   That resource also pins `@2025-10-15`: on the file's `@2024-11-15`, `fullTextPolicy` and
+   `fullTextIndexes` are BCP037 **warnings, not errors**, so they would be silently dropped and the
+   container would deploy unsearchable with nothing failing.
+4. Backfill `chunks` → `chunks_fts`. **Expect 429 throttling** — the spike copy died at ~37K rows
+   after `bulkVerified` exhausted 6 attempts. Pace the writes, raise the retry ceiling, run
+   detached, and wait for index progress 100 before cutover. Copy with **`Create`, treating 409 as
+   "already present, skip"**: writes are repointed as of stage 2 and chunk ids are deterministic, so
+   an `Upsert` could overwrite a document re-ingested during the copy window with its own stale rows.
+5. Remove chunks from Typesense.
+6. Metadata search onto Cosmos, then delete `src/typesense/`, the timer, the dependency, the Bicep
+   module and the Container App.
+
+**Between stages 2 and 4 the Typesense chunk index goes stale by design.** `chunks.listVisible` is
+the full sync's source and now reads `chunks_fts`, which is empty until the backfill runs, so a full
+sync would index 0 chunks. `nightlySyncTimer` is disabled and the chunk collection is deleted at
+stage 5 regardless — but do not read a 0-chunk sync as a failure.
+
+**Typesense is not a partial keep.** `grep query_by_weights|facet_by|sort_by` in
+`src/controllers/search.js` returns **nothing** — the `QUERY_BY` weights and `FACET_BY` maps in
+`collections.js` are dead config, and the Project branch already has a Cosmos fallback
+(`search.js:104-136`). What remains is token matching over 393 projects and 60,578 documents, which
+does not justify a second datastore, a second copy of the ACL, or the sync machinery around it.
+
+#### Superseded work to retire at its stage
+
+| Item | Disposition |
+|---|---|
+| `46fdce5` `container-apps.bicep` 4.0/8.0Gi | **Never deploy.** File is deleted at Stage 6 |
+| `46fdce5` `BATCH_SIZES.DocumentChunk = 500` | Dies with `SOURCES.DocumentChunk` at Stage 5 |
+| `_syncwrap.js` in `wwwroot`, and the one-off Typesense chunk sync | Delete / never run |
+| `memoryPreflight()` (`68d3b02`) | **Delete at Stage 5** — it guards only the Typesense RAM ceiling |
+| `TYPESENSE_MEMORY_LIMIT_GIB` | Never needs setting; drop the open item |
+| Orphan-purge-on-exit (`68d3b02`), `FACET_BY.DocumentChunk` (`7946942`) | Die with their files at Stage 6 |
+| `AzureWebJobs.nightlySyncTimer.Disabled=true` | Keep disabled; the timer goes at Stage 6 |
+
+**Extraction is unaffected and must not be stopped.** docling → markdown on local disk is
+backend-agnostic and is the critical path. Only `ingest.py` pauses, and only long enough to repoint
+the write target at `chunks_fts` so the remaining ~97% of the corpus never needs copying.
+
 ---
 
 ### Phase 5 pre-flight (done 2026-07-30) — 4 blockers found and fixed
@@ -577,15 +788,17 @@ Also verified: the deploy package includes `src/seed/`, `src/merge/`, `src/stora
 the seed can run inside the network via Kudu. **No user-assigned identity exists yet**, so
 `identity.bicep` must deploy first — its `principalId` feeds the other two modules.
 
-### Why Phase 1 is written but not deployed
+### Why Phase 1 was deferred, and what that bought
+
+**Historical — Phase 1 is deployed and `demi-cosmos-dev` is live. Kept because the reasoning still
+governs Phase 8's timing.**
 
 Serverless Cosmos is effectively free when idle (storage only, ~76 MB), but its **private
 endpoint is a flat ~$7/month regardless of use**. Two accounts in parallel pays it twice for
-the whole overlap. Every test here mocks the repositories, so no live account is needed to
-build and verify Phases 2–3. Provision → seed → cut over → decommission happens in one
-window, making the overlap hours instead of weeks.
-
-**Nothing billable has been created.** Dev RG still has its original 15 resources.
+the whole overlap. Every test mocks the repositories, so no live account was needed to
+build and verify Phases 2–3, and provision → seed → cut over happened in one window. The same
+double charge is running now and stops when Phase 8 deletes the Mongo account **and its private
+endpoint** — the endpoint is the recurring cost, not the idle account.
 
 ### Phase 2 progress
 
@@ -611,11 +824,14 @@ window, making the overlap hours instead of weeks.
 `src/routes/api.js` picks the controller set from **one** conditional:
 
 ```js
-const USE_NOSQL = Boolean(process.env.COSMOS_ENDPOINT);
+const USE_NOSQL = process.env.USE_COSMOS_NOSQL === 'true';
 ```
 
-Unset today, so dev still runs on Mongo and is unaffected. **Setting `COSMOS_ENDPOINT` flips
-every route at once** — that is the whole of Phase 5's code change.
+Set to `true` on `demi-api-dev` since the 2026-07-30 cutover, so every route runs on the NoSQL
+controllers. It is an **explicit flag**, not an inference: an earlier version read
+`Boolean(process.env.COSMOS_ENDPOINT)`, and because that variable was already set and pointing at
+the *Mongo* account, merely provisioning the new account would have flipped the live data layer.
+Never derive this switch from the presence of another variable.
 
 The two controller sets are deliberately **not** abstracted behind a common interface: they
 take fundamentally different inputs (Mongo filter objects vs an access context), and an

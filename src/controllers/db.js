@@ -14,6 +14,56 @@ const models = {
 };
 
 /**
+ * Containers whose index-build state is worth reporting. `chunks_fts` is the one that matters:
+ * `ORDER BY RANK` cannot be served from a partially built full-text index, so anything that lands
+ * rows in bulk has to wait for 100 before its search results mean anything.
+ */
+const INDEXED_CONTAINERS = ['chunks_fts', 'chunks', 'documents', 'projects'];
+
+/**
+ * Index-build progress per container, as a percentage.
+ *
+ * Exposed through the API rather than read out of band: Cosmos sits behind a private endpoint on a
+ * keyless account, so the app's managed identity is the only thing that can read it, and this is
+ * the app. Reused as the pre-cutover gate for any bulk load — see MIGRATION.md §F.
+ */
+async function getIndexProgress() {
+  if (process.env.USE_COSMOS_NOSQL !== 'true') return null;
+
+  const cosmosNoSql = require('../db/cosmos-nosql');
+  const progress = {};
+  for (const name of INDEXED_CONTAINERS) {
+    try {
+      progress[name] = await cosmosNoSql.indexProgress(name);
+    } catch (err) {
+      // One missing or unreadable container must not deny the whole reading.
+      progress[name] = `error: ${err.message}`;
+    }
+  }
+  return progress;
+}
+
+/**
+ * GET /admin/index-progress — index-build state, and nothing else.
+ *
+ * Deliberately NOT folded into /db/stats. That endpoint runs four `countDocuments()` calls against
+ * the LEGACY Mongo-API account first and can take minutes or hang outright, so an instrument
+ * placed behind it is unusable exactly when it is needed. An operational reading has to be cheap
+ * and independent of the thing it is being used to diagnose.
+ */
+async function getIndexProgressHandler(req, res) {
+  try {
+    const progress = await getIndexProgress();
+    if (!progress) {
+      return res.json({ success: true, active: false, reason: 'USE_COSMOS_NOSQL is not true' });
+    }
+    res.json({ success: true, active: true, database: 'demi', indexProgress: progress });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+/**
  * Get document counts and stats for all collections
  */
 async function getDbStats(req, res) {
@@ -22,12 +72,20 @@ async function getDbStats(req, res) {
     for (const [name, model] of Object.entries(models)) {
       stats[name] = await model.countDocuments();
     }
+
+    // Reported separately from `stats`, and labelled, because `stats` counts come from the LEGACY
+    // Mongo-API layer (database `epic`) while index progress is read from the NoSQL account. Two
+    // different databases in one response is exactly the confusion that made `COSMOS_DATABASE`
+    // silently repoint the live app, so neither number is allowed to look like the other's.
+    const indexProgress = await getIndexProgress();
+
     res.json({
       success: true,
       database: 'epic',
       connectionState: 'connected',
       driver: 'azure-cosmos-sdk',
-      stats
+      stats,
+      ...(indexProgress ? { nosql: { database: 'demi', indexProgress } } : {})
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -160,6 +218,7 @@ async function seedTrackDatabase(req, res) {
 
 module.exports = {
   getDbStats,
+  getIndexProgressHandler,
   seedDatabase,
   seedTrackDatabase,
   runNightlySyncHandler,

@@ -41,6 +41,27 @@ function contains(field, value, paramName, alias = 'c') {
 }
 
 /**
+ * Membership test against a bounded list of values.
+ *
+ * An EMPTY list renders as `false`, never as an omitted clause: `IN ()` is not valid SQL, and the
+ * tempting alternative — dropping the criterion — would silently widen the query from "these
+ * specific rows" to "every row the caller may see".
+ *
+ * The caller supplies the parameter prefix so two IN clauses in one query cannot collide;
+ * andClauses throws on a duplicate name rather than quietly dropping one.
+ */
+function inList(field, values, prefix, alias = 'c') {
+  if (!Array.isArray(values) || values.length === 0) {
+    return { clause: 'false', params: [] };
+  }
+  const names = values.map((_, i) => `${prefix}${i}`);
+  return {
+    clause: `${alias}.${field} IN (${names.join(', ')})`,
+    params: names.map((name, i) => ({ name, value: values[i] }))
+  };
+}
+
+/**
  * Build a SELECT with the caller's visibility predicate ANDed to the supplied criteria.
  *
  * The visibility fragment always comes first and is never optional — a repository cannot
@@ -88,4 +109,12 @@ function pageOptions({ pageSize, continuationToken, partitionKey } = {}) {
   return options;
 }
 
-module.exports = { eq, contains, isDefinedAndNotNull, selectWhere, countWhere, pageOptions };
+module.exports = {
+  eq,
+  contains,
+  inList,
+  isDefinedAndNotNull,
+  selectWhere,
+  countWhere,
+  pageOptions
+};

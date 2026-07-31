@@ -4,6 +4,56 @@ const Project = require('../models/project');
 const Document = require('../models/document');
 const { rolesFor, readFilter, withReadFilter } = require('../helpers/access');
 
+// The DocumentChunk branch runs on the NoSQL layer; the Project and Document branches above it
+// still read through the Mongo-era models. That split is transitional — this file is on the
+// Phase 8 port list (MIGRATION.md §B) and both halves collapse onto the repositories there.
+const { resolveAccess } = require('../helpers/access-sql');
+const chunksRepo = require('../repositories/chunks');
+const documentsRepo = require('../repositories/documents');
+const projectsRepo = require('../repositories/projects');
+
+/** Characters that would otherwise let stored document text inject markup into the snippet. */
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
+}
+
+const SNIPPET_RADIUS = 150;
+
+/**
+ * The matched span of a chunk, with the search terms marked.
+ *
+ * Cosmos full-text search returns no highlights, so this replaces what Typesense used to supply.
+ * The result is rendered with [innerHTML], so the document text is escaped FIRST and the <mark>
+ * tags are added afterwards — chunk content is extracted from arbitrary uploaded PDFs and must
+ * never reach the DOM as markup.
+ *
+ * Falls back to the head of the chunk when no term matches literally, which happens legitimately:
+ * Cosmos matches on stems and fuzzy edits, so "assessed" is a hit for "assess".
+ */
+function buildSnippet(content, terms) {
+  const text = String(content || '');
+  if (!text || terms.length === 0) return escapeHtml(text.slice(0, SNIPPET_RADIUS * 2));
+
+  const pattern = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const finder = new RegExp(pattern, 'iu');
+  const hit = text.search(finder);
+
+  const start = hit < 0 ? 0 : Math.max(0, hit - SNIPPET_RADIUS);
+  const window = text.slice(start, start + SNIPPET_RADIUS * 2);
+
+  // Split on a CAPTURING group so matches land on odd indices, then escape each piece
+  // individually. Escaping the whole window first and marking afterwards would let a term like
+  // "amp" match inside an `&amp;` entity and break it.
+  const marked = window
+    .split(new RegExp(`(${pattern})`, 'giu'))
+    .map((part, i) => (i % 2 ? `<mark>${escapeHtml(part)}</mark>` : escapeHtml(part)))
+    .join('');
+
+  return (start > 0 ? '…' : '') + marked + (start + SNIPPET_RADIUS * 2 < text.length ? '…' : '');
+}
+
 function getTypesenseBaseUrl() {
   if (process.env.TYPESENSE_URL) {
     return process.env.TYPESENSE_URL.replace(/\/$/, '');
@@ -45,7 +95,7 @@ exports.search = async (req, res) => {
 
     const accessContext = getUserAccessContext(req);
 
-    const typesensePageSize = Math.min(pageSize, 250);
+    const resultPageSize = Math.min(pageSize, 250);
 
     if (dataset === 'Project') {
       // Query Typesense when search keywords are present. When listing without keywords, query Cosmos DB directly to return all database projects.
@@ -59,7 +109,7 @@ exports.search = async (req, res) => {
         }
 
         const q = keywords;
-        const typesenseUrl = `${TYPESENSE_BASE_URL}/collections/projects/documents/search?q=${encodeURIComponent(q)}&query_by=name,displayName,description,proponent&num_typos=${fuzzy ? 2 : 0}&prefix=true&per_page=${typesensePageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
+        const typesenseUrl = `${TYPESENSE_BASE_URL}/collections/projects/documents/search?q=${encodeURIComponent(q)}&query_by=name,displayName,description,proponent&num_typos=${fuzzy ? 2 : 0}&prefix=true&per_page=${resultPageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
 
         try {
           const typesenseRes = await fetch(typesenseUrl, {
@@ -146,7 +196,7 @@ exports.search = async (req, res) => {
         }
 
         const q = keywords;
-        const typesenseUrl = `${TYPESENSE_BASE_URL}/collections/documents/documents/search?q=${encodeURIComponent(q)}&query_by=displayName,documentFileName,description,projectName&num_typos=${fuzzy ? 2 : 0}&prefix=true&per_page=${typesensePageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
+        const typesenseUrl = `${TYPESENSE_BASE_URL}/collections/documents/documents/search?q=${encodeURIComponent(q)}&query_by=displayName,documentFileName,description,projectName&num_typos=${fuzzy ? 2 : 0}&prefix=true&per_page=${resultPageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
 
         try {
           const typesenseRes = await fetch(typesenseUrl, {
@@ -201,56 +251,69 @@ exports.search = async (req, res) => {
         return res.json([{ searchResults: [] }]);
       }
     } else if (dataset === 'DocumentChunk') {
-      // Deep Search over extracted document TEXT.
+      // Deep Search over extracted document TEXT — served from Cosmos DB native full-text search.
       //
-      // Typesense only, with NO Cosmos fallback — full text lives exclusively in the index, and a
-      // fallback that fires on an empty result is precisely how the deleted `epic`-collection
-      // workarounds came to exist: it turns "extraction has not run" into "silently search
-      // something else". An empty result here means no chunks matched, and says so.
+      // The chunk corpus is 2.92M rows / 8.61 GB of indexed text, which needs 17-26 GB of RAM in
+      // Typesense against an 8 GiB Container Apps Consumption ceiling. The text already lives in
+      // Cosmos, so it is searched where it is (MIGRATION.md §F).
+      //
+      // NO fallback to another source on an empty result. A fallback that fires on zero rows is
+      // precisely how the deleted `epic`-collection workarounds came to exist: it turns
+      // "extraction has not run" into "silently searched something else". An empty result here
+      // means no chunks matched, and says so.
       if (!keywords) {
         return res.json([{ searchResults: [] }]);
       }
 
-      const TYPESENSE_BASE_URL = getTypesenseBaseUrl();
-      const TYPESENSE_API_KEY = process.env.TYPESENSE_API_KEY || 'local-dev-key';
-
-      const filterBy = [];
-      if (accessContext.typesenseFilter) {
-        filterBy.push(accessContext.typesenseFilter);
-      }
-
-      const typesenseUrl = `${TYPESENSE_BASE_URL}/collections/document_chunks/documents/search?q=${encodeURIComponent(keywords)}&query_by=content&num_typos=${fuzzy ? 2 : 0}&prefix=false&highlight_full_fields=content&per_page=${typesensePageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
-
       try {
-        const typesenseRes = await fetch(typesenseUrl, {
-          headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY }
+        // resolveAccess, not the Mongo-era roles above: the visibility predicate is composed into
+        // the same WHERE clause as the full-text match, so ranking is computed only over rows this
+        // caller may read. Roles still come from the verified token only.
+        const access = resolveAccess(req);
+        const { items } = await chunksRepo.searchText(access, {
+          keywords,
+          fuzzy,
+          top: resultPageSize
         });
-        if (!typesenseRes.ok) {
-          console.warn(`[search] Typesense chunk search HTTP ${typesenseRes.status}`);
+
+        if (items.length === 0) {
           return res.json([{ searchResults: [] }]);
         }
 
-        const data = await typesenseRes.json();
-        const mappedChunks = (data.hits || []).map(hit => {
-          const chunk = hit.document;
-          const highlight = (hit.highlights || []).find(h => h.field === 'content');
+        // Chunks carry ids, not labels. Hydrate the parent document and project names in two
+        // bounded reads under the CALLER's access — never systemAccess(), which would let a name
+        // leak past the ACL that governs the row it describes.
+        const documentIds = items.map(c => c.documentId);
+        const projectIds = items.map(c => c.projectId);
+        const [parentDocs, parentProjects] = await Promise.all([
+          documentsRepo.listByIds(access, documentIds, projectIds),
+          projectsRepo.listByIds(access, projectIds)
+        ]);
+        const docById = new Map(parentDocs.map(d => [String(d.id), d]));
+        const projById = new Map(parentProjects.map(p => [String(p.id), p]));
+
+        const terms = chunksRepo.tokenize(keywords);
+        const mappedChunks = items.map(chunk => {
+          const parent = docById.get(String(chunk.documentId));
+          const project = projById.get(String(chunk.projectId));
           return {
             _id: String(chunk.id),
             documentId: String(chunk.documentId || ''),
             project: String(chunk.projectId || ''),
-            projectName: chunk.projectName || 'Associated Project',
-            documentName: chunk.documentName || 'Untitled Document',
-            documentType: chunk.documentType || 'PDF Document',
+            projectName: (project && project.name) || 'Associated Project',
+            documentName:
+              (parent && (parent.displayName || parent.documentFileName)) || 'Untitled Document',
+            documentType: (parent && parent.type) || 'PDF Document',
             pageNumber: chunk.pageNumber ?? 0,
             content: chunk.content || '',
             // The matched span, so the UI can show why this hit matched without re-searching.
-            snippet: (highlight && (highlight.snippet || highlight.value)) || '',
-            read: chunk.allowed_roles || ['public']
+            snippet: buildSnippet(chunk.content, terms),
+            read: Array.isArray(chunk.read) && chunk.read.length > 0 ? chunk.read : ['public']
           };
         });
         return res.json([{ searchResults: mappedChunks }]);
       } catch (err) {
-        console.error('[search] Chunk Typesense query failed:', err.message);
+        console.error('[search] Chunk full-text query failed:', err.message);
         return res.json([{ searchResults: [] }]);
       }
     } else {

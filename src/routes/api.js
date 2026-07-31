@@ -56,6 +56,9 @@ router.get('/config', configController.getConfig);
 // any collection — nothing called them, and under the NoSQL API they would have to become a
 // SQL passthrough). /db/seed-boundaries removed with the dead boundary seeder.
 router.get('/db/stats', authMiddleware, dbController.getDbStats);
+// Cheap and independent of /db/stats, which runs legacy Mongo counts and can hang. Ranked
+// full-text queries are only meaningful at progress 100, so this gates any bulk load.
+router.get('/admin/index-progress', authMiddleware, dbController.getIndexProgressHandler);
 router.post('/db/seed', authMiddleware, dbController.seedDatabase);
 router.post('/sync', authMiddleware, dbController.seedDatabase);
 router.post('/admin/sync', authMiddleware, dbController.runNightlySyncHandler);

@@ -106,3 +106,62 @@ test('unconfigured client degrades safely rather than throwing', async (t) => {
     assert.strictEqual(await cosmos.ping(), false);
   });
 });
+
+// The defect this pins took demi-api-dev fully unreachable for ~6 minutes: a ranked query that
+// matched nothing against a NON-EMPTY container left hasMoreResults() permanently true, so
+// fetchAll() spun on a single core. The process never exited, so there was no crash, no restart
+// and nothing in the logs — only an app that stopped answering. The page cap is what converts
+// that hang into a visible short result.
+test('drainRanked bounds the drain instead of spinning', async (t) => {
+  function iter(pages) {
+    let i = 0;
+    return {
+      hasMoreResults: () => true, // the pathological case: never goes false
+      fetchNext: async () => {
+        const page = pages[Math.min(i, pages.length - 1)];
+        i++;
+        return { resources: page, requestCharge: 1 };
+      }
+    };
+  }
+
+  await t.test('a never-terminating iterator stops at the page cap', async () => {
+    const res = await cosmos.drainRanked(iter([[]]), 20);
+    assert.deepStrictEqual(res.items, []);
+    assert.strictEqual(res.pages, cosmos.RANKED_MAX_PAGES, 'must stop at the cap, not loop');
+    assert.strictEqual(res.truncated, true, 'hitting the cap must be reported, not silent');
+  });
+
+  await t.test('empty early pages are drained rather than read once', async () => {
+    // The opposite failure: one fetchNext() returns nothing for a query that HAS matches.
+    const res = await cosmos.drainRanked(iter([[], [], [{ id: 'a' }, { id: 'b' }]]), 2);
+    assert.deepStrictEqual(res.items.map(i => i.id), ['a', 'b']);
+    assert.strictEqual(res.truncated, false);
+  });
+
+  await t.test('stops as soon as top is satisfied', async () => {
+    const res = await cosmos.drainRanked(iter([[{ id: 'a' }, { id: 'b' }, { id: 'c' }]]), 2);
+    assert.strictEqual(res.items.length, 2, 'must not exceed top');
+    assert.strictEqual(res.pages, 1);
+  });
+
+  // The page cap is not a bound on TIME. 50 pages that each take seconds is minutes, and a
+  // request that runs for minutes on a single-worker plan takes every other endpoint with it.
+  await t.test('a past deadline stops the drain and reports timedOut', async () => {
+    const res = await cosmos.drainRanked(iter([[]]), 20, { deadline: Date.now() - 1 });
+    assert.strictEqual(res.pages, 0, 'must not issue a page once the deadline has passed');
+    assert.strictEqual(res.timedOut, true);
+    assert.strictEqual(res.truncated, true, 'a timeout must also read as truncated');
+  });
+
+  await t.test('a live deadline does not interfere with a normal drain', async () => {
+    const res = await cosmos.drainRanked(iter([[{ id: 'a' }]]), 1, { deadline: Date.now() + 60000 });
+    assert.deepStrictEqual(res.items.map(i => i.id), ['a']);
+    assert.strictEqual(res.timedOut, false);
+    assert.strictEqual(res.truncated, false);
+  });
+
+  await t.test('queryRanked still validates the spec', async () => {
+    await assert.rejects(() => cosmos.queryRanked('chunks_fts', 'SELECT *', { top: 5 }), TypeError);
+  });
+});

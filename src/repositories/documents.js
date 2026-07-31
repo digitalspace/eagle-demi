@@ -10,7 +10,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, selectWhere, countWhere, pageOptions } = require('./_sql');
+const { eq, inList, selectWhere, countWhere, pageOptions } = require('./_sql');
 
 const CONTAINER = 'documents';
 const PARTITION_FIELD = 'projectId';
@@ -79,6 +79,35 @@ async function getById(access, id, projectId) {
   });
   const { items } = await cosmos.query(CONTAINER, spec, { maxItemCount: 1 });
   return items[0] || null;
+}
+
+/**
+ * Display metadata for a bounded set of documents, in one query.
+ *
+ * Chunk search returns rows that carry only ids, so the result set has to be labelled with the
+ * parent document's name and type. Passing the project ids as well keeps this targeted at the
+ * partitions the hits actually came from instead of fanning out across all 357.
+ *
+ * Projects only the display fields — a caller that may read a chunk still has no business
+ * receiving the whole parent document.
+ */
+async function listByIds(access, ids, projectIds) {
+  const unique = Array.from(new Set((ids || []).map(String)));
+  const projects = Array.from(new Set((projectIds || []).map(String)));
+  if (unique.length === 0) return [];
+
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [
+      inList('id', unique, '@did'),
+      inList(PARTITION_FIELD, projects, '@dpid')
+    ],
+    select: 'c.id, c.displayName, c.documentFileName, c.type'
+  });
+
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items;
 }
 
 async function upsert(document) {
@@ -151,6 +180,7 @@ module.exports = {
   listVisible,
   countVisible,
   getById,
+  listByIds,
   upsert,
   bulkUpsertForProject,
   patchExtraction,

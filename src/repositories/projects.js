@@ -14,7 +14,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, isDefinedAndNotNull, selectWhere, countWhere, pageOptions } = require('./_sql');
+const { eq, inList, isDefinedAndNotNull, selectWhere, countWhere, pageOptions } = require('./_sql');
 
 const CONTAINER = 'projects';
 const PARTITION_FIELD = 'id';
@@ -105,6 +105,27 @@ async function listBySourceSystem(access, sourceSystem) {
   return cosmos.query(CONTAINER, spec);
 }
 
+/**
+ * Names for a bounded set of project ids, in one query.
+ *
+ * Chunk search hits carry a projectId and no name, so the results have to be labelled. Only the
+ * name is projected — the caller is entitled to the label, not to the project record.
+ */
+async function listByIds(access, ids) {
+  const unique = Array.from(new Set((ids || []).map(String)));
+  if (unique.length === 0) return [];
+
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [inList(PARTITION_FIELD, unique, '@pid')],
+    select: 'c.id, c.name'
+  });
+
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items;
+}
+
 /** Projects with a usable centroid — for boundary tagging. */
 async function listWithCentroid(access) {
   const spec = selectWhere({
@@ -161,6 +182,7 @@ module.exports = {
   countVisible,
   getById,
   getByEagleId,
+  listByIds,
   listBySourceSystem,
   listWithCentroid,
   upsert,
