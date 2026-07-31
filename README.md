@@ -12,7 +12,7 @@ This repository houses:
 
 > **Status: dev only.** No test or prod environment exists yet. `MIGRATION.md` is the living
 > source of truth for architecture, environment reality and operational gotchas — when this file
-> and that one disagree, `MIGRATION.md` is right.
+> and that one disagree, `MIGRATION.md` is right. `TODO.md` holds what is left to do.
 
 ---
 
@@ -33,8 +33,10 @@ Azure Policy forbids. `MIGRATION.md` has the full recipe and the four things it 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
 npm run db:purge-extraction      # dry run by default; --live to write
-npm run typesense:sync-nosql
 ```
+
+There is no search sync command. Azure AI Search indexers PULL from Cosmos every five minutes on a
+`_ts` high-water mark, so nothing has to be pushed to keep the index current.
 
 ---
 
@@ -42,9 +44,9 @@ npm run typesense:sync-nosql
 
 | | |
 |---|---|
-| API | Azure Functions v4, Node 22, `Y1` Consumption, `expressApi` catch-all |
+| API | Azure Functions v4, Node 22, **B1 Basic** (1 vCPU / 1.75 GB, single worker), `expressApi` catch-all |
 | Database | **Azure Cosmos DB for NoSQL** (`@azure/cosmos`), account `demi-cosmos-dev` |
-| Search | Typesense on Azure Container Apps (`demi-typesense-dev`) |
+| Search | **Azure AI Search** `demi-search-dev` — Basic, keyless, private endpoint only. `demi-chunks`, `demi-projects`, `demi-documents` |
 | Object store | `nrs.objectstore.gov.bc.ca`, bucket `asnpnn` (S3-compatible, `minio` client) |
 | Frontend | Angular, built to `frontend/dist`, served by `pm2 serve --spa` |
 | IaC | Bicep — `azure/main.bicep`, `azure/modules/` |
@@ -67,7 +69,9 @@ Some notable implementation details:
   `setInterval` timers that leak across execution freeze cycles.
 - **Nightly sync** is the Azure Functions timer `nightlySyncTimer`. It is currently disabled while
   the chunk corpus is backfilled — see `MIGRATION.md` §A.
-- **GeoJSON is `[longitude, latitude]`**; the Typesense sync swaps to `[latitude, longitude]`.
+- **GeoJSON is `[longitude, latitude]`** end to end — Cosmos stores it, AI Search indexes it as a
+  `GeographyPoint`, and the API returns it unchanged. The lat/lng swap that Typesense's geopoint
+  type required is gone with it.
 
 ---
 
@@ -126,7 +130,7 @@ Project scope is a second, orthogonal dimension: it arrives as Keycloak roles pr
 (`project:207`) and rides the partition key. `rolesFor()` strips `project:*` from the role list so
 a project id can never enter the `read[]` clause.
 
-`systemAccess()` is the only context that reads past ACLs (the Typesense sync). It takes no
+`systemAccess()` is the only context that reads past ACLs (chunk ingest, maintenance scripts). It takes no
 arguments, so it cannot be derived from a request, and it resolves *through* the same predicate
 rather than bypassing it.
 
@@ -211,12 +215,12 @@ Angular app under `frontend/`, built to `frontend/dist`.
   `node scripts/export-topological-boundaries.js`, which uses Mapshaper Visvalingam-Whyatt arc
   simplification so adjacent areas share edges with no slivers or overlaps. These files are also
   read at seed time by `src/seed/sources.js`, and `scripts/package-api.py` hard-fails without them.
-- **Deep text search** over extracted document chunks, via Typesense.
+- **Deep text search** over extracted document chunks, via Azure AI Search.
 
 ---
 
 ## Related repositories
 
 - [eagle-api](https://github.com/bcgov/eagle-api) — reads read-only cached project/document entries
-- [eagle-typesense](https://github.com/digitalspace/eagle-typesense) — the EAGLE-side Typesense sync
-  (DEMI syncs its own index from Cosmos via `src/typesense/full-sync-nosql.js`)
+- [eagle-typesense](https://github.com/digitalspace/eagle-typesense) — the EAGLE-side Typesense sync.
+  DEMI no longer uses Typesense: its search moved to Azure AI Search on 2026-07-31

@@ -4,7 +4,11 @@
 > Full design rationale: wiki `ADR-004-Read-ACL-Authorization-Model` and
 > `Environment-Reality-and-Operational-Gotchas`.
 
-**Last updated:** 2026-07-30 · **Current phase:** 5 and 6 complete — DEMI dev is LIVE on Cosmos DB for NoSQL
+**Last updated:** 2026-07-31 · **Current phase:** 5 and 6 complete — DEMI dev is LIVE on Cosmos DB for NoSQL
+
+> **2026-07-31 — Cosmos full-text search is RULED OUT as the Deep Search backend.** Fuzzy is a
+> requirement and Cosmos cannot serve it (§F trap 6). The replacement is **Azure AI Search Basic**.
+> `TODO.md` holds the actionable plan; this file keeps the evidence so nobody re-attempts it.
 
 ---
 
@@ -39,7 +43,8 @@ and `contentExtracted: true` flags with no chunks behind them.
 | **4 — Seed** | ✅ **run live** | 393 projects · 60,578 documents · 281 boundaries written and verified |
 | **5 — Cut over** | ✅ **DONE** | Live on Cosmos NoSQL: 393 projects · 60,578 documents · 281 boundaries |
 | **6 — Typesense** | ✅ **DONE** | Reindexed from Cosmos: 393 projects + 60,578 documents; search verified |
-| **F — Cosmos full-text search** | ✅ stages 1-3 **deployed and validated on dev** | `chunks_fts` live, `chunks.searchText` + count pre-flight, `search.js` swapped, `GET /admin/index-progress` added. Probe set passes 0.3-0.9s. **Stage 4 backfill is next and is mandatory** |
+| **F — Cosmos full-text search** | ❌ **ABANDONED 2026-07-31** | Base FTS works and is fast (0.3-0.9s), but **fuzzy `distance` is a silent no-op** and fuzzy is a requirement. Backfill never ran; `chunks_fts` holds 0 rows. Replacement: **Azure AI Search Basic** — see `TODO.md`. Evidence in trap 6 below |
+| **F2 — Azure AI Search** | ⬜ todo | Basic tier, native Cosmos NoSQL indexer (`_ts` high-water mark), 3 indexes, OData ACL filter. Replaces Typesense **and** Cosmos FTS. See `TODO.md` |
 | **7 — Change feed** | ⬜ deferred | Functions trigger + `leases`. No soft-delete marker needed — index removal is explicit |
 | **8 — Decommission** | ⬜ todo | Delete the Mongo account after a clean week |
 
@@ -139,6 +144,50 @@ across all 393 projects and 60,578 documents. That is the gate that licenses del
 no-ACL tier below.
 
 ### A. Extraction — in progress 2026-07-30
+
+#### 📏 MEASURED 2026-07-31 — the text is mostly fine, and OCR is not the problem
+
+Deep Search made the extracted text visible for the first time, and the visible damage looked like
+an OCR failure. It is not. `src/scripts/audit-chunk-quality.js` scored **1,299 chunks across 400
+extracted documents** (5 chunks each, seeded sample):
+
+| | |
+|---|---|
+| Chunks scoring clean | **71.8%** |
+| Marginal | 12.4% |
+| Garbage | **15.8% — an UPPER bound**, see the caveat below |
+| Documents in the random stratum with **zero** bad chunks | **30 of 40** |
+| **OCR word-salad** (`vowelless-tokens`, e.g. `Cnstum dlld`) | **3 chunks — 0.23%** |
+| Documents whose text is nothing but `<!-- image -->` | 8 of 77 sampled, all **presentation decks** |
+
+**The headline: OCR debris is 0.23% of chunks.** The dominant real defect is different — slide-deck
+PDFs (`Hearing Exhibit 42/44/75 - Presentation…`) extract to **nothing but image placeholders**.
+Those documents are in the index and are unfindable by content, which is worse than noisy text and
+is a routing/OCR-coverage question, not an engine-quality one.
+
+**Three things the instrument got wrong first, all corrected before the numbers above were kept.**
+Recorded because each would have sent Phase 2 at the wrong target:
+
+- **29.1% garbage, first run.** Dominated by `repeated-character-run`, which fired on the dot
+  leaders of a table of contents inside a perfectly clean BC Hydro report. Condemning a chunk for
+  the LENGTH of a separator run is wrong; the share of the chunk that is furniture is the measure.
+- **A hydrology data table scored identically to OCR debris** (vowelless 0.27 vs 0.24) until
+  identifiers like `PH12-3-3` and `3E-06` were excluded from the vowelless count. Cheap metrics
+  cannot separate the two on any single signal.
+- **A table of earthquake records** was flagged because tabular detection only understood pipe
+  tables. Whitespace columns are still columns.
+
+**Caveats that belong with the number.** The 15.8% still counts table-of-contents pages as garbage
+(section titles are findable content), so real damage is lower. The 400 documents were taken in
+Cosmos scan order, which skews heavily toward Site C hearing exhibits — this is a sample of that
+cluster, not of the corpus. And **provenance was absent on all 400**, so none of it can yet be
+attributed to the OCR path versus the text-layer path.
+
+Two artefact classes are *text-layer* damage rather than OCR, and matter for where a fix belongs:
+`Tum ble r Ridge` / `Ge orge` (character spacing) and `<!-- image -->` (docling's own placeholder,
+which `image_export_mode` cannot switch off — it admits only `placeholder`, `embedded`,
+`referenced`). The spacing artefact scores CLEAN on every cheap metric, which is why the verdict
+metric is retrieval rather than heuristics.
 
 #### ✅ RESOLVED 2026-07-30 — old chunker redeployed, stale chunks purged
 
@@ -571,16 +620,25 @@ plan-management charge — hence the ~$700.
 
 #### Spike results — capability (12 rows) and scale (37,797 real chunks)
 
+> ⚠️ **The fuzzy rows below are WRONG and this spike is why the wrong backend was chosen.**
+> Re-measured 2026-07-31: fuzzy `distance` is a silent no-op on this account (trap 6). The likely
+> reading error is in the row `Fuzzy on real typos … all 20 hits`: **20 is the TOP cap**, and three
+> different typos all returning exactly the cap is the signature of trap 1 — a ranked query whose
+> full-text predicate matched nothing returns the whole container, ranked but unfiltered. That
+> reads as "fuzzy works brilliantly" and is in fact "the predicate did nothing". A fuzzy probe must
+> use a **rare or nonsense term** and assert an exact expected count, never a capped one.
+
 | Test | Result |
 |---|---|
-| `FULLTEXTCONTAINS` exact / fuzzy `{term,distance}` | works · ~3 RU |
-| **`FULLTEXTSCORE` with the fuzzy object** in `ORDER BY RANK` | **works** |
+| `FULLTEXTCONTAINS` exact | works · ~3 RU |
+| ~~`FULLTEXTCONTAINS` fuzzy `{term,distance}`~~ | ~~works~~ **no-op — see trap 6** |
+| ~~**`FULLTEXTSCORE` with the fuzzy object** in `ORDER BY RANK`~~ | ~~**works**~~ **never valid — pass exact strings to `FULLTEXTSCORE`, see below** |
 | `FULLTEXTCONTAINSALL`, stemming (`assess` → "assessed") | works |
 | **ACL predicate composed into the same `WHERE`** | **works** · 3.06 RU |
 | ACL **excludes** (anonymous, private term) / **admits** (privileged) | **0 hits / 5 hits** ✅ |
 | Ranked real terms (`river`, `hydro`, `proponent`) | 20 hits · 24.6-26.5 RU · 182-964ms |
 | Rare term (`sacrifice`, 9 occurrences) | 16 hits · 9.43 RU · 215ms |
-| Fuzzy on real typos (`rivver`, `propnent`, `climat`) | all 20 hits · 7.2-7.6 RU · ~100ms |
+| ~~Fuzzy on real typos (`rivver`, `propnent`, `climat`)~~ | ~~all 20 hits · 7.2-7.6 RU · ~100ms~~ **invalid — 20 is the TOP cap, see the warning above** |
 | Stopword-only (`the and of`) | **0 hits** ✅ — not the whole corpus |
 | Phrase (`peace river`) | 20 hits · 30.94 RU · 678ms |
 
@@ -623,19 +681,55 @@ multi-field OR + ACL 39.3 RU / 62ms, project-scoped 15.1 RU / **34ms**.
    `chunks.searchText` now runs a COUNT with the **identical** predicate and no `ORDER BY RANK`
    first (via `countWhere`, so the two can never drift), and returns empty on zero. Measured after
    the fix: every probe 0.3-0.9s with the app healthy throughout.
-6. **Fuzzy `{term, distance}` returns ZERO rows on this account.** Microsoft document fuzzy search
-   as **early preview**, requiring enrolment in *New features for full-text Search*, which
-   `demi-cosmos-dev` does not have — contradicting the "No preview enrollment was required" note
-   above, which was true only of base full-text search. This nearly shipped as a blank feature:
-   the frontend sends `fuzzy=true` on **every** Deep Search
-   (`registry-state.service.ts`), so honouring the flag returned nothing at all. Fuzzy is now off
-   unless `COSMOS_FTS_FUZZY=true` and degrades to exact matching, which still stems natively
-   ("assess" finds "assessed"). Enable the flag only after enrolling and verifying against live data.
+6. **Fuzzy `{term, distance}` is a NO-OP on this account — the feature is unavailable.**
+   *(Rewritten 2026-07-31 after enrolment. Do not re-chase any of this.)*
+
+   `demi-cosmos-dev` now carries `EnableNoSQLFullTextSearchPreviewFeatures`, the *New features for
+   full-text Search* enrolment Microsoft's docs require. **It made no difference.** The syntax
+   parses, the `term` matches, and `distance` does nothing:
+
+   | query | fuzzy | hits |
+   |---|---|---|
+   | `quokkafluxion` | true | 1 — exact still matches |
+   | `quokafluxion` (1 deletion) | true | **0** |
+   | `riparia` / `riparians` | true | 1 — that is the stemmer, not fuzzy |
+
+   The decisive case is a nonsense token one edit from an indexed one, which no stemmer can bridge.
+   Eliminated by measurement, in order: not enrolment (capability present); not the app flag
+   (`/admin/index-progress` reports `fuzzyEnabled: true`); not parameter binding (rewritten as an
+   inline SQL literal, verified in `wwwroot`, identical); not query shape (the COUNT pre-flight has
+   no `ORDER BY` and also returns 0); **not a stale index** — the container was deleted and
+   recreated from scratch after enrolment and behaved identically. What remains is server-side:
+   region gating (`canadacentral`) or the preview not honouring `distance` yet.
+
+   `COSMOS_FTS_FUZZY` is **`false`** and must stay off: the frontend sends `fuzzy=true` on **every**
+   Deep Search (`registry-state.service.ts`), so honouring it returns nothing at all. Exact matching
+   still stems natively ("assess" finds "assessed").
+
+   **Fuzzy is a hard requirement, so this rules Cosmos FTS out as the Deep Search backend.**
+
+   Backends costed against the corpus (Azure retail pricing API, canadacentral, 2026-07-30):
+
+   | Option | Cost/mo | Fuzzy | Verdict |
+   |---|---|---|---|
+   | Cosmos DB FTS | ~$9 | **no — silent no-op** | ruled out above |
+   | **Azure AI Search Basic** | **~$75-81** | yes, GA | **chosen.** Also gives highlighting, faceting and synonyms natively — all hand-rolled for Cosmos |
+   | Typesense Dedicated D8 | ~$700 | yes, GA | corpus needs 17-26 GB RAM vs the 8 GiB Container Apps Consumption ceiling |
+
+   Cosmos stays the system of record either way; only the query layer moves. Plan: `TODO.md`.
 
 Also: **container creation is control-plane** — the app's managed identity gets
 `403 ... cannot be authorized by AAD token in data plane`. Containers come from ARM/Bicep only.
-And **full-text and vector policies are immutable**, so enabling FTS means a *new* container plus a
-copy — which is why the timing matters.
+And a **full-text policy is immutable**, so enabling FTS means a *new* container plus a copy —
+which is why the timing matters.
+
+On "vector policies are immutable" — narrower than it reads. Measured 2026-07-31: adding a vector
+policy to the already-existing (but EMPTY) `chunks_fts` succeeded **in place**, no delete and
+recreate. What cannot change is an existing embedding's dimensions or metric. Whether the same add
+works against a container holding rows is untested. `chunks_fts` now declares `/embedding`
+(float32, 1536, cosine, diskANN) — unused, nothing writes embeddings; declared only because it was
+free while the container was empty. Adding it at all requires the account capability
+`EnableNoSQLVectorSearch`, which is now on; base full-text search requires no capability.
 
 #### Consequences for the design
 
@@ -648,9 +742,14 @@ copy — which is why the timing matters.
 - **`CONTAINS` matches mid-word.** Query `env` returned "G**renv**ille to Kincolith Road". Typesense
   `prefix=true` is a *token* prefix; `STARTSWITH` is *field* start; neither is a drop-in. Token
   behaviour needs `STARTSWITH(f,q) OR CONTAINS(f,' '+q)`.
-- Declare the **vector policy at container creation, unpopulated** — it is immutable, so declaring
-  costs nothing and omitting forces another rebuild when AI search arrives. Retrieval itself stays
-  lexical; AI is a summarizer over the final top-N only.
+- Declare the **vector policy at container creation, unpopulated** — declaring costs nothing while
+  the container is empty. Retrieval itself stays lexical; AI is a summarizer over the final top-N
+  only. (Done on `chunks_fts` 2026-07-31. The "immutable, so it must be at creation" reasoning
+  turned out to be too strong — see the note above the Consequences section.)
+- **A fuzzy probe must use a rare or nonsense term and assert an exact count.** A probe that
+  returns the TOP cap proves nothing: an ineffective full-text predicate returns the whole
+  container ranked, which looks like a perfect result. This is what made the original spike
+  conclude fuzzy worked.
 
 #### Stage sequence
 
@@ -663,8 +762,8 @@ copy — which is why the timing matters.
    dropped from the deployment and the container would come out unsearchable with nothing failing.
    `az bicep build` is clean.
 2. ✅ **Code written 2026-07-30.** `chunks.searchText()` composes `visibilityFor` +
-   `FULLTEXTCONTAINSALL` (or per-term `FULLTEXTCONTAINS` with the fuzzy object) + `ORDER BY RANK
-   FULLTEXTSCORE`. `src/db/cosmos-nosql.js` was **not** touched: `TOP @top` bounds the result in
+   `FULLTEXTCONTAINSALL` (or per-term `FULLTEXTCONTAINS` with the fuzzy operand, written INLINE —
+   as a bound parameter it matched nothing) + `ORDER BY RANK FULLTEXTSCORE`. `src/db/cosmos-nosql.js` was **not** touched: `TOP @top` bounds the result in
    SQL and the call omits `maxItemCount`, which takes the existing `fetchAll()` branch and sidesteps
    trap 1 without changing continuation-token behaviour for the other repositories.
    `CONTAINER` in `src/repositories/chunks.js` now reads `chunks_fts` — that constant **is** the
@@ -675,16 +774,38 @@ copy — which is why the timing matters.
    `documentType` / `projectName`, and `buildSnippet` replaces Typesense highlighting — escaping
    first and marking after, because the frontend renders it with `[innerHTML]`.
    **Validated on dev 2026-07-31**, one throwaway document, probe set with a health check after
-   every probe: exact 1 hit / zero-match 0 / fuzzy-degraded 0 / fuzzy-flag-with-real-term 1 /
-   stemming 1 / stopwords 0 / both-terms 1 / one-absent 0, all **0.3-0.9s, app healthy throughout**.
-   Two account facts found on the way: base full-text needs **no** account capability, but a
-   **vector policy requires `EnableNoSQLVectorSearch`**, which is not enabled — the container
-   deployment fails outright with it declared. The vector policy was therefore dropped from
-   `azure/modules/cosmos-nosql.bicep`, so adding embeddings later means a THIRD container and
-   another full copy. Enabling the capability is an account-level, effectively one-way change.
-   That resource also pins `@2025-10-15`: on the file's `@2024-11-15`, `fullTextPolicy` and
+   every probe: exact 1 hit / zero-match 0 / stemming 1 / stopwords 0 / both-terms 1 / one-absent 0,
+   all **0.3-0.9s, app healthy throughout**. Base full-text search works and is fast.
+   That resource pins `@2025-10-15`: on the file's `@2024-11-15`, `fullTextPolicy` and
    `fullTextIndexes` are BCP037 **warnings, not errors**, so they would be silently dropped and the
    container would deploy unsearchable with nothing failing.
+
+   Two corrections to earlier text here. The `ORDER BY RANK FULLTEXTSCORE` now binds its **own**
+   parameters (`@rankN`, plain strings) rather than reusing the `WHERE` clause's `@termN` — sharing
+   them would push a fuzzy object into `FULLTEXTSCORE`, and per Microsoft's FTS FAQ a malformed
+   `FULLTEXTSCORE` can return **500 rather than 400**. And `GET /admin/index-progress` now reports
+   `search.fuzzyEnabled`, because a disabled flag and a server ignoring fuzzy produce identical hit
+   counts and app settings cannot be read back from the SCM container.
+
+> ### 🛑 Stages 4-6 are CANCELLED — Cosmos FTS is not the backend
+>
+> **Fuzzy search is a hard requirement and Cosmos cannot serve it** (trap 6, measured 2026-07-31
+> after preview enrolment and a container rebuild). The backfill never ran and must not: it would
+> move 80,354 chunks into a backend that is being replaced.
+>
+> Decided: **Azure AI Search Basic** (~$75-81/mo, GA fuzzy). Cosmos stays the system of record;
+> only the query layer moves. Costs and the eliminated causes are in trap 6 above; the actionable
+> plan is `TODO.md`.
+>
+> **Repoint `CONTAINER` in `src/repositories/chunks.js` back to `chunks` before extraction
+> restarts**, or the corpus splits across two containers. This is `TODO.md` item A.
+>
+> ✅ **Retired 2026-07-31 and deployed.** `CONTAINER` is `chunks` again; the `chunks_fts` container
+> (0 documents) and its bicep resource are deleted, along with `COSMOS_FTS_FUZZY`, `searchText`,
+> `queryRanked`/`drainRanked` and `buildSnippet`. Everything below stages 4-6 is a record of a
+> ruled-out path, not work. `dataset=DocumentChunk` returns an empty list until AI Search ships —
+> deliberately, and it says so in the log rather than passing it off as "no matches".
+
 4. Backfill `chunks` → `chunks_fts`. **Expect 429 throttling** — the spike copy died at ~37K rows
    after `bulkVerified` exhausted 6 attempts. Pace the writes, raise the retry ceiling, run
    detached, and wait for index progress 100 before cutover. Copy with **`Create`, treating 409 as
@@ -1313,14 +1434,119 @@ Parameters only, never interpolation.
 
 ---
 
+## Measuring — three mistakes made twice here
+
+Folded in from `SEARCH-BACKEND-FINDINGS.md` (2026-07-31), which is deleted; this is its durable half.
+
+1. **A probe harness that reuses one output file lies.** A timed-out `curl` does not rewrite its
+   `-o` file, so every probe re-reads the previous probe's JSON. That produced a table of identical
+   hit counts, which reads as "the results are wrong" when the truth was "the app is hung".
+   **One output file per probe, always.** Abort the whole run on the first unhealthy probe — firing
+   more into a wedged app compounds the outage and makes the output unreadable.
+2. **Deploying on a hypothesis without an instrument** cost most of two days across two sessions.
+   Four fixes shipped on plausible causes and all four failed. Both turning points were adding a
+   measurement (`indexProgress`, then `fuzzyEnabled`). **Instrument first.**
+3. **A probe that cannot fail proves nothing.** `keywords=<exact term>&fuzzy=true` returns 1 whether
+   fuzzy is on or off, so it separates nothing. The probe that finally settled it was a nonsense
+   token one edit from an indexed one — unreachable by stemming. Likewise **a probe returning the
+   `top` cap proves nothing**: an ineffective full-text predicate returns the whole container
+   ranked, which is exactly why the original Cosmos spike concluded fuzzy worked when it did not.
+   Use rare or nonsense terms and assert exact counts.
+
+## §G. Azure AI Search — Tier 0 spike (measured 2026-07-31)
+
+`demi-search-dev`, Basic, canadacentral, keyless, private. Indexes the `chunks` container:
+**80,355 items, 0 failed, 4m46s**, index count equal to Cosmos `DocumentCount` exactly. Every probe
+passed — ACL gate (anonymous 0 / privileged 1), fuzzy at one edit, nonsense 0, stopwords 0,
+stemming, highlights. Classic lexical BM25 only: no vector fields, no semantic ranker.
+
+Five things that cost time, none of them documented where they were needed:
+
+- **`publicNetworkAccess` MUST be `Disabled`.** The landing-zone policy set
+  `Deny-PublicPaaSEndpoints` (`Deny-CognitiveSearch-PublicEndpoint`, assigned at the
+  `bcgov-managed-lz-live-landing-zones` management group) rejects the deployment outright
+  otherwise — `RequestDisallowedByPolicy`, before the service exists. Plan for a private endpoint
+  from the start; there is no "start public, lock down later" path here.
+- **A new private endpoint is not usable the moment ARM returns, and the two ways it is unready
+  look like different bugs.** Measured on this one:
+    - *Routing*: the first TCP connect to the private IP timed out; the next attempt ~45 s later
+      connected in 10 ms.
+    - *DNS*: the landing zone's automation writes the `A-record` into the central Private DNS Zone
+      **about ten minutes** after the endpoint is created (documented in the platform's own
+      *Be mindful of service constraints* page). Before that record exists, the name resolves to
+      the service's PUBLIC address — which policy has disabled — so it fails as a connection
+      timeout that reads exactly like a missing DNS zone. **It is not.** Waiting is the fix.
+      Confirmed by hostname from inside the VNet: `demi-search-dev.search.windows.net ->
+      10.46.51.10`, `HTTP 200`. No SNI workaround, no gateway, no support ticket.
+
+  Corollary worth keeping: **do not create your own Private DNS Zone and link it to the VNet.**
+  The platform documents that this cannot work — every DNS query is routed through the central
+  Private DNS Resolver, so a zone linked to the spoke is never consulted. A genuinely missing zone
+  (third-party services) is a support request to the Public Cloud team, not a self-service fix.
+- **The data-source `identity` property is rejected on api-version `2024-07-01`** — "Cannot find
+  nested property 'identity'". A user-assigned identity needs a preview version;
+  `2024-11-01-preview` works. Index and query calls stay on the GA version.
+- **The indexer needs ARM read on the Cosmos account, not just data-plane access.** The UAMI held
+  the Cosmos built-in Data Contributor and still failed with *"Unable to retrieve account endpoint
+  … ensure the resource ID is correct"* — which points at the connection string, not at RBAC. The
+  fix is `Cosmos DB Account Reader Role` on the account.
+
+**Typesense is gone as of 2026-07-31.** All three datasets serve from AI Search; the Container App,
+both Container Apps environments, the `tsstgdevpcbd7cygyic52` storage account and its file share are
+deleted, and `src/typesense/` with them. Two things that migration taught, both measured:
+
+- **`projectName` was doing more work than it looked.** Typesense indexed it on every document; a
+  Cosmos document row does not carry it, and an indexer reads one container. Dropping it would have
+  cost **77% of hits for "Ajax"** and 66% for "pipeline" — silently. `searchDocuments` recovers it
+  with a second leg through the projects index, under the caller's own document ACL.
+- **The Cosmos fallback was hiding failures.** A keyword query that matched nothing fell through to
+  the keywordless list, so an anonymous search for a nonsense term returned 50 unrelated rows — and
+  that same path masked a 400 (`$select` naming a field the index lacked) which had broken project
+  search outright. A keyword search that matches nothing now answers with nothing.
+
+Two behaviours found only once the APPLICATION drove the index, not the spike's raw REST probes:
+
+- **Fuzzy expansion of short words returns garbage, and the frontend sends `fuzzy=true` on every
+  search.** The stopword-only query "the and of" came back with a full page of OCR debris —
+  `the~1` matched a scanned fragment reading "th" — while the same query with fuzzy off returned 0.
+  A fuzzy term bypasses the analyzer, so stopword removal never happens either. Terms shorter than
+  four characters are no longer fuzzed (`MIN_FUZZY_LENGTH`, `src/search/ai-search.js`).
+- **A highlight fragment can be cut INSIDE a highlight.** One came back carrying a closing sentinel
+  whose opener had been trimmed off, which rendered as a stray `</mark>` in an `[innerHTML]`
+  binding. Fragments are now balanced individually before they are joined.
+
+Both were invisible to the spike because its probes read counts, not rendered output. A probe that
+only counts rows cannot see a malformed row.
+
+Two design facts settled by measurement rather than assumption:
+
+- **`retrievable: false` does not disable highlighting.** `@search.highlights` returns `<em>`-marked
+  fragments while the response carries no chunk text at all. The index stays small and the API
+  never ships whole chunks.
+- **The `_ts` high-water mark cannot see deletes.** After hard-deleting the probe document, a
+  re-run processed **0 items** and the row stayed searchable until deleted from the index
+  explicitly. Delete propagation is application work, not indexer configuration.
+
+---
+
 ## Operational gotchas (each cost real time)
 
 - **`az functionapp restart` does NOT recycle the Node worker.** App-setting changes appear
   inert. Use `stop` then `start`. Confirmed twice.
-- **Cosmos is private-endpoint only** — unreachable from a laptop. Run DB scripts *inside*
-  the app via Kudu: `https://demi-api-dev.scm.azurewebsites.net/api/command`, creds from
-  `az webapp deployment list-publishing-profiles`. Cloud Shell is not VNet-joined.
-  `/api/command` is synchronous and will time out — run detached, log to a file.
+- **Cosmos is private-endpoint only AND keyless** — unreachable from a laptop. **Kudu
+  `/api/command` cannot reach it either, but not for the reason first recorded here**: measured
+  2026-07-31, the SCM container *does* have the VNet data path (it resolves the private endpoints
+  through the platform DNS server and opens TCP to them). What it lacks is a **managed identity**
+  (`IDENTITY_ENDPOINT` unset), and with local auth disabled there is no key to fall back on. For
+  the same reason **app settings cannot be read back from the SCM container**. So Kudu is usable
+  for anything where a token can be supplied from outside — that is exactly how the AI Search
+  spike drove the data plane: **auth minted outside, network from inside**. For Cosmos, where no
+  such token exists, the route is still the App Service SSH tunnel into the *app* container — full
+  recipe under "How the seed actually had to run". Kudu is also still correct for **deploying** and
+  for **reading `wwwroot` via the VFS API**.
+- **Prefer an API endpoint over out-of-band DB access.** `GET /admin/index-progress` exists because
+  a diagnostic behind `/db/stats` is unusable — that route runs four legacy Mongo
+  `countDocuments()` calls first and can hang for minutes.
 - **Deploy zip trap:** pruning `dist` by name at every depth also strips
   `node_modules/**/dist` (e.g. `@mongodb-js/saslprep`), shipping an app that 500s on every
   request. Prune at the repo root only. Already fixed in the workflows.
