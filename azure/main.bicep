@@ -23,7 +23,7 @@ param minioSecretKey string
 param typesenseApiKey string
 
 @description('Monthly Budget Limit in USD')
-param budgetAmount int = 50
+param budgetAmount int = 100
 
 @description('Notification Email Addresses for Cost Alerts')
 param contactEmails array = [

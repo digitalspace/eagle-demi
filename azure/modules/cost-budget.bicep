@@ -2,8 +2,11 @@
 @description('Environment name (e.g. dev, test, prod)')
 param environmentName string
 
-@description('Monthly Budget Amount in USD (e.g. 50)')
-param budgetAmount int = 50
+// 100, not 50: Azure AI Search Basic is a FIXED ~$75-81/mo whether it is queried or idle, so the
+// old ceiling would sit permanently in alert and stop meaning anything. Raise this deliberately
+// whenever a fixed-rate service is added — an alert that always fires is not a control.
+@description('Monthly Budget Amount in USD (e.g. 100)')
+param budgetAmount int = 100
 
 @description('Email addresses to receive budget threshold alerts')
 param contactEmails array = [
