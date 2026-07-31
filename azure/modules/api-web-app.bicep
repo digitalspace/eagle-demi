@@ -23,12 +23,11 @@ param minioSecretKey string
 @secure()
 param mongodbConnectionString string
 
-@description('Typesense Host Endpoint URL')
-param typesenseUrl string
+@description('Azure AI Search endpoint, e.g. https://demi-search-dev.search.windows.net. Empty disables chunk search rather than failing it.')
+param searchEndpoint string = ''
 
-@description('Typesense API Key')
-@secure()
-param typesenseApiKey string
+@description('Azure AI Search index holding document chunks')
+param searchIndex string = 'demi-chunks'
 
 @description('Subnet ID for Virtual Network Integration')
 param apiSubnetId string = ''
@@ -141,14 +140,17 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'MINIO_SECRET_KEY'
           value: minioSecretKey
         }
-        // Typesense Search Connection
+        // Azure AI Search — Deep Search over extracted document text. No key: the service has
+        // disableLocalAuth, so the app authenticates with the same user-assigned identity it uses
+        // for Cosmos. When SEARCH_ENDPOINT is absent the chunk dataset degrades to empty results
+        // and says so once, rather than failing the whole search endpoint.
         {
-          name: 'TYPESENSE_URL'
-          value: typesenseUrl
+          name: 'SEARCH_ENDPOINT'
+          value: searchEndpoint
         }
         {
-          name: 'TYPESENSE_API_KEY'
-          value: typesenseApiKey
+          name: 'SEARCH_INDEX'
+          value: searchIndex
         }
         // Keycloak / SSO — MUST be pinned per environment. Without these the API falls
         // back to src/config.js defaults, which point at the DEV realm, so a dev-realm

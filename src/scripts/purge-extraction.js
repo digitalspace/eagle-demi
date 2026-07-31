@@ -26,7 +26,7 @@
 
 const documents = require('../repositories/documents');
 const chunks = require('../repositories/chunks');
-const typesenseClient = require('../typesense/typesenseClient');
+const aiSearch = require('../search/ai-search');
 const { systemAccess } = require('../helpers/access-sql');
 
 const DEFAULT_PAGE_SIZE = 200;
@@ -61,11 +61,10 @@ const CLEARED_EXTRACTION = {
 /**
  * Page through the matching documents, yielding one page at a time.
  *
- * `pageAll` in src/typesense/full-sync-nosql.js is exported and does the same job, but its
- * signature is `(repo, access, pageSize)` — it has no way to carry the `extracted: true` filter,
- * and widening it would touch a file another session has reserved. Continuation tokens rather than
- * skip/take for the same reason it does: Cosmos has no efficient offset, so page N would cost as
- * much as pages 1..N combined.
+ * A local pager rather than a shared one: the only other implementation lived in the Typesense
+ * full sync, which is deleted, and its signature `(repo, access, pageSize)` had no way to carry
+ * the `extracted: true` filter anyway. Continuation tokens rather than skip/take, because Cosmos
+ * has no efficient offset — page N would cost as much as pages 1..N combined.
  */
 async function* pageAll(repo, access, opts) {
   let continuationToken;
@@ -78,13 +77,13 @@ async function* pageAll(repo, access, opts) {
 
 /**
  * @param {string[]} argv
- * @param {object} [opts]  test seam, same shape as fullSync's: {documents, chunks, typesense}
+ * @param {object} [opts]  test seam: {documents, chunks, index}
  */
 async function purge(argv = [], opts = {}) {
   const args = parseArgs(argv);
   const documentsRepo = opts.documents || documents;
   const chunksRepo = opts.chunks || chunks;
-  const index = opts.typesense || typesenseClient;
+  const index = opts.index || aiSearch;
 
   // systemAccess() is mandatory, not a convenience. removeForDocument enumerates ids via
   // idsForDocument, so a scoped or public context would delete only the chunks it can SEE and

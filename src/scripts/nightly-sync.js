@@ -4,13 +4,9 @@ const fs = require('fs');
 const { initCosmosClient } = require('../db/cosmos');
 const Project = require('../models/project');
 const Document = require('../models/document');
-// Same explicit switch as src/routes/api.js. The two syncs read from entirely different data
-// layers, so they are NOT abstracted behind a shared interface — an adapter over both is the shape
-// that let a half-working translator disable access control here. Deleted together with the legacy
-// controllers at cutover.
-const { fullSync } = process.env.USE_COSMOS_NOSQL === 'true'
-  ? require('../typesense/full-sync-nosql')
-  : require('../typesense/full-sync');
+// No search sync step any more. Typesense had to be PUSHED a copy of everything nightly; the AI
+// Search indexers PULL from Cosmos on a five-minute high-water mark, so the index follows the
+// database without a job. What remains here is the upstream data the registry itself needs.
 const { syncNrptiData } = require('./sync-nrpti');
 const { syncWildfiresData } = require('./sync-wildfires');
 
@@ -83,14 +79,10 @@ async function runNightlySync() {
       console.error('[Nightly Sync] Wildfire sync error:', wildfireErr.message);
     }
 
-    // 4. Trigger Typesense Search Re-Indexing
-    console.log('[Nightly Sync] Triggering Typesense search re-indexing...');
-    try {
-      await fullSync();
-      console.log('[Nightly Sync] Typesense search re-indexing completed successfully.');
-    } catch (tsErr) {
-      console.error('[Nightly Sync] Typesense re-indexing error:', tsErr.message);
-    }
+    // Step 4 was a full search re-index. It is gone: the AI Search indexers run every five
+    // minutes off a `_ts` high-water mark, so whatever the steps above wrote is picked up without
+    // a nightly push. The one thing a pull cannot see is a DELETE — that is handled at the point
+    // of deletion instead, in the project and document controllers.
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(`[Nightly Sync] DEMI Nightly Sync Job completed in ${elapsed}s.`);

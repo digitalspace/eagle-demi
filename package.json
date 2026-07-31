@@ -13,8 +13,6 @@
     "db:copy-blobs": "NODE_PATH=node_modules node -r dotenv/config src/scripts/copy-blobs-to-azure.js",
     "db:purge-extraction": "NODE_PATH=node_modules node -r dotenv/config src/scripts/purge-extraction.js",
     "db:nightly-sync": "NODE_PATH=node_modules node -r dotenv/config src/scripts/nightly-sync.js",
-    "typesense:sync-nosql": "TYPESENSE_MIN_FREE_GIB=1 NODE_PATH=node_modules node -r dotenv/config src/typesense/full-sync-nosql.js",
-    "typesense:sync": "TYPESENSE_MIN_FREE_GIB=1 NODE_PATH=node_modules node -r dotenv/config src/typesense/full-sync.js",
     "deploy:azure": "bash scripts/deploy-azure.sh all",
     "deploy:azure:api": "bash scripts/deploy-azure.sh api",
     "deploy:azure:frontend": "bash scripts/deploy-azure.sh frontend",
@@ -43,7 +41,6 @@
     "pdf-lib": "^1.17.1",
     "serverless-http": "^3.2.0",
     "swagger-ui-express": "^5.0.1",
-    "typesense": "^3.0.5",
     "winston": "^3.19.0",
     "yamljs": "^0.3.0"
   },

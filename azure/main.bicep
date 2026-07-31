@@ -18,10 +18,6 @@ param minioAccessKey string
 @secure()
 param minioSecretKey string
 
-@description('Typesense Master API Key')
-@secure()
-param typesenseApiKey string
-
 @description('Monthly Budget Limit in USD')
 param budgetAmount int = 100
 
@@ -80,17 +76,6 @@ module cosmosDb './modules/cosmos-db.bicep' = {
   }
 }
 
-// 5. Search Engine (Azure Container Apps - Typesense)
-module containerApps './modules/container-apps.bicep' = {
-  name: 'deploy-container-apps'
-  params: {
-    location: location
-    environmentName: environmentName
-    tags: defaultTags
-    typesenseApiKey: typesenseApiKey
-  }
-}
-
 // 6. REST API (Azure Function App Serverless Consumption + VNet Integration)
 module apiWebApp './modules/api-web-app.bicep' = {
   name: 'deploy-api-web-app'
@@ -102,8 +87,6 @@ module apiWebApp './modules/api-web-app.bicep' = {
     minioAccessKey: minioAccessKey
     minioSecretKey: minioSecretKey
     mongodbConnectionString: cosmosDb.outputs.connectionString
-    typesenseUrl: containerApps.outputs.typesenseUrl
-    typesenseApiKey: typesenseApiKey
     apiSubnetId: vnet.outputs.apiSubnetId
   }
 }
@@ -121,5 +104,4 @@ module costBudget './modules/cost-budget.bicep' = {
 // Outputs
 output staticWebAppDefaultHostname string = staticWebApp.outputs.staticWebAppDefaultHostname
 output apiWebAppHostName string = apiWebApp.outputs.apiWebAppHostName
-output typesenseUrl string = containerApps.outputs.typesenseUrl
 output keyVaultName string = keyVault.outputs.keyVaultName

@@ -5,7 +5,7 @@
  *
  * Queries MongoDB for unextracted Documents, downloads each file from MinIO,
  * sends to docling-serve for text extraction, and writes DocumentChunk records
- * back to MongoDB. eagle-typesense Change Stream picks up the new chunks and
+ * back to MongoDB. The AI Search indexer picks up the new chunks on its schedule and
  * syncs them to Typesense automatically.
  *
  * Supported file types: PDF (including scanned/OCR), DOCX, DOC, PPTX, XLSX

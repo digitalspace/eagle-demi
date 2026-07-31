@@ -34,7 +34,7 @@ exports.getDocuments = async (req, res) => {
  * Resolve the ACL for a new document.
  *
  * Fail closed, and never let a document out-rank its parent project: a doc can only be
- * public if the project is. Mirrors constrainToProject in typesense/transform.js.
+ * public if the project is. The same rule the search index relies on.
  *
  * EVERY document write path must go through this — createDocument and extractDocument both
  * do. extractDocument previously set only isPublished and no read[], which let an uploaded

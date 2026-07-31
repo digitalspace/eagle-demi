@@ -80,7 +80,7 @@ test('a dry run counts chunks but writes nothing', async () => {
   const chunks = fakeChunks(PER_DOC);
   const index = fakeTypesense();
 
-  const summary = await purge([], { documents: docs, chunks, typesense: index });
+  const summary = await purge([], { documents: docs, chunks, index });
 
   assert.strictEqual(summary.mode, 'dry-run');
   assert.strictEqual(summary.documents, 3);
@@ -95,7 +95,7 @@ test('a live run removes chunks, clears flags and drops index entries', async ()
   const chunks = fakeChunks(PER_DOC);
   const index = fakeTypesense();
 
-  const summary = await purge(['--live'], { documents: docs, chunks, typesense: index });
+  const summary = await purge(['--live'], { documents: docs, chunks, index });
 
   assert.strictEqual(summary.mode, 'live');
   assert.strictEqual(summary.chunksRemoved, 22);
@@ -126,7 +126,7 @@ test('a document whose chunks fail to delete keeps its flags', async () => {
   const chunks = fakeChunks(PER_DOC, { failFor: 'd2' });
   const index = fakeTypesense();
 
-  const summary = await purge(['--live'], { documents: docs, chunks, typesense: index });
+  const summary = await purge(['--live'], { documents: docs, chunks, index });
 
   assert.deepStrictEqual(docs.state.patched.map(p => p.id), ['d1', 'd3']);
   assert.deepStrictEqual(index.state.deleted, ['d1', 'd3']);
