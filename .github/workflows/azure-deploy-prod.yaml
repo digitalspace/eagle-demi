@@ -67,7 +67,7 @@ jobs:
           scope: resourcegroup
           resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
           template: ./azure/main.bicep
-          parameters: ./azure/main.bicepparam environmentName=prod minioAccessKey="${{ secrets.MINIO_ACCESS_KEY }}" minioSecretKey="${{ secrets.MINIO_SECRET_KEY }}" typesenseApiKey="${{ secrets.TYPESENSE_API_KEY }}"
+          parameters: ./azure/main.bicepparam environmentName=prod minioAccessKey="${{ secrets.MINIO_ACCESS_KEY }}" minioSecretKey="${{ secrets.MINIO_SECRET_KEY }}"
 
       - name: Report Infrastructure Failure to Job Summary
         if: failure()

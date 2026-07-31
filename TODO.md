@@ -16,7 +16,7 @@ Verified through API before cutover, per dataset: ACL gate anonymous **0** / pri
 
 ### Next, in code
 
-1. **Phase 8 — retire `demi-mongo-dev-*`.** Still on request path: `src/models/base.js` → `src/db/cosmos.js` (Mongo-API client), reached by four controllers wired unconditionally in `src/routes/api.js` — `search`, `db`, `log`, `wildfire`. Two keywordless list paths in `search.js` (`Project.find`, `Document.find`) become `projectsRepo.listVisible` / `documentsRepo.listVisible`, already exist + tested; `logs` and `wildfires` containers already exist NoSQL side; `/db/stats` should DROP its four legacy `countDocuments()` calls, not port them — that endpoint hang for minutes. Then account, `demi-mongo-pe` + its NIC.
+1. **Phase 8 — retire `demi-mongo-dev-*`.** Still on request path: `src/models/base.js` → `src/db/cosmos.js` (Mongo-API client), reached by four controllers wired unconditionally in `src/routes/api.js` — `search`, `db`, `log`, `wildfire`. `Project.find` (`search.js:125`) and `Document.find` (`search.js:214`) become `projectsRepo.listVisible` / `documentsRepo.listVisible`, already exist + tested — but **they serve two callers, not one**: keywordless requests AND the `catch` fallback when AI Search throws. Port both or a search FAULT stop degrading to a Cosmos page and start returning empty, which look identical to no matches from outside. `logs` and `wildfires` containers already exist NoSQL side; `/db/stats` should DROP its four legacy `countDocuments()` calls, not port them — that endpoint hang for minutes. Then account, `demi-mongo-pe` + its NIC.
 2. **Extraction quality** — deferred deliberately, this order: slide decks extracting to nothing but `<!-- image -->` (indexed, unfindable by content) → retrieval scoring run → only then intake cleaner, scoped to stripping placeholders + separator-only chunks. **Not** OCR re-run: word-salad 0.23% of chunks.
 
 ### Needs a human, not code
@@ -77,6 +77,7 @@ demi-admin]`, exact counts, one output file per probe. **Re-run all of it agains
 - [x] Code: `src/typesense/` + its tests, `typesense` dependency, both `typesense:sync*` scripts, client calls in `deleteDocument`, nightly full-sync step — AI Search indexers PULL every five minutes, nothing left to push.
 - [x] Infrastructure: Container App, `demi-ca-env-dev`, orphan `demi-container-env-dev`, `tsstgdevpcbd7cygyic52` storage account + its `typesense-data` share. `az containerapp list` now empty.
 - [x] Templates: `container-apps.bicep` deleted, `typesenseApiKey` / `typesenseUrl` params + outputs removed from `main.bicep` and `api-web-app.bicep`, `TYPESENSE_*` app settings deleted.
+- [x] **Param CONSUMERS, missed in that pass and fixed 2026-07-31.** `azure/main.bicepparam` and all three `azure-deploy-*.yaml` still passed `typesenseApiKey` to a template that no longer declare it — every IaC deployment would fail to compile. Latent only because CI blocked on `AZURE_CLIENT_ID`; a hand-run `az deployment group create --parameters azure/main.bicepparam` hit it. Same file also pinned `budgetAmount = 50`, quietly undoing the raise to 100 in `main.bicep`; line deleted so template default is the only source.
 
 **Rollback** = `git revert` plus redeploying `container-apps.bicep` from history; index rebuild from Cosmos by indexer run, not from backup.
 
@@ -120,7 +121,7 @@ Numbers + caveats in `MIGRATION.md` §A. **OCR not the problem: word-salad 0.23%
 
 ## Backlog
 
-- **Phase 8 — decommission Mongo.** Delete `demi-mongo-dev-*` after clean week. Boot-path order matters: `src/utils/logger.js` → `models/log` → `src/db/cosmos.js`, plus `controllers/{search,db,log,wildfire}.js` required unconditionally at `src/routes/api.js`. 17 files touch legacy layer. **Blocked until Deep Search on AI Search.**
+- **Phase 8 — decommission Mongo.** Delete `demi-mongo-dev-*` after clean week. Boot-path order matters: `src/utils/logger.js` → `models/log` → `src/db/cosmos.js`, plus `controllers/{search,db,log,wildfire}.js` required unconditionally at `src/routes/api.js`. 14 files require `models/`, plus `src/app.js` and `models/base.js` straight onto `src/db/cosmos.js`. **Blocked until Deep Search on AI Search.**
 - **Nothing in Azure extracts text.** Ingest exists (external host POST markdown to `POST /documents/:id/chunks`); `src/extract.js` run only under `require.main === module`. Deliberate — serverless GPU priced and rejected. Do not delete as dead code.
 - **Extraction ~7% done** against 60,578 documents.
 - **CI blocked.** `AZURE_CLIENT_ID` missing from repo secrets. Need Entra app registration + federated credential; creating one need Microsoft Graph, which conditional access blocks.
@@ -128,7 +129,6 @@ Numbers + caveats in `MIGRATION.md` §A. **OCR not the problem: word-salad 0.23%
 - **`models/syncState.js` scheduled nowhere.**
 - **`readFilter` legacy tier** for rows with no `read[]`: run `src/scripts/backfill-read-acl.js` inside network, then delete tier.
 - **Phase 3b blob storage** — code + Bicep written, not deployed, nothing copied. Need `Storage Blob Delegator` or every download link fail to sign.
-- **`rg-epic-search` (test sub)** — pgvector POC, `Standard_D8s_v3` Postgres + running `Standard_E32-16ads_v5` VM, two of three APIs stopped. Not ours; someone confirm cost and revive or decommission.
 
 ---
 
