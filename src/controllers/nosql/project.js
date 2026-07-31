@@ -14,6 +14,7 @@
 const projects = require('../../repositories/projects');
 const fragments = require('../../repositories/fragments');
 const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+const aiSearch = require('../../search/ai-search');
 
 exports.getProjects = async (req, res) => {
   try {
@@ -149,7 +150,14 @@ exports.deleteProject = async (req, res) => {
     }
 
     await projects.deleteById(existing.id);
-    return res.json({ message: 'Project deleted successfully', deleted: existing });
+
+    // The indexer's high-water mark never sees a delete, so without this the project stays
+    // searchable by name after it is gone. Best-effort: the row is already deleted and the
+    // caller has already succeeded, so a failure here is reported, not thrown.
+    const removedFromSearch =
+      await aiSearch.deleteFromIndex(aiSearch.indexes().projects, existing.id);
+
+    return res.json({ message: 'Project deleted successfully', deleted: existing, removedFromSearch });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

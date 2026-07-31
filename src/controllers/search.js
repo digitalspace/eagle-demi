@@ -4,55 +4,42 @@ const Project = require('../models/project');
 const Document = require('../models/document');
 const { rolesFor, readFilter, withReadFilter } = require('../helpers/access');
 
-// The Project and Document branches read through the Mongo-era models. That is transitional —
-// this file is on the Phase 8 port list (MIGRATION.md §B) and collapses onto the repositories
-// there. The DocumentChunk branch has no backend at all until Azure AI Search lands (TODO.md §B).
+// All three datasets search Azure AI Search. What remains Mongo-era is the KEYWORDLESS path —
+// listing projects or documents is a read, not a search, and still goes to the models below. That
+// half is on the Phase 8 port list (MIGRATION.md §B).
+const { resolveAccess } = require('../helpers/access-sql');
+const { filterFor } = require('../helpers/access-odata');
+const aiSearch = require('../search/ai-search');
+const documentsRepo = require('../repositories/documents');
+const projectsRepo = require('../repositories/projects');
 
 /**
- * Once per process, not once per query: a chunk search that returns nothing because there is no
- * backend is a different fact from one that matched nothing, and the log is the only place that
- * distinction survives. Per-query it would be pure noise — the frontend fires this on every
- * keystroke-driven search.
- */
-let chunkSearchWarned = false;
-function warnChunkSearchUnavailable() {
-  if (chunkSearchWarned) return;
-  chunkSearchWarned = true;
-  console.warn(
-    '[search] DocumentChunk search has no backend: Cosmos full-text search was ruled out and ' +
-    'Azure AI Search is not built yet (TODO.md §B). Returning empty results, NOT "no matches".'
-  );
-}
-
-function getTypesenseBaseUrl() {
-  if (process.env.TYPESENSE_URL) {
-    return process.env.TYPESENSE_URL.replace(/\/$/, '');
-  }
-  const host = process.env.TYPESENSE_HOST || 'eagle-typesense';
-  const port = process.env.TYPESENSE_PORT || '8108';
-  const protocol = process.env.TYPESENSE_PROTOCOL || 'http';
-  return `${protocol}://${host}:${port}`;
-}
-
-/**
- * Visibility context for this request.
+ * Visibility context for the Mongo-era list path.
  *
- * Roles come from the verified token only (helpers/auth.js populates req.user; the
- * X-Api-Key service path sets the privileged roles there too). Both the Typesense filter
- * and the Mongo filter are derived from the SAME role list, so the two search backends
- * can no longer disagree about what a caller may see.
+ * Roles come from the verified token only (helpers/auth.js populates req.user; the X-Api-Key
+ * service path sets the privileged roles there too). The search path does not use this — it
+ * resolves its own context through `resolveAccess` and `filterFor`, so the two are derived from
+ * the same roles rather than from each other.
  */
 function getUserAccessContext(req) {
   const roles = rolesFor(req);
-  const mongoFilter = readFilter(roles);
-  const isPrivileged = Object.keys(mongoFilter).length === 0;
+  return { roles, mongoFilter: readFilter(roles) };
+}
 
-  return {
-    roles,
-    // Privileged callers get no filter_by, matching the unfiltered Mongo read.
-    typesenseFilter: isPrivileged ? null : `allowed_roles:=[${roles.join(', ')}]`,
-    mongoFilter
-  };
+/**
+ * A stored GeoJSON point as the frontend wants it: `[lng, lat]`.
+ *
+ * AI Search returns `{type: 'Point', coordinates: [lng, lat]}`, which is exactly how Cosmos stores
+ * it, so nothing is swapped here. Typesense's geopoint type was lat-first, which is why this file
+ * used to guess the orientation from the sign of the first number — a heuristic that worked only
+ * because British Columbia is west of Greenwich. It is gone.
+ */
+function geoPoint(centroid) {
+  const coords = Array.isArray(centroid) ? centroid : centroid && centroid.coordinates;
+  if (!Array.isArray(coords) || coords.length !== 2) return [-125.0, 54.0];
+  const [lng, lat] = coords.map(Number);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) return [-125.0, 54.0];
+  return [lng, lat];
 }
 
 exports.search = async (req, res) => {
@@ -68,55 +55,63 @@ exports.search = async (req, res) => {
     const resultPageSize = Math.min(pageSize, 250);
 
     if (dataset === 'Project') {
-      // Query Typesense when search keywords are present. When listing without keywords, query Cosmos DB directly to return all database projects.
+      // Keywords go to AI Search; a bare list still comes from Cosmos below, because listing every
+      // project is a read, not a search, and the index adds nothing to it.
       if (keywords) {
-        const TYPESENSE_BASE_URL = getTypesenseBaseUrl();
-        const TYPESENSE_API_KEY = process.env.TYPESENSE_API_KEY || 'local-dev-key';
-
-        const filterBy = [];
-        if (accessContext.typesenseFilter) {
-          filterBy.push(accessContext.typesenseFilter);
-        }
-
-        const q = keywords;
-        const typesenseUrl = `${TYPESENSE_BASE_URL}/collections/projects/documents/search?q=${encodeURIComponent(q)}&query_by=name,displayName,description,proponent&num_typos=${fuzzy ? 2 : 0}&prefix=true&per_page=${resultPageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
-
         try {
-          const typesenseRes = await fetch(typesenseUrl, {
-            headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY }
-          });
-          if (typesenseRes.ok) {
-            const data = await typesenseRes.json();
-            const hits = data.hits || [];
-            if (hits.length > 0) {
-              const searchResults = hits.map(hit => {
-                const doc = hit.document;
-                return {
-                  _id: String(doc.id),
-                  id: String(doc.id),
-                  trackProjectId: doc.trackProjectId || doc.id,
-                  legacyEagleId: doc.legacyEagleId || doc.eagleId || '',
-                  name: doc.name || doc.displayName || 'Unnamed Project',
-                  sector: doc.sector || 'Other',
-                  status: doc.status || 'Active',
-                  centroid: doc.centroid ? (doc.centroid[0] < 0 ? [doc.centroid[0], doc.centroid[1]] : [doc.centroid[1], doc.centroid[0]]) : [-125.0, 54.0],
-                  read: doc.allowed_roles || ['public'],
-                  region: doc.region || 'British Columbia',
-                  description: doc.description || 'No project description provided.',
-                  proponent: { name: doc.proponent || 'Proponent Organization' },
-                  isPublished: doc.allowed_roles ? doc.allowed_roles.includes('public') : true,
-                  sources: doc.sources || { nrpti: { recordCount: doc.nrptiRecords ? doc.nrptiRecords.length : 0 } },
-                  nrptiRecords: doc.nrptiRecords || []
-                };
-              });
+          const access = resolveAccess(req);
+          // 'id', not 'projectId' — a project IS its own scope, and scoping on a field the index
+          // does not have would match nothing while looking like an empty corpus.
+          const { filter, empty } = filterFor(access, 'id');
+
+          if (!empty) {
+            const { items } = await aiSearch.searchProjects({
+              filter,
+              keywords,
+              fuzzy,
+              top: resultPageSize
+            });
+
+            if (items.length > 0) {
+              const searchResults = items.map(doc => ({
+                _id: String(doc.id),
+                id: String(doc.id),
+                // Never carried by the old Typesense schema either, so this has always been the id.
+                trackProjectId: doc.id,
+                legacyEagleId: doc.legacyEagleId || '',
+                name: doc.name || doc.displayName || 'Unnamed Project',
+                sector: doc.sector || 'Other',
+                status: doc.status || 'Active',
+                // Cosmos stores GeoJSON [lng, lat] and the frontend wants [lng, lat], so the index
+                // carries the point unchanged. The lat/lng swap that Typesense needed — and the
+                // sign-sniffing that guessed at its orientation here — is simply gone.
+                centroid: geoPoint(doc.centroid),
+                read: Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : ['public'],
+                region: doc.region || 'British Columbia',
+                description: doc.description || 'No project description provided.',
+                proponent: { name: doc.proponent || 'Proponent Organization' },
+                isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true,
+                sources: doc.sources || {},
+                nrptiRecords: []
+              }));
 
               return res.json([{ searchResults }]);
             }
-          } else {
-            console.warn(`[search] Typesense project search HTTP ${typesenseRes.status}, falling back to Cosmos DB`);
+
+            // Nothing matched. Answer that, rather than falling through to the keywordless Cosmos
+            // read below — that path ignores the keywords entirely and returns an arbitrary page.
+            // Measured: an anonymous search for a nonsense term returned 50 unrelated projects,
+            // and the same fallback masked a 400 that had broken project search outright.
+            return res.json([{ searchResults: [] }]);
           }
+
+          // Scoped to nothing. Fail closed, and do not let the unfiltered list answer instead.
+          return res.json([{ searchResults: [] }]);
         } catch (err) {
-          console.error('[search] Typesense query failed, falling back to Cosmos DB:', err.message);
+          // A backend FAULT is different from no matches, and is the one case still worth the
+          // database's answer — logged loudly, because an empty page and a broken search look
+          // identical from outside.
+          console.error('[search] project search failed, falling back to Cosmos:', err.message);
         }
       }
 
@@ -157,46 +152,60 @@ exports.search = async (req, res) => {
       }
     } else if (dataset === 'Document') {
       if (keywords) {
-        const TYPESENSE_BASE_URL = getTypesenseBaseUrl();
-        const TYPESENSE_API_KEY = process.env.TYPESENSE_API_KEY || 'local-dev-key';
-
-        const filterBy = [];
-        if (accessContext.typesenseFilter) {
-          filterBy.push(accessContext.typesenseFilter);
-        }
-
-        const q = keywords;
-        const typesenseUrl = `${TYPESENSE_BASE_URL}/collections/documents/documents/search?q=${encodeURIComponent(q)}&query_by=displayName,documentFileName,description,projectName&num_typos=${fuzzy ? 2 : 0}&prefix=true&per_page=${resultPageSize}${filterBy.length > 0 ? '&filter_by=' + encodeURIComponent(filterBy.join(' && ')) : ''}`;
-
         try {
-          const typesenseRes = await fetch(typesenseUrl, {
-            headers: { 'X-TYPESENSE-API-KEY': TYPESENSE_API_KEY }
-          });
-          if (typesenseRes.ok) {
-            const data = await typesenseRes.json();
-            const hits = data.hits || [];
-            if (hits.length > 0) {
-              const mappedDocs = hits.map(hit => {
-                const doc = hit.document;
-                return {
-                  _id: String(doc.id),
-                  displayName: doc.displayName || 'Untitled Document',
-                  documentFileName: doc.documentFileName || 'document.pdf',
-                  documentType: doc.type || 'PDF Document',
-                  project: String(doc.projectId || ''),
-                  projectName: doc.projectName || 'Associated Project',
-                  read: doc.allowed_roles || ['public'],
-                  isPublished: doc.allowed_roles ? doc.allowed_roles.includes('public') : true,
-                  description: doc.description || 'Official document extracted from central registry.'
-                };
-              });
+          const access = resolveAccess(req);
+          const { filter, empty } = filterFor(access);
+          // Projects are scoped on their own id; the same caller, a different index.
+          const projectScope = filterFor(access, 'id');
+
+          if (!empty) {
+            const { items } = await aiSearch.searchDocuments({
+              filter,
+              // Passed so the project-name leg can run under the caller's project visibility.
+              // Undefined would disable that leg entirely; null legitimately means "unrestricted".
+              projectFilter: projectScope.empty ? undefined : projectScope.filter,
+              keywords,
+              fuzzy,
+              top: resultPageSize
+            });
+
+            if (items.length > 0) {
+              const mappedDocs = items.map(doc => ({
+                _id: String(doc.id),
+                displayName: doc.displayName || 'Untitled Document',
+                documentFileName: doc.documentFileName || 'document.pdf',
+                documentType: doc.type || 'PDF Document',
+                project: String(doc.projectId || ''),
+                // The index carries no projectName — a Cosmos document row does not have one, and
+                // an indexer reads a single container. The label is resolved below.
+                projectName: 'Associated Project',
+                read: Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : ['public'],
+                isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true,
+                description: doc.description || 'Official document extracted from central registry.'
+              }));
+
+              // Hydrate project names under the CALLER's access — never systemAccess(), which
+              // would let a label leak past the ACL governing the row it describes. Same shape the
+              // chunk branch uses.
+              const projectIds = mappedDocs.map(d => d.project).filter(Boolean);
+              if (projectIds.length > 0) {
+                const parents = await projectsRepo.listByIds(access, projectIds);
+                const nameById = new Map(parents.map(p => [String(p.id), p.name]));
+                for (const doc of mappedDocs) {
+                  doc.projectName = nameById.get(doc.project) || 'Associated Project';
+                }
+              }
+
               return res.json([{ searchResults: mappedDocs }]);
             }
-          } else {
-            console.warn(`[search] Typesense document search HTTP ${typesenseRes.status}, falling back to Cosmos DB`);
+
+            // See the project branch: no matches is an answer, not a reason to list the corpus.
+            return res.json([{ searchResults: [] }]);
           }
+
+          return res.json([{ searchResults: [] }]);
         } catch (err) {
-          console.error('[search] Document Typesense query failed, falling back to Cosmos DB:', err.message);
+          console.error('[search] document search failed, falling back to Cosmos:', err.message);
         }
       }
 
@@ -221,23 +230,83 @@ exports.search = async (req, res) => {
         return res.json([{ searchResults: [] }]);
       }
     } else if (dataset === 'DocumentChunk') {
-      // Deep Search over extracted document TEXT — NO BACKEND until Azure AI Search lands
-      // (TODO.md §B). Cosmos native full-text search was built here and ruled out: fuzzy is a
-      // silent no-op even with the preview enrolled, and the frontend sends fuzzy=true on every
-      // Deep Search. The `chunks` container carries no full-text policy, so there is nothing left
-      // here to query — the empty result is issued without touching Cosmos.
+      // Deep Search over extracted document TEXT, served by Azure AI Search.
       //
-      // 200 with an empty list, not 503: the frontend retries 5xx twice at 1s
-      // (registry-state.service.ts fetchWithRetry) and lands on an empty chunk list either way,
-      // so a status code only buys ~2s of latency on every search.
-      //
-      // NO fallback to another source. A fallback here is precisely how the deleted
-      // `epic`-collection workarounds came to exist: it turns "no chunk search" into "silently
-      // searched something else".
-      if (keywords) {
-        warnChunkSearchUnavailable();
+      // NO fallback to another source on an empty result. A fallback that fires on zero rows is
+      // precisely how the deleted `epic`-collection workarounds came to exist: it turns
+      // "extraction has not run" into "silently searched something else". Empty means empty.
+      if (!keywords) {
+        return res.json([{ searchResults: [] }]);
       }
-      return res.json([{ searchResults: [] }]);
+
+      try {
+        // resolveAccess, not the Mongo-era roles above: the visibility filter is evaluated BY THE
+        // SERVICE alongside the match, so ranking is computed only over rows this caller may read.
+        // Roles still come from the verified token only.
+        const access = resolveAccess(req);
+        const { filter, empty } = filterFor(access);
+
+        // `empty` is the fail-closed branch and it MUST short-circuit here. OData has no `false`
+        // literal, so "this caller may see nothing" cannot be expressed as a filter — issuing the
+        // request with no filter would return everything.
+        if (empty) {
+          return res.json([{ searchResults: [] }]);
+        }
+
+        const { items } = await aiSearch.searchChunks({
+          filter,
+          keywords,
+          fuzzy,
+          top: resultPageSize
+        });
+
+        if (items.length === 0) {
+          return res.json([{ searchResults: [] }]);
+        }
+
+        // Chunks carry ids, not labels. Hydrate the parent document and project names in two
+        // bounded reads under the CALLER's access — never systemAccess(), which would let a name
+        // leak past the ACL that governs the row it describes.
+        const documentIds = items.map(c => c.documentId);
+        const projectIds = items.map(c => c.projectId);
+        const [parentDocs, parentProjects] = await Promise.all([
+          documentsRepo.listByIds(access, documentIds, projectIds),
+          projectsRepo.listByIds(access, projectIds)
+        ]);
+        const docById = new Map(parentDocs.map(d => [String(d.id), d]));
+        const projById = new Map(parentProjects.map(p => [String(p.id), p]));
+
+        const mappedChunks = items.map(chunk => {
+          const parent = docById.get(String(chunk.documentId));
+          const project = projById.get(String(chunk.projectId));
+          return {
+            _id: String(chunk.chunkId),
+            documentId: String(chunk.documentId || ''),
+            project: String(chunk.projectId || ''),
+            projectName: (project && project.name) || 'Associated Project',
+            documentName:
+              (parent && (parent.displayName || parent.documentFileName)) || 'Untitled Document',
+            documentType: (parent && parent.type) || 'PDF Document',
+            pageNumber: chunk.pageNumber ?? 0,
+            // Empty by design: `content` is not retrievable from the index, so the API never
+            // ships whole chunks. The UI renders `snippet` and only falls back to `content`
+            // when there is no snippet.
+            content: '',
+            // Already escaped, with only the <mark> tags this layer added — chunk text comes from
+            // arbitrary uploaded PDFs and the UI renders it with [innerHTML].
+            snippet: chunk.snippet || '',
+            read: Array.isArray(chunk.read) && chunk.read.length > 0 ? chunk.read : ['public']
+          };
+        });
+        return res.json([{ searchResults: mappedChunks }]);
+      } catch (err) {
+        // A bounded failure still has to be legible: an empty result caused by a fault is NOT the
+        // same fact as "nothing matched". 200 rather than 5xx because the frontend retries 5xx
+        // twice at 1s (registry-state.service.ts fetchWithRetry) and lands on an empty chunk list
+        // regardless, so a status code only buys latency on every search.
+        console.error('[search] chunk search failed:', err.message);
+        return res.json([{ searchResults: [] }]);
+      }
     } else {
       return res.status(400).json({ error: `Invalid or unsupported dataset: ${dataset}` });
     }
