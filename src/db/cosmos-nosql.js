@@ -173,130 +173,11 @@ async function query(containerName, spec, options = {}) {
 }
 
 /**
- * Upper bound on pages drained for a ranked query. Generous — a ranked query fans out one page
- * per physical partition and then stops — but it MUST exist. See queryRanked.
- */
-const RANKED_MAX_PAGES = 50;
-
-/**
- * Wall-clock ceiling for one ranked query, across every page.
- *
- * The page cap alone is NOT a bound on time: 50 pages that each take seconds is minutes, and on a
- * single-worker B1 plan a request that runs for minutes takes every other endpoint down with it —
- * measured, `/api/config` went dark alongside search. The spike measured healthy ranked queries at
- * 182-964ms, so 5s is far outside normal and still well inside any client timeout.
- */
-const RANKED_TIMEOUT_MS = Number(process.env.COSMOS_RANKED_TIMEOUT_MS) || 5000;
-
-/**
- * Run an `ORDER BY RANK` query. Ranked queries need their own entry point because BOTH of the
- * ordinary ways of reading a feed are broken for them, in opposite directions:
- *
- *   fetchNext() once  — returns EMPTY early pages with hasMoreResults still true, so a caller
- *                       that reads one page gets zero rows for a query that has matches.
- *   fetchAll()        — drains until hasMoreResults goes false, and for a ranked query that
- *                       matches NOTHING against a non-empty container that never happens. It
- *                       spins, pegs the single core, and the app stops answering entirely
- *                       WITHOUT the process exiting: measured on demi-api-dev, one such query
- *                       made every endpoint unreachable for ~6 minutes with no crash, no restart
- *                       and nothing in the logs.
- *
- * So: drain explicitly, and bound the drain. The page cap is the actual safety property here —
- * it converts a hang into a short result, which is a bug you can see rather than an outage.
- *
- * Returns TOP-N. There is no continuation token: ranked queries cannot page by one.
- */
-async function queryRanked(containerName, spec, options = {}) {
-  assertQuerySpec(spec, containerName);
-
-  const container = getContainer(containerName);
-  if (!container) return { items: [], requestCharge: 0, pages: 0, truncated: false };
-
-  const top = Math.max(1, Number(options.top) || 1);
-  const maxPages = Number(options.maxPages) || RANKED_MAX_PAGES;
-  const timeoutMs = Number(options.timeoutMs) || RANKED_TIMEOUT_MS;
-
-  const feedOptions = { maxItemCount: top };
-  if (options.partitionKey !== undefined) feedOptions.partitionKey = options.partitionKey;
-
-  // TWO bounds, because they stop different things. The deadline below cannot interrupt a single
-  // fetchNext() that never returns — only the abort signal can. The abort signal in turn does not
-  // stop a fast-but-endless sequence of pages — only the deadline and the page cap do.
-  const abort = AbortSignal.timeout(timeoutMs);
-  feedOptions.abortSignal = abort;
-
-  let result;
-  try {
-    result = await drainRanked(container.items.query(spec, feedOptions), top, {
-      maxPages,
-      deadline: Date.now() + timeoutMs
-    });
-  } catch (err) {
-    // An aborted query is a bounded failure, not a crash: report empty and say so loudly. It must
-    // not propagate as a 500, and it must never be silent — silence is what made the original
-    // outage look like a network problem.
-    if (abort.aborted || err.name === 'AbortError' || err.code === 'ABORT_ERR') {
-      console.error(
-        `[Cosmos] ranked query on "${containerName}" ABORTED after ${timeoutMs}ms. ` +
-        'Returning empty rather than holding the worker.'
-      );
-      return { items: [], requestCharge: 0, pages: 0, truncated: true, timedOut: true };
-    }
-    throw err;
-  }
-
-  // Hitting either bound is the pathological shape above. Say so.
-  if (result.truncated || result.timedOut) {
-    console.warn(
-      `[Cosmos] ranked query on "${containerName}" stopped early ` +
-      `(pages=${result.pages}, timedOut=${Boolean(result.timedOut)}) with ` +
-      `${result.items.length} item(s); returning what it has rather than spinning.`
-    );
-  }
-
-  return { ...result, items: result.items.map(stripInternals) };
-}
-
-/**
- * The bounded drain itself, separated from client plumbing so it can be tested against a fake
- * iterator — including the one shape that matters, an iterator whose hasMoreResults() never goes
- * false. Exported for that reason only.
- */
-async function drainRanked(iterator, top, opts = {}) {
-  const maxPages = Number(opts.maxPages) || RANKED_MAX_PAGES;
-  const deadline = opts.deadline; // epoch ms, optional — injected so this stays testable
-  const items = [];
-  let requestCharge = 0;
-  let pages = 0;
-  let timedOut = false;
-
-  while (iterator.hasMoreResults() && items.length < top && pages < maxPages) {
-    if (deadline && Date.now() >= deadline) {
-      timedOut = true;
-      break;
-    }
-    const page = await iterator.fetchNext();
-    pages++;
-    requestCharge += page.requestCharge || 0;
-    if (page.resources && page.resources.length) items.push(...page.resources);
-  }
-
-  return {
-    items: items.slice(0, top),
-    requestCharge,
-    pages,
-    timedOut,
-    truncated: timedOut || (pages >= maxPages && items.length < top)
-  };
-}
-
-/**
  * How far Cosmos has got rebuilding a container's index, as a percentage.
  *
- * This exists because a ranked query is only meaningful at 100: `ORDER BY RANK` cannot be served
- * from a partially built index, while `FULLTEXTCONTAINS` masks the same state by scanning. Every
- * cutover that lands rows in bulk has to wait on this, so it is a permanent operational reading,
- * not a debugging aid — see MIGRATION.md §F.
+ * A query against a partially built index answers short rather than erroring, so every cutover
+ * that lands rows in bulk has to wait on this. Permanent operational reading, not a debugging
+ * aid — see MIGRATION.md §F.
  *
  * Returns null when the header is absent (the SDK only emits it with populateQuotaInfo, and only
  * for containers that have one).
@@ -483,15 +364,11 @@ module.exports = {
   INTERNAL_FIELDS,
   stripInternals,
   BULK_MAX_OPERATIONS,
-  RANKED_MAX_PAGES,
-  RANKED_TIMEOUT_MS,
   initCosmosClient,
   getDatabase,
   getContainer,
   assertQuerySpec,
   query,
-  queryRanked,
-  drainRanked,
   indexProgress,
   queryValue,
   readItem,

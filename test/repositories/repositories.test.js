@@ -35,20 +35,12 @@ function captureQuery(t) {
     record(container, spec, options);
     return { items: [], continuationToken: undefined, requestCharge: 0 };
   });
-  // Returns 1, not 0: chunk search now runs a COUNT pre-flight and short-circuits on zero, so a
-  // 0 here would stop every ranked query before it was ever emitted and the SQL assertions below
-  // would silently assert nothing. No test asserts on the scalar itself.
+  // Returns 1, not 0: a count of zero can short-circuit a caller before it emits the query the
+  // test is asserting on. No test asserts on the scalar itself.
   t.mock.method(cosmos, 'queryValue', async (container, spec, options = {}) => {
     record(container, spec, options);
     return 1;
   });
-  // Ranked reads go through their own entry point — mocking query() alone would miss every
-  // chunk search and the test would assert nothing.
-  t.mock.method(cosmos, 'queryRanked', async (container, spec, options = {}) => {
-    record(container, spec, options);
-    return { items: [], requestCharge: 0, pages: 1, truncated: false };
-  });
-
   return calls;
 }
 
@@ -217,8 +209,9 @@ test('chunks repository', async (t) => {
     await chunks.listVisible(PUBLIC, {});
 
     const { spec, container } = calls[0];
-    // chunks_fts, not chunks: the full-text policy is immutable, so search needed a new container.
-    assert.strictEqual(container, 'chunks_fts');
+    // One container for chunks. `chunks_fts` existed briefly for Cosmos full-text search and is
+    // gone; this constant addresses every chunk WRITE too, so a wrong value splits the corpus.
+    assert.strictEqual(container, 'chunks');
     assert.match(spec.query, /^SELECT \* FROM c WHERE /);
     assert.match(spec.query, /EXISTS\(SELECT VALUE r FROM r IN c\.read/);
   });
@@ -258,100 +251,6 @@ test('chunks repository', async (t) => {
     const calls = captureQuery(t);
     await chunks.listVisible(ADMIN, { documentId: "x' OR 1=1 --" });
     assert.ok(!calls[0].spec.query.includes('OR 1=1'));
-  });
-
-  await t.test('searchText composes the ACL into the SAME where clause as the match', async () => {
-    const calls = captureQuery(t);
-    await chunks.searchText(PUBLIC, { keywords: 'peace river' });
-
-    // calls[0] is the COUNT pre-flight, calls[1] is the ranked query.
-    assert.match(calls[0].spec.query, /SELECT VALUE COUNT\(1\)/, 'pre-flight must be a count');
-    assert.ok(!/ORDER BY RANK/.test(calls[0].spec.query),
-      'the pre-flight must NOT be a ranked query — that is the shape being avoided');
-
-    const { spec, options } = calls[1];
-    assert.match(spec.query, /FULLTEXTCONTAINSALL\(c\.content, @term0, @term1\)/);
-    assert.match(spec.query, /EXISTS\(SELECT VALUE r FROM r IN c\.read/);
-    assert.match(spec.query, /ORDER BY RANK FULLTEXTSCORE\(c\.content, @term0, @term1\)/);
-    assert.deepStrictEqual(
-      spec.parameters.filter(p => p.name.startsWith('@term')).map(p => p.value),
-      ['peace', 'river']
-    );
-    // Must go through queryRanked, which drains with a page cap. query()'s fetchAll branch
-    // never terminates on a ranked query that matches nothing against a non-empty container.
-    assert.strictEqual(options.top, 20, 'ranked reads must pass top to queryRanked');
-    assert.match(spec.query, /SELECT TOP @top /);
-  });
-
-  // THE defence against the outage. A ranked query that matches nothing spins synchronously
-  // inside the SDK's client-side merge and blocks the event loop, so no timeout or AbortSignal
-  // can rescue it — the query simply must not be issued.
-  await t.test('zero matches means the ranked query is never issued', async (tt) => {
-    const calls = [];
-    tt.mock.method(cosmos, 'queryValue', async (container, spec) => {
-      cosmos.assertQuerySpec(spec, container);
-      calls.push({ kind: 'count', spec });
-      return 0; // nothing matches
-    });
-    tt.mock.method(cosmos, 'queryRanked', async (container, spec) => {
-      calls.push({ kind: 'ranked', spec });
-      return { items: [], requestCharge: 0, pages: 0, truncated: false };
-    });
-
-    const res = await chunks.searchText(PUBLIC, { keywords: 'zzznotpresent' });
-
-    assert.deepStrictEqual(res.items, []);
-    assert.strictEqual(res.matched, 0);
-    assert.deepStrictEqual(calls.map(c => c.kind), ['count'],
-      'a ranked query must NOT follow a zero count');
-  });
-
-  await t.test('scoped callers are restricted on projectId in a ranked search too', async () => {
-    const calls = captureQuery(t);
-    await chunks.searchText(SCOPED, { keywords: 'river' });
-
-    const { spec } = calls[0];
-    assert.match(spec.query, /c\.projectId IN \(/);
-    assert.ok(!/c\.documentId IN \(/.test(spec.query));
-  });
-
-  // Measured on the live account: the fuzzy {term, distance} form returns ZERO rows, and the
-  // frontend sends fuzzy=true on EVERY Deep Search. Honouring it would blank the whole feature,
-  // so an unavailable fuzzy degrades to exact matching instead of to silence.
-  await t.test('fuzzy degrades to exact matching when it is not enabled', async () => {
-    assert.strictEqual(chunks.FUZZY_ENABLED, false, 'default must be off');
-    const calls = captureQuery(t);
-    const res = await chunks.searchText(PUBLIC, { keywords: 'rivver propnent', fuzzy: true });
-
-    const { spec } = calls[1];
-    assert.match(spec.query, /FULLTEXTCONTAINSALL\(c\.content, @term0, @term1\)/,
-      'must fall back to the exact form, not emit a fuzzy object');
-    for (const p of spec.parameters.filter(x => x.name.startsWith('@term'))) {
-      assert.strictEqual(typeof p.value, 'string', 'no object parameters when fuzzy is off');
-    }
-    assert.strictEqual(res.fuzzyUnavailable, true, 'the degradation must be reported, not hidden');
-  });
-
-  // ORDER BY RANK with no full-text predicate returns the WHOLE container, ranked but unfiltered.
-  await t.test('no usable terms means no query at all, never a bare ORDER BY RANK', async () => {
-    const calls = captureQuery(t);
-    const empty = await chunks.searchText(PUBLIC, { keywords: '   !!!  ' });
-
-    assert.deepStrictEqual(empty.items, []);
-    assert.strictEqual(calls.length, 0, 'must not reach the data layer');
-  });
-
-  await t.test('hostile search input is bound, never interpolated', async () => {
-    const calls = captureQuery(t);
-    await chunks.searchText(PUBLIC, { keywords: "river') OR 1=1 --" });
-    assert.ok(!calls[0].spec.query.includes('OR 1=1'));
-  });
-
-  await t.test('top is capped so a caller cannot ask for the whole corpus', async () => {
-    const calls = captureQuery(t);
-    await chunks.searchText(PUBLIC, { keywords: 'river', top: 100000 });
-    const top = calls[1].spec.parameters.find(p => p.name === '@top');
-    assert.strictEqual(top.value, chunks.MAX_TOP);
   });
 
   await t.test('chunkId is deterministic, so re-extraction upserts instead of duplicating', () => {

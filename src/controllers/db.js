@@ -14,11 +14,10 @@ const models = {
 };
 
 /**
- * Containers whose index-build state is worth reporting. `chunks_fts` is the one that matters:
- * `ORDER BY RANK` cannot be served from a partially built full-text index, so anything that lands
- * rows in bulk has to wait for 100 before its search results mean anything.
+ * Containers whose index-build state is worth reporting. A bulk load leaves the index lagging the
+ * rows, and a reader that arrives before it reaches 100 sees a short answer rather than an error.
  */
-const INDEXED_CONTAINERS = ['chunks_fts', 'chunks', 'documents', 'projects'];
+const INDEXED_CONTAINERS = ['chunks', 'documents', 'projects'];
 
 /**
  * Index-build progress per container, as a percentage.
@@ -57,7 +56,18 @@ async function getIndexProgressHandler(req, res) {
     if (!progress) {
       return res.json({ success: true, active: false, reason: 'USE_COSMOS_NOSQL is not true' });
     }
-    res.json({ success: true, active: true, database: 'demi', indexProgress: progress });
+    // Which container a DEPLOYED build actually writes chunks to is otherwise unobservable from
+    // outside — app settings cannot be read back from the SCM container either, since it gets
+    // neither the app's env nor its managed identity. One string removes the guess, and this is
+    // exactly the fact that went wrong when chunk writes were pointed at `chunks_fts`.
+    const chunks = require('../repositories/chunks');
+    res.json({
+      success: true,
+      active: true,
+      database: 'demi',
+      indexProgress: progress,
+      search: { container: chunks.CONTAINER }
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

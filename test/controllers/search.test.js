@@ -165,53 +165,38 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
   });
 
-  await t.test('DocumentChunk search hydrates names and escapes the snippet', async () => {
-    t.mock.method(chunksRepo, 'searchText', async (access, opts) => {
-      // The caller's own access context, not a system one — a name must not out-rank the row.
-      assert.strictEqual(access.tier, 'public');
-      assert.strictEqual(opts.keywords, 'river');
-      return {
-        items: [{
-          id: 'd1::p2::c0',
-          documentId: 'd1',
-          projectId: '207',
-          pageNumber: 2,
-          content: 'The <script>alert(1)</script> river & the "peace" river flows north.',
-          read: ['public']
-        }]
-      };
-    });
-    t.mock.method(documentsRepo, 'listByIds', async () => ([
-      { id: 'd1', displayName: 'Application', documentFileName: 'app.pdf', type: 'Application' }
-    ]));
-    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+  // The Cosmos full-text backend was ruled out and Azure AI Search is not built yet (TODO.md §B),
+  // so this branch answers empty WITHOUT reaching any data layer. Asserting "never queried" is the
+  // point: a stub that still hit Cosmos would burn RU per keystroke against a container with no
+  // full-text index, and the failure would show up as latency rather than as an error.
+  await t.test('DocumentChunk search answers empty without touching a backend', async () => {
+    let touched = false;
+    for (const repo of [documentsRepo, projectsRepo]) {
+      t.mock.method(repo, 'listByIds', async () => { touched = true; return []; });
+    }
+    t.mock.method(chunksRepo, 'listVisible', async () => { touched = true; return { items: [] }; });
 
     const req = {
-      query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '50' },
+      query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '50', fuzzy: 'true' },
       header: () => null
     };
     let jsonResponse;
-    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    let statusCode = 200;
+    const res = {
+      json: (data) => { jsonResponse = data; return res; },
+      status: (code) => { statusCode = code; return res; }
+    };
 
     await searchController.search(req, res);
 
-    const [hit] = jsonResponse[0].searchResults;
-    assert.strictEqual(hit.projectName, 'Site C');
-    assert.strictEqual(hit.documentName, 'Application');
-    assert.strictEqual(hit.documentType, 'Application');
-    assert.strictEqual(hit.pageNumber, 2);
-    assert.deepStrictEqual(hit.read, ['public']);
-    // Rendered with [innerHTML]: chunk text comes from arbitrary uploaded PDFs, so the only tag
-    // allowed to survive is the <mark> this controller adds itself.
-    assert.ok(!hit.snippet.includes('<script>'), 'document text must not reach the DOM as markup');
-    assert.ok(hit.snippet.includes('&lt;script&gt;'));
-    assert.ok(hit.snippet.includes('<mark>river</mark>'));
-    assert.ok(hit.snippet.includes('&amp;'), 'entities must survive marking intact');
+    assert.strictEqual(statusCode, 200, '200, not 5xx — the frontend retries 5xx twice at 1s');
+    assert.deepStrictEqual(jsonResponse, [{ searchResults: [] }]);
+    assert.strictEqual(touched, false, 'the branch must issue no query at all');
   });
 
   await t.test('DocumentChunk search with no keywords never queries', async () => {
     let called = false;
-    t.mock.method(chunksRepo, 'searchText', async () => { called = true; return { items: [] }; });
+    t.mock.method(chunksRepo, 'listVisible', async () => { called = true; return { items: [] }; });
 
     const req = { query: { dataset: 'DocumentChunk', keywords: '' }, header: () => null };
     let jsonResponse;
