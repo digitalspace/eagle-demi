@@ -52,8 +52,8 @@ There is no search sync command. Azure AI Search indexers PULL from Cosmos every
 | IaC | Bicep — `azure/main.bicep`, `azure/modules/` |
 
 **The database is keyless.** The account sets `disableLocalAuth`, so there is no connection key:
-auth is Entra managed identity via `AZURE_CLIENT_ID`, configured with `COSMOS_ENDPOINT` and
-`COSMOS_NOSQL_DATABASE`.
+auth is Entra managed identity via `AZURE_CLIENT_ID` and `COSMOS_ENDPOINT`. Verified live
+2026-08-01: `disableLocalAuth: true`, `publicNetworkAccess: Disabled`, `EnableServerless`.
 
 **One data layer.** The MongoDB-API client and everything behind it — `src/db/cosmos.js`,
 `src/models/*`, `src/helpers/access.js`, the legacy controllers and the `USE_COSMOS_NOSQL` switch
@@ -63,6 +63,11 @@ read composes `src/helpers/access-sql.js`.
 `COSMOS_DATABASE=epic` is still set on the deployed app and is now inert; it goes with the account.
 The NoSQL client reads `COSMOS_NOSQL_DATABASE` and deliberately ignores it — pointing it at
 `COSMOS_DATABASE` once repointed the live app at an empty database that answered `[]` with HTTP 200.
+
+**`COSMOS_NOSQL_DATABASE` is not actually set on `demi-api-dev`** (checked 2026-08-01). The app
+reaches the right database only through the `|| 'demi'` default in `src/db/cosmos-nosql.js:37`. That
+works, but the explicit setting is the guard against exactly the repoint described above, and it is
+missing. Setting it recycles the worker, so it waits for the extraction run to land — `TODO.md`.
 
 Some notable implementation details:
 
@@ -162,6 +167,11 @@ two bugs at once.
 Backend is chosen by an explicit `STORAGE_BACKEND` (`minio` | `azure`); an unknown value throws at
 load. It is never inferred from whichever credentials happen to be present.
 
+**`STORAGE_BACKEND` is not set on `demi-api-dev`** (checked 2026-08-01); `src/config.js:69` defaults
+it to `minio`, which is the intended dev backend, so nothing is broken. But "explicit" describes the
+code contract, not the deployment — the default is doing the choosing. Set it with
+`COSMOS_NOSQL_DATABASE` in the same pass, after the extraction run lands.
+
 MinIO settings: `MINIO_HOST`, `MINIO_BUCKET_NAME`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, plus
 **`MINIO_PORT=443`**, **`MINIO_USE_SSL=true`** and a pinned region — without an explicit region the
 SDK does a bucket-region lookup on every presign that hangs ~135 s before failing. Dev also needs
@@ -205,6 +215,13 @@ above is the working path.
 **Only dev deploys on a push to `main`.** Test and prod are `workflow_dispatch` only. They used to
 carry the same push trigger, which would have deployed both on every merge with no tag and no
 approval the moment the missing credential landed. Do not restore it.
+
+**`azure/main.bicep` is not what built the running environment**, but `azure-deploy-dev.yaml` runs
+`az deployment group create` against it on any push to `main` touching `azure/**` — and redeploys
+the API in the same run. It has never instantiated `cosmos-nosql.bicep`, `ai-search.bicep` or the
+other modules that make up current dev; there is no VNet in the resource group either. Today this is
+inert because CI cannot authenticate. The day `AZURE_CLIENT_ID` lands, that trigger deploys a
+template that does not describe reality, so fix the template before fixing the credential.
 
 Things that will cost you time if you rediscover them:
 

@@ -19,10 +19,6 @@ param minioAccessKey string
 @secure()
 param minioSecretKey string
 
-@description('Cosmos DB Connection String')
-@secure()
-param mongodbConnectionString string
-
 @description('Azure AI Search endpoint, e.g. https://demi-search-dev.search.windows.net. Empty disables chunk search rather than failing it.')
 param searchEndpoint string = ''
 
@@ -110,23 +106,10 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'WEBSITE_RUN_FROM_PACKAGE'
           value: '1'
         }
-        // Azure Cosmos DB Connection
-        {
-          name: 'COSMOSDB_URI'
-          value: mongodbConnectionString
-        }
-        {
-          name: 'COSMOSDB_DATABASE'
-          value: 'epic'
-        }
-        {
-          name: 'MONGODB_URI'
-          value: mongodbConnectionString
-        }
-        {
-          name: 'MONGODB_DATABASE'
-          value: 'epic'
-        }
+        // No Cosmos DB for MongoDB API settings. COSMOSDB_URI, COSMOSDB_DATABASE, MONGODB_URI and
+        // MONGODB_DATABASE all carried the same connection string and the same 'epic' database, and
+        // all four went with the Mongo data layer at Phase 8. The NoSQL account is keyless, so its
+        // settings are COSMOS_ENDPOINT plus COSMOS_NOSQL_DATABASE and there is no secret to wire.
         // MinIO Storage Connection
         {
           name: 'MINIO_HOST'

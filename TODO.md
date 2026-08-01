@@ -29,16 +29,18 @@ documents 60,578, records 48,086, boundaries 281. All three indexers report prog
 
 ### 1. Phase 8 Azure teardown — earliest 2026-08-08
 
-Code side done. Nothing here run before the clean week end. Rollback until then is `git revert`, no
-redeploy.
+Code and template both done. Only `az` mutations left, and none run before the clean week end.
+Rollback until then is `git revert` plus the app settings still on `demi-api-dev` — **the template
+edits did not touch either**, so rollback is intact.
 
-- [ ] Bicep: `azure/main.bicep:69` `cosmosDb` module + `:89` `mongodbConnectionString` wiring (its
-      ONLY consumer) · `azure/modules/cosmos-db.bicep` · `api-web-app.bicep:22-24` param +
-      `:113-129` settings block.
-- [ ] Stale compiled `azure/main.json` — regenerate or delete. No workflow read it, but leaving it
-      stale is a trap.
+- [x] **Bicep, done 2026-08-01.** `cosmosDb` module + `mongodbConnectionString` wiring out of
+      `main.bicep`; `azure/modules/cosmos-db.bicep` deleted; `api-web-app.bicep` param and all four
+      settings it fed (`COSMOSDB_URI`, `COSMOSDB_DATABASE`, `MONGODB_URI`, `MONGODB_DATABASE` — TODO
+      named two, they shared one param) deleted; stale `azure/main.json` deleted. `az bicep build`
+      clean on all three touched files. Deployed nothing: `main.bicep` is not what run and CI cannot
+      auth.
 - [ ] App settings `MONGODB_URI`, `MONGODB_DATABASE` off `demi-api-dev`, then `stop`/`start`. **This
-      burn the rollback.**
+      burn the rollback.** Confirmed still present 2026-08-01.
 - [ ] Account `demi-mongo-dev-pcbd7cygyic52`, then `demi-mongo-pe` + its NIC. **The private endpoint
       is the only flat recurring charge (~$7/mo).**
 
@@ -185,8 +187,27 @@ randomly sampled documents had zero bad chunks.** In this order:
   listed in its own trigger paths. Comments in both files say not to restore it.
 - **Phase 3b blob storage** — code + Bicep written, not deployed, nothing copied. Need
   `Storage Blob Delegator` or every download link fail to sign.
-- **`syncState` container** exist in `cosmos-nosql.bicep`, unwritten by anything.
-- [ ] Verify every `README.md` claim against the running system.
+- ~~**`syncState` container** exist in `cosmos-nosql.bicep`, unwritten by anything.~~ — **removed
+  from template 2026-08-01.** Container still exist in the live account; template not deployed, so
+  nothing deleted. Sweep it up with the account teardown. `leases` kept, comment corrected — its
+  stated reason (Typesense change-feed sync) died 2026-07-31, but a change-feed trigger stay the
+  only route to automatic delete propagation.
+- ~~[ ] Verify every `README.md` claim against the running system.~~ — **done 2026-08-01**, live and
+  read-only. Confirmed: B1 Basic + `NODE|22`, AI Search `basic` / `disableLocalAuth` /
+  `publicNetworkAccess: Disabled`, Cosmos serverless + keyless + private, `ENABLE_ORYX_BUILD=false`,
+  no Container Apps, no `nightlySyncTimer`, no `src/models` / `src/db/cosmos.js` /
+  `src/helpers/access.js`, test+prod workflows `workflow_dispatch` only. **Two drifts found, both
+  need an app-setting write, so both wait for the run to land:**
+  - **`COSMOS_NOSQL_DATABASE` not set** on `demi-api-dev`. Right database reached only via the
+    `|| 'demi'` default in `src/db/cosmos-nosql.js:37`. The explicit setting IS the guard against
+    the repoint that once served `[]` with HTTP 200.
+  - **`STORAGE_BACKEND` not set.** `src/config.js:69` default to `minio`, which is right for dev, so
+    nothing broken — but the "never a side effect" rule is being carried by a default.
+- **`azure-deploy-dev.yaml` would deploy `main.bicep`** on any push to `main` touching `azure/**`,
+  and redeploy the API in the same run. `main.bicep` never instantiate `cosmos-nosql.bicep`,
+  `ai-search.bicep`, `identity.bicep`, `document-storage.bicep` or `frontend-web-app.bicep`, and
+  there is no VNet in the RG — so it does not describe dev. Inert only because CI cannot auth.
+  **Fix the template before fixing the credential.**
 
 ---
 

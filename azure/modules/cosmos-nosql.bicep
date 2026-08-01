@@ -1,8 +1,8 @@
 // Azure Cosmos DB for NoSQL — DEMI's target data store.
 //
-// Replaces the MongoDB-API account in azure/modules/cosmos-db.bicep. An account's API is
-// fixed at creation, so this is a new account plus a re-seed, not an in-place conversion.
-// Both accounts exist during the migration; the Mongo one is deleted in the final phase.
+// Replaced the MongoDB-API account, whose template (azure/modules/cosmos-db.bicep) was deleted at
+// Phase 8. An account's API is fixed at creation, so this was a new account plus a re-seed, not an
+// in-place conversion. The Mongo account itself is deleted after the clean week ends 2026-08-08.
 //
 // Cost note: serverless bills per request plus storage (~76 MB of data), so an idle account
 // is effectively free. The private endpoint is the one flat recurring charge, which is why
@@ -476,24 +476,15 @@ resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
   }
 }
 
-resource syncStateContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
-  parent: database
-  name: 'syncState'
-  properties: {
-    resource: {
-      id: 'syncState'
-      partitionKey: {
-        paths: [
-          '/id'
-        ]
-        kind: 'Hash'
-      }
-    }
-  }
-}
+// No syncState container. It was defined here and nothing ever read or wrote it — there is no
+// sync cursor to persist, because the AI Search indexers hold their own high-water mark on _ts.
+// The container still exists in the live account; this template is not deployed, so removing the
+// definition deletes nothing. Delete it with the account teardown if it is still empty.
 
 // Required by the change-feed processor / Functions trigger. Must be partitioned on /id.
-// Created now so enabling real-time Typesense sync later needs no infrastructure change.
+// Nothing reads it today: the real-time sync it was created for was Typesense, deleted 2026-07-31,
+// and AI Search pulls on a _ts high-water mark instead of a change feed. Kept because a change-feed
+// trigger is the only way deletes would ever propagate automatically, and that remains plausible.
 resource leasesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'leases'

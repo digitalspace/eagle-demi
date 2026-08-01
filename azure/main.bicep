@@ -65,16 +65,10 @@ module staticWebApp './modules/static-web-app.bicep' = {
   }
 }
 
-// 4. Database (Azure Cosmos DB Serverless + Private Endpoint)
-module cosmosDb './modules/cosmos-db.bicep' = {
-  name: 'deploy-cosmos-db'
-  params: {
-    location: location
-    environmentName: environmentName
-    tags: defaultTags
-    peSubnetId: vnet.outputs.peSubnetId
-  }
-}
+// 4. Database — the Cosmos DB for MongoDB API account was cut loose at Phase 8. Nothing in the app
+// speaks Mongo any more, so the module and its connection-string wiring are gone. The NoSQL account
+// this replaced it with lives in './modules/cosmos-nosql.bicep', which this orchestrator has never
+// instantiated: the running environment was not built from this file.
 
 // 6. REST API (Azure Function App Serverless Consumption + VNet Integration)
 module apiWebApp './modules/api-web-app.bicep' = {
@@ -86,7 +80,6 @@ module apiWebApp './modules/api-web-app.bicep' = {
     minioHost: minioHost
     minioAccessKey: minioAccessKey
     minioSecretKey: minioSecretKey
-    mongodbConnectionString: cosmosDb.outputs.connectionString
     apiSubnetId: vnet.outputs.apiSubnetId
   }
 }
