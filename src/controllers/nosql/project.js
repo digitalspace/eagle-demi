@@ -3,9 +3,8 @@
 /**
  * Project controller — Cosmos NoSQL.
  *
- * Selected by src/routes/api.js when COSMOS_ENDPOINT is set. The Mongo-backed controllers in
- * the parent directory stay until the cutover, then both they and this directory's nesting
- * go away.
+ * The only project controller. The Mongo-backed pair in the parent directory went with the
+ * data layer in Phase 8; the `nosql/` nesting is now just a path, not a choice.
  *
  * Controllers are thin here: the repository owns the SQL and the visibility predicate, so
  * these functions only translate HTTP to a repository call and back.

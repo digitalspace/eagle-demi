@@ -6,8 +6,8 @@ const config = require('../config');
  * Returns dynamic runtime configuration to the frontend.
  *
  * This endpoint is UNAUTHENTICATED — everything returned here is public. Never add
- * secrets, API keys, or connection strings. The frontend reaches Typesense only through
- * GET /api/search, so no Typesense URL or key belongs in this payload.
+ * secrets, API keys, or connection strings. The frontend reaches the search backend only
+ * through GET /api/search, so no search endpoint or key belongs in this payload.
  */
 exports.getConfig = (req, res) => {
   res.json({

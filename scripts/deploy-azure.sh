@@ -7,7 +7,8 @@ set -e
 # There is deliberately no `job` target. It used to create a Container App Job running
 # mcr.microsoft.com/azuredocs/aci-helloworld on a 2am cron, plus a SECOND Container Apps
 # environment (demi-container-env-dev, not the real demi-ca-env-dev) — billable resources that
-# did nothing. The nightly sync is the Functions timer `nightlySyncTimer`.
+# did nothing. There is no nightly sync either: the `nightlySyncTimer` Functions timer went with
+# the Mongo data layer, and the AI Search indexers pull on a PT5M schedule.
 
 TARGET="${1:-all}"
 RESOURCE_GROUP="${2:-c4b0a8-dev-rg}"
