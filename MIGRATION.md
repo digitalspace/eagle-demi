@@ -64,7 +64,8 @@ and `contentExtracted: true` flags with no chunks behind them.
 
 ### ✅ Phase 5 + 6 complete — cutover done 2026-07-30
 
-Dev serves from **Cosmos DB for NoSQL**. `USE_COSMOS_NOSQL=true`, `stop`/`start` applied.
+Dev serves from **Cosmos DB for NoSQL**. `USE_COSMOS_NOSQL=true`, `stop`/`start` applied. (The
+flag itself is gone — Phase 8 deleted it from the code and, 2026-08-01, from the live app.)
 
 | Verified | Result |
 |---|---|
@@ -516,7 +517,14 @@ Delete this block when the corpus is done and the extraction host is decommissio
 
 ### B. Phase 8 — decommission the MongoDB-API account
 
-**Code done 2026-08-01. Azure resources still standing.**
+**Code done, deployed and verified live 2026-08-01. Azure resources still standing; clean week
+runs to 2026-08-08.**
+
+Live evidence, all five probes, one output file each — full results and the traps in `TODO.md`
+item 1. Headline: `/db/stats` now answer `driver: azure-cosmos-nosql` / `database: demi` with
+`393 / 60,578 / 281`; the ACL gate measure anonymous **0** vs privileged **1** on a throwaway
+non-public record; and the wildfire aggregate survive a subsequent NRPTI sync **byte-identical on
+393/393 projects**, which is the patch-not-replace guarantee this phase turned on.
 
 The blocker was never the file list — it was that deleting `src/models/*` broke **boot**, not a
 route:
@@ -905,19 +913,22 @@ exists. The new account has `disableLocalAuth: true`, so there is no key. These 
 | `COSMOS_ENDPOINT` | **repoint** to `https://demi-cosmos-dev.documents.azure.com:443/` |
 | `COSMOS_KEY` | **delete** — no key exists on the new account |
 | `AZURE_CLIENT_ID` | **add** — the UAMI client id, selects the identity |
-| `USE_COSMOS_NOSQL` | **add** `true` — the only switch that activates the new layer |
+| `USE_COSMOS_NOSQL` | ~~**add** `true`~~ — **DELETED from the live app 2026-08-01.** Phase 8 removed the switch and the layer it chose against |
 | `COSMOS_DATABASE` | already `demi`, verify |
 | `STORAGE_BACKEND` | leave unset (defaults to `minio`) — blobs are not copied yet |
 | `MINIO_*` | **keep** — still the live object store |
 | `MONGODB_URI`, `MONGODB_DATABASE` | **keep until Phase 8** — the rollback path |
 | `WEBSITE_VNET_ROUTE_ALL`, `WEBSITE_DNS_SERVER` | already set; required for private-endpoint DNS |
 
-**Rollback is one setting:** `USE_COSMOS_NOSQL=false` plus `stop`/`start`. Both data layers coexist
-by design until Phase 8, so nothing is one-way until the Mongo account is deleted.
+~~**Rollback is one setting:** `USE_COSMOS_NOSQL=false` plus `stop`/`start`.~~ **No longer true as
+of 2026-08-01.** Phase 8 deleted the switch and the Mongo layer, and the setting is off the live
+app. Rollback is now `git revert` + redeploy, and it only works while `MONGODB_URI` /
+`MONGODB_DATABASE` and the account still stand — that is what the clean week to 2026-08-08 buys.
+Deleting the account is the one-way step.
 
-Also verified: the deploy package includes `src/seed/`, `src/merge/`, `src/storage/`,
-`src/typesense/*-nosql.js` and `seed-nosql.js` (`package-api.py` prunes only at the repo root), so
-the seed can run inside the network via Kudu. **No user-assigned identity exists yet**, so
+Also verified: the deploy package includes `src/seed/`, `src/merge/`, `src/storage/` and
+`seed-nosql.js` (`package-api.py` prunes only at the repo root), so the seed can run inside the
+network via Kudu. (`src/typesense/` was in this list until 2026-07-31; it is deleted.) **No user-assigned identity exists yet**, so
 `identity.bicep` must deploy first — its `principalId` feeds the other two modules.
 
 ### Why Phase 1 was deferred, and what that bought
@@ -1365,6 +1376,10 @@ fragments. The browser never touches Cosmos, so the API is already the trust bou
 **Keycloak stays for user identity; Entra managed identity is only for app→Cosmos.**
 
 ### Typesense (Phase 6 — code written, no reindex run)
+
+**Historical. All of it deleted 2026-07-31 with Typesense itself** — `src/typesense/`, the
+`nightly-sync.js` router, and the flag. Search is Azure AI Search; see §G. Kept for the transform
+reasoning below, which still explain why the NoSQL model carry the fields it does.
 
 `src/typesense/transform-nosql.js` + `full-sync-nosql.js`, selected by the **same**
 `USE_COSMOS_NOSQL` flag as the router (`nightly-sync.js` branches on it). The Mongo-era pair stays
