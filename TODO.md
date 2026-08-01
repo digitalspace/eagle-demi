@@ -123,6 +123,14 @@ randomly sampled documents had zero bad chunks.** In this order:
       extracted ZERO text; the live question is why zero.
 - [ ] **Retrieval scoring** on human-labelled phrases — the verdict metric. Heuristics cannot see
       character-spacing damage (`Tum ble r Ridge` score clean), so only this close the question.
+      **Harness written 2026-08-01**: `src/scripts/score-retrieval.js`, read-only, queries through
+      `searchChunks()` so it score path API actually serve. Report recall@1/@5/@10 + MRR; MRR there
+      because recall@1 cannot tell "ranked second" from "absent". Refuse to run when
+      `SEARCH_ENDPOINT` unset — unconfigured search return `[]`, which would print as `recall@1: 0`
+      and read as unfindable corpus. **Two human steps left**: write labels (format +
+      discipline in `src/scripts/retrieval-labels.example.jsonl`; phrase must come from SOURCE
+      document, not extracted markdown, else it retrieve itself and measure nothing), then run it
+      **after the extraction run land** — growing corpus make two scorecards incomparable.
 - [ ] Only then decide on an intake cleaner. On current evidence job small: strip `<!-- image -->`,
       drop chunks that are pure separator furniture. **Not** an OCR re-run.
 
@@ -132,11 +140,30 @@ randomly sampled documents had zero bad chunks.** In this order:
   managed through the AI Services Hub in the Landing Zones"*, requested via
   <https://bcgov.github.io/ai-hub-tracking/>. `demi-search-dev` created directly, without that
   request. Nothing blocked it, nothing broken, but process skipped — submit before this go past dev.
+  `rg-epic-search` below hold three Cognitive Services accounts too — same question, different team,
+  not ours to file.
 - **Provenance from LXC 109 (`doc-ocr-processor`).** API accept an `extraction` object now, but the
   host must send it. Until then, no quality number splittable by OCR path vs text-layer path.
-- **`rg-epic-search` (test subscription)** — not ours. `Standard_E32-16ads_v5` VM **deallocated**,
-  but `vm-postgresql-vector` (`Standard_D8s_v3`) **running**, alongside three App Services, three
-  plans, App Gateway WAF policy, Log Analytics, storage. Someone confirm owner + bill.
+- **`rg-epic-search` (test sub `7897ceb1-…`)** — not ours. Inventoried live 2026-08-01; earlier
+  entry was wrong on two counts and missed the expensive part.
+
+  | Resource | Reality |
+  |---|---|
+  | `vm-epic-search-embedder` | `Standard_E32-16ads_v5`, **deallocated**. Compute not billing; OS disk is |
+  | `vm-postgresql-vector` | **NOT a VM** — `Microsoft.DBforPostgreSQL/flexibleServers`. Name mislead. SKU/state **unverified** |
+  | `epic-search-poc` | App Service, **Running**, `Premium0V3` |
+  | `epic-poc-api` | App Service, **Stopped** 2026-08-01, `PremiumV3` |
+  | `epic-poc-vector-api` | App Service, **Stopped** 2026-08-01, `PremiumMV3` |
+  | `ASP-ui`, `ASP-ui-api`, `asp-vector-api` | Three plans. **Plans bill whether app run or not** — stopping the two apps saved nothing |
+  | `ai-di-epic-search`, `ai-cv-epic-search`, `ai-epic-poc-east` | **Three Cognitive Services accounts, not previously recorded.** Doc Intelligence + Computer Vision + one in `canadaeast` |
+  | `kv-epic-search`, `saepicstoragelogs`, `law-epic-search`, `gw-epic-search-waf-policy` | Key Vault, storage, Log Analytics, WAF policy |
+  | ~8 private endpoints + NICs, 14 `Microsoft.Web/connections` (`office365`/`azurevm` ×7 each) | Logic App connectors. Alert `Failure Anomalies - la-epic-logic-apps` reference Logic Apps **that no longer exist** |
+
+  **Owner is on the resources.** VM carry `account_coding: 1152990370037633129L0122`,
+  `billing_group: c4b0a8`, `ministry_name: EAO` — chase that coding rather than asking around. Two
+  App Services stopped 2026-08-01, so somebody is still active in there; ask before touching.
+  Three Premium-V3 plans, three Cognitive Services accounts and a Postgres flexible server are the
+  bill, not the deallocated VM the old entry led with.
 
 ---
 
@@ -152,8 +179,10 @@ randomly sampled documents had zero bad chunks.** In this order:
   Deliberate — serverless GPU priced and rejected. **Do not delete as dead code.**
 - **CI blocked.** `AZURE_CLIENT_ID` missing from repo secrets. Need Entra app registration +
   federated credential; creating one need Microsoft Graph, which conditional access block.
-- **`azure-deploy-prod.yaml` / `-test.yaml` trigger on every push to `main`** — no tag, no approval.
-  Inert today. **Gate before adding the OIDC credential.**
+- ~~**`azure-deploy-prod.yaml` / `-test.yaml` trigger on every push to `main`**~~ — **done
+  2026-08-01.** Both are `workflow_dispatch` only now; dev keeps its push trigger. Done while CI
+  was still dead, so the edit deployed nothing — including the prod workflow's own file, which is
+  listed in its own trigger paths. Comments in both files say not to restore it.
 - **Phase 3b blob storage** — code + Bicep written, not deployed, nothing copied. Need
   `Storage Blob Delegator` or every download link fail to sign.
 - **`syncState` container** exist in `cosmos-nosql.bicep`, unwritten by anything.

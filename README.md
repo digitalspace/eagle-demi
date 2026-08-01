@@ -70,8 +70,9 @@ Some notable implementation details:
   and hands them to Express directly, with no proxy adapter.
 - **`src/middleware/rate-limiter.js`** switches to `inlineCleanup` when `isServerless`, avoiding
   `setInterval` timers that leak across execution freeze cycles.
-- **Nightly sync** is the Azure Functions timer `nightlySyncTimer`. It is currently disabled while
-  the chunk corpus is backfilled — see `MIGRATION.md` §A.
+- **There is no nightly sync.** The `nightlySyncTimer` Azure Functions timer is gone, not disabled:
+  its script went with the Mongo data layer, and the AI Search indexers pull every five minutes, so
+  there is nothing left for a nightly job to push (`api/index.js`).
 - **GeoJSON is `[longitude, latitude]`** end to end — Cosmos stores it, AI Search indexes it as a
   `GeographyPoint`, and the API returns it unchanged. The lat/lng swap that Typesense's geopoint
   type required is gone with it.
@@ -95,6 +96,10 @@ reconciles, so the route is idempotent and an interrupted backfill simply restar
 and PDF page-batching code and runs only under `require.main === module`; extraction for new
 projects is deliberately deferred, not cancelled. Do not delete it as dead code. `MIGRATION.md` §A
 has the reasoning and the pricing that deferred it.
+
+It is also the last thing in the repo that speaks Mongo, so it throws at startup unless a database
+is configured rather than falling back to localhost — without that guard, a run after the Phase 8
+teardown would connect to nothing and report zero documents as if the corpus were empty.
 
 ---
 
@@ -196,6 +201,10 @@ parent. Auto-seeding them is what produced 3,382 synthetic project rows in the o
 GitHub Actions workflows exist for dev/test/prod (`.github/workflows/azure-deploy-*.yaml`) but
 **CI cannot currently authenticate** — `AZURE_CLIENT_ID` is missing from repo secrets. The script
 above is the working path.
+
+**Only dev deploys on a push to `main`.** Test and prod are `workflow_dispatch` only. They used to
+carry the same push trigger, which would have deployed both on every merge with no tag and no
+approval the moment the missing credential landed. Do not restore it.
 
 Things that will cost you time if you rediscover them:
 
