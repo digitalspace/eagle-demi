@@ -55,9 +55,23 @@ Checked already, so nobody re-check:
   throw when no Mongo URI env configured, so a post-teardown run error instead of silently reading
   localhost and reporting zero documents.
 
-### 2. Extraction STOPPED since 2026-07-30 14:08 — cascade RECOVERED 2026-08-01
+### 2. Extraction RESTARTED 2026-08-01 — cascade recovered, run in flight
 
-External host halted mid-run; ~4% of 60,578 documents ingested. Restart still pending, host-side.
+Halted 2026-07-30 14:08 after a crash cascade. Root cause fixed host-side, false failures recovered,
+**full-corpus run restarted 2026-08-01 22:14 PDT** at `CONVERTERS=4` / `TEXT_WORKERS=8` on a host
+resized to 64 GB / 16 vCPU. `LIMIT=0`, so this is the whole corpus.
+
+First 90 minutes: **1,950 converted, 14 failed, 0 deferred, 0 runner faults**; 1,670 text path /
+316 OCR (13 re-routed), ~1,350 docs/hr, **ETA ~42 h**. Every failure is `unsupported format: msg` —
+genuine and permanent. RAM peaked 9 GB of 64, VRAM 8.4 GB of 16, so `CONVERTERS` has headroom if
+the estimate needs to come down.
+
+**The 7.4-day / 354-converter-hour figures in `MIGRATION.md` §A predate the router and are stale.**
+Re-measure from this run when it lands rather than patching them by guess.
+
+Both services are `systemctl enable`d, so a host reboot resumes. Work is resumable from disk —
+`already_done()` reads `out/`, `sent/`, `dead/`, and `ingest.py` reruns every 5 minutes doing only
+outstanding work.
 
 **Root cause, confirmed by reproduction.** `ocr_worker` submitted `split_pdf` into a shared
 `ProcessPoolExecutor`. A `ProcessPoolExecutor` never recovers — once a child dies badly, `_broken`
@@ -86,7 +100,9 @@ carries them, which is how the smoke test picked two up. Everything else the hos
 **Fixed host-side 2026-08-01** (out of repo, `worker.py`): runner faults are now classified apart
 from document faults and `defer()`ed — no `.err`, so the document stays in the work list; the pool
 is rebuilt in place; 25 consecutive runner faults stop the run rather than walking the corpus. The
-host now also sends `extraction` provenance, which nothing ever had.
+circuit breaker exits **cleanly**, so `Restart=on-failure` deliberately does not restart it — it
+stops and waits for a human instead of grinding through the corpus. The host now also sends
+`extraction` provenance, which nothing ever had.
 
 Sample for context, read live off the first 1,000 extracted documents in Cosmos scan order (783
 carried an error, 777 of them the cascade string). `pageSize` caps at 1000 and the endpoint returns
@@ -101,6 +117,10 @@ randomly sampled documents had zero bad chunks.** In this order:
 - [ ] **Slide decks extract to nothing but `<!-- image -->`.** Eight of sampled documents in index,
       unfindable by content. Find out whether router sent them down text path on a thin text layer,
       or whether OCR ran and returned nothing. Real defect; about coverage, not engine quality.
+      **Wait for the run to land — provenance now arrives**, so this splits by `extraction.path`
+      from data instead of needing the separate probe originally scoped. Note a thin text layer
+      would still have emitted its words, so placeholder-only markdown already means docling
+      extracted ZERO text; the live question is why zero.
 - [ ] **Retrieval scoring** on human-labelled phrases — the verdict metric. Heuristics cannot see
       character-spacing damage (`Tum ble r Ridge` score clean), so only this close the question.
 - [ ] Only then decide on an intake cleaner. On current evidence job small: strip `<!-- image -->`,

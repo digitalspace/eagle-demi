@@ -231,7 +231,17 @@ target:
 - **A table of earthquake records** was flagged because tabular detection only understood pipe
   tables. Whitespace columns are still columns.
 
-#### Conversion, measured on 326 documents (2026-07-30)
+#### Conversion — the 2026-07-30 numbers below are STALE
+
+They were measured before the extraction host added its `pypdfium2` router, when `do_ocr=True` ran
+on every PDF. The 2026-08-01 restart routes first, and the shape is completely different: **86% of
+documents take the CPU text path at 0.0-0.3 s each**, and only genuine scans reach the GPU. Measured
+over the first 90 minutes at `CONVERTERS=4` / `TEXT_WORKERS=8` on a 64 GB / 16 vCPU host —
+~1,350 docs/hr against a whole-corpus ETA of ~42 h, versus the 7.4 days below.
+
+Do not quote the table below as current. Re-measure when the run lands.
+
+#### Conversion, measured on 326 documents (2026-07-30) — superseded, kept for the memory ceiling
 
 The sample's byte distribution matches the corpus (mean 2.65 MB vs 2.68 MB), so scaling by the mean
 holds.
