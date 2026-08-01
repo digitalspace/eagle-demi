@@ -265,6 +265,15 @@ async function main() {
   const docIdIdx    = args.indexOf('--doc-id');
   const docIdArg    = docIdIdx !== -1 ? args[docIdIdx + 1] : null;
 
+  // src/config.js falls back to mongodb://localhost:27017/epic when nothing is configured. Once
+  // MONGODB_URI comes off the App Service (Phase 8 teardown), that fallback would connect to
+  // nothing and report zero documents to extract — a silent no-op dressed as a clean run.
+  // An explicitly-set localhost still works; only "configured nowhere" is refused.
+  if (!process.env.COSMOSDB_URI && !process.env.MONGODB_URI &&
+      !process.env.COSMOSDB_HOST && !process.env.MONGODB_HOST) {
+    throw new Error('No database configured: set COSMOSDB_URI or MONGODB_URI (or COSMOSDB_HOST/MONGODB_HOST).');
+  }
+
   const client = new MongoClient(config.mongoUri);
   await client.connect();
   const db = await getDb(client);

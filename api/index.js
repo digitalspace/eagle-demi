@@ -146,19 +146,8 @@ app.http('expressApiRoot', {
   handler: handleExpress
 });
 
-app.timer('nightlySyncTimer', {
-  schedule: '0 0 2 * * *',
-  handler: async (myTimer, context) => {
-    const log = context && context.log ? context.log : console.log;
-    const errLog = context && context.error ? context.error : console.error;
-    log('[Azure Timer] Nightly Sync Timer triggered at:', new Date().toISOString());
-    try {
-      const { runNightlySync } = require('../src/scripts/nightly-sync');
-      await runNightlySync();
-      log('[Azure Timer] Nightly Sync finished successfully.');
-    } catch (err) {
-      errLog('[Azure Timer] Nightly Sync failed with error:', err.message || err);
-    }
-  }
-});
+// The nightlySyncTimer used to live here. Its script (src/scripts/nightly-sync.js) went with the
+// Mongo data layer, and the AI Search indexers pull every five minutes, so there is nothing left
+// for a nightly job to push. Registration survived the deletion because the require was lazy and
+// wrapped in a catch — it failed silently once a night instead of at boot.
 
