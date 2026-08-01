@@ -199,61 +199,43 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
   });
 });
 
-test('router selects the data layer from COSMOS_ENDPOINT', async (t) => {
-  const load = (enabled) => {
+test('the router mounts one data layer, unconditionally', async (t) => {
+  const load = (env = {}) => {
     const key = require.resolve('../../src/routes/api');
     delete require.cache[key];
-    const prev = process.env.USE_COSMOS_NOSQL;
-    if (enabled) process.env.USE_COSMOS_NOSQL = 'true';
-    else delete process.env.USE_COSMOS_NOSQL;
-
-    const router = require('../../src/routes/api');
-    const paths = router.stack.filter(l => l.route).map(l => `${l.route.path}`).sort();
-
-    if (prev === undefined) delete process.env.USE_COSMOS_NOSQL;
-    else process.env.USE_COSMOS_NOSQL = prev;
-    delete require.cache[key];
-    return paths;
+    const prev = { ...process.env };
+    Object.assign(process.env, env);
+    try {
+      const router = require('../../src/routes/api');
+      return router.stack.filter(l => l.route).map(l => l.route.path).sort();
+    } finally {
+      for (const k of Object.keys(env)) {
+        if (prev[k] === undefined) delete process.env[k];
+        else process.env[k] = prev[k];
+      }
+      delete require.cache[key];
+    }
   };
 
-  await t.test('the switch is NOT inferred from COSMOS_ENDPOINT', () => {
-    // COSMOS_ENDPOINT is already set on the deployed app and points at the MongoDB-API
-    // account. Keying the data layer off it silently activated the NoSQL controllers against
-    // an account that does not speak SQL. A mode switch must be explicit.
-    const key = require.resolve('../../src/routes/api');
-    const prevEndpoint = process.env.COSMOS_ENDPOINT;
-    const prevFlag = process.env.USE_COSMOS_NOSQL;
+  await t.test('no environment variable can change the route table', () => {
+    // USE_COSMOS_NOSQL was the rollback switch between the Mongo-API and NoSQL controllers.
+    // Both it and the layer it fell back to are gone; a stale value left on the deployed app
+    // must not resurrect a branch. Asserting the table is IDENTICAL either way is the check —
+    // a flag that silently changed which controller answers is how the wrong data layer got
+    // activated against an account that did not speak its query language.
+    const withFlag = load({ USE_COSMOS_NOSQL: 'true' });
+    const withoutFlag = load({ USE_COSMOS_NOSQL: 'false' });
 
-    delete require.cache[key];
-    process.env.COSMOS_ENDPOINT = 'https://anything.documents.azure.com:443/';
-    delete process.env.USE_COSMOS_NOSQL;
-    const router = require('../../src/routes/api');
-    const paths = router.stack.filter(l => l.route).map(l => l.route.path);
-
-    assert.ok(!paths.includes('/documents/:id/published'),
-      'COSMOS_ENDPOINT alone must NOT activate the NoSQL layer');
-
-    if (prevEndpoint === undefined) delete process.env.COSMOS_ENDPOINT;
-    else process.env.COSMOS_ENDPOINT = prevEndpoint;
-    if (prevFlag !== undefined) process.env.USE_COSMOS_NOSQL = prevFlag;
-    delete require.cache[key];
+    assert.deepStrictEqual(withFlag, withoutFlag);
   });
 
-  await t.test('the NoSQL path never DROPS a route', () => {
-    // The invariant that matters: switching the data layer must not silently remove an
-    // endpoint clients depend on. Adding one is fine and expected.
-    const legacy = load(false);
-    const nosql = new Set(load(true));
-
-    const missing = legacy.filter(p => !nosql.has(p));
-    assert.deepStrictEqual(missing, [], 'these routes disappear under the NoSQL layer');
-  });
-
-  await t.test('publish/unpublish exists only on the NoSQL path, by design', () => {
-    // Hiding a document is a publication change, not a deletion. The legacy Mongo controller
-    // has no equivalent, so the route is added conditionally rather than 501-ing.
-    assert.ok(load(true).includes('/documents/:id/published'));
-    assert.ok(!load(false).includes('/documents/:id/published'));
+  await t.test('publish/unpublish and chunk ingest are always mounted', () => {
+    // Both used to be conditional, purely because the Mongo controller had no such handler.
+    // Mounting them behind a truthiness check on the controller export means a rename would
+    // silently drop the route instead of failing.
+    const paths = load();
+    assert.ok(paths.includes('/documents/:id/published'));
+    assert.ok(paths.includes('/documents/:id/chunks'));
   });
 });
 

@@ -4,85 +4,10 @@ info:
   description: Central authoritative storage and spatial search engine for projects, documents, and administrative region boundaries.
   version: 1.0.0
 paths:
-  /api/admin/logs:
-    get:
-      summary: Retrieve application logs
-      description: Returns structured application logs from the MongoDB Capped Collection. Restricted to administrators.
-      security:
-        - ApiKeyAuth: []
-        - BearerAuth: []
-      parameters:
-        - name: level
-          in: query
-          required: false
-          description: Filter logs by severity level (error, warn, info, debug).
-          schema:
-            type: string
-        - name: requestId
-          in: query
-          required: false
-          description: Filter logs by request trace ID.
-          schema:
-            type: string
-        - name: search
-          in: query
-          required: false
-          description: Regex text search within log messages.
-          schema:
-            type: string
-        - name: limit
-          in: query
-          required: false
-          description: Number of log entries to retrieve (default is 100, max is 1000).
-          schema:
-            type: integer
-        - name: sort
-          in: query
-          required: false
-          description: Sort direction (-1 for newest first, 1 for oldest first).
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Structured log response.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  count:
-                    type: integer
-                  data:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        _id:
-                          type: string
-                        timestamp:
-                          type: string
-                          format: date-time
-                        level:
-                          type: string
-                        message:
-                          type: string
-                        requestId:
-                          type: string
-                        meta:
-                          type: object
-                        stack:
-                          type: string
-        '401':
-          description: Unauthorized.
-        '403':
-          description: Forbidden. Insufficient roles.
-
   /api/search:
     get:
       summary: Search document content
-      description: Queries the Typesense search engine for matching text chunks within documents.
+      description: Queries Azure AI Search for matching projects, documents or text chunks.
       parameters:
         - name: q
           in: query
@@ -333,92 +258,6 @@ paths:
         '200':
           description: List of C&E compliance records.
 
-  /api/wildfires:
-    get:
-      summary: Retrieve active wildfires
-      description: Returns active wildfire perimeter and point data for spatial proximity analysis.
-      responses:
-        '200':
-          description: List of active wildfire perimeter records.
-
-  /api/regions:
-    get:
-      summary: Retrieve regions
-      description: Get all administrative boundary regions.
-      responses:
-        '200':
-          description: List of region boundary shapes.
-    post:
-      summary: Ingest administrative region shape
-      description: Create a new region boundary boundary.
-      security:
-        - ApiKeyAuth: []
-        - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegionInput'
-      responses:
-        '201':
-          description: Region shapefile stored successfully.
-        '401':
-          description: Unauthorized.
-
-  /api/regions/{id}:
-    get:
-      summary: Get region by ID
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Region document.
-        '404':
-          description: Region not found.
-    put:
-      summary: Update region
-      security:
-        - ApiKeyAuth: []
-        - BearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegionInput'
-      responses:
-        '200':
-          description: Region successfully updated.
-        '401':
-          description: Unauthorized.
-    delete:
-      summary: Delete region
-      security:
-        - ApiKeyAuth: []
-        - BearerAuth: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Region successfully deleted.
-        '401':
-          description: Unauthorized.
-
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -480,25 +319,6 @@ components:
           type: string
         orcsClassification:
           type: string
-
-    RegionInput:
-      type: object
-      required:
-        - name
-        - geometry
-      properties:
-        name:
-          type: string
-        geometry:
-          type: object
-          properties:
-            type:
-              type: string
-              enum: [Polygon, MultiPolygon]
-            coordinates:
-              type: array
-              items:
-                type: array
 
     GeoPoint:
       type: object

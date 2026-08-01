@@ -15,7 +15,7 @@ function routeTable() {
 
 test('DB Management Routes Security Tests', async (t) => {
   await t.test('admin DB routes exist and are behind authMiddleware', () => {
-    const protectedPaths = ['/db/stats', '/db/seed', '/sync', '/admin/sync', '/admin/seed-track'];
+    const protectedPaths = ['/db/stats', '/admin/index-progress', '/admin/sync/nrpti'];
     const routes = routeTable();
 
     for (const path of protectedPaths) {
@@ -31,7 +31,16 @@ test('DB Management Routes Security Tests', async (t) => {
     // collection. Nothing called them, and under the NoSQL API they would have to become a
     // SQL passthrough — exactly the fail-open shape this codebase already shipped once.
     // /db/seed-boundaries went with the dead boundary seeder.
-    const removed = ['/db/query', '/db/import', '/db/seed-boundaries'];
+    //
+    // /db/seed, /sync, /admin/sync and /admin/seed-track went with the Mongo-era scripts they
+    // drove. seed-nosql.js replaces them and runs inside the network — a 60k-document seed
+    // outlives the request, so reintroducing the route would only produce timeouts.
+    // /admin/logs and /wildfires went with the Cosmos log transport and the unused read path.
+    const removed = [
+      '/db/query', '/db/import', '/db/seed-boundaries',
+      '/db/seed', '/sync', '/admin/sync', '/admin/seed-track',
+      '/admin/logs', '/wildfires'
+    ];
     const paths = routeTable().map(r => r.path);
 
     for (const path of removed) {

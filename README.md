@@ -55,11 +55,14 @@ There is no search sync command. Azure AI Search indexers PULL from Cosmos every
 auth is Entra managed identity via `AZURE_CLIENT_ID`, configured with `COSMOS_ENDPOINT` and
 `COSMOS_NOSQL_DATABASE`.
 
-**`COSMOS_DATABASE` belongs to the legacy MongoDB-API client** and must stay `epic`. The two data
-layers coexist behind `USE_COSMOS_NOSQL` until the Mongo account is decommissioned at Phase 8 — it
-is the rollback path. Consequently `src/db/cosmos.js`, `src/models/*.js`, `src/helpers/access.js`
-and the legacy controllers are all still present and still required; **do not delete them as dead
-code**, and note that NoSQL CRUD lives in `src/repositories/*`, not in `src/models/*`.
+**One data layer.** The MongoDB-API client and everything behind it — `src/db/cosmos.js`,
+`src/models/*`, `src/helpers/access.js`, the legacy controllers and the `USE_COSMOS_NOSQL` switch
+that chose between them — were deleted at Phase 8. All CRUD lives in `src/repositories/*` and every
+read composes `src/helpers/access-sql.js`.
+
+`COSMOS_DATABASE=epic` is still set on the deployed app and is now inert; it goes with the account.
+The NoSQL client reads `COSMOS_NOSQL_DATABASE` and deliberately ignores it — pointing it at
+`COSMOS_DATABASE` once repointed the live app at an empty database that answered `[]` with HTTP 200.
 
 Some notable implementation details:
 

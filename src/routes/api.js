@@ -6,44 +6,24 @@ const router = express.Router();
 const authMiddleware = require('../middleware/auth');
 const passiveAuthMiddleware = require('../middleware/passiveAuth');
 
-// ── Data-layer selection ─────────────────────────────────────────────────────
-// The single switch between the MongoDB-API controllers and the Cosmos NoSQL ones. The two
-// take fundamentally different inputs (Mongo filter objects vs an access context), so they
-// are NOT abstracted behind a common interface — an adapter over both is precisely the shape
-// that let a half-working translator disable access control in this codebase.
+// One data layer. The `USE_COSMOS_NOSQL` switch and the MongoDB-API controllers behind it are
+// gone — the flag was the rollback path during the Cosmos cutover, and the account it fell back
+// to is decommissioned.
 //
-// The flag is a DEDICATED variable, deliberately not inferred from COSMOS_ENDPOINT.
-// COSMOS_ENDPOINT is already set on the deployed app by the original Bicep and points at the
-// MongoDB-API account, so keying off it silently activated the NoSQL controllers against an
-// account that does not speak SQL — every switched route 500'd while unswitched ones kept
-// working. A mode switch must be explicit, never a side effect of unrelated config.
-//
-// At cutover set USE_COSMOS_NOSQL=true; the legacy controllers and this branch are deleted
-// together in the final phase.
-const USE_NOSQL = process.env.USE_COSMOS_NOSQL === 'true';
+// The two layers were never abstracted behind a common interface, deliberately: they took
+// fundamentally different inputs (Mongo filter objects vs an access context), and an adapter
+// over both is precisely the shape that let a half-working translator disable access control in
+// this codebase.
+const projectController = require('../controllers/nosql/project');
+const documentController = require('../controllers/nosql/document');
+const boundaryController = require('../controllers/nosql/boundary');
+const recordController = require('../controllers/nosql/record');
 
-const projectController = USE_NOSQL
-  ? require('../controllers/nosql/project')
-  : require('../controllers/project');
-const documentController = USE_NOSQL
-  ? require('../controllers/nosql/document')
-  : require('../controllers/document');
-const boundaryController = USE_NOSQL
-  ? require('../controllers/nosql/boundary')
-  : require('../controllers/boundary');
-const recordController = USE_NOSQL
-  ? require('../controllers/nosql/record')
-  : require('../controllers/record');
-
-if (USE_NOSQL) {
-  console.log('[routes] Cosmos NoSQL data layer active (USE_COSMOS_NOSQL=true).');
-}
 const wildfireController = require('../controllers/wildfire');
 const searchController = require('../controllers/search');
-const logController = require('../controllers/log');
 
-// Logs Route (Admin Only)
-router.get('/admin/logs', authMiddleware, logController.getLogs);
+// GET /admin/logs removed with the Cosmos log transport — logs are stdout only, read through the
+// App Service log stream and Log Analytics.
 
 const dbController = require('../controllers/db');
 const configController = require('../controllers/config');
@@ -51,19 +31,19 @@ const configController = require('../controllers/config');
 // Config Route
 router.get('/config', configController.getConfig);
 
-// Database Management & Seeding Routes
+// Database Management Routes
 // Removed: /db/import and /db/query (generic bulk-write and arbitrary-query endpoints over
 // any collection — nothing called them, and under the NoSQL API they would have to become a
 // SQL passthrough). /db/seed-boundaries removed with the dead boundary seeder.
+//
+// Also removed: /db/seed, /sync, /admin/sync and /admin/seed-track. They drove the Mongo-era
+// scripts; src/scripts/seed-nosql.js replaces them and runs inside the network, not behind a
+// request that a 60k-document seed would outlive.
 router.get('/db/stats', authMiddleware, dbController.getDbStats);
-// Cheap and independent of /db/stats, which runs legacy Mongo counts and can hang. Ranked
-// full-text queries are only meaningful at progress 100, so this gates any bulk load.
+// Issues no container query at all, so it still answers when the counts behind /db/stats are
+// timing out. Ranked queries are only meaningful at progress 100, so this gates any bulk load.
 router.get('/admin/index-progress', authMiddleware, dbController.getIndexProgressHandler);
-router.post('/db/seed', authMiddleware, dbController.seedDatabase);
-router.post('/sync', authMiddleware, dbController.seedDatabase);
-router.post('/admin/sync', authMiddleware, dbController.runNightlySyncHandler);
 router.post('/admin/sync/nrpti', authMiddleware, dbController.runNrptiSyncHandler);
-router.post('/admin/seed-track', authMiddleware, dbController.seedTrackDatabase);
 
 // Search Route
 router.get('/search', passiveAuthMiddleware, searchController.search);
@@ -73,7 +53,8 @@ router.get('/records', passiveAuthMiddleware, recordController.getRecords);
 router.get('/records/:id', passiveAuthMiddleware, recordController.getRecord);
 
 // Wildfire Routes
-router.get('/wildfires', passiveAuthMiddleware, wildfireController.getWildfires);
+// GET /wildfires removed — no consumer. The frontend reads the DataBC WFS directly, and the
+// project-level aggregate this sync writes is served with the project.
 router.post('/admin/sync/wildfires', authMiddleware, wildfireController.syncWildfiresAdmin);
 
 // Projects Routes
@@ -96,10 +77,9 @@ router.post('/documents', authMiddleware, documentController.createDocument);
 router.post('/documents/extract', authMiddleware, upload.single('upfile'), documentController.extractDocument);
 router.put('/documents/:id', authMiddleware, documentController.updateDocument);
 // Publish / unpublish — the mechanism for hiding a document from public and proponents.
-// Deletion is for genuine removal, not for hiding. Only the NoSQL controller implements it.
-if (documentController.setDocumentPublished) {
-  router.put('/documents/:id/published', authMiddleware, documentController.setDocumentPublished);
-}
+// Deletion is for genuine removal, not for hiding. Unconditional now: the guard existed only
+// because the Mongo controller had no equivalent handler to mount.
+router.put('/documents/:id/published', authMiddleware, documentController.setDocumentPublished);
 // Extracted-text ingest. The body is markdown for a whole document.
 //
 // No route-level body parser: app.js already applies express.json({limit:'10mb'}) globally and
@@ -109,9 +89,7 @@ if (documentController.setDocumentPublished) {
 //
 // The caller supplies text only — never an ACL: read[] is copied from the live document inside
 // the controller, so an extraction host cannot widen a document's visibility.
-if (documentController.ingestChunks) {
-  router.post('/documents/:id/chunks', authMiddleware, documentController.ingestChunks);
-}
+router.post('/documents/:id/chunks', authMiddleware, documentController.ingestChunks);
 router.delete('/documents/:id', authMiddleware, documentController.deleteDocument);
 
 // Regions routes removed — the collection is empty (0 items) and nothing consumed it.

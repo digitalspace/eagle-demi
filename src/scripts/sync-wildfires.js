@@ -2,9 +2,9 @@
 
 const https = require('https');
 const http = require('http');
-const Wildfire = require('../models/wildfire');
-const Project = require('../models/project');
-const { initCosmosClient } = require('../db/cosmos');
+const wildfiresRepo = require('../repositories/wildfires');
+const projectsRepo = require('../repositories/projects');
+const { systemAccess } = require('../helpers/access-sql');
 
 const WFS_POINTS_URL = 'https://openmaps.gov.bc.ca/geo/pub/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=pub:WHSE_LAND_AND_NATURAL_RESOURCE.PROT_CURRENT_FIRE_PNTS_SP&outputFormat=json';
 const WFS_POLYS_URL = 'https://openmaps.gov.bc.ca/geo/pub/wfs?service=WFS&version=2.0.0&request=GetFeature&typeName=pub:WHSE_LAND_AND_NATURAL_RESOURCE.PROT_CURRENT_FIRE_POLYS_SP&outputFormat=json';
@@ -68,7 +68,7 @@ async function syncWildfiresData() {
     const lat = props.LATITUDE;
 
     const fireDoc = {
-      _id: fireNumber,
+      id: String(fireNumber),
       fireNumber,
       fireYear: props.FIRE_YEAR || new Date().getFullYear(),
       incidentName: props.INCIDENT_NAME || props.GEOGRAPHIC_DESCRIPTION || fireNumber,
@@ -83,14 +83,16 @@ async function syncWildfiresData() {
       syncedAt: new Date().toISOString()
     };
 
-    await Wildfire.upsert(fireDoc);
+    await wildfiresRepo.upsert(fireDoc);
     syncedWildfires++;
   }
 
   // --- Proximity Engine Calculation ---
   console.log('[Wildfire Proximity] Calculating distance between projects and active fires...');
   const activeFires = points.filter(f => f.properties?.FIRE_STATUS !== 'Out' && f.properties?.LATITUDE && f.properties?.LONGITUDE);
-  const projects = await Project.find();
+  // Only projects that HAVE a centroid, projected to id/name/centroid. A project without one
+  // was skipped by the loop below anyway, so listing the rest was pure RU.
+  const { items: projects } = await projectsRepo.listWithCentroid(systemAccess());
 
   let updatedProjects = 0;
   for (const proj of projects) {
@@ -126,15 +128,16 @@ async function syncWildfiresData() {
       }
     }
 
-    if (!proj.sources) proj.sources = {};
-    proj.sources.wildfire = {
+    // A PATCH of one path, not a whole-item upsert. listWithCentroid projects three fields, so
+    // writing the item back would erase the project — but even with a full row it would be
+    // wrong: a replace from this sync silently discards whatever the Track and NRPTI syncs
+    // wrote in between.
+    await projectsRepo.patchWildfireStats(proj.id, {
       activeCountWithin50km,
       nearestDistanceKm: minDistance === Infinity ? null : parseFloat(minDistance.toFixed(1)),
       firesOfNoteNearby: firesOfNoteCount,
       lastCalculatedAt: new Date().toISOString()
-    };
-
-    await Project.upsert(proj);
+    });
     updatedProjects++;
   }
 
@@ -145,9 +148,10 @@ async function syncWildfiresData() {
 module.exports = { syncWildfiresData };
 
 if (require.main === module) {
-  initCosmosClient()
-    .then(async () => {
-      const res = await syncWildfiresData();
+  // No explicit client init — the NoSQL client connects lazily on first use, and Cosmos is
+  // behind a private endpoint, so this only runs inside the network anyway.
+  syncWildfiresData()
+    .then((res) => {
       console.log('[Wildfire Sync CLI] Result:', res);
       process.exit(0);
     })

@@ -1,9 +1,9 @@
 'use strict';
 
 const https = require('https');
-const Record = require('../models/record');
-const Project = require('../models/project');
-const { initCosmosClient } = require('../db/cosmos');
+const recordsRepo = require('../repositories/records');
+const projectsRepo = require('../repositories/projects');
+const { systemAccess } = require('../helpers/access-sql');
 
 const NRPTI_API_BASE = process.env.NRPTI_API_BASE ||
   'https://nrpti-api-f00029-prod.apps.silver.devops.gov.bc.ca/api/public';
@@ -69,7 +69,9 @@ async function syncNrptiData(options = {}) {
   console.log(`[NRPTI Sync] Starting NRPTI compliance ingestion${sinceDate ? ` (incremental since ${sinceDate.toISOString()})` : ''}...`);
   const startTime = Date.now();
 
-  const existingProjects = await Project.find();
+  // systemAccess() — a sync reconciles the whole registry, and it takes no arguments so it
+  // cannot be derived from a request. This script is never on the request path.
+  const { items: existingProjects } = await projectsRepo.listVisible(systemAccess());
   existingProjects.sort((a, b) => {
     const aIsAuto = a.metadata?.sourceSystem === 'nrpti' ? 1 : 0;
     const bIsAuto = b.metadata?.sourceSystem === 'nrpti' ? 1 : 0;
@@ -81,10 +83,14 @@ async function syncNrptiData(options = {}) {
   const normalizedNameToProjMap = new Map();
 
   for (const proj of existingProjects) {
-    const projIdStr = String(proj._id);
+    const projIdStr = String(proj.id);
     eagleIdToProjMap.set(projIdStr, projIdStr);
 
-    if (proj.sources?.eagle?._id) {
+    // `eagleId` is the merged registry's own field; the raw payload under sources.eagle is the
+    // fallback for rows that predate it.
+    if (proj.eagleId) {
+      eagleIdToProjMap.set(String(proj.eagleId), projIdStr);
+    } else if (proj.sources?.eagle?._id) {
       eagleIdToProjMap.set(String(proj.sources.eagle._id), projIdStr);
     } else if (proj.metadata?.eagleAttributes?._id) {
       eagleIdToProjMap.set(String(proj.metadata.eagleAttributes._id), projIdStr);
@@ -200,8 +206,8 @@ async function syncNrptiData(options = {}) {
           const newProjId = String(syntheticTrackId);
 
           const seededProject = {
-            _id: newProjId,
             id: newProjId,
+            sourceSystem: 'nrpti',
             trackProjectId: syntheticTrackId,
             name: rawProjName,
             region: item.location || 'BC',
@@ -237,7 +243,7 @@ async function syncNrptiData(options = {}) {
             }
           };
 
-          await Project.upsert(seededProject);
+          await projectsRepo.upsert(seededProject);
           linkedProjId = newProjId;
           totalAutoSeededProjects++;
 
@@ -265,11 +271,15 @@ async function syncNrptiData(options = {}) {
         const dateIssued = item.dateIssued ? new Date(item.dateIssued).toISOString() : null;
 
         const recordDoc = {
-          _id: String(item._id),
           id: String(item._id),
+          sourceSystem: 'nrpti',
           nrptiId: String(item._id),
-          nrptiSchemaName: item._schemaName || dataset,
-          project: linkedProjId ? String(linkedProjId) : '',
+          // `dataset`, not `nrptiSchemaName`. The latter was only ever the Typesense index field
+          // name, so every query filtering on it matched nothing — no Cosmos item carries it.
+          dataset: item._schemaName || dataset,
+          // `projectId` is the container's PARTITION KEY. Writing the Mongo-era `project` instead
+          // would land every record in the empty-string partition, unreachable by any scoped read.
+          projectId: linkedProjId ? String(linkedProjId) : '',
           recordName: item.recordName || item.title || `${dataset} Record`,
           recordType: item.recordType || dataset,
           recordSubtype: item.recordSubtype || '',
@@ -291,7 +301,7 @@ async function syncNrptiData(options = {}) {
           sourceData: item
         };
 
-        await Record.upsert(recordDoc);
+        await recordsRepo.upsert(recordDoc);
         dsIngested++;
         totalIngested++;
       }
@@ -316,21 +326,29 @@ async function syncNrptiData(options = {}) {
   return { totalIngested, totalLinkedExisting, totalAutoSeededProjects, linkedProjectCount: projectStats.size };
 }
 
+/**
+ * Roll every record up into the BOUNDED per-project aggregate.
+ *
+ * Records are REFERENCED, never folded in. This used to write the full record objects onto the
+ * project twice — `nrptiRecords` and `sources.nrpti.records` — each carrying the raw upstream
+ * payload. Roughly 250 records took a project past the 2 MB Cosmos item cap; Mongo's 16 MB limit
+ * was hiding it. `/records?project=X` is a single-partition read, so nothing needs the copy.
+ */
 async function recalculateAllProjectComplianceStats() {
   console.log('[NRPTI Sync] Recalculating compliance stats across all records in Cosmos DB...');
-  const records = await Record.find({ isPublished: true });
-  
+  const access = systemAccess();
+  const { items: records } = await recordsRepo.listVisible(access);
+
   const statsMap = new Map();
   for (const rec of records) {
-    const pId = rec.project;
+    const pId = rec.projectId;
     if (!pId) continue;
     if (!statsMap.has(pId)) {
-      statsMap.set(pId, { total: 0, orders: 0, inspections: 0, tickets: 0, lastDate: null, records: [] });
+      statsMap.set(pId, { total: 0, orders: 0, inspections: 0, tickets: 0, lastDate: null });
     }
     const st = statsMap.get(pId);
     st.total++;
-    st.records.push(rec);
-    const ds = rec.recordType || rec.nrptiSchemaName || '';
+    const ds = rec.recordType || rec.dataset || '';
     if (ds === 'Order') st.orders++;
     if (ds === 'Inspection') st.inspections++;
     if (ds === 'Ticket') st.tickets++;
@@ -342,41 +360,31 @@ async function recalculateAllProjectComplianceStats() {
 
   console.log(`[NRPTI Sync] Aggregated compliance stats for ${statsMap.size} project identifiers.`);
   for (const [pId, st] of statsMap.entries()) {
-    let proj = await Project.findById(pId);
-    if (!proj) {
-      const escaped = String(pId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      proj = await Project.findOne({
-        $or: [
-          { legacyEagleId: String(pId) },
-          { trackProjectId: isNaN(pId) ? -1 : Number(pId) },
-          { name: { $regex: `^${escaped}$`, $options: 'i' } }
-        ]
-      });
-    }
-    if (proj) {
-      if (!proj.sources) proj.sources = {};
-      proj.nrptiRecords = st.records;
-      proj.sources.nrpti = {
-        recordCount: st.total,
-        orderCount: st.orders,
-        inspectionCount: st.inspections,
-        ticketCount: st.tickets,
-        complianceStatus: 'Active Monitoring',
-        lastRecordDate: st.lastDate ? st.lastDate.toISOString() : null,
-        records: st.records
-      };
-      await Project.upsert(proj);
-      console.log(`[NRPTI Sync] Folded ${st.total} NRPTI records into project: ${proj.name || pId} (${proj._id})`);
-    }
+    // The ingest phase resolved every record's projectId from this same registry, so a point
+    // read hits. The eagleId lookup covers rows linked before the merge assigned Track ids.
+    // The old name-regex fallback is gone with the Mongo filter interface.
+    const proj = await projectsRepo.getById(access, pId) ||
+      await projectsRepo.getByEagleId(access, pId);
+
+    if (!proj) continue;
+
+    // A patch of one path, not a read-modify-write: atomic, and it cannot erase what the Track
+    // or wildfire syncs wrote in between.
+    await projectsRepo.patchNrptiStats(proj.id, {
+      recordCount: st.total,
+      orderCount: st.orders,
+      inspectionCount: st.inspections,
+      ticketCount: st.tickets,
+      complianceStatus: 'Active Monitoring',
+      lastRecordDate: st.lastDate ? st.lastDate.toISOString() : null
+    });
+    console.log(`[NRPTI Sync] Recorded ${st.total} NRPTI records against project: ${proj.name || pId} (${proj.id})`);
   }
 }
 
 if (require.main === module) {
-  initCosmosClient()
-    .then(async () => {
-      await syncNrptiData();
-      process.exit(0);
-    })
+  syncNrptiData()
+    .then(() => process.exit(0))
     .catch((err) => {
       console.error('[NRPTI Sync] Error during execution:', err);
       process.exit(1);

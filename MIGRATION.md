@@ -76,8 +76,9 @@ Dev serves from **Cosmos DB for NoSQL**. `USE_COSMOS_NOSQL=true`, `stop`/`start`
 | document download | **HTTP 200, `application/pdf`, 84,031 bytes** |
 | Typesense | 393 + 60,578 indexed, aliases swapped; `Ajax` → *Ajax Mine*, `Site C` → real inspection records |
 
-Rollback remains one setting: `USE_COSMOS_NOSQL=false` + stop/start. `MONGODB_URI` is untouched and
-the Mongo account still holds 4,123 projects / 18,969 documents until Phase 8.
+~~Rollback remains one setting: `USE_COSMOS_NOSQL=false` + stop/start.~~ **Superseded 2026-08-01.**
+Phase 8 deleted the flag and the layer behind it, so rollback is now `git revert` + redeploy, not an
+app setting. The Mongo account still holds 4,123 projects / 18,969 documents — see §B.
 
 #### How the seed actually had to run — the plan was wrong
 
@@ -515,50 +516,60 @@ Delete this block when the corpus is done and the extraction host is decommissio
 
 ### B. Phase 8 — decommission the MongoDB-API account
 
-**Not before a clean week on NoSQL.** The Mongo account is the rollback path and still holds 4,123
-projects / 18,969 documents.
+**Code done 2026-08-01. Azure resources still standing.**
 
-Then, in order: delete `src/db/cosmos.js`, `src/models/*`, `src/controllers/{project,document,record,boundary}.js`,
-`src/helpers/access.js`, `src/typesense/{full-sync,transform}.js`,
-`src/scripts/{seed-and-merge,sync_from_openshift,backfill-read-acl}.js`; collapse the
-`USE_COSMOS_NOSQL` branch in `routes/api.js` and `nightly-sync.js`; drop the `mongodb` dependency;
-delete the `MONGODB_*` and `COSMOS_DATABASE` app settings; delete the account **and its private
-endpoint** (the endpoint is the only flat recurring charge, ~$7/mo).
-
-`readFilter` tier 3 — the no-`read[]` fallback — goes with it. The gate above is now met.
-
-#### ⚠️ That list is incomplete, and following it literally takes the app down
-
-Verified 2026-07-30. **Seven more files depend on `src/models/*` and are not named above.** Deleting
-`src/models/*` without them does not break a route — it breaks **boot**:
+The blocker was never the file list — it was that deleting `src/models/*` broke **boot**, not a
+route:
 
 ```
 src/app.js  ->  src/utils/logger.js:6  ->  require('../models/log')  ->  src/db/cosmos.js
 ```
 
 `src/utils/logger.js` is loaded by `src/app.js`, `src/server.js`, `src/middleware/request-id.js`
-and `src/middleware/http-logger.js` — the core boot path, none of it legacy. That one is the
-blocker; it needs its `LogModel` write path moved to a repository (or dropped) *before* anything
-else in Phase 8 happens.
+and `src/middleware/http-logger.js` — core boot path, none of it legacy. It was done first, by
+DROPPING the Cosmos log transport rather than porting it: App Service already ships stdout to Log
+Analytics, so a database round trip per log line bought nothing. `GET /admin/logs` went with it.
 
-The other six are required **unconditionally** by `src/routes/api.js:41-48`, outside the
-`USE_COSMOS_NOSQL` branch, so they are live on the NoSQL path today while still reading through
-the Mongo layer:
+Six more files read through the Mongo layer while being required **unconditionally** by
+`routes/api.js`, i.e. live on the NoSQL path. All ported to `src/repositories/*` and
+`access-sql.js`:
 
-| File | Legacy dependency |
-|---|---|
-| `src/utils/logger.js` | `../models/log` — **boot path, fix first** |
-| `src/controllers/search.js` | `../models/{project,document}`, `../helpers/access` |
-| `src/controllers/db.js` | `../models/{project,document,boundary,record}` |
-| `src/controllers/log.js` | `../models/log` |
-| `src/controllers/wildfire.js` | `../models/wildfire` |
-| `src/scripts/sync-nrpti.js` | `../models/{record,project}`, `../db/cosmos` |
-| `src/scripts/sync-wildfires.js` | `../models/{wildfire,project}`, `../db/cosmos` |
+| File | Was | Now |
+|---|---|---|
+| `src/utils/logger.js` | `models/log` transport | console only |
+| `src/controllers/search.js` | `models/{project,document}`, `helpers/access` | `projectsRepo` / `documentsRepo` `listVisible` |
+| `src/controllers/db.js` | four `countDocuments()` | `countVisible` under `systemAccess()`; seed handlers deleted |
+| `src/controllers/log.js` | `models/log` | deleted |
+| `src/controllers/wildfire.js` | `models/wildfire` | read route deleted; admin sync kept |
+| `src/scripts/sync-nrpti.js` | `models/{record,project}` | `recordsRepo` + `patchNrptiStats` |
+| `src/scripts/sync-wildfires.js` | `models/{wildfire,project}` | `repositories/wildfires` + `patchWildfireStats` |
 
-Note `src/controllers/search.js` is the DocumentChunk search path, so it is not optional. These
-need porting to `src/repositories/*` and `access-sql.js`, not deleting — which makes Phase 8
-meaningfully larger than "delete a list of files". Also unrelated but adjacent:
-`src/models/syncState.js` has zero requires anywhere and can simply go.
+Three things the port had to CHANGE rather than carry, each a live defect in the Mongo original:
+
+1. **`sync-nrpti` embedded every record object into its project**, twice — `nrptiRecords` and
+   `sources.nrpti.records`, each with the raw upstream payload. ~250 records exceeded the 2 MB
+   Cosmos item cap; Mongo's 16 MB limit hid it. Now the bounded aggregate via `patchNrptiStats`.
+2. **Both syncs wrote whole items back** (`Project.upsert(proj)`), which silently discards
+   whatever another sync wrote in between. Both now patch a single path.
+3. **`sync-nrpti` wrote `project` and `nrptiSchemaName`.** The container partitions on
+   `/projectId`, and `nrptiSchemaName` was only ever a Typesense index field — every Cosmos query
+   filtering on it matched nothing. Now `projectId` and `dataset`.
+
+Also deleted: `src/scripts/{seed-and-merge,sync_from_openshift,nightly-sync,backfill-read-acl}.js`
+and the `/db/seed`, `/sync`, `/admin/sync`, `/admin/seed-track` routes that drove them —
+`seed-nosql.js` reproduces all of it and runs inside the network, past any request timeout.
+`readFilter` tier 3 went with `helpers/access.js`; `readClause` in `access-sql.js` never had that
+tier, because every seeder writes `read[]` explicitly.
+
+**`mongodb` stays in `package.json`.** `src/extract.js:26` is its only remaining user, and that
+file is deferred-not-dead (the Azure extraction path). Deleting the account breaks its configured
+`MONGODB_URI`; nothing live regresses, because extraction runs on LXC 109 through the API.
+
+**Left to do:** `azure/main.bicep:69` `cosmosDb` module, `azure/modules/cosmos-db.bicep`, the
+`mongodbConnectionString` param and the four `COSMOSDB_*`/`MONGODB_*` app settings in
+`api-web-app.bicep`, then the account **and its private endpoint** (the endpoint is the only flat
+recurring charge, ~$7/mo) plus its NIC. Not before a clean week — until then the code rollback is
+`git revert` with no redeploy, and the account still holds 4,123 projects / 18,969 documents.
 
 ### C. Phase 3b — document storage on Azure Blob (optional)
 

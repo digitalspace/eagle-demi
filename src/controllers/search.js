@@ -1,30 +1,13 @@
 'use strict';
 
-const Project = require('../models/project');
-const Document = require('../models/document');
-const { rolesFor, readFilter, withReadFilter } = require('../helpers/access');
-
-// All three datasets search Azure AI Search. What remains Mongo-era is the KEYWORDLESS path —
-// listing projects or documents is a read, not a search, and still goes to the models below. That
-// half is on the Phase 8 port list (MIGRATION.md §B).
+// All three datasets search Azure AI Search. The KEYWORDLESS path — listing projects or documents,
+// which is a read rather than a search — goes to the Cosmos NoSQL repositories. It used to go to
+// the Mongo-API models; that was the last data-layer split in this file and it is gone.
 const { resolveAccess } = require('../helpers/access-sql');
 const { filterFor } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
 const documentsRepo = require('../repositories/documents');
 const projectsRepo = require('../repositories/projects');
-
-/**
- * Visibility context for the Mongo-era list path.
- *
- * Roles come from the verified token only (helpers/auth.js populates req.user; the X-Api-Key
- * service path sets the privileged roles there too). The search path does not use this — it
- * resolves its own context through `resolveAccess` and `filterFor`, so the two are derived from
- * the same roles rather than from each other.
- */
-function getUserAccessContext(req) {
-  const roles = rolesFor(req);
-  return { roles, mongoFilter: readFilter(roles) };
-}
 
 /**
  * A stored GeoJSON point as the frontend wants it: `[lng, lat]`.
@@ -50,7 +33,10 @@ exports.search = async (req, res) => {
     const requestedPageSize = parseInt(req.query.pageSize || '10', 10);
     const pageSize = Math.min(requestedPageSize, 5000);
 
-    const accessContext = getUserAccessContext(req);
+    // One access context for the whole request. Both the AI Search filter and the Cosmos
+    // predicate are derived from it, so the indexed and the unindexed path cannot disagree
+    // about what this caller may see.
+    const access = resolveAccess(req);
 
     const resultPageSize = Math.min(pageSize, 250);
 
@@ -59,7 +45,6 @@ exports.search = async (req, res) => {
       // project is a read, not a search, and the index adds nothing to it.
       if (keywords) {
         try {
-          const access = resolveAccess(req);
           // 'id', not 'projectId' — a project IS its own scope, and scoping on a field the index
           // does not have would match nothing while looking like an empty corpus.
           const { filter, empty } = filterFor(access, 'id');
@@ -118,20 +103,31 @@ exports.search = async (req, res) => {
       // Cosmos DB Fallback & Direct Search
       try {
         const allowNonTrack = req.query.includeNrpti === 'true' || req.query.includeSeeded === 'true';
-        // Provenance filter — orthogonal to visibility, and never a substitute for it.
-        const trackOnly = allowNonTrack ? null : { 'sources.track': { $exists: true, $ne: null } };
-        const filter = withReadFilter(accessContext.roles, trackOnly);
 
-        const projects = await Project.find(filter, { maxItemCount: pageSize, sort: { name: 1 } });
+        // Provenance filter — orthogonal to visibility, and never a substitute for it.
+        // `sourceSystem = 'track'`, not the old `sources.track EXISTS AND != null`: an indexed
+        // equality, and it sidesteps the Mongo/SQL disagreement over whether a missing field
+        // matches $ne. buildCriteria in the repository owns that translation.
+        //
+        // ORDER BY c.name ASC comes from listVisible itself, so the sort survives the port.
+        const { items: projects } = await projectsRepo.listVisible(access, {
+          trackOnly: !allowNonTrack,
+          pageSize
+        });
+
+        // A NoSQL row has `id` and no `_id`. `_id` is kept in the RESPONSE because the frontend
+        // still keys on it — dropping it here would empty the project list without any error.
         const mapped = projects.map(p => ({
-          _id: String(p._id),
-          id: String(p.id || p._id),
-          trackProjectId: p.trackProjectId || p._id,
+          _id: String(p.id),
+          id: String(p.id),
+          trackProjectId: p.trackProjectId || p.id,
           legacyEagleId: p.legacyEagleId || '',
           name: p.name || 'Unnamed Project',
           sector: p.sector || 'Other',
           status: p.status || 'Active',
-          centroid: p.centroid ? (Array.isArray(p.centroid) ? p.centroid : p.centroid.coordinates) : [-125.0, 54.0],
+          // Same helper as the AI Search branch — one definition of the fallback centroid, and
+          // no second place to get the [lng, lat] orientation wrong.
+          centroid: geoPoint(p.centroid),
           read: Array.isArray(p.read) && p.read.length > 0 ? p.read : ['public'],
           region: p.region || 'British Columbia',
           description: p.description || 'No project description provided.',
@@ -153,7 +149,6 @@ exports.search = async (req, res) => {
     } else if (dataset === 'Document') {
       if (keywords) {
         try {
-          const access = resolveAccess(req);
           const { filter, empty } = filterFor(access);
           // Projects are scoped on their own id; the same caller, a different index.
           const projectScope = filterFor(access, 'id');
@@ -211,19 +206,36 @@ exports.search = async (req, res) => {
 
       // Cosmos DB Fallback & Direct Search
       try {
-        const docs = await Document.find(withReadFilter(accessContext.roles), { maxItemCount: pageSize });
+        const { items: docs } = await documentsRepo.listVisible(access, { pageSize });
+
+        // `projectId`, not the Mongo-era `project` — the NoSQL row's partition key. Reading the
+        // old field name would leave every result unlinked to a project and unlabelled below,
+        // which looks like missing data rather than a wrong field.
         const mappedDocs = docs.map(d => ({
-          _id: String(d._id),
+          _id: String(d.id),
           displayName: d.displayName || 'Untitled Document',
-          documentFileName: d.s3Key ? d.s3Key.split('/').pop() : 'document.pdf',
-          documentType: 'PDF Document',
-          project: String(d.project || ''),
+          documentFileName: d.documentFileName || (d.s3Key ? d.s3Key.split('/').pop() : 'document.pdf'),
+          documentType: d.type || 'PDF Document',
+          project: String(d.projectId || ''),
           projectName: 'Associated Project',
           // Report the record's real ACL/publication state, not a hardcoded 'public'.
           read: Array.isArray(d.read) && d.read.length > 0 ? d.read : ['public'],
-          isPublished: d.isPublished === true,
-          description: 'Official document extracted from central registry.'
+          isPublished: Array.isArray(d.read) ? d.read.includes('public') : d.isPublished === true,
+          description: d.description || 'Official document extracted from central registry.'
         }));
+
+        // Label the results the same way the AI Search branch does, under the CALLER's access.
+        // The Mongo path left every row reading 'Associated Project'; that difference is exactly
+        // how a silent degradation to the fallback stayed invisible.
+        const projectIds = mappedDocs.map(d => d.project).filter(Boolean);
+        if (projectIds.length > 0) {
+          const parents = await projectsRepo.listByIds(access, projectIds);
+          const nameById = new Map(parents.map(p => [String(p.id), p.name]));
+          for (const doc of mappedDocs) {
+            doc.projectName = nameById.get(doc.project) || 'Associated Project';
+          }
+        }
+
         return res.json([{ searchResults: mappedDocs }]);
       } catch (cosmosErr) {
         console.error('[search] Document Cosmos DB fallback failed:', cosmosErr.message);
@@ -240,10 +252,8 @@ exports.search = async (req, res) => {
       }
 
       try {
-        // resolveAccess, not the Mongo-era roles above: the visibility filter is evaluated BY THE
-        // SERVICE alongside the match, so ranking is computed only over rows this caller may read.
-        // Roles still come from the verified token only.
-        const access = resolveAccess(req);
+        // The visibility filter is evaluated BY THE SERVICE alongside the match, so ranking is
+        // computed only over rows this caller may read. Roles come from the verified token only.
         const { filter, empty } = filterFor(access);
 
         // `empty` is the fail-closed branch and it MUST short-circuit here. OData has no `false`

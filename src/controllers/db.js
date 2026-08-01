@@ -1,17 +1,10 @@
 'use strict';
 
-const Project = require('../models/project');
-const Document = require('../models/document');
-const Boundary = require('../models/boundary');
-const Record = require('../models/record');
-const { runSync } = require('../scripts/sync_from_openshift');
-
-const models = {
-  projects: Project,
-  documents: Document,
-  boundaries: Boundary,
-  records: Record
-};
+const { systemAccess } = require('../helpers/access-sql');
+const projectsRepo = require('../repositories/projects');
+const documentsRepo = require('../repositories/documents');
+const boundariesRepo = require('../repositories/boundaries');
+const recordsRepo = require('../repositories/records');
 
 /**
  * Containers whose index-build state is worth reporting. A bulk load leaves the index lagging the
@@ -27,8 +20,9 @@ const INDEXED_CONTAINERS = ['chunks', 'documents', 'projects'];
  * the app. Reused as the pre-cutover gate for any bulk load — see MIGRATION.md §F.
  */
 async function getIndexProgress() {
-  if (process.env.USE_COSMOS_NOSQL !== 'true') return null;
-
+  // No USE_COSMOS_NOSQL gate. It used to return null when the flag was unset, which is now the
+  // wrong answer in the only remaining direction: with one data layer, an unset flag would make
+  // this report "inactive" for a database that is very much serving traffic.
   const cosmosNoSql = require('../db/cosmos-nosql');
   const progress = {};
   for (const name of INDEXED_CONTAINERS) {
@@ -45,17 +39,14 @@ async function getIndexProgress() {
 /**
  * GET /admin/index-progress — index-build state, and nothing else.
  *
- * Deliberately NOT folded into /db/stats. That endpoint runs four `countDocuments()` calls against
- * the LEGACY Mongo-API account first and can take minutes or hang outright, so an instrument
- * placed behind it is unusable exactly when it is needed. An operational reading has to be cheap
- * and independent of the thing it is being used to diagnose.
+ * Deliberately NOT folded into /db/stats, even now that stats no longer runs the legacy Mongo
+ * counts that used to make it hang for minutes. An operational reading has to be independent of
+ * the thing it is used to diagnose: this one issues no container query at all, so it still
+ * answers when every count is timing out.
  */
 async function getIndexProgressHandler(req, res) {
   try {
     const progress = await getIndexProgress();
-    if (!progress) {
-      return res.json({ success: true, active: false, reason: 'USE_COSMOS_NOSQL is not true' });
-    }
     // Which container a DEPLOYED build actually writes chunks to is otherwise unobservable from
     // outside — app settings cannot be read back from the SCM container either, since it gets
     // neither the app's env nor its managed identity. One string removes the guess, and this is
@@ -74,104 +65,49 @@ async function getIndexProgressHandler(req, res) {
 }
 
 /**
- * Get document counts and stats for all collections
+ * Item counts per container.
+ *
+ * Every number now comes from the SAME database. This used to run four `countDocuments()` calls
+ * against the legacy Mongo-API account (database `epic`) and report them alongside NoSQL index
+ * progress — two databases in one response, which is exactly the confusion that let
+ * `COSMOS_DATABASE` silently repoint the live app. Those counts are gone with the account.
+ *
+ * Counts run under systemAccess(): this is an operational reading of the whole database, the
+ * route is admin-only, and systemAccess takes no arguments so it cannot be derived from a
+ * request.
  */
 async function getDbStats(req, res) {
   try {
-    const stats = {};
-    for (const [name, model] of Object.entries(models)) {
-      stats[name] = await model.countDocuments();
-    }
+    const access = systemAccess();
 
-    // Reported separately from `stats`, and labelled, because `stats` counts come from the LEGACY
-    // Mongo-API layer (database `epic`) while index progress is read from the NoSQL account. Two
-    // different databases in one response is exactly the confusion that made `COSMOS_DATABASE`
-    // silently repoint the live app, so neither number is allowed to look like the other's.
+    const [projects, documents, records, boundaries] = await Promise.all([
+      projectsRepo.countVisible(access),
+      documentsRepo.countVisible(access),
+      recordsRepo.countVisible(access),
+      // No access argument — the boundaries container carries no read[] at all.
+      boundariesRepo.count()
+    ]);
+
     const indexProgress = await getIndexProgress();
 
     res.json({
       success: true,
-      database: 'epic',
+      database: 'demi',
       connectionState: 'connected',
-      driver: 'azure-cosmos-sdk',
-      stats,
-      ...(indexProgress ? { nosql: { database: 'demi', indexProgress } } : {})
+      driver: 'azure-cosmos-nosql',
+      stats: { projects, documents, boundaries, records },
+      ...(indexProgress ? { indexProgress } : {})
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 }
 
-/**
- * Trigger full sync / seed from OpenShift API to Cosmos DB
- */
-async function seedDatabase(req, res) {
-  try {
-    const { run: runSeedAndMerge } = require('../scripts/seed-and-merge');
-    const isAsync = req.query.async === 'true';
-    if (isAsync) {
-      runSync().then(() => runSeedAndMerge()).catch((err) => console.error('Background seed error:', err));
-      return res.json({
-        success: true,
-        message: 'Database seed/sync triggered in background.'
-      });
-    }
-
-    console.log(' Starting database seed/sync...');
-    await runSync();
-    const mergeStats = await runSeedAndMerge();
-    const stats = {};
-    for (const [name, model] of Object.entries(models)) {
-      stats[name] = await model.countDocuments();
-    }
-
-    res.json({
-      success: true,
-      message: 'Database seed/sync completed successfully.',
-      stats,
-      mergeStats
-    });
-  } catch (err) {
-    console.error('Seed database error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-}
-
-
-
-
-/**
- * Trigger nightly sync process manually via HTTP API
- */
-async function runNightlySyncHandler(req, res) {
-  try {
-    const { runNightlySync } = require('../scripts/nightly-sync');
-    const isAsync = req.query.async === 'true';
-    if (isAsync) {
-      runNightlySync().catch((err) => console.error('Background nightly sync error:', err));
-      return res.json({
-        success: true,
-        message: 'Nightly sync process triggered in background.'
-      });
-    }
-
-    console.log(' Starting manual nightly sync...');
-    await runNightlySync();
-    const stats = {};
-    for (const [name, model] of Object.entries(models)) {
-      stats[name] = await model.countDocuments();
-    }
-
-    res.json({
-      success: true,
-      message: 'Nightly sync completed successfully.',
-      stats
-    });
-  } catch (err) {
-    console.error('Nightly sync error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-}
+// The seed and nightly-sync handlers are gone with the Mongo-era scripts behind them
+// (sync_from_openshift, seed-and-merge, nightly-sync). `src/scripts/seed-nosql.js` reproduces
+// projects, documents and boundaries from the upstream sources, and is run inside the network
+// over the App Service SSH tunnel — a 60k-document seed outlives any HTTP request, so it never
+// belonged behind a route. See README.md for the recipe.
 
 /**
  * Trigger NRPTI sync process manually via HTTP API
@@ -202,35 +138,8 @@ async function runNrptiSyncHandler(req, res) {
   }
 }
 
-/**
- * Trigger Track project seeding & NRPTI record folding explicitly
- */
-async function seedTrackDatabase(req, res) {
-  try {
-    const { run: runSeedAndMerge } = require('../scripts/seed-and-merge');
-    console.log('[dbController] Starting track project seed and merge...');
-    const mergeStats = await runSeedAndMerge();
-    const stats = {};
-    for (const [name, model] of Object.entries(models)) {
-      stats[name] = await model.countDocuments();
-    }
-    return res.json({
-      success: true,
-      message: 'Track projects seeded and NRPTI records folded successfully.',
-      mergeStats,
-      stats
-    });
-  } catch (err) {
-    console.error('[dbController] Track seed error:', err);
-    return res.status(500).json({ success: false, error: err.message, stack: err.stack });
-  }
-}
-
 module.exports = {
   getDbStats,
   getIndexProgressHandler,
-  seedDatabase,
-  seedTrackDatabase,
-  runNightlySyncHandler,
   runNrptiSyncHandler
 };

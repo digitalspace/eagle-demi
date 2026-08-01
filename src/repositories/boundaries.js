@@ -87,6 +87,20 @@ async function getByName(name, type) {
   return items[0] || null;
 }
 
+/**
+ * How many boundaries are loaded. Takes no access context and applies no read predicate, for
+ * the same reason listByType does not — this container carries no `read[]`. Named `count`, not
+ * `countVisible`, so it cannot be mistaken for the ACL-respecting counts on the other
+ * repositories.
+ */
+async function count() {
+  const value = await cosmos.queryValue(CONTAINER, {
+    query: 'SELECT VALUE COUNT(1) FROM c',
+    parameters: []
+  });
+  return value || 0;
+}
+
 async function upsert(boundary) {
   return cosmos.upsert(CONTAINER, boundary);
 }
@@ -111,6 +125,7 @@ module.exports = {
   listByType,
   getById,
   getByName,
+  count,
   upsert,
   bulkUpsertForType,
   deleteById

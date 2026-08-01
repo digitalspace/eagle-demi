@@ -16,7 +16,7 @@ const express = require('express');
 const compression = require('compression');
 const cors = require('cors');
 const helmet = require('helmet');
-const { initCosmosClient } = require('./db/cosmos');
+const cosmos = require('./db/cosmos-nosql');
 const { logger } = require('./utils/logger');
 
 const apiRoutes = require('./routes/api');
@@ -87,32 +87,23 @@ app.get('/config', configController.getConfig);
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// Readiness — actually reaches the database. initCosmosClient() RETURNS NULL rather than
-// throwing when unconfigured, so a truthy check is required; `try/catch` alone is not enough.
+// Readiness — actually reaches the database. ping() returns FALSE rather than throwing when the
+// account is unconfigured, so a truthy check is required; `try/catch` alone is not enough.
 app.get('/api/health/db', async (req, res) => {
   try {
-    const db = initCosmosClient();
-    if (!db) {
+    const ok = await cosmos.ping();
+    if (!ok) {
       return res.status(503).json({ ok: false, error: 'Database client is not configured.' });
     }
-    await db.command({ ping: 1 });
-    return res.json({ ok: true, driver: 'cosmos-db-mongodb-api' });
+    return res.json({ ok: true, driver: 'cosmos-db-nosql' });
   } catch (err) {
     return res.status(503).json({ ok: false, error: err.message });
   }
 });
 
-// Ensure DB is initialized before processing requests
-app.use((req, res, next) => {
-  try {
-    initCosmosClient();
-    next();
-  } catch (err) {
-    res.status(500).json({ error: 'Database client initialization failed.', details: err.message });
-  }
-});
-
-// DB connection is handled lazily per request in middleware above
+// No per-request database init. The Mongo client needed one because it connected eagerly; the
+// NoSQL client builds its container handles lazily on first use, so a middleware that only
+// primed the connection would cost every request a branch and buy nothing.
 
 // Mount Swagger Documentation UI
 try {

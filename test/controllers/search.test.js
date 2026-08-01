@@ -5,8 +5,6 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const Project = require('../../src/models/project');
-const Document = require('../../src/models/document');
 const searchController = require('../../src/controllers/search');
 const aiSearch = require('../../src/search/ai-search');
 const documentsRepo = require('../../src/repositories/documents');
@@ -21,27 +19,25 @@ test('Search Controller Tests', async (t) => {
   await t.test('search projects returns projects from Cosmos DB when no keywords are provided', async () => {
     const mockProjects = [
       {
-        _id: '12345',
+        id: '12345',
         name: 'Ajax Mine',
         region: 'Thompson-Okanagan',
         sector: 'Mining',
         status: 'Completed',
         centroid: { type: 'Point', coordinates: [-120.37, 50.62] },
+        read: ['public'],
         isPublished: true
       }
     ];
 
-    t.mock.method(Project, 'find', async (filter, options) => {
-      // Anonymous: ACL clause AND the track-provenance clause, combined with $and so
-      // neither can cancel the other out.
-      assert.ok(Array.isArray(filter.$and), 'expected combined $and filter');
-      assert.ok(filter.$and.some(c => Array.isArray(c.$or)), 'expected read ACL clause');
-      assert.ok(
-        filter.$and.some(c => c['sources.track']),
-        'expected track provenance clause'
-      );
-      assert.strictEqual(options.maxItemCount, 10);
-      return mockProjects;
+    t.mock.method(projectsRepo, 'listVisible', async (access, opts) => {
+      // The repository owns the SQL; what this path must not lose is the track-provenance
+      // restriction and the caller's access context — the two things the old Mongo filter
+      // combined by hand.
+      assert.ok(access, 'expected an access context');
+      assert.strictEqual(opts.trackOnly, true);
+      assert.strictEqual(opts.pageSize, 10);
+      return { items: mockProjects };
     });
 
     const req = {
@@ -121,7 +117,10 @@ test('Search Controller Tests', async (t) => {
     async () => {
       let listed = false;
       t.mock.method(aiSearch, 'searchProjects', async () => ({ count: 0, items: [] }));
-      t.mock.method(Project, 'find', async () => { listed = true; return []; });
+      t.mock.method(projectsRepo, 'listVisible', async () => {
+        listed = true;
+        return { items: [] };
+      });
 
       const req = { query: { dataset: 'Project', keywords: 'zarquonflux' }, header: () => null };
       let jsonResponse;
@@ -195,19 +194,26 @@ test('Search Controller Tests', async (t) => {
   await t.test('search documents returns documents from Cosmos DB', async () => {
     const mockDocuments = [
       {
-        _id: 'doc1',
+        id: 'doc1',
         displayName: 'Test Doc',
         s3Key: 'uploads/test_doc.pdf',
         region: 'Skeena',
-        project: '12345',
+        projectId: '12345',
+        read: ['public'],
         isPublished: true
       }
     ];
 
-    t.mock.method(Document, 'find', async (filter) => {
-      assert.ok(Array.isArray(filter.$or), 'public document read must apply an ACL clause');
-      assert.deepStrictEqual(filter.$or[0], { read: { $in: ['public'] } });
-      return mockDocuments;
+    t.mock.method(documentsRepo, 'listVisible', async (access, opts) => {
+      assert.ok(access, 'expected an access context');
+      assert.strictEqual(opts.pageSize, 10);
+      return { items: mockDocuments };
+    });
+
+    // The keywordless path labels its results too, exactly as the AI Search path does.
+    t.mock.method(projectsRepo, 'listByIds', async (access, ids) => {
+      assert.deepStrictEqual(ids, ['12345']);
+      return [{ id: '12345', name: 'Ajax Mine' }];
     });
 
     const req = {
@@ -231,6 +237,7 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(jsonResponse[0].searchResults[0].displayName, 'Test Doc');
     assert.strictEqual(jsonResponse[0].searchResults[0].documentFileName, 'test_doc.pdf');
     assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
+    assert.strictEqual(jsonResponse[0].searchResults[0].projectName, 'Ajax Mine');
   });
 
   // The Cosmos full-text backend was ruled out and Azure AI Search is not built yet (TODO.md §B),

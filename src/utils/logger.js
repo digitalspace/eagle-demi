@@ -3,7 +3,6 @@
 const winston = require('winston');
 const { format, transports } = winston;
 const { AsyncLocalStorage } = require('async_hooks');
-const LogModel = require('../models/log');
 const config = require('../config');
 
 // Asynchronous Context Tracking for Request/Correlation IDs
@@ -18,38 +17,11 @@ const requestIdFormat = format((info) => {
   return info;
 });
 
-// Custom Winston Transport to write logs to Azure Cosmos DB
-class CosmosLogTransport extends winston.Transport {
-  constructor(opts) {
-    super(opts);
-    this.name = 'CosmosLogTransport';
-    this.level = opts.level || 'info';
-  }
-
-  log(info, callback) {
-    setImmediate(() => {
-      this.emit('logged', info);
-    });
-
-    try {
-      const { timestamp, level, message, requestId, stack, ...meta } = info;
-      LogModel.upsert({
-        timestamp: timestamp ? new Date(timestamp).toISOString() : new Date().toISOString(),
-        level: level,
-        message: message,
-        requestId: requestId || '',
-        meta: meta || {},
-        stack: stack || ''
-      }).catch((err) => {
-        process.stderr.write(`[CosmosLogTransport Error] Failed to write log: ${err.message}\n`);
-      });
-    } catch (_err) {
-      // Gracefully ignore during shutdown or startup
-    }
-
-    callback();
-  }
-}
+// Logs go to stdout only. There used to be a second transport writing every line to the legacy
+// Mongo-API `logs` container, which made the logger — required at boot by app.js — the deepest
+// edge in the request path's dependency on that account. App Service captures stdout and ships it
+// to Log Analytics, so the database round trip per log line bought nothing the platform did not
+// already provide.
 
 // Set up logger formats
 const isProduction = process.env.NODE_ENV === 'production';
@@ -77,11 +49,6 @@ const defaultTransports = [
             return `${timestamp} ${colorLevel}${reqTag}: ${msg}`;
           })
     )
-  }),
-
-  // 2. Custom Cosmos DB Transport
-  new CosmosLogTransport({
-    level: config.logLevel
   })
 ];
 

@@ -1,6 +1,6 @@
 # DEMI — TODO
 
-**Updated 2026-07-31.** Actionable work only. Rationale in `MIGRATION.md`; agent rules in `CLAUDE.md`.
+**Updated 2026-08-01.** Actionable work only. Rationale in `MIGRATION.md`; agent rules in `CLAUDE.md`.
 
 Status: **dev only, no test/prod.** Items = backlog, not incidents.
 
@@ -16,8 +16,23 @@ Verified through API before cutover, per dataset: ACL gate anonymous **0** / pri
 
 ### Next, in code
 
-1. **Phase 8 — retire `demi-mongo-dev-*`.** Still on request path: `src/models/base.js` → `src/db/cosmos.js` (Mongo-API client), reached by four controllers wired unconditionally in `src/routes/api.js` — `search`, `db`, `log`, `wildfire`. `Project.find` (`search.js:125`) and `Document.find` (`search.js:214`) become `projectsRepo.listVisible` / `documentsRepo.listVisible`, already exist + tested — but **they serve two callers, not one**: keywordless requests AND the `catch` fallback when AI Search throws. Port both or a search FAULT stop degrading to a Cosmos page and start returning empty, which look identical to no matches from outside. `logs` and `wildfires` containers already exist NoSQL side; `/db/stats` should DROP its four legacy `countDocuments()` calls, not port them — that endpoint hang for minutes. Then account, `demi-mongo-pe` + its NIC.
-2. **Extraction quality** — deferred deliberately, this order: slide decks extracting to nothing but `<!-- image -->` (indexed, unfindable by content) → retrieval scoring run → only then intake cleaner, scoped to stripping placeholders + separator-only chunks. **Not** OCR re-run: word-salad 0.23% of chunks.
+1. **Phase 8 — CODE DONE 2026-08-01, Azure teardown left.** Mongo-API layer cut out of the app: `src/models/`, `src/db/cosmos.js`, `src/helpers/access.js`, legacy controllers, `sync_from_openshift` / `seed-and-merge` / `nightly-sync`, `backfill-read-acl`, and the `USE_COSMOS_NOSQL` switch all deleted. `grep -rn "models/\|db/cosmos'" src/` return only `src/extract.js`. What changed beyond a straight port:
+   - Log DB writes DROPPED, not ported. `CosmosLogTransport` was the deepest boot-path edge (`app.js` → `logger` → `models/log`). Console only; App Service ship stdout to Log Analytics. `GET /admin/logs` gone.
+   - `GET /wildfires` gone — no consumer, frontend read DataBC WFS direct. Sync KEPT, now on `src/repositories/wildfires.js` + `projectsRepo.patchWildfireStats` (was whole-item `Project.upsert`, which would erase Track/NRPTI writes).
+   - `sync-nrpti` stop embedding full record objects into projects (`nrptiRecords` + `sources.nrpti.records`) — that the 2 MB item-cap bug `repositories/records.js` header describes. Bounded aggregate via `patchNrptiStats` only. Records now write `projectId` (partition key) and `dataset`, not `project` / `nrptiSchemaName`.
+   - Seed/sync ROUTES deleted (`/db/seed`, `/sync`, `/admin/sync`, `/admin/seed-track`) — `seed-nosql.js` replace them and run inside network, past any request timeout. `/admin/sync/nrpti` + `/admin/sync/wildfires` stay.
+   - **`src/extract.js` still `require('mongodb')`** and read `MONGODB_URI`. Deleting the account break it. Deferred-not-dead (Azure extraction path); extraction run on LXC 109 through API, so nothing live regress. `mongodb` dependency kept for it alone.
+
+   **Verified LOCAL only** — 405 tests, lint clean, `src/app.js` boot with no Mongo, route table correct. **NOT deployed, NOT verified live.** Before teardown run, after `stop`/`start`:
+   - `GET /db/stats` — answer in seconds now, not minutes. That latency IS the proof legacy counts gone.
+   - `GET /search?dataset=Project` no keywords — anonymous vs `X-Api-Key` must differ.
+   - **Fault fallback** — point `AI_SEARCH_ENDPOINT` at bad host, confirm `dataset=Document&keywords=pipeline` still return Cosmos rows, restore. Probe that cannot tell "fallback works" from "nothing matched" prove nothing.
+   - `POST /admin/sync/wildfires` then `POST /admin/sync/nrpti` — confirm a project's `sources.wildfire` updated AND its `sources.track`/`sources.nrpti` survived (patch-not-replace).
+   - `GET /admin/logs`, `GET /wildfires` → 404. Log stream still carry `requestId`.
+
+   **Left:** `azure/main.bicep:69` `cosmosDb` module, `azure/modules/cosmos-db.bicep`, `mongodbConnectionString` param + four `COSMOSDB_*`/`MONGODB_*` app settings in `api-web-app.bicep`, then account, `demi-mongo-pe` + its NIC. After a clean week — code rollback is `git revert`, no redeploy.
+2. **Extraction STOPPED since 2026-07-30 14:08.** External extraction host halted mid-run; ~4% of 60,578 documents ingested. A crash cascade also parked **~1,712 valid PDFs as permanent failures** — the host treats a recorded error as done, so they never retry and are silently absent from the index. Needs crash recovery + a requeue of the false failures before the run restarts. Host-side, out of repo.
+3. **Extraction quality** — deferred deliberately, this order: slide decks extracting to nothing but `<!-- image -->` (indexed, unfindable by content) → retrieval scoring run → only then intake cleaner, scoped to stripping placeholders + separator-only chunks. **Not** OCR re-run: word-salad 0.23% of chunks.
 
 ### Needs a human, not code
 
@@ -121,13 +136,13 @@ Numbers + caveats in `MIGRATION.md` §A. **OCR not the problem: word-salad 0.23%
 
 ## Backlog
 
-- **Phase 8 — decommission Mongo.** Delete `demi-mongo-dev-*` after clean week. Boot-path order matters: `src/utils/logger.js` → `models/log` → `src/db/cosmos.js`, plus `controllers/{search,db,log,wildfire}.js` required unconditionally at `src/routes/api.js`. 14 files require `models/`, plus `src/app.js` and `models/base.js` straight onto `src/db/cosmos.js`. **Blocked until Deep Search on AI Search.**
+- **Phase 8 Azure teardown.** Delete `demi-mongo-dev-*` after clean week — see item 1 for the exact resource list. Code side done.
 - **Nothing in Azure extracts text.** Ingest exists (external host POST markdown to `POST /documents/:id/chunks`); `src/extract.js` run only under `require.main === module`. Deliberate — serverless GPU priced and rejected. Do not delete as dead code.
-- **Extraction ~7% done** against 60,578 documents.
+- **Extraction ~4% done** against 60,578 documents, and STALLED — see item 2. The earlier "~7%" counted documents flagged `contentExtracted`, not documents with chunks behind them.
 - **CI blocked.** `AZURE_CLIENT_ID` missing from repo secrets. Need Entra app registration + federated credential; creating one need Microsoft Graph, which conditional access blocks.
 - **`azure-deploy-prod.yaml` / `-test.yaml` trigger on every push to `main`** — no tag, no approval. Inert today. **Gate before adding OIDC credential.**
-- **`models/syncState.js` scheduled nowhere.**
-- **`readFilter` legacy tier** for rows with no `read[]`: run `src/scripts/backfill-read-acl.js` inside network, then delete tier.
+- ~~`models/syncState.js` scheduled nowhere~~ — deleted with `src/models/`. The `syncState` CONTAINER still exist in `cosmos-nosql.bicep`, unwritten by anything.
+- ~~`readFilter` legacy tier + `backfill-read-acl.js`~~ — both gone. `readClause` in `access-sql.js` never had the pre-ACL tier (every seeder write `read[]` explicitly), and the backfill only ever targeted the Mongo account.
 - **Phase 3b blob storage** — code + Bicep written, not deployed, nothing copied. Need `Storage Blob Delegator` or every download link fail to sign.
 
 ---
