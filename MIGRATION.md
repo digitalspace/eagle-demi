@@ -231,6 +231,27 @@ target:
 - **A table of earthquake records** was flagged because tabular detection only understood pipe
   tables. Whitespace columns are still columns.
 
+#### Some "PDFs" in the corpus are saved 404 pages — not an extraction defect
+
+Measured 2026-08-01. `PDFium: Data format error` on a document is worth one check before assuming a
+corrupt PDF: fetch the object and look at the first five bytes. At least one document
+(`Vol 8 - Map P7 Mineral Titles and Reserves`) stores a **268-byte HTML error page**, captured when
+the ORIGINAL ETL fetched the legacy EPIC system, got a 404, and wrote the error body to disk as if
+it were the file:
+
+```
+fileExt: pdf | mimeType: application/pdf | fileSize: 268
+<!DOCTYPE HTML ...><title>404 Not Found</title>
+The requested URL /appsdata/epic/documents/p18/d16424/1076007686213_....pdf was not found.
+```
+
+The metadata still claims `application/pdf`. The real file is gone from the source system, so
+recording an extraction error is CORRECT — there is nothing to extract, and no re-run or engine
+change recovers it. **Rate: 2 of 9,034 documents downloaded (~0.02%)**, so on the order of a dozen
+corpus-wide. `fileSize` under ~1 KB on a `pdf` is the cheap detector.
+
+Consequence worth stating once: the 60,578 document count slightly overstates retrievable content.
+
 #### Conversion — the 2026-07-30 numbers below are STALE
 
 They were measured before the extraction host added its `pypdfium2` router, when `do_ocr=True` ran
