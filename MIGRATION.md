@@ -133,12 +133,37 @@ template or app setting references the host.
 
 **Re-POSTing a failed document clears the failure. There is no guard on `contentExtracted`.**
 `ingestChunks` replaces the chunks and patches `contentExtractionError: null` whatever state the
-document was in. So a host holding its own done-list requeues the **~1,712 valid PDFs parked as
-permanent failures** (`TODO.md` §2) by simply posting them again — no flag reset, no admin script,
-no SSH tunnel. `purge-extraction.js --errors-only` exists for the other case: making the API's OWN
-work list truthful, which `src/extract.js --retry-failed` and any future Azure-side worker read.
-Without that flag the only lever was a blanket purge that deleted every good chunk to requeue the
-failures, because **a recorded failure sets `contentExtracted: true` exactly like a success**.
+document was in. So a host holding its own done-list requeues by simply posting again — no flag
+reset, no admin script, no SSH tunnel. `purge-extraction.js --errors-only` exists for the one case
+that cannot fix itself: a document still flagged extracted-with-error is invisible to the host's
+`build_worklist`, which asks for `extracted=false`. Without that flag the only lever was a blanket
+purge that deleted every good chunk to requeue the failures, because **a recorded failure sets
+`contentExtracted: true` exactly like a success**.
+
+#### The 2026-07-30 cascade — one crash, 855 documents, recovered 2026-08-01
+
+**Measured, and reproduced.** The extraction host submitted PDF page-splitting into a shared
+`ProcessPoolExecutor`. That class never recovers: once a child dies badly `_broken` is set and every
+later submit raises. The raise hit a generic `except` that recorded a DOCUMENT failure, so every
+subsequent document was marked extracted with zero chunks and left the work list for good.
+Reproduced on the host's Python 3.13 — killing a pool child sets `_broken` to exactly the string
+seen across the corpus, `A child process terminated abruptly, the process pool is not usable
+anymore`.
+
+The lesson generalises past this host: **an infrastructure failure must never be recorded as a data
+failure.** The recording is what made it permanent and silent — 855 documents absent from search
+while 842 of them had good markdown sitting on disk the whole time.
+
+| | |
+|---|---|
+| Recorded as errors in Cosmos | **855** (not the "~1,712" previously stated, which counted `.err` FILES across two directories and double-counted ids) |
+| Recovered by re-POST alone | **842** — 863 markdown files posted, **43,003 chunks, 0 failed, 2.2 minutes, zero GPU time** |
+| Crash victims with no markdown | 5 — need `--errors-only` to re-enter the work list |
+| Genuinely unsupported (`msg`/`doc`) | 8 — correctly flagged |
+
+Throughput of the recovery ingest: ~23,900 documents/hour at `UPLOADERS=4`, 49.5 chunks/document.
+Cosmos serverless returned `Request rate is too large` intermittently; the poster's exponential
+backoff absorbed it with zero terminal failures.
 
 **What is local and what is not.** Extraction — GPU, OCR, docling, page batching — is entirely
 off-platform and free. The only thing crossing to Azure is one JSON POST of markdown per document.
@@ -147,8 +172,18 @@ was deleted 2026-07-31, code and infrastructure, so there is no local index left
 Cosmos-side maintenance is the one job that must execute INSIDE the VNet, because the account is
 private-endpoint-only and keyless — not a preference, a landing-zone policy.
 
-**Send `extraction` provenance.** The route has accepted it since `4bddede` and nothing sends it,
-which is the only reason no quality number below can be split by OCR path vs text-layer path.
+**`extraction` provenance now arrives — first documents carrying it landed 2026-08-01.** The route
+had accepted it since `4bddede` and nothing sent it, which is why every quality number below is
+unattributable to a path. Verified live on Cosmos:
+
+```json
+{"path": "ocr", "engine": "docling+rapidocr (cuda)", "doclingVersion": "2.116.0",
+ "options": "{\"force_ocr\":false,\"batch_pages\":25}", "at": "2026-08-01T05:09:15.741294+00:00"}
+```
+
+Note `options` comes back as a STRING — `sanitizeExtraction` flattens it with `JSON.stringify` and
+caps it at 500 characters, so nesting cannot smuggle in depth. Anything outside the five-key
+whitelist is dropped silently, so a typo in the sender is invisible rather than an error.
 
 **How Azure extracts documents for NEW projects is deliberately deferred.** `src/extract.js` stays
 for that reason — it is the only in-repo docling client and PDF page-batching code. **Do not delete

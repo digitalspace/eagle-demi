@@ -55,31 +55,43 @@ Checked already, so nobody re-check:
   throw when no Mongo URI env configured, so a post-teardown run error instead of silently reading
   localhost and reporting zero documents.
 
-### 2. Extraction STOPPED since 2026-07-30 14:08
+### 2. Extraction STOPPED since 2026-07-30 14:08 — cascade RECOVERED 2026-08-01
 
-External host halted mid-run; ~4% of 60,578 documents ingested. A crash cascade also parked
-**~1,712 valid PDFs as permanent failures** — the host treat a recorded error as done, so they never
-retry and are silently absent from the index. Needs crash recovery + requeue of the false failures
-before the run restart. Host-side, out of repo.
+External host halted mid-run; ~4% of 60,578 documents ingested. Restart still pending, host-side.
 
-**Signature to select on**, read live 2026-08-01 off the first 1,000 extracted documents in Cosmos
-scan order — 783 of them carried an error:
+**Root cause, confirmed by reproduction.** `ocr_worker` submitted `split_pdf` into a shared
+`ProcessPoolExecutor`. A `ProcessPoolExecutor` never recovers — once a child dies badly, `_broken`
+is set and every later submit raises. That raise hit a generic `except` which called `fail()`,
+writing a `.err`, which `ingest.py` posts as `{"error": ...}`, which marks the document extracted
+with zero chunks and removes it from the work list permanently. **One crash, 855 documents silently
+absent from search.** Reproduced on the host's own Python 3.13: a killed pool child sets `_broken`
+to the exact corpus string `A child process terminated abruptly, the process pool is not usable
+anymore`.
 
-| Count | `contentExtractionError` | Requeue? |
+**The count was wrong.** "~1,712" counted `.err` FILES across two directories, double-counting ids.
+Deduplicated against what was actually posted: **855** documents recorded as errors.
+
+| | | |
 |---|---|---|
-| 777 | `docling failed: A child process terminated abruptly, the process pool is not usable anymore` | **yes** — Python `BrokenProcessPool`; once the pool died every later document recorded this instantly |
-| 5 | `unsupported format: msg` | no |
-| 1 | `unsupported format: doc` | no — genuine, no docling reader |
+| Had good markdown already on disk | **842** | **recovered 2026-08-01** — 863 markdown files posted, 43,003 chunks, 0 failed, 2.2 min, zero GPU time |
+| Crash victims with no markdown | **3** | 5 originally; 2 re-extracted in the 2026-08-01 smoke test |
+| Genuinely unsupported (`msg`, `doc`) | **8** | correctly flagged, leave them |
 
-`pageSize` caps at 1000 and the endpoint returns a bare array with no continuation token, so that is
-a **page, not a total** — the signature is the finding, not the 78% rate. Of the 217 clean rows in
-that page, **0 carried `extraction` provenance** and none had zero chunks.
+**The remaining 3 need `purge-extraction.js --errors-only`** *if the host's `worklist.json` cache is
+ever deleted*. `build_worklist` asks the API for `extracted=false`, so a document still flagged
+extracted-with-error never appears in a REBUILD — but the cached list predates the flags and still
+carries them, which is how the smoke test picked two up. Everything else the host requeues itself:
+`ingestChunks` has no `contentExtracted` guard and a plain re-POST clears the error.
 
-**Requeue is just a re-POST.** `ingestChunks` has no `contentExtracted` guard, so posting a failed
-document again replaces its chunks and clears `contentExtractionError`. No admin script, no tunnel.
-`purge-extraction.js --errors-only` is for the other case — making the API's own work list truthful.
-Send `extraction` provenance on the restart; nothing ever has, which is why no quality number splits
-by OCR path. Detail in `MIGRATION.md` §A.
+**Fixed host-side 2026-08-01** (out of repo, `worker.py`): runner faults are now classified apart
+from document faults and `defer()`ed — no `.err`, so the document stays in the work list; the pool
+is rebuilt in place; 25 consecutive runner faults stop the run rather than walking the corpus. The
+host now also sends `extraction` provenance, which nothing ever had.
+
+Sample for context, read live off the first 1,000 extracted documents in Cosmos scan order (783
+carried an error, 777 of them the cascade string). `pageSize` caps at 1000 and the endpoint returns
+a bare array with no continuation token, so that is **a page, not a total** — the signature was the
+finding, not the 78% rate.
 
 ### 3. Extraction quality
 
