@@ -10,9 +10,12 @@ Status: **dev only, no test/prod.** Items = backlog, not incidents.
 ## State of play
 
 **Live.** Azure AI Search `demi-search-dev` (Basic, keyless, private endpoint only) serve all three
-datasets — `demi-chunks` 80,354 rows, `demi-projects` 393, `demi-documents` 60,578 — indexers on
+datasets — `demi-chunks` 80,354 rows, `demi-projects`, `demi-documents` 60,578 — indexers on
 `PT5M`. Typesense deleted 2026-07-31, code and infrastructure both; `az containerapp list -g
 c4b0a8-dev-rg` return nothing.
+
+Cosmos counts read live 2026-08-01: **projects 2,248** (the 393 figure predate the NRPTI sync),
+documents 60,578, records 48,086, boundaries 281. All three indexers report progress 100.
 
 **Phase 8 deployed + verified live 2026-08-01.** Mongo-API layer gone from app. Clean week run to
 **2026-08-08**; only Azure teardown left. Evidence in `MIGRATION.md` §B.
@@ -58,6 +61,19 @@ External host halted mid-run; ~4% of 60,578 documents ingested. A crash cascade 
 **~1,712 valid PDFs as permanent failures** — the host treat a recorded error as done, so they never
 retry and are silently absent from the index. Needs crash recovery + requeue of the false failures
 before the run restart. Host-side, out of repo.
+
+**Signature to select on**, read live 2026-08-01 off the first 1,000 extracted documents in Cosmos
+scan order — 783 of them carried an error:
+
+| Count | `contentExtractionError` | Requeue? |
+|---|---|---|
+| 777 | `docling failed: A child process terminated abruptly, the process pool is not usable anymore` | **yes** — Python `BrokenProcessPool`; once the pool died every later document recorded this instantly |
+| 5 | `unsupported format: msg` | no |
+| 1 | `unsupported format: doc` | no — genuine, no docling reader |
+
+`pageSize` caps at 1000 and the endpoint returns a bare array with no continuation token, so that is
+a **page, not a total** — the signature is the finding, not the 78% rate. Of the 217 clean rows in
+that page, **0 carried `extraction` provenance** and none had zero chunks.
 
 **Requeue is just a re-POST.** `ingestChunks` has no `contentExtracted` guard, so posting a failed
 document again replaces its chunks and clears `contentExtractionError`. No admin script, no tunnel.
