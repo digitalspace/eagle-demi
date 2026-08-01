@@ -1,0 +1,21 @@
+# EXAMPLE ONLY. The documentIds below are fake and will score as misses if you run this file.
+# Copy it, replace every line, and keep one file per stratum — a worst-stratum score and a
+# random-stratum score answer different questions and must not be averaged together.
+#
+# One line per label: {"documentId": "...", "phrase": "...", "note": "..."}   (note optional)
+#
+# THE PHRASE MUST COME FROM THE SOURCE DOCUMENT, read by a human, NOT from the extracted
+# markdown. A phrase copied out of the extraction retrieves itself by construction and measures
+# nothing. Pick something a person would plausibly search for: a place name, a proponent, a
+# heading, a facility. Keep it under 16 words — the query tokenizer caps there and drops the tail.
+#
+# Get the documentIds from audit-chunk-quality.js output (worstStratum / randomStratum), then
+# open each document at source and write down what you can actually see on the page.
+#
+#   node src/scripts/score-retrieval.js --labels worst-stratum.jsonl --out worst.json
+#
+# Run it only when no extraction run is in flight; a corpus growing under the queries makes two
+# scorecards incomparable.
+{"documentId":"00000000-0000-0000-0000-000000000001","phrase":"Tumbler Ridge","note":"slide deck, title page — spacing damage suspected"}
+{"documentId":"00000000-0000-0000-0000-000000000002","phrase":"Fort St. John natural gas pipeline","note":"section heading"}
+{"documentId":"00000000-0000-0000-0000-000000000003","phrase":"environmental assessment certificate application","note":"cover page"}

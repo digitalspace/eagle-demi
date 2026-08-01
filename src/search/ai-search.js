@@ -491,6 +491,10 @@ module.exports = {
   deleteChunksForDocument,
   deleteFromIndex,
   indexes,
+  // Exported so a caller can tell "search is not configured" from "search found nothing". The API
+  // is right to treat the first as a degraded state and return []; an instrument is not, and must
+  // refuse to publish a zero it cannot distinguish from an unset app setting.
+  config,
   // Exported for tests.
   tokenize,
   buildQuery,
