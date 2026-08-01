@@ -1,0 +1,29 @@
+# Text-path stratum. Phrases read from each SOURCE PDF's own text layer with pypdf --
+# a different extractor than the one under test, so these are genuine ground truth.
+# Not filtered against the search index: dropping phrases that fail would select for
+# labels that already pass and inflate recall.
+{"documentId": "5886a7f4a4acd4014b81f94e", "phrase": "Table 5.1 Expected Case Concentrations (mg/L) of Key Parameters in Morrison Lake", "note": "text path, source text layer p20, 74 chunks"}
+{"documentId": "588692b1eed3c0016f854f55", "phrase": "\u2022 Troy Hromadnik, RPF, Planning Forester of West Fraser Mills, Williams Lake", "note": "text path, source text layer p9, 20 chunks"}
+{"documentId": "58869ab1a4acd4014b81f553", "phrase": "VC Activities Nature of Impact Mitigation Residual Impact Monitoring Commitments", "note": "text path, source text layer p4, 15 chunks"}
+{"documentId": "5886ad96e036fb0105769539", "phrase": "3.2.1 BC Oil and Gas Commission Noise Control Best Practices Guideline", "note": "text path, source text layer p17, 24 chunks"}
+{"documentId": "5886b234a4acd4014b81fde8", "phrase": "Theme Class Feature Type Activity Type Use Intensity Attractant Firearm", "note": "text path, source text layer p24, 34 chunks"}
+{"documentId": "5886b775eed3c0016f8565ed", "phrase": "Tulsequah Chief Mine - Air Cushion Barge Transportation System - Project Description", "note": "text path, source text layer p4, 6 chunks"}
+{"documentId": "58869553a4acd4014b81f220", "phrase": "2.4 Sand Bar Stabilization by Dendritic Channel Modification", "note": "text path, source text layer p34, 24 chunks"}
+{"documentId": "588691fbeed3c0016f854d57", "phrase": "\uf0b7 Bellefontaine, K.A. 1998. Prosperity Gold-Copper Project: BC MEM Status of", "note": "text path, source text layer p50, 103 chunks"}
+{"documentId": "588693fde036fb010576917a", "phrase": "Public Health Act, Industrial Camp Regulation", "note": "text path, source text layer p4, 17 chunks"}
+{"documentId": "5886a285a4acd4014b81f814", "phrase": "surrounding Burns Lake that includes Donald Landing, Palling, Decker Lake, Sheraton, and", "note": "text path, source text layer p25, 103 chunks"}
+{"documentId": "5886913be036fb0105768f2e", "phrase": "Objectives and Canadian Ambient Air Quality Objectives for NO2, SO2, CO,", "note": "text path, source text layer p51, 147 chunks"}
+{"documentId": "5886906be036fb0105768b12", "phrase": "Table 2 Summary of Potential Project Residual Effects Extending onto Federal Lands", "note": "text path, source text layer p5, 13 chunks"}
+{"documentId": "588696eda4acd4014b81f30e", "phrase": "Grassland Habitats. In the Chilliwack Forest District, there is", "note": "text path, source text layer p2, 6 chunks"}
+{"documentId": "5886afeae036fb01057695b7", "phrase": "3.1 CONSULTATION TO DATE WITH SCHEDULE B ABORIGINAL", "note": "text path, source text layer p8, 16 chunks"}
+{"documentId": "5886908ce036fb0105768bbc", "phrase": "Freshwater Aquatic Resources Assessment Boundaries", "note": "text path, source text layer p1, 5 chunks"}
+{"documentId": "588690bce036fb0105768cd9", "phrase": "TERRESTRIAL ECOSYSTEM MAPPING (TEM) POLYGONS AND FIELD PLOT LOCATIONS,", "note": "text path, source text layer p4, 16 chunks"}
+{"documentId": "58869132e036fb0105768efb", "phrase": "Mayor Michael Smith - West Vancouver, West Vancouver, British Columbia", "note": "text path, source text layer p38, 155 chunks"}
+{"documentId": "58869572e036fb01057691e3", "phrase": "obtained from Teck Coal Limited. DATUM: NAD 83 PROJECTION: UTM ZONE 11", "note": "text path, source text layer p22, 75 chunks"}
+{"documentId": "5886ad8ca4acd4014b81fc5c", "phrase": "Table 6.1-1 (cont\u2019d) Comprehensive List of Marine Environmental Subcomponents", "note": "text path, source text layer p6, 5 chunks"}
+{"documentId": "58869193e036fb0105768fc8", "phrase": "Table 5.16-5 Criteria Used to Characterize Residual Effects on Marine Benthic Habitat", "note": "text path, source text layer p16, 43 chunks"}
+{"documentId": "588695fdde49fe015163a439", "phrase": "Stlixwim Hydro Corporation Proposed Right-of-Way Wildfire Risk Management System", "note": "text path, source text layer p6, 17 chunks"}
+{"documentId": "588690a1e036fb0105768c4a", "phrase": "SAULTEAU FIRST NATIONS ASSERTED TRADITIONAL TERRITORY", "note": "text path, source text layer p3, 8 chunks"}
+{"documentId": "5886b304a4acd4014b81fe5f", "phrase": "\u2022 Main Phase, Late Phase, Breccias, Felsite Dykes. Carbonate exceeds NP", "note": "text path, source text layer p18, 17 chunks"}
+{"documentId": "58869407e036fb0105769180", "phrase": "Recommendation 3 - Baseline Studies for Breeding and Terrestrial Habitat", "note": "text path, source text layer p3, 8 chunks"}
+{"documentId": "5886a36ea4acd4014b81f851", "phrase": "App T. PBM Waste Rock Storage Alternatives Rev 1.doc", "note": "text path, source text layer p6, 15 chunks"}

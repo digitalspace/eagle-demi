@@ -1,0 +1,36 @@
+# OCR-path stratum. CANDIDATES, NOT LABELS YET.
+# A scan has no text layer, so no phrase can be read from source mechanically. Each
+# phrase below is seeded from the document TITLE, which is metadata, not something
+# verified to be on the page. Open each scan, confirm the words appear, and edit or
+# delete the line. An unconfirmed line measures the title, not the extraction.
+# Lines marked STARVED yielded <=2 chunks off >=1 MB. Keep them: they are the point of
+# this stratum. But "starved" is a suspicion, not a verdict -- 70.6% of documents with
+# that signature are maps and figures that hold no text to begin with. Titles matching
+# map/figure/drawing/plate/photo were filtered out, and the filter is imperfect: it does
+# not catch "Fig3" without a word boundary, or "Conceptual Rendering". If the scan you
+# open is a drawing, delete the line rather than labelling it.
+{"documentId": "58869484eed3c0016f855337", "phrase": "Volume 5 - Part 5", "note": "CANDIDATE - confirm on page 1. STARVED: 5.7 MB yielded 1 chunks"}
+{"documentId": "588690d5e036fb0105768d73", "phrase": "Prince Rupert Gas Transmission - Separate Submission to Ministers - Metlakatla First", "note": "CANDIDATE - confirm on page 1. STARVED: 1.2 MB yielded 2 chunks"}
+{"documentId": "58869245eed3c0016f854e2f", "phrase": "Volume 3 Appendix 3-6-B Part 9 Transmission Line Corridor Selection, 1997-3", "note": "CANDIDATE - confirm on page 1. STARVED: 3.4 MB yielded 1 chunks"}
+{"documentId": "588694e6eed3c0016f8553c3", "phrase": "Vol 4 - Appendix 4F - Conceptual Rendering - Commander Glacier 1", "note": "CANDIDATE - confirm on page 1. STARVED: 1.3 MB yielded 1 chunks"}
+{"documentId": "58869e95a4acd4014b81f6de", "phrase": "Vol 2 - Append 2 - Fig3 - Lower Cowichan River/Chemainus River", "note": "CANDIDATE - confirm on page 1. STARVED: 12.9 MB yielded 1 chunks"}
+{"documentId": "588695bbde49fe015163a3f8", "phrase": "A51 - Navigable Waters Report Earle Creek", "note": "CANDIDATE - confirm on page 1. STARVED: 1.1 MB yielded 2 chunks"}
+{"documentId": "58869210de49fe0151639dde", "phrase": "Project Description - Upper Toba Project", "note": "CANDIDATE - confirm on page 1. STARVED: 1.6 MB yielded 1 chunks"}
+{"documentId": "5886b3a1a4acd4014b81fefe", "phrase": "Certificate Extension Request - EAC #M05-02 - Red Chris Porphyry Copper-Gold Mine", "note": "CANDIDATE - confirm on page 1. STARVED: 1.0 MB yielded 1 chunks"}
+{"documentId": "5886b814eed3c0016f856651", "phrase": "Metal Leaching/Potential Acid Generating Waste Rock Management Plan - Part 2", "note": "CANDIDATE - confirm on page 1. STARVED: 7.6 MB yielded 1 chunks"}
+{"documentId": "5886b4a1a4acd4014b820000", "phrase": "Vol 8 - Final Report (FR) - Appendices - App 5-J -", "note": "CANDIDATE - confirm on page 1. STARVED: 9.9 MB yielded 2 chunks"}
+{"documentId": "588696f0de49fe015163a46e", "phrase": "Part E - First Nations and Socio-Economic Environment - Part 3", "note": "CANDIDATE - confirm on page 1. STARVED: 7.1 MB yielded 1 chunks"}
+{"documentId": "5886a3e2a4acd4014b81f871", "phrase": "Addendum Appendix H PBM 2009 Morrison Geology & Faults Rev-1-App. D3", "note": "CANDIDATE - confirm on page 1. STARVED: 6.1 MB yielded 1 chunks"}
+{"documentId": "588694afeed3c0016f855374", "phrase": "Jumbo Glacier Resort - Newsletter #3 - Jumbo Glacier Alpine Resort Proposal", "note": "CANDIDATE - confirm on page 1. ocr path, 28 chunks"}
+{"documentId": "58869ed7a4acd4014b81f6f7", "phrase": "Letter dated Feb 1/05 from Don Allingham (Public) to Paul Finkel (EAO)", "note": "CANDIDATE - confirm on page 1. ocr path, 5 chunks"}
+{"documentId": "5886946deed3c0016f855316", "phrase": "Volume 3 - Appendix I, J, K, & L", "note": "CANDIDATE - confirm on page 1. ocr path, 16 chunks"}
+{"documentId": "58869181a4acd4014b81ea23", "phrase": "Pre-Construction Compliance Self-Report - 2005-08-26 Appendix I - Ocean Disposal Application -", "note": "CANDIDATE - confirm on page 1. ocr path, 6 chunks"}
+{"documentId": "588690dae036fb0105768d84", "phrase": "Effects of Indutrial Disturbance on BRFN", "note": "CANDIDATE - confirm on page 1. ocr path, 26 chunks"}
+{"documentId": "58869243eed3c0016f854e26", "phrase": "Volume 3 Appendix 3-6-E Part 4 Feasibility Design of the Open Pit", "note": "CANDIDATE - confirm on page 1. ocr path, 117 chunks"}
+{"documentId": "5886925ea4acd4014b81ecf2", "phrase": "Section 9.1 - Ashcroft Feedback Forms continued....", "note": "CANDIDATE - confirm on page 1. ocr path, 9 chunks"}
+{"documentId": "5886b5e2eed3c0016f8564d7", "phrase": "Tulsequah Reconvened EA Process Final Meeting Minutes (Victoria and Vancouver, BC, November", "note": "CANDIDATE - confirm on page 1. ocr path, 15 chunks"}
+{"documentId": "58869741eed3c0016f8555ac", "phrase": "Villa - Wood", "note": "CANDIDATE - confirm on page 1. ocr path, 27 chunks"}
+{"documentId": "58869f53eed3c0016f855a80", "phrase": "Response dated May 14/04 from Oberto Oberti", "note": "CANDIDATE - confirm on page 1. ocr path, 40 chunks"}
+{"documentId": "5886956fa4acd4014b81f244", "phrase": "Pre-Construction Compliance Self-Report - 2007-02-01", "note": "CANDIDATE - confirm on page 1. ocr path, 8 chunks"}
+{"documentId": "588690ace036fb0105768c8f", "phrase": "Prince Rupert Gas Transmission - Table of Comments from MoE to EAO", "note": "CANDIDATE - confirm on page 1. ocr path, 25 chunks"}
+{"documentId": "58869317a4acd4014b81ee91", "phrase": "Application Table of Contents (see complete Application below)", "note": "CANDIDATE - confirm on page 1. ocr path, 6 chunks"}
