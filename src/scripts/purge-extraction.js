@@ -16,8 +16,14 @@
  *
  * **DRY RUN BY DEFAULT.** `--live` is required to delete or write anything.
  *
+ * `--errors-only` narrows this to documents that RECORDED AN EXTRACTION FAILURE. The extraction
+ * host treats a recorded error as done, so ~1,712 valid PDFs are parked as permanent failures and
+ * are silently absent from the index. Requeuing them means clearing `contentExtracted` — but a
+ * failure sets that flag too (`ingestChunks`, controllers/nosql/document.js), so without this flag
+ * the only lever is a blanket purge that deletes every good chunk alongside them.
+ *
  * Usage:
- *   node src/scripts/purge-extraction.js [--live] [--page-size N]
+ *   node src/scripts/purge-extraction.js [--live] [--errors-only] [--page-size N]
  *
  * Cosmos is private-endpoint-only and keyless, so a live run must execute INSIDE the app
  * container over the App Service SSH tunnel — not Kudu's /api/command, whose SCM container has no
@@ -32,10 +38,11 @@ const { systemAccess } = require('../helpers/access-sql');
 const DEFAULT_PAGE_SIZE = 200;
 
 function parseArgs(argv) {
-  const args = { live: false, pageSize: DEFAULT_PAGE_SIZE };
+  const args = { live: false, errorsOnly: false, pageSize: DEFAULT_PAGE_SIZE };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
+    else if (a === '--errors-only') args.errorsOnly = true;
     else if (a === '--page-size') args.pageSize = parseInt(argv[++i], 10);
     else throw new Error(`[purge] unknown argument: ${a}`);
   }
@@ -92,16 +99,33 @@ async function purge(argv = [], opts = {}) {
 
   const summary = {
     mode: args.live ? 'live' : 'dry-run',
+    errorsOnly: args.errorsOnly,
+    scanned: 0,
     documents: 0,
     chunksRemoved: 0,
     indexEntriesRemoved: 0,
     failures: []
   };
 
-  console.log(`[purge] ${summary.mode}: documents with contentExtracted=true`);
+  const selector = args.errorsOnly
+    ? 'contentExtracted=true AND contentExtractionError set'
+    : 'contentExtracted=true';
+  console.log(`[purge] ${summary.mode}: documents with ${selector}`);
 
   for await (const page of pageAll(documentsRepo, access, { extracted: true, pageSize: args.pageSize })) {
     for (const doc of page) {
+      summary.scanned++;
+
+      // Filtered here rather than in the query: `buildCriteria` has no error predicate, and adding
+      // one means new SQL surface for a one-off admin run over the ~4% of the corpus that is
+      // extracted at all. The page is already in hand.
+      //
+      // Chunk removal still runs for the documents that DO match. A recorded failure usually wrote
+      // no chunks, so it is a no-op — but the partial-write path records an error over an earlier
+      // successful extraction, and skipping removal there would flag a document unextracted while
+      // its chunks are still present. That is the exact state the catch below refuses to create.
+      if (args.errorsOnly && !doc.contentExtractionError) continue;
+
       summary.documents++;
 
       if (!args.live) {
@@ -141,13 +165,16 @@ async function purge(argv = [], opts = {}) {
       summary.indexEntriesRemoved += await index.deleteChunksForDocument(doc.id);
     }
 
-    console.log(`[purge] ${summary.documents} documents, ${summary.chunksRemoved} chunks so far`);
+    console.log(
+      `[purge] ${summary.documents} of ${summary.scanned} scanned, ` +
+      `${summary.chunksRemoved} chunks so far`
+    );
   }
 
   const suffix = args.live ? '' : ' (dry run, nothing written)';
   console.log(
-    `[purge] ${summary.documents} documents, ${summary.chunksRemoved} chunks, ` +
-    `${summary.indexEntriesRemoved} index entries${suffix}`
+    `[purge] ${summary.documents} documents of ${summary.scanned} scanned, ` +
+    `${summary.chunksRemoved} chunks, ${summary.indexEntriesRemoved} index entries${suffix}`
   );
   if (summary.failures.length) {
     console.error(`[purge] ${summary.failures.length} failure(s):`);

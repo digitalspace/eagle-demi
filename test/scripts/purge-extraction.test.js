@@ -63,12 +63,13 @@ const DOCS = [
 ];
 const PER_DOC = { d1: 10, d2: 5, d3: 7 };
 
-test('parseArgs defaults to a dry run', () => {
-  assert.deepStrictEqual(parseArgs([]), { live: false, pageSize: 200 });
+test('parseArgs defaults to a dry run over every extracted document', () => {
+  assert.deepStrictEqual(parseArgs([]), { live: false, errorsOnly: false, pageSize: 200 });
 });
 
 test('parseArgs requires --live to write and validates --page-size', () => {
   assert.strictEqual(parseArgs(['--live']).live, true);
+  assert.strictEqual(parseArgs(['--errors-only']).errorsOnly, true);
   assert.strictEqual(parseArgs(['--page-size', '50']).pageSize, 50);
   assert.throws(() => parseArgs(['--page-size', '0']), /positive integer/);
   assert.throws(() => parseArgs(['--page-size', 'abc']), /positive integer/);
@@ -173,4 +174,51 @@ test('only documents flagged contentExtracted are selected', async () => {
   const docs = fakeDocuments(DOCS);
   await purge([], { documents: docs, chunks: fakeChunks(PER_DOC), typesense: fakeTypesense() });
   assert.strictEqual(docs.state.listCalls[0].listOpts.extracted, true);
+});
+
+// A recorded failure sets contentExtracted TOO, so the query cannot tell the two apart. These
+// documents are the ~1,712 valid PDFs the extraction host parked as permanent failures.
+const MIXED = [
+  { id: 'ok1', projectId: '207' },
+  { id: 'failed', projectId: '207', contentExtractionError: 'docling-serve HTTP 500' },
+  { id: 'ok2', projectId: '311', contentExtractionError: null }
+];
+
+test('--errors-only leaves a successfully extracted document completely alone', async () => {
+  // The whole point of the flag. Without it the only lever is a blanket purge that deletes every
+  // good chunk in the corpus to requeue the failures.
+  const docs = fakeDocuments(MIXED);
+  const chunks = fakeChunks({ ok1: 10, failed: 0, ok2: 7 });
+  const index = fakeTypesense();
+
+  const summary = await purge(['--live', '--errors-only'], { documents: docs, chunks, index });
+
+  assert.deepStrictEqual(docs.state.patched.map(p => p.id), ['failed']);
+  assert.deepStrictEqual(chunks.state.removed, ['failed']);
+  assert.deepStrictEqual(index.state.deleted, ['failed']);
+  assert.strictEqual(summary.documents, 1);
+  assert.strictEqual(summary.chunksRemoved, 0);   // a failure wrote no chunks
+});
+
+test('--errors-only reports what it skipped, so a dry run is readable as a count', async () => {
+  // "1 of 3" is the check before the live run: it must be the failure count, not the corpus.
+  const docs = fakeDocuments(MIXED);
+  const summary = await purge(['--errors-only'], {
+    documents: docs, chunks: fakeChunks({ ok1: 10, failed: 0, ok2: 7 }), index: fakeTypesense()
+  });
+
+  assert.strictEqual(summary.errorsOnly, true);
+  assert.strictEqual(summary.scanned, 3);
+  assert.strictEqual(summary.documents, 1);
+});
+
+test('without --errors-only every extracted document is still purged', async () => {
+  const docs = fakeDocuments(MIXED);
+  const summary = await purge(['--live'], {
+    documents: docs, chunks: fakeChunks({ ok1: 10, failed: 0, ok2: 7 }), index: fakeTypesense()
+  });
+
+  assert.deepStrictEqual(docs.state.patched.map(p => p.id), ['ok1', 'failed', 'ok2']);
+  assert.strictEqual(summary.scanned, 3);
+  assert.strictEqual(summary.documents, 3);
 });
