@@ -1,105 +1,75 @@
-# DEMI → Cosmos DB for NoSQL — live migration status
+# DEMI → Cosmos DB for NoSQL — migration record
 
-> **Living document.** Updated as each phase lands. If a session is lost, start here.
-> Full design rationale: wiki `ADR-004-Read-ACL-Authorization-Model` and
+> **Living document.** `TODO.md` owns what is left to do; this file owns architecture, measured
+> facts and the traps. Full design rationale: wiki `ADR-004-Read-ACL-Authorization-Model` and
 > `Environment-Reality-and-Operational-Gotchas`.
 
-**Last updated:** 2026-07-31 · **Current phase:** 5 and 6 complete — DEMI dev is LIVE on Cosmos DB for NoSQL
-
-> **2026-07-31 — Cosmos full-text search is RULED OUT as the Deep Search backend.** Fuzzy is a
-> requirement and Cosmos cannot serve it (§F trap 6). The replacement is **Azure AI Search Basic**.
-> `TODO.md` holds the actionable plan; this file keeps the evidence so nobody re-attempts it.
+**Last updated:** 2026-08-01 · **State:** migration complete. Dev runs on Cosmos DB for NoSQL with
+Azure AI Search. Only Phase 8's Azure teardown is open.
 
 ---
 
 ## Goal
 
-DEMI becomes the EAO's central store for **Projects** and **Documents**, holding a *merged*
-model across `epic.track` (authoritative for projects), `eagle` (richer EA-process data),
-NRPTI (external compliance data) and eventually `epic.submit`.
+DEMI is the EAO's central store for **Projects** and **Documents**, holding a *merged* model across
+`epic.track` (authoritative for projects), `eagle` (richer EA-process data), NRPTI (external
+compliance data) and eventually `epic.submit`.
 
-Simultaneously, move off Cosmos DB's **MongoDB API** to its **NoSQL API** with
-`@azure/cosmos`. `DEMI_PLAN.md` claimed for months this had already happened; it had not, and
-the half-finished attempt produced the SQL-string-over-mongo-driver shim whose dropped
-predicates disabled all access control (ADR-004).
+The move off Cosmos DB's **MongoDB API** to its **NoSQL API** with `@azure/cosmos` is done.
+`DEMI_PLAN.md` claimed for months this had already happened; it had not, and the half-finished
+attempt produced the SQL-string-over-mongo-driver shim whose dropped predicates disabled all access
+control (ADR-004).
 
-**Build clean and re-seed from source — do not migrate the data.** Everything is reproducible
-from upstream, and the current database carries Mongoose legacy, 3,382 synthetic project rows,
-and `contentExtracted: true` flags with no chunks behind them.
+**Built clean and re-seeded from source — the data was not migrated.** Everything is reproducible
+from upstream, and the old database carried Mongoose legacy, 3,382 synthetic project rows, and
+`contentExtracted: true` flags with no chunks behind them.
 
 ---
 
 ## Phase status
 
-| Phase | State | Notes |
-|---|---|---|
-| **0 — Delete unreachable code** | ✅ done (`99889e6`) | −1,536 lines; 5 latent bugs fixed; lint 0 errors |
-| **1 — Infrastructure** | ✅ **deployed** | `demi-identity-dev`, `demi-cosmos-dev` (10 containers), private endpoint + policy DNS |
-| **2 — Data access + authorization** | ✅ done (`09b35f1`, `d6de8a6`, `cc08ba8`) | Client, repositories, controllers, router switch |
-| **2b — Delete semantics** | ✅ done (`7f5e4a8`) | Hard delete + index removal; unpublish is the hide mechanism |
-| **2c — Object key + switch fixes** | ✅ done (`cc8a6b7`) | Downloads verified end to end; switch is now an explicit flag |
-| **3 — Merge engine** | ✅ done | `src/merge/project.js` + 41 tests on the real 382-record Track dataset. Project scope now derived from Keycloak roles |
-| **3b — Blob storage** | ✅ code + template written, ⏸ **not deployed, nothing copied** | `src/storage/` abstraction live on both backends; Bicep validated; copy script dry-run only |
-| **4 — Seed** | ✅ **run live** | 393 projects · 60,578 documents · 281 boundaries written and verified |
-| **5 — Cut over** | ✅ **DONE** | Live on Cosmos NoSQL: 393 projects · 60,578 documents · 281 boundaries |
-| **6 — Typesense** | ✅ **DONE** | Reindexed from Cosmos: 393 projects + 60,578 documents; search verified |
-| **F — Cosmos full-text search** | ❌ **ABANDONED 2026-07-31** | Base FTS works and is fast (0.3-0.9s), but **fuzzy `distance` is a silent no-op** and fuzzy is a requirement. Backfill never ran; `chunks_fts` holds 0 rows. Replacement: **Azure AI Search Basic** — see `TODO.md`. Evidence in trap 6 below |
-| **F2 — Azure AI Search** | ⬜ todo | Basic tier, native Cosmos NoSQL indexer (`_ts` high-water mark), 3 indexes, OData ACL filter. Replaces Typesense **and** Cosmos FTS. See `TODO.md` |
-| **7 — Change feed** | ⬜ deferred | Functions trigger + `leases`. No soft-delete marker needed — index removal is explicit |
-| **8 — Decommission** | ⬜ todo | Delete the Mongo account after a clean week |
+| Phase | State |
+|---|---|
+| **0 — Delete unreachable code** | ✅ `99889e6` — −1,536 lines, 5 latent bugs fixed |
+| **1 — Infrastructure** | ✅ `demi-identity-dev`, `demi-cosmos-dev` (10 containers), private endpoint + policy DNS |
+| **2 — Data access + authorization** | ✅ Client, repositories, controllers |
+| **2b/2c — Delete semantics, object key** | ✅ Hard delete + index removal; downloads verified end to end |
+| **3 — Merge engine** | ✅ `src/merge/project.js` + 41 tests on the real 382-record Track dataset |
+| **3b — Blob storage** | ⏸ code + Bicep written, **not deployed, nothing copied** |
+| **4 — Seed** | ✅ run live — 393 projects · 60,578 documents · 281 boundaries |
+| **5 — Cut over** | ✅ 2026-07-30 |
+| **6 — Typesense** | ✅ then **deleted entirely 2026-07-31** — replaced by Azure AI Search |
+| **F — Cosmos full-text search** | ❌ **ABANDONED 2026-07-31.** Base FTS works and is fast, but fuzzy `distance` is a silent no-op and fuzzy is a requirement. See §F |
+| **F2 — Azure AI Search** | ✅ **live 2026-07-31.** Basic, 3 indexes, `_ts` indexers on `PT5M`, OData ACL filter. See §G |
+| **7 — Change feed** | ⬜ deferred by design. Indexers pull every 5 min; add when sub-5-minute staleness matters |
+| **8 — Decommission Mongo** | 🔶 **code deployed + verified live 2026-08-01**; Azure teardown open, earliest **2026-08-08**. See §B |
 
-### Open decisions blocking nothing yet
-
-- ~~**Where project membership comes from**~~ **Closed 2026-07-30: Keycloak, via role names.**
-  Keycloak dictates all roles, so there is no separate membership store. Scope arrives as roles
-  prefixed `project:` — `project:207` scopes the caller to project 207. The prefix is required
-  because a bare role name cannot be classified: given `ajax`, nothing distinguishes "scoped to
-  the Ajax project" from a role type like `staff`, and guessing would be a security bug either
-  way. `project:*` roles are stripped from the `read[]` role list so the two dimensions never
-  mix. The value is a canonical project id, keeping `resolveAccess` synchronous and lookup-free.
-  Accepting a project *name* would need a cached slug→id map — noted, not built.
-- **Whether to move prod document storage to Azure.** Dev only is planned. The safety argument
-  is weaker than first stated — environments already use separate buckets
-  (dev `asnpnn`, test `zdspnb`, prod `ozwdez`).
-
-### ✅ Phase 5 + 6 complete — cutover done 2026-07-30
-
-Dev serves from **Cosmos DB for NoSQL**. `USE_COSMOS_NOSQL=true`, `stop`/`start` applied. (The
-flag itself is gone — Phase 8 deleted it from the code and, 2026-08-01, from the live app.)
+### Cutover verified 2026-07-30
 
 | Verified | Result |
 |---|---|
 | projects / documents / boundaries in Cosmos | **393 / 60,578 / 281** — exactly the dry-run figures |
-| `PUT /documents/:id/published` | **401** — the NoSQL-only route is live (legacy would 404) |
+| `PUT /documents/:id/published` | **401** — the NoSQL-only route is live |
 | anonymous project list | **382 of 393**; the 11 hidden are Eagle-only projects whose upstream ACL excludes `public` |
 | `isPublished` vs `read[]` drift | **0** |
 | forged `x-demi-roles: sysadmin` header | identical results — cannot promote |
 | document download | **HTTP 200, `application/pdf`, 84,031 bytes** |
-| Typesense | 393 + 60,578 indexed, aliases swapped; `Ajax` → *Ajax Mine*, `Site C` → real inspection records |
 
-~~Rollback remains one setting: `USE_COSMOS_NOSQL=false` + stop/start.~~ **Superseded 2026-08-01.**
-Phase 8 deleted the flag and the layer behind it, so rollback is now `git revert` + redeploy, not an
-app setting. The Mongo account still holds 4,123 projects / 18,969 documents — see §B.
+**Project membership comes from Keycloak, via role names** (closed 2026-07-30). Scope arrives as
+roles prefixed `project:` — `project:207` scopes the caller to project 207. The prefix is required:
+given a bare `ajax`, nothing distinguishes "scoped to the Ajax project" from a role type like
+`staff`, and guessing would be a security bug either way.
 
-#### How the seed actually had to run — the plan was wrong
+### How the seed had to run — the plan was wrong
 
-"Run it inside the network via Kudu" **does not work**. Kudu's `/api/command` executes in the
-**SCM container**, which has no managed-identity endpoint:
+"Run it inside the network via Kudu" **does not work**. Kudu's `/api/command` executes in the **SCM
+container**, which has no managed-identity endpoint (`IDENTITY_ENDPOINT`, `IDENTITY_HEADER`,
+`MSI_ENDPOINT` all MISSING), and the account is `disableLocalAuth: true`, so there is no key to fall
+back on. Opening the firewall is impossible — Azure Policy denies it at the landing-zone level
+(`RequestDisallowedByPolicy`, "Azure Cosmos DB should disable public network access").
 
-```
-IDENTITY_ENDPOINT=MISSING   IDENTITY_HEADER=MISSING   MSI_ENDPOINT=MISSING
-```
-
-and the account is `disableLocalAuth: true`, so there is no key to fall back on. Opening the
-firewall instead is impossible — **Azure Policy denies it** at the landing-zone level:
-
-```
-RequestDisallowedByPolicy
-"Azure Cosmos DB should disable public network access" (797b37f7-06b8-444c-b1ad-fc62867f335a)
-```
-
-The **app container** is the only place with both network access and MSI. Reach it over the
-App Service SSH tunnel:
+The **app container** is the only place with both network access and MSI. Reach it over the App
+Service SSH tunnel:
 
 ```bash
 az webapp create-remote-connection -g c4b0a8-dev-rg -n demi-api-dev --port 50123 &
@@ -116,74 +86,78 @@ Two more things the SSH route needs, both handled by the `_seedwrap.js` pattern:
 2. **`globalThis.crypto` must be shimmed.** `src/app.js` does it for the web app; a standalone
    script never loads `app.js`, and the Azure SDKs need it on Node 22.
 
-And run with **`--max-old-space-size=224`**: the container has ~1.85 GB with ~330 MB free, and
-Node's default heap (~1.5 GB) gets the process OOM-killed with **no error in the log** — it simply
-vanishes mid-run.
+Run with **`--max-old-space-size=224`**: the container has ~1.85 GB with ~330 MB free, and Node's
+default heap (~1.5 GB) gets the process OOM-killed with **no error in the log** — it simply vanishes.
 
-#### Bugs found during cutover
+### Bugs found during cutover
 
 - **`COSMOS_DATABASE` collision** — both data layers read it, needing `epic` vs `demi`. Setting it
   for the NoSQL client repointed the LIVE legacy app at the empty database; every endpoint returned
   `[]` with HTTP 200 because `queryContainer` swallows the error. Fixed: `COSMOS_NOSQL_DATABASE`.
 - **Bulk writes counted as sent, not landed.** First seed reported 60,578 written when 56,317
   existed. `bulkVerified` retries and confirms; the re-run's histogram proved it exactly —
-  `{200: 56317, 201: 4261, 429: 105}`, i.e. 4,261 creations filling precisely the gap, and 105
-  throttles all recovered.
-- **`isPublished` derived from Track's `is_active`**, which is orthogonal to publication (17 of the
-  40 it marks inactive are "Pre Work", 2 "Operation"). 23 public projects read `isPublished: false`,
-  which also 409'd any attempt to publish a document under them. It now mirrors `read[]`.
+  `{200: 56317, 201: 4261, 429: 105}`.
+- **`isPublished` derived from Track's `is_active`**, which is orthogonal to publication. 23 public
+  projects read `isPublished: false`, which also 409'd any attempt to publish a document under them.
+  It now mirrors `read[]`.
 - **Boundary GeoJSON never shipped** — it lives under `frontend/`, which the packager excludes.
   Failed only in Azure, never locally.
 - **Oryx ran `yarn install` inside the VNet**, which has no route to `registry.yarnpkg.com`. Set
   `ENABLE_ORYX_BUILD=false`; the zip already ships `node_modules`.
-- **`az webapp deploy` 502s** on this 25 MB package. `POST /api/zipdeploy?isAsync=true` accepts it
-  in **1.6 s**. Kudu status **3 = FAILED, 4 = SUCCESS**; `complete: true` alone means nothing.
+- **Every POST/PUT/PATCH returned HTTP 500 with an empty body.** `api/index.js` hands Express a
+  hand-built `req`; Express reparents it onto `http.IncomingMessage.prototype`, whose `_destroy()`
+  calls `this.socket.destroy()`. With `socket` a plain `{remoteAddress}` object, reaching EOF threw
+  `TypeError: this.socket.destroy is not a function` **from a microtask** — past every try/catch —
+  killing the Node worker, which the Functions host silently respawned. GET hid it completely.
+  Fixed with `autoDestroy: false` plus a real EventEmitter socket stub; regression test in
+  `test/routes/functions-adapter.test.js`.
+
+---
 
 ## Remaining work
 
-Verified against live data 2026-07-30: **0 items without `read[]`, 0 `isPublished`/`read[]` drift**
-across all 393 projects and 60,578 documents. That is the gate that licenses deleting the legacy
-no-ACL tier below.
+### A. Extraction
 
-### A. Extraction — in progress 2026-07-30
+`TODO.md` owns the actionable plan. This section keeps the measurements behind it.
 
-#### 📏 MEASURED 2026-07-31 — the text is mostly fine, and OCR is not the problem
+**Shape.** An extraction host posts MARKDOWN to `POST /documents/:id/chunks`; the server chunks it
+(`src/chunker.js` is the only chunking implementation) and copies `read[]` from the **live**
+document, so an extraction host can never widen a document's visibility. Chunk ids are deterministic
+(`<documentId>::p<page>::c<index>`) and `chunks.replaceForDocument` reconciles, so the route is
+idempotent and a killed backfill just restarts.
 
-Deep Search made the extracted text visible for the first time, and the visible damage looked like
-an OCR failure. It is not. `src/scripts/audit-chunk-quality.js` scored **1,299 chunks across 400
-extracted documents** (5 chunks each, seeded sample):
+**The backfill runs off-platform on a one-off GPU host** — an ordinary API client using the same
+public endpoints and admin key any client would. `GET /documents/:id/download` returns a presigned
+URL, so document bytes go straight from the object store and never transit Azure. No repo file,
+template or app setting references the host.
+
+**How Azure extracts documents for NEW projects is deliberately deferred.** `src/extract.js` stays
+for that reason — it is the only in-repo docling client and PDF page-batching code. **Do not delete
+it as dead code.** Priced 2026-07-30 and rejected for now: Container Apps serverless GPU in
+canadacentral is T4 $0.317/hr, A100 $2.29/hr, and a GPU needs a whole new workload-profiles
+environment.
+
+#### Quality — measured 2026-07-31. OCR is not the problem
+
+`src/scripts/audit-chunk-quality.js` scored **1,299 chunks across 400 extracted documents**:
 
 | | |
 |---|---|
 | Chunks scoring clean | **71.8%** |
 | Marginal | 12.4% |
-| Garbage | **15.8% — an UPPER bound**, see the caveat below |
+| Garbage | **15.8% — an UPPER bound** |
 | Documents in the random stratum with **zero** bad chunks | **30 of 40** |
 | **OCR word-salad** (`vowelless-tokens`, e.g. `Cnstum dlld`) | **3 chunks — 0.23%** |
 | Documents whose text is nothing but `<!-- image -->` | 8 of 77 sampled, all **presentation decks** |
 
-**The headline: OCR debris is 0.23% of chunks.** The dominant real defect is different — slide-deck
-PDFs (`Hearing Exhibit 42/44/75 - Presentation…`) extract to **nothing but image placeholders**.
-Those documents are in the index and are unfindable by content, which is worse than noisy text and
-is a routing/OCR-coverage question, not an engine-quality one.
+**OCR debris is 0.23% of chunks.** The dominant real defect is different — slide-deck PDFs extract
+to **nothing but image placeholders**. Those documents are in the index and unfindable by content,
+which is worse than noisy text and is a routing/OCR-coverage question, not an engine-quality one.
 
-**Three things the instrument got wrong first, all corrected before the numbers above were kept.**
-Recorded because each would have sent Phase 2 at the wrong target:
-
-- **29.1% garbage, first run.** Dominated by `repeated-character-run`, which fired on the dot
-  leaders of a table of contents inside a perfectly clean BC Hydro report. Condemning a chunk for
-  the LENGTH of a separator run is wrong; the share of the chunk that is furniture is the measure.
-- **A hydrology data table scored identically to OCR debris** (vowelless 0.27 vs 0.24) until
-  identifiers like `PH12-3-3` and `3E-06` were excluded from the vowelless count. Cheap metrics
-  cannot separate the two on any single signal.
-- **A table of earthquake records** was flagged because tabular detection only understood pipe
-  tables. Whitespace columns are still columns.
-
-**Caveats that belong with the number.** The 15.8% still counts table-of-contents pages as garbage
-(section titles are findable content), so real damage is lower. The 400 documents were taken in
-Cosmos scan order, which skews heavily toward Site C hearing exhibits — this is a sample of that
-cluster, not of the corpus. And **provenance was absent on all 400**, so none of it can yet be
-attributed to the OCR path versus the text-layer path.
+**Caveats that belong with the number.** The 15.8% still counts table-of-contents pages as garbage,
+so real damage is lower. The 400 documents were taken in Cosmos scan order, which skews heavily
+toward Site C hearing exhibits — a sample of that cluster, not of the corpus. And **provenance was
+absent on all 400**, so none of it is attributable to the OCR path versus the text-layer path.
 
 Two artefact classes are *text-layer* damage rather than OCR, and matter for where a fix belongs:
 `Tum ble r Ridge` / `Ge orge` (character spacing) and `<!-- image -->` (docling's own placeholder,
@@ -191,340 +165,86 @@ which `image_export_mode` cannot switch off — it admits only `placeholder`, `e
 `referenced`). The spacing artefact scores CLEAN on every cheap metric, which is why the verdict
 metric is retrieval rather than heuristics.
 
-#### ✅ RESOLVED 2026-07-30 — old chunker redeployed, stale chunks purged
+**Three things the instrument got wrong first**, each of which would have sent the fix at the wrong
+target:
 
-`4cf1c71` is deployed to `demi-api-dev` (Kudu `status: 4`), `stop`/`start` applied. Verified by
-**content**, not mtime — the zip carries source mtimes, which is what made the original diagnosis
-need a content check in the first place:
+- **29.1% garbage, first run.** Dominated by `repeated-character-run`, which fired on the dot leaders
+  of a table of contents inside a perfectly clean report. Condemning a chunk for the LENGTH of a
+  separator run is wrong; the share of the chunk that is furniture is the measure.
+- **A hydrology data table scored identically to OCR debris** (vowelless 0.27 vs 0.24) until
+  identifiers like `PH12-3-3` and `3E-06` were excluded. Cheap metrics cannot separate the two on
+  any single signal.
+- **A table of earthquake records** was flagged because tabular detection only understood pipe
+  tables. Whitespace columns are still columns.
 
-| Check | Result |
-|---|---|
-| `grep -c TARGET_CHUNK_SIZE wwwroot/src/chunker.js` | **3** (was 0) |
-| `wwwroot/src/config.js` | `targetChunkSize` present, default 2500 |
-| `wwwroot/.env` | **absent** — the packaging leak is closed |
-| chunks in Cosmos | **0** |
-| documents `contentExtracted: true` | **0** · `false`: **60,578** — the whole corpus is back in the work list |
-| Typesense `document_chunks` | **0** |
+#### Conversion, measured on 326 documents (2026-07-30)
 
-Purge ran via `src/scripts/purge-extraction.js` (dry run first): **187 documents, 9,500 chunks, 0
-failures**, reconciling exactly with both the independently-reported 187 and the 9,500 counted in
-Typesense. `_purgewrap.js` is left in `wwwroot` alongside `_syncwrap.js` for a re-run.
-
-**`config-zip` merges rather than clean-deploys** — `_syncwrap.js` survived the redeploy. Worth
-knowing before anyone plans around losing it; equally, a file deleted from the repo will **not**
-disappear from `wwwroot` on deploy.
-
-**Re-extraction is a real reconversion, not a replay.** None of the 187 documents have markdown on
-disk — the phase-0 design posted inline and never wrote `out/*.md` — so those documents go back
-through the GPU rather than being re-posted from cache.
-
-The original finding, kept because the reasoning is what justifies the corpus sizing below:
-
-**`demi-api-dev` had never been redeployed with the accumulating chunker.** The backfill was
-writing per-paragraph chunks, and the numbers below that depend on `TARGET_CHUNK_SIZE` were
-projections of code that was not in production.
-
-Verified over the App Service SSH tunnel:
-
-```
-/home/site/wwwroot/src/chunker.js   mtime 2026-06-04, grep -c TARGET_CHUNK_SIZE = 0
-/home/site/wwwroot/src/config.js    mtime 2026-07-30 01:40, has maxChunkSize only
-no MAX_CHUNK_SIZE / TARGET_CHUNK_SIZE / OVERLAP_SIZE app settings — defaults apply
-```
-
-The accumulation landed in `eea68d3` and is pushed (`092c0d4`); it was never deployed.
-
-**Measured on the live index — 9,500 chunks across 178 documents:**
+The sample's byte distribution matches the corpus (mean 2.65 MB vs 2.68 MB), so scaling by the mean
+holds.
 
 | | |
 |---|---|
-| Chunk length | mean **514** characters, median **292**, p90 1,254, max 4,000 (= `MAX_CHUNK_SIZE`) |
-| Per document | mean **53.4** chunks, mean **27,432** characters |
-| Single-chunk documents | 12 of 178 (6.7%) |
-
-514 is the per-paragraph shape — it matches the ~601 characters `chunkMarkdown`'s own docstring
-cites as the behaviour the accumulation replaced. If accumulation were live, a 27 K-character
-document would emit ~11 chunks, not 53.
-
-**The same old file has a second defect.** It filters `s.length >= MIN_CHUNK_SIZE` **before**
-merging, so headings, table rows and short lines are dropped and never reach the index — exactly
-what the rewritten `chunkMarkdown` comment warns about ("silently deleted headings, table rows and
-short lines from the indexed text"). Every document ingested so far has holes in it, not merely
-over-fine chunking.
-
-**What it does to the sizing plan below:**
-
-| | Deployed (old) | Committed (new) |
-|---|---|---|
-| Characters per chunk | **514, measured** | ~2,500 |
-| Corpus at ~4.7 G characters | **~9.1M chunks** | ~1.9M chunks |
-| × ~1.1 KB/chunk overhead | **~10 GB, overhead alone** | ~2.1 GB |
-
-The "~1.9M chunks is 5-6 GB and needs 4.0 vCPU / 8.0Gi" figure further down assumes the committed
-chunker. On what is actually deployed the row count is ~4.8x that, and per-chunk overhead clears
-the 8 GiB Consumption ceiling before any text is counted.
-
-**Fixed on day 0 rather than day 7** — a chunker change orphans every chunk already written, since
-chunk ids derive from the split. Done: see the RESOLVED table above.
-
-**Two corrections to the paragraph above, verified 2026-07-30 11:55 local.** They make the fix
-cheaper, not more expensive:
-
-- **The chunks are not the backfill's.** `contentExtracted=true` is set on **187** documents, all
-  stamped `2026-07-30T17:0x` UTC — this morning's phase-0 design, which posted each document as it
-  converted. The current split-phase backfill has ingested **nothing**: `sent/`, `dead/` and
-  `ingest.jsonl` do not exist on the extraction host. So there is no "0.3% done" to preserve and
-  nothing to restart. **Correction to an earlier version of this line: the markdown is NOT on
-  disk** — phase 0 posted inline and never wrote `out/*.md`, so the 187 go back through the GPU as
-  a real reconversion rather than a replay. Still the right call at 187 of 60,391, but not free.
-- **The extraction host must not be touched.** Its `worker.py` is mid-change (a routing stage that
-  keeps digital PDFs off the GPU) and a validation run is live on it right now.
-  `gpu-extractor.service` is stopped **deliberately**, not crashed.
-
-**Ownership while this is in flight** — so the two halves do not collide:
-
-| Owner | Scope |
-|---|---|
-| Azure / API session | ✅ **done 2026-07-30.** Deployed `4cf1c71` (`stop`+`start`), purged 187 documents / 9,500 chunks and reset their extraction flags, committed the `FACET_BY.DocumentChunk` fix — plus the `.env` packaging fix found on the way |
-| Extraction session | LXC 109 only — `worker.py`, `ingest.py`, `gpu-extractor.service`. **Ingest is now unblocked** |
-
-The redeploy was the **gate on starting ingest at all** — on the old chunker the corpus was ~9.1M
-chunks and per-chunk overhead alone cleared the 8 GiB ceiling, so ingesting first would have
-written 9M rows destined for the bin. **Gate satisfied 2026-07-30**: `4cf1c71` is live, verified by
-content, and ingest is running (2,951 characters/chunk measured on the wire, against 514 on the old
-build). Typesense sizing is now a separate open question — see the MEASURED block at the top of §A.
-
-`nightlySyncTimer` is already disabled (`AzureWebJobs.nightlySyncTimer.Disabled=true`, applied and
-recycled 2026-07-30) — leave it that way.
-
----
-
-`document_chunks` had never held data, so Deep Search was metadata-only — which is the product's
-whole point. The ingest path is now built and live on dev; the corpus backfill is running.
-
-**Shape:** an extraction host posts MARKDOWN to `POST /documents/:id/chunks`; the server chunks it
-(`src/chunker.js` stays the only chunking implementation) and copies `read[]` from the **live**
-document, so an extraction host can never widen a document's visibility. Chunk ids are
-deterministic (`<documentId>::p<page>::c<index>`) and `chunks.replaceForDocument` reconciles, so the
-route is idempotent and a killed backfill just restarts. `SOURCES.DocumentChunk` is live in
-`full-sync-nosql.js`, and `dataset=DocumentChunk` is wired through search and the frontend.
-
-**The backfill runs off-platform on a one-off GPU host** — an ordinary API client using the same
-public endpoints and admin key any client would. `GET /documents/:id/download` returns a presigned
-URL, so document bytes go straight from the object store and never transit Azure. Nothing about
-DEMI knows the host exists, and no repo file, template or app setting references it.
-
-**How Azure extracts documents for NEW projects is deliberately deferred.** `src/extract.js` stays
-for that reason — it is the only in-repo docling client and PDF page-batching code. Do not delete
-it as dead code. Priced 2026-07-30 and rejected for now: Container Apps serverless GPU in
-canadacentral is **T4 $0.317/hr, A100 $2.29/hr**, and `demi-ca-env-dev` is Consumption-only, so GPU
-needs a whole new workload-profiles environment.
-
-**Measured on 326 converted documents (2026-07-30) — these supersede an earlier 200-document table
-that was taken on a single converter thread and was wrong in every row.** The sample's byte
-distribution matches the corpus (mean 2.65 MB vs corpus 2.68 MB), so scaling by the mean holds.
-
-| | |
-|---|---|
-| Conversion time | median **4.7 s**, mean **21.1 s**, max **227 s** — a long tail of large scanned PDFs |
+| Conversion time | median **4.7 s**, mean **21.1 s**, max **227 s** |
 | Full corpus at that rate | **354 converter-hours → ~7.4 days** at `CONVERTERS=2` |
 | Concurrency | **`CONVERTERS=3` OOM-killed the 16 GiB host at 15.9 GB peak** — docling holds page images for the whole document, so RAM scales with page count. Settled at **2**, plus a semaphore serialising documents over 8 MB |
-| Markdown per document | median **6.8 K**, mean **78 K characters** |
 | Work list | **60,391 documents / 161.8 GB** — 59,752 PDF (98.9%), 639 other |
 | Document sizes | median **0.29 MB**, p90 **6.4 MB**, p99 **37 MB**, max **1.26 GB** |
-| Projected corpus | **~4.7 G characters → ~1.9M chunks** at `TARGET_CHUNK_SIZE=2500` |
+| Corpus, measured through the accumulating chunker | **2.92M chunks / 8.61 GB indexed text** (48.1 chunks/doc, 2,951 chars/chunk, 142 KB/document) |
 
-**GPU throughput is not the bottleneck — routing is.** The converter ran `do_ocr=True` on every
-PDF, so digital PDFs with a perfectly good text layer were pushed through RapidOCR anyway. The
-extraction host now routes first: a `pypdfium2` text-layer probe sends digital PDFs down a
-CPU-only path, and only image formats and text-poor PDFs reach the GPU. The router is deliberately
-biased toward OCR — mis-routing a scan silently drops the document out of a lexical index, which is
-far worse than spending GPU time on a digital PDF. `msg`/`zip`/`rtf`/legacy `doc` (65 documents)
-have no docling reader and are recorded as extraction errors without being downloaded.
+**GPU throughput is not the bottleneck — routing is.** The converter ran `do_ocr=True` on every PDF,
+so digital PDFs with a good text layer were pushed through RapidOCR anyway. The extraction host now
+routes first: a `pypdfium2` text-layer probe sends digital PDFs down a CPU-only path, and only image
+formats and text-poor PDFs reach the GPU. The router is deliberately biased toward OCR —
+mis-routing a scan silently drops the document out of a lexical index, far worse than spending GPU
+time on a digital PDF. `msg`/`zip`/`rtf`/legacy `doc` (65 documents) have no docling reader and are
+recorded as extraction errors without being downloaded.
 
-**Typesense is the real ceiling.** It holds its index in RAM. The container is **live at 2.0 vCPU /
-4 GiB**; `azure/modules/container-apps.bicep` declares **4.0 vCPU / 8.0Gi** as of `46fdce5`, which
-is the maximum on a Consumption environment (the CPU:memory ratio is locked at 1:2 and
-`demi-ca-env-dev` has `workloadProfiles: null`). It had declared 1.0/2.0Gi, *below* what was
-deployed, so the template was a downsizing hazard until that commit.
+**Do not change `TARGET_CHUNK_SIZE`, `MAX_CHUNK_SIZE` or `OVERLAP_SIZE` while ingest is running.**
+Chunk ids derive from the split, so a mid-run change orphans every chunk already written instead of
+reconciling with it.
 
-The "~1.9M chunks is 5-6 GB" that motivated 4.0/8.0Gi is **superseded** — see the two blocks
-immediately below. The real corpus is 2.92M chunks / 8.61 GB of indexed text, which 8 GiB does not
-hold.
+#### Secret rotation
 
-#### 🛑 MEASURED 2026-07-30 — the corpus does not fit Consumption at all
-
-The re-derivation below was right to distrust the 5-6 GB, and the real numbers are worse than its
-2x. These are **measured from 1,656 documents actually ingested through the deployed accumulating
-chunker**, not projected:
-
-| | Assumed | Measured |
-|---|---|---|
-| chunks per document | ~31 | **48.1** |
-| characters per chunk | 2,500 | 2,951 |
-| **corpus chunks** | ~1.9M | **2.92M** |
-| **indexed text (`content`)** | 4.7 GB | **8.61 GB** |
-
-The earlier 78 K characters/document came from an early sample biased toward the text path; the
-real mean is **142 KB/document**. At Typesense's documented 2-3x against searched fields that is
-**17-26 GB**, and even the favourable 1.5x is ~12.9 GB. **8 GiB is the Consumption ceiling, so
-`46fdce5`'s 4.0/8.0Gi is insufficient rather than merely tight.** Raising the container is no
-longer a lever — the options are a workload-profiles environment or indexing less of the corpus.
-
-> **RESOLVED 2026-07-30 — a third option won: leave Typesense entirely.** The measurements above
-> are what justified the decision, so they are kept rather than deleted. The chunk corpus moves to
-> **Cosmos DB NoSQL native full-text search**, where the text already lives, at a measured
-> **~$8-9/mo** against ~$700/mo for the only Typesense configuration that fits. Typesense is then
-> removed completely, metadata search included. **See §F for the full architecture, the spike
-> evidence, and four undocumented silent-failure traps.** Neither a workload-profiles environment
-> nor a reduced corpus is needed.
-
-Extraction and ingest are unaffected and continue: chunks in Cosmos are the durable artefact, and
-what goes into Typesense is a separate decision made against this table.
-
-**One correction to the measurement below.** The "~4 KB per chunk" from 507.9 MB against a 468 MB
-baseline was taken over **old-chunker rows at 514 characters**. Per-chunk cost does not transfer
-across a 4.5x change in chunk size — the meaningful unit is RAM per *character* of indexed text.
-That 39.9 MB delta is also within noise on a 500 MB base, which the note already says.
-
-**Re-derive the 5-6 GB before committing to 4.0/8.0Gi — it looks optimistic by ~2x.** Typesense's
-own rule (`typesense.org/docs/guide/system-requirements`) is **2x-3x RAM against the size of the
-fields you search on**, and unindexed fields genuinely live on disk and cost nothing, which is what
-makes the schema cut below load-bearing. The only searched chunk field is `content`: ~4.7 G
-characters plus overlap duplication ≈ **~5.1 GB**, so the documented range is **~10-15 GB** and even
-a favourable 1.5x (heavily repetitive EA vocabulary, the low end the docs describe) is ~7.6 GB —
-the cap, with no headroom and 468 MB already resident. Measure the real multiplier from
-`typesense_memory_resident_bytes` at two different chunk counts rather than extrapolating; if it
-lands above ~1.5x, Consumption has nothing left and the options are a workload-profiles environment
-(a new env — the same conclusion already reached for serverless GPU) or indexing less of the corpus.
-**Superseded 2026-07-30 — see the RESOLVED note above and §F: the corpus leaves Typesense entirely,
-so this sizing question is closed rather than answered.**
-
-**`TARGET_CHUNK_SIZE` 2500 → 4000 is not the lever it looks like.** It takes ~1.9M rows to ~1.2M,
-but the indexed *text* is nearly unchanged — it removes per-row overhead and ~3% of the corpus in
-overlap. It cannot close a multi-GB gap. Sharding is not a lever either: the docs frame splitting a
-collection as a response-time optimisation, and every shard still sits in RAM on the same node.
-
-The chunk schema was already cut to only what
-is searched (`content` for `query_by`, `allowed_roles` for `filter_by`, `documentId` for delete
-cleanup — everything else is stored but `index: false`, and `centroid` and the unpopulated
-`embedding` float[768] are gone, the latter a 9 GB liability the moment anyone fills it in).
-`TYPESENSE_MIN_FREE_GIB` is a **disk** pre-flight (0.1 from the app setting, 1 hardcoded in the
-`typesense:sync-nosql` script) — it will **not** catch an OOM either way.
-
-**A RAM pre-flight now exists** — `memoryPreflight()` in `full-sync-nosql.js`, run beside
-`diskPreflight` at the top of `fullSync`. It reads `typesense_memory_resident_bytes`, doubles it
-for the alias swap (which holds the old and new collections at once, same reasoning as the disk
-check) and aborts if that exceeds the configured ceiling.
-
-**It needs `TYPESENSE_MEMORY_LIMIT_GIB` set as an app setting, and deliberately refuses to guess.**
-Nothing in the metrics endpoint exposes the cgroup limit, so with the variable unset the check logs
-a loud SKIP rather than inventing a number. Set it to whatever the container is actually sized at —
-**4 today, 8 once `46fdce5`'s bicep is deployed.** Not set yet: the value has to track the sizing
-decision, which is the Typesense owner's call, not this session's.
-
-**It must not be built on `system_memory_*`.** Measured on live dev,
-`/metrics.json` reports `system_memory_total_bytes` = **16.77 GB** — that is the underlying node, not
-the 4 GiB container limit, so a guard using it would be wrong by 4x in the unsafe direction. Only
-`typesense_memory_resident_bytes` is meaningful, checked against a *configured* ceiling. Live
-reading 2026-07-30: **507.9 MB** resident holding 393 projects, 60,578 documents and 9,500 chunks —
-against the 468 MB recorded before any chunks, that implies ~4 KB per chunk rather than the assumed
-1.1 KB. The baseline is soft, so treat it as a reason to re-measure cleanly, not as a number.
-
-> **Correction, verified 2026-07-31: the plan is `demi-plan-dev`, B1 Basic — 1 vCPU / 1.75 GB, a
-> SINGLE worker — not Y1 Consumption.** `az appservice plan list` confirms it. That changes two
-> things. The 10-minute timeout is `host.json` configuration, **not** a platform ceiling, so it can
-> simply be raised; the Container App Job below is no longer forced. And one vCPU with one worker
-> means a single blocked request takes down *every* endpoint, which is exactly what the ranked-query
-> defect did. Treat "Y1 Consumption" anywhere in this document as wrong.
-
-**The nightly full sync cannot carry this volume.** The Function App is Y1 Consumption and
-`host.json` pins `functionTimeout: 00:10:00`, a hard ceiling on Y1. Syncing 1.9M chunks is ~19,000
-Cosmos reads plus ~3,800 Typesense imports at the 500-row batch size. The backfill's own sync is
-therefore a **one-off** run of `npm run typesense:sync-nosql` inside the app container over the App
-Service SSH tunnel (same recipe as the Cosmos scripts above), with `nightlySyncTimer` disabled for
-the duration. Making the *recurring* sync viable at this corpus size is open follow-up work — a
-Container App Job on the existing `demi-ca-env-dev` is the obvious candidate, since jobs have no
-10-minute ceiling and `nightly-sync.js` is already standalone.
-
-**Orphan collections on a failed run — half-fixed 2026-07-30.** The purge in `full-sync-nosql.js`
-ran only at sync *start*, so a failure left a `document_chunks_<timestamp>` collection eating
-Typesense RAM and the Azure Files share until the next run. `syncSchema` now drops its own partial
-collection when the sync throws, and leaves the alias pointing at the old one — a failed sync no
-longer takes the live index down or strands a multi-GB collection. **It cannot help a SIGKILL**: a
-Y1 timeout runs no JS on the way out, so the entry purge stays as the backstop and both now exist
-deliberately. Worth noting the entry purge already bounded this at *one* stale collection rather
-than an unbounded pile, since each run purges the previous run's orphan; what it could not do was
-reclaim the space before the next sync.
-
-#### Secret rotation — split by blast radius, not deferred wholesale
-
-`/home/site/wwwroot/.env` shipped in every deploy from 2026-07-24 until `639269b`, mode
-`rwxrwxrwx`. `scripts/package-api.py` had no `.env` exclusion; the CI workflows did, but CI is dead
-on the missing `AZURE_CLIENT_ID`, so the script was the only live path. **Never committed**
-(`.gitignore:5`, confirmed across all history) — a packaging leak, not a repo one — and no
-entrypoint loads `dotenv`, so the file was inert on disk. All four settings still exist on
-`demi-api-dev`: `MINIO_SECRET_KEY`, `TYPESENSE_API_KEY`, `DOCLING_API_KEY`, `ADMIN_API_KEY`.
+`/home/site/wwwroot/.env` shipped in every deploy from 2026-07-24 until `639269b`, mode `rwxrwxrwx`.
+`scripts/package-api.py` had no `.env` exclusion; the CI workflows did, but CI is dead on the
+missing `AZURE_CLIENT_ID`, so the script was the only live path. **Never committed** (`.gitignore:5`,
+confirmed across all history) — a packaging leak, not a repo one — and no entrypoint loads `dotenv`,
+so the file was inert on disk.
 
 | Key | When | Why |
 |---|---|---|
 | `DOCLING_API_KEY` | **now** | It was a live *inbound* sysadmin credential until `4bddede` split `ADMIN_API_KEY` out. The extraction host does not use it |
-| `MINIO_SECRET_KEY` | **hold until extraction finishes** | It signs the presigned download URLs the extraction host fetches document bytes with — rotating mid-run breaks the backfill |
-| `TYPESENSE_API_KEY` | whenever | |
-| `MONGODB_PASSWORD` | whenever | Legacy layer only; goes away entirely at Phase 8 |
+| `MINIO_SECRET_KEY` | **hold until extraction finishes** | It signs the presigned download URLs the extraction host fetches document bytes with |
+| `MONGODB_PASSWORD` | whenever | Legacy layer only; goes away with the account |
 
-**Also corrected:** `FACET_BY.DocumentChunk` in
-`src/typesense/collections.js` read `'documentType,projectId,region'` — all three are
-`index: false` on `DOCUMENT_CHUNKS_SCHEMA`, and Typesense rejects a `facet_by` naming an unindexed
-field, failing the whole search. It never fired only because the DocumentChunk branch of
-`search.js` passes no `facet_by`, so the first person to wire faceting up would have inherited the
-break. Now `''` (`7946942`), with the reasoning inline. The only facetable fields on that schema are
-`documentId` and `allowed_roles`, neither of which is a user-facing facet.
-
-**Fixed on the way (both live on dev):**
-
-- **`DOCLING_API_KEY` was DEMI's only admin credential.** `src/helpers/auth.js` had it in
-  `validKeys`, so the secret DEMI sends OUTBOUND to docling was simultaneously an INBOUND sysadmin
-  credential — a logged request header or a compromised extraction host was full admin. Split out
-  to `ADMIN_API_KEY`; the old key now 401s.
-- **Every POST/PUT/PATCH in the API was returning HTTP 500 with an empty body.** `api/index.js`
-  hands Express a hand-built `req`; Express reparents it onto `http.IncomingMessage.prototype`,
-  whose `_destroy()` calls `this.socket.destroy()`. With `socket` a plain `{remoteAddress}` object,
-  reaching EOF threw `TypeError: this.socket.destroy is not a function` **from a microtask** — past
-  every try/catch — killing the Node worker, which the Functions host silently respawned. GET hid
-  it completely because nothing reads the body. Fixed with `autoDestroy: false` plus a real
-  EventEmitter socket stub; regression test in `test/routes/functions-adapter.test.js`.
-
-#### ⚠️ Backfill in flight — do not
-
-Delete this block when the corpus is done and the extraction host is decommissioned.
-
-- **Do not re-enable `nightlySyncTimer`.** It is disabled via the app setting
-  `AzureWebJobs.nightlySyncTimer.Disabled=true` until the one-off sync has run. Every nightly run
-  at this volume times out at 10 minutes and orphans a `document_chunks_<timestamp>` collection.
-- **`azure/main.bicep` now declares 4.0 vCPU / 8.0Gi (`46fdce5`), not the old 1.0/2.0Gi** — the
-  downsizing hazard is gone. Deploying it would *raise* the live 2.0/4 GiB container. Hold anyway
-  until the sizing question is settled: per the MEASURED block at the top of §A, 8 GiB does not fit
-  the corpus either, so deploying it buys headroom without solving anything.
-- **Do not change `TARGET_CHUNK_SIZE`, `MAX_CHUNK_SIZE` or `OVERLAP_SIZE` while ingest is
-  running.** Chunk ids are derived from the split, so a mid-run change orphans every chunk already
-  written instead of reconciling with it. (The earlier exception to this rule is spent — the
-  accumulating chunker is deployed and the stale chunks were purged.)
-- **Do not stop/start `demi-api-dev` casually.** The extraction host retries with backoff so a
-  restart costs seconds rather than documents, but a deploy mid-run still costs time.
-- Ingest is safe to interrupt at any point: `POST /documents/:id/chunks` is idempotent and the host
-  resumes from its own on-disk state, not from an API query.
+**`DOCLING_API_KEY` was DEMI's only admin credential.** `src/helpers/auth.js` had it in `validKeys`,
+so the secret DEMI sends OUTBOUND to docling was simultaneously an INBOUND sysadmin credential — a
+logged request header or a compromised extraction host was full admin. Split out to
+`ADMIN_API_KEY`; the old key now 401s.
 
 ### B. Phase 8 — decommission the MongoDB-API account
 
-**Code done, deployed and verified live 2026-08-01. Azure resources still standing; clean week
-runs to 2026-08-08.**
+**Code done, deployed and verified live 2026-08-01. Azure resources still standing; clean week runs
+to 2026-08-08.**
 
-Live evidence, all five probes, one output file each — full results and the traps in `TODO.md`
-item 1. Headline: `/db/stats` now answer `driver: azure-cosmos-nosql` / `database: demi` with
-`393 / 60,578 / 281`; the ACL gate measure anonymous **0** vs privileged **1** on a throwaway
-non-public record; and the wildfire aggregate survive a subsequent NRPTI sync **byte-identical on
-393/393 projects**, which is the patch-not-replace guarantee this phase turned on.
+Live evidence, five probes, one output file each:
+
+| Probe | Result |
+|---|---|
+| `GET /db/stats` | `driver: azure-cosmos-nosql`, `database: demi`, **393 / 60,578 / 281**, ~0.7 s |
+| ACL gate | search path (OData) anonymous **0** / privileged **1** on a throwaway non-public project; point read, index-free, anonymous **404** / privileged **200**. Probe deleted, `removedFromSearch: 1`, index hits **0** immediately |
+| Fault fallback | `SEARCH_ENDPOINT` at a bad host + nonsense term → **10** on Document and Project (fallback fired; healthy is 0). `DocumentChunk` 0 both — no fallback by design |
+| Patch-not-replace | wildfire sync (815 wildfires, 392 projects), then NRPTI sync. All 393 track projects read individually: `sources.track` byte-identical **393/393**, `sources.wildfire` byte-identical **393/393**, `sources.eagle` intact, embedded `nrptiRecords[]` **0** |
+| Removed routes | `GET /admin/logs`, `GET /wildfires` → **404** anonymous and privileged; `X-Request-ID` still present |
+
+**Three of the five probes as originally written could not fail** — see *Measuring* below, which is
+the durable lesson. The traps hit while running them are in *Operational gotchas*.
+
+Side effect worth knowing: the NRPTI sync grew projects **393 → 2,248** and records **0 → 48,086**.
+`trackOnly` keeps them out of default search. It may be **incomplete** — the sync outlived its 504
+and was still running when the app-setting restart landed on it; counts are static, but
+finished-versus-killed is not distinguishable from outside. Re-run with `?async=true` if a complete
+record set matters.
 
 The blocker was never the file list — it was that deleting `src/models/*` broke **boot**, not a
 route:
@@ -533,14 +253,13 @@ route:
 src/app.js  ->  src/utils/logger.js:6  ->  require('../models/log')  ->  src/db/cosmos.js
 ```
 
-`src/utils/logger.js` is loaded by `src/app.js`, `src/server.js`, `src/middleware/request-id.js`
-and `src/middleware/http-logger.js` — core boot path, none of it legacy. It was done first, by
-DROPPING the Cosmos log transport rather than porting it: App Service already ships stdout to Log
-Analytics, so a database round trip per log line bought nothing. `GET /admin/logs` went with it.
+`src/utils/logger.js` is loaded by `src/app.js`, `src/server.js`, `src/middleware/request-id.js` and
+`src/middleware/http-logger.js` — core boot path, none of it legacy. It was done first, by DROPPING
+the Cosmos log transport rather than porting it: App Service already ships stdout to Log Analytics.
+`GET /admin/logs` went with it.
 
 Six more files read through the Mongo layer while being required **unconditionally** by
-`routes/api.js`, i.e. live on the NoSQL path. All ported to `src/repositories/*` and
-`access-sql.js`:
+`routes/api.js`. All ported to `src/repositories/*` and `access-sql.js`:
 
 | File | Was | Now |
 |---|---|---|
@@ -557,11 +276,11 @@ Three things the port had to CHANGE rather than carry, each a live defect in the
 1. **`sync-nrpti` embedded every record object into its project**, twice — `nrptiRecords` and
    `sources.nrpti.records`, each with the raw upstream payload. ~250 records exceeded the 2 MB
    Cosmos item cap; Mongo's 16 MB limit hid it. Now the bounded aggregate via `patchNrptiStats`.
-2. **Both syncs wrote whole items back** (`Project.upsert(proj)`), which silently discards
-   whatever another sync wrote in between. Both now patch a single path.
-3. **`sync-nrpti` wrote `project` and `nrptiSchemaName`.** The container partitions on
-   `/projectId`, and `nrptiSchemaName` was only ever a Typesense index field — every Cosmos query
-   filtering on it matched nothing. Now `projectId` and `dataset`.
+2. **Both syncs wrote whole items back** (`Project.upsert(proj)`), which silently discards whatever
+   another sync wrote in between. Both now patch a single path.
+3. **`sync-nrpti` wrote `project` and `nrptiSchemaName`.** The container partitions on `/projectId`,
+   and `nrptiSchemaName` was only ever a Typesense index field — every Cosmos query filtering on it
+   matched nothing. Now `projectId` and `dataset`.
 
 Also deleted: `src/scripts/{seed-and-merge,sync_from_openshift,nightly-sync,backfill-read-acl}.js`
 and the `/db/seed`, `/sync`, `/admin/sync`, `/admin/seed-track` routes that drove them —
@@ -569,143 +288,73 @@ and the `/db/seed`, `/sync`, `/admin/sync`, `/admin/seed-track` routes that drov
 `readFilter` tier 3 went with `helpers/access.js`; `readClause` in `access-sql.js` never had that
 tier, because every seeder writes `read[]` explicitly.
 
-**`mongodb` stays in `package.json`.** `src/extract.js:26` is its only remaining user, and that
-file is deferred-not-dead (the Azure extraction path). Deleting the account breaks its configured
-`MONGODB_URI`; nothing live regresses, because extraction runs on LXC 109 through the API.
+**`mongodb` stays in `package.json`.** `src/extract.js:26` is its only remaining user, and that file
+is deferred-not-dead. Deleting the account breaks its configured `MONGODB_URI`; nothing live
+regresses, because extraction runs on LXC 109 through the API. A guard in `main()` throws when no
+Mongo URI env is configured, so a post-teardown run errors instead of silently connecting to
+localhost and reporting zero documents.
 
-**Left to do:** `azure/main.bicep:69` `cosmosDb` module, `azure/modules/cosmos-db.bicep`, the
-`mongodbConnectionString` param and the four `COSMOSDB_*`/`MONGODB_*` app settings in
-`api-web-app.bicep`, then the account **and its private endpoint** (the endpoint is the only flat
-recurring charge, ~$7/mo) plus its NIC. Not before a clean week — until then the code rollback is
-`git revert` with no redeploy, and the account still holds 4,123 projects / 18,969 documents.
+**Left to do** — exact resource list and the checked hazards in `TODO.md` item 1. In short:
+`azure/main.bicep:69` + `:89`, `azure/modules/cosmos-db.bicep`, `api-web-app.bicep:22-24` and
+`:113-129`, the stale compiled `azure/main.json`, then the account `demi-mongo-dev-pcbd7cygyic52`,
+`demi-mongo-pe` and its NIC. **The private endpoint is the only flat recurring charge (~$7/mo).**
+Not before the clean week ends.
 
 ### C. Phase 3b — document storage on Azure Blob (optional)
 
-Code and Bicep are written and validated; **nothing is deployed or copied**. Not urgent: the dev
-MinIO bucket already has 100% blob coverage for all 60,578 documents. ~200 GB Cool LRS is ~$2.20/mo
-plus ~$0.35 one-time. The argument for doing it is per-environment isolation, not cost.
+Code and Bicep written and validated; **nothing deployed or copied**. Not urgent: the dev MinIO
+bucket already has 100% blob coverage for all 60,578 documents. ~200 GB Cool LRS is ~$2.20/mo plus
+~$0.35 one-time. The argument for doing it is per-environment isolation, not cost. Detail below
+under *Object storage*.
 
-### D. Phase 7 — change feed (deferred by design)
-
-Nightly full sync is the backstop and works. Add when index staleness within a day actually matters.
-
-### E. Verification not yet exercised live
+### D. Verification not yet exercised live
 
 - **Scoped and fragment access tiers** — unit-tested only; no scoped Keycloak role exists yet.
   Create a `project:<id>` role on a test user to exercise it end to end.
 - **Boundary rendering at all three frontend fidelities** — the API contract is verified
   (`/boundaries` and `/boundaries/<name>` both 200), the visual result is not.
 
-### F. Search architecture — Typesense → Cosmos DB full-text search
+---
 
-**Decided 2026-07-30. Typesense is being removed entirely and replaced by Cosmos DB NoSQL native
-full-text search.** Both halves were validated against live data before committing; the spike
-results below are the evidence, and re-deriving them costs a session several hours.
+## §F. Cosmos full-text search — RULED OUT 2026-07-31
 
-#### Why Typesense cannot do this job
+**Record of a dead end. Nothing here is work.** Kept so nobody re-attempts it; re-deriving it costs
+a session several hours.
 
-Measured on the real corpus: **2.92M chunks / 8.61 GB of indexed `content`** (48.1 chunks/doc,
-2,951 chars/chunk).
+Base FTS works and is fast (0.3-0.9 s, ~25 RU per ranked query, ~$8-9/mo — by far the cheapest
+option costed). **It was still rejected, because fuzzy is a hard requirement and Cosmos cannot serve
+it.** The backfill never ran; `chunks_fts` held 0 rows and is deleted, along with `COSMOS_FTS_FUZZY`,
+`searchText`, `queryRanked`/`drainRanked` and `buildSnippet`.
 
-- **Indexed fields are RAM-only.** There is no on-disk mode for searchable fields. Unindexed fields
-  live on disk and cost nothing — which is why the chunk schema was already cut to `content` +
-  `allowed_roles` + `documentId` — but `content` is the whole problem and cannot be unindexed.
-- **Clustering is replication, not sharding.** Typesense's own docs: "data is automatically and
-  continuously replicated across all nodes." A 3-node cluster is 3× the RAM, not a third each.
-  `union` (v28+) merges collections but they still live on one node.
-- Typesense's sizing rule is **2-3× RAM against searched-field size** → **17-26 GB**. The Container
-  Apps Consumption ceiling is **8 GiB** (CPU:memory locked 1:2, `demi-ca-env-dev` has no workload
-  profiles). So `46fdce5`'s 4.0/8.0Gi is not tight, it is **insufficient**, and a bigger container
-  is not a lever.
+### Six silent-failure traps — none errors, all return zero
 
-**Chunks are already durable in Cosmos** — `src/controllers/nosql/document.js:375-384` writes the
-full `content` into the `chunks` container; `azure/modules/cosmos-nosql.bicep` simply does not index
-it. So the text can be searched where it already lives.
-
-#### Cost, from the Azure retail pricing API (canadacentral, 2026-07-30)
-
-| Option | Monthly | Holds 8.61 GB? |
-|---|---|---|
-| Typesense today (2 vCPU / 4 GiB) | ~$63 | No — 468 MB of metadata only |
-| Typesense 4 vCPU / 8 GiB (`46fdce5`) | ~$126 | **No** |
-| Typesense Dedicated D8 (8 vCPU / 32 GiB) | **~$700** | Yes |
-| Azure AI Search Basic (15 GB) | ~$81 | Yes |
-| **Cosmos FTS** | **~$8-9 measured** | Yes |
-
-Measured: **6.24 KB/chunk including index** → 2.92M ≈ **18.2 GB ≈ $5.01/mo** at $0.275/GB-month.
-A ranked chunk query is **~25 RU** at 37,797 rows; at 5× growth, 100k searches/month ≈ **$3.44/mo**
-at $0.275/1M RU. Dedicated Container Apps bills per profile vCPU *and* GiB *and* a flat $73/mo
-plan-management charge — hence the ~$700.
-
-#### Spike results — capability (12 rows) and scale (37,797 real chunks)
-
-> ⚠️ **The fuzzy rows below are WRONG and this spike is why the wrong backend was chosen.**
-> Re-measured 2026-07-31: fuzzy `distance` is a silent no-op on this account (trap 6). The likely
-> reading error is in the row `Fuzzy on real typos … all 20 hits`: **20 is the TOP cap**, and three
-> different typos all returning exactly the cap is the signature of trap 1 — a ranked query whose
-> full-text predicate matched nothing returns the whole container, ranked but unfiltered. That
-> reads as "fuzzy works brilliantly" and is in fact "the predicate did nothing". A fuzzy probe must
-> use a **rare or nonsense term** and assert an exact expected count, never a capped one.
-
-| Test | Result |
-|---|---|
-| `FULLTEXTCONTAINS` exact | works · ~3 RU |
-| ~~`FULLTEXTCONTAINS` fuzzy `{term,distance}`~~ | ~~works~~ **no-op — see trap 6** |
-| ~~**`FULLTEXTSCORE` with the fuzzy object** in `ORDER BY RANK`~~ | ~~**works**~~ **never valid — pass exact strings to `FULLTEXTSCORE`, see below** |
-| `FULLTEXTCONTAINSALL`, stemming (`assess` → "assessed") | works |
-| **ACL predicate composed into the same `WHERE`** | **works** · 3.06 RU |
-| ACL **excludes** (anonymous, private term) / **admits** (privileged) | **0 hits / 5 hits** ✅ |
-| Ranked real terms (`river`, `hydro`, `proponent`) | 20 hits · 24.6-26.5 RU · 182-964ms |
-| Rare term (`sacrifice`, 9 occurrences) | 16 hits · 9.43 RU · 215ms |
-| ~~Fuzzy on real typos (`rivver`, `propnent`, `climat`)~~ | ~~all 20 hits · 7.2-7.6 RU · ~100ms~~ **invalid — 20 is the TOP cap, see the warning above** |
-| Stopword-only (`the and of`) | **0 hits** ✅ — not the whole corpus |
-| Phrase (`peace river`) | 20 hits · 30.94 RU · 678ms |
-
-Fuzzy proven genuine, not accidental: on the typo `enviromental`, plain string **0 hits**,
-`distance:0` **0 hits**, `distance:1` and `:2` **4 hits**. **No preview enrollment was required.**
-`@azure/cosmos` 4.10.0 already types and accepts `fullTextPolicy` / `fullTextIndexes`.
-
-**Metadata search** (live containers, no FTS policy — pure `STARTSWITH`/`CONTAINS`): 393 projects
-3-6.5 RU / 61-70ms; 60,578 documents `STARTSWITH` 9.23 RU / 75ms, `CONTAINS` 67.7 RU / 81ms,
-multi-field OR + ACL 39.3 RU / 62ms, project-scoped 15.1 RU / **34ms**.
-
-#### ⚠️ Six silent-failure traps — none errors, all return zero
-
-**None of these is documented by Microsoft. Each cost real time to isolate.**
+**None documented by Microsoft. Each cost real time.** Traps 1-5 are properties of the Cosmos SDK
+and apply to any ranked query, so they outlive the decision.
 
 1. **`fetchNext()` returns empty early pages for ranked queries.** Measured: `fetchAll` → 5 hits /
    24.72 RU; one `fetchNext` → **0 hits / 4.83 RU with `hasMoreResults: true`**; draining 3 pages →
-   5 hits. **`src/db/cosmos-nosql.js:query()` runs exactly one `fetchNext()` whenever
-   `maxItemCount` is set**, so every repository method built on it returns nothing for a ranked
-   query. This produced three wrong diagnoses during the spike. A ranked path that drains the
-   iterator is required.
+   5 hits. `src/db/cosmos-nosql.js:query()` runs exactly one `fetchNext()` whenever `maxItemCount` is
+   set, so every repository method built on it returns nothing for a ranked query. This produced
+   three wrong diagnoses during the spike.
 2. **Index lag after a bulk load.** Ranked queries return 0 until
    `x-ms-documentdb-collection-index-transformation-progress` (container read with
    `populateQuotaInfo`) reaches **100**. `FULLTEXTCONTAINS` masks it by scanning; `ORDER BY RANK`
    cannot. **Poll it before any cutover.**
-3. **`distance: 3` returns 0 rows and does not error.** The documented max is 2. Clamp in the
-   repository.
+3. **`distance: 3` returns 0 rows and does not error.** The documented max is 2.
 4. **`ORDER BY RANK` without a `WHERE` returns everything**, ranked but unfiltered.
 5. **A ranked query matching ZERO rows against a POPULATED container blocks the Node event loop.**
-   Found 2026-07-31, and it is the worst of the five. `FULLTEXTCONTAINSALL` + `ORDER BY RANK` that
-   matches nothing spins **synchronously** inside the SDK's client-side merge: the whole app stops
-   answering — `/api/config` included — for minutes, with no error, no crash, no container restart,
-   and nothing in any log. It then recovers on its own, which makes it look like a network fault.
-   Verified at index-transformation progress **100**, so it is not the index-lag trap above, and it
-   reproduces with `fuzzy=false`, so it is GA surface, not preview.
-
-   **No client-side timeout can defend against it.** `AbortSignal.timeout()` and an elapsed-time
-   check between pages are both timers, and a blocked event loop runs no timers — two fixes built
-   on that premise were deployed and failed. The only defence is to not issue the query:
-   `chunks.searchText` now runs a COUNT with the **identical** predicate and no `ORDER BY RANK`
-   first (via `countWhere`, so the two can never drift), and returns empty on zero. Measured after
-   the fix: every probe 0.3-0.9s with the app healthy throughout.
-6. **Fuzzy `{term, distance}` is a NO-OP on this account — the feature is unavailable.**
-   *(Rewritten 2026-07-31 after enrolment. Do not re-chase any of this.)*
-
-   `demi-cosmos-dev` now carries `EnableNoSQLFullTextSearchPreviewFeatures`, the *New features for
-   full-text Search* enrolment Microsoft's docs require. **It made no difference.** The syntax
-   parses, the `term` matches, and `distance` does nothing:
+   The worst of the six. `FULLTEXTCONTAINSALL` + `ORDER BY RANK` that matches nothing spins
+   **synchronously** inside the SDK's client-side merge: the whole app stops answering —
+   `/api/config` included — for minutes, with no error, no crash, no container restart, nothing in
+   any log. It then recovers on its own, which makes it look like a network fault. Verified at index
+   progress **100**, and it reproduces with `fuzzy=false`, so it is GA surface, not preview.
+   **No client-side timeout can defend against it** — `AbortSignal.timeout()` and elapsed-time checks
+   between pages are both timers, and a blocked event loop runs no timers. Two fixes built on that
+   premise were deployed and failed. The only defence is to not issue the query: run a COUNT with the
+   **identical** predicate and no `ORDER BY RANK` first, and return empty on zero.
+6. **Fuzzy `{term, distance}` is a NO-OP on this account.** `demi-cosmos-dev` carries
+   `EnableNoSQLFullTextSearchPreviewFeatures`, the enrolment Microsoft's docs require. **It made no
+   difference.** The syntax parses, the `term` matches, `distance` does nothing:
 
    | query | fuzzy | hits |
    |---|---|---|
@@ -714,397 +363,125 @@ multi-field OR + ACL 39.3 RU / 62ms, project-scoped 15.1 RU / **34ms**.
    | `riparia` / `riparians` | true | 1 — that is the stemmer, not fuzzy |
 
    The decisive case is a nonsense token one edit from an indexed one, which no stemmer can bridge.
-   Eliminated by measurement, in order: not enrolment (capability present); not the app flag
-   (`/admin/index-progress` reports `fuzzyEnabled: true`); not parameter binding (rewritten as an
-   inline SQL literal, verified in `wwwroot`, identical); not query shape (the COUNT pre-flight has
-   no `ORDER BY` and also returns 0); **not a stale index** — the container was deleted and
-   recreated from scratch after enrolment and behaved identically. What remains is server-side:
-   region gating (`canadacentral`) or the preview not honouring `distance` yet.
+   Eliminated by measurement, in order: not enrolment; not the app flag; not parameter binding
+   (rewritten as an inline SQL literal, verified in `wwwroot`, identical); not query shape; **not a
+   stale index** — the container was deleted and recreated from scratch after enrolment and behaved
+   identically. What remains is server-side: region gating (`canadacentral`) or the preview not
+   honouring `distance` yet.
 
-   `COSMOS_FTS_FUZZY` is **`false`** and must stay off: the frontend sends `fuzzy=true` on **every**
-   Deep Search (`registry-state.service.ts`), so honouring it returns nothing at all. Exact matching
-   still stems natively ("assess" finds "assessed").
+### Why the original spike said fuzzy worked
 
-   **Fuzzy is a hard requirement, so this rules Cosmos FTS out as the Deep Search backend.**
+The first spike reported `Fuzzy on real typos (rivver, propnent, climat) → all 20 hits`. **20 was
+the TOP cap**, and three different typos all returning exactly the cap is the signature of trap 4 —
+a ranked query whose full-text predicate matched nothing returns the whole container, ranked but
+unfiltered. That reads as "fuzzy works brilliantly" and is in fact "the predicate did nothing".
 
-   Backends costed against the corpus (Azure retail pricing API, canadacentral, 2026-07-30):
+**A fuzzy probe must use a rare or nonsense term and assert an exact expected count, never a capped
+one.** This is the single most expensive lesson in this file.
 
-   | Option | Cost/mo | Fuzzy | Verdict |
-   |---|---|---|---|
-   | Cosmos DB FTS | ~$9 | **no — silent no-op** | ruled out above |
-   | **Azure AI Search Basic** | **~$75-81** | yes, GA | **chosen.** Also gives highlighting, faceting and synonyms natively — all hand-rolled for Cosmos |
-   | Typesense Dedicated D8 | ~$700 | yes, GA | corpus needs 17-26 GB RAM vs the 8 GiB Container Apps Consumption ceiling |
+### Backends costed against the corpus (Azure retail pricing API, canadacentral, 2026-07-30)
 
-   Cosmos stays the system of record either way; only the query layer moves. Plan: `TODO.md`.
+| Option | Cost/mo | Fuzzy | Verdict |
+|---|---|---|---|
+| Cosmos DB FTS | ~$9 | **no — silent no-op** | ruled out |
+| **Azure AI Search Basic** | **~$75-81** | yes, GA | **chosen.** Also gives highlighting, faceting and synonyms natively |
+| Typesense Dedicated D8 | ~$700 | yes, GA | corpus needs 17-26 GB RAM vs the 8 GiB Container Apps Consumption ceiling |
 
-Also: **container creation is control-plane** — the app's managed identity gets
-`403 ... cannot be authorized by AAD token in data plane`. Containers come from ARM/Bicep only.
-And a **full-text policy is immutable**, so enabling FTS means a *new* container plus a copy —
-which is why the timing matters.
+**Why Typesense could not stay.** Indexed fields are RAM-only, with no on-disk mode; clustering is
+replication, not sharding (a 3-node cluster is 3× the RAM, not a third each); and its own sizing rule
+is 2-3× RAM against searched-field size → **17-26 GB** against an 8 GiB ceiling. A bigger container
+was not a lever.
 
-On "vector policies are immutable" — narrower than it reads. Measured 2026-07-31: adding a vector
-policy to the already-existing (but EMPTY) `chunks_fts` succeeded **in place**, no delete and
-recreate. What cannot change is an existing embedding's dimensions or metric. Whether the same add
-works against a container holding rows is untested. `chunks_fts` now declares `/embedding`
-(float32, 1536, cosine, diskANN) — unused, nothing writes embeddings; declared only because it was
-free while the container was empty. Adding it at all requires the account capability
-`EnableNoSQLVectorSearch`, which is now on; base full-text search requires no capability.
+### Durable Cosmos facts from the spike
 
-#### Consequences for the design
-
-- **Ranked queries cannot page by continuation token** → chunk search is TOP-N, no pagination.
-  That is what the current API already does (250 max, page 1), so the contract is unaffected.
-- **Ranked chunk queries are 182-964ms**, against Typesense's tens of ms. Fine for submit-driven
-  search, and `deep-search.component.ts` already debounces at **300 ms** (`onSearchInput` clears and
-  re-sets `searchDebounceTimer`). An earlier version of this line claimed there was no debounce and
-  that adding one was mandatory — there is, and no frontend change is needed for latency.
+- **Container creation is control-plane.** The app's managed identity gets
+  `403 ... cannot be authorized by AAD token in data plane`. Containers come from ARM/Bicep only.
+- **A full-text policy is immutable** — enabling FTS means a *new* container plus a copy. Vector
+  policies are narrower than they read: adding one to an existing but EMPTY container succeeded in
+  place. What cannot change is an existing embedding's dimensions or metric.
 - **`CONTAINS` matches mid-word.** Query `env` returned "G**renv**ille to Kincolith Road". Typesense
   `prefix=true` is a *token* prefix; `STARTSWITH` is *field* start; neither is a drop-in. Token
   behaviour needs `STARTSWITH(f,q) OR CONTAINS(f,' '+q)`.
-- Declare the **vector policy at container creation, unpopulated** — declaring costs nothing while
-  the container is empty. Retrieval itself stays lexical; AI is a summarizer over the final top-N
-  only. (Done on `chunks_fts` 2026-07-31. The "immutable, so it must be at creation" reasoning
-  turned out to be too strong — see the note above the Consequences section.)
-- **A fuzzy probe must use a rare or nonsense term and assert an exact count.** A probe that
-  returns the TOP cap proves nothing: an ineffective full-text predicate returns the whole
-  container ranked, which looks like a perfect result. This is what made the original spike
-  conclude fuzzy worked.
-
-#### Stage sequence
-
-0. ✅ Capability spike · ✅ Scale spike — both passed 2026-07-30.
-1. ✅ **Code written 2026-07-30, not yet deployed.** `chunks_fts` in
-   `azure/modules/cosmos-nosql.bicep` — FTS policy on `/content`, vector policy declared
-   unpopulated, same `/documentId` partition key. That one resource pins **`@2025-10-15`**, the
-   earliest API version carrying `fullTextPolicy` and `indexingPolicy.fullTextIndexes`; on the
-   file's own `@2024-11-15` bicep reports them as **BCP037 warnings, not errors**, so they would be
-   dropped from the deployment and the container would come out unsearchable with nothing failing.
-   `az bicep build` is clean.
-2. ✅ **Code written 2026-07-30.** `chunks.searchText()` composes `visibilityFor` +
-   `FULLTEXTCONTAINSALL` (or per-term `FULLTEXTCONTAINS` with the fuzzy operand, written INLINE —
-   as a bound parameter it matched nothing) + `ORDER BY RANK FULLTEXTSCORE`. `src/db/cosmos-nosql.js` was **not** touched: `TOP @top` bounds the result in
-   SQL and the call omits `maxItemCount`, which takes the existing `fetchAll()` branch and sidesteps
-   trap 1 without changing continuation-token behaviour for the other repositories.
-   `CONTAINER` in `src/repositories/chunks.js` now reads `chunks_fts` — that constant **is** the
-   write repoint, and `ingest.py` needs no change because the route decides nothing.
-3. ✅ **Code written 2026-07-30.** `DocumentChunk` branch of `src/controllers/search.js` now reads
-   Cosmos. Response contract unchanged. Chunks carry no labels, so `documents.listByIds` and
-   `projects.listByIds` (both new, both under the CALLER's access) hydrate `documentName` /
-   `documentType` / `projectName`, and `buildSnippet` replaces Typesense highlighting — escaping
-   first and marking after, because the frontend renders it with `[innerHTML]`.
-   **Validated on dev 2026-07-31**, one throwaway document, probe set with a health check after
-   every probe: exact 1 hit / zero-match 0 / stemming 1 / stopwords 0 / both-terms 1 / one-absent 0,
-   all **0.3-0.9s, app healthy throughout**. Base full-text search works and is fast.
-   That resource pins `@2025-10-15`: on the file's `@2024-11-15`, `fullTextPolicy` and
-   `fullTextIndexes` are BCP037 **warnings, not errors**, so they would be silently dropped and the
-   container would deploy unsearchable with nothing failing.
-
-   Two corrections to earlier text here. The `ORDER BY RANK FULLTEXTSCORE` now binds its **own**
-   parameters (`@rankN`, plain strings) rather than reusing the `WHERE` clause's `@termN` — sharing
-   them would push a fuzzy object into `FULLTEXTSCORE`, and per Microsoft's FTS FAQ a malformed
-   `FULLTEXTSCORE` can return **500 rather than 400**. And `GET /admin/index-progress` now reports
-   `search.fuzzyEnabled`, because a disabled flag and a server ignoring fuzzy produce identical hit
-   counts and app settings cannot be read back from the SCM container.
-
-> ### 🛑 Stages 4-6 are CANCELLED — Cosmos FTS is not the backend
->
-> **Fuzzy search is a hard requirement and Cosmos cannot serve it** (trap 6, measured 2026-07-31
-> after preview enrolment and a container rebuild). The backfill never ran and must not: it would
-> move 80,354 chunks into a backend that is being replaced.
->
-> Decided: **Azure AI Search Basic** (~$75-81/mo, GA fuzzy). Cosmos stays the system of record;
-> only the query layer moves. Costs and the eliminated causes are in trap 6 above; the actionable
-> plan is `TODO.md`.
->
-> **Repoint `CONTAINER` in `src/repositories/chunks.js` back to `chunks` before extraction
-> restarts**, or the corpus splits across two containers. This is `TODO.md` item A.
->
-> ✅ **Retired 2026-07-31 and deployed.** `CONTAINER` is `chunks` again; the `chunks_fts` container
-> (0 documents) and its bicep resource are deleted, along with `COSMOS_FTS_FUZZY`, `searchText`,
-> `queryRanked`/`drainRanked` and `buildSnippet`. Everything below stages 4-6 is a record of a
-> ruled-out path, not work. `dataset=DocumentChunk` returns an empty list until AI Search ships —
-> deliberately, and it says so in the log rather than passing it off as "no matches".
-
-4. Backfill `chunks` → `chunks_fts`. **Expect 429 throttling** — the spike copy died at ~37K rows
-   after `bulkVerified` exhausted 6 attempts. Pace the writes, raise the retry ceiling, run
-   detached, and wait for index progress 100 before cutover. Copy with **`Create`, treating 409 as
-   "already present, skip"**: writes are repointed as of stage 2 and chunk ids are deterministic, so
-   an `Upsert` could overwrite a document re-ingested during the copy window with its own stale rows.
-5. Remove chunks from Typesense.
-6. Metadata search onto Cosmos, then delete `src/typesense/`, the timer, the dependency, the Bicep
-   module and the Container App.
-
-**Between stages 2 and 4 the Typesense chunk index goes stale by design.** `chunks.listVisible` is
-the full sync's source and now reads `chunks_fts`, which is empty until the backfill runs, so a full
-sync would index 0 chunks. `nightlySyncTimer` is disabled and the chunk collection is deleted at
-stage 5 regardless — but do not read a 0-chunk sync as a failure.
-
-**Typesense is not a partial keep.** `grep query_by_weights|facet_by|sort_by` in
-`src/controllers/search.js` returns **nothing** — the `QUERY_BY` weights and `FACET_BY` maps in
-`collections.js` are dead config, and the Project branch already has a Cosmos fallback
-(`search.js:104-136`). What remains is token matching over 393 projects and 60,578 documents, which
-does not justify a second datastore, a second copy of the ACL, or the sync machinery around it.
-
-#### Superseded work to retire at its stage
-
-| Item | Disposition |
-|---|---|
-| `46fdce5` `container-apps.bicep` 4.0/8.0Gi | **Never deploy.** File is deleted at Stage 6 |
-| `46fdce5` `BATCH_SIZES.DocumentChunk = 500` | Dies with `SOURCES.DocumentChunk` at Stage 5 |
-| `_syncwrap.js` in `wwwroot`, and the one-off Typesense chunk sync | Delete / never run |
-| `memoryPreflight()` (`68d3b02`) | **Delete at Stage 5** — it guards only the Typesense RAM ceiling |
-| `TYPESENSE_MEMORY_LIMIT_GIB` | Never needs setting; drop the open item |
-| Orphan-purge-on-exit (`68d3b02`), `FACET_BY.DocumentChunk` (`7946942`) | Die with their files at Stage 6 |
-| `AzureWebJobs.nightlySyncTimer.Disabled=true` | Keep disabled; the timer goes at Stage 6 |
-
-**Extraction is unaffected and must not be stopped.** docling → markdown on local disk is
-backend-agnostic and is the critical path. Only `ingest.py` pauses, and only long enough to repoint
-the write target at `chunks_fts` so the remaining ~97% of the corpus never needs copying.
+- **Ranked queries cannot page by continuation token** → chunk search is TOP-N, no pagination.
+- **Metadata search on live containers with no FTS policy** (pure `STARTSWITH`/`CONTAINS`): 393
+  projects 3-6.5 RU / 61-70 ms; 60,578 documents `STARTSWITH` 9.23 RU / 75 ms, `CONTAINS` 67.7 RU /
+  81 ms, multi-field OR + ACL 39.3 RU / 62 ms, project-scoped 15.1 RU / **34 ms**.
+- **Chunks are durable in Cosmos regardless of backend** — `src/controllers/nosql/document.js`
+  writes the full `content` into the `chunks` container. The search backend is a query layer over it.
 
 ---
 
-### Phase 5 pre-flight (done 2026-07-30) — 4 blockers found and fixed
+## §G. Azure AI Search — live since 2026-07-31
 
-All three modules now return `status: Succeeded, error: None` from
-`az deployment group what-if` against the **live** `c4b0a8-dev-rg`:
+`demi-search-dev`, Basic, canadacentral, keyless, private endpoint only. Three indexes —
+`demi-chunks`, `demi-projects`, `demi-documents` — with native Cosmos NoSQL indexers on a `PT5M`
+schedule using an `_ts` high-water mark. Classic lexical BM25: no vector fields, no semantic ranker.
+First chunk index run: **80,355 items, 0 failed, 4m46s**, count equal to Cosmos `DocumentCount`
+exactly.
 
-| Module | Creates |
-|---|---|
-| `identity.bicep` | `demi-identity-dev` (1 resource) |
-| `cosmos-nosql.bicep` | account + `demi` database + **10 containers** + 1 `sqlRoleAssignment` + PE |
-| `document-storage.bicep` | account + blobService + `documents-dev` container + 2 role assignments + PE |
+Reads compose `src/helpers/access-odata.js` — `filterFor(access, partitionField)`. Projects scope on
+`id`, everything else on `projectId`. **OData has no `false` literal**, so "matches nothing" is an
+`empty` flag and the caller issues NO request; a null or empty filter is UNRESTRICTED.
 
-**Blocker 1 — private DNS would have failed the deployment.** `document-storage.bicep` created its
-own private DNS zone, VNet link and zone group. The deployed environment says otherwise: the
-existing `demi-mongo-pe` carries a zone group named **`deployedByPolicy`** whose zone lives in a
-*different subscription* (`bcgov-managed-lz-live-dns`). BC Gov's managed landing zone attaches
-private DNS by Azure Policy. Our own version would have (a) failed on `virtualNetworkLinks`, since
-the VNet is in `c4b0a8-dev-networking` which this identity cannot even list, (b) created a second
-zone competing with the platform's, and (c) been redundant, because policy adds its own group to
-every new endpoint. **Now creates the endpoint only and lets policy wire DNS.** `cosmos-nosql.bicep`
-was already correct.
+### Infrastructure traps
 
-**Blocker 2 — `dataset` vs `nrptiSchemaName`.** The seed writes `dataset` (from NRPTI's
-`_schemaName`); `records.buildCriteria` filtered `nrptiSchemaName`, which is the **Typesense** field
-name. No Cosmos item has that property, so `GET /api/records?dataset=Inspection` matched nothing —
-and the Bicep indexed the same wrong path, so the field actually filtered on stayed unindexed and
-scanned. Both fixed.
+- **`publicNetworkAccess` MUST be `Disabled`.** The landing-zone policy set `Deny-PublicPaaSEndpoints`
+  rejects the deployment outright otherwise — `RequestDisallowedByPolicy`, before the service
+  exists. There is no "start public, lock down later" path.
+- **A new private endpoint is not usable the moment ARM returns, and the two ways it is unready look
+  like different bugs.** *Routing*: the first TCP connect to the private IP timed out; the next
+  attempt ~45 s later connected in 10 ms. *DNS*: the landing zone writes the `A-record` into the
+  central Private DNS Zone **about ten minutes** after the endpoint is created. Before that, the name
+  resolves to the service's PUBLIC address — which policy has disabled — so it fails as a connection
+  timeout that reads exactly like a missing DNS zone. **It is not.** Waiting is the fix. Confirmed
+  from inside the VNet: `demi-search-dev.search.windows.net -> 10.46.51.10`, `HTTP 200`.
+- **Do not create your own Private DNS Zone and link it to the VNet.** Every DNS query is routed
+  through the central Private DNS Resolver, so a zone linked to the spoke is never consulted. A
+  genuinely missing zone is a support request to the Public Cloud team, not a self-service fix.
+- **The data-source `identity` property is rejected on api-version `2024-07-01`.** A user-assigned
+  identity needs `2024-11-01-preview`. Index and query calls stay on the GA version.
+- **The indexer needs ARM read on the Cosmos account, not just data-plane access.** The UAMI held
+  Cosmos Data Contributor and still failed with *"Unable to retrieve account endpoint"* — which
+  points at the connection string, not at RBAC. The fix is `Cosmos DB Account Reader Role`.
+- **Deleting from the index is a write.** The UAMI needs Index Data **Contributor**, not Reader.
 
-**Blocker 3 — the network is not what `azure/main.bicep` describes.** There is **no VNet in the
-resource group**; `azure/modules/vnet.bicep` was never deployed. The real subnet is the platform
-vWAN spoke:
+### What the Typesense migration taught, both measured
 
-```
-/subscriptions/…/resourceGroups/c4b0a8-dev-networking/providers/Microsoft.Network/
-  virtualNetworks/c4b0a8-dev-vwan-spoke/subnets/c4b0a8-dev-cond-ext-pe-subnet
-```
+- **`projectName` was doing more work than it looked.** Typesense indexed it on every document; a
+  Cosmos document row does not carry it, and an indexer reads one container. Dropping it would have
+  cost **77% of hits for "Ajax"** and 66% for "pipeline" — silently. `searchDocuments` recovers it
+  with a second leg through the projects index, under the caller's own document ACL.
+- **The Cosmos fallback was hiding failures.** A keyword query that matched nothing fell through to
+  the keywordless list, so an anonymous search for a nonsense term returned 50 unrelated rows — and
+  that same path masked a 400 (`$select` naming a field the index lacked) which had broken project
+  search outright. A keyword search that matches nothing now answers with nothing.
 
-Pass that as `peSubnetId`. Do not deploy `main.bicep` expecting it to build networking.
+### Two behaviours found only once the APPLICATION drove the index
 
-**Blocker 4 — `COSMOS_ENDPOINT` is already set, pointing at the Mongo account**, and `COSMOS_KEY`
-exists. The new account has `disableLocalAuth: true`, so there is no key. These must be
-**repointed and deleted**, not merely added to — this is the same stale-config trap that made
-`Boolean(process.env.COSMOS_ENDPOINT)` silently activate the wrong data layer.
+- **Fuzzy expansion of short words returns garbage, and the frontend sends `fuzzy=true` on every
+  search.** The stopword-only query "the and of" came back with a full page of OCR debris — `the~1`
+  matched a scanned fragment reading "th" — while the same query with fuzzy off returned 0. A fuzzy
+  term bypasses the analyzer, so stopword removal never happens either. Terms shorter than four
+  characters are no longer fuzzed (`MIN_FUZZY_LENGTH`).
+- **A highlight fragment can be cut INSIDE a highlight.** One came back carrying a closing sentinel
+  whose opener had been trimmed off, rendering as a stray `</mark>` in an `[innerHTML]` binding.
+  Fragments are now balanced individually before they are joined.
 
-#### App settings delta on `demi-api-dev`
+Both were invisible to the spike because its probes read counts, not rendered output. **A probe that
+only counts rows cannot see a malformed row.**
 
-| Setting | Action |
-|---|---|
-| `COSMOS_ENDPOINT` | **repoint** to `https://demi-cosmos-dev.documents.azure.com:443/` |
-| `COSMOS_KEY` | **delete** — no key exists on the new account |
-| `AZURE_CLIENT_ID` | **add** — the UAMI client id, selects the identity |
-| `USE_COSMOS_NOSQL` | ~~**add** `true`~~ — **DELETED from the live app 2026-08-01.** Phase 8 removed the switch and the layer it chose against |
-| `COSMOS_DATABASE` | already `demi`, verify |
-| `STORAGE_BACKEND` | leave unset (defaults to `minio`) — blobs are not copied yet |
-| `MINIO_*` | **keep** — still the live object store |
-| `MONGODB_URI`, `MONGODB_DATABASE` | **keep until Phase 8** — the rollback path |
-| `WEBSITE_VNET_ROUTE_ALL`, `WEBSITE_DNS_SERVER` | already set; required for private-endpoint DNS |
+### Two design facts settled by measurement
 
-~~**Rollback is one setting:** `USE_COSMOS_NOSQL=false` plus `stop`/`start`.~~ **No longer true as
-of 2026-08-01.** Phase 8 deleted the switch and the Mongo layer, and the setting is off the live
-app. Rollback is now `git revert` + redeploy, and it only works while `MONGODB_URI` /
-`MONGODB_DATABASE` and the account still stand — that is what the clean week to 2026-08-08 buys.
-Deleting the account is the one-way step.
+- **`retrievable: false` does not disable highlighting.** `@search.highlights` returns marked
+  fragments while the response carries no chunk text at all.
+- **The `_ts` high-water mark cannot see deletes.** After hard-deleting the probe document, a re-run
+  processed **0 items** and the row stayed searchable until deleted from the index explicitly.
+  Delete propagation is application work, not indexer configuration — `aiSearch.deleteFromIndex` in
+  `deleteProject`/`deleteDocument`, and `deleteChunksForDocument` for chunk text.
 
-Also verified: the deploy package includes `src/seed/`, `src/merge/`, `src/storage/` and
-`seed-nosql.js` (`package-api.py` prunes only at the repo root), so the seed can run inside the
-network via Kudu. (`src/typesense/` was in this list until 2026-07-31; it is deleted.) **No user-assigned identity exists yet**, so
-`identity.bicep` must deploy first — its `principalId` feeds the other two modules.
-
-### Why Phase 1 was deferred, and what that bought
-
-**Historical — Phase 1 is deployed and `demi-cosmos-dev` is live. Kept because the reasoning still
-governs Phase 8's timing.**
-
-Serverless Cosmos is effectively free when idle (storage only, ~76 MB), but its **private
-endpoint is a flat ~$7/month regardless of use**. Two accounts in parallel pays it twice for
-the whole overlap. Every test mocks the repositories, so no live account was needed to
-build and verify Phases 2–3, and provision → seed → cut over happened in one window. The same
-double charge is running now and stops when Phase 8 deletes the Mongo account **and its private
-endpoint** — the endpoint is the recurring cost, not the idle account.
-
-### Phase 2 progress
-
-**Landed** (new files, built alongside the old layer so the app keeps running on Mongo):
-
-| File | What |
-|---|---|
-| `src/helpers/access-sql.js` | `resolveAccess` (3 tiers), `readClause`, `scopeClause`, `andClauses`, `visibilityFor`, `canRead` |
-| `src/db/cosmos-nosql.js` | `query`/`queryValue`/`readItem`/`create`/`upsert`/`replace`/`patch`/`remove`/`bulk`/`ping`, all fail-closed |
-| `src/repositories/_sql.js` | `eq`/`contains`/`selectWhere`/`countWhere`/`pageOptions` — visibility is always ANDed in, never optional |
-| `src/repositories/{projects,documents,records,boundaries,fragments}.js` | Named methods, each owning its SQL |
-| `test/helpers/access-sql.test.js` | Asserts **emitted SQL and params** per tier |
-| `test/db/cosmos-nosql.test.js` | Pins that a non-spec input **throws** rather than degrading |
-| `test/repositories/repositories.test.js` | Asserts the SQL each repository emits |
-
-| `src/controllers/nosql/{project,document,record,boundary}.js` | Thin HTTP layer over the repositories |
-| `test/controllers/nosql-controllers.test.js` | Tier resolution, partition-key protection, parent-ACL rule, route parity |
-
-`@azure/identity` added (the one new dependency). Tests **166/166**, lint 0 errors.
-
-### 🔑 The cutover switch
-
-`src/routes/api.js` picks the controller set from **one** conditional:
-
-```js
-const USE_NOSQL = process.env.USE_COSMOS_NOSQL === 'true';
-```
-
-Set to `true` on `demi-api-dev` since the 2026-07-30 cutover, so every route runs on the NoSQL
-controllers. It is an **explicit flag**, not an inference: an earlier version read
-`Boolean(process.env.COSMOS_ENDPOINT)`, and because that variable was already set and pointing at
-the *Mongo* account, merely provisioning the new account would have flipped the live data layer.
-Never derive this switch from the presence of another variable.
-
-The two controller sets are deliberately **not** abstracted behind a common interface: they
-take fundamentally different inputs (Mongo filter objects vs an access context), and an
-adapter over both is precisely the shape that let a half-working translator disable access
-control here before. A test asserts both paths expose the identical route surface, so the
-switch cannot silently add or drop an endpoint.
-
-**Remaining for cutover:** delete `src/models/*.js`, `src/db/cosmos.js`,
-`src/helpers/access.js`, the legacy controllers, the `USE_NOSQL` branch, and `mongodb`.
-
-Controller notes:
-- A hidden project returns **404, not 403** — a 403 would confirm the id exists.
-- Update paths refuse to reassign a partition key (`id` on projects, `projectId` on documents,
-  `type` on boundaries): in Cosmos that is a delete-and-reinsert, not an update.
-- `resolveDocumentAcl()` is used by **both** document write paths. The Mongo version had it in
-  `createDocument` only, so an intake upload could be published under a private project.
-- `deleteDocument` is a **soft delete**. The change feed emits no deletes in latest-version
-  mode, so a hard delete would strand the document in Typesense forever.
-- `getProjectFragments` is the read path for independently-ACL'd fragments; a caller lacking
-  the roles gets fewer items, never a stripped object.
-
-Repository design notes:
-- **No generic `find(filter)`.** A filter-object interface is what let a broken translator
-  disable access control. Each method owns its SQL and cannot emit an unfiltered read.
-- **`countWhere` shares `selectWhere`**, so a count can never drift from its list predicate —
-  a count built from a different filter leaks the size of a set the caller cannot read.
-- **`boundaries` deliberately has no ACL predicate.** It is public reference data with no
-  `read[]`; applying the standard clause would match nothing and blank the map. Stated in the
-  file so it reads as a decision, not an omission.
-- **`fragments.put()` refuses an empty `read[]`.** A fragment with no ACL would fall back to
-  the `isPublished` mirror and could become publicly readable — the opposite of the point.
-- Paging uses **continuation tokens**, not skip/take: Cosmos has no efficient offset, so page
-  N would cost as much as pages 1..N combined.
-### Deletion semantics (decided 2026-07-30 — supersedes the earlier soft delete)
-
-| Action | What it does |
-|---|---|
-| **Unpublish** (`PUT /documents/:id/published`) | Hides from public and proponents: `isPublished: false` and `read[]` loses `public`. **This is the hide mechanism.** |
-| **Hard delete** (`DELETE /documents/:id`) | Permanently removes the Cosmos item **and** the Typesense entry. |
-| **The stored blob** | **Never deleted by any request path.** Orphans are reclaimed by a separate audited job. |
-
-The index entry is removed **explicitly** rather than via the change feed (which emits no
-deletes in latest-version mode) — doing it directly is what makes a soft-delete marker
-unnecessary at all, removing that whole class of confusion.
-
-Index removal is **best-effort**: the record is already gone from Cosmos and the nightly full
-sync reconciles via alias swap, so a Typesense failure must not turn a successful delete into
-a 500. The response reports `removedFromIndex` and `storedFileRetained` so the outcome is
-explicit rather than implied.
-
-Publishing a document under an **unpublished project returns 409** — a document may never
-out-rank its parent.
-
-### Object storage (Phase 3b — code written, nothing deployed or copied)
-
-`src/storage/` is the single entry point. **Four operations**, because that is all the
-application does with stored files:
-
-```
-getBuffer(key)                  -> Buffer            (extraction)
-getDownloadUrl(key, opts)       -> short-lived URL   (download endpoint)
-putFile(key, filePath, ctype)   -> stored key        (upload)
-describe()                      -> non-secret info   (logs, health)
-```
-
-No bucket, container, or client escapes the module. Backend is chosen by an **explicit**
-`STORAGE_BACKEND` (`minio` | `azure`); an unknown value **throws at load**. Not inferred from
-whichever credentials are present — that is how `COSMOS_ENDPOINT` silently activated the wrong
-data layer on deploy.
-
-**A real bug this fixed.** `extract.js` read `doc.s3Key` **raw**, with no environment key
-prefix, so every extraction in dev fetched a key that 404s — the identical bug the download
-endpoint already had and had fixed at its own call site. Meanwhile both HTTP controllers were
-importing the *batch extraction script* purely to borrow its MinIO client. One cause: no single
-owner of the storage path. The prefix now lives inside the MinIO backend, where no caller can
-forget it.
-
-Verified end to end against real dev storage after the rewire: `etl/29694-marshall-road-…pdf`
-→ **638,034 bytes, `application/pdf`, `%PDF-1.4`**, byte-identical via `getDownloadUrl` and
-`getBuffer`. The `getBuffer` path is the one that was previously broken.
-
-| | MinIO | Azure Blob |
-|---|---|---|
-| Auth | access key + secret | **Entra managed identity, no keys** (`allowSharedKeyAccess: false`) |
-| Environment isolation | one bucket, nested `ozwdez/` prefix | **one container per environment** |
-| Download URL | presigned GET | **user delegation SAS**, `sp=r`, https-only |
-| Container creation | on demand | **never** — comes from Bicep |
-
-Per-environment containers are the actual safety win. Dev's `MINIO_HOST` is one env-var edit
-from prod storage today; a container reachable only by that environment's identity makes the
-mistake impossible rather than discouraged. That also removes the need for a key prefix, so the
-recorded `s3Key` becomes the blob name verbatim.
-
-**Three gotchas worth not rediscovering:**
-
-- **`Storage Blob Delegator` is required** and is *not* implied by `Storage Blob Data
-  Contributor`. Without it `getUserDelegationKey` fails, and with shared-key access disabled a
-  user delegation SAS is the only way to sign a download link — so every download breaks.
-- **The delegation key's `signedStartsOn`/`signedExpiresOn` must be `Date` objects.** The
-  generated mapper types them as `String`, but `generateBlobSASQueryParameters` calls
-  `toISOString()` on them. `BlobServiceClient.getUserDelegationKey` bridges the two internally,
-  so only hand-built keys hit this.
-- **The delegation key is cached for 30 min** (valid up to 7 days). Uncached, every download
-  adds a round trip; cached too long, it silently produces SAS URLs that fail authentication.
-
-`azure/modules/document-storage.bicep` — validated (`az bicep build`, exit 0), **standalone,
-not wired into `main.bicep`**, same as the Phase 1 modules. A separate account from the
-`demistg*` Function-host one, because that account's keys are listed by the runtime and so
-cannot have shared-key access disabled. Cool LRS, blob + container soft delete 30 d,
-versioning on, `publicAccess: 'None'`, RBAC scoped to the **container**. No key output.
-
-`src/scripts/copy-blobs-to-azure.js` — **dry run by default**; `--live` is required to write
-anything. Resumable: a destination blob of matching size is skipped, a truncated one is
-recopied, and a short write throws rather than reporting success. The MinIO **write** operation
-is not imported at all, and a test greps the compiled-away-comments source to keep it that way
-— the source is never written to.
-
-**Nothing has been deployed and nothing has been copied.** ~200 GB Cool LRS is ~$2.20/mo plus
-~$0.35 one-time in write operations, and dev already holds the full corpus in MinIO, so this
-waits on an explicit go-ahead.
-
-Notes for whoever picks this up:
-- `resolveAccess().projectScope` is **live**: it reads `project:<id>` roles from the Keycloak
-  token (or an explicit `req.user.projectScope`). Adding a scoped user is a Keycloak role
-  assignment — no code change. Every query inherits the restriction automatically.
-- **Never call a storage backend directly.** Go through `src/storage/`. Reaching past it is what
-  produced the raw-`s3Key` extraction bug and the controllers importing `extract.js`.
-- `patch()` is capped at 10 ops by Cosmos and guarded. Use it for partial updates; `upsert()`
-  REPLACES the whole item and will erase fields written by another path.
-- Point reads bypass the query predicate, so `canRead()` is **mandatory** after `readItem()`.
+Query shape: `(term OR term~1)` per term, plus `term*` prefix on the LAST term only — Typesense ran
+`prefix=true` and the frontend searches on debounced keystrokes, so without it results thin out
+mid-typing.
 
 ---
 
@@ -1115,20 +492,20 @@ Notes for whoever picks this up:
 | Source | Content |
 |---|---|
 | **Track** (`src/data/track_projects_enriched.json`, checked in) | **382 projects.** `track_project_id` is authoritative identity. **354 carry `epic_guid`** = the Eagle project `_id` |
-| **Eagle** (`eagle-dev…/api/public/search`) | **359 projects** with 60+ fields Track lacks (`eaStatus`, `eacDecision`, `phaseHistory`, `legislation`, contacts, CAC). **60,661 documents.** Carries no Track id — the join is one-directional |
-| **NRPTI** (`nrpti-api…/api/public/search`) | **99,430** across 5 datasets. `_epicProjectId` is a deterministic link to an Eagle project **when present — but it usually is not.** See below |
+| **Eagle** (`eagle-dev…/api/public/search`) | **359 projects** with 60+ fields Track lacks. **60,661 documents.** Carries no Track id — the join is one-directional |
+| **NRPTI** (`nrpti-api…/api/public/search`) | **99,430** across 5 datasets. `_epicProjectId` links to an Eagle project **when present — but it usually is not** |
 | **epic.submit** | No integration exists. Future work |
 
-**Join:** 348 of 354 Track `epic_guid`s match an Eagle project · 28 Track-only · 6 dangle ·
-~10 Eagle-only → **~392 real projects** (vs 4,123 rows today). `buildRegistry` asserts exactly
-these counts against the checked-in Track dataset, so upstream drift fails a test.
+**Join:** 348 of 354 Track `epic_guid`s match an Eagle project · 28 Track-only · 6 dangle · ~10
+Eagle-only → **~392 real projects** (vs 4,123 rows in the old database). `buildRegistry` asserts
+exactly these counts against the checked-in Track dataset, so upstream drift fails a test.
 
-**Track coordinate defects (found by the Phase 3 tests, not by inspection):** 7 of 382 records
-carry a **positive longitude** — a dropped minus sign. BC longitude is always negative, so
+**Track coordinate defects** (found by the Phase 3 tests, not by inspection): 7 of 382 records carry
+a **positive longitude** — a dropped minus sign. BC longitude is always negative, so
 `validCoordinates` negates and re-validates against a BC bounding box, recovering 6. The 7th,
-`Sparwood Wells #04` (id 358, lat 45.861 lng 53.354), is unrecoverable — Sparwood is at ~49.7,
--114.9, so both values are wrong. It gets **no centroid** rather than an invented one. Without
-the sign repair, Zincton plots in Uzbekistan.
+`Sparwood Wells #04` (id 358, lat 45.861 lng 53.354), is unrecoverable — both values are wrong. It
+gets **no centroid** rather than an invented one. Without the sign repair, Zincton plots in
+Uzbekistan.
 
 ### Documents — no copy needed (measured 2026-07-30)
 
@@ -1138,22 +515,20 @@ the sign repair, Zincton plots in Uzbekistan.
 | eagle test | 55,845 | `zdspnb` |
 | eagle prod | 61,428 | `ozwdez` |
 
-Dev has **more** documents than test, contrary to assumption — 99% of prod. The dev bucket
-`asnpnn` holds **92,809 objects / 242.6 GB**, of which **92,472 sit under a prefix named
-`ozwdez`** (a full prod copy — hence `minioKeyPrefix`). A blob-coverage check on 100 dev
-documents found **100% present, 0 missing**. So DEMI can be tested against the full corpus
-today with no copy, and Phase 3b is an architecture choice rather than a prerequisite.
+Dev has **more** documents than test, contrary to assumption — 99% of prod. The dev bucket `asnpnn`
+holds **92,809 objects / 242.6 GB**, of which **92,472 sit under a prefix named `ozwdez`** (a full
+prod copy — hence `minioKeyPrefix`). A blob-coverage check on 100 dev documents found **100%
+present, 0 missing**. So DEMI can be tested against the full corpus today with no copy, and Phase 3b
+is an architecture choice rather than a prerequisite.
 
-### Current database (to be replaced)
+### The old database (replaced)
 
-4,123 projects (**3,382 NRPTI-synthetic**), 18,969 documents (a third of Eagle's), 4,045
-records (**0 unlinked** → `/projectId` is safe), 244 boundaries, 278 logs, 0 regions,
-0 wildfires. **No chunk collection at all** — `document_chunks` and `epic` do not exist, so
-Deep Search over content has never had data.
+4,123 projects (**3,382 NRPTI-synthetic**), 18,969 documents (a third of Eagle's), 4,045 records
+(**0 unlinked** → `/projectId` is safe), 244 boundaries. **No chunk collection at all.**
 
-Item sizes: boundaries max **1.58 MB** (Peace River RD; 9 over 1 MB), everything else ≤6 KB.
-Cosmos NoSQL caps items at **2 MB** — the 16 MB allowance is MongoDB-API-only, which is what
-has been masking this.
+Item sizes: boundaries max **1.58 MB** (Peace River RD; 9 over 1 MB), everything else ≤6 KB. Cosmos
+NoSQL caps items at **2 MB** — the 16 MB allowance is MongoDB-API-only, which is what had been
+masking this.
 
 ---
 
@@ -1170,190 +545,140 @@ has been masking this.
 | `chunks` | `/documentId` | delete-then-reinsert stays single-partition |
 | `boundaries` | `/type` | Only filter that exists; 244 items |
 | `logs` | `/id` | + 14 d TTL |
-| `wildfires` | `/id` | + spatial index, 7 d TTL (stale fires self-expire) |
-| `syncState`, `leases` | `/id` | high-water marks; change-feed leases |
+| `wildfires` | `/id` | + spatial index, 7 d TTL |
+| `syncState`, `leases` | `/id` | high-water marks; change-feed leases. **Both unwritten by anything today** |
 
-Indexing **excludes `/*`**, includes only filtered paths. `/read/[]/?` must be indexed or
-every ACL read is a full scan; `/name` must be indexed or `ORDER BY` fails outright.
+Indexing **excludes `/*`**, includes only filtered paths. `/read/[]/?` must be indexed or every ACL
+read is a full scan; `/name` must be indexed or `ORDER BY` fails outright.
 
 ### Identity & merge
 
-**Implemented in `src/merge/project.js` (Phase 3).** Pure functions, no I/O — merge bugs are
-silent, so every rule is data and tested as data.
+**Implemented in `src/merge/project.js`.** Pure functions, no I/O — merge bugs are silent, so every
+rule is data and tested as data.
 
-`id` = `String(track_project_id)`. Cross-refs on every project: `trackProjectId`, `eagleId`
-(from Track `epic_guid`, or the Eagle `_id` for eagle-only), `sourceSystem`.
-**Track wins, Eagle fills gaps** — `TRACK_PRECEDENCE`, an explicit `[target, trackField,
-eagleField]` map. It is a map rather than `{...eagle, ...track}` precisely because a spread
-overwrites with `undefined` and would silently erase data: 12 real Track records have no
-`abbreviation`, 1 has no `description`, 1 no `address`, 1 no `project_state_name`.
-Eagle-only projects are included, flagged `sourceSystem: 'eagle'`, keyed `eagle-<eagleId>`.
+`id` = `String(track_project_id)`. Cross-refs on every project: `trackProjectId`, `eagleId`,
+`sourceSystem`. **Track wins, Eagle fills gaps** — `TRACK_PRECEDENCE`, an explicit
+`[target, trackField, eagleField]` map. It is a map rather than `{...eagle, ...track}` precisely
+because a spread overwrites with `undefined` and would silently erase data: 12 real Track records
+have no `abbreviation`, 1 no `description`, 1 no `address`, 1 no `project_state_name`.
 
-| Function | Role |
-|---|---|
-| `mergeTrackProject(track, eagle)` | one merged item; throws without a `track_project_id` |
-| `mergeEagleOnlyProject(eagle)` | an Eagle project Track never referenced |
-| `buildRegistry(track[], eagle[])` | `{projects, report}` — the report is the point, it proves nothing was dropped |
-| `buildProjectIndex(projects).resolve(ref)` | `_epicProjectId` / Track id → canonical id, or **null** |
-| `validCoordinates` / `normalizeCentroid` | GeoJSON `[lng, lat]`, sign repair, BC bbox validation |
-| `resolveProjectAcl(eagle, isPublished)` | preserves an upstream `read[]`; fails closed otherwise |
+`buildProjectIndex(projects).resolve(ref)` returning **null** is load-bearing: an unresolvable NRPTI
+record is **dropped**, never given a fabricated parent. That is what replaces fuzzy name matching.
 
-`resolve()` returning null is load-bearing: an unresolvable NRPTI record is **dropped**, never
-given a fabricated parent. That is what replaces the fuzzy name matching.
+Raw payloads are retained under `sources.track` / `sources.eagle` (unindexed) so a re-merge never
+re-fetches upstream and any field is traceable to its origin. Never read by the API.
 
-Raw payloads are retained under `sources.track` / `sources.eagle` (unindexed) so a re-merge
-never re-fetches upstream and any field is traceable to its origin. Never read by the API.
+**Do not create projects from NRPTI.** Only ingest records whose `_epicProjectId` resolves to a
+project already in the registry.
 
-**NRPTI: do not create projects from NRPTI at all.** Only ingest records whose
-`_epicProjectId` resolves to a project already in the registry; drop the rest rather than
-inventing a parent. The entire fuzzy-matching apparatus goes with it (`normalizeProjectName`
-and its hardcoded "conuma coal"/"chetwynd" cases).
-
-> **Verified 2026-07-30 — the 3,382 NRPTI-seeded "projects" are junk.** 0 have Track
-> provenance, 0 have Eagle provenance, all carry synthetic ids ≥ 8,000,000 from
-> `8000000 + hash % 1e6`, and **851 share a duplicate name**. Their names are cities and
-> watercourses, not EA projects: Kelowna, Victoria, Burnaby, Surrey, Prince George, Kamloops,
-> "Cawston / Keremeos Creek", "Cariboo River Provincial Park". The auto-seeder turned every
-> unmatched NRPTI `location`/`projectName` string into a project. **They are not re-seeded.**
+> **Verified 2026-07-30 — the 3,382 NRPTI-seeded "projects" were junk.** 0 had Track provenance, 0
+> had Eagle provenance, all carried synthetic ids ≥ 8,000,000 from `8000000 + hash % 1e6`, and
+> **851 shared a duplicate name**. Their names were cities and watercourses, not EA projects. The
+> auto-seeder turned every unmatched NRPTI `location`/`projectName` string into a project. **They
+> were not re-seeded.**
 >
-> Consequence: the registry is **~392 real projects**, all published — so in practice **there
-> are no hidden projects**, and the 404-for-unauthorised path is unreachable. The ACL stays
-> because it still governs documents and future Track drafts (`isPublished: false`).
+> Consequence: the registry is **~392 real projects**, all published — so in practice **there are no
+> hidden projects**. The ACL stays because it still governs documents and future Track drafts.
 
-**Boundaries** store simplified geometry only; full-resolution GeoJSON is a build artifact
-already emitted to `frontend/public/assets/geojson/` and already preferred by the frontend.
-
-### The seed (Phase 4 — code written, dry run passes, nothing written)
+### The seed
 
 `src/seed/sources.js` (all I/O) + `src/seed/transform.js` (pure) + `src/scripts/seed-nosql.js`
-(orchestrator). **Dry run by default**; `--live` required to write. The gates run in *both*
-modes, so a dry run is a real pre-flight check and works from outside the private endpoint.
+(orchestrator). **Dry run by default**; `--live` required to write. The gates run in *both* modes, so
+a dry run is a real pre-flight check and works from outside the private endpoint.
 
 ```
 node src/scripts/seed-nosql.js [--live] [--only projects,documents,records,boundaries]
                                [--limit-documents N]
 ```
 
-Order is forced: projects first, because every other container partitions by a canonical project
-id only the merged registry can supply. `--only` still *builds* the registry even when projects
-are not written — a stale index would misfile documents into the wrong partition.
+Order is forced: projects first, because every other container partitions by a canonical project id
+only the merged registry can supply. `--only` still *builds* the registry even when projects are not
+written — a stale index would misfile documents into the wrong partition.
 
-**Live dry run against real sources, 2026-07-30:**
+Live dry run against real sources, 2026-07-30:
 
 ```
 projects    382 Track + 359 Eagle → 348 matched · 28 no epic_guid · 6 dangling · 11 Eagle-only = 393
 documents   60,661 fetched → 60,578 built across 357 projects · 83 dropped · 0 without an object key
 boundaries  281: Regional District 28 · Municipality 160 · Electoral District 93
-Verification passed
 ```
 
-**393**, not the estimated ~392 — 11 Eagle-only, not 10. Boundaries are **281 from the static
-exports**, not the 244 currently in the database. **83 documents dropped** (0.14% across 19
-distinct project refs), not the ~60 extrapolated from a 2,961-document sample.
+The `60,661` fetched matches the upstream `searchResultsTotal` exactly, which is what the truncation
+guard checks.
 
-The `60,661` fetched matches the upstream `searchResultsTotal` exactly, which is what the
-truncation guard checks.
-
-#### Streaming, because the accumulating version did not fit the host
-
-The first implementation held all 60,661 raw payloads **plus** their transformed forms: peak RSS
-**252 MB by document 45,000 and still climbing**, against a Y1 Consumption plan with 1.5 GB.
-
-Documents and records now stream — `fetchAllPages({accumulate: false})` never builds the array,
-and the orchestrator buffers per project and flushes at `FLUSH_THRESHOLD = 100` (the Cosmos bulk
-limit, so a full buffer is exactly one request). Measured peak: **123 MB, flat**, with identical
-output — same 60,661 / 60,578 / 83 / 357 / 0.
-
-Two consequences worth knowing:
-
-- **The NRPTI aggregate is folded incrementally** (`emptySummary` + `accumulateRecord`), because
-  it needs every record but the records are no longer retained. A test asserts
-  incremental == whole-list; a divergence there would silently make the aggregate disagree with
-  the data it summarises.
-- **The page handler is awaited.** Without that the flush-per-page backpressure disappears and
-  memory grows unbounded anyway, which is the bug this change exists to prevent. Asserted by test.
-
-Progress is reported **per page, not per dataset**. Inspection alone is 673 pages, and a
-per-dataset callback emitted nothing for ~20 minutes — indistinguishable from a hung process.
-
-#### Source facts that changed the transform (all measured, 2,961-document sample)
+#### Source facts that changed the transform (measured, 2,961-document sample)
 
 | Finding | Consequence |
 |---|---|
 | **`s3Key` is null on 100% of Eagle documents; `internalURL` holds the key** | Reading `s3Key` would seed 60,661 records with no downloadable file |
 | **`isPublished` is true on only 66% of documents that are unambiguously public by `read[]`** | `isPublished` is **derived** from `read[]`, never copied. Copying it would hide a third of the corpus |
 | `internalSize` is a number OR a numeric string (261 of 2,961 were strings) | coerced via `toNumber` |
-| `contentExtracted` is true on 99% upstream, but DEMI has no chunk data at all | **reset to false**; importing it tells the extractor there is nothing to do |
-| ~**0.1%** of documents reference a project absent from the public 359 (2024/2025 ObjectIds — unpublished) | dropped **and counted**; a silent drop looks like a complete corpus |
+| `contentExtracted` is true on 99% upstream, but DEMI has no chunk data | **reset to false** |
+| ~**0.1%** of documents reference a project absent from the public 359 | dropped **and counted** — a silent drop looks like a complete corpus |
 | `pageSize` is **capped at 100** regardless of what is requested | asking for 1000 silently reads a tenth of the data while appearing to work |
 | Eagle `type`/`milestone`/`projectPhase` are ObjectId refs into a 213-item `List` | resolved to labels at seed time; an unresolvable ref keeps its raw value rather than becoming null |
-| NRPTI uses a **different role vocabulary** (`admin:nrced`, `admin:lng`, `admin:bcmi`) | `read[]` preserved verbatim — these are still role types, and privileged callers short-circuit to `true` anyway |
+| NRPTI uses a **different role vocabulary** (`admin:nrced`, `admin:lng`, `admin:bcmi`) | `read[]` preserved verbatim — these are still role types |
 
-#### Scope: NRPTI records are not in the default seed (decided 2026-07-30)
+#### Streaming, because the accumulating version did not fit the host
 
-`DEFAULT_STAGES` is `projects, documents, boundaries`. `records` remains a valid `--only` value
-and the code is kept and tested — it is simply not what DEMI is for right now.
+The first implementation held all 60,661 raw payloads **plus** their transformed forms: peak RSS
+**252 MB by document 45,000 and still climbing**. Documents and records now stream —
+`fetchAllPages({accumulate: false})` never builds the array, and the orchestrator buffers per project
+and flushes at `FLUSH_THRESHOLD = 100` (the Cosmos bulk limit, so a full buffer is exactly one
+request). Measured peak: **123 MB, flat**, with identical output.
 
-NRPTI records are compliance and enforcement **events**, neither projects nor documents: 67,287
-Inspections · 29,555 Tickets · 1,086 Orders · 891 AdministrativePenalties · 611 Certificates.
+- **The NRPTI aggregate is folded incrementally** (`emptySummary` + `accumulateRecord`), because it
+  needs every record but the records are no longer retained. A test asserts incremental ==
+  whole-list.
+- **The page handler is awaited.** Without that the flush-per-page backpressure disappears and memory
+  grows unbounded anyway. Asserted by test.
 
-They *do* carry `documents: [...]` references, which would have made them worth ingesting — but
-those ids are unreachable through NRPTI's public API: `dataset=Document` does not respond,
-`RecordDocument` returns empty, and `/api/public/document/<id>` returns 404. Dead ends.
-
-And only **2,238 of 99,430 (2.25%)** resolve to a project in the registry, because NRPTI covers all
-BC natural-resource compliance rather than only projects that went through an EA. The stage costs
-~40 minutes of upstream fetching per seed for data outside the current remit.
+Progress is reported **per page, not per dataset**. Inspection alone is 673 pages, and a per-dataset
+callback emitted nothing for ~20 minutes — indistinguishable from a hung process.
 
 #### Safety properties
 
 - **`fetchAllPages` throws on a short count.** A mid-run upstream hiccup returning a partial page
   would otherwise read as end-of-data and quietly seed 40k fewer documents — and the result would
-  look complete. Verified against the reported `searchResultsTotal`.
+  look complete.
 - **An unexpected response envelope throws** rather than reading as zero results and seeding an
   empty database.
-- **Gates fail the run with a non-zero exit**: synthetic `trackProjectId >= 8,000,000`, >20
-  duplicate names, duplicate ids, any item with no `read[]`, any item with no partition key, and
-  any item whose `isPublished` has drifted from `read[]`.
-- **`items.bulk` is chunked at 100 inside `cosmos-nosql.js`**, not at the call sites. Cosmos
-  rejects more, and a caller that forgot would fail only on the large projects — i.e. in
-  production, not in a test.
-- The NRPTI aggregate is written to **`project_fragments`** as its own item with
-  `read: ['sysadmin','staff','demi-admin','compliance']`. That is simultaneously the 2 MB fix and
-  the fragment-ACL mechanism.
+- **Gates fail the run with a non-zero exit**: synthetic `trackProjectId >= 8,000,000`, >20 duplicate
+  names, duplicate ids, any item with no `read[]`, any item with no partition key, and any item whose
+  `isPublished` has drifted from `read[]`.
+- **`items.bulk` is chunked at 100 inside `cosmos-nosql.js`**, not at the call sites. Cosmos rejects
+  more, and a caller that forgot would fail only on the large projects — i.e. in production, not in a
+  test.
+- The NRPTI aggregate is written to **`project_fragments`** as its own item. That is simultaneously
+  the 2 MB fix and the fragment-ACL mechanism.
 
-`src/scripts/seed-documents.js` was **deleted**: it was hand-written fake documents with fake
-chunk text ("Northern Red-legged Frog…"), not a seeder, and had no dependents. The Mongo-era
-`seed-and-merge.js` and `sync_from_openshift.js` stay until Phase 5, when they are deleted with
-the legacy controllers that still import them.
+**NRPTI records are not in the default seed.** `DEFAULT_STAGES` is `projects, documents, boundaries`.
+Only **2,238 of 99,430 (2.25%)** resolve to a project in the registry, because NRPTI covers all BC
+natural-resource compliance rather than only projects that went through an EA. The stage costs ~40
+minutes of upstream fetching per seed. Their `documents: [...]` references are unreachable through
+NRPTI's public API (`dataset=Document` does not respond, `RecordDocument` returns empty,
+`/api/public/document/<id>` returns 404).
 
 ### Authorization
 
 Two **orthogonal** dimensions — this is the scaling decision:
 
-- **`read[]` holds role *types* only** (`public`, `sysadmin`, `staff`, `project-team`…).
-  Bounded, indexed. Putting project identity here would mean a user in 50 projects carrying
-  150 roles and every read becoming a cross-partition ACL scan.
-- **Project scope rides the partition key.** It is already the partition boundary, so it
-  costs nothing extra.
-
-**Scope comes from Keycloak role names** (decided 2026-07-30 — Keycloak dictates all roles, so
-there is no separate membership store):
+- **`read[]` holds role *types* only** (`public`, `sysadmin`, `staff`, `project-team`…). Bounded,
+  indexed. Putting project identity here would mean a user in 50 projects carrying 150 roles and
+  every read becoming a cross-partition ACL scan.
+- **Project scope rides the partition key.** It is already the partition boundary, so it costs
+  nothing extra.
 
 ```
 project:207        -> scoped to project 207 (a canonical project id = the partition key)
 staff, compliance  -> role TYPES, matched against read[]
 ```
 
-The `project:` prefix is **required**. A bare role name cannot be classified — given `ajax`,
-nothing distinguishes "scoped to the Ajax project" from a role type, and guessing would be a
-security bug in whichever direction it guessed. `rolesFor()` strips `project:*` from the role
-list so a project id can never land in the `read[]` `IN` clause. No project role at all means
-**not scoped** (public tier), which is distinct from an explicit `projectScope: []` meaning
-**scoped to nothing** (`scopeClause` → `false`). Privileged roles ignore scope entirely.
-
-Scope values are ids, not names, which keeps `resolveAccess` synchronous and lookup-free on
-every request. A cached slug→id map would be needed to accept names — noted, not built.
+`rolesFor()` strips `project:*` from the role list so a project id can never land in the `read[]`
+`IN` clause. No project role at all means **not scoped** (public tier), distinct from an explicit
+`projectScope: []` meaning **scoped to nothing** (`scopeClause` → `false`). Privileged roles ignore
+scope entirely. Scope values are ids, not names, which keeps `resolveAccess` synchronous and
+lookup-free on every request.
 
 `readClause(roles)` is the only place a visibility predicate is built:
 
@@ -1363,244 +688,236 @@ every request. A cached slug→id map would be needed to accept names — noted,
 ```
 
 `EXISTS`-with-subquery, **not `ARRAY_CONTAINS_ANY`** (that one does not use the index).
-Legacy tier 3 is **deleted, not translated** — every seeder writes an explicit `read[]`.
+
+**`systemAccess()`** is the one context that reads every item regardless of ACL. It is built from the
+normal privileged tier and resolves to `true` **through `readClause`** — not a bypass flag, because a
+"skip the predicate" path is exactly what disabled access control here before, and it would not be
+covered by the SQL-asserting tests. It takes **no arguments**, so it can never be derived from a
+request.
 
 Fragment-level control = **make the fragment its own item**, so the same `readClause` applies
 unchanged and an unreadable fragment is never fetched.
 
-**Rejected: database-level ACLs driven by Keycloak.** Cosmos NoSQL data-plane RBAC is
-Entra-only and its finest scope is a *container* — no item, partition or predicate scoping,
-and no row-level security. Resource tokens can scope to a partition key but are key-derived
-(incompatible with `disableLocalAuth`), expire in 1–5 h, and cannot express role types or
-fragments. The browser never touches Cosmos, so the API is already the trust boundary.
-**Keycloak stays for user identity; Entra managed identity is only for app→Cosmos.**
-
-### Typesense (Phase 6 — code written, no reindex run)
-
-**Historical. All of it deleted 2026-07-31 with Typesense itself** — `src/typesense/`, the
-`nightly-sync.js` router, and the flag. Search is Azure AI Search; see §G. Kept for the transform
-reasoning below, which still explain why the NoSQL model carry the fields it does.
-
-`src/typesense/transform-nosql.js` + `full-sync-nosql.js`, selected by the **same**
-`USE_COSMOS_NOSQL` flag as the router (`nightly-sync.js` branches on it). The Mongo-era pair stays
-until cutover and is deleted with the legacy controllers.
-
-The old transform could not be adapted — it reads fields the NoSQL model does not have:
-
-| Mongo-era | DEMI NoSQL |
-|---|---|
-| `_id` | `id` |
-| `doc.project` | `doc.projectId` (already the canonical Track id) |
-| `legislation_2018` / `_2002` / `_1996` blocks | flat merged fields (precedence resolved at seed) |
-| `type`/`milestone` as ObjectId refs into `List` | already resolved to **labels** at seed time |
-| `sources.nrpti.recordCount` | `project_fragments`, behind its own ACL |
-
-#### Deleted rather than ported — each would have broken the first real sync
-
-- **The `List` lookup and its `MIN_LOOKUP_SIZE` guard.** DEMI has no `List` collection, so the
-  lookup returns an empty Map and the guard (`>= 50` in production) **hard-aborts every production
-  sync**.
-- **The PCP lookup**, plus `transformRecentActivity` and `transformProjectNotification`. Those two
-  are in `TRANSFORMS` but **not in `SCHEMAS`**, and the sync iterates `SCHEMAS` — unreachable dead
-  code, and the lookup existed only to feed them.
-- **The `epic` collection fallbacks.** Each schema probed `projects`/`documents`, then on a **zero
-  count** re-queried a catch-all `epic` collection by `_schemaName`. A fallback that fires on an
-  empty result turns "the seed failed" into "silently indexed something else".
-- **The three-way chunk probe** (`document_chunks` → `documentchunks` → `epic`) — a workaround for
-  two writers disagreeing on a collection name.
-- **The `test`-database fallback.** Connecting to a *different database* because the configured one
-  looked empty is how a dev sync ends up indexing another environment's data.
-
-Kept because each earns its place: the alias swap, orphan purge, disk pre-flight, the
-80%-of-previous count guard, and the import retry.
-
-#### Two security decisions
-
-**`systemAccess()`** (new, in `access-sql.js`) is the one context that reads every item regardless
-of ACL. It is built from the normal privileged tier and resolves to `true` **through `readClause`**
-— not a bypass flag, because a "skip the predicate" path is exactly what disabled access control
-here before, and it would not be covered by the SQL-asserting tests. It takes **no arguments**, so
-it can never be derived from a request. Safe for the index because Typesense enforces visibility
-itself at query time via scoped search keys embedding `filter_by: allowed_roles:=[...]`; the sync's
-only security duty is to copy `read[]` into `allowed_roles` faithfully. A test asserts every
-repository read in a full sync uses the privileged tier — a non-privileged one would silently index
-a subset.
-
-**`nrptiRecordCount` is no longer emitted** onto the project index. The compliance aggregate now
-lives in `project_fragments` behind a `compliance` ACL, and the project document is public — so
-copying the count there would leak restricted data through search no matter what the fragment's ACL
-said. It has **zero consumers** in the frontend, so nothing regresses.
-
-Also enforced in the transform, not just at write time: a child's `allowed_roles` is **intersected**
-with its project's (`constrainToProject`), and a chunk inherits its **parent document's**
-visibility — a chunk is a fragment of a document, so its text must never be findable when the
-document is not. The index is a second copy of the data; a stale or hand-edited child would
-otherwise be searchable beyond its project.
-
-An **empty project lookup aborts the sync** rather than proceeding: every child denormalises the
-project name, region and ACL, so an empty lookup would index the whole corpus with no project
-context. That is the same failure the deleted fallbacks used to paper over.
-
-`allowed_roles` fails closed — an item with no `read[]` and no explicit `isPublished: true` gets
-`[]` (matches nothing), never `['public']`.
-
-A test asserts **every field the transforms emit is declared in `collections.js`**: Typesense
-rejects an unknown field and fails the entire batch, so a drift between transform and schema would
-break a reindex at import time rather than at review time.
+**Rejected: database-level ACLs driven by Keycloak.** Cosmos NoSQL data-plane RBAC is Entra-only and
+its finest scope is a *container* — no item, partition or predicate scoping, and no row-level
+security. Resource tokens can scope to a partition key but are key-derived (incompatible with
+`disableLocalAuth`), expire in 1–5 h, and cannot express role types or fragments. The browser never
+touches Cosmos, so the API is already the trust boundary. **Keycloak stays for user identity; Entra
+managed identity is only for app→Cosmos.**
 
 ### Data access
 
-**No Mongo→SQL translator.** One that handles 90% of operators fails *open* on the rest, and
-the operators where the two disagree (`$ne`, `$exists`, `$size`) are exactly what `readFilter`
-is built from — this repo has shipped that bug once already. There are only ~12 distinct query
-shapes in the whole application.
+**No Mongo→SQL translator.** One that handles 90% of operators fails *open* on the rest, and the
+operators where the two disagree (`$ne`, `$exists`, `$size`) are exactly what `readFilter` was built
+from — this repo has shipped that bug once already. There are only ~12 distinct query shapes in the
+whole application.
 
-`query(name, spec, opts)` throws unless the spec is `{query: string, parameters: array}`.
-Parameters only, never interpolation.
+`query(name, spec, opts)` throws unless the spec is `{query: string, parameters: array}`. Parameters
+only, never interpolation.
+
+Repository design notes:
+
+- **No generic `find(filter)`.** Each method owns its SQL and cannot emit an unfiltered read.
+- **`countWhere` shares `selectWhere`**, so a count can never drift from its list predicate — a count
+  built from a different filter leaks the size of a set the caller cannot read.
+- **`boundaries` deliberately has no ACL predicate.** It is public reference data with no `read[]`;
+  applying the standard clause would match nothing and blank the map.
+- **`fragments.put()` refuses an empty `read[]`.** A fragment with no ACL would fall back to the
+  `isPublished` mirror and could become publicly readable.
+- Paging uses **continuation tokens**, not skip/take: Cosmos has no efficient offset.
+- `patch()` is capped at 10 ops by Cosmos and guarded. Use it for partial updates; `upsert()`
+  REPLACES the whole item and will erase fields written by another path.
+- **Point reads bypass the query predicate, so `canRead()` is mandatory after `readItem()`.**
+
+Controller notes:
+
+- A hidden project returns **404, not 403** — a 403 would confirm the id exists.
+- Update paths refuse to reassign a partition key (`id` on projects, `projectId` on documents, `type`
+  on boundaries): in Cosmos that is a delete-and-reinsert, not an update.
+- `resolveDocumentAcl()` is used by **both** document write paths. The Mongo version had it in
+  `createDocument` only, so an intake upload could be published under a private project.
+
+### Deletion semantics
+
+| Action | What it does |
+|---|---|
+| **Unpublish** (`PUT /documents/:id/published`) | Hides from public and proponents: `isPublished: false` and `read[]` loses `public`. **This is the hide mechanism.** |
+| **Hard delete** (`DELETE /documents/:id`) | Permanently removes the Cosmos item **and** the search-index entry |
+| **The stored blob** | **Never deleted by any request path.** Orphans are reclaimed by a separate audited job |
+
+The index entry is removed **explicitly** rather than via the change feed (which emits no deletes in
+latest-version mode) — doing it directly is what makes a soft-delete marker unnecessary at all.
+
+Index removal is **best-effort**: the record is already gone from Cosmos, so an index failure must
+not turn a successful delete into a 500. The response reports the outcome explicitly.
+
+Publishing a document under an **unpublished project returns 409** — a document may never out-rank
+its parent.
+
+### Object storage (Phase 3b — code written, nothing deployed or copied)
+
+`src/storage/` is the single entry point. **Four operations**, because that is all the application
+does with stored files:
+
+```
+getBuffer(key)                  -> Buffer            (extraction)
+getDownloadUrl(key, opts)       -> short-lived URL   (download endpoint)
+putFile(key, filePath, ctype)   -> stored key        (upload)
+describe()                      -> non-secret info   (logs, health)
+```
+
+No bucket, container, or client escapes the module. Backend is chosen by an **explicit**
+`STORAGE_BACKEND` (`minio` | `azure`); an unknown value **throws at load**. Not inferred from
+whichever credentials are present — that is how `COSMOS_ENDPOINT` silently activated the wrong data
+layer on deploy.
+
+**A real bug this fixed.** `extract.js` read `doc.s3Key` **raw**, with no environment key prefix, so
+every extraction in dev fetched a key that 404s. Meanwhile both HTTP controllers were importing the
+*batch extraction script* purely to borrow its MinIO client. One cause: no single owner of the
+storage path. The prefix now lives inside the MinIO backend, where no caller can forget it.
+
+| | MinIO | Azure Blob |
+|---|---|---|
+| Auth | access key + secret | **Entra managed identity, no keys** (`allowSharedKeyAccess: false`) |
+| Environment isolation | one bucket, nested `ozwdez/` prefix | **one container per environment** |
+| Download URL | presigned GET | **user delegation SAS**, `sp=r`, https-only |
+| Container creation | on demand | **never** — comes from Bicep |
+
+Per-environment containers are the actual safety win. Dev's `MINIO_HOST` is one env-var edit from
+prod storage today; a container reachable only by that environment's identity makes the mistake
+impossible rather than discouraged.
+
+**Three gotchas worth not rediscovering:**
+
+- **`Storage Blob Delegator` is required** and is *not* implied by `Storage Blob Data Contributor`.
+  Without it `getUserDelegationKey` fails, and with shared-key access disabled a user delegation SAS
+  is the only way to sign a download link — so every download breaks.
+- **The delegation key's `signedStartsOn`/`signedExpiresOn` must be `Date` objects.** The generated
+  mapper types them as `String`, but `generateBlobSASQueryParameters` calls `toISOString()` on them.
+- **The delegation key is cached for 30 min** (valid up to 7 days). Uncached, every download adds a
+  round trip; cached too long, it silently produces SAS URLs that fail authentication.
+
+`src/scripts/copy-blobs-to-azure.js` is **dry run by default**; `--live` is required. Resumable: a
+destination blob of matching size is skipped, a truncated one is recopied, and a short write throws
+rather than reporting success. The MinIO **write** operation is not imported at all, and a test greps
+the source to keep it that way.
+
+---
+
+## Environment reality
+
+**`demi-plan-dev` is B1 Basic — 1 vCPU / 1.75 GB, a SINGLE worker — not Y1 Consumption.**
+`az appservice plan list` confirms it. Two consequences: the 10-minute timeout is `host.json`
+configuration, **not** a platform ceiling, so it can be raised; and one vCPU with one worker means a
+single blocked request takes down *every* endpoint, which is exactly what the ranked-query defect
+did. Treat "Y1 Consumption" in any older document as wrong.
+
+**The network is not what `azure/main.bicep` describes.** There is **no VNet in the resource group**;
+`azure/modules/vnet.bicep` was never deployed. `main.bicep` also never instantiates `cosmos-nosql`,
+`ai-search`, `document-storage` or `identity` — the four modules that build the current
+architecture. The real subnet is the platform vWAN spoke:
+
+```
+/subscriptions/…/resourceGroups/c4b0a8-dev-networking/providers/Microsoft.Network/
+  virtualNetworks/c4b0a8-dev-vwan-spoke/subnets/c4b0a8-dev-cond-ext-pe-subnet
+```
+
+Pass that as `peSubnetId`. Do not deploy `main.bicep` expecting it to build networking, and do not
+expect it to be how live app settings change.
+
+**Private DNS is attached by Azure Policy, not by this repo.** The existing `demi-mongo-pe` carries a
+zone group named **`deployedByPolicy`** whose zone lives in a *different subscription*
+(`bcgov-managed-lz-live-dns`). Our own version would have (a) failed on `virtualNetworkLinks`, since
+the VNet is in `c4b0a8-dev-networking` which this identity cannot even list, (b) created a second
+zone competing with the platform's, and (c) been redundant. **Create the endpoint only and let policy
+wire DNS.**
+
+### App settings on `demi-api-dev`
+
+| Setting | State |
+|---|---|
+| `COSMOS_ENDPOINT` | `https://demi-cosmos-dev.documents.azure.com:443/` — the **NoSQL** account. It once pointed at Mongo; it no longer does, so deleting the Mongo account cannot break NoSQL reads |
+| `COSMOS_NOSQL_DATABASE` | `demi`. **Not** `COSMOS_DATABASE`, which is inert and goes with the Mongo account |
+| `AZURE_CLIENT_ID` | the UAMI client id, selects the identity |
+| `SEARCH_ENDPOINT`, `SEARCH_INDEX` | AI Search. `SEARCH_INDEX_PROJECTS` / `_DOCUMENTS` default to `demi-projects` / `demi-documents` |
+| `USE_COSMOS_NOSQL` | **deleted 2026-08-01** — Phase 8 removed the switch and the layer it chose against |
+| `AzureWebJobs.nightlySyncTimer.Disabled` | **deleted 2026-08-01** with the timer itself |
+| `STORAGE_BACKEND` | unset (defaults to `minio`) — blobs are not copied yet |
+| `MINIO_*` | **keep** — still the live object store |
+| `MONGODB_URI`, `MONGODB_DATABASE` | **keep until teardown** — they are the rollback path |
+| `WEBSITE_VNET_ROUTE_ALL`, `WEBSITE_DNS_SERVER` | required for private-endpoint DNS |
+| `ENABLE_ORYX_BUILD` | must stay `false` |
+
+**Rollback is `git revert` + redeploy**, and only while `MONGODB_URI` / `MONGODB_DATABASE` and the
+account still stand — that is what the clean week to 2026-08-08 buys. Deleting the account is the
+one-way step.
 
 ---
 
 ## Measuring — three mistakes made twice here
 
-Folded in from `SEARCH-BACKEND-FINDINGS.md` (2026-07-31), which is deleted; this is its durable half.
-
-1. **A probe harness that reuses one output file lies.** A timed-out `curl` does not rewrite its
-   `-o` file, so every probe re-reads the previous probe's JSON. That produced a table of identical
-   hit counts, which reads as "the results are wrong" when the truth was "the app is hung".
-   **One output file per probe, always.** Abort the whole run on the first unhealthy probe — firing
-   more into a wedged app compounds the outage and makes the output unreadable.
+1. **A probe harness that reuses one output file lies.** A timed-out `curl` does not rewrite its `-o`
+   file, so every probe re-reads the previous probe's JSON. That produced a table of identical hit
+   counts, which reads as "the results are wrong" when the truth was "the app is hung". **One output
+   file per probe, always.** Abort the whole run on the first unhealthy probe.
 2. **Deploying on a hypothesis without an instrument** cost most of two days across two sessions.
    Four fixes shipped on plausible causes and all four failed. Both turning points were adding a
    measurement (`indexProgress`, then `fuzzyEnabled`). **Instrument first.**
-3. **A probe that cannot fail proves nothing.** `keywords=<exact term>&fuzzy=true` returns 1 whether
-   fuzzy is on or off, so it separates nothing. The probe that finally settled it was a nonsense
-   token one edit from an indexed one — unreachable by stemming. Likewise **a probe returning the
-   `top` cap proves nothing**: an ineffective full-text predicate returns the whole container
-   ranked, which is exactly why the original Cosmos spike concluded fuzzy worked when it did not.
-   Use rare or nonsense terms and assert exact counts.
-
-## §G. Azure AI Search — Tier 0 spike (measured 2026-07-31)
-
-`demi-search-dev`, Basic, canadacentral, keyless, private. Indexes the `chunks` container:
-**80,355 items, 0 failed, 4m46s**, index count equal to Cosmos `DocumentCount` exactly. Every probe
-passed — ACL gate (anonymous 0 / privileged 1), fuzzy at one edit, nonsense 0, stopwords 0,
-stemming, highlights. Classic lexical BM25 only: no vector fields, no semantic ranker.
-
-Five things that cost time, none of them documented where they were needed:
-
-- **`publicNetworkAccess` MUST be `Disabled`.** The landing-zone policy set
-  `Deny-PublicPaaSEndpoints` (`Deny-CognitiveSearch-PublicEndpoint`, assigned at the
-  `bcgov-managed-lz-live-landing-zones` management group) rejects the deployment outright
-  otherwise — `RequestDisallowedByPolicy`, before the service exists. Plan for a private endpoint
-  from the start; there is no "start public, lock down later" path here.
-- **A new private endpoint is not usable the moment ARM returns, and the two ways it is unready
-  look like different bugs.** Measured on this one:
-    - *Routing*: the first TCP connect to the private IP timed out; the next attempt ~45 s later
-      connected in 10 ms.
-    - *DNS*: the landing zone's automation writes the `A-record` into the central Private DNS Zone
-      **about ten minutes** after the endpoint is created (documented in the platform's own
-      *Be mindful of service constraints* page). Before that record exists, the name resolves to
-      the service's PUBLIC address — which policy has disabled — so it fails as a connection
-      timeout that reads exactly like a missing DNS zone. **It is not.** Waiting is the fix.
-      Confirmed by hostname from inside the VNet: `demi-search-dev.search.windows.net ->
-      10.46.51.10`, `HTTP 200`. No SNI workaround, no gateway, no support ticket.
-
-  Corollary worth keeping: **do not create your own Private DNS Zone and link it to the VNet.**
-  The platform documents that this cannot work — every DNS query is routed through the central
-  Private DNS Resolver, so a zone linked to the spoke is never consulted. A genuinely missing zone
-  (third-party services) is a support request to the Public Cloud team, not a self-service fix.
-- **The data-source `identity` property is rejected on api-version `2024-07-01`** — "Cannot find
-  nested property 'identity'". A user-assigned identity needs a preview version;
-  `2024-11-01-preview` works. Index and query calls stay on the GA version.
-- **The indexer needs ARM read on the Cosmos account, not just data-plane access.** The UAMI held
-  the Cosmos built-in Data Contributor and still failed with *"Unable to retrieve account endpoint
-  … ensure the resource ID is correct"* — which points at the connection string, not at RBAC. The
-  fix is `Cosmos DB Account Reader Role` on the account.
-
-**Typesense is gone as of 2026-07-31.** All three datasets serve from AI Search; the Container App,
-both Container Apps environments, the `tsstgdevpcbd7cygyic52` storage account and its file share are
-deleted, and `src/typesense/` with them. Two things that migration taught, both measured:
-
-- **`projectName` was doing more work than it looked.** Typesense indexed it on every document; a
-  Cosmos document row does not carry it, and an indexer reads one container. Dropping it would have
-  cost **77% of hits for "Ajax"** and 66% for "pipeline" — silently. `searchDocuments` recovers it
-  with a second leg through the projects index, under the caller's own document ACL.
-- **The Cosmos fallback was hiding failures.** A keyword query that matched nothing fell through to
-  the keywordless list, so an anonymous search for a nonsense term returned 50 unrelated rows — and
-  that same path masked a 400 (`$select` naming a field the index lacked) which had broken project
-  search outright. A keyword search that matches nothing now answers with nothing.
-
-Two behaviours found only once the APPLICATION drove the index, not the spike's raw REST probes:
-
-- **Fuzzy expansion of short words returns garbage, and the frontend sends `fuzzy=true` on every
-  search.** The stopword-only query "the and of" came back with a full page of OCR debris —
-  `the~1` matched a scanned fragment reading "th" — while the same query with fuzzy off returned 0.
-  A fuzzy term bypasses the analyzer, so stopword removal never happens either. Terms shorter than
-  four characters are no longer fuzzed (`MIN_FUZZY_LENGTH`, `src/search/ai-search.js`).
-- **A highlight fragment can be cut INSIDE a highlight.** One came back carrying a closing sentinel
-  whose opener had been trimmed off, which rendered as a stray `</mark>` in an `[innerHTML]`
-  binding. Fragments are now balanced individually before they are joined.
-
-Both were invisible to the spike because its probes read counts, not rendered output. A probe that
-only counts rows cannot see a malformed row.
-
-Two design facts settled by measurement rather than assumption:
-
-- **`retrievable: false` does not disable highlighting.** `@search.highlights` returns `<em>`-marked
-  fragments while the response carries no chunk text at all. The index stays small and the API
-  never ships whole chunks.
-- **The `_ts` high-water mark cannot see deletes.** After hard-deleting the probe document, a
-  re-run processed **0 items** and the row stayed searchable until deleted from the index
-  explicitly. Delete propagation is application work, not indexer configuration.
+3. **A probe that cannot fail proves nothing.** Four separate instances now:
+   - `keywords=<exact term>&fuzzy=true` returns 1 whether fuzzy is on or off. The probe that settled
+     it was a nonsense token one edit from an indexed one — unreachable by stemming.
+   - **A probe returning the `top` cap proves nothing**: an ineffective full-text predicate returns
+     the whole container ranked, which is why the Cosmos spike concluded fuzzy worked when it did not.
+   - **A latency claim needs a BEFORE reading.** "`/db/stats` answers in seconds, not minutes" was
+     offered as proof Phase 8 landed; the legacy build answered in 2.2 s too. The payload
+     discriminates, not the timing.
+   - **A capped list hides an ACL difference.** Comparing anonymous and privileged result counts
+     proves nothing when the page caps at 10 and every row is public. Use a throwaway record with a
+     non-public `read[]` and assert 0 vs 1.
 
 ---
 
 ## Operational gotchas (each cost real time)
 
-- **`az functionapp restart` does NOT recycle the Node worker.** App-setting changes appear
-  inert. Use `stop` then `start`. Confirmed twice.
-- **Cosmos is private-endpoint only AND keyless** — unreachable from a laptop. **Kudu
-  `/api/command` cannot reach it either, but not for the reason first recorded here**: measured
-  2026-07-31, the SCM container *does* have the VNet data path (it resolves the private endpoints
-  through the platform DNS server and opens TCP to them). What it lacks is a **managed identity**
-  (`IDENTITY_ENDPOINT` unset), and with local auth disabled there is no key to fall back on. For
-  the same reason **app settings cannot be read back from the SCM container**. So Kudu is usable
-  for anything where a token can be supplied from outside — that is exactly how the AI Search
-  spike drove the data plane: **auth minted outside, network from inside**. For Cosmos, where no
-  such token exists, the route is still the App Service SSH tunnel into the *app* container — full
-  recipe under "How the seed actually had to run". Kudu is also still correct for **deploying** and
-  for **reading `wwwroot` via the VFS API**.
-- **Prefer an API endpoint over out-of-band DB access.** `GET /admin/index-progress` exists because
-  a diagnostic behind `/db/stats` is unusable — that route runs four legacy Mongo
-  `countDocuments()` calls first and can hang for minutes.
-- **Deploy zip trap:** pruning `dist` by name at every depth also strips
-  `node_modules/**/dist` (e.g. `@mongodb-js/saslprep`), shipping an app that 500s on every
-  request. Prune at the repo root only. Already fixed in the workflows.
+- **`az functionapp restart` does NOT recycle the Node worker.** Use `stop` then `start`. Confirmed
+  twice. **And `stop`/`start` still does not prove new code or a new app setting is live** — a warm
+  worker served the OLD build after both, for minutes past the ~50 s cold start. Poll a discriminator
+  until it flips.
+- **`config-zip` merges rather than clean-deploys.** A file deleted from the repo will **not**
+  disappear from `wwwroot`. Verify by content, never mtime — the zip carries source mtimes.
+- **SCM basic auth is disabled** (landing-zone policy). Kudu returns 401 to publishing credentials;
+  use an AAD bearer (`az account get-access-token --resource https://management.core.windows.net/`).
+- **`az webapp deploy` 502s** on a ~27 MB package. `POST /api/zipdeploy?isAsync=true` accepts it in
+  ~1.6 s. Kudu status **3 = FAILED, 4 = SUCCESS**; `complete: true` alone means nothing.
+- **Cosmos is private-endpoint only AND keyless** — unreachable from a laptop. **Kudu `/api/command`
+  cannot reach it either, but not for the obvious reason**: measured 2026-07-31, the SCM container
+  *does* have the VNet data path. What it lacks is a **managed identity** (`IDENTITY_ENDPOINT`
+  unset), and with local auth disabled there is no key to fall back on. For the same reason **app
+  settings cannot be read back from the SCM container**. So Kudu is usable wherever a token can be
+  supplied from outside — that is exactly how the AI Search spike drove the data plane: **auth minted
+  outside, network from inside**. For Cosmos the route is the App Service SSH tunnel into the *app*
+  container. Kudu is still correct for **deploying** and for **reading `wwwroot` via the VFS API**.
+- **Prefer an API endpoint over out-of-band DB access.** `GET /admin/index-progress` issues no
+  container query at all, so it answers when `/db/stats` counts are timing out.
+- **`POST /admin/sync/nrpti` 504s at 240 s** on the App Service request timeout and **keeps running
+  server-side regardless.** Use `?async=true` and watch `/db/stats` records until stable.
+- **`pageSize` caps at 1000** on list reads whatever you ask for. Never answer a data-loss question
+  from a list response — read the ids individually.
+- **Deploy zip trap:** pruning `dist` by name at every depth also strips `node_modules/**/dist` (e.g.
+  `@mongodb-js/saslprep`), shipping an app that 500s on every request. Prune at the repo root only.
 - **Never ship `.env`** in the deploy package.
-- **Cosmos rejects `cursor.sort()` on unindexed fields** and the query layer swallows it into
-  `[]` — a silently blank page.
+- **Cosmos rejects `cursor.sort()` on unindexed fields** and the query layer swallows it into `[]` —
+  a silently blank page.
 - **`_id` is mixed:** EPIC imports carry real ObjectIds, DEMI-created rows use strings.
 - **Object store** is `nrs.objectstore.gov.bc.ca` bucket `asnpnn` (creds in OpenShift secret
-  `eagle-api-minio-keys`, ns `6cdc9e-dev`). Needs port 443 + SSL + a **pinned region**, or
-  presign hangs ~135 s. There is no MinIO in OpenShift.
-- **The OpenShift `eagle-demi-api` pod crash-loops on its own unpaginated `/documents`.**
-  Seed documents from `eagle-api` directly.
-- **CI is blocked:** `AZURE_CLIENT_ID` missing from repo secrets. Creating the Entra app needs
-  Graph, blocked by conditional access. `pr.yaml` only runs on PRs, so backend lint had never
-  run before Phase 0.
-- `azure-deploy-prod.yaml` and `-test.yaml` trigger on **every push to main**, no tag, no
-  approval. Inert today; gate before adding the OIDC credential.
-
----
-
-## Deliberate deviations from the original plan
-
-- **`tmp/` kept.** The plan said delete it, but it holds two mongodump archives (322 MB).
-  Deleting database backups immediately before a re-seed is the wrong moment. Untracked, so
-  it does not touch the repo.
-- **Phase 1 deployment deferred** on cost (above).
-- **New data layer built alongside the old** rather than replacing in place, so the app keeps
-  working on Mongo while the NoSQL layer is built and tested.
+  `eagle-api-minio-keys`, ns `6cdc9e-dev`). Needs port 443 + SSL + a **pinned region**, or presign
+  hangs ~135 s. There is no MinIO in OpenShift.
+- **The OpenShift `eagle-demi-api` pod crash-loops on its own unpaginated `/documents`.** Seed
+  documents from `eagle-api` directly.
+- **CI is blocked:** `AZURE_CLIENT_ID` missing from repo secrets. Creating the Entra app needs Graph,
+  blocked by conditional access.
+- `azure-deploy-prod.yaml` and `-test.yaml` trigger on **every push to main**, no tag, no approval.
+  Inert today; gate before adding the OIDC credential.
 
 ---
 
@@ -1608,11 +925,12 @@ Two design facts settled by measurement rather than assumption:
 
 Every phase: `npm test` and `cd frontend && yarn lint && yarn test && yarn build`.
 
-At cutover, the highest-consequence surface is **authorization**:
+The highest-consequence surface is **authorization**:
+
 - anonymous → only `public` items; a `read:['sysadmin']` document is invisible
 - `sysadmin` → everything including unpublished
-- **scoped** → items in its projects only; a project outside scope unreachable **by id as well
-  as by list**
+- **scoped** → items in its projects only; a project outside scope unreachable **by id as well as by
+  list**
 - **fragment** → project visible, fragment absent and never fetched
 - counts use the *identical* WHERE fragment as the read
-- **zero rows without `read[]`** — the gate that licenses deleting tier 3
+- **zero rows without `read[]`**
