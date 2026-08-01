@@ -1,26 +1,19 @@
 # =============================================================================
 # Build and Deploy DEMI to Azure Prod
 # =============================================================================
-# Triggered on push to main branch (when azure or application files change) or
-# workflow_dispatch. Provisions Bicep IaC with DEMI tags, deploys Angular frontend
+# Manual trigger only. Provisions Bicep IaC with DEMI tags, deploys Angular frontend
 # to Azure Web App (demi-frontend-prod), and deploys Node.js Express API to Azure
 # Web App (demi-api-prod).
+#
+# NO push trigger. Prod deploys an exact tag that was verified on test first, and it
+# deploys because a human asked. This used to fire on every push to main - no tag, no
+# approval - which was inert only because AZURE_CLIENT_ID is missing from repo secrets.
+# Do not restore the push trigger when that credential lands.
 # =============================================================================
 
 name: Deploy DEMI to Azure Prod
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'src/**'
-      - 'api/**'
-      - 'frontend/**'
-      - 'azure/**'
-      - 'package.json'
-      - 'yarn.lock'
-      - '.github/workflows/azure-deploy-prod.yaml'
   workflow_dispatch:
 
 concurrency:
