@@ -131,6 +131,25 @@ public endpoints and admin key any client would. `GET /documents/:id/download` r
 URL, so document bytes go straight from the object store and never transit Azure. No repo file,
 template or app setting references the host.
 
+**Re-POSTing a failed document clears the failure. There is no guard on `contentExtracted`.**
+`ingestChunks` replaces the chunks and patches `contentExtractionError: null` whatever state the
+document was in. So a host holding its own done-list requeues the **~1,712 valid PDFs parked as
+permanent failures** (`TODO.md` §2) by simply posting them again — no flag reset, no admin script,
+no SSH tunnel. `purge-extraction.js --errors-only` exists for the other case: making the API's OWN
+work list truthful, which `src/extract.js --retry-failed` and any future Azure-side worker read.
+Without that flag the only lever was a blanket purge that deleted every good chunk to requeue the
+failures, because **a recorded failure sets `contentExtracted: true` exactly like a success**.
+
+**What is local and what is not.** Extraction — GPU, OCR, docling, page batching — is entirely
+off-platform and free. The only thing crossing to Azure is one JSON POST of markdown per document.
+It has to cross because Cosmos is the system of record and AI Search indexes it on `PT5M`; Typesense
+was deleted 2026-07-31, code and infrastructure, so there is no local index left to write to.
+Cosmos-side maintenance is the one job that must execute INSIDE the VNet, because the account is
+private-endpoint-only and keyless — not a preference, a landing-zone policy.
+
+**Send `extraction` provenance.** The route has accepted it since `4bddede` and nothing sends it,
+which is the only reason no quality number below can be split by OCR path vs text-layer path.
+
 **How Azure extracts documents for NEW projects is deliberately deferred.** `src/extract.js` stays
 for that reason — it is the only in-repo docling client and PDF page-batching code. **Do not delete
 it as dead code.** Priced 2026-07-30 and rejected for now: Container Apps serverless GPU in

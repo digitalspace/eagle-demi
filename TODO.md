@@ -59,6 +59,12 @@ External host halted mid-run; ~4% of 60,578 documents ingested. A crash cascade 
 retry and are silently absent from the index. Needs crash recovery + requeue of the false failures
 before the run restart. Host-side, out of repo.
 
+**Requeue is just a re-POST.** `ingestChunks` has no `contentExtracted` guard, so posting a failed
+document again replaces its chunks and clears `contentExtractionError`. No admin script, no tunnel.
+`purge-extraction.js --errors-only` is for the other case — making the API's own work list truthful.
+Send `extraction` provenance on the restart; nothing ever has, which is why no quality number splits
+by OCR path. Detail in `MIGRATION.md` §A.
+
 ### 3. Extraction quality
 
 Numbers + caveats in `MIGRATION.md` §A. **OCR not the problem: word-salad 0.23% of chunks, 30 of 40
