@@ -295,6 +295,28 @@ test('Search Controller Tests', async (t) => {
       assert.ok(!hit.snippet.includes('<script>'), 'document text must not reach the DOM as markup');
     });
 
+  // The AI Search data plane is private-endpoint-only, so this is the ONLY way to observe how many
+  // chunks the index holds. The count deliberately differs from items.length here: a passthrough
+  // that returned the page size would satisfy a same-number assertion and measure nothing.
+  await t.test('DocumentChunk search returns the index-wide match count, not the page size',
+    async () => {
+      t.mock.method(aiSearch, 'searchChunks', async () => ({
+        count: 995316,
+        items: [{ chunkId: 'c1', documentId: 'd1', projectId: '207', pageNumber: 1, read: ['public'], snippet: 'x' }]
+      }));
+      t.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'Doc' }]));
+      t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+
+      const req = { query: { dataset: 'DocumentChunk', keywords: 'river' }, header: () => null };
+      let jsonResponse;
+      const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+
+      await searchController.search(req, res);
+
+      assert.strictEqual(jsonResponse[0].count, 995316);
+      assert.strictEqual(jsonResponse[0].searchResults.length, 1);
+    });
+
   // The fail-closed branch. OData has no `false` literal, so a caller scoped to nothing cannot be
   // expressed as a filter — the request must simply not be issued.
   await t.test('a caller scoped to nothing is answered empty without a request', async () => {

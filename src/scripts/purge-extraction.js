@@ -17,13 +17,22 @@
  * **DRY RUN BY DEFAULT.** `--live` is required to delete or write anything.
  *
  * `--errors-only` narrows this to documents that RECORDED AN EXTRACTION FAILURE. The extraction
- * host treats a recorded error as done, so ~1,712 valid PDFs are parked as permanent failures and
+ * host treats a recorded error as done, so those documents are parked as permanent failures and
  * are silently absent from the index. Requeuing them means clearing `contentExtracted` — but a
  * failure sets that flag too (`ingestChunks`, controllers/nosql/document.js), so without this flag
  * the only lever is a blanket purge that deletes every good chunk alongside them.
  *
+ * `--error-like <substring>` narrows it further, to ONE class of failure. Not a convenience:
+ * measured 2026-08-02, 5,802 of the 5,908 recorded failures read `download failed: 404` — the dev
+ * object store is a partial copy of prod and those documents have no bytes to fetch, so the error
+ * is false and clearing it is the honest thing. The other ~106 are genuine and permanent
+ * (`unsupported format`, `PDFium data format error`). `--errors-only` alone cannot tell them
+ * apart, so it would also requeue every genuine failure and send it back through the GPU to fail
+ * again. Match on a substring rather than the whole message because the tail carries a presigned
+ * URL, a filename, or a byte count, and no two are identical.
+ *
  * Usage:
- *   node src/scripts/purge-extraction.js [--live] [--errors-only] [--page-size N]
+ *   node src/scripts/purge-extraction.js [--live] [--errors-only] [--error-like STR] [--page-size N]
  *
  * Cosmos is private-endpoint-only and keyless, so a live run must execute INSIDE the app
  * container over the App Service SSH tunnel — not Kudu's /api/command, whose SCM container has no
@@ -38,13 +47,22 @@ const { systemAccess } = require('../helpers/access-sql');
 const DEFAULT_PAGE_SIZE = 200;
 
 function parseArgs(argv) {
-  const args = { live: false, errorsOnly: false, pageSize: DEFAULT_PAGE_SIZE };
+  const args = { live: false, errorsOnly: false, errorLike: '', pageSize: DEFAULT_PAGE_SIZE };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
     else if (a === '--errors-only') args.errorsOnly = true;
+    // Implies --errors-only rather than requiring both. A substring to match is already a
+    // statement that only failures are wanted, and the pair could otherwise be given in the one
+    // combination that means nothing: a filter with no set to filter.
+    else if (a === '--error-like') { args.errorLike = String(argv[++i] ?? ''); args.errorsOnly = true; }
     else if (a === '--page-size') args.pageSize = parseInt(argv[++i], 10);
     else throw new Error(`[purge] unknown argument: ${a}`);
+  }
+  // An empty substring matches every error, which is `--errors-only` wearing a disguise — and the
+  // disguise is the danger: the operator asked to narrow the set and would get the whole of it.
+  if (argv.includes('--error-like') && !args.errorLike) {
+    throw new Error('[purge] --error-like needs a non-empty substring');
   }
   if (!Number.isInteger(args.pageSize) || args.pageSize < 1) {
     throw new Error(`[purge] --page-size must be a positive integer, got: ${args.pageSize}`);
@@ -107,9 +125,9 @@ async function purge(argv = [], opts = {}) {
     failures: []
   };
 
-  const selector = args.errorsOnly
-    ? 'contentExtracted=true AND contentExtractionError set'
-    : 'contentExtracted=true';
+  let selector = 'contentExtracted=true';
+  if (args.errorsOnly) selector += ' AND contentExtractionError set';
+  if (args.errorLike) selector += ` AND error contains ${JSON.stringify(args.errorLike)}`;
   console.log(`[purge] ${summary.mode}: documents with ${selector}`);
 
   for await (const page of pageAll(documentsRepo, access, { extracted: true, pageSize: args.pageSize })) {
@@ -125,6 +143,9 @@ async function purge(argv = [], opts = {}) {
       // successful extraction, and skipping removal there would flag a document unextracted while
       // its chunks are still present. That is the exact state the catch below refuses to create.
       if (args.errorsOnly && !doc.contentExtractionError) continue;
+      // Substring, not equality: the tail of a recorded error carries a presigned URL, a filename
+      // or a byte count, so no two messages in a class are identical.
+      if (args.errorLike && !String(doc.contentExtractionError).includes(args.errorLike)) continue;
 
       summary.documents++;
 

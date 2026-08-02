@@ -263,7 +263,7 @@ exports.search = async (req, res) => {
           return res.json([{ searchResults: [] }]);
         }
 
-        const { items } = await aiSearch.searchChunks({
+        const { items, count } = await aiSearch.searchChunks({
           filter,
           keywords,
           fuzzy,
@@ -308,7 +308,14 @@ exports.search = async (req, res) => {
             read: Array.isArray(chunk.read) && chunk.read.length > 0 ? chunk.read : ['public']
           };
         });
-        return res.json([{ searchResults: mappedChunks }]);
+        // `count` is the index-wide total for this query, not the page size — the service already
+        // computes it and this layer used to discard it. It is the only way to see how many chunks
+        // Azure AI Search actually holds: the data plane is private-endpoint-only, and the
+        // `indexProgress` in /db/stats reports COSMOS index-build percent, which says nothing
+        // about whether the PT5M indexer has pulled anything. Added deliberately only to the
+        // success path — the empty returns above omit it, because absent means "not measured"
+        // while a 0 would be a claim about the index.
+        return res.json([{ searchResults: mappedChunks, count }]);
       } catch (err) {
         // A bounded failure still has to be legible: an empty result caused by a fault is NOT the
         // same fact as "nothing matched". 200 rather than 5xx because the frontend retries 5xx

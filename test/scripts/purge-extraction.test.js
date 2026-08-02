@@ -64,7 +64,7 @@ const DOCS = [
 const PER_DOC = { d1: 10, d2: 5, d3: 7 };
 
 test('parseArgs defaults to a dry run over every extracted document', () => {
-  assert.deepStrictEqual(parseArgs([]), { live: false, errorsOnly: false, pageSize: 200 });
+  assert.deepStrictEqual(parseArgs([]), { live: false, errorsOnly: false, errorLike: '', pageSize: 200 });
 });
 
 test('parseArgs requires --live to write and validates --page-size', () => {
@@ -176,13 +176,25 @@ test('only documents flagged contentExtracted are selected', async () => {
   assert.strictEqual(docs.state.listCalls[0].listOpts.extracted, true);
 });
 
-// A recorded failure sets contentExtracted TOO, so the query cannot tell the two apart. These
-// documents are the ~1,712 valid PDFs the extraction host parked as permanent failures.
+// A recorded failure sets contentExtracted TOO, so the query cannot tell the two apart. These are
+// the documents the extraction host parked as permanent failures — 855 in the 2026-07-30 cascade,
+// 5,908 after the 2026-08-02 full-corpus run.
 const MIXED = [
   { id: 'ok1', projectId: '207' },
   { id: 'failed', projectId: '207', contentExtractionError: 'docling-serve HTTP 500' },
   { id: 'ok2', projectId: '311', contentExtractionError: null }
 ];
+
+// Two failure classes side by side, which is the state the corpus is actually in: 5,802 documents
+// whose source 404s (false — the dev object store is a partial copy) against ~106 that are
+// genuinely unreadable. `--errors-only` cannot tell them apart.
+const TWO_CLASSES = [
+  { id: 'ok1', projectId: '207' },
+  { id: 'gone1', projectId: '207', contentExtractionError: 'download failed: 404 Client Error: Not Found for url: https://x/a?X-Amz-Signature=abc' },
+  { id: 'gone2', projectId: '311', contentExtractionError: 'download failed: 404 Client Error: Not Found for url: https://x/b?X-Amz-Signature=def' },
+  { id: 'broken', projectId: '311', contentExtractionError: 'unsupported format: msg' }
+];
+const TWO_CLASSES_CHUNKS = { ok1: 10, gone1: 0, gone2: 0, broken: 0 };
 
 test('--errors-only leaves a successfully extracted document completely alone', async () => {
   // The whole point of the flag. Without it the only lever is a blanket purge that deletes every
@@ -210,6 +222,58 @@ test('--errors-only reports what it skipped, so a dry run is readable as a count
   assert.strictEqual(summary.errorsOnly, true);
   assert.strictEqual(summary.scanned, 3);
   assert.strictEqual(summary.documents, 1);
+});
+
+test('parseArgs: --error-like implies --errors-only and refuses an empty substring', () => {
+  const args = parseArgs(['--error-like', 'download failed: 404']);
+  assert.strictEqual(args.errorLike, 'download failed: 404');
+  // Implied, not required alongside. Asking for one class of failure already says "failures only".
+  assert.strictEqual(args.errorsOnly, true);
+  // An empty substring matches every error — `--errors-only` in disguise, and the disguise is the
+  // danger: the operator asked to narrow the set and would silently get all of it.
+  assert.throws(() => parseArgs(['--error-like', '']), /non-empty substring/);
+});
+
+test('--error-like purges one class of failure and leaves the other classes alone', async () => {
+  // The check that matters: without it, requeuing the 5,802 false 404s also sends every genuine
+  // failure back through the GPU to fail again in exactly the same way.
+  const docs = fakeDocuments(TWO_CLASSES);
+  const chunks = fakeChunks(TWO_CLASSES_CHUNKS);
+  const index = fakeTypesense();
+
+  const summary = await purge(['--live', '--error-like', 'download failed: 404'],
+    { documents: docs, chunks, index });
+
+  assert.deepStrictEqual(docs.state.patched.map(p => p.id), ['gone1', 'gone2']);
+  assert.deepStrictEqual(chunks.state.removed, ['gone1', 'gone2']);
+  assert.strictEqual(summary.scanned, 4);
+  assert.strictEqual(summary.documents, 2);
+});
+
+test('--errors-only without --error-like still takes every failure, both classes', async () => {
+  // The other half of the distinction. If this ever stops being true the new flag has quietly
+  // become mandatory, and every existing recovery recipe is wrong.
+  const docs = fakeDocuments(TWO_CLASSES);
+  const summary = await purge(['--errors-only'], {
+    documents: docs, chunks: fakeChunks(TWO_CLASSES_CHUNKS), index: fakeTypesense()
+  });
+  assert.strictEqual(summary.documents, 3);
+});
+
+test('--error-like matches a substring, not the whole message', async () => {
+  // Every real 404 message ends in a different presigned URL, so equality would match nothing and
+  // report a clean "0 documents" — a purge that looks like it ran and did not.
+  const docs = fakeDocuments(TWO_CLASSES);
+  const summary = await purge([], {
+    documents: docs, chunks: fakeChunks(TWO_CLASSES_CHUNKS), index: fakeTypesense()
+  });
+  assert.strictEqual(summary.documents, 4, 'guard: all four are visible without a filter');
+
+  const exact = fakeDocuments(TWO_CLASSES);
+  const whole = await purge(['--error-like', TWO_CLASSES[1].contentExtractionError], {
+    documents: exact, chunks: fakeChunks(TWO_CLASSES_CHUNKS), index: fakeTypesense()
+  });
+  assert.strictEqual(whole.documents, 1, 'a full message matches only its own document');
 });
 
 test('without --errors-only every extracted document is still purged', async () => {
