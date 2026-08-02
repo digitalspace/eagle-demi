@@ -206,8 +206,24 @@ randomly sampled documents had zero bad chunks.** In this order:
       low-yield retry (`LOW_YIELD_CHARS=500`, `LOW_YIELD_MIN_BYTES=200000`) is useless here: it
       fires — median source is 822 KB — and forced full-page OCR returns byte-identical output.
 
-      Fix direction: tile oversized pages spatially before OCR, mirroring the page batching the
-      host already does. Host-side, out of repo. Recovers ~2,000 documents with no re-download.
+      **Fixed host-side 2026-08-02** (out of repo, `worker.py`). A conversion that comes back with
+      fewer than `TEXTLESS_CHARS` REAL characters — placeholders and whitespace stripped, because
+      `<!-- image -->` is 14 characters and sailed past every `len()` gate in the file — is re-OCR'd
+      by cutting each page into a `TILE_GRID`×`TILE_GRID` grid with 6% overlap, joined with
+      duplicate lines dropped so the seam does not index the same sentence twice. Bounded: 20 pages
+      per document, page render capped at 60 MP. Provenance records `tiled` and the grid.
+      Measured on five known-bad documents: 14→3,197, 0→943, 0→1,104, 17→241, 6→1,649 characters.
+      The same `real_chars` test replaced the text path's `len(md)`, where 600 characters of
+      whitespace also read as a good extraction.
+
+      Recovered text is ROUGH where map lettering sits at an angle (`Barrowsources`, `Offsite
+      constnk source Of`). Findable beats invisible for a lexical index, but do not expect prose,
+      and weigh it when reading the retrieval scorecard below.
+- [ ] **Re-run the 2,039 against the tiling fix.** Staged on the host as `worklist-tiles.json`.
+      ~8.4 h: `convert_forced` holds ONE global lock, so tiling serialises across all four
+      converter threads. Left that way on purpose — per-thread forced converters cost VRAM, which
+      is the exact change class behind this box's OOM and SIGTRAP history. Requires clearing those
+      documents' `.md`/`.json` from `sent/` first, or `already_done()` skips every one.
 
       Note `<!-- image -->` is exactly 14 characters, which is what a placeholder-only markdown
       file measures. Handy when grepping.
