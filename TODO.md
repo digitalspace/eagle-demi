@@ -1,6 +1,6 @@
 # DEMI — TODO
 
-**Updated 2026-08-01.** Actionable work only. Rationale + measured facts in `MIGRATION.md`; agent
+**Updated 2026-08-02.** Actionable work only. Rationale + measured facts in `MIGRATION.md`; agent
 rules in `CLAUDE.md`. **Record finding once, in file that owns topic.**
 
 Status: **dev only, no test/prod.** Items = backlog, not incidents.
@@ -10,12 +10,31 @@ Status: **dev only, no test/prod.** Items = backlog, not incidents.
 ## State of play
 
 **Live.** Azure AI Search `demi-search-dev` (Basic, keyless, private endpoint only) serve all three
-datasets — `demi-chunks` 80,354 rows, `demi-projects`, `demi-documents` 60,578 — indexers on
-`PT5M`. Typesense deleted 2026-07-31, code and infrastructure both; `az containerapp list -g
-c4b0a8-dev-rg` return nothing.
+datasets — `demi-chunks`, `demi-projects`, `demi-documents` — indexers on `PT5M`. Typesense deleted
+2026-07-31, code and infrastructure both; `az containerapp list -g c4b0a8-dev-rg` return nothing.
+`demi-chunks` held 80,354 rows on 2026-08-01; Cosmos now holds **995,316** chunks after the
+2026-08-02 run, and the index count has not been re-read (see below).
 
-Cosmos counts read live 2026-08-01: **projects 2,248** (the 393 figure predate the NRPTI sync),
-documents 60,578, records 48,086, boundaries 281. All three indexers report progress 100.
+Cosmos counts read live 2026-08-02: **projects 2,248** (the 393 figure predate the NRPTI sync),
+documents 60,578, records 48,086, boundaries 281.
+
+**`indexProgress` in `/db/stats` and `/admin/index-progress` is COSMOS index-build percent, not
+Azure AI Search.** `src/controllers/db.js:22-37` calls `cosmosNoSql.indexProgress`. `chunks: 100`
+means the Cosmos container finished indexing itself and says NOTHING about whether the `PT5M`
+indexer has pulled anything. The data plane is private-endpoint-only, so the only AI Search number
+observable from outside is now `count` on `GET /search?dataset=DocumentChunk` — `searchChunks()`
+always computed it and the controller used to discard it.
+
+**That count is per-query, not an index total, and there is no match-all path to one.** `keywords`
+is required (empty short-circuits to `[]`), `*` is escaped by the query builder, and `the`/`a` are
+stopwords under the `en.microsoft` analyzer — all three return 0 hits. It is also evaluated under
+the CALLER's ACL, so an unauthenticated count covers public rows only. A true index total still
+needs a data-plane query from inside the VNet.
+
+**Paging: `continuationToken` is a QUERY PARAMETER.** The API returns the token in the
+`x-continuation-token` RESPONSE header but only reads it from the query string
+(`src/controllers/nosql/document.js:45-67`). Passing it back as a request header silently re-serves
+page 1 forever — a count taken that way read 21,000 when the answer was 1,511.
 
 **Phase 8 deployed + verified live 2026-08-01.** Mongo-API layer gone from app. Clean week run to
 **2026-08-08**; only Azure teardown left. Evidence in `MIGRATION.md` §B.
@@ -57,19 +76,64 @@ Checked already, so nobody re-check:
   throw when no Mongo URI env configured, so a post-teardown run error instead of silently reading
   localhost and reporting zero documents.
 
-### 2. Extraction RESTARTED 2026-08-01 — cascade recovered, run in flight
+### 2. Extraction LANDED 2026-08-02 13:05 — corpus reconciled
 
-Halted 2026-07-30 14:08 after a crash cascade. Root cause fixed host-side, false failures recovered,
-**full-corpus run restarted 2026-08-01 22:14 PDT** at `CONVERTERS=4` / `TEXT_WORKERS=8` on a host
-resized to 64 GB / 16 vCPU. `LIMIT=0`, so this is the whole corpus.
+Full-corpus run finished: `DONE in 1.34 h — 2321 ok, 6 failed, 1496 source missing, 0 deferred,
+56755 skipped`. Zero SIGTRAPs, zero restarts after the backend switch (below). Ingest fully
+drained, `out/` empty.
 
-First 90 minutes: **1,950 converted, 14 failed, 0 deferred, 0 runner faults**; 1,670 text path /
-316 OCR (13 re-routed), ~1,350 docs/hr, **ETA ~42 h**. Every failure is `unsupported format: msg` —
-genuine and permanent. RAM peaked 9 GB of 64, VRAM 8.4 GB of 16, so `CONVERTERS` has headroom if
-the estimate needs to come down.
+**Reconciled 2026-08-02** — API page-walk of `extracted=true/false` against the host's own disk.
+Balances exactly, no unexplained remainder:
 
-**The 7.4-day / 354-converter-hour figures in `MIGRATION.md` §A predate the router and are stale.**
-Re-measure from this run when it lands rather than patching them by guess.
+| | | |
+|---|---|---|
+| Corpus | **60,578** | `GET /db/stats` |
+| Extracted **with chunks** | **53,109** | `contentPageCount > 0` — real coverage, 87.7% |
+| Flagged extracted, **zero chunks** | 5,958 | a recorded failure sets `contentExtracted` too |
+| Unextracted (`extracted=false`) | 1,511 | ≈ the run's own 1,496 source-missing |
+| Chunks in Cosmos | **995,316** | Σ `contentPageCount`, vs 80,355 first-run baseline |
+
+Zero-chunk documents by cause: **5,802 `download failed: 404`**, 73 `unsupported format`, 50 no
+error at all, 17 `PDFium data format error`, 10 other download, 5 other, 1 cascade leftover. So
+**genuinely unextractable is ~106 documents, 0.18%.**
+
+**The 5,802 404s are FALSE failures and the dev object store is why.** Docling never read those
+documents; there were no bytes to fetch. Measured: 4,003 of the 5,802 sit under an object-store
+prefix that ALSO holds successfully-downloaded objects, with structurally identical keys
+(`<prefix>/<32-hex>.<ext>`), so the key scheme is right and those specific objects are simply
+absent. Dev is a partial copy of prod. 111 prefixes affected, 47 of them missing entirely.
+- [ ] **Clear them** with `purge-extraction.js --error-like "download failed: 404"` (added
+      2026-08-02 for exactly this — `--errors-only` alone would also requeue the ~106 genuine
+      failures and burn GPU time re-failing them). Host side, ALSO delete the matching `.err` in
+      `sent/` and `worklist.json`: `already_done()` treats a local `.err` as settled regardless of
+      what Cosmos says.
+
+**Two silent gaps found by the reconciliation, neither previously visible:**
+- [ ] **15 documents rejected by the API and parked in `dead/`.** Their markdown is 14–63 MB
+      against `express.json({ limit: '10mb' })` (`src/app.js:75`), so every POST is a 413. They are
+      the ONLY documents with markdown on disk and nothing in Cosmos. Raising the limit is not
+      obviously safe on B1 Basic (1.75 GB, single worker) — a 63 MB JSON body is parsed in memory.
+      Ask why the markdown is 63 MB before designing the fix.
+- [ ] **50 documents extracted clean, no error, zero chunks.** 31 images + 19 PDFs, 44 via OCR.
+      Empty markdown produced no chunks, and `contentExtractionError: null` claims success. Subset
+      of the placeholder-only population in §3.
+
+**Backend switched to `PyPdfiumDocumentBackend` 2026-08-02 11:44.** `DoclingParseDocumentBackend`'s
+native page decoder ABORTS THE PROCESS on some corpus documents — 83 restarts in five hours, all
+`status=5/TRAP`, and with `faulthandler.register(signal.SIGTRAP)` (which `PYTHONFAULTHANDLER=1`
+does NOT cover, hence five hours of silent crashes) 4 of 4 captured traps had an identical top
+frame: `docling_parse/pdf_parser.py:757 _ensure_page_decoder`. A native abort cannot be caught, so
+`fail()`/`defer()`/`missing()` never ran, nothing was recorded, the feeder requeued the same work
+and the run stalled to zero documents in 90 seconds. After the switch: 0 traps, 0 restarts,
+~1,400 docs/hr, and three previously-unextractable documents converted on the first attempt.
+**The corpus is now mixed-provenance** — sidecars record `pdf_backend`, and any quality comparison
+has to split on it.
+
+**A third outcome class exists now: `missing()`.** A source 404 is neither a document defect nor a
+runner fault. It writes no `.err`, so the document stays in the work list for whenever the file
+appears, and it does not trip the circuit breaker. Before this, 5,445 unfetchable documents were
+recorded as extraction errors and dropped from the work list permanently. `1,511 unextracted` is
+that class working, not a bug.
 
 Both services are `systemctl enable`d, so a host reboot resumes. Work is resumable from disk —
 `already_done()` reads `out/`, `sent/`, `dead/`, and `ingest.py` reruns every 5 minutes doing only
@@ -116,13 +180,37 @@ finding, not the 78% rate.
 Numbers + caveats in `MIGRATION.md` §A. **OCR not the problem: word-salad 0.23% of chunks, 30 of 40
 randomly sampled documents had zero bad chunks.** In this order:
 
-- [ ] **Slide decks extract to nothing but `<!-- image -->`.** Eight of sampled documents in index,
-      unfindable by content. Find out whether router sent them down text path on a thin text layer,
-      or whether OCR ran and returned nothing. Real defect; about coverage, not engine quality.
-      **Wait for the run to land — provenance now arrives**, so this splits by `extraction.path`
-      from data instead of needing the separate probe originally scoped. Note a thin text layer
-      would still have emitted its words, so placeholder-only markdown already means docling
-      extracted ZERO text; the live question is why zero.
+- [ ] **Large-format sheets extract to nothing but `<!-- image -->` — docling starves OCR on them.**
+      **Diagnosed 2026-08-02**, and it is not what this entry used to say. Corrections first: they
+      are not slide decks (they are figures, maps, cross-sections and title-block engineering
+      drawings), the router did not misroute them (**2,011 of 2,039 carry `extraction.path: ocr`**),
+      and the population is far larger than the eight originally sampled.
+
+      **2,039 documents, 3.8% of everything extracted, contain no text at all.** 1,908 PDF + 131
+      image. **1,989 of them are IN the index holding one chunk of nothing** — findable by title,
+      matching no content, which is worse than being absent. The other 50 produced zero chunks.
+
+      Measured on one page, same converter, same settings each time:
+
+      | Input | Real chars |
+      |---|---|
+      | Whole page, normal OCR | 0 |
+      | Whole page, `force_full_page_ocr=True` | 0 |
+      | Whole page rendered at scale 2 / 4 / 6, upright or rotated 90° | 0 in all six |
+      | **Same page cut into a 3×3 grid, tiles OCR'd separately** | **1,018** |
+      | Positive control (letter-size scan, same converter) | 1,840 |
+
+      So OCR works, the page has real text, and **docling normalises the page image to a fixed size
+      before OCR** — on a D-size sheet that puts 6-point map labels below RapidOCR's detection
+      floor. Render scale and rotation cannot move it; only tiling can. The host's existing
+      low-yield retry (`LOW_YIELD_CHARS=500`, `LOW_YIELD_MIN_BYTES=200000`) is useless here: it
+      fires — median source is 822 KB — and forced full-page OCR returns byte-identical output.
+
+      Fix direction: tile oversized pages spatially before OCR, mirroring the page batching the
+      host already does. Host-side, out of repo. Recovers ~2,000 documents with no re-download.
+
+      Note `<!-- image -->` is exactly 14 characters, which is what a placeholder-only markdown
+      file measures. Handy when grepping.
 - [ ] **Retrieval scoring** on human-labelled phrases — the verdict metric. Heuristics cannot see
       character-spacing damage (`Tum ble r Ridge` score clean), so only this close the question.
       **Harness written 2026-08-01**: `src/scripts/score-retrieval.js`, read-only, queries through
@@ -132,7 +220,9 @@ randomly sampled documents had zero bad chunks.** In this order:
       and read as unfindable corpus. **Two human steps left**: write labels (format +
       discipline in `src/scripts/retrieval-labels.example.jsonl`; phrase must come from SOURCE
       document, not extracted markdown, else it retrieve itself and measure nothing), then run it
-      **after the extraction run land** — growing corpus make two scorecards incomparable.
+      **after the extraction run land** — growing corpus make two scorecards incomparable. **The
+      run landed 2026-08-02, so that condition is clear.** Split the scorecard by
+      `extraction.pdf_backend` too: the corpus is mixed-provenance now.
 - [ ] Only then decide on an intake cleaner. On current evidence job small: strip `<!-- image -->`,
       drop chunks that are pure separator furniture. **Not** an OCR re-run.
 
@@ -144,8 +234,6 @@ randomly sampled documents had zero bad chunks.** In this order:
   request. Nothing blocked it, nothing broken, but process skipped — submit before this go past dev.
   `rg-epic-search` below hold three Cognitive Services accounts too — same question, different team,
   not ours to file.
-- **Provenance from LXC 109 (`doc-ocr-processor`).** API accept an `extraction` object now, but the
-  host must send it. Until then, no quality number splittable by OCR path vs text-layer path.
 - **`rg-epic-search` (test sub `7897ceb1-…`)** — not ours. Inventoried live 2026-08-01; earlier
   entry was wrong on two counts and missed the expensive part.
 

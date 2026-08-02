@@ -158,7 +158,7 @@ while 842 of them had good markdown sitting on disk the whole time.
 |---|---|
 | Recorded as errors in Cosmos | **855** (not the "~1,712" previously stated, which counted `.err` FILES across two directories and double-counted ids) |
 | Recovered by re-POST alone | **842** — 863 markdown files posted, **43,003 chunks, 0 failed, 2.2 minutes, zero GPU time** |
-| Crash victims with no markdown | 5 — need `--errors-only` to re-enter the work list |
+| Crash victims with no markdown | 3 — 5 originally, 2 re-extracted in the 2026-08-01 smoke test |
 | Genuinely unsupported (`msg`/`doc`) | 8 — correctly flagged |
 
 Throughput of the recovery ingest: ~23,900 documents/hour at `UPLOADERS=4`, 49.5 chunks/document.
@@ -252,15 +252,29 @@ corpus-wide. `fileSize` under ~1 KB on a `pdf` is the cheap detector.
 
 Consequence worth stating once: the 60,578 document count slightly overstates retrievable content.
 
-#### Conversion — the 2026-07-30 numbers below are STALE
+#### Conversion — measured on the landed full-corpus run (2026-08-02)
 
-They were measured before the extraction host added its `pypdfium2` router, when `do_ocr=True` ran
-on every PDF. The 2026-08-01 restart routes first, and the shape is completely different: **86% of
-documents take the CPU text path at 0.0-0.3 s each**, and only genuine scans reach the GPU. Measured
-over the first 90 minutes at `CONVERTERS=4` / `TEXT_WORKERS=8` on a 64 GB / 16 vCPU host —
-~1,350 docs/hr against a whole-corpus ETA of ~42 h, versus the 7.4 days below.
+The 2026-07-30 table further down is superseded. It was taken before the host added its `pypdfium2`
+router, when `do_ocr=True` ran on every PDF; routing, not GPU throughput, was the bottleneck.
 
-Do not quote the table below as current. Re-measure when the run lands.
+The corpus is now **mixed-provenance**: everything before 2026-08-02 11:44 was read by
+`DoclingParseDocumentBackend`, everything after by `PyPdfiumDocumentBackend` (see the SIGTRAP note
+in `TODO.md` §2). Sidecars record `extraction.options.pdf_backend`. Split any quality measurement
+on it.
+
+| | |
+|---|---|
+| Throughput after the backend switch | **~1,400 docs/hr** at `CONVERTERS=4` / `TEXT_WORKERS=8`, 64 GB / 16 vCPU |
+| Path split, whole corpus | **34,153 text / 17,286 OCR**; 7,628 carry no provenance (extracted before the host sent it, or recorded as an error) |
+| Documents with chunks | **53,109 of 60,578** (87.7%) |
+| Chunks in Cosmos | **995,316** — 18.7 chunks/document, against 48.1 measured under the pre-accumulation chunker |
+| Genuinely unextractable | **~106** (0.18%) — `unsupported format`, `PDFium data format error` |
+| Not extractable here at all | **5,802** whose source 404s: the dev object store is a partial copy of prod, not an extraction defect |
+| Extracted but textless | **2,039** large-format sheets, `<!-- image -->` only — `TODO.md` §3 |
+
+Chunks/document fell from 48.1 to 18.7 because the earlier figure was measured through the
+pre-accumulation chunker, which split per paragraph at ~514 characters against a 2,500 target. Not
+a regression — the same text in fewer, larger chunks.
 
 #### Conversion, measured on 326 documents (2026-07-30) — superseded, kept for the memory ceiling
 
