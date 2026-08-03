@@ -323,14 +323,36 @@ async function bulk(containerName, operations) {
  */
 async function bulkVerified(containerName, operations, opts = {}) {
   const maxAttempts = opts.maxAttempts || 4;
+  // Seam for the retry tests. Without a Cosmos client `bulk()` returns [] rather than throwing,
+  // so there is otherwise no way to exercise the one path that matters here.
+  const doBulk = opts.bulkFn || ((ops) => bulk(containerName, ops));
   const statusCounts = {};
   let pending = operations;
   let succeeded = 0;
+  let lastThrown = null;
 
   for (let attempt = 1; attempt <= maxAttempts && pending.length > 0; attempt++) {
-    const results = await bulk(containerName, pending);
-    const retry = [];
+    let results;
+    try {
+      results = await doBulk(pending);
+    } catch (err) {                                               // noqa: BLE001
+      // The SDK THROWS when Cosmos rejects the whole request rather than individual operations.
+      // A serverless 429 is the common case ("The request rate is too large") and it arrives with
+      // no per-operation statuses at all, so the loop below never sees it. Before this, that
+      // escaped the retry entirely and reached the caller as a hard failure — which is wrong for
+      // precisely the status class this function exists to survive. Measured 2026-08-03 on the
+      // streaming ingest, where one 30 MB document issues ~60 bulk calls back to back and dev's
+      // serverless throughput cannot keep up.
+      //
+      // Treat it as "the whole attempt failed": `pending` is untouched, so the same operations are
+      // retried. Recorded under `thrown` so the caller's error message still says what happened.
+      statusCounts.thrown = (statusCounts.thrown || 0) + 1;
+      lastThrown = err;
+      if (attempt < maxAttempts) await new Promise(r => setTimeout(r, 1000 * attempt));
+      continue;
+    }
 
+    const retry = [];
     results.forEach((r, i) => {
       const code = r && r.statusCode;
       statusCounts[code] = (statusCounts[code] || 0) + 1;
@@ -344,6 +366,12 @@ async function bulkVerified(containerName, operations, opts = {}) {
       // per-operation reliably, so this stays simple and generous.
       await new Promise(r => setTimeout(r, 1000 * attempt));
     }
+  }
+
+  // Only when every attempt threw and nothing landed: the caller has no per-operation detail to
+  // report, so surface the underlying error rather than a bare count it cannot act on.
+  if (lastThrown && succeeded === 0 && pending.length === operations.length) {
+    throw lastThrown;
   }
 
   return { succeeded, failed: pending.length, statusCounts };
