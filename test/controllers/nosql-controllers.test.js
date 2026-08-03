@@ -474,3 +474,188 @@ test('chunk ingest route', async (t) => {
     assert.strictEqual(res.statusCode, 400);
   });
 });
+
+test('chunk ingest — NDJSON streaming path', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const { Readable } = require('node:stream');
+  const { chunkMarkdown } = require('../../src/chunker');
+  const DOC = { id: 'd1', projectId: '207', read: ['staff', 'sysadmin'], isPublished: false };
+
+  // A real Readable, not a fake: the handler drives it with readline, and a stub that merely
+  // exposes the lines would not exercise the streaming at all — which is the entire feature.
+  const streamReq = (lines) => Object.assign(
+    Readable.from(lines.map(l => `${l}\n`)),
+    { params: { id: 'd1' }, query: {}, user: ADMIN_USER, is: (t2) => t2 === 'application/x-ndjson' }
+  );
+
+  const ndjson = (blocks, meta = {}) =>
+    [JSON.stringify(meta), ...blocks.map(b => JSON.stringify(b))];
+
+  function stubDoc(t2, doc = DOC) {
+    t2.mock.method(documents, 'getById', async () => doc);
+    t2.mock.method(documents, 'patchExtraction', async () => ({}));
+  }
+
+  await t.test('streamed chunks match the JSON path exactly, block for block', async () => {
+    // Two doors into one corpus. If they disagree, a document's chunk boundaries depend on how big
+    // it happened to be, and re-ingesting through the other door rewrites every id.
+    stubDoc(t);
+    const blocks = Array.from({ length: 12 }, (_, i) => `Block ${i} ${'z'.repeat(400)}`);
+    const written = [];
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
+      written.push(...items); return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    await documentController.ingestChunks(streamReq(ndjson(blocks)), mockRes());
+
+    const viaJson = chunkMarkdown(blocks.join('\n\n'));
+    assert.deepStrictEqual(
+      written.map(c => ({ pageNumber: c.pageNumber, chunkIndex: c.chunkIndex, content: c.content })),
+      viaJson,
+      'the streaming path produced different chunks from chunkMarkdown'
+    );
+  });
+
+  await t.test('flushes in batches instead of buffering the whole document', async () => {
+    // The reason this feature exists. If it accumulated everything and wrote once, a 63 MB
+    // document would still be held whole in memory and nothing would have been fixed.
+    stubDoc(t);
+    const blocks = Array.from({ length: 900 }, (_, i) => `Para ${i} ${'q'.repeat(2600)}`);
+    const batchSizes = [];
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
+      batchSizes.push(items.length); return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    await documentController.ingestChunks(streamReq(ndjson(blocks)), mockRes());
+
+    assert.ok(batchSizes.length > 1, `expected several batches, got ${batchSizes.length}`);
+    for (const n of batchSizes) {
+      assert.ok(n <= 200, `a batch of ${n} exceeds the streaming batch bound`);
+    }
+  });
+
+  await t.test('ONE huge block is still flushed in bounded batches', async () => {
+    // The regression that killed the worker six times on 5cd1bf58f8f32d0024119fb9: that document
+    // is 30 MB across 2,247 lines with only FIVE blank ones, so it splits into ~6 blocks of ~5 MB
+    // and each one emits well over a thousand chunks in a single call. Checking the batch bound
+    // between blocks made the bound follow BLOCK size, which is the one thing that cannot be
+    // relied on. The test above uses 900 separate blocks and passed throughout — a single block
+    // is what distinguishes the two.
+    stubDoc(t);
+    const batchSizes = [];
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
+      batchSizes.push(items.length); return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    // One block, no blank lines, big enough that splitText alone yields hundreds of chunks.
+    const oneBlock = 'lorem ipsum dolor sit amet '.repeat(40000);
+    await documentController.ingestChunks(streamReq(ndjson([oneBlock])), mockRes());
+
+    assert.ok(batchSizes.length > 1,
+      `a single huge block must still flush repeatedly, got ${batchSizes.length} batch(es)`);
+    for (const n of batchSizes) {
+      assert.ok(n <= 200, `a batch of ${n} from ONE block exceeds the streaming bound`);
+    }
+  });
+
+  await t.test('the ACL still comes from the LIVE document', async () => {
+    stubDoc(t);
+    const written = [];
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
+      written.push(...items); return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    await documentController.ingestChunks(
+      streamReq(ndjson(['x'.repeat(300)], { read: ['public'], extraction: { path: 'ocr' } })),
+      mockRes()
+    );
+
+    assert.ok(written.length > 0);
+    for (const c of written) assert.deepStrictEqual(c.read, ['staff', 'sysadmin']);
+  });
+
+  await t.test('a failed batch 500s, records the error, and never marks the document extracted',
+    async () => {
+      // bulkVerified REPORTS partial failure, it does not throw. Marking the document extracted
+      // here would drop it from the work list with part of its text missing.
+      stubDoc(t);
+      const patches = [];
+      t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+        patches.push(fields); return {};
+      });
+      t.mock.method(chunksRepo, 'upsertBatch', async () =>
+        ({ succeeded: 0, failed: 3, statusCounts: { 429: 3 } }));
+      t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+      const res = mockRes();
+      await documentController.ingestChunks(streamReq(ndjson(['a'.repeat(400)])), res);
+
+      assert.strictEqual(res.statusCode, 500);
+      assert.ok(patches.length > 0, 'the failure must be recorded on the document');
+      for (const p of patches) {
+        assert.ok(!p.contentExtracted, 'a partial write must never mark the document extracted');
+        assert.ok(p.contentExtractionError, 'and must leave an error behind');
+      }
+    });
+
+  await t.test('surplus chunks are deleted with the ids that survived', async () => {
+    // AI Search never sees deletes, so an orphan left here stays searchable forever.
+    stubDoc(t);
+    let keep = null;
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) =>
+      ({ succeeded: items.length, failed: 0, statusCounts: {} }));
+    t.mock.method(chunksRepo, 'deleteSurplus', async (a, id, keepIds) => {
+      keep = keepIds; return { succeeded: 0, failed: 0 };
+    });
+
+    const res = mockRes();
+    await documentController.ingestChunks(
+      streamReq(ndjson(Array.from({ length: 6 }, (_, i) => `B${i} ${'w'.repeat(900)}`))), res);
+
+    assert.ok(Array.isArray(keep) && keep.length > 0);
+    assert.strictEqual(keep.length, res.body.chunks, 'kept ids must equal the reported count');
+    assert.deepStrictEqual(keep, [...new Set(keep)], 'chunk ids must be unique');
+  });
+
+  await t.test('a malformed line is a 400, not a half-written document', async () => {
+    stubDoc(t);
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) =>
+      ({ succeeded: items.length, failed: 0, statusCounts: {} }));
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    for (const [lines, why] of [
+      [['not json'], 'metadata line must be JSON'],
+      [['{}', '{"not":"a string"}'], 'blocks must be JSON-encoded strings'],
+      [[], 'an empty stream has no metadata line']
+    ]) {
+      const res = mockRes();
+      await documentController.ingestChunks(streamReq(lines), res);
+      assert.strictEqual(res.statusCode, 400, why);
+    }
+  });
+
+  await t.test('provenance from line 1 is sanitised and recorded', async () => {
+    stubDoc(t);
+    let patched = null;
+    t.mock.method(documents, 'patchExtraction', async (id, pid, fields) => {
+      patched = fields; return {};
+    });
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) =>
+      ({ succeeded: items.length, failed: 0, statusCounts: {} }));
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    await documentController.ingestChunks(
+      streamReq(ndjson(['m'.repeat(300)], { extraction: { path: 'nonsense', engine: 'docling' } })),
+      mockRes()
+    );
+
+    assert.strictEqual(patched.contentExtracted, true);
+    assert.strictEqual(patched.contentExtractionError, null);
+    assert.strictEqual(patched.extraction.path, 'unknown', 'an unknown path is recorded, not trusted');
+  });
+});

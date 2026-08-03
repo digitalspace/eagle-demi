@@ -94,9 +94,7 @@ async function idsForDocument(access, documentId) {
  * @param {string} documentId
  * @param {Array}  chunkItems  fully-formed items; each MUST carry a non-empty read[]
  */
-async function replaceForDocument(access, documentId, chunkItems) {
-  const pk = String(documentId);
-
+function assertAcl(chunkItems) {
   for (const item of chunkItems) {
     // Fail closed. A chunk with no ACL falls back to the isPublished mirror and could become
     // publicly readable — a chunk is a fragment of its document and must never out-rank it.
@@ -104,6 +102,50 @@ async function replaceForDocument(access, documentId, chunkItems) {
       throw new TypeError('[chunks] every chunk requires a non-empty read[] ACL');
     }
   }
+}
+
+/**
+ * Upsert ONE batch of a document's chunks, leaving surplus alone.
+ *
+ * For the streaming ingest path, which cannot know the full chunk set up front — a 63 MB document
+ * is chunked as it arrives, so the "what should survive" question can only be answered at the end.
+ * Pair every streamed ingest with `deleteSurplus`, or a re-extraction that yields fewer chunks
+ * leaves the old tail in place.
+ */
+async function upsertBatch(access, documentId, chunkItems) {
+  assertAcl(chunkItems);
+  if (chunkItems.length === 0) return { succeeded: 0, failed: 0, statusCounts: {} };
+
+  const pk = String(documentId);
+  return cosmos.bulkVerified(CONTAINER, chunkItems.map(resourceBody => ({
+    operationType: 'Upsert', partitionKey: pk, resourceBody
+  })));
+}
+
+/**
+ * Delete every chunk of this document whose id is NOT in `keepIds` — the tail half of a streamed
+ * replace.
+ *
+ * Skipping this is not a cosmetic leak: AI Search indexers never see deletes (`_ts` high-water
+ * mark only), so an orphaned chunk stays searchable forever and a document keeps answering queries
+ * with text it no longer contains.
+ */
+async function deleteSurplus(access, documentId, keepIds) {
+  const pk = String(documentId);
+  const keep = new Set(Array.from(keepIds, String));
+
+  const operations = (await idsForDocument(access, documentId))
+    .filter(id => !keep.has(String(id)))
+    .map(id => ({ operationType: 'Delete', partitionKey: pk, id: String(id) }));
+
+  if (operations.length === 0) return { succeeded: 0, failed: 0, statusCounts: {} };
+  return cosmos.bulkVerified(CONTAINER, operations);
+}
+
+async function replaceForDocument(access, documentId, chunkItems) {
+  const pk = String(documentId);
+
+  assertAcl(chunkItems);
 
   const existing = new Set(await idsForDocument(access, documentId));
   const keep = new Set(chunkItems.map(i => String(i.id)));
@@ -142,5 +184,7 @@ module.exports = {
   getById,
   idsForDocument,
   replaceForDocument,
+  upsertBatch,
+  deleteSurplus,
   removeForDocument
 };

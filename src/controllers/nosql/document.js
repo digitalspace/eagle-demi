@@ -17,7 +17,7 @@ const storage = require('../../storage');
 const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const chunks = require('../../repositories/chunks');
-const { chunkMarkdown } = require('../../chunker');
+const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
 const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const aiSearch = require('../../search/ai-search');
 
@@ -394,12 +394,186 @@ function sanitizeExtraction(raw) {
   return out;
 }
 
+/**
+ * Chunks per bulk call on the streaming path. The whole point is that peak memory follows chunk
+ * size, not document size, so this is what actually bounds it: ~200 chunks of ~2500 characters is
+ * roughly half a megabyte in flight regardless of whether the document is 1 MB or 600 MB.
+ */
+const STREAM_BATCH_CHUNKS = 200;
+
+/**
+ * Ingest extracted text as an NDJSON stream: POST /documents/:id/chunks
+ * with `Content-Type: application/x-ndjson`.
+ *
+ *   {"extraction": {...}}          <- line 1, the same provenance object the JSON path takes
+ *   "first markdown block\n..."    <- lines 2..n, JSON-ENCODED markdown blocks
+ *
+ * WHY THIS EXISTS. The JSON path buffers the whole document: a 63 MB markdown parses to a 63 MB JS
+ * string plus parser buffer on a B1 Basic instance with 1.75 GB and a single worker, so
+ * `express.json`'s 10 MB limit 413s it and raising that limit only moves the ceiling. Measured on
+ * this corpus, 15 documents already exceed it — docling renders them as one enormous table, the
+ * largest 2,198 lines averaging 28,817 characters — and the roadmap is ~300K documents, so this is
+ * a class rather than an outlier. Here nothing larger than one batch is ever held.
+ *
+ * Blocks are JSON-encoded per line because a markdown paragraph contains newlines and an NDJSON
+ * line cannot. The host splits on the SAME `/\n{2,}/` boundary `chunkMarkdown` uses, and both
+ * paths share `createChunkAccumulator`, so a document chunks identically whichever door it came
+ * through.
+ *
+ * Failure is deliberately not partial-success: a batch that fails records the error and 500s
+ * WITHOUT patching `contentExtracted`, so the work list still offers the document. `bulkVerified`
+ * reports partial failure rather than throwing — ignoring `failed` is the bug that once reported
+ * 60,578 documents written when 56,317 landed — so it is checked per batch, not once at the end.
+ */
+async function ingestChunksStreaming(req, res, doc) {
+  const readline = require('readline');
+
+  const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : [...SECURE_ROLES];
+  const acc = createChunkAccumulator();
+  const keepIds = [];
+  let provenance = null;
+  let batch = [];
+  let seenHeader = false;
+
+  // Flushes INSIDE the loop, not after it. One markdown block can be megabytes — measured on this
+  // corpus, a 30 MB document with only 5 blank lines splits into ~6 blocks of ~5 MB, and each one
+  // emits well over a thousand chunks in a single call. Checking the batch bound between blocks
+  // instead of between chunks made the bound follow BLOCK size, which is exactly the thing that
+  // cannot be relied on, and the worker died on that document six times before this was found.
+  // Returns an error string on partial failure, null on success.
+  const collect = async (emitted) => {
+    for (const { pageNumber, chunkIndex, content } of emitted) {
+      const id = chunks.chunkId(doc.id, pageNumber, chunkIndex);
+      keepIds.push(id);
+      batch.push({
+        id,
+        documentId: String(doc.id),
+        projectId: String(doc.projectId),
+        pageNumber,
+        chunkIndex,
+        content,
+        read,
+        extractedAt: new Date().toISOString()
+      });
+      if (batch.length >= STREAM_BATCH_CHUNKS) {
+        const err = await flush();
+        if (err) return err;
+      }
+    }
+    return null;
+  };
+
+  // Returns an error string on partial failure, null on success. Never throws on a bulk shortfall,
+  // because the caller has to record it against the document before answering.
+  const flush = async () => {
+    if (batch.length === 0) return null;
+    const sending = batch;
+    batch = [];
+    const result = await chunks.upsertBatch(systemAccess(), doc.id, sending);
+    if (result && result.failed) {
+      return `chunk write incomplete: ${result.failed} of ${sending.length} failed ` +
+        `(${JSON.stringify(result.statusCounts)})`;
+    }
+    return null;
+  };
+
+  const fail = async (status, message) => {
+    // Recorded on the document, not just returned: a 500 the host retries is fine, but a silent
+    // shortfall that leaves the document looking extracted is the failure mode this guards.
+    if (status >= 500) {
+      await documents.patchExtraction(doc.id, doc.projectId, {
+        contentExtractionError: message.slice(0, 500)
+      });
+    }
+    return res.status(status).json({ error: message });
+  };
+
+  const rl = readline.createInterface({ input: req, crlfDelay: Infinity });
+  let lineNo = 0;
+
+  try {
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      lineNo++;
+
+      if (!seenHeader) {
+        seenHeader = true;
+        let header;
+        try {
+          header = JSON.parse(line);
+        } catch {
+          return fail(400, 'line 1 must be a JSON object of stream metadata');
+        }
+        if (!header || typeof header !== 'object' || Array.isArray(header)) {
+          return fail(400, 'line 1 must be a JSON object of stream metadata');
+        }
+        provenance = sanitizeExtraction(header.extraction);
+        continue;
+      }
+
+      let block;
+      try {
+        block = JSON.parse(line);
+      } catch {
+        return fail(400, `line ${lineNo} is not valid JSON`);
+      }
+      if (typeof block !== 'string') {
+        return fail(400, `line ${lineNo} must be a JSON-encoded string`);
+      }
+
+      const batchErr = await collect(acc.push(block));
+      if (batchErr) return fail(500, batchErr);
+    }
+  } finally {
+    rl.close();
+  }
+
+  if (!seenHeader) {
+    return fail(400, 'empty stream: expected a metadata line');
+  }
+
+  const tailErr = await collect(acc.end());
+  if (tailErr) return fail(500, tailErr);
+  const err = await flush();
+  if (err) return fail(500, err);
+
+  // Only now is the surviving set knowable. Without this a re-extraction yielding fewer chunks
+  // leaves orphans, and AI Search never sees deletes.
+  const surplus = await chunks.deleteSurplus(systemAccess(), doc.id, keepIds);
+  if (surplus && surplus.failed) {
+    return fail(500, `surplus chunk delete incomplete: ${surplus.failed} failed ` +
+      `(${JSON.stringify(surplus.statusCounts)})`);
+  }
+
+  await documents.patchExtraction(doc.id, doc.projectId, {
+    contentExtracted: true,
+    contentExtractedAt: new Date().toISOString(),
+    contentPageCount: keepIds.length,
+    contentExtractionError: null,
+    extractionMethod: 'docling',
+    ...(provenance ? { extraction: provenance } : {})
+  });
+
+  return res.json({ id: doc.id, chunks: keepIds.length, extraction: provenance || null,
+    streamed: true });
+}
+
 exports.ingestChunks = async (req, res) => {
   try {
     const access = resolveAccess(req);
     const doc = await documents.getById(access, req.params.id, req.query.project);
     if (!doc) {
       return res.status(404).json({ error: 'Document not found' });
+    }
+
+    // `express.json` only parses `application/json`, so an NDJSON body arrives here with the
+    // request stream unread. That is what makes this a content-type switch rather than a new route.
+    //
+    // Guarded on `req.is` existing rather than called bare: Express always supplies it, but the
+    // outer catch turns a bare TypeError here into a 500 that reads as a database fault, and it
+    // would fire on every JSON ingest. Cheaper to ask than to debug.
+    if (typeof req.is === 'function' && req.is('application/x-ndjson')) {
+      return await ingestChunksStreaming(req, res, doc);
     }
 
     const { markdown, error, extraction } = req.body || {};

@@ -10,7 +10,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { chunkMarkdown } = require('../src/chunker');
+const { chunkMarkdown, createChunkAccumulator } = require('../src/chunker');
 
 const para = (n, ch = 'a') => ch.repeat(n);
 
@@ -77,5 +77,57 @@ test('chunkMarkdown', async (t) => {
     const chunks = chunkMarkdown(md);
 
     assert.deepStrictEqual(chunks.map(c => c.chunkIndex), chunks.map((_, i) => i));
+  });
+});
+
+test('createChunkAccumulator', async (t) => {
+  // The streaming ingest path feeds sections one at a time and flushes as it goes. If it can
+  // produce different boundaries from the whole-string path, there are two chunking rules and the
+  // corpus becomes inconsistent depending on which door a document came through. These tests
+  // exist to make that impossible to introduce quietly.
+  const feed = (sections) => {
+    const acc = createChunkAccumulator();
+    const out = [];
+    for (const s of sections) out.push(...acc.push(s));
+    out.push(...acc.end());
+    return out;
+  };
+
+  await t.test('incremental output is identical to the whole-string path', () => {
+    const cases = [
+      ['Tiny.'],
+      ['# Heading', 'Short line.', 'Another short one.'],
+      Array.from({ length: 20 }, (_, i) => para(300, String.fromCharCode(97 + i))),
+      Array.from({ length: 12 }, (_, i) => `Paragraph ${i} ${para(400)}`),
+      [para(10000)],
+      // A long run of near-target sections plus a SHORT tail: the tail rule reaches back into the
+      // previous block, which is the one thing a naive streaming implementation gets wrong.
+      [...Array.from({ length: 5 }, () => para(2400)), 'tail'],
+      // Target-sized body then a tail long enough to stand alone.
+      [...Array.from({ length: 3 }, () => para(2600)), para(500)]
+    ];
+    for (const sections of cases) {
+      const whole = chunkMarkdown(sections.join('\n\n'));
+      assert.deepStrictEqual(feed(sections), whole,
+        `streamed output diverged for ${sections.length} sections`);
+    }
+  });
+
+  await t.test('a short tail still joins the previous block, not a stub of its own', () => {
+    const chunks = feed([...Array.from({ length: 3 }, () => para(2600)), 'tail']);
+    assert.ok(chunks.length > 0);
+    assert.ok(chunks[chunks.length - 1].content.endsWith('tail'),
+      'the tail must be appended to the last chunk');
+    assert.ok(chunks[chunks.length - 1].content.length > 100,
+      'and must not have become a chunk of its own');
+  });
+
+  await t.test('blank sections are skipped without consuming an index', () => {
+    assert.deepStrictEqual(feed(['', '   ', 'Tiny.', '\n']), chunkMarkdown('Tiny.'));
+  });
+
+  await t.test('nothing in yields nothing out', () => {
+    assert.deepStrictEqual(feed([]), []);
+    assert.deepStrictEqual(feed(['', '  ']), []);
   });
 });
