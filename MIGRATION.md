@@ -258,9 +258,23 @@ The 2026-07-30 table further down is superseded. It was taken before the host ad
 router, when `do_ocr=True` ran on every PDF; routing, not GPU throughput, was the bottleneck.
 
 The corpus is now **mixed-provenance**: everything before 2026-08-02 11:44 was read by
-`DoclingParseDocumentBackend`, everything after by `PyPdfiumDocumentBackend` (see the SIGTRAP note
-in `TODO.md` §2). Sidecars record `extraction.options.pdf_backend`. Split any quality measurement
-on it.
+`DoclingParseDocumentBackend`, everything after by `PyPdfiumDocumentBackend` (SIGTRAP note below).
+Sidecars record `extraction.options.pdf_backend`. Split any quality measurement on it.
+
+**Why the backend was switched.** `DoclingParseDocumentBackend`'s native page decoder ABORTS THE
+PROCESS on some corpus documents — 83 restarts in five hours, all `status=5/TRAP`. With
+`faulthandler.register(signal.SIGTRAP)` (which `PYTHONFAULTHANDLER=1` does NOT cover, hence five
+hours of silent crashes) 4 of 4 captured traps had an identical top frame:
+`docling_parse/pdf_parser.py:757 _ensure_page_decoder`. **A native abort cannot be caught**, so
+`fail()` / `defer()` / `missing()` never ran, nothing was recorded, the feeder requeued the same
+work, and the run stalled to zero documents in 90 seconds. After the switch: 0 traps, 0 restarts,
+~1,400 docs/hr, and three previously-unextractable documents converted first try.
+
+**A third outcome class exists: `missing()`.** A source 404 is neither a document defect nor a
+runner fault. It writes no `.err`, so the document stays in the work list for whenever the file
+appears, and it does not trip the circuit breaker. Before this, 5,445 unfetchable documents were
+recorded as extraction errors and dropped from the work list permanently. A large `unextracted`
+count is that class working, not a bug.
 
 | | |
 |---|---|
@@ -275,6 +289,17 @@ on it.
 Chunks/document fell from 48.1 to 18.7 because the earlier figure was measured through the
 pre-accumulation chunker, which split per paragraph at ~514 characters against a 2,500 target. Not
 a regression — the same text in fewer, larger chunks.
+
+**Zero-chunk documents by cause, 2026-08-02** (5,958 flagged extracted holding nothing): 5,802
+`download failed: 404` · 73 `unsupported format` · 50 no error at all · 17 `PDFium data format
+error` · 10 other download · 5 other · 1 cascade leftover. The 404s were false failures — docling
+never read those documents because there were no bytes to fetch. Measured: 4,003 of the 5,802 sit
+under an object-store prefix that ALSO holds successfully-downloaded objects with structurally
+identical keys (`<prefix>/<32-hex>.<ext>`), so the key scheme is right and those specific objects
+are simply absent. 111 prefixes affected, 47 missing entirely. Cleared 2026-08-03, below.
+
+**A recorded failure sets `contentExtracted: true`**, so that flag alone is never evidence of
+chunks. The meaningful pair is `(contentPageCount, contentExtractionError)`.
 
 #### Tiling recovery run (2026-08-02 20:47–23:03)
 
@@ -298,6 +323,100 @@ the empty pass", **not** "the text is usable" — 83 of the 184 residue document
 **`contentPageCount` cannot see this recovery.** 1,874 of the 2,039 still read exactly 1 chunk,
 because ~300 characters is one chunk either way; what changed is that the chunk now holds text
 instead of a 14-character placeholder. Measure the markdown or run a query — not the count.
+
+**The 23 `text`-route residue documents ran 2026-08-03** with `LOW_YIELD_MIN_BYTES=0`, which removes
+`decide()`'s small-file escape so they reach `ocr_worker` and therefore tiling. All 23 re-routed to
+OCR, 22 improved, 18 clear `TEXTLESS_CHARS`. **Residue 184 → 166.** Read the distribution, not the
+headline — six clear the bar without being useful:
+
+```
+22 25 25 28 30 | 47 60 68 75 84 183 | 781 1055 1193 1275 1283 1387 1518 1616 2030 2034 3216 3405
+```
+
+That override BREAKS `worker.py --selfcheck` (`assert decide([120] * 5, small) == "text"`, "a tiny
+file must not be sent to the GPU"), which is a correct invariant for the general corpus. It belongs
+on a hand-built work list of the affected documents, never on a corpus run.
+
+#### The tiling fix failed 552 of 623 documents on its first attempt (2026-08-02)
+
+Every failure was `PDFium: Data format error` or `pypdfium could not load` on files that are not
+damaged — the same documents converted cleanly minutes later. Cause: `convert_tiled` rendered pages
+by opening the PDF with pypdfium2 **in the parent process**. `worker.py` already carried a comment
+above `probe_pdf` saying exactly why that is forbidden — docling uses pypdfium2 too, its converter
+threads live in the parent, and they touch the same global state without taking any lock of ours.
+It corrupts silently rather than crashing. The comment even recorded the prior incident (468
+failures in two minutes). It was reintroduced anyway.
+
+**Why the tests missed it, which is the transferable part.** The host's 45 self-checks monkeypatched
+the render with a PIL fixture, so no test ever opened a real PDF. The five-document verification
+probe ran serially, and the bug needs docling's threads and the render running CONCURRENTLY — a
+serial probe is structurally incapable of showing it. A single-path test passing is not evidence
+when the failure mode IS the interaction.
+
+Fixed by moving the render into the existing `ProcessPoolExecutor` as `tile_job`, matching
+`pdfium_job` / `split_pdf`. The regression check asserts the render is *submitted to the pool*
+rather than asserting on output — the output looked fine either way. Blast radius was contained
+because `gpu-ingest` was stopped in time: 615 false `.err` files never posted, and the 305 that did
+self-healed on re-ingest, since `ingestChunks` has no `contentExtracted` guard.
+
+#### Oversize documents: streaming ingest, and FOUR ceilings (2026-08-03)
+
+15 documents held 13–60 MB of markdown against `express.json({ limit: '10mb' })` (`src/app.js:75`),
+so every POST was a 413. They were the only documents with markdown on disk and nothing in Cosmos.
+**All 15 now landed: 132,787 chunks, 12/15 retrieve themselves** (the 3 misses are near-identical
+review-table text across sibling documents, so their own chunk ranks below `pageSize` — bad labels,
+not missing content).
+
+**Why the markdown is 60 MB:** docling renders them as one enormous markdown table, the largest
+2,198 lines averaging 28,817 characters. Nothing is malformed; they are genuinely that big.
+
+**Raising the limit is the wrong knob** — a 60 MB body parses to a 60 MB JS string plus parser
+buffer on B1 Basic, and the ceiling only moves to the next document, against a roadmap of ~300K.
+The fix is `Content-Type: application/x-ndjson` on the same route: line 1 provenance, lines 2..n
+JSON-encoded markdown blocks. `express.json` only parses `application/json`, so the body arrives
+unconsumed and no route change was needed. Both paths share `createChunkAccumulator`, so a document
+chunks identically whichever door it came through.
+
+Only the first ceiling was designed for. **Each of the others surfaced from a real document, never
+from a test:**
+
+| Ceiling | Symptom | Resolution |
+|---|---|---|
+| Memory, 10 MB body | 413 | NDJSON streaming path |
+| Transport | `400 empty stream` | App Service drops CHUNKED bodies — send `Content-Length`. See infrastructure traps |
+| Time, 240 s | 504 GatewayTimeout | `UPLOADERS=1`; a 31 MB document went 240 s+ → 111 s |
+| Throughput | Cosmos 429 | The SDK THROWS a request-level 429 instead of returning per-operation statuses, so `bulkVerified` never retried it. Fixed in the shared function |
+
+**And one bug of our own, which killed the worker six times.** The batch bound was checked between
+markdown BLOCKS rather than between chunks, so peak memory followed block size. One 30 MB document
+is 2,247 lines with only FIVE blank ones — ~6 blocks of ~5 MB, each emitting well over a thousand
+chunks per call. The existing batch test used 900 separate blocks and passed throughout. **A single
+huge block is the shape that distinguishes correct from broken.**
+
+Verified at `UPLOADERS=1` only. Whether 4 still fits inside 240 s now that batching is bounded is
+untested — do not assume it does.
+
+#### The 5,802 false 404s, cleared 2026-08-03
+
+```
+PURGE_RESULT {"mode":"live","errorsOnly":true,"scanned":59082,"documents":5802,
+              "chunksRemoved":0,"indexEntriesRemoved":0,"failures":[]}
+```
+
+The dry run matched the reconciliation's independently-measured 5,802 exactly, which was the gate
+for proceeding. `chunksRemoved: 0` because these documents never held chunks — the run reset false
+flags and deleted nothing. Executed via `_purgewrap.js` inside the app container over the App
+Service SSH tunnel, because Cosmos is private and keyless.
+
+**The host side is half the job**: `already_done()` treats a local `.err` as settled no matter what
+Cosmos says. The `.err` files partition exactly, which is the cross-check that the classification is
+right — 5,802 404-class + 840 superseded (an `.err` beside a `.md`) + **106 genuine** = 6,748, and
+that 106 matches the independently derived unextractable count. The first two were quarantined;
+`worklist.json` was deleted so it rebuilds.
+
+Rebuild verified: **7,298 = 1,496 source-missing + 5,802 purged.** Documents attempted afterwards
+record through `missing()` — no `.err`, so they stay honestly in the work list instead of being
+falsely marked failed, which was the entire point.
 
 #### Conversion, measured on 326 documents (2026-07-30) — superseded, kept for the memory ceiling
 
