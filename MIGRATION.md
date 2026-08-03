@@ -270,11 +270,34 @@ on it.
 | Chunks in Cosmos | **995,316** — 18.7 chunks/document, against 48.1 measured under the pre-accumulation chunker |
 | Genuinely unextractable | **~106** (0.18%) — `unsupported format`, `PDFium data format error` |
 | Not extractable here at all | **5,802** whose source 404s: the dev object store is a partial copy of prod, not an extraction defect |
-| Extracted but textless | **2,039** large-format sheets, `<!-- image -->` only — `TODO.md` §3 |
+| Extracted but textless | **2,039** large-format sheets, `<!-- image -->` only — recovered 2026-08-02, below |
 
 Chunks/document fell from 48.1 to 18.7 because the earlier figure was measured through the
 pre-accumulation chunker, which split per paragraph at ~514 characters against a 2,500 target. Not
 a regression — the same text in fewer, larger chunks.
+
+#### Tiling recovery run (2026-08-02 20:47–23:03)
+
+The 2,039 textless documents re-OCR'd by cutting each page into a 3×3 grid with 6% overlap, because
+docling normalises a page image to a fixed size before OCR and that puts 6-point labels on a D-size
+sheet under RapidOCR's detection floor. Diagnosis table in `TODO.md` §3.
+
+| | |
+|---|---|
+| Processed | **2,039** in 2.49 h — 0 failed, 0 deferred, 0 source-missing |
+| Now holding real text | **1,855 (91%)** — median **299** real characters, p75 552, p90 1,017, max 104,190 |
+| Residue | **184 (9%)** — 101 unimproved, 83 under 32 characters. 161 `ocr` / 23 `text` |
+| Cosmos | all 2,039 `contentExtracted`, **zero** `contentExtractionError` |
+| Search round-trip | **9 of 10** sampled documents retrieve themselves |
+
+**A third provenance class exists now.** Sidecars record `extraction.options.tiled`. Tiled text is
+ROUGH where map lettering sits at an angle (`Barrowsources`, `Offsite constnk source Of`), so any
+quality measurement splits on `tiled` as well as on `pdf_backend`. And the flag means "tiling beat
+the empty pass", **not** "the text is usable" — 83 of the 184 residue documents carry it.
+
+**`contentPageCount` cannot see this recovery.** 1,874 of the 2,039 still read exactly 1 chunk,
+because ~300 characters is one chunk either way; what changed is that the chunk now holds text
+instead of a 14-character placeholder. Measure the markdown or run a query — not the count.
 
 #### Conversion, measured on 326 documents (2026-07-30) — superseded, kept for the memory ceiling
 
@@ -543,6 +566,17 @@ Reads compose `src/helpers/access-odata.js` — `filterFor(access, partitionFiel
   Cosmos Data Contributor and still failed with *"Unable to retrieve account endpoint"* — which
   points at the connection string, not at RBAC. The fix is `Cosmos DB Account Reader Role`.
 - **Deleting from the index is a write.** The UAMI needs Index Data **Contributor**, not Reader.
+- **App Service does NOT forward a CHUNKED request body to the Node worker.** A body sent with
+  `Transfer-Encoding: chunked` arrives as an EMPTY stream: the app reads zero bytes and answers 400,
+  which reads like a malformed payload rather than a transport problem. Measured 2026-08-03 on the
+  NDJSON ingest route, identical bytes both ways: chunked → `400 empty stream`, `Content-Length` →
+  `200`. Any streaming client must set `Content-Length` — in Python `requests`, pass bytes, never a
+  generator. **This does not defeat server-side streaming**: Content-Length is metadata, Node still
+  reads the socket incrementally, and peak memory still follows batch size rather than body size.
+- **App Service's 240 s request timeout applies to a streaming write too.** Four concurrent 30 MB
+  ingests on one B1 vCPU pushed past it and returned 504; serialising to one uploader took the same
+  document to 111 s. Long synchronous writes need either serialisation or a resumable protocol —
+  the same ceiling already documented for `POST /admin/sync/nrpti`.
 
 ### What the Typesense migration taught, both measured
 
