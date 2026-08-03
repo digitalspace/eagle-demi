@@ -444,6 +444,108 @@ recorded as extraction errors without being downloaded.
 Chunk ids derive from the split, so a mid-run change orphans every chunk already written instead of
 reconciling with it.
 
+#### The retrieval scorecard, first real run (2026-08-03)
+
+`src/scripts/score-retrieval.js` had never executed against live data. It has now, and it earned its
+keep: it found a public-facing 400 and named the dominant corpus defect, neither of which any
+heuristic had seen.
+
+**Labels came from an INDEPENDENT reader, not from a human, and that is legitimate.** The script's
+header says labels cannot be automated. The real requirement is narrower — the phrase must be
+independent of *the pipeline under measurement*, because a phrase lifted from docling's own markdown
+retrieves itself by construction. Two readers satisfy that and share no code with docling: poppler's
+`pdftotext` where a text layer exists, and a `pdftoppm` page render read by eye where it does not.
+47 labels, four provenance strata plus a negative control.
+
+**Strata are what the sidecars can PROVE.** `pdf_backend` is recorded on only 2,755 of 51,460
+sidecars and the field started being written at **18:45 on 2026-08-02, seven hours after the 11:44
+backend switch** — so timestamp alone does not separate the backends. The 11:44–18:45 window is
+unattributable and was excluded rather than guessed at.
+
+| Stratum | n | recall@1 | recall@10 | MRR |
+|---|---|---|---|---|
+| `text` / pypdfium2 | 15 | 0.27 | **0.53** | 0.331 |
+| `ocr`, pre-switch (docling-parse) | 15 | 0.20 | **0.53** | 0.258 |
+| `ocr`, PyPdfium, not tiled | 14 | 0.14 | **0.50** | 0.233 |
+| `ocr`, tiled | 2 | 0.50 | 0.50 | 0.500 |
+| **control — textless documents** | 2 | **0** | **0** | **0** |
+
+**Precision: at n≈15 one standard error is ~13 points, so a 95% interval spans roughly ±25.** The
+three main strata are statistically indistinguishable from each other. This is a smoke test with a
+denominator, not a measurement fine enough to rank strata — do not read the 0.53/0.53/0.50 ordering
+as real.
+
+**The control is what makes the rest meaningful.** Both textless documents scored `rank: 0` while
+their queries returned 9 and 1,386 matching chunks — the instrument finds documents and correctly
+fails to find these. Without it a uniform ~0.5 could not be distinguished from a broken harness.
+
+##### Half the misses are not a corpus problem, and a self-phrase probe proved which half
+
+A uniform ~0.5 across unrelated strata looks like index coverage, not text quality — `demi-chunks`
+held 80,354 rows on 2026-08-01 against 995,316 chunks in Cosmos. So each of the 22 missed documents
+was re-queried with a phrase taken from **its own extracted markdown**. That deliberately violates
+the independence rule, which is the point: a self-phrase MUST retrieve its own document if that
+document is indexed at all, so the two hypotheses predict different answers.
+
+**14 of 22 came back** — those documents are in the index, so their human-label miss is a genuine
+retrieval failure. The other 8 used generic or numeric self-phrases (`REPORT Prepared for: BC Hydro`,
+`6070000 6075000 …`) matching 68–6,759 chunks each and were outranked at `top: 10`. **That is a weak
+probe, not evidence of absence from the index** — it says nothing either way.
+
+##### The dominant defect is word-JOINING, and it is OCR-path-specific
+
+The self-phrases showed it directly, because they are quoted from the extraction:
+
+```
+Laren: Iwant tovoicemyopposition to theKitimat-Summit
+linkto aMoFRwebsiteconcerning engineering topicsinre
+IN THE MATTER OF ENVIRONMENTALASSESSMENT CERTIFICATE
+CommentfromEAoiNFo    4S4 Ph0ae: 1250 723-4656 Fux:
+```
+
+This is the **inverse** of the `Tum ble r Ridge` spacing artefact the 2026-07-31 audit predicted, and
+it defeats heuristics for the same reason: every glued fragment is alphabetic and pronounceable. A
+user searching the words they can see on the page gets nothing, because the index holds one token
+where the page has four.
+
+Measured across 400 documents per stratum, rate per 1,000 word tokens:
+
+| Stratum | alphabetic token ≥16 chars | internal lower→Upper | example |
+|---|---|---|---|
+| `text` | **0.44** | **2.70** | `characterization` |
+| `ocr` pre-switch | 10.23 | 17.45 | `tovoicemyopposition` |
+| `ocr` PyPdfium | 12.37 | 18.05 | `OfficeofthePremier` |
+| `ocr` tiled | 12.76 | **37.57** | `FLOWFROMNORTHWEST` |
+
+**23–29× more frequent on the OCR path.** The `text` figure is the detector's false-positive floor,
+not real joining — its own worst example is a legitimate English word. The backend switch did not
+help (10.2 → 12.4), and tiling roughly doubles the camel rate, consistent with map lettering.
+
+Two consequences that change the plan:
+
+- **The intake cleaner as specced does not touch this.** Stripping `<!-- image -->` and dropping
+  separator chunks is unrelated to a missing space inside a token. This is RapidOCR losing
+  inter-word spacing; the fix belongs in extraction or in a decompounding step at index time, and
+  either is a new component rather than a filter.
+- **`text`-stratum misses remain UNEXPLAINED.** Those documents are indexed and barely joined, yet
+  7 of 15 labels still missed. Label length does not predict it (0.75 / 0.43 / 0.53 by word count at
+  n=46 — noise). Whatever is happening there is a second, separate cause and has not been found.
+
+##### A standalone AND / OR / NOT in any public query returned HTTP 400
+
+Found on the control label `EAST TOBA AND MONIROSE HYDROELECTRIC PROJECT`:
+`Failed to parse query string at line 1, column 42`. Column 42 is exactly where the bare `AND`
+lands in `(EAST OR EAST~1) AND (TOBA OR TOBA~1) AND AND AND …`.
+
+`tokenize` splits on non-alphanumerics, so it strips operator *punctuation* but cannot strip a
+*word*; `AND`/`OR`/`NOT` are case-sensitive Lucene booleans under `queryType: 'full'` and reached
+`buildQuery` as ordinary terms. A test asserted the safe-looking half of this (`tokenize` returns
+them as words) with a comment claiming a user typing `OR` "searches for that word" — it does not,
+it gets a 400. **An assumption written into a test but never put to the service.**
+
+Fixed in `buildQuery` by lowercasing the three reserved words: the operators are case-sensitive and
+the index side is lowercased by `en.microsoft`, so the term still matches. One place, all datasets.
+
 #### Secret rotation
 
 `/home/site/wwwroot/.env` shipped in every deploy from 2026-07-24 until `639269b`, mode `rwxrwxrwx`.

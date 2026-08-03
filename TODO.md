@@ -21,8 +21,13 @@ documents 60,578, records 48,086, boundaries 281.
 
 **Extraction, as of 2026-08-03.** Work list **7,298 outstanding** = 1,496 whose source 404s in the
 dev object store + 5,802 whose false failure flags were cleared. `.err` on the host down to **106**,
-the genuinely unextractable. **166 documents extract to nothing** and tiling cannot reach them.
-Ingest handles any document size via the NDJSON path — `MIGRATION.md` §A for all of it.
+the genuinely unextractable. **166 documents extract to nothing** — accepted as a floor 2026-08-03
+(0.27%). Ingest handles any document size via the NDJSON path — `MIGRATION.md` §A for all of it.
+
+**Retrieval measured 2026-08-03, first real run of the scorecard: recall@10 ≈ 0.5.** The cause is
+word-joining on the OCR path, not index coverage — a self-phrase probe confirmed 14 of 22 missed
+documents are indexed. Same run found a public 400 on any query containing a standalone `AND`/`OR`/
+`NOT`; fixed. §3 and `MIGRATION.md` §A.
 
 **`indexProgress` in `/db/stats` and `/admin/index-progress` is COSMOS index-build percent, not
 Azure AI Search.** `src/controllers/db.js:22-37` calls `cosmosNoSql.indexProgress`. `chunks: 100`
@@ -96,32 +101,44 @@ Current position: work list **7,298** = 1,496 source-missing + 5,802 requeued af
 
 ### 3. Extraction quality
 
-Numbers + caveats in `MIGRATION.md` §A. **OCR not the problem: word-salad 0.23% of chunks, 30 of 40
-randomly sampled documents had zero bad chunks.** In this order:
+Numbers + caveats in `MIGRATION.md` §A. OCR *word-salad* is still 0.23% of chunks and 30 of 40
+sampled documents had zero bad chunks — but **"OCR is not the problem" no longer survives the
+retrieval run.** The 2026-08-03 scorecard found a different OCR defect the heuristics cannot see:
+**word-JOINING** (`tovoicemyopposition`), 23–29× more frequent on the OCR path. Every glued fragment
+is pronounceable, so it scores clean and still costs the search. In this order:
 
 - [x] **Large-format sheets extracting to nothing — FIXED 2026-08-02/03 by 3x3 tiling.** 2,039
       documents re-run, 0 failed, **1,855 (91%) now hold real text**. Full account in
       `MIGRATION.md` §A. One thing to carry forward when reading anything below: **`tiled: true`
       means tiling beat the empty pass, NOT that the text is usable** — 83 residue documents
       carry it.
-- [ ] **The 166 residue.** Tiling is the last tool available for them; another pass changes nothing.
-      Needs a different instrument, or an accepted floor. 161 `ocr` / 5 `text`.
-- [ ] **Retrieval scoring** on human-labelled phrases — the verdict metric. Heuristics cannot see
-      character-spacing damage (`Tum ble r Ridge` score clean), so only this close the question.
-      **Harness written 2026-08-01**: `src/scripts/score-retrieval.js`, read-only, queries through
-      `searchChunks()` so it score path API actually serve. Report recall@1/@5/@10 + MRR; MRR there
-      because recall@1 cannot tell "ranked second" from "absent". Refuse to run when
-      `SEARCH_ENDPOINT` unset — unconfigured search return `[]`, which would print as `recall@1: 0`
-      and read as unfindable corpus. **Two human steps left**: write labels (format +
-      discipline in `src/scripts/retrieval-labels.example.jsonl`; phrase must come from SOURCE
-      document, not extracted markdown, else it retrieve itself and measure nothing), then run it
-      **after the extraction run land** — growing corpus make two scorecards incomparable. **The
-      run landed 2026-08-02, so that condition is clear.** Split the scorecard by
-      `extraction.pdf_backend` AND by `extraction.options.tiled`: the corpus now carries three
-      provenance classes, and tiled text is explicitly rough (`Barrowsources`), so merging it with
-      the rest would hide exactly the population most in doubt.
-- [ ] Only then decide on an intake cleaner. On current evidence job small: strip `<!-- image -->`,
-      drop chunks that are pure separator furniture. **Not** an OCR re-run.
+- [x] **The 166 residue — ACCEPTED AS A FLOOR 2026-08-03.** 166 of 60,578 = **0.27%**. Tiling was
+      the last tool available and the 2026-08-03 pass showed the margin is already thin: 18
+      recovered, about six of them useful. Not worth a new instrument. Count independently
+      reproduced from `sent/*.md` at `real_chars < 32`. Reopen only if the corpus grows a much
+      larger population of the same shape.
+- [x] **Retrieval scoring — RAN 2026-08-03.** Numbers, method and both findings in `MIGRATION.md`
+      §A. Headline: **recall@10 ≈ 0.5** across all three main strata, negative control clean at 0.
+      Labels came from independent readers (`pdftotext`, page renders read by eye) rather than
+      waiting on a human — see §A for why that satisfies the discipline. **At n≈15 the strata are
+      statistically indistinguishable; do not rank them.**
+- [ ] **Word-joining on the OCR path — the finding that needs a decision.** The extraction holds
+      `tovoicemyopposition`, `ENVIRONMENTALASSESSMENT`, `OfficeofthePremier`: **23–29× more glued
+      tokens on the OCR path than the text path** (measured, 400 docs/stratum). Heuristics score it
+      clean because every fragment is pronounceable. It is the confirmed cause of retrieval misses
+      on OCR-path documents. Options, none cheap: RapidOCR detection/merge tuning, a decompounding
+      step at index time, or a different OCR engine. **Decide before any re-extraction run.**
+- [ ] **`text`-stratum misses are unexplained.** Those documents are indexed and barely joined, yet
+      7 of 15 labels missed. Label length does not predict it. A second cause exists and has not
+      been found; a larger label set on that stratum is the next instrument.
+- [ ] **The `tiled` stratum is barely scored — 2 labels, not 10.** The other 8 need an eye on a
+      rendered map sheet, which is the one stratum where a wrong reading is indistinguishable from a
+      retrieval miss. Renders are at `/root/demi-tiled-review/`; drop phrases into
+      `D-ocr-tiled.jsonl` and re-run. Until then the tiled row in the scorecard means nothing.
+- [ ] **Intake cleaner — still open, but the case for it got WEAKER.** Stripping `<!-- image -->`
+      and dropping separator chunks does nothing about word-joining, which is the defect actually
+      costing retrieval. Worth doing as tidying; do not expect it to move recall. **Not** an OCR
+      re-run.
 
 ### 4. Needs a human, not code
 
