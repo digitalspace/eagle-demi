@@ -530,6 +530,38 @@ Two consequences that change the plan:
 - **`text`-stratum misses remain UNEXPLAINED.** Those documents are indexed and barely joined, yet
   7 of 15 labels still missed. Label length does not predict it (0.75 / 0.43 / 0.53 by word count at
   n=46 — noise). Whatever is happening there is a second, separate cause and has not been found.
+  Re-measured at n=39 below; it is not sampling noise.
+
+##### The text stratum re-scored at n=39, and ~0.6 holds
+
+`src/scripts/retrieval-labels-text.jsonl` (25 labels, written 2026-08-01, phrases read from each
+source PDF's own text layer with **pypdf**) was sitting unmerged on `demi-todo-corrections` and had
+never been run. Cherry-picked to `main` and scored. **Zero document overlap** with the 15 built
+2026-08-03, so the two sets pool cleanly.
+
+| Set | n | recall@1 | recall@10 | MRR |
+|---|---|---|---|---|
+| 2026-08-03, page 1–3, `pdftotext` | 15 | 0.27 | 0.53 | 0.331 |
+| 2026-08-01, deeper pages, `pypdf` | 24 | 0.375 | 0.625 | 0.500 |
+| **pooled** | **39** | **0.333** | **0.590** | **0.435** |
+
+At n=39 one standard error is ~8 points rather than ~13. **The text path genuinely loses about 40%
+of labels at top 10** — that is now a measurement, not a small-sample artefact, and it is the more
+important half of the picture because word-joining does not explain it.
+
+**One hypothesis tested and rejected**: that misses cluster on structured page furniture (numbered
+headings, table captions, all-caps map annotations) rather than running prose. Measured 0.50 (n=10)
+against 0.62 (n=29) — well inside noise at those sizes. Recorded so nobody re-runs it.
+
+**The AND/OR/NOT 400 was hit independently by both label sets** — `EAST TOBA AND MONIROSE …` and
+`TERRESTRIAL ECOSYSTEM MAPPING (TEM) POLYGONS AND FIELD PLOT LOCATIONS`. 2 of 72 labels across two
+sets built a day apart by different means, so the real-world exposure is on the order of a few
+percent of natural queries, not a curiosity.
+
+**`retrieval-labels-ocr.jsonl` was cherry-picked but deliberately NOT scored.** Its own header says
+the 25 lines are CANDIDATES seeded from document titles, which are metadata and not verified to be
+on the page — scoring them would measure the title, not the extraction. They need an eye on each
+scan first.
 
 ##### A standalone AND / OR / NOT in any public query returned HTTP 400
 

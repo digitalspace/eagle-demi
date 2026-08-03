@@ -128,9 +128,16 @@ is pronounceable, so it scores clean and still costs the search. In this order:
       clean because every fragment is pronounceable. It is the confirmed cause of retrieval misses
       on OCR-path documents. Options, none cheap: RapidOCR detection/merge tuning, a decompounding
       step at index time, or a different OCR engine. **Decide before any re-extraction run.**
-- [ ] **`text`-stratum misses are unexplained.** Those documents are indexed and barely joined, yet
-      7 of 15 labels missed. Label length does not predict it. A second cause exists and has not
-      been found; a larger label set on that stratum is the next instrument.
+- [ ] **`text`-stratum misses are unexplained — and NOT sampling noise.** Re-scored at **n=39**
+      (pooling the 2026-08-01 pypdf labels, cherry-picked from `demi-todo-corrections`, with the
+      2026-08-03 set; zero document overlap): **recall@10 = 0.590**, one SE ~8 points. The text path
+      loses ~40% of labels and word-joining does not explain it, since that stratum barely joins.
+      Two hypotheses already tested and rejected: label length, and structured page furniture vs
+      prose. **This is now the biggest open question in extraction quality.**
+- [ ] **`src/scripts/retrieval-labels-ocr.jsonl` — 25 CANDIDATES, not labels.** Seeded from document
+      titles, which are metadata and not verified to be on the page; 12 marked STARVED. Scoring them
+      as-is measures the title, not the extraction. Open each scan, confirm the words appear, edit or
+      delete the line — then it becomes a second OCR stratum worth running.
 - [ ] **The `tiled` stratum is barely scored — 2 labels, not 10.** The other 8 need an eye on a
       rendered map sheet, which is the one stratum where a wrong reading is indistinguishable from a
       retrieval miss. Renders are at `/root/demi-tiled-review/`; drop phrases into
