@@ -70,12 +70,28 @@ test('ai-search query construction', async (t) => {
   // queryType 'full' makes +, -, *, ", ~, ( ) and : operators. An unbalanced one is a 400, not a
   // search for that character, so nothing but letters and digits may reach the query.
   await t.test('tokenize strips every Lucene operator', () => {
-    // OR/AND survive as WORDS, not as operators — buildQuery joins terms with its own AND, so a
-    // user typing "OR" searches for that word rather than restructuring the query.
+    // OR/AND survive tokenize as WORDS — it splits on punctuation and cannot strip a word. They
+    // are demoted to terms by buildQuery instead; see the reserved-word test below.
     assert.deepStrictEqual(aiSearch.tokenize('river) OR *:* AND "x"'), ['river', 'OR', 'AND', 'x']);
     assert.deepStrictEqual(aiSearch.tokenize('  !!! '), []);
     assert.deepStrictEqual(aiSearch.tokenize('rivière québec'), ['rivière', 'québec'],
       'accented letters must survive or French place names become unsearchable');
+  });
+
+  // Found by the first real run of score-retrieval.js against the live index, on a corpus phrase:
+  // "EAST TOBA AND MONTROSE HYDROELECTRIC PROJECT" came back
+  // `Failed to parse query string at line 1, column 42` — column 42 is exactly where the bare AND
+  // lands. Any public query containing a standalone AND/OR/NOT was answering HTTP 400.
+  await t.test('reserved boolean words are demoted to terms, not left as operators', () => {
+    assert.strictEqual(aiSearch.buildQuery(['EAST', 'TOBA', 'AND', 'MONTROSE'], false),
+      'EAST AND TOBA AND and AND MONTROSE');
+    assert.strictEqual(aiSearch.buildQuery(['OR', 'NOT'], false), 'or AND not');
+    // Lowercase forms were never operators and must be left alone.
+    assert.strictEqual(aiSearch.buildQuery(['and', 'or'], false), 'and AND or');
+    // Demotion must survive fuzzing too — these are all under MIN_FUZZY_LENGTH, so the point is
+    // that the operator never reappears once fuzzy expansion is on.
+    assert.strictEqual(aiSearch.buildQuery(['river', 'AND', 'creek'], true),
+      '(river OR river~1) AND and AND (creek OR creek~1)');
   });
 
   await t.test('term count is capped', () => {

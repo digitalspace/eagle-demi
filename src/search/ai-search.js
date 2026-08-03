@@ -154,6 +154,20 @@ function tokenize(keywords) {
 const MIN_FUZZY_LENGTH = 4;
 
 /**
+ * Lucene's boolean operators, which are CASE-SENSITIVE under `queryType: 'full'`.
+ *
+ * `tokenize` strips operator punctuation but cannot strip a word, so these reach `buildQuery` as
+ * ordinary terms and join into `... AND AND AND ...` — a parse error, HTTP 400, not a search.
+ * Measured against the live index on a real corpus phrase, "EAST TOBA AND MONTROSE HYDROELECTRIC
+ * PROJECT": `Failed to parse query string at line 1, column 42`, which is exactly where the bare
+ * `AND` lands. Any public query containing a standalone AND/OR/NOT was failing this way.
+ *
+ * Lowercasing demotes them back to terms and loses nothing: the index side is lowercased by
+ * `en.microsoft`, so the word still matches whatever it would have matched.
+ */
+const LUCENE_OPERATORS = new Set(['AND', 'OR', 'NOT']);
+
+/**
  * `(term OR term~1)` per term, ANDed together.
  *
  * The OR is not redundant. A fuzzy term bypasses the query analyzer, so it matches only against
@@ -164,7 +178,8 @@ const MIN_FUZZY_LENGTH = 4;
 function buildQuery(terms, fuzzy, prefix = false) {
   const last = terms.length - 1;
   return terms
-    .map((t, i) => {
+    .map((raw, i) => {
+      const t = LUCENE_OPERATORS.has(raw) ? raw.toLowerCase() : raw;
       const parts = [t];
       if (fuzzy && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}~1`);
       // Prefix on the LAST term only — the one still being typed. Applying it to every term would
