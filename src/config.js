@@ -78,10 +78,17 @@ const config = {
   doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
   doclingKey:   process.env.DOCLING_API_KEY  || '',
 
-  // Chunk sizing is the main lever on Typesense RAM: the index is held in memory and per-chunk
-  // overhead dominates the text itself (~1.1 KB of RAM for a 601-character chunk, measured).
   // Paragraphs accumulate to TARGET before a chunk is emitted; MAX is the hard split point and
   // MIN is only the floor below which a trailing fragment is folded into the previous chunk.
+  //
+  // TARGET = 2500 IS CURRENTLY UNJUSTIFIED. It was derived against Typesense, which held its index
+  // in RAM and paid ~1.1 KB per 601-character chunk, so per-chunk overhead dominated the text and
+  // merging up to ~2500 cut the corpus from ~3.1M chunks to ~740k. AI Search has no such cost, so
+  // that argument no longer applies to anything. The real lever now is retrieval: chunks are the
+  // unit a conjunctive query must match within, so larger chunks satisfy AND more often and dilute
+  // BM25 term density, and smaller ones do the reverse. That trade can only be settled by
+  // re-chunking at several sizes and scoring — see the sweep planned with the re-ingest. Until
+  // then this number is inherited, not chosen.
   maxChunkSize:    parseInt(process.env.MAX_CHUNK_SIZE    || '4000', 10),
   targetChunkSize: parseInt(process.env.TARGET_CHUNK_SIZE || '2500', 10),
   minChunkSize:    parseInt(process.env.MIN_CHUNK_SIZE    || '100',  10),

@@ -299,8 +299,9 @@ exports.deleteDocument = async (req, res) => {
     await documents.deleteById(existing.id, existing.projectId);
 
     // The document's extracted text has to go with it. Without this the chunks survive in Cosmos
-    // and the next nightly full sync re-indexes the complete text of a deleted document — the
-    // exact thing "a chunk must never be findable when its document is not" forbids.
+    // and keep serving the complete text of a deleted document — the exact thing "a chunk must
+    // never be findable when its document is not" forbids. Nothing sweeps them later: the nightly
+    // full sync that used to be the backstop went with Typesense.
     let removedChunks = 0;
     try {
       const result = await chunks.removeForDocument(systemAccess(), existing.id);
@@ -316,12 +317,14 @@ exports.deleteDocument = async (req, res) => {
     const removedFromSearch =
       await aiSearch.deleteFromIndex(aiSearch.indexes().documents, existing.id);
 
-    // AI Search is NOT the same "best-effort" as Typesense above, and the difference matters.
-    // Typesense has a nightly full sync that reconciles whatever this misses; the AI Search
-    // indexer runs on a high-water mark over `_ts`, which cannot see deletes AT ALL (measured:
-    // a run immediately after a hard delete processed 0 items). This call is the only thing that
-    // removes the text of a deleted document from search. It still must not fail the request —
-    // the record is already gone — so the client is told what happened instead.
+    // "Best-effort" here does NOT mean "something else will catch it". Nothing will: the indexer
+    // runs on a high-water mark over `_ts`, which cannot see deletes AT ALL (measured: a run
+    // immediately after a hard delete processed 0 items), and there is no deletion-detection
+    // policy configured. This call is the only thing that removes the text of a deleted document
+    // from search, and if it fails the text stays searchable until someone retries. It still must
+    // not fail the request — the record is already gone — so the client is told what happened
+    // instead. `deleteChunksForDocument` swallows and logs its own errors, which is why this is a
+    // bare await rather than a try/catch.
     const removedChunksFromSearch = await aiSearch.deleteChunksForDocument(existing.id);
 
     return res.json({

@@ -214,6 +214,12 @@ function parseArgs(argv) {
   if (!Number.isInteger(args.maxChunks) || args.maxChunks < 1) {
     throw new Error('[probe-phrase-presence] --max-chunks must be a positive integer');
   }
+  // Unvalidated, a non-numeric value reaches Cosmos as `maxItemCount: NaN`, which is treated as
+  // absent — and that is the unpaged fetchAll() the loadChunks docstring below exists to avoid.
+  // The failure mode is an OOM kill with nothing in the log, so it must be refused here.
+  if (!Number.isInteger(args.pageSize) || args.pageSize < 1) {
+    throw new Error('[probe-phrase-presence] --page-size must be a positive integer');
+  }
   return args;
 }
 
@@ -305,7 +311,12 @@ async function probe(argv = []) {
     input: {
       labelsFile: args.labels,
       scorecard: args.scorecard || null,
+      // Recorded so the report says where it was written, and so the `require.main` block below can
+      // tell "written to a file" from "nowhere but stdout". Without this key that test read
+      // `undefined` and the summary was dumped to stdout even when --out was given.
+      out: args.out || null,
       maxChunks: args.maxChunks,
+      pageSize: args.pageSize,
       note: 'class = FIRST matching rung, tightest first; straddle-* means the phrase spans a seam'
     },
     byClass: tally(results, r => r.class),

@@ -1,11 +1,15 @@
 'use strict';
 
 /**
- * The chunker decides how many rows land in Typesense, and Typesense holds its index in RAM — so
- * these are capacity tests as much as correctness ones. Measured on the real corpus: ~1.1 KB of
- * index RAM per chunk against an average 601-character chunk, i.e. per-chunk overhead dominates
- * the text. Emitting one chunk per paragraph projected to 3.1M chunks / 3.4 GB; accumulating to
- * ~2500 characters projects to ~740k.
+ * Boundary tests for the split rules — where a chunk starts, where it ends, and what must never be
+ * dropped on the way.
+ *
+ * These began as capacity tests: Typesense held its index in RAM at ~1.1 KB per chunk against an
+ * average 601-character chunk, so one-chunk-per-paragraph projected to 3.1M chunks / 3.4 GB and
+ * accumulating to ~2500 brought it to ~740k. That argument died with Typesense, and the size
+ * constants are now inherited rather than derived (see `src/config.js`). What survives is the part
+ * that was always about correctness: no text lost, short paragraphs merged rather than dropped,
+ * `chunkIndex` dense because ids are built from it.
  */
 
 const test = require('node:test');

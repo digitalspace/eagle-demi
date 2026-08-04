@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * chunker.js — Split text into overlapping chunks for Typesense indexing.
+ * chunker.js — Split text into overlapping chunks for AI Search indexing.
  *
  * Strategy: paragraph/section-aware with overlap.
  *  - If text <= MAX_CHUNK_SIZE: single chunk

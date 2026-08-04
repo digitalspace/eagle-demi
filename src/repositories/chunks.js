@@ -36,8 +36,8 @@ const SCOPE_FIELD = 'projectId';      // project scope rides this, NOT the parti
 
 /**
  * Chunk ids are deterministic, so re-extracting a document upserts its chunks in place instead of
- * duplicating them. The Typesense transform reads `chunk.id` verbatim and synthesises nothing
- * (transform-nosql.js), so the id has to be minted here.
+ * duplicating them. Nothing downstream synthesises an id — the AI Search indexer encodes this one
+ * as the document key — so it has to be minted here.
  */
 function chunkId(documentId, pageNumber, chunkIndex) {
   return `${documentId}::p${pageNumber}::c${chunkIndex}`;
@@ -46,8 +46,8 @@ function chunkId(documentId, pageNumber, chunkIndex) {
 /**
  * Chunks visible to this caller.
  *
- * `listVisible(access, {pageSize, continuationToken})` is the signature the Typesense full sync's
- * pageAll() calls, so this doubles as the sync source.
+ * `listVisible(access, {pageSize, continuationToken})` keeps the paged signature every bulk reader
+ * expects, so this doubles as the source for whole-corpus passes.
  */
 async function listVisible(access, opts = {}) {
   const { documentId } = opts;

@@ -11,10 +11,10 @@ const server = app.listen(PORT, () => {
   logger.info(`DEMI Central API Server running on port ${PORT}`);
   logger.info(`OpenAPI documentation available at http://localhost:${PORT}/api-docs`);
 
-  // The Typesense change-stream watcher was removed. It could never run against Cosmos:
-  // it gated on db.command({hello:1}) reporting a replica-set name, which the Mongo API
-  // never returns, so it exited immediately on every boot. Typesense is kept current by
-  // the nightly full sync (alias swap); real-time sync returns with the Cosmos change feed.
+  // The Typesense change-stream watcher was removed, along with Typesense itself. It could never
+  // run against Cosmos anyway: it gated on db.command({hello:1}) reporting a replica-set name,
+  // which the Mongo API never returns, so it exited immediately on every boot. Search is kept
+  // current by the AI Search indexers on their own PT5M schedule — writes here trigger nothing.
 });
 
 // Handle Graceful Shutdown

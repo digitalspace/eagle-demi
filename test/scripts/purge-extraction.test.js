@@ -45,7 +45,15 @@ function fakeChunks(perDoc, opts = {}) {
   };
 }
 
-function fakeTypesense() {
+/**
+ * Stands in for `src/search/ai-search.js`. The name matters: `purge()` reads `opts.index`, and four
+ * tests here used to pass `typesense:` — a key left behind when Typesense was replaced. Those tests
+ * silently fell through to the REAL AI Search client. Harmless only by luck, because
+ * `deleteChunksForDocument` returns 0 when SEARCH_ENDPOINT is unset; on a machine with a populated
+ * `.env` they would have issued live deletes against the dev index. Assert on `state.deleted` in
+ * live tests so the next rename fails here instead of in Azure.
+ */
+function fakeIndex() {
   const state = { deleted: [] };
   return {
     state,
@@ -79,7 +87,7 @@ test('parseArgs requires --live to write and validates --page-size', () => {
 test('a dry run counts chunks but writes nothing', async () => {
   const docs = fakeDocuments(DOCS);
   const chunks = fakeChunks(PER_DOC);
-  const index = fakeTypesense();
+  const index = fakeIndex();
 
   const summary = await purge([], { documents: docs, chunks, index });
 
@@ -94,7 +102,7 @@ test('a dry run counts chunks but writes nothing', async () => {
 test('a live run removes chunks, clears flags and drops index entries', async () => {
   const docs = fakeDocuments(DOCS);
   const chunks = fakeChunks(PER_DOC);
-  const index = fakeTypesense();
+  const index = fakeIndex();
 
   const summary = await purge(['--live'], { documents: docs, chunks, index });
 
@@ -125,7 +133,7 @@ test('a document whose chunks fail to delete keeps its flags', async () => {
   // Re-ingest would then reconcile against rows nobody knows are there.
   const docs = fakeDocuments(DOCS);
   const chunks = fakeChunks(PER_DOC, { failFor: 'd2' });
-  const index = fakeTypesense();
+  const index = fakeIndex();
 
   const summary = await purge(['--live'], { documents: docs, chunks, index });
 
@@ -139,31 +147,40 @@ test('a document whose chunks fail to delete keeps its flags', async () => {
 test('a partial bulk failure is recorded rather than counted as success', async () => {
   const docs = fakeDocuments(DOCS);
   const chunks = fakeChunks(PER_DOC, { partialFor: 'd1' });
+  const index = fakeIndex();
 
-  const summary = await purge(['--live'], { documents: docs, chunks, typesense: fakeTypesense() });
+  const summary = await purge(['--live'], { documents: docs, chunks, index });
 
   assert.strictEqual(summary.failures.length, 1);
   assert.match(summary.failures[0].message, /bulk operation/);
+  // d1 IS still indexed-deleted and flag-cleared, unlike the thrown case above. The asymmetry is
+  // deliberate: a throw leaves an unknown number of chunks behind, whereas a partial failure leaves
+  // a known few — and chunk ids are deterministic, so re-ingest upserts over the survivors and
+  // `replaceForDocument` sweeps any surplus. Asserting this also proves the fake was wired in at
+  // all; passing the wrong opts key would silently use the real client. See fakeIndex().
+  assert.deepStrictEqual(index.state.deleted, ['d1', 'd2', 'd3']);
 });
 
 test('paging follows continuation tokens instead of reading one page', async () => {
   const many = Array.from({ length: 7 }, (_, i) => ({ id: `x${i}`, projectId: '1' }));
   const docs = fakeDocuments(many);
   const chunks = fakeChunks({});
+  const index = fakeIndex();
 
   const summary = await purge(['--live', '--page-size', '3'], {
-    documents: docs, chunks, typesense: fakeTypesense()
+    documents: docs, chunks, index
   });
 
   assert.strictEqual(summary.documents, 7);
   assert.strictEqual(docs.state.listCalls.length, 3);   // 3 + 3 + 1
+  assert.strictEqual(index.state.deleted.length, 7);    // every page's documents reached the index
 });
 
 test('the purge reads with the privileged tier, or it orphans what it cannot see', async () => {
   // removeForDocument enumerates ids via idsForDocument. A scoped context would delete only the
   // visible chunks and still clear the flag — a silent partial purge.
   const docs = fakeDocuments(DOCS);
-  await purge([], { documents: docs, chunks: fakeChunks(PER_DOC), typesense: fakeTypesense() });
+  await purge([], { documents: docs, chunks: fakeChunks(PER_DOC), index: fakeIndex() });
 
   const { access } = docs.state.listCalls[0];
   assert.strictEqual(access.tier, TIER.PRIVILEGED);
@@ -172,7 +189,7 @@ test('the purge reads with the privileged tier, or it orphans what it cannot see
 
 test('only documents flagged contentExtracted are selected', async () => {
   const docs = fakeDocuments(DOCS);
-  await purge([], { documents: docs, chunks: fakeChunks(PER_DOC), typesense: fakeTypesense() });
+  await purge([], { documents: docs, chunks: fakeChunks(PER_DOC), index: fakeIndex() });
   assert.strictEqual(docs.state.listCalls[0].listOpts.extracted, true);
 });
 
@@ -201,7 +218,7 @@ test('--errors-only leaves a successfully extracted document completely alone', 
   // good chunk in the corpus to requeue the failures.
   const docs = fakeDocuments(MIXED);
   const chunks = fakeChunks({ ok1: 10, failed: 0, ok2: 7 });
-  const index = fakeTypesense();
+  const index = fakeIndex();
 
   const summary = await purge(['--live', '--errors-only'], { documents: docs, chunks, index });
 
@@ -216,7 +233,7 @@ test('--errors-only reports what it skipped, so a dry run is readable as a count
   // "1 of 3" is the check before the live run: it must be the failure count, not the corpus.
   const docs = fakeDocuments(MIXED);
   const summary = await purge(['--errors-only'], {
-    documents: docs, chunks: fakeChunks({ ok1: 10, failed: 0, ok2: 7 }), index: fakeTypesense()
+    documents: docs, chunks: fakeChunks({ ok1: 10, failed: 0, ok2: 7 }), index: fakeIndex()
   });
 
   assert.strictEqual(summary.errorsOnly, true);
@@ -239,7 +256,7 @@ test('--error-like purges one class of failure and leaves the other classes alon
   // failure back through the GPU to fail again in exactly the same way.
   const docs = fakeDocuments(TWO_CLASSES);
   const chunks = fakeChunks(TWO_CLASSES_CHUNKS);
-  const index = fakeTypesense();
+  const index = fakeIndex();
 
   const summary = await purge(['--live', '--error-like', 'download failed: 404'],
     { documents: docs, chunks, index });
@@ -255,7 +272,7 @@ test('--errors-only without --error-like still takes every failure, both classes
   // become mandatory, and every existing recovery recipe is wrong.
   const docs = fakeDocuments(TWO_CLASSES);
   const summary = await purge(['--errors-only'], {
-    documents: docs, chunks: fakeChunks(TWO_CLASSES_CHUNKS), index: fakeTypesense()
+    documents: docs, chunks: fakeChunks(TWO_CLASSES_CHUNKS), index: fakeIndex()
   });
   assert.strictEqual(summary.documents, 3);
 });
@@ -265,13 +282,13 @@ test('--error-like matches a substring, not the whole message', async () => {
   // report a clean "0 documents" — a purge that looks like it ran and did not.
   const docs = fakeDocuments(TWO_CLASSES);
   const summary = await purge([], {
-    documents: docs, chunks: fakeChunks(TWO_CLASSES_CHUNKS), index: fakeTypesense()
+    documents: docs, chunks: fakeChunks(TWO_CLASSES_CHUNKS), index: fakeIndex()
   });
   assert.strictEqual(summary.documents, 4, 'guard: all four are visible without a filter');
 
   const exact = fakeDocuments(TWO_CLASSES);
   const whole = await purge(['--error-like', TWO_CLASSES[1].contentExtractionError], {
-    documents: exact, chunks: fakeChunks(TWO_CLASSES_CHUNKS), index: fakeTypesense()
+    documents: exact, chunks: fakeChunks(TWO_CLASSES_CHUNKS), index: fakeIndex()
   });
   assert.strictEqual(whole.documents, 1, 'a full message matches only its own document');
 });
@@ -279,7 +296,7 @@ test('--error-like matches a substring, not the whole message', async () => {
 test('without --errors-only every extracted document is still purged', async () => {
   const docs = fakeDocuments(MIXED);
   const summary = await purge(['--live'], {
-    documents: docs, chunks: fakeChunks({ ok1: 10, failed: 0, ok2: 7 }), index: fakeTypesense()
+    documents: docs, chunks: fakeChunks({ ok1: 10, failed: 0, ok2: 7 }), index: fakeIndex()
   });
 
   assert.deepStrictEqual(docs.state.patched.map(p => p.id), ['ok1', 'failed', 'ok2']);

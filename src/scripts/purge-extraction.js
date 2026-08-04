@@ -181,8 +181,10 @@ async function purge(argv = [], opts = {}) {
       }
 
       // Best-effort by design, like the DELETE /documents/:id path: the chunks are already gone
-      // from Cosmos and the next full sync reconciles via alias swap, so an index failure must not
-      // turn a successful purge into a failed one.
+      // from Cosmos, so an index failure must not turn a successful purge into a failed one.
+      // Nothing reconciles it afterwards, though — there is no full sync and no deletion-detection
+      // policy — so a failure here leaves searchable text behind until the purge is re-run.
+      // `deleteChunksForDocument` logs and returns 0 rather than throwing, hence the bare await.
       summary.indexEntriesRemoved += await index.deleteChunksForDocument(doc.id);
     }
 
