@@ -216,7 +216,7 @@ test('chunks repository', async (t) => {
     assert.match(spec.query, /EXISTS\(SELECT VALUE r FROM r IN c\.read/);
   });
 
-  await t.test('privileged list is unrestricted — the Typesense sync source', async () => {
+  await t.test('privileged list is unrestricted — the whole-corpus read source', async () => {
     const calls = captureQuery(t);
     await chunks.listVisible(ADMIN, {});
     assert.match(calls[0].spec.query, /WHERE true/);

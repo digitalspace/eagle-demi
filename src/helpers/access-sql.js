@@ -134,17 +134,19 @@ function projectScopeFor(req) {
 }
 
 /**
- * Access context for an internal job that must read EVERY item regardless of ACL — the Typesense
- * full sync and the extraction worker.
+ * Access context for an internal job that must read EVERY item regardless of ACL — the extraction
+ * worker, the purge, and whole-corpus passes.
  *
  * Deliberately built from the normal privileged tier rather than a bypass flag: it goes through
  * `readClause` like every other caller and simply resolves to `true`. A separate "skip the
  * predicate" path is exactly the shape that let a half-working translator disable access control
  * in this codebase, and it would not be covered by the SQL-asserting tests.
  *
- * Safe for the search index because Typesense enforces visibility itself, at query time, via
- * scoped search keys embedding `filter_by: allowed_roles:=[...]`. The sync's job is to copy the
- * ACL into `allowed_roles`, which it cannot do for rows it is not allowed to read.
+ * Safe for the search index because visibility is enforced at QUERY time, not at index time: the
+ * index holds every row's `read[]` verbatim, and `access-odata.js` translates the caller's resolved
+ * access context into the OData `$filter` on each search. An indexing job therefore has to read
+ * rows it will never itself return — copying an ACL it was not allowed to see is impossible.
+ * This is why widening here does not widen what anyone can find.
  *
  * NEVER derive this from a request. It takes no arguments for that reason.
  */

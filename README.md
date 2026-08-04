@@ -97,14 +97,15 @@ The server chunks the markdown (`src/chunker.js` is the only chunking implementa
 Chunk ids are deterministic (`<documentId>::p<page>::c<index>`) and `chunks.replaceForDocument`
 reconciles, so the route is idempotent and an interrupted backfill simply restarts.
 
-**Nothing inside Azure extracts text today.** `src/extract.js` is the only in-repo docling client
-and PDF page-batching code and runs only under `require.main === module`; extraction for new
-projects is deliberately deferred, not cancelled. Do not delete it as dead code. `MIGRATION.md` §A
-has the reasoning and the pricing that deferred it.
+**Nothing inside Azure extracts text today.** `src/extract.js` holds the only in-repo docling client
+and PDF page-batching code; extraction for new projects is deliberately deferred, not cancelled. Do
+not delete it as dead code. `MIGRATION.md` §A has the reasoning and the pricing that deferred it.
 
-It is also the last thing in the repo that speaks Mongo, so it throws at startup unless a database
-is configured rather than falling back to localhost — without that guard, a run after the Phase 8
-teardown would connect to nothing and report zero documents as if the corpus were empty.
+It is now a **library, not a worker**. The Mongo-driven loop around those two functions — query
+unextracted documents, write chunks back, mark the document — was deleted on 2026-08-04 along with
+the `mongodb` dependency it was the last user of, because the account it drove no longer exists.
+Reviving extraction means writing a new driver against Cosmos NoSQL and reusing
+`splitAndExtract`; it does not mean restoring the old one.
 
 ---
 

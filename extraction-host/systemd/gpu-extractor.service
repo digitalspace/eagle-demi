@@ -1,0 +1,25 @@
+[Unit]
+Description=DEMI one-off GPU document backfill
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/gpu-extractor
+EnvironmentFile=/root/gpu-extractor/gpu-extractor.env
+ExecStart=/root/gpu-extractor/venv/bin/python /root/gpu-extractor/worker.py
+Restart=on-failure
+RestartSec=30
+# The run is hours long and entirely restartable; never let a stall look like completion.
+TimeoutStopSec=120
+# The docling parent leaks ~330 MB per large scanned document and does not give it back.
+# Rather than guess a restart interval (which would kill in-flight OCR documents that now take
+# up to 25 minutes), cap the cgroup: the kernel kills THIS service, not the box, and
+# Restart=on-failure brings it straight back. Work is resumable from disk, so the only cost is
+# the handful of in-flight conversions - and it is paid only when the leak actually demands it.
+MemoryMax=48G
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

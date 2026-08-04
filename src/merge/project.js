@@ -99,8 +99,9 @@ function validCoordinates(lngRaw, latRaw) {
  * Normalise a centroid to GeoJSON `[longitude, latitude]`.
  *
  * Track supplies lat/lng as STRINGS; Eagle supplies a `centroid` in one of several shapes.
- * Coordinate order is the classic bug here — the Typesense sync swaps to [lat, lng] for its
- * geopoint type, so anything upstream of that must be unambiguous.
+ * Coordinate order is the classic bug here. Typesense used to swap to [lat, lng] for its geopoint
+ * type; nothing swaps any more — Cosmos stores [lng, lat] and AI Search carries it unchanged — so
+ * a wrong order now survives all the way to the map instead of being masked.
  */
 function normalizeCentroid(track, eagle) {
   if (track && hasValue(track.longitude) && hasValue(track.latitude)) {

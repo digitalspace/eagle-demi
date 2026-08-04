@@ -322,51 +322,82 @@ Left behind there, non-blocking and not ours to land: four now-unread `Document`
 
 ## Backlog
 
-- **The extraction host's code is unversioned.** Keeping the GPU box itself off-platform is settled
-  and correct (`MIGRATION.md` §A) — this is about the source, which is separable. `worker.py` is
-  ~1,200 lines holding essentially every hard-won fact the project owns: pdfium's non-thread-safety
-  (found after 468 failures in two minutes), the docling-parse SIGTRAP that `PYTHONFAULTHANDLER=1`
-  does not cover, the tiling measurement table, routing thresholds, the `CONVERTERS=3` OOM ceiling.
-  The rationale survives in `MIGRATION.md`; the code implementing it exists only on the host and in
-  scratch copies that already differ in length. Committing it under `extraction-host/` with host,
-  env and keys excluded costs one commit, changes no deployment, and makes its ~45 self-checks
-  CI-runnable. **`gpu-extractor.env` permissions — CHECKED 2026-08-04, the exposure does not
-  reproduce and no rotation is needed.** The file is `600 root:root` inside a `700 /root`, as is its
-  `.bak`. Grepping the literal 48-char value across `/tmp`, `/var/tmp`, `/var/log`, `/home`, `/srv`,
-  `/opt` and `/root` returns those two files and nothing else; it is absent from `.bash_history` and
+- ~~**The extraction host's code is unversioned.**~~ — **done 2026-08-04.** `worker.py` (1,193
+  lines), `ingest.py`, `test_poolfix.py`, `HANDOFF.md` and the three systemd units now live under
+  `extraction-host/`, with a `.gitignore` excluding the env file, every `.bak`/`.pre-poolfix` scratch
+  copy and ~44 GB of run state. Verified on the staged bytes: no literal key material, no private
+  addresses — the repo is public. Keeping the GPU box off-platform stays settled; only the source
+  moved. **The "~45 self-checks" claim was wrong**: it is 8 assertions in one `selfcheck()`, all on
+  `decide()`, the text-vs-OCR routing rule. `python3 extraction-host/worker.py --selfcheck` runs with
+  no network, no GPU and no docling.
+- **`gpu-extractor.env` permissions — CHECKED 2026-08-04, the exposure does not reproduce and no
+  rotation is needed.** The file is `600 root:root` inside a `700 /root`, as is its `.bak`. Grepping
+  the literal 48-char value across `/tmp`, `/var/tmp`, `/var/log`, `/home`, `/srv`, `/opt` and
+  `/root` returns those two files and nothing else; it is absent from `.bash_history` and
   `.python_history`. Every consumer reads `os.environ["DEMI_ADMIN_KEY"]` — `worker.py:80`, the ten
   `scratch/*.py` probes, `ingest.py` — and the one world-readable file that names it,
   `/tmp/trap_probe2.py`, does `os.environ.setdefault("DEMI_ADMIN_KEY", "test")`. The `644` on the
   scratch scripts is real but harmless: they hold no value, and `/root` is not traversable. Do not
-  re-check this.
-- **No RU observability on a serverless account.** `query()` returns `requestCharge` and **no caller
-  in `src/` reads it**, against ~1.13M chunks with indexers pulling every 5 minutes. One log line on
-  the ingest path establishes a baseline. Related: `bulkVerified` explicitly ignores
+  re-check this. The env file is excluded from `extraction-host/` by `.gitignore`.
+- ~~**No RU observability on a serverless account.**~~ — **baseline landed 2026-08-04.**
+  `bulkVerified` now sums `requestCharge` across every attempt (a throttled operation is billed on
+  each one) and the chunk-ingest path logs it per document — `document.js:638`, `[chunk-ingest]`.
+  That covers writes, which is where the volume is. **Reads are still unmeasured**: `query()` has
+  returned `requestCharge` all along and nothing on the read path reads it. Related: `bulkVerified`
+  explicitly ignores
   `retryAfterInMs` in favour of linear backoff, and `bulk()` discards results from earlier 100-op
   sub-requests when a later one throws, so the retry re-sends the whole pending set — correct,
   because upserts are idempotent, but the RU is paid twice.
-- **Typesense references outlive Typesense** (deleted 2026-07-31): `chunker.js:4`, `config.js:81`,
-  `chunker.test.js:4-8`, and `chunks.js:39-40`, which cites `transform-nosql.js` — a file that does
-  not exist. More than a naming tidy: `TARGET_CHUNK_SIZE = 2500` was derived from a Typesense
-  in-memory-index RAM argument, and chunk size is a direct input to the conjunction problem in §3.
-  Re-derive it against AI Search rather than relabelling it.
-- **Nothing in Azure extracts text, and `src/extract.js` should lose its Mongo writer.** Ingest
-  exists (external host POSTs markdown to `POST /documents/:id/chunks`); `src/extract.js` runs only
-  under `require.main === module`. Deliberate — serverless GPU priced and rejected. **Do not delete
-  as dead code**: that covers the docling client and the 10-page batching, which is the whole point
-  of keeping the file. It does **not** cover the Mongo write path, which does `deleteMany` then
-  `insertMany` — leaving a window where a live document has zero chunks, exactly what
-  `replaceForDocument` was written to avoid. Exported, exposed as `yarn extract`, no test file at
-  all. Drop that half.
+- ~~**Typesense references outlive Typesense**~~ — **swept 2026-08-04.** `chunker.js`, `config.js`,
+  `chunker.test.js`, `chunks.js` (the `transform-nosql.js` citation pointed at a file that never
+  existed), `server.js`, `access-sql.js`, `merge/project.js`. Comments that explain Typesense as
+  *history* were left alone; only present-tense claims were rewritten. Three were load-bearing
+  rather than cosmetic:
+  - `document.js` and `purge-extraction.js` justified best-effort index deletes with "a nightly full
+    sync reconciles whatever this misses". **Nothing reconciles** — no full sync, no alias swap, and
+    no deletion-detection policy configured. The code was already right; its stated reason was false.
+    A failed index delete leaves searchable text until someone re-runs it.
+  - `access-sql.js` credited Typesense with enforcing visibility via scoped search keys. It is
+    `access-odata.js`, at query time, that does so — worth stating exactly, since it is what makes a
+    privileged read safe.
+  - `merge/project.js` said the sync swaps to `[lat, lng]`. Nothing swaps any more, so a wrong
+    coordinate order now reaches the map instead of being masked.
+  **`TARGET_CHUNK_SIZE = 2500` is recorded as inherited, not re-derived.** Its Typesense RAM argument
+  is void; the real lever is retrieval (chunk = the unit a conjunctive query must match within), and
+  that can only be settled by re-chunking at several sizes and scoring. Handed to the re-ingest.
+- ~~**`src/extract.js` should lose its Mongo writer.**~~ — **done 2026-08-04, and it went further.**
+  Dropping only the write half would have left a script that cannot run in either direction: the
+  whole driver loop was Mongo-driven and the account is unreachable since the teardown, so its one
+  possible outcome was the "no database configured" guard erroring. Reduced to what the deferral was
+  actually protecting — `extractWithDocling` and `splitAndExtract`, the docling client and the
+  10-page batching. Deleted: the query loop, `replaceChunks` (the `deleteMany`→`insertMany` window),
+  `markDocument`, `main()` and its guard, and the three `yarn extract*` scripts.
+  **`mongodb` is out of `package.json`** — extract.js was its last user — along with the dead
+  `mongoUri`/`cosmosDbUri` builders in `config.js`, which nothing read and which defaulted to
+  `localhost:27017`. Nothing in the repo speaks Mongo now.
+  `splitAndExtract` got its first test, which caught a real bug: `getPageCount()` sat outside the
+  try meant to make an unparseable PDF fall back to a whole-file send, so a PDF that loads with a
+  broken page tree threw instead of degrading. Extraction-inside-Azure stays deferred, not
+  cancelled; reviving it means a new driver against Cosmos NoSQL, not restoring the old one.
+- ~~**Four purge tests fell through to the LIVE search client.**~~ — **fixed 2026-08-04.** `purge()`
+  reads `opts.index`; four tests passed `typesense:`, a key left behind when Typesense was replaced,
+  so they exercised the real `ai-search` module. Harmless only because `deleteChunksForDocument`
+  returns 0 when `SEARCH_ENDPOINT` is unset — but `server.js` loads `dotenv`, so on a machine with a
+  populated `.env` the suite would have issued live deletes against the dev index. Renamed the fake
+  to `fakeIndex` and asserted `state.deleted` in the live tests, so the next rename fails in the
+  suite rather than in Azure.
 - **Two test gaps worth closing.** Nothing asserts the config knobs reach the chunker — the chunker
   tests assert loose bounds against literals, while a silent env change to `TARGET`/`MAX`/`OVERLAP`
   orphans every chunk already written. And `cosmos.bulk()`'s >100-op chunking is untested, including
   the discard-on-throw behaviour above.
-- **`wwwroot` debris.** Twelve ad-hoc probe scripts at the root of the deployed app —
-  `_auditwrap.js`, `_copy.js`, `_copy.log`, `_derive.js`, `_fetch.js`, `_fts.js`, `_idx.js`,
-  `_isolate.js`, `_meta.js`, `_param.js`, `_purgewrap.js`, `_syncwrap.js` — plus an empty
-  `src/models/`. None in the repo, none reachable as routes, but `config-zip` merge never remove
-  them. Clean out through Kudu VFS.
+- ~~**`wwwroot` debris.**~~ — **swept 2026-08-04** through Kudu VFS, and it was wider than the twelve
+  probe scripts recorded here. Also removed: stale `helm/` (the old OpenShift chart, deleted from the
+  repo but still deployed — checked first, it holds secret *references* only, no credential values),
+  and empty `openshift/`, `scratch/`, `tmp/`, `.claude/`, `.vscode/`, `src/models/`. Deleted in three
+  groups with a health check between each. **`public/` deliberately untouched** — it is the live
+  frontend, not debris. After: `/projects` and `/documents` 200, `/search?dataset=DocumentChunk`
+  still `count: 29392`, `public/` intact with its main bundle. `config-zip` merges rather than
+  replaces, which is why any of this persisted.
 - **CI blocked.** `AZURE_CLIENT_ID` missing from repo secrets. Need Entra app registration +
   federated credential; creating one need Microsoft Graph, which conditional access block.
 - ~~**`azure-deploy-prod.yaml` / `-test.yaml` trigger on every push to `main`**~~ — **done

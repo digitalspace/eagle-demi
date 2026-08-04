@@ -5,9 +5,6 @@
   "main": "api/index.js",
   "scripts": {
     "start": "node src/server.js",
-    "extract": "node src/extract.js",
-    "extract:retry": "node src/extract.js --retry-failed",
-    "extract:doc": "node src/extract.js --doc-id",
     "db:seed-nosql": "NODE_PATH=node_modules node -r dotenv/config src/scripts/seed-nosql.js",
     "db:copy-blobs": "NODE_PATH=node_modules node -r dotenv/config src/scripts/copy-blobs-to-azure.js",
     "db:purge-extraction": "NODE_PATH=node_modules node -r dotenv/config src/scripts/purge-extraction.js",
@@ -34,7 +31,6 @@
     "jsonwebtoken": "^9.0.2",
     "jwks-rsa": "^3.2.2",
     "minio": "^7.0.8",
-    "mongodb": "^7.5.0",
     "multer": "^2.2.0",
     "pdf-lib": "^1.17.1",
     "serverless-http": "^3.2.0",
