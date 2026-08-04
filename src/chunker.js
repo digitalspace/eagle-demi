@@ -4,12 +4,22 @@
  * chunker.js — Split text into overlapping chunks for AI Search indexing.
  *
  * Strategy: paragraph/section-aware with overlap.
- *  - If text <= MAX_CHUNK_SIZE: single chunk
- *  - If text > MAX_CHUNK_SIZE: split into sub-chunks with OVERLAP_SIZE overlap
- *  - If chunk < MIN_CHUNK_SIZE: merge with next
+ *  - Sections accumulate to TARGET_CHUNK_SIZE, then that block is emitted
+ *  - A block over MAX_CHUNK_SIZE is split into pieces that overlap by OVERLAP_SIZE
+ *  - Consecutive chunks also overlap by OVERLAP_SIZE ACROSS block boundaries — see `emit()`
+ *  - A fragment under MIN_CHUNK_SIZE is folded into its neighbour rather than emitted
+ *
+ * A chunk may therefore run to MAX_CHUNK_SIZE + OVERLAP_SIZE: the ceiling bounds a block's own
+ * text, and prepended overlap sits on top of it. Bounded, which is what the ceiling is for.
  *
  * Input: plain text string (markdown from docling-serve).
  * Output: array of { pageNumber, chunkIndex, content } objects.
+ *
+ * `pageNumber` IS NOT A PDF PAGE. It is a sequence number: the extraction host flattens pages
+ * before posting (`extract_text` joins them and drops the index; the OCR path is 25-page batch
+ * granular), and the ingest payload carries paragraphs, not pages. It exists because the schema
+ * has the field, and the UI labels it "Passage" for that reason. Real page numbers are a citation
+ * feature and need host, protocol and API changes — see TODO.md.
  */
 
 const {
@@ -62,17 +72,42 @@ function createChunkAccumulator() {
   let pending = null;
   let pageNumber = 0;
   let chunkIndex = 0;
+  // Tail of the last emitted chunk, prepended to the next one. Per-accumulator, so it cannot leak
+  // text from one document into another.
+  let carry = '';
 
   function emit(block, out) {
-    for (const sub of splitText(block)) {
-      const content = sub.trim();
+    const parts = splitText(block);
+    for (let i = 0; i < parts.length; i++) {
+      // `own` is this block's OWN contribution, before any overlap is prepended. Every size test
+      // below measures it rather than the final content — see the MIN_CHUNK_SIZE note.
+      const own = parts[i].trim();
       // Only a trailing sliver from splitText can land here, and an index entry of a few
       // characters matches everything and means nothing. `chunkIndex` doubles as the running
       // total, so this is the same "not the very first chunk" test the whole-string version made
       // against result.length.
-      if (!content || (chunkIndex > 0 && content.length < MIN_CHUNK_SIZE)) continue;
+      //
+      // Measured against `own`, NEVER against `own + carry`: 200 characters of overlap would
+      // otherwise lift every sliver over the floor, and the chunk that survived would be almost
+      // entirely text already indexed under its neighbour.
+      if (!own || (chunkIndex > 0 && own.length < MIN_CHUNK_SIZE)) continue;
+
+      // The overlap itself, and the bug this fixes. `splitText` already overlaps consecutive
+      // pieces of ONE oversized block (`step = MAX - OVERLAP`), but it returns any block under
+      // MAX unchanged — and blocks are emitted at TARGET (2500), well under MAX (4000). So on the
+      // common path it returned a single piece and consecutive chunks shared nothing at all.
+      // Only i === 0 needs this; later parts already carry splitText's own overlap.
+      //
+      // Joined with '\n\n' because that is exactly how the two blocks sat in the source: `push()`
+      // accumulates sections with the same separator. Reproducing it means a phrase that spanned
+      // the boundary now appears in this chunk the way it was written, which is the entire point —
+      // any other joiner would put a break through the middle of the phrase being rescued.
+      const content = (i === 0 && carry) ? `${carry}\n\n${own}` : own;
+
       out.push({ pageNumber, chunkIndex, content });
       chunkIndex++;
+      // Tail of this chunk's own text, so overlap never compounds across successive chunks.
+      carry = own.slice(-OVERLAP_SIZE);
     }
     pageNumber++;
   }

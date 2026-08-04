@@ -97,7 +97,7 @@ grouping on `ServiceName`. **`az consumption usage list` does not work here** �
 
 ## Open work
 
-### 1. Phase 8 Azure teardown — steps 1 and 2 DONE 2026-08-04, account deletion still open
+### 1. Phase 8 Azure teardown — COMPLETE 2026-08-04
 
 **The clean week to 2026-08-08 was ended early, deliberately.** Its purpose was to let a latent
 regression surface under real traffic before the rollback was burned — and there is no traffic:
@@ -126,22 +126,17 @@ three idle days already proved. Two measurements replaced the calendar:
       healthy after deletion. **Reversible**: recreate with `az network private-endpoint create`
       against subnet `c4b0a8-dev-networking/.../c4b0a8-dev-vwan-spoke/subnets/c4b0a8-dev-cond-ext-pe-subnet`,
       group `MongoDB`, connection name `demi-mongo-pe-conn`, `canadacentral`.
-- [ ] **Account `demi-mongo-dev-pcbd7cygyic52` — the one-way step, deliberately still open.** It is
-      now unreachable (no private endpoint) but intact. Delete when satisfied nothing lives only
-      there; remember the 8-hour restore window. Data-loss risk is low but not zero: Cosmos NoSQL is
-      the reconciled source of truth and the extraction host still holds 53,174 `sent/*.md`, so
-      chunks are re-derivable without a GPU.
+- [x] **Account `demi-mongo-dev-pcbd7cygyic52` DELETED 2026-08-04.** The one-way step, taken after
+      `TotalRequests` was re-confirmed at **0 across the preceding 24 hours**. Its configuration was
+      captured first (`kind: MongoDB`, `EnableServerless`, Canada Central, Periodic/240-min/8-hour
+      /Geo backup, `publicNetworkAccess: Disabled`), so the *shape* is recoverable even though the
+      data is not. Three databases went with it: `demi-dev`, `test`, `epic` — and the orphaned
+      `syncState` container inside them. Verified after: `/projects` and `/documents` 200,
+      `/search?dataset=DocumentChunk` still `count: 29392`, `az cosmosdb list -g c4b0a8-dev-rg`
+      returns only `demi-cosmos-dev`, and no orphan private endpoint or NIC is left —
+      `pe-cosmos-nosql-dev` and `pe-demi-search-dev` remain and are load-bearing.
 
-- [x] **Bicep, done 2026-08-01.** `cosmosDb` module + `mongodbConnectionString` wiring out of
-      `main.bicep`; `azure/modules/cosmos-db.bicep` deleted; `api-web-app.bicep` param and all four
-      settings it fed (`COSMOSDB_URI`, `COSMOSDB_DATABASE`, `MONGODB_URI`, `MONGODB_DATABASE` — TODO
-      named two, they shared one param) deleted; stale `azure/main.json` deleted. `az bicep build`
-      clean on all three touched files. Deployed nothing: `main.bicep` is not what run and CI cannot
-      auth.
-- [ ] App settings `MONGODB_URI`, `MONGODB_DATABASE` off `demi-api-dev`, then `stop`/`start`. **This
-      burn the rollback.** Confirmed still present 2026-08-01.
-- [ ] Account `demi-mongo-dev-pcbd7cygyic52`, then `demi-mongo-pe` + its NIC. **The private endpoint
-      is the only flat recurring charge (~$7/mo).**
+**Phase 8 is closed.** Nothing in the repo or the resource group speaks Mongo any more.
 
 Checked already, so nobody re-check:
 
@@ -150,11 +145,8 @@ Checked already, so nobody re-check:
   repeat here.
 - **`COSMOS_ENDPOINT` safe** — point at `demi-cosmos-dev`, the NoSQL account, not Mongo.
 - **`main.bicep` is not what run** — no VNet in the RG, and it never instantiate the four modules
-  that build current architecture. Settings come off with `az`, not a template deploy. Bicep edit
-  keep the template honest for whenever IaC unblock.
-- **`src/extract.js` still speak Mongo** and is deferred-not-dead. Guard added 2026-08-01: `main()`
-  throw when no Mongo URI env configured, so a post-teardown run error instead of silently reading
-  localhost and reporting zero documents.
+  that build current architecture. Settings came off with `az`, not a template deploy. The workflow
+  can no longer deploy it at all (validate-only since 2026-08-04).
 
 ### 2. Extraction — landed, reconciled, cleared
 
@@ -295,28 +287,13 @@ Left behind there, non-blocking and not ours to land: four now-unread `Document`
   managed through the AI Services Hub in the Landing Zones"*, requested via
   <https://bcgov.github.io/ai-hub-tracking/>. `demi-search-dev` created directly, without that
   request. Nothing blocked it, nothing broken, but process skipped — submit before this go past dev.
-  `rg-epic-search` below hold three Cognitive Services accounts too — same question, different team,
-  not ours to file.
-- **`rg-epic-search` (test sub `7897ceb1-…`)** — not ours. Inventoried live 2026-08-01; earlier
-  entry was wrong on two counts and missed the expensive part.
-
-  | Resource | Reality |
-  |---|---|
-  | `vm-epic-search-embedder` | `Standard_E32-16ads_v5`, **deallocated**. Compute not billing; OS disk is |
-  | `vm-postgresql-vector` | **NOT a VM** — `Microsoft.DBforPostgreSQL/flexibleServers`. Name mislead. SKU/state **unverified** |
-  | `epic-search-poc` | App Service, **Running**, `Premium0V3` |
-  | `epic-poc-api` | App Service, **Stopped** 2026-08-01, `PremiumV3` |
-  | `epic-poc-vector-api` | App Service, **Stopped** 2026-08-01, `PremiumMV3` |
-  | `ASP-ui`, `ASP-ui-api`, `asp-vector-api` | Three plans. **Plans bill whether app run or not** — stopping the two apps saved nothing |
-  | `ai-di-epic-search`, `ai-cv-epic-search`, `ai-epic-poc-east` | **Three Cognitive Services accounts, not previously recorded.** Doc Intelligence + Computer Vision + one in `canadaeast` |
-  | `kv-epic-search`, `saepicstoragelogs`, `law-epic-search`, `gw-epic-search-waf-policy` | Key Vault, storage, Log Analytics, WAF policy |
-  | ~8 private endpoints + NICs, 14 `Microsoft.Web/connections` (`office365`/`azurevm` ×7 each) | Logic App connectors. Alert `Failure Anomalies - la-epic-logic-apps` reference Logic Apps **that no longer exist** |
-
-  **Owner is on the resources.** VM carry `account_coding: 1152990370037633129L0122`,
-  `billing_group: c4b0a8`, `ministry_name: EAO` — chase that coding rather than asking around. Two
-  App Services stopped 2026-08-01, so somebody is still active in there; ask before touching.
-  Three Premium-V3 plans, three Cognitive Services accounts and a Postgres flexible server are the
-  bill, not the deallocated VM the old entry led with.
+- **`rg-epic-search` is NOT OUR PROJECT. Do not investigate it, cost it, or track it here.** It
+  shares the `c4b0a8` billing group, so it surfaces in any subscription-wide cost query — sharing a
+  bill is not owning a system. The previous inventory of its VMs, App Service plans, Cognitive
+  Services accounts and Postgres server has been removed from this file: it was work on somebody
+  else's estate and it kept inviting more. Scope stays `c4b0a8-dev-rg` and the DEMI resources
+  (`demi-api-dev`, `demi-cosmos-dev`, `demi-search-dev`, the frontend web app). If something ever
+  genuinely couples DEMI to it, raise that specific coupling — do not reopen the area.
 
 ---
 
@@ -386,10 +363,48 @@ Left behind there, non-blocking and not ours to land: four now-unread `Document`
   populated `.env` the suite would have issued live deletes against the dev index. Renamed the fake
   to `fakeIndex` and asserted `state.deleted` in the live tests, so the next rename fails in the
   suite rather than in Azure.
-- **Two test gaps worth closing.** Nothing asserts the config knobs reach the chunker — the chunker
-  tests assert loose bounds against literals, while a silent env change to `TARGET`/`MAX`/`OVERLAP`
-  orphans every chunk already written. And `cosmos.bulk()`'s >100-op chunking is untested, including
-  the discard-on-throw behaviour above.
+- **Two test gaps, one narrowed.** `cosmos.bulk()`'s >100-op chunking is still untested, including
+  the discard-on-throw behaviour above. On the chunker side, the overlap tests added 2026-08-04 read
+  `MAX` and `OVERLAP` from `src/config.js`, so those two knobs are now genuinely asserted to reach
+  the chunker — but `TARGET` and `MIN` are still only checked against literals (`>= 2000`, `> 100`),
+  so a silent env change to either still orphans every chunk already written without failing a test.
+- ~~**Chunk overlap never fires.**~~ — **fixed 2026-08-04, code only.** `emit()` called
+  `splitText()`, which returns any block under `MAX_CHUNK_SIZE` (4000) unchanged — and blocks are
+  emitted at `TARGET_CHUNK_SIZE` (2500), so on the common path it was a no-op and consecutive chunks
+  shared nothing. `splitText` did overlap pieces *within* one oversized block, which is why this
+  looked fine. Fixed in `emit()`: the tail of the previous chunk is prepended to the next block,
+  joined with `\n\n` because that is exactly how the two blocks sat in the source, so a phrase that
+  spanned the boundary is now contiguous. Two traps handled: the `MIN_CHUNK_SIZE` floor measures the
+  block's OWN text, or 200 characters of overlap would rescue every sliver into a chunk of almost
+  entirely duplicated text; and a chunk may now run to `MAX + OVERLAP`, still bounded.
+  **THE DEPLOYED CORPUS IS UNCHANGED.** This fixes future writes only — every chunk in Cosmos and
+  AI Search stays disjoint until some re-ingest, and none is planned. **It buys no recall**: the
+  measured cost of the bug was zero, 0 of 74 labels sat only across a seam. It is a correctness fix
+  so the code does what it claims. When it does eventually land, it is not free — ~200 duplicated
+  characters against ~1.13M chunks is roughly 226 MB of extra indexed text, and RU to write.
+  The old test passed because it asserted only `length > 1` and the size ceiling; the new one fails
+  against the old chunker, which was verified rather than assumed.
+- **`pageNumber` is a citation feature, and nothing cites. DO NOT BUILD IT YET.** It is a sequence
+  number, not a PDF page, and the whole chain would have to change to make it real:
+  `extraction-host/worker.py:471` `extract_text` builds a per-page list then returns
+  `"\n\n".join(...)`, discarding the index **and dropping blank pages**, so it cannot be recovered by
+  counting separators; the OCR path is 25-page batch granular (`OCR_BATCH_PAGES`), one
+  `export_to_markdown()` per batch; the ingest payload carries paragraphs, not pages; and
+  `createChunkAccumulator` invents the value. So it needs host + wire-protocol + API changes **and**
+  re-extraction — it is not a re-chunk, which is what an earlier plan assumed.
+  Its value is jumping to the source, and there is nothing to jump with: no PDF viewer and no
+  `#page=` anchor anywhere in the frontend, which renders it honestly as `Passage {{ pageNumber }}`.
+  **If citations are ever wanted**, the cheap slice is the text path — 56% of the corpus, pypdfium2,
+  no GPU — but it still needs source PDFs (~1,496 already 404 in the dev object store). `#page=N` is
+  a client-side fragment so it survives a presigned URL unmodified; whether the browser honours it
+  depends on the object being served inline rather than as an attachment, which is **unverified**.
+- **Search has no result paging at all.** `searchChunks` sends only `top` (default 20, hard cap 250)
+  and **never sends `$skip`**; the controller has no offset and the frontend has no load-more. You
+  get one slab and the list ends. Unrelated to `pageNumber` — a different axis. If it is ever wanted:
+  `$skip` caps at 100,000 and deep skips degrade, and score-ordered paging is unstable across
+  requests, so infinite scroll needs a deterministic tiebreak in `$orderby` rather than score alone.
+  `@odata.count` is already requested, so a total is free. Left alone deliberately: nobody uses DEMI
+  yet, and this is a decision for whoever owns the search UI.
 - ~~**`wwwroot` debris.**~~ — **swept 2026-08-04** through Kudu VFS, and it was wider than the twelve
   probe scripts recorded here. Also removed: stale `helm/` (the old OpenShift chart, deleted from the
   repo but still deployed — checked first, it holds secret *references* only, no credential values),

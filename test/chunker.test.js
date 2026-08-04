@@ -18,6 +18,17 @@ const { chunkMarkdown, createChunkAccumulator } = require('../src/chunker');
 
 const para = (n, ch = 'a') => ch.repeat(n);
 
+const {
+  maxChunkSize: MAX,
+  overlapSize: OVERLAP
+} = require('../src/config');
+
+/** Do two chunks share a run of text? The question the old overlap test never asked. */
+function shareText(a, b) {
+  const tail = a.content.slice(-OVERLAP);
+  return tail.length > 0 && b.content.includes(tail.slice(0, Math.min(40, tail.length)));
+}
+
 test('chunkMarkdown', async (t) => {
   await t.test('empty input yields no chunks', () => {
     assert.deepStrictEqual(chunkMarkdown(''), []);
@@ -60,12 +71,47 @@ test('chunkMarkdown', async (t) => {
     }
   });
 
-  await t.test('a single oversized paragraph is split, with overlap', () => {
-    const chunks = chunkMarkdown(para(10000));
+  await t.test('a single oversized paragraph is split, and the pieces really do overlap', () => {
+    // This test used to assert only `length > 1` and the size ceiling, which is why the overlap
+    // bug survived: nothing checked that any text was actually shared.
+    const chunks = chunkMarkdown(para(10000, 'x').replace(/x{50}/g, m => m + ' '));
 
     assert.ok(chunks.length > 1);
     for (const c of chunks) {
-      assert.ok(c.content.length <= 4000, `chunk of ${c.content.length} exceeds maxChunkSize`);
+      assert.ok(c.content.length <= MAX + OVERLAP,
+        `chunk of ${c.content.length} exceeds maxChunkSize + overlap`);
+    }
+    for (let i = 1; i < chunks.length; i++) {
+      assert.ok(shareText(chunks[i - 1], chunks[i]),
+        `chunks ${i - 1} and ${i} share no text — overlap did not fire`);
+    }
+  });
+
+  await t.test('consecutive chunks overlap ACROSS a block boundary', () => {
+    // The path that was actually broken. `emit()` called `splitText()`, which returns any block
+    // under MAX (4000) unchanged — and blocks are emitted at TARGET (2500). So on the common path
+    // splitText was a no-op and consecutive chunks shared nothing.
+    const md = Array.from({ length: 20 }, (_, i) => `Para${i} ${para(300, String.fromCharCode(97 + i))}`)
+      .join('\n\n');
+    const chunks = chunkMarkdown(md);
+
+    assert.ok(chunks.length >= 2, 'need at least two blocks to test a boundary');
+    for (let i = 1; i < chunks.length; i++) {
+      assert.ok(chunks[i].content.startsWith(chunks[i - 1].content.slice(-OVERLAP)),
+        `chunk ${i} does not begin with the tail of chunk ${i - 1}`);
+    }
+  });
+
+  await t.test('overlap must not rescue a fragment below the minimum', () => {
+    // The trap in prepending overlap: 200 characters of a neighbour's text would lift any sliver
+    // over MIN_CHUNK_SIZE, and the surviving chunk would be almost entirely duplicated text. The
+    // floor has to measure the block's own contribution.
+    const tiny = 'x'.repeat(20);
+    const chunks = chunkMarkdown([para(3000, 'a'), tiny].join('\n\n'));
+
+    for (const c of chunks) {
+      assert.ok(!c.content.endsWith(tiny) || c.content.length > OVERLAP + tiny.length + 10,
+        'a sub-minimum fragment was emitted as its own chunk, padded by overlap');
     }
   });
 
