@@ -32,6 +32,9 @@ param cosmosAccountId string = ''
 @description('Subnet ID for the inbound private endpoint. Required in this landing zone — public network access is denied by policy.')
 param peSubnetId string = ''
 
+@description('Principal ID of the identity the API queries as. Granted Search Index Data Contributor below.')
+param apiPrincipalId string
+
 // Basic, not Free: the Free tier supports neither a managed identity nor a shared private link,
 // and `demi-cosmos-dev` has publicNetworkAccess disabled with local auth off — so Free cannot
 // reach the data at all, at any size. Basic is the floor, not a choice about capacity.
@@ -57,6 +60,13 @@ resource search 'Microsoft.Search/searchServices@2025-05-01' = {
     replicaCount: 1
     partitionCount: 1
     hostingMode: 'Default'
+
+    // 'free' is what the live service has, and it is stated explicitly so a deployment cannot flip
+    // it by omission. It does NOT contradict the header: the free tier costs nothing unless a query
+    // asks for it, and no query here ever does — `searchChunks` sends queryType 'full' (Lucene) and
+    // never 'semantic'. Turning the capability off entirely is a separate decision from writing
+    // down which state dev is in.
+    semanticSearch: 'free'
 
     // Keyless, like every other service here: admin and query keys are disabled outright and all
     // data-plane access is Entra RBAC. `authOptions` MUST be absent when local auth is disabled —
@@ -121,6 +131,27 @@ resource cosmosLink 'Microsoft.Search/searchServices/sharedPrivateLinkResources@
     privateLinkResourceId: cosmosAccountId
     groupId: 'Sql'
     requestMessage: 'DEMI AI Search indexer reads the chunks container.'
+  }
+}
+
+// Search Index Data Contributor — read and write of the documents IN an index.
+//
+// Deliberately NOT Search Service Contributor, which also allows creating and deleting indexes.
+// The API serves public search traffic and never defines an index, so the wider role would only
+// widen the blast radius of a compromise. The consequence is real and worth stating: exporting the
+// index, indexer and data-source DEFINITIONS is a control-plane read this identity cannot perform,
+// so it needs a temporary elevation rather than being something the app could do for itself.
+//
+// This existed only as a hand-made assignment on the live service until 2026-08-04.
+var searchIndexDataContributor = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'
+
+resource searchDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: search
+  name: guid(search.id, apiPrincipalId, searchIndexDataContributor)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', searchIndexDataContributor)
+    principalId: apiPrincipalId
+    principalType: 'ServicePrincipal'
   }
 }
 

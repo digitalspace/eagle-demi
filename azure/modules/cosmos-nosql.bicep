@@ -64,9 +64,21 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
     disableLocalAuth: true
     disableKeyBasedMetadataWriteAccess: true
     minimalTlsVersion: 'Tls12'
+    // All three are on the live account. The two preview enrolments are VESTIGIAL: Cosmos native
+    // full-text search was ruled out (fuzzy `distance` is a silent no-op even with the preview
+    // enrolled, MIGRATION.md §F) and nothing generates embeddings, so neither is used by any query.
+    // They are declared anyway because a deployment that omitted them would strip capabilities off
+    // a live account as a side effect of describing it — removing them is a decision, not a
+    // consequence of writing this file down.
     capabilities: [
       {
         name: 'EnableServerless'
+      }
+      {
+        name: 'EnableNoSQLFullTextSearchPreviewFeatures'
+      }
+      {
+        name: 'EnableNoSQLVectorSearch'
       }
     ]
     consistencyPolicy: {
@@ -79,6 +91,12 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' = {
         isZoneRedundant: false
       }
     ]
+
+    // On, matching the live account. It does nothing on a single-region account — there is nowhere
+    // to fail over TO — but the ARM default is false, so omitting it would silently turn a flag off
+    // as a side effect of writing this file down. It becomes meaningful only if a second region is
+    // ever added, which is a cost decision nobody has made.
+    enableAutomaticFailover: true
   }
 }
 
