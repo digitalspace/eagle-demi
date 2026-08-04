@@ -1,0 +1,6 @@
+# stratum E-control-textless -- 3 labels
+# Phrases come from an INDEPENDENT reader (poppler's pdftotext, or a page
+# render read by eye), never from the docling extraction under measurement.
+{"documentId": "5886bb66a4acd4014b820404", "phrase": "Fluvial Geomorphic Classification Sampling Locations", "note": "eye:render | E-control-textless | realChars=0"}
+{"documentId": "5886b06da4acd4014b81fd69", "phrase": "Whistler Nordic Centre", "note": "pdftotext | E-control-textless | realChars=8"}
+{"documentId": "5886b929a4acd4014b8202d5", "phrase": "EAST TOBA AND MONIROSE HYDROELECTRIC PROJECT", "note": "pdftotext | E-control-textless | realChars=12"}
