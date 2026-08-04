@@ -20,6 +20,7 @@ const chunks = require('../../repositories/chunks');
 const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
 const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const aiSearch = require('../../search/ai-search');
+const { logger } = require('../../utils/logger');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -627,6 +628,12 @@ exports.ingestChunks = async (req, res) => {
       });
       return res.status(500).json({ error: detail });
     }
+
+    // RU is the variable cost on a serverless account and nothing in the app was reading it, against
+    // ~1.13M chunks. One line per ingested document is the cheapest baseline that can be read back
+    // out of the log later; `ru` includes retries, because a retried write is billed twice.
+    logger.info(`[chunk-ingest] doc=${doc.id} chunks=${items.length} ` +
+      `ru=${Math.round(result.requestCharge || 0)}`);
 
     await documents.patchExtraction(doc.id, doc.projectId, {
       contentExtracted: true,

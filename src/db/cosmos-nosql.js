@@ -319,7 +319,12 @@ async function bulk(containerName, operations) {
  * 429 (throttling), which is retryable — so failures are retried with backoff rather than merely
  * counted.
  *
- * @returns {{succeeded: number, failed: number, statusCounts: object}}
+ * `requestCharge` is the RU actually billed, summed across every attempt — retries included, since
+ * on serverless a retried operation is paid for twice and a figure that hid that would understate
+ * the bill exactly when it matters. This is the only write path for chunks, so it is the one place
+ * the number can be collected once for ingest, seeds and deletes alike.
+ *
+ * @returns {{succeeded: number, failed: number, statusCounts: object, requestCharge: number}}
  */
 async function bulkVerified(containerName, operations, opts = {}) {
   const maxAttempts = opts.maxAttempts || 4;
@@ -329,6 +334,7 @@ async function bulkVerified(containerName, operations, opts = {}) {
   const statusCounts = {};
   let pending = operations;
   let succeeded = 0;
+  let requestCharge = 0;
   let lastThrown = null;
 
   for (let attempt = 1; attempt <= maxAttempts && pending.length > 0; attempt++) {
@@ -356,6 +362,9 @@ async function bulkVerified(containerName, operations, opts = {}) {
     results.forEach((r, i) => {
       const code = r && r.statusCode;
       statusCounts[code] = (statusCounts[code] || 0) + 1;
+      // Charged whatever the status: a rejected operation still costs RU, and a 429 costs it again
+      // on the retry below.
+      requestCharge += (r && Number(r.requestCharge)) || 0;
       if (code >= 200 && code < 300) succeeded++;
       else retry.push(pending[i]);
     });
@@ -374,7 +383,7 @@ async function bulkVerified(containerName, operations, opts = {}) {
     throw lastThrown;
   }
 
-  return { succeeded, failed: pending.length, statusCounts };
+  return { succeeded, failed: pending.length, statusCounts, requestCharge };
 }
 
 /**

@@ -101,3 +101,46 @@ test('bulkVerified retries a THROWN bulk failure', async (t) => {
     assert.strictEqual(res.statusCounts.thrown, undefined, 'nothing threw, so nothing to record');
   });
 });
+
+// RU is the variable cost on a serverless account. The figure has to include what was paid for
+// REJECTED work, or the number understates the bill in exactly the case worth watching — a
+// throttled ingest, where the same operations are billed on every attempt.
+test('bulkVerified reports the RU actually billed', async (t) => {
+  await t.test('charges from a retried attempt are added, not replaced', async () => {
+    let calls = 0;
+    const res = await bulkVerified('chunks', ops(3), {
+      ...fast,
+      bulkFn: async (pending) => {
+        calls++;
+        return calls === 1
+          // First attempt: one write lands, two are throttled — and all three are charged.
+          ? pending.map((_, i) => ({ statusCode: i === 0 ? 200 : 429, requestCharge: 5 }))
+          : pending.map(() => ({ statusCode: 200, requestCharge: 5 }));
+      }
+    });
+
+    assert.strictEqual(res.succeeded, 3);
+    // 3 charged on attempt one (including the two rejects) + 2 charged again on the retry.
+    assert.strictEqual(res.requestCharge, 25);
+  });
+
+  await t.test('a thrown attempt contributes nothing, because no charges came back', async () => {
+    let calls = 0;
+    const res = await bulkVerified('chunks', ops(2), {
+      ...fast,
+      bulkFn: async (pending) => {
+        calls++;
+        if (calls === 1) throw RU();
+        return pending.map(() => ({ statusCode: 200, requestCharge: 4 }));
+      }
+    });
+
+    assert.strictEqual(res.requestCharge, 8);
+  });
+
+  await t.test('a driver that omits requestCharge yields 0, never NaN', async () => {
+    const res = await bulkVerified('chunks', ops(2), { ...fast, bulkFn: async (p) => ok(p) });
+
+    assert.strictEqual(res.requestCharge, 0, 'a missing charge must not poison the sum');
+  });
+});
