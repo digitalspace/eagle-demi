@@ -53,7 +53,7 @@ const aiSearch = require('../search/ai-search');
 const { systemAccess } = require('../helpers/access-sql');
 const { filterFor } = require('../helpers/access-odata');
 
-const DEFAULTS = { labels: '', top: 10, fuzzy: true, out: '', anyTerms: false };
+const DEFAULTS = { labels: '', top: 10, fuzzy: true, out: '' };
 
 // Reported at, not below. `tokenize` caps a query at 16 terms, so a longer phrase silently loses
 // its tail — and a label that lost words is not the label the human wrote.
@@ -70,9 +70,6 @@ function parseArgs(argv) {
     else if (a === '--fuzzy') args.fuzzy = true;
     else if (a === '--no-fuzzy') args.fuzzy = false;
     else if (a === '--out') args.out = String(argv[++i]);
-    // The OR arm. Unknown args throw below, so a typo'd `--any-term` aborts instead of quietly
-    // scoring the baseline and writing it to the OR filename.
-    else if (a === '--any-terms') args.anyTerms = true;
     else throw new Error(`[score-retrieval] unknown argument: ${a}`);
   }
   if (!args.labels) throw new Error('[score-retrieval] --labels <file.jsonl> is required');
@@ -186,8 +183,6 @@ async function scoreLabel(label, args, filter) {
   const { items, count } = await aiSearch.searchChunks({
     keywords: label.phrase,
     fuzzy: args.fuzzy,
-    // Explicit keys, not a spread — the arm has to be named here or the flag reaches nothing.
-    anyTerms: args.anyTerms,
     top: args.top,
     filter
   });
@@ -253,9 +248,6 @@ async function score(argv = []) {
       out: args.out || null,
       top: args.top,
       fuzzy: args.fuzzy,
-      // Which arm. Two reports off the same labels file are otherwise indistinguishable, and the
-      // whole experiment is a paired before/after — a mislabelled `--out` would invert the finding.
-      anyTerms: args.anyTerms,
       note: 'queries go through searchChunks(), the path the API serves'
     },
     ...summarize(results, args.top),

@@ -200,15 +200,12 @@ const ANALYZER_STOPWORDS = new Set([
  * Measured on the live index, the bare fuzzy form happened to match too — because the INDEX side
  * is lemmatised — but that is a property of the current analyzer, and the OR does not depend on it.
  *
- * `anyTerms` joins with ` OR ` instead, and exists because the outer join is a suspect: every term
- * being mandatory caps recall before BM25 ranks anything, and `tokenize` manufactures conjuncts a
- * human never typed (`Table 5.1 … (mg/L)` becomes 14, including bare `5` and `1`). The 2026-08-03
- * scorecard measured recall@10 ≈ 0.5 and could not tell that apart from OCR damage. It is a
- * BOOLEAN, not a join string — a caller-supplied separator would concatenate caller data into a
- * Lucene query. Default is unchanged, and `controllers/search.js` passes an explicit key whitelist,
- * so nothing reachable over HTTP can set it.
+ * The outer ` AND ` was tested as the recall suspect and CLEARED: an ` OR ` arm moved pooled
+ * recall@10 0.549 → 0.577 at n=71, half a standard error, with recall@1 and MRR worse and the
+ * discriminating `text` stratum flat. See MIGRATION.md §A — the knob is not carried in the code
+ * because the question it answered is closed.
  */
-function buildQuery(terms, fuzzy, prefix = false, anyTerms = false) {
+function buildQuery(terms, fuzzy, prefix = false) {
   const last = terms.length - 1;
   return terms
     .map((raw, i) => {
@@ -227,7 +224,7 @@ function buildQuery(terms, fuzzy, prefix = false, anyTerms = false) {
       if (prefix && analyzed && i === last && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}*`);
       return parts.length > 1 ? `(${parts.join(' OR ')})` : t;
     })
-    .join(anyTerms ? ' OR ' : ' AND ');
+    .join(' AND ');
 }
 
 /**
@@ -239,9 +236,7 @@ async function runSearch(index, opts = {}) {
   if (terms.length === 0 && !opts.matchAll) return { value: [], count: 0 };
 
   const body = {
-    search: opts.matchAll
-      ? '*'
-      : buildQuery(terms, opts.fuzzy === true, opts.prefix === true, opts.anyTerms === true),
+    search: opts.matchAll ? '*' : buildQuery(terms, opts.fuzzy === true, opts.prefix === true),
     queryType: opts.matchAll ? 'simple' : 'full',
     top: Math.min(Math.max(Number(opts.top) || 20, 1), 250),
     count: true

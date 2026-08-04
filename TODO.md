@@ -149,8 +149,8 @@ is left is search-side and free to test. In this order:
       arms, and median `matchingChunks` went ~20 → ~660,000, so the knob demonstrably reached the
       wire. **recall@1 and MRR got worse** on the largest set (0.360 → 0.280, MRR 0.480 → 0.433), so
       flipping the default would cost precision and buy nothing. Full numbers, guards and the
-      mechanism bucket in `MIGRATION.md` §A. `anyTerms` stays default-false and unreachable over
-      HTTP. **Label sets are now committed** (`src/scripts/retrieval-labels-{A-text,B-ocr-legacy,
+      mechanism bucket in `MIGRATION.md` §A. The join stays ` AND `, and the temporary `anyTerms`
+      knob was removed with the answer. **Label sets are now committed** (`src/scripts/retrieval-labels-{A-text,B-ocr-legacy,
       C-ocr-pdfium,D-ocr-tiled,E-control-textless}.jsonl`) — they had existed only on one host, so
       no §A number was reproducible from a checkout.
 - [x] **Word-joining — SIZED 2026-08-04, and it is NOT the main term. No GPU run is justified.**

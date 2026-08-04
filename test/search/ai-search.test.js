@@ -94,20 +94,15 @@ test('ai-search query construction', async (t) => {
       '(river OR river~1) AND and AND (creek OR creek~1)');
   });
 
-  // The outer join is the suspect behind recall@10 ≈ 0.5: every term mandatory caps recall before
-  // BM25 ranks anything. `anyTerms` is the paired arm of that experiment; the DEFAULT staying AND
-  // is what the two assertions above pin.
-  await t.test('anyTerms swaps only the OUTER join', () => {
-    assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], false, false, true),
-      'peace OR river');
-    // The per-term (t OR t~1) group is a different OR and must survive intact — flattening it
+  // The outer ` AND ` was the suspect behind recall@10 ≈ 0.5 and an ` OR ` arm cleared it
+  // (MIGRATION.md §A). This pins that the join stayed AND — a later reader should not re-derive
+  // the experiment from the absence of a knob.
+  await t.test('terms are joined with AND', () => {
+    assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], false), 'peace AND river');
+    // The per-term (t OR t~1) group is a DIFFERENT OR and must survive intact — flattening it
     // would change what fuzzy means, not just how terms combine.
-    assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], true, false, true),
-      '(peace OR peace~1) OR (river OR river~1)');
-    // Operator demotion has to hold in this arm too. A naive replace() on the joined string is the
-    // obvious wrong implementation and would turn the demoted `and` back into an operator.
-    assert.strictEqual(aiSearch.buildQuery(['river', 'AND', 'creek'], false, false, true),
-      'river OR and OR creek');
+    assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], true),
+      '(peace OR peace~1) AND (river OR river~1)');
   });
 
   // Measured 2026-08-04: the label "Sediments from the proposed Lodgepole mine will move
@@ -208,16 +203,6 @@ test('ai-search request shape', async (t) => {
     assert.strictEqual(body.top, 50);
     // content is not retrievable, so the API can never ship whole chunks even by accident.
     assert.ok(!body.select.includes('content'), 'chunk text must not be requested');
-  });
-
-  // buildQuery is exported, but runSearch calls it INTERNALLY — monkey-patching the export proves
-  // nothing about what leaves the process. Only the wire body proves the opt is threaded, and a
-  // scorecard run against an unthreaded flag would report the baseline twice under two names.
-  await t.test('anyTerms reaches the wire as an OR join', async (tt) => {
-    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
-    await aiSearch.searchChunks({ filter: null, keywords: 'peace river', anyTerms: true });
-    assert.strictEqual(calls[0].body.search, 'peace OR river');
-    assert.strictEqual(calls[0].body.queryType, 'full');
   });
 
   // A null filter means "privileged"; an EMPTY filter would mean unrestricted too, so the field

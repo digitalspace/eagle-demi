@@ -29,11 +29,6 @@ test('parseArgs defaults fuzzy ON, because that is the path the frontend sends',
   assert.strictEqual(parseArgs(['--labels', 'l.jsonl', '--no-fuzzy']).fuzzy, false);
 });
 
-test('parseArgs defaults to the AND join; --any-terms selects the OR arm', () => {
-  assert.strictEqual(parseArgs(['--labels', 'l.jsonl']).anyTerms, false);
-  assert.strictEqual(parseArgs(['--labels', 'l.jsonl', '--any-terms']).anyTerms, true);
-});
-
 test('parseArgs rejects a nonsense --top rather than scoring against it', () => {
   assert.throws(() => parseArgs(['--labels', 'l.jsonl', '--top', '0']), /positive integer/);
 });
@@ -154,36 +149,6 @@ test('score refuses to run when search is unconfigured, rather than reporting 0%
     );
   } finally {
     if (saved !== undefined) process.env.SEARCH_ENDPOINT = saved;
-    fs.rmSync(labelsFile, { force: true });
-  }
-});
-
-// The highest-probability break in the OR experiment: `searchChunks` spreads `...opts` into
-// runSearch, which makes it LOOK as though the scorer needs no edit — but scoreLabel builds its
-// argument with explicit keys, so an unthreaded flag would run the baseline twice and stamp one
-// of them `anyTerms: true`. Still no real AI Search call: the module's methods are replaced, which
-// works because score-retrieval reaches them as property lookups.
-test('the arm reaches the query and is stamped on the report', async () => {
-  const aiSearch = require('../../src/search/ai-search');
-  const saved = { searchChunks: aiSearch.searchChunks, config: aiSearch.config };
-  const labelsFile = path.join(os.tmpdir(), `score-retrieval-arm-${process.pid}.jsonl`);
-  let seen = null;
-
-  aiSearch.searchChunks = async (opts) => { seen = opts; return { items: [], count: 0 }; };
-  aiSearch.config = () => ({ configured: true });
-  fs.writeFileSync(labelsFile, '{"documentId":"doc-a","phrase":"peace river"}\n');
-
-  try {
-    const or = await score(['--labels', labelsFile, '--any-terms']);
-    assert.strictEqual(seen.anyTerms, true);
-    assert.strictEqual(or.query.anyTerms, true);
-
-    const and = await score(['--labels', labelsFile]);
-    assert.strictEqual(seen.anyTerms, false);
-    assert.strictEqual(and.query.anyTerms, false);
-  } finally {
-    aiSearch.searchChunks = saved.searchChunks;
-    aiSearch.config = saved.config;
     fs.rmSync(labelsFile, { force: true });
   }
 });

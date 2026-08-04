@@ -616,7 +616,7 @@ this is a property of the *query builder* and had never been examined.
 | the conjunction dominates | yes | **yes, sharply** |
 
 Run 2026-08-04, both arms paired in one session against one index state, `--top 10`, fuzzy on,
-changing **only** the join (`anyTerms`, `src/search/ai-search.js:178-201`). The `text` row is the
+changing **only** the outer join in `buildQuery` (`src/search/ai-search.js`). The `text` row is the
 discriminating one, and it did not move:
 
 | stratum | n | AND r@1 / r@5 / r@10 / MRR | OR r@1 / r@5 / r@10 / MRR | miss→hit | hit→miss |
@@ -671,14 +671,17 @@ should have surfaced here. Recall barely moved.
 
 **Reproducing this.** The label sets are now committed (`src/scripts/retrieval-labels-{A-text,
 B-ocr-legacy,C-ocr-pdfium,D-ocr-tiled,E-control-textless}.jsonl`) — until 2026-08-04 they existed
-only on one host, and no number in this section was reproducible from a checkout. Both arms:
-`score-retrieval.js --labels <file> --top 10 [--any-terms]`, run inside the app container over the
-SSH tunnel (§ "How the seed had to run"). `report.query.anyTerms` records the arm, because two
-reports off one labels file are otherwise indistinguishable.
+only on one host, and no number in this section was reproducible from a checkout.
+`score-retrieval.js --labels <file> --top 10`, run inside the app container over the SSH tunnel
+(§ "How the seed had to run"), gives the AND arm. The OR arm was produced by changing the join in
+`buildQuery` — `.join(' AND ')` → `.join(' OR ')`, one line — and re-running the same command;
+write the two reports to different `--out` files, because two reports off one labels file are
+otherwise indistinguishable.
 
-**Not productised.** `anyTerms` defaults to false and no controller passes it; `controllers/search.js`
-builds its `searchChunks` argument from an explicit key whitelist, so nothing reachable over HTTP can
-set it. On these numbers flipping the default would trade rank-1 precision for nothing.
+**The knob is not in the code.** The experiment ran behind a temporary `anyTerms` parameter, which
+was removed once it answered: the arm is rejected, no controller would ever pass it, and a live
+search parameter that exists only to be false is a thing to maintain rather than a finding. Flipping
+the join permanently would trade rank-1 precision for nothing.
 
 **`MAX_TERMS = 16`'s stated rationale is backwards.** `ai-search.js:41` reads *"beyond this the query
 grows without adding recall; BM25 is already dominated by the rest."* Under a conjunction each extra
