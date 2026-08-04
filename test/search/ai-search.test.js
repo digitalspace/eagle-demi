@@ -48,9 +48,24 @@ function stubToken() {
 stubToken();
 
 test('ai-search query construction', async (t) => {
-  await t.test('fuzzy emits (term OR term~1) per term, ANDed', () => {
+  await t.test('fuzzy emits (term OR term~1^0.5) per term, ANDed', () => {
     assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], true),
-      '(peace OR peace~1) AND (river OR river~1)');
+      '(peace OR peace~1^0.5) AND (river OR river~1^0.5)');
+  });
+
+  await t.test('the fuzzy variant is down-weighted, and the plain term is NOT', () => {
+    // Measured 2026-08-04: pooled recall@10 0.592 -> 0.620, recall@1 and MRR both up, 0 hit->miss.
+    // The boost belongs on the fuzzy arm alone — the exact arm is what it exists to protect, so a
+    // `^` next to the plain term would defeat the whole change.
+    assert.ok(!aiSearch.buildQuery(['river'], true).includes('river^'));
+  });
+
+  await t.test('the down-weight never revives ~1 on an analyzer-removed term', () => {
+    // The earlier fix: on a term en.microsoft removes, the unanalyzed ~1 side is the only matchable
+    // half of the clause and acts as a near-random MANDATORY filter. Scoring it lower does not make
+    // it satisfiable, so the term must still get no ~1 at all.
+    assert.strictEqual(aiSearch.buildQuery(['that', 'river'], true),
+      'that AND (river OR river~1^0.5)');
   });
 
   // The OR is not redundant: a fuzzy term bypasses the query analyzer, so the plain term is what
@@ -64,7 +79,7 @@ test('ai-search query construction', async (t) => {
   // stopword removal too. The same query with fuzzy off returned 0.
   await t.test('short terms are never fuzzed, even when fuzzy is requested', () => {
     assert.strictEqual(aiSearch.buildQuery(['the', 'and', 'of'], true), 'the AND and AND of');
-    assert.strictEqual(aiSearch.buildQuery(['the', 'river'], true), 'the AND (river OR river~1)');
+    assert.strictEqual(aiSearch.buildQuery(['the', 'river'], true), 'the AND (river OR river~1^0.5)');
   });
 
   // queryType 'full' makes +, -, *, ", ~, ( ) and : operators. An unbalanced one is a 400, not a
@@ -91,7 +106,7 @@ test('ai-search query construction', async (t) => {
     // Demotion must survive fuzzing too — these are all under MIN_FUZZY_LENGTH, so the point is
     // that the operator never reappears once fuzzy expansion is on.
     assert.strictEqual(aiSearch.buildQuery(['river', 'AND', 'creek'], true),
-      '(river OR river~1) AND and AND (creek OR creek~1)');
+      '(river OR river~1^0.5) AND and AND (creek OR creek~1^0.5)');
   });
 
   // The outer ` AND ` was the suspect behind recall@10 ≈ 0.5 and an ` OR ` arm cleared it
@@ -102,7 +117,7 @@ test('ai-search query construction', async (t) => {
     // The per-term (t OR t~1) group is a DIFFERENT OR and must survive intact — flattening it
     // would change what fuzzy means, not just how terms combine.
     assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], true),
-      '(peace OR peace~1) AND (river OR river~1)');
+      '(peace OR peace~1^0.5) AND (river OR river~1^0.5)');
   });
 
   // Measured 2026-08-04: the label "Sediments from the proposed Lodgepole mine will move
@@ -111,14 +126,14 @@ test('ai-search query construction', async (t) => {
   // demanded a literal the index does not hold and the AND join zeroed the whole query.
   await t.test('analyzer stopwords get no unanalyzed variant', () => {
     assert.strictEqual(aiSearch.buildQuery(['sediments', 'from', 'mine'], true),
-      '(sediments OR sediments~1) AND from AND mine');
+      '(sediments OR sediments~1^0.5) AND from AND mine');
     // The plain term must SURVIVE — it analyzes away and is dropped harmlessly. Removing the term
     // outright would be a different change, and one that alters what the user asked for.
     assert.ok(aiSearch.buildQuery(['from'], true).includes('from'));
     // Case-insensitive: labels are full of sentence-cased and ALL-CAPS text.
     assert.strictEqual(aiSearch.buildQuery(['With', 'THOSE'], true), 'With AND THOSE');
     // A non-stopword of the same length still fuzzes, or the fix would be a blanket disable.
-    assert.strictEqual(aiSearch.buildQuery(['mine', 'lake'], true), 'mine AND (lake OR lake~1)');
+    assert.strictEqual(aiSearch.buildQuery(['mine', 'lake'], true), 'mine AND (lake OR lake~1^0.5)');
   });
 
   await t.test('term count is capped', () => {
@@ -198,7 +213,7 @@ test('ai-search request shape', async (t) => {
     assert.ok(url.includes('/indexes/demi-chunks/docs/search'));
     assert.strictEqual(body.filter, "read/any(r: search.in(r, 'public', ','))");
     assert.strictEqual(body.queryType, 'full');
-    assert.strictEqual(body.search, '(river OR river~1)');
+    assert.strictEqual(body.search, '(river OR river~1^0.5)');
     assert.strictEqual(body.highlight, 'content');
     assert.strictEqual(body.top, 50);
     // content is not retrievable, so the API can never ship whole chunks even by accident.

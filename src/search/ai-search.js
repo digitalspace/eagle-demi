@@ -154,6 +154,32 @@ function tokenize(keywords) {
 const MIN_FUZZY_LENGTH = 4;
 
 /**
+ * Score multiplier on the fuzzy variant. MEASURED, not chosen.
+ *
+ * `(term OR term~1)` lets the fuzzy arm compete with the exact arm on BM25 score, so a document
+ * matching only by edit distance can outrank one holding the term verbatim. That was the residual
+ * gap after the stopword fix: blanket `--no-fuzzy` still scored 2 labels higher (44 vs 42), and the
+ * vocabulary sweep came back clean, so it was a RANKING effect rather than a zeroing one.
+ *
+ * Paired run, both arms in one session, 71 labels plus the textless control (2026-08-04):
+ *
+ *   pooled recall@10  0.592 -> 0.620   (42 -> 44 of 71)
+ *   pooled recall@1   0.282 -> 0.310
+ *   pooled MRR        0.382 -> 0.403
+ *   2 miss->hit, 0 hit->miss, no stratum regressed, control 0 in both arms
+ *
+ * All three metrics move together, which is what makes this shippable — `anyTerms` improved
+ * recall@10 while making recall@1 and MRR worse, and was rejected for exactly that. It lands on the
+ * same 44 labels blanket `--no-fuzzy` reaches, so it recovers the residue WITHOUT giving up typo
+ * tolerance, which was the point.
+ *
+ * Honest limit: 2 discordant pairs is not statistically significant (one SE ~ 0.059 on this label
+ * set; the move is half of that). The case rests on the direction being consistent across all three
+ * metrics with zero regressions, not on the aggregate. Full account in MIGRATION.md §A.
+ */
+const FUZZY_BOOST = 0.5;
+
+/**
  * Lucene's boolean operators, which are CASE-SENSITIVE under `queryType: 'full'`.
  *
  * `tokenize` strips operator punctuation but cannot strip a word, so these reach `buildQuery` as
@@ -216,7 +242,9 @@ function buildQuery(terms, fuzzy, prefix = false) {
       // becomes unsatisfiable — fatal under a conjunction. The plain term stays: it analyzes away
       // and is dropped harmlessly, which is the behaviour that was already correct.
       const analyzed = !ANALYZER_STOPWORDS.has(t.toLowerCase());
-      if (fuzzy && analyzed && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}~1`);
+      // `^0.5` on the fuzzy variant only — see FUZZY_BOOST. Never on the plain term (the arm this
+      // protects) and never on the `*` prefix variant, which is a different mechanism.
+      if (fuzzy && analyzed && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}~1^${FUZZY_BOOST}`);
       // Prefix on the LAST term only — the one still being typed. Applying it to every term would
       // match `pipe` inside `pipeline` in the middle of a phrase and blur the query; applying it
       // to none loses search-as-you-type, which Typesense provided via `prefix=true` and the

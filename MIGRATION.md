@@ -828,6 +828,46 @@ unsatisfiable clause), not on the aggregate. Blanket `--no-fuzzy` still scores 2
 is fuzzy diluting BM25 on ordinary terms, a ranking effect rather than a zeroing one, and worth its
 own experiment before anyone trades away typo tolerance for it.
 
+#### The fuzzy down-weight — RAN 2026-08-04, and it is ACCEPTED
+
+That residue experiment. If the fuzzy arm competes with the exact arm on BM25 score, a document
+matching only by edit distance can outrank one holding the term verbatim — so keep `~1` but score it
+lower: `(term OR term~1^0.5)`.
+
+Paired, both arms in one session, same 71 labels plus the textless control, run inside the app
+container over the SSH tunnel (the data plane is private and keyless, so there is nowhere else):
+
+| stratum | n | r@10 before / after | MRR before / after |
+|---|---|---|---|
+| `A-text` | 15 | 0.600 / 0.600 | 0.364 / **0.375** |
+| `B-ocr-legacy` | 15 | 0.533 / **0.600** | 0.258 / **0.268** |
+| `C-ocr-pdfium` | 14 | 0.643 / 0.643 | 0.340 / 0.340 |
+| `D-ocr-tiled` | 2 | 0.500 / 0.500 | 0.500 / 0.500 |
+| `retrieval-labels-text` | 25 | 0.600 / **0.640** | 0.480 / **0.528** |
+| **control — textless** | 3 | **0** / **0** | — |
+
+**Pooled recall@10 0.592 → 0.620 (42 → 44 of 71). recall@1 0.282 → 0.310. MRR 0.382 → 0.403.
+2 miss→hit, 0 hit→miss, no stratum regressed.**
+
+**Why this ships where `anyTerms` did not.** The rule was stated before the run: ship only if
+recall@10 improves *and* neither recall@1 nor MRR regresses. `anyTerms` failed exactly that test —
+it bought recall@10 and cost precision. Here all three move the same way, and the change lands on
+**the same 44 labels blanket `--no-fuzzy` reaches**, so it recovers the residue without giving up
+typo tolerance. That was the whole point of trying it.
+
+Eight of 71 ranks moved: five improved (3→2, 6→4, 2→1, 2→1, and one 0→5), two slipped slightly but
+stayed on the page (9→10, 7→8), and one miss came back at 10. The two slips are the mechanism
+working as intended — those were fuzzy-only matches being demoted beneath exact ones.
+
+**Honest limit: 2 discordant pairs is not significant.** One SE is ≈0.059 on this label set and the
+move is half of that. This is *not* a demonstration that the corpus got better; it is a consistent
+directional result with zero regressions on a mechanism with a clear story. Treat 0.620 as the same
+number as 0.592 until the label debt is paid and n is larger.
+
+Shipped as a constant, `FUZZY_BOOST` in `ai-search.js`, not a knob — the experiment's `--fuzzy-boost`
+plumbing was removed in the same PR that recorded the answer, which is the lesson `anyTerms` taught.
+**§3's `--no-fuzzy` residue item is closed.**
+
 ##### Chunk overlap is not applied on the common path — measured 2026-08-04
 
 `chunker.js` documents itself as "paragraph/section-aware with overlap" and `OVERLAP_SIZE=200` is
