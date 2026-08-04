@@ -1013,11 +1013,26 @@ time; nothing read them, and they defaulted to `localhost:27017`.
 outside the try that was supposed to make an unparseable PDF fall back to a whole-file send, so a
 PDF that loads but has a broken page tree threw instead of degrading.
 
-**Left to do** — exact resource list and the checked hazards in `TODO.md` item 1. In short:
-`azure/main.bicep:69` + `:89`, `azure/modules/cosmos-db.bicep`, `api-web-app.bicep:22-24` and
-`:113-129`, the stale compiled `azure/main.json`, then the account `demi-mongo-dev-pcbd7cygyic52`,
-`demi-mongo-pe` and its NIC. **The private endpoint is the only flat recurring charge (~$7/mo).**
-Not before the clean week ends.
+**Nothing left to do — Phase 8 closed 2026-08-04.** The Bicep edits landed 2026-08-01; the app
+settings came off and `demi-mongo-pe` plus its NIC went earlier on 08-04; and the account
+`demi-mongo-dev-pcbd7cygyic52` was deleted last, after `TotalRequests` was re-confirmed at **0
+across the preceding 24 hours**.
+
+Its configuration was captured before deletion — `kind: MongoDB`, `EnableServerless`, Canada
+Central, Periodic backup on a 240-minute interval with **8-hour** retention, Geo redundancy,
+`publicNetworkAccess: Disabled` — so the shape is reproducible even though the data is not. Three
+databases went with it (`demi-dev`, `test`, `epic`), taking the orphaned `syncState` container that
+had already been removed from the template but still existed in the account.
+
+Verified immediately after: `/projects` and `/documents` returned 200, `/search?dataset=DocumentChunk`
+still reported `count: 29392`, `az cosmosdb list -g c4b0a8-dev-rg` returned only `demi-cosmos-dev`,
+and no orphan private endpoint or NIC remained — `pe-cosmos-nosql-dev` and `pe-demi-search-dev` are
+both load-bearing and untouched.
+
+Correcting a figure this document carried for a while: **the private endpoint was never "the only
+flat recurring charge (~$7/mo)"**. The resource group held three, and the ~29 CAD/month Virtual
+Network line was split across them, so removing `demi-mongo-pe` took roughly a third of it — about
+10 CAD/month, not the whole line.
 
 ### C. Phase 3b — document storage on Azure Blob (optional)
 
@@ -1575,15 +1590,16 @@ wire DNS.**
 | `SEARCH_ENDPOINT`, `SEARCH_INDEX` | AI Search. `SEARCH_INDEX_PROJECTS` / `_DOCUMENTS` default to `demi-projects` / `demi-documents` |
 | `USE_COSMOS_NOSQL` | **deleted 2026-08-01** — Phase 8 removed the switch and the layer it chose against |
 | `AzureWebJobs.nightlySyncTimer.Disabled` | **deleted 2026-08-01** with the timer itself |
-| `STORAGE_BACKEND` | unset (defaults to `minio`) — blobs are not copied yet |
+| `STORAGE_BACKEND` | **set explicitly to `minio` 2026-08-04.** Was unset and carried by the default in `src/config.js`; the "never a side effect" rule should not rest on a default |
 | `MINIO_*` | **keep** — still the live object store |
-| `MONGODB_URI`, `MONGODB_DATABASE` | **keep until teardown** — they are the rollback path |
+| `MONGODB_URI`, `MONGODB_DATABASE` | **deleted 2026-08-04**, with the account. There is no rollback path any more, by design |
 | `WEBSITE_VNET_ROUTE_ALL`, `WEBSITE_DNS_SERVER` | required for private-endpoint DNS |
 | `ENABLE_ORYX_BUILD` | must stay `false` |
 
-**Rollback is `git revert` + redeploy**, and only while `MONGODB_URI` / `MONGODB_DATABASE` and the
-account still stand — that is what the clean week to 2026-08-08 buys. Deleting the account is the
-one-way step.
+**There is no rollback any more.** It used to be `git revert` + redeploy, and only while
+`MONGODB_URI` / `MONGODB_DATABASE` and the account still stood. The settings came off and the
+account was deleted on 2026-08-04, so a revert now restores code that points at nothing. Anything
+built from here forward targets Cosmos NoSQL; there is no Mongo to fall back to.
 
 ---
 

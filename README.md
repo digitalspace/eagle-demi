@@ -60,14 +60,13 @@ auth is Entra managed identity via `AZURE_CLIENT_ID` and `COSMOS_ENDPOINT`. Veri
 that chose between them — were deleted at Phase 8. All CRUD lives in `src/repositories/*` and every
 read composes `src/helpers/access-sql.js`.
 
-`COSMOS_DATABASE=epic` is still set on the deployed app and is now inert; it goes with the account.
-The NoSQL client reads `COSMOS_NOSQL_DATABASE` and deliberately ignores it — pointing it at
-`COSMOS_DATABASE` once repointed the live app at an empty database that answered `[]` with HTTP 200.
+The NoSQL client reads `COSMOS_NOSQL_DATABASE` and deliberately ignores `COSMOS_DATABASE` — pointing
+it at the latter once repointed the live app at an empty database that answered `[]` with HTTP 200.
 
-**`COSMOS_NOSQL_DATABASE` is not actually set on `demi-api-dev`** (checked 2026-08-01). The app
-reaches the right database only through the `|| 'demi'` default in `src/db/cosmos-nosql.js:37`. That
-works, but the explicit setting is the guard against exactly the repoint described above, and it is
-missing. Setting it recycles the worker, so it waits for the extraction run to land — `TODO.md`.
+**`COSMOS_NOSQL_DATABASE` is now set explicitly to `demi`** (2026-08-04). It had been unset, so the
+app reached the right database only through the `|| 'demi'` default in `src/db/cosmos-nosql.js` —
+which worked, but left the guard against that repoint resting on a default. `COSMOS_DATABASE=epic`
+went with the Mongo account in the same window.
 
 Some notable implementation details:
 
