@@ -216,27 +216,20 @@ is left is search-side and free to test. In this order:
       costing retrieval. Worth doing as tidying; do not expect it to move recall. **Not** an OCR
       re-run.
 
-### 4. `eagle-api` accepts a hardcoded API key on the DEMI sync route — found 2026-08-04
+### 4. `eagle-api`'s hardcoded API key on the DEMI sync route — CLOSED 2026-08-04
 
-Not this repo, but DEMI is the counterparty and nobody else is looking at it.
-`eagle-api/api/controllers/demi.js:22-23`:
+Resolved by `bcgov/eagle-api#836`, squash-merged to `develop` as `6567071`. The route was **deleted**
+rather than hardened: `api/controllers/demi.js` (with its
+`process.env.DOCLING_API_KEY || 'eagle-demi-api-key'` fallback and its `!==` comparison), the
+`/document/sync` swagger path, the Helm `DOCLING_API_KEY` env block and both `secrets.demi` values
+entries all went. Nothing in eagle-api trusts a DEMI credential now, and there is no sync route to
+harden — eagle-api and DEMI stay decoupled until a real integration is designed.
 
-```js
-const expectedKey = process.env.DOCLING_API_KEY || 'eagle-demi-api-key';
-if (!apiKey || apiKey !== expectedKey) {
-```
-
-Three problems in two lines, all of which DEMI already fixed on its own side and eagle-api did not:
-
-- **Hardcoded fallback.** Unset the env var and `syncDocumentFromDemi` authenticates against a
-  literal committed to a public repository.
-- **`!==` instead of `crypto.timingSafeEqual`** — the rule is in `CLAUDE.md` and `src/helpers/auth.js`
-  follows it.
-- **Outbound credential reused as an inbound secret.** This is the same conflation recorded under
-  "Secret rotation" in `MIGRATION.md`: `DOCLING_API_KEY` was DEMI's only admin credential until
-  `4bddede` split `ADMIN_API_KEY` out. DEMI removed it from `validKeys`; eagle-api still trusts it.
-
-Fix: distinct `DEMI_SYNC_KEY`, no default, fail closed when unset, `timingSafeEqual`.
+Left behind there, non-blocking and not ours to land: four now-unread `Document` schema fields
+(`demiReviewStatus`, `contentExtracted`, `contentPageCount`, `contentExtractionError` —
+`extractionMethod` and `contentExtractedAt` are still read by eagle-admin), the orphaned
+`eagle-demi-api-key` secret in `6cdc9e-dev`, and workspace docs still advertising
+`POST /api/document/sync`.
 
 ### 5. Needs a human, not code
 
