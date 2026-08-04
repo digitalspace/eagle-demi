@@ -42,7 +42,7 @@ from upstream, and the old database carried Mongoose legacy, 3,382 synthetic pro
 | **F — Cosmos full-text search** | ❌ **ABANDONED 2026-07-31.** Base FTS works and is fast, but fuzzy `distance` is a silent no-op and fuzzy is a requirement. See §F |
 | **F2 — Azure AI Search** | ✅ **live 2026-07-31.** Basic, 3 indexes, `_ts` indexers on `PT5M`, OData ACL filter. See §G |
 | **7 — Change feed** | ⬜ deferred by design. Indexers pull every 5 min; add when sub-5-minute staleness matters |
-| **8 — Decommission Mongo** | 🔶 **code deployed + verified live 2026-08-01**; Azure teardown open, earliest **2026-08-08**. See §B |
+| **8 — Decommission Mongo** | ✅ **COMPLETE 2026-08-04.** Code live 08-01; app settings, `demi-mongo-pe` + NIC, then the account itself. Clean week ended early on measurements. See §B |
 
 ### Cutover verified 2026-07-30
 
@@ -1613,9 +1613,10 @@ architecture. The real subnet is the platform vWAN spoke:
 Pass that as `peSubnetId`. Do not deploy `main.bicep` expecting it to build networking, and do not
 expect it to be how live app settings change.
 
-**Private DNS is attached by Azure Policy, not by this repo.** The existing `demi-mongo-pe` carries a
-zone group named **`deployedByPolicy`** whose zone lives in a *different subscription*
-(`bcgov-managed-lz-live-dns`). Our own version would have (a) failed on `virtualNetworkLinks`, since
+**Private DNS is attached by Azure Policy, not by this repo.** Observed on `demi-mongo-pe` before it
+was deleted in the 2026-08-04 teardown — and it holds for the two endpoints that remain: the
+endpoint carried a zone group named **`deployedByPolicy`** whose zone lives in a *different
+subscription* (`bcgov-managed-lz-live-dns`). Our own version would have (a) failed on `virtualNetworkLinks`, since
 the VNet is in `c4b0a8-dev-networking` which this identity cannot even list, (b) created a second
 zone competing with the platform's, and (c) been redundant. **Create the endpoint only and let policy
 wire DNS.**
@@ -1674,8 +1675,16 @@ built from here forward targets Cosmos NoSQL; there is no Mongo to fall back to.
   until it flips.
 - **`config-zip` merges rather than clean-deploys.** A file deleted from the repo will **not**
   disappear from `wwwroot`. Verify by content, never mtime — the zip carries source mtimes.
-- **SCM basic auth is disabled** (landing-zone policy). Kudu returns 401 to publishing credentials;
-  use an AAD bearer (`az account get-access-token --resource https://management.core.windows.net/`).
+- **SCM basic auth: CHECK IT, do not assume either way.** This entry used to state flatly that basic
+  auth is disabled by landing-zone policy and that Kudu 401s to publishing credentials. **That was
+  false on 2026-08-04**: `basicPublishingCredentialsPolicies/scm` read `allow: true`, and every Kudu
+  call in that day's `wwwroot` sweep authenticated with publishing credentials and returned 200.
+  Either the policy changed or the original 401 came from a different app or moment.
+  So: try publishing credentials first —
+  `az webapp deployment list-publishing-credentials -n <app> -g <rg>` — and fall back to an AAD
+  bearer (`az account get-access-token --resource https://management.core.windows.net/`) if the
+  policy is turned off again. Re-read `properties.allow` rather than trusting this line; it is
+  exactly the kind of claim that goes stale silently and costs an hour on the long path.
 - **`az webapp deploy` 502s** on a ~27 MB package. `POST /api/zipdeploy?isAsync=true` accepts it in
   ~1.6 s. Kudu status **3 = FAILED, 4 = SUCCESS**; `complete: true` alone means nothing.
 - **Cosmos is private-endpoint only AND keyless** — unreachable from a laptop. **Kudu `/api/command`

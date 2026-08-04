@@ -40,6 +40,16 @@ filter. Proved on a document whose chunk holds the phrase verbatim and is indexe
 fuzzy on, 1 with it off**. Pooled recall@10 **0.549 → 0.592**, 3 miss→hit, 0 hit→miss, control still
 0. §3 and `MIGRATION.md` §A.
 
+**A second search-side fix landed the same day: the fuzzy down-weight.** `(term OR term~1)` let the
+fuzzy arm compete with the exact arm on BM25, so a document matching only by edit distance could
+outrank one holding the term verbatim. Scoring the fuzzy variant at `^0.5` gives pooled recall@10
+**0.592 → 0.620**, recall@1 0.282 → 0.310, MRR 0.382 → 0.403, **2 miss→hit and 0 hit→miss**, control
+still 0. It reaches the same 44 labels blanket `--no-fuzzy` reaches, so it recovers that residue
+without trading away typo tolerance. **Read 0.620 and 0.592 as the same measurement** — 2 discordant
+pairs is inside one SE (≈0.059), and the case rests on the direction being consistent across all
+three metrics with no regressions, not on the aggregate. It will stay that way until the label debt
+in §3 is paid.
+
 **`indexProgress` in `/db/stats` and `/admin/index-progress` is COSMOS index-build percent, not
 Azure AI Search.** `src/controllers/db.js:22-37` calls `cosmosNoSql.indexProgress`. `chunks: 100`
 means the Cosmos container finished indexing itself and says NOTHING about whether the `PT5M`
@@ -58,8 +68,16 @@ needs a data-plane query from inside the VNet.
 (`src/controllers/nosql/document.js:45-67`). Passing it back as a request header silently re-serves
 page 1 forever — a count taken that way read 21,000 when the answer was 1,511.
 
-**Phase 8 deployed + verified live 2026-08-01.** Mongo-API layer gone from app. Clean week run to
-**2026-08-08**; only Azure teardown left. Evidence in `MIGRATION.md` §B.
+**Phase 8 COMPLETE 2026-08-04.** Mongo-API layer gone from the app (2026-08-01), then the app
+settings, `demi-mongo-pe` and its NIC, and finally the account `demi-mongo-dev-pcbd7cygyic52` — the
+clean week was ended early on purpose, on measurements rather than the calendar. Nothing in the repo
+or the resource group speaks Mongo. §1 has the sequence, `MIGRATION.md` §B the reasoning.
+
+**`demi-api-dev` runs `main` as of 2026-08-04.** It had been serving 2026-08-01 code, so every
+search fix measured since existed only in the repo. Verified by discriminator, not by deployment
+status: the phrase *"Sediments from the proposed Lodgepole mine will move downstream and accumulate"*
+returned **0 results with `fuzzy=true` before the deploy and 1 after**, against a chunk holding it
+verbatim. `/projects` and `/documents` 200, `/search` `count: 29392` unchanged.
 
 **Cost — first post-Typesense reading taken 2026-08-04, and the budget will be exceeded.**
 `demi-budget-dev` is **100 CAD/month**; Cost Management reports **26.08 CAD** month-to-date over
@@ -71,7 +89,7 @@ Aug 1–4 (the budget API's own `currentSpend` says 24.56 — same story, it lag
 | Azure Cognitive Search | 9.55 | ~74 | Basic, fixed whether queried or idle. Confirms the ~$75-81 estimate |
 | **Microsoft Defender for Cloud** | **6.29** | **~48** | **Was not recorded anywhere. Second-largest line** |
 | Azure Cosmos DB | 4.67 | ~36 | Serverless RU + storage on ~1.13M chunks |
-| Virtual Network | 3.80 | ~29 | **Three** private endpoints, not one |
+| Virtual Network | 3.80 | ~29 | Three private endpoints **during this window**; `demi-mongo-pe` went 2026-08-04, so two remain |
 | Azure App Service | 1.70 | ~13 | B1 Basic |
 | Storage | 0.07 | ~0.5 | |
 
@@ -84,10 +102,12 @@ Two corrections to what this file used to say:
   account and one storage account. **Do not turn these off.** This is a BC Gov landing zone and
   Defender tiers are almost certainly set by platform/security policy, not by this team — ask before
   touching, and treat it as a question for the platform team rather than a saving to take.
-- **"The private endpoint is the only flat recurring charge (~$7/mo)" is wrong.** `c4b0a8-dev-rg`
-  holds **three**: `demi-mongo-pe` (MongoDB), `pe-cosmos-nosql-dev` (Sql) and `pe-demi-search-dev`
-  (searchService). The ~29 CAD/mo is split across all three, so the Phase 8 teardown removes roughly
-  a third of it — around 10 CAD/mo, not the whole line. The other two are load-bearing.
+- **"The private endpoint is the only flat recurring charge (~$7/mo)" was wrong.** During the Aug 1–4
+  window `c4b0a8-dev-rg` held **three**: `demi-mongo-pe` (MongoDB), `pe-cosmos-nosql-dev` (Sql) and
+  `pe-demi-search-dev` (searchService), and the ~29 CAD/mo was split across them. **Since 2026-08-04
+  there are two** — `demi-mongo-pe` went with the teardown, realising roughly a third of that line,
+  about 10 CAD/mo. The remaining two are load-bearing, so this line does not shrink further.
+  The table above is a *measurement* of Aug 1–4 and is left as measured; only this note is updated.
 
 Read it with `az rest --method post .../Microsoft.CostManagement/query?api-version=2023-03-01`
 grouping on `ServiceName`. **`az consumption usage list` does not work here** — it returns
@@ -318,17 +338,13 @@ Left behind there, non-blocking and not ours to land: four now-unread `Document`
 - ~~**`demi-api-dev` was running 2026-08-01 code.**~~ — **DEPLOYED 2026-08-04.** It had no
   `ANALYZER_STOPWORDS`, so the live app still emitted the unanalyzed `~1` on analyzer-removed terms
   and every improvement measured since (**recall@10 0.549 → 0.592 → 0.620**) existed only in `main`.
-  Now current, verified by the discriminating probe rather than by the deployment status: the phrase
-  *"Sediments from the proposed Lodgepole mine will move downstream and accumulate"* returned
-  **0 results with `fuzzy=true` before and 1 after**, against a chunk that holds it verbatim.
-  `/projects` and `/documents` 200, `/search` still `count: 29392`.
-  **`config-zip` alone is NOT enough — the running Node process keeps the old modules.** After the
-  deploy reported success and the new file was confirmed on disk through Kudu VFS, the app still
-  served the OLD behaviour; it took a `stop`/`start` (never `restart`) to reload. Anyone verifying a
-  deploy by reading the deployed file, or by trusting the deployment status, will conclude it worked
-  when it has not. **Check behaviour, not bytes.**
-  Deploy from a checkout with `node_modules` installed: `ENABLE_ORYX_BUILD=false`, so nothing is
-  installed server-side and a package built without them ships an app that 500s on every request. `worker.py` (1,193
+  Now current — see State of play for the discriminator that proved it.
+  **The deploy needed a `stop`/`start` after `config-zip`, exactly as `MIGRATION.md`'s *Operational
+  gotchas* already warned** ("a warm worker served the OLD build… poll a discriminator until it
+  flips"). That entry owns the topic; do not restate it here.
+  The one thing not recorded there: **build the package from a checkout with `node_modules`
+  installed.** `ENABLE_ORYX_BUILD=false`, so nothing is installed server-side and a package built
+  from a bare worktree ships an app that 500s on every request. `worker.py` (1,193
   lines), `ingest.py`, `test_poolfix.py`, `HANDOFF.md` and the three systemd units now live under
   `extraction-host/`, with a `.gitignore` excluding the env file, every `.bak`/`.pre-poolfix` scratch
   copy and ~44 GB of run state. Verified on the staged bytes: no literal key material, no private
