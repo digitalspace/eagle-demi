@@ -1,4 +1,31 @@
-// Root Bicep Orchestrator for DEMI Azure Infrastructure (Serverless Architecture)
+// Root Bicep orchestrator for the DEMI Azure environment.
+//
+// WHAT THIS FILE IS. A description of what is actually deployed in `c4b0a8-dev-rg`, verified
+// against the live resource group on 2026-08-04. It is not deployable today and is not deployed by
+// CI: `azure-deploy-dev.yaml`'s infra job was reduced to `az bicep build` on 2026-08-04, and there
+// is no federated credential for it to use in any case. Its job is to make the environment
+// REBUILDABLE and to make drift visible, which the previous version could not do — it deployed a
+// VNet, a Key Vault and a Static Web App, none of which exist here, and instantiated none of the
+// five modules that describe what does.
+//
+// THE NETWORK IS NOT OURS. There is no VNet in this resource group and there must not be. The
+// landing zone provides one in `c4b0a8-dev-networking` (`c4b0a8-dev-vwan-spoke`), and both the
+// private endpoints and the app's VNet integration point into its subnets. So subnet IDs are
+// PARAMETERS here. `modules/vnet.bicep` is left in the tree unreferenced rather than deleted,
+// because it is the only written record of the topology this was designed against before the
+// landing zone supplied one — but instantiating it would build a second, disconnected network.
+//
+// WHAT IS DELIBERATELY ABSENT.
+//   - Key Vault. Never deployed; secrets are app settings. `modules/key-vault.bicep` is unreferenced.
+//   - Static Web App. The frontend is an App Service (`demi-frontend-dev`), not a SWA.
+//     `modules/static-web-app.bicep` is unreferenced and superseded by `frontend-web-app.bicep`.
+//   - Cosmos DB for MongoDB. Cut loose at Phase 8; nothing speaks Mongo.
+//   - Document storage. Phase 3b, written but never deployed — see `deployDocumentStorage`.
+//
+// NOT DESCRIBED HERE, because Azure creates them rather than us: the Log Analytics workspace
+// (`workspace-c4b0a8devrgYb8e`, Defender/diagnostics) and the Event Grid system topic on the API
+// storage account. Both exist in the group; neither is ours to declare.
+
 targetScope = 'resourceGroup'
 
 @description('Target Azure region')
@@ -26,6 +53,26 @@ param contactEmails array = [
   'Daniel.T.Truong@gov.bc.ca'
 ]
 
+// Subnets in the landing zone's VNet, which lives in another resource group and is not managed
+// here. Empty values skip the private endpoints and VNet integration, which is only ever right for
+// a scratch deployment — in this landing zone public network access is denied by policy, so an
+// account without its private endpoint is unreachable rather than merely public.
+@description('Existing landing-zone subnet for inbound private endpoints (c4b0a8-dev-networking).')
+param privateEndpointSubnetId string = ''
+
+@description('Existing landing-zone subnet for App Service VNet integration (c4b0a8-dev-networking).')
+param appServiceSubnetId string = ''
+
+@description('Object ID of a human principal granted read access to data planes. Empty grants none.')
+param readerPrincipalId string = ''
+
+// Phase 3b. The module is written and the argument for it is per-environment isolation rather than
+// cost, but nothing is deployed and nothing is copied — and turning it on needs `Storage Blob
+// Delegator` on the identity or every download link fails to sign, which is NOT implied by
+// `Storage Blob Data Contributor`. Off, so that this file keeps describing what exists.
+@description('Deploy the Phase 3b document storage account. Off: dev still reads MinIO.')
+param deployDocumentStorage bool = false
+
 // Mandatory Cost Management Tags applied across ALL resources
 var defaultTags = {
   Project: 'DEMI'
@@ -35,9 +82,14 @@ var defaultTags = {
   CostCenter: 'c4b0a8'
 }
 
-// 1. Virtual Network (VNet Integration & Private Endpoints Subnets)
-module vnet './modules/vnet.bicep' = {
-  name: 'deploy-vnet'
+// 1. User-assigned managed identity — the principal for EVERY data plane.
+//
+// User-assigned rather than system-assigned, and the distinction is load-bearing: the identity
+// outlives the app, so a redeploy does not invalidate the role assignments below, and the app can
+// name it with AZURE_CLIENT_ID. `demi-identity-dev`, principal c2de07f1-…, is the identity the
+// live API actually runs as.
+module identity './modules/identity.bicep' = {
+  name: 'deploy-identity'
   params: {
     location: location
     environmentName: environmentName
@@ -45,32 +97,54 @@ module vnet './modules/vnet.bicep' = {
   }
 }
 
-// 2. Key Vault (Secrets Management)
-module keyVault './modules/key-vault.bicep' = {
-  name: 'deploy-key-vault'
+// 2. Cosmos DB for NoSQL — the system of record. Serverless, keyless (`disableLocalAuth`), reached
+// only through a private endpoint. The module also carries the SQL role assignment that lets the
+// identity read and write it.
+module cosmos './modules/cosmos-nosql.bicep' = {
+  name: 'deploy-cosmos-nosql'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
+    peSubnetId: privateEndpointSubnetId
+    apiPrincipalId: identity.outputs.principalId
+    readerPrincipalId: readerPrincipalId
   }
 }
 
-// 3. Angular Frontend (Azure Static Web Apps - Serverless SPA Host)
-module staticWebApp './modules/static-web-app.bicep' = {
-  name: 'deploy-static-web-app'
+// 3. Azure AI Search — the Deep Search query layer. Basic tier, one replica, one partition.
+module search './modules/ai-search.bicep' = {
+  name: 'deploy-ai-search'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
+    identityId: identity.outputs.identityId
+    // Both, and they are different things: the indexer authenticates AS the identity (resource
+    // ID), while the data-plane role assignment inside the module grants TO its principal.
+    apiPrincipalId: identity.outputs.principalId
+    cosmosAccountId: cosmos.outputs.cosmosAccountId
+    peSubnetId: privateEndpointSubnetId
   }
 }
 
-// 4. Database — the Cosmos DB for MongoDB API account was cut loose at Phase 8. Nothing in the app
-// speaks Mongo any more, so the module and its connection-string wiring are gone. The NoSQL account
-// this replaced it with lives in './modules/cosmos-nosql.bicep', which this orchestrator has never
-// instantiated: the running environment was not built from this file.
+// 4. Phase 3b document storage — see `deployDocumentStorage`. Not deployed in dev.
+module documentStorage './modules/document-storage.bicep' = if (deployDocumentStorage) {
+  name: 'deploy-document-storage'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    peSubnetId: privateEndpointSubnetId
+    apiPrincipalId: identity.outputs.principalId
+    readerPrincipalId: readerPrincipalId
+  }
+}
 
-// 6. REST API (Azure Function App Serverless Consumption + VNet Integration)
+// 5. REST API — Linux App Service on a B1 plan, integrated into the landing-zone subnet.
+//
+// Not Consumption (Y1) despite `kind: 'functionapp'`: the live plan is B1, because the app holds a
+// warm worker and the 224 MB heap ceiling the scripts are written against is a B1 instance.
 module apiWebApp './modules/api-web-app.bicep' = {
   name: 'deploy-api-web-app'
   params: {
@@ -80,11 +154,26 @@ module apiWebApp './modules/api-web-app.bicep' = {
     minioHost: minioHost
     minioAccessKey: minioAccessKey
     minioSecretKey: minioSecretKey
-    apiSubnetId: vnet.outputs.apiSubnetId
+    apiSubnetId: appServiceSubnetId
+    identityId: identity.outputs.identityId
+    identityClientId: identity.outputs.clientId
+    cosmosEndpoint: cosmos.outputs.cosmosEndpoint
+    searchEndpoint: search.outputs.searchEndpoint
   }
 }
 
-// 7. Cost Budget Alerts ($50/month threshold)
+// 6. Angular frontend — a second Linux App Service on its own B1 plan.
+module frontendWebApp './modules/frontend-web-app.bicep' = {
+  name: 'deploy-frontend-web-app'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+  }
+}
+
+// 7. Cost budget alerts. AI Search Basic is a fixed monthly charge whether queried or idle, which
+// is what moved the ceiling to 100.
 module costBudget './modules/cost-budget.bicep' = {
   name: 'deploy-cost-budget'
   params: {
@@ -95,6 +184,8 @@ module costBudget './modules/cost-budget.bicep' = {
 }
 
 // Outputs
-output staticWebAppDefaultHostname string = staticWebApp.outputs.staticWebAppDefaultHostname
 output apiWebAppHostName string = apiWebApp.outputs.apiWebAppHostName
-output keyVaultName string = keyVault.outputs.keyVaultName
+output frontendWebAppHostName string = frontendWebApp.outputs.frontendWebAppHostName
+output searchEndpoint string = search.outputs.searchEndpoint
+output cosmosEndpoint string = cosmos.outputs.cosmosEndpoint
+output identityClientId string = identity.outputs.clientId

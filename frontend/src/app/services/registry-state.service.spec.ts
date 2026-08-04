@@ -252,6 +252,36 @@ describe('RegistryStateService', () => {
     });
   });
 
+  // Highlighting used to be reconstructed in the browser from the raw query string. The index
+  // stems (en.microsoft), so `flood` matches `flooding` and a regex over the query marks neither.
+  describe('highlightField', () => {
+    it('prefers the markup the search service returned', () => {
+      const server = 'Peace <mark>River</mark>';
+      expect(service.highlightField(server, 'Peace River', 'river')).toBe(server);
+    });
+
+    it('does NOT re-mark or re-escape what the server already marked', () => {
+      // The server escapes once. Running it through highlightText again would decode the entities
+      // it emitted and mark inside its own tags.
+      const server = 'Tunnels &amp; <mark>bridges</mark>';
+      expect(service.highlightField(server, 'Tunnels & bridges', 'bridges')).toBe(server);
+    });
+
+    it('falls back to client marking when there is no server markup', () => {
+      // Not dead code: the Cosmos fallback path has no analyzer to ask, and neither does a field
+      // the frontend replaced with text of its own.
+      expect(service.highlightField('', 'Peace River', 'peace'))
+        .toBe('<mark>Peace</mark> River');
+      expect(service.highlightField(undefined, 'Peace River', 'peace'))
+        .toBe('<mark>Peace</mark> River');
+    });
+
+    it('still escapes on the fallback path', () => {
+      expect(service.highlightField(null, '<b>Peace</b>', ''))
+        .toBe('&lt;b&gt;Peace&lt;/b&gt;');
+    });
+  });
+
   // The fetch interceptor used to decide "is this our API?" with url.includes(basePath).
   // With the '/api' fallback that matches any third-party URL containing those characters,
   // which would attach the user's Bearer token to it.

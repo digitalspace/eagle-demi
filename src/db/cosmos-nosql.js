@@ -298,8 +298,12 @@ const BULK_MAX_OPERATIONS = 100;
  * Splits into 100-operation requests and concatenates the responses, so the return value has one
  * entry per input operation in input order regardless of how it was chunked.
  */
-async function bulk(containerName, operations) {
-  const container = getContainer(containerName);
+async function bulk(containerName, operations, opts = {}) {
+  // Seam for the chunking tests, mirroring `bulkVerified`'s `bulkFn` rather than inventing a second
+  // style. Without a Cosmos client `getContainer()` returns nothing and this returns [], so the
+  // 100-operation split — the part that only misbehaves on large partitions — is otherwise
+  // unreachable from a test.
+  const container = opts.containerFn ? opts.containerFn(containerName) : getContainer(containerName);
   if (!container || !operations.length) return [];
 
   const results = [];

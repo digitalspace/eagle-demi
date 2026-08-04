@@ -52,4 +52,9 @@ export class DeepSearchComponent implements OnInit {
   highlightText(text: string, query: string): string {
     return this.service.highlightText(text, query);
   }
+
+  /** Prefer the index's own highlight; fall back to client marking. See the service. */
+  highlightField(serverMarkup: string | undefined | null, text: string, query: string): string {
+    return this.service.highlightField(serverMarkup, text, query);
+  }
 }

@@ -14,6 +14,12 @@ export interface Project {
   electoralDistrict?: string;
   description: string;
   proponent: string;
+  /**
+   * Pre-escaped `<mark>` markup from AI Search, per field — what the index's own analyzer matched,
+   * which is not the same as what a regex in the browser can find. Absent on the Cosmos fallback
+   * path, where there is no analyzer to ask, so a renderer must fall back to client marking.
+   */
+  highlighted?: { name?: string; description?: string };
   rawMetadata?: any;
   sources?: {
     track?: any;
@@ -34,6 +40,8 @@ export interface Document {
   projectName: string;
   gatingState: 'admitted' | 'staged';
   textSnippet: string;
+  /** See `Project.highlighted`. Empty when the frontend substituted its own text for the field. */
+  highlighted?: { displayName?: string; textSnippet?: string };
 }
 
 /**

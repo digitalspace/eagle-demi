@@ -1,0 +1,19 @@
+{
+  "name": "demi-documents-ds",
+  "description": null,
+  "type": "cosmosdb",
+  "subtype": null,
+  "credentials": {
+    "connectionString": null
+  },
+  "container": {
+    "name": "documents",
+    "query": "SELECT c.id, c.displayName, c.documentFileName, c.description, c.type, c.projectId, c.read, c.isPublished, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
+  },
+  "dataChangeDetectionPolicy": {
+    "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",
+    "highWaterMarkColumnName": "_ts"
+  },
+  "dataDeletionDetectionPolicy": null,
+  "encryptionKey": null
+}

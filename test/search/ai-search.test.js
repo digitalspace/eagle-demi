@@ -398,3 +398,113 @@ test('ai-search request resilience', async (t) => {
     assert.strictEqual(ids[0], ids[1], 'retries share the id so the logs relate them');
   });
 });
+
+// Project and document highlighting used to be reconstructed in the browser by a regex plus a
+// hand-rolled Levenshtein. That marks words the index never hit and misses stemmed ones it did —
+// `en.microsoft` matches `flooding` for `flood`, and the client marked neither. Asking the service
+// for the highlight is asking the analyzer what it actually matched.
+test('project and document search return the analyzer\'s highlights', async (t) => {
+  const PRE = aiSearch.HL_PRE;
+  const POST = aiSearch.HL_POST;
+
+  await t.test('searchProjects asks for highlights on the fields the card renders', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchProjects({ filter: null, keywords: 'flood' });
+
+    assert.strictEqual(calls[0].body.highlight, 'name,displayName,description');
+    assert.strictEqual(calls[0].body.highlightPreTag, PRE);
+    assert.strictEqual(calls[0].body.highlightPostTag, POST);
+  });
+
+  await t.test('a highlighted field comes back as balanced, escaped markup', async (tt) => {
+    captureFetch(tt, () => ({
+      json: {
+        value: [{
+          id: 'p1',
+          name: 'Peace River <Project>',
+          description: 'A dam & a reservoir.',
+          '@search.highlights': { name: [`Peace ${PRE}River${POST} <Project>`] }
+        }]
+      }
+    }));
+
+    const { items } = await aiSearch.searchProjects({ filter: null, keywords: 'river' });
+
+    assert.strictEqual(items[0].highlighted.name, 'Peace <mark>River</mark> &lt;Project&gt;');
+  });
+
+  await t.test('a field the query did NOT match is escaped plain text, not empty', async (tt) => {
+    // The frontend binds one string per field into [innerHTML]. Returning '' for an unmatched
+    // field would blank the card; returning the raw value would put unescaped user text there.
+    captureFetch(tt, () => ({
+      json: {
+        value: [{
+          id: 'p1',
+          name: 'Peace River',
+          description: 'Tunnels & <b>bridges</b>',
+          '@search.highlights': { name: [`${PRE}Peace${POST} River`] }
+        }]
+      }
+    }));
+
+    const { items } = await aiSearch.searchProjects({ filter: null, keywords: 'peace' });
+
+    assert.strictEqual(items[0].highlighted.description, 'Tunnels &amp; &lt;b&gt;bridges&lt;/b&gt;');
+  });
+
+  await t.test('a missing field yields an empty string rather than "undefined"', async (tt) => {
+    captureFetch(tt, () => ({ json: { value: [{ id: 'p1', name: 'Peace River' }] } }));
+
+    const { items } = await aiSearch.searchProjects({ filter: null, keywords: 'peace' });
+
+    assert.strictEqual(items[0].highlighted.description, '');
+  });
+
+  await t.test('the underlying hit fields are still returned alongside the markup', async (tt) => {
+    // The controller reshapes from the raw values; only the display layer wants the markup.
+    captureFetch(tt, () => ({
+      json: { value: [{ id: 'p1', name: 'Peace River', sector: 'Energy', region: 'Peace' }] }
+    }));
+
+    const { items } = await aiSearch.searchProjects({ filter: null, keywords: 'peace' });
+
+    assert.strictEqual(items[0].sector, 'Energy');
+    assert.strictEqual(items[0].name, 'Peace River');
+  });
+
+  await t.test('searchDocuments highlights its own metadata fields', async (tt) => {
+    const calls = captureFetch(tt, () => ({
+      json: {
+        value: [{
+          id: 'd1',
+          displayName: 'Flood Assessment',
+          '@search.highlights': { displayName: [`${PRE}Flood${POST} Assessment`] }
+        }]
+      }
+    }));
+
+    const { items } = await aiSearch.searchDocuments({ filter: null, keywords: 'flood' });
+
+    assert.strictEqual(calls[0].body.highlight, 'displayName,description');
+    assert.strictEqual(items[0].highlighted.displayName, '<mark>Flood</mark> Assessment');
+  });
+
+  await t.test('documents pulled in by PROJECT name carry no marks', async (tt) => {
+    // Leg two matches the project, not the document, so nothing in the document's own fields was
+    // hit. Marking it anyway would claim a match that did not happen.
+    const calls = captureFetch(tt, (i) => {
+      if (i === 0) return { json: { value: [] } };                       // direct leg: no hits
+      if (i === 1) return { json: { value: [{ id: 'p1' }] } };           // project fan-out
+      return { json: { value: [{ id: 'd9', displayName: 'Appendix C' }] } };
+    });
+
+    const { items } = await aiSearch.searchDocuments({
+      filter: null, projectFilter: null, keywords: 'peace'
+    });
+
+    assert.strictEqual(calls.length, 3);
+    assert.strictEqual(items[0].highlighted.displayName, 'Appendix C',
+      'escaped plain text, with no <mark>');
+  });
+});

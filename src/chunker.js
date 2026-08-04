@@ -29,6 +29,8 @@ const {
   overlapSize: OVERLAP_SIZE
 } = require('./config');
 
+const { stripPlaceholders, isSeparatorFurniture } = require('./text-quality');
+
 /**
  * Split a single block of text into overlapping sub-chunks.
  * @param {string} text
@@ -92,6 +94,17 @@ function createChunkAccumulator() {
       // entirely text already indexed under its neighbour.
       if (!own || (chunkIndex > 0 && own.length < MIN_CHUNK_SIZE)) continue;
 
+      // Furniture — a chunk that is nothing but rules, dot leaders or form underscores — carries no
+      // words, so it can never be the right answer to a query and only spends an index entry. This
+      // is the ONLY quality reason acted on here: `classify()` also reports vowelless and
+      // fragmented tokens, but those describe damaged TEXT, and dropping them would delete the
+      // hardest OCR documents from the index and hide a measurable extraction problem.
+      //
+      // Guarded on `chunkIndex > 0` for the same reason the size floor is: a document must still
+      // produce at least one chunk, or "extracted but entirely furniture" becomes indistinguishable
+      // from "never extracted", which is the STARVED signal the audit relies on.
+      if (chunkIndex > 0 && isSeparatorFurniture(own)) continue;
+
       // The overlap itself, and the bug this fixes. `splitText` already overlaps consecutive
       // pieces of ONE oversized block (`step = MAX - OVERLAP`), but it returns any block under
       // MAX unchanged — and blocks are emitted at TARGET (2500), well under MAX (4000). So on the
@@ -116,7 +129,11 @@ function createChunkAccumulator() {
     /** @param {string} section one paragraph/section, unsplit. Returns chunks completed by it. */
     push(section) {
       const out = [];
-      const trimmed = String(section).trim();
+      // Strip docling's `<!-- image -->` markup on the way in, so it never reaches a chunk, the
+      // index or a Deep Search snippet. A section that was nothing BUT placeholders strips to '' and
+      // is dropped by the emptiness check below, which is the case worth having: it carries no words
+      // and an index entry made from it matches nothing.
+      const trimmed = stripPlaceholders(section);
       // Every non-empty section is kept. This deliberately does NOT drop sections shorter than
       // MIN_CHUNK_SIZE: doing so silently deleted headings, table rows and short lines from the
       // indexed text. MIN_CHUNK_SIZE means only "too small to be worth its own chunk", after

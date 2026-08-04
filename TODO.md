@@ -8,29 +8,36 @@ Dev only. `main` is deployed and current as of 2026-08-04.
 
 ---
 
-## Label debt — blocks any further retrieval work
+## Label debt
 
-The retrieval scorecard is the verdict metric for extraction quality, and it currently rests on 71
-labels with strata too small to rank. Everything below is "put an eye on a document", not code.
+The retrieval scorecard is the verdict metric for extraction quality. It now rests on 78 labels
+across five strata, all of them verified by a human reading the source rather than seeded from
+metadata.
 
-- [ ] **`src/scripts/retrieval-labels-ocr.jsonl` holds 25 candidates, not labels.** Seeded from
-      document titles, which are metadata and not verified to be on the page; 12 are marked STARVED.
-      Scoring them as-is measures the title, not the extraction. Open each scan, confirm the words
-      appear, then edit or delete the line — that turns it into a second OCR stratum worth running.
-- [ ] **The `tiled` stratum has 2 labels, not 10.** The other 8 need an eye on a rendered map sheet,
-      which is the one stratum where a wrong reading is indistinguishable from a retrieval miss.
-      Renders are at `/root/demi-tiled-review/`; drop phrases into `D-ocr-tiled.jsonl` and re-run.
-      Until then the tiled row in the scorecard means nothing.
+- [ ] **The tiled stratum has 9 labels and no more renders to read.** The seven renders in
+      `/root/demi-tiled-review/` were read by eye on 2026-08-04 and labelled; going past 9 means
+      rendering more map sheets from the object store, where ~1,496 source PDFs 404.
+- [ ] **No OCR-scan stratum exists.** `retrieval-labels-ocr.jsonl` was deleted rather than scored:
+      its 25 lines were seeded from document TITLES, which are metadata and were never verified to
+      be on the page, and 13 were marked STARVED. Rebuilding it needs renders of scans that mostly
+      cannot be fetched. `B-ocr-legacy` and `C-ocr-pdfium` still cover the OCR paths.
 
-Until n is larger, treat recall@10 0.620 as the same number as 0.549 — one standard error on this
-label set is ~0.059 and both shipped improvements are inside it.
+Pooled recall@10 is 0.590 at n=78 (recall@1 0.308, MRR 0.392). One standard error is ~0.056, so it
+is the same number as the 0.620 recorded at n=71 — the labels moved, the retrieval did not.
+
+## Retrieval — a ranking failure, not an extraction one
+
+- [ ] **A document with the exact phrase in its only chunk does not reach the top 10.**
+      `58869332de49fe015163a0c9` ("CROSS SECTIONS N AND A THROUGH NORTH WASTE DUMPS") probes as
+      `class: exact`, coverage 1.0, one chunk, not truncated, not stale — and ranks 0. Extraction is
+      fine; BM25 puts ten other documents above it. Every tiled hit ranks **1st or nowhere**:
+      recall@1, @5 and @10 are all 0.333, so nothing in that stratum ever lands at 2–10.
+      The cross-tab of the 9 tiled labels: 4 missing because the text really is absent, 1 word-joining,
+      1 pure ranking failure — and 2 of the 3 hits surfaced *without* the phrase being fully extracted.
+      Worth understanding before any more extraction effort: this one is not an extraction problem.
 
 ## Extraction
 
-- [ ] **Intake cleaner.** Still worth doing as tidying, but the case got weaker: stripping
-      `<!-- image -->` and dropping separator chunks does nothing about word-joining, which is the
-      defect in the extracted text. Do not expect it to move recall — word-joining accounts for 3 of
-      32 retrieval misses. Not an OCR re-run.
 - [ ] **`pageNumber` is a citation feature and nothing cites. Do not build it yet.** It is a sequence
       number on both paths, not a PDF page, and making it real needs host, wire-protocol and API
       changes *plus* re-extraction — it does not ride a re-chunk. Nothing consumes it: no PDF viewer
@@ -40,57 +47,47 @@ label set is ~0.059 and both shipped improvements are inside it.
       honours `#page=N` on a presigned URL depends on the object being served inline rather than as an
       attachment, which is unverified. Background:
       [Extraction Pipeline](https://github.com/digitalspace/eagle-demi/wiki/Extraction-Pipeline).
-
-## Tests
-
-- [ ] **`cosmos.bulk()`'s >100-op chunking is untested**, including its discard-on-throw behaviour.
-- [ ] **`TARGET_CHUNK_SIZE` and `MIN_CHUNK_SIZE` are only checked against literals** (`>= 2000`,
-      `> 100`). `MAX` and `OVERLAP` are now read from `src/config.js` by the overlap tests, so those
-      two are genuinely asserted to reach the chunker — but a silent env change to `TARGET` or `MIN`
-      still orphans every chunk already written without failing a test.
+- [ ] **The intake cleaner is intake-only.** Chunks already written keep their `<!-- image -->`
+      placeholders and their separator-furniture rows; only new ingest is clean. Nothing here is
+      worth a re-extraction on its own — fold it into whatever re-extraction happens next.
 
 ## Infrastructure
 
-- [ ] **Rewrite `azure/main.bicep` to describe dev.** It never instantiates `cosmos-nosql.bicep`,
-      `ai-search.bicep`, `identity.bicep`, `document-storage.bicep` or `frontend-web-app.bicep`, and
-      there is no VNet in the resource group. Not urgent — `azure-deploy-dev.yaml`'s infra job was
-      reduced to `az bicep build` on 2026-08-04, so it cannot deploy the template even once a
-      credential exists.
 - [ ] **CI is blocked.** `AZURE_CLIENT_ID` is missing from repo secrets. It needs an Entra app
       registration with a federated credential, and creating one needs Microsoft Graph, which
-      conditional access blocks. Manual deploy is the working path meanwhile.
-- [ ] **Phase 3b, blob storage.** Code and Bicep written, nothing deployed or copied. The argument is
+      conditional access blocks. Manual deploy is the working path meanwhile, and every merge to
+      `main` will keep showing a red "Deploy DEMI to Azure Dev" that fails at the Azure Login step.
+- [ ] **Phase 3b, blob storage.** Code and Bicep written, nothing deployed or copied; wired into
+      `main.bicep` behind `deployDocumentStorage`, which defaults false. The argument is
       per-environment isolation, not cost. Needs `Storage Blob Delegator` on the identity or every
       download link fails to sign — it is not implied by `Storage Blob Data Contributor`.
-- [ ] **The `syncState` container still exists in the live account.** It was removed from the template
-      2026-08-01, but the template is not deployed so nothing was deleted. `leases` is kept
-      deliberately: its original reason died with Typesense, but a change-feed trigger stays the only
-      route to automatic delete propagation.
+- [ ] **`main.bicep` has never been deployed and still should not be.** It now describes dev
+      accurately — `az deployment group what-if` reports zero creates and zero deletes against the
+      live group — but it has never actually run, and `azure-deploy-dev.yaml`'s infra job was
+      reduced to `az bicep build` on 2026-08-04. Deploying it for the first time is its own
+      decision, needing a credential that does not exist.
 
 ## Search UI
 
-- [ ] **Highlighting for projects and documents is done in the browser.** Only the chunk index asks
-      AI Search for `highlight`; project and document hits are marked up client-side by a regex and
-      a hand-rolled Levenshtein in `registry-state.service.ts`. Asking the service to highlight
-      `displayName,description` would delete that code and match what the analyzer actually matched
-      — the local matcher can mark a word the index never hit, and miss a stemmed one it did.
-- [ ] **No facets.** The sector chips are a hardcoded list of four, and nothing displays a count per
-      value. Facets would make them real, but `sector`/`region`/`status` must be `facetable` in the
-      index first, which is not a mutable field property — it needs a reindex. Cost is the reindex,
-      not the query.
-- [ ] **The index, indexer and data-source definitions exist only in the live service.** Nothing in
-      git can rebuild them, and `publicNetworkAccess: Disabled` means they were hand-POSTed from
-      inside the VNet. Export the three of each to JSON via Kudu and commit them. Read-only, no
-      deployment risk, and it is the difference between a rebuildable environment and an
-      unrepeatable one.
+- [ ] **Facets are NOT blocked — the reason recorded here was wrong.** `sector`, `region` and
+      `status` on `demi-projects` are already `facetable: true`, as is every field in both metadata
+      indexes; see `azure/search/indexes/`. This entry previously said they needed a reindex because
+      `facetable` is not a mutable field property. True in general, moot here: the fields were
+      created facetable. What remains is a `facets` parameter on the query and UI to render the
+      counts — the sector chips are still a hardcoded list of four with no count per value.
 - [ ] **There is no result paging.** `searchChunks` sends only `top` (default 20, hard cap 250) and
       never sends `$skip`; the controller has no offset and the frontend has no load-more. Left alone
       deliberately — nobody uses DEMI yet, and this is a decision for whoever owns the search UI. If
       it is ever wanted: `$skip` caps at 100,000 and deep skips degrade, and score-ordered paging is
       unstable across requests, so infinite scroll needs a deterministic tiebreak in `$orderby` rather
-      than score alone. `@odata.count` is already requested and, since 2026-08-04, returned by all
-      three datasets and shown in the column headers — so the user can now see how much a page is
-      hiding, which is the argument for paging rather than a substitute for it.
+      than score alone. `@odata.count` is already requested and returned by all three datasets and
+      shown in the column headers — so the user can see how much a page is hiding, which is the
+      argument for paging rather than a substitute for it.
+- [ ] **The client-side highlighter did not die and should not yet.** Project, document and chunk
+      cards now render the analyzer's own `<mark>` markup, but the regex-and-Levenshtein path still
+      backs two live cases: results from the Cosmos fallback, which has no analyzer to ask, and
+      map-explorer's boundary-name lists, which never touch the search API. It becomes deletable
+      only if the Cosmos fallback goes.
 
 ## Needs a human, not code
 
@@ -102,6 +99,11 @@ label set is ~0.059 and both shipped improvements are inside it.
       role exists yet. Create a `project:<id>` role on a test user.
 - [ ] **Verify boundary rendering at all three frontend fidelities.** The API contract is verified
       (`/boundaries` and `/boundaries/<name>` both 200); the visual result is not.
+- [ ] **Look at server-side highlighting on dev.** Shipped and unit-tested, but the visible result
+      has not been eyeballed. Azure returns windowed fragments for a long field, so a long project
+      description now renders as fragments joined by an ellipsis rather than in full.
+- [ ] **Delete the 12 merged branches on `origin`.** From PRs #1–#10, #12 and #13.
+      `git push --delete` is barred by settings deny, so this needs a human or the GitHub UI.
 
 ## Cost
 
@@ -116,11 +118,13 @@ turn plans off. Breakdown in
 | # | Question | Default | Cost of reversing |
 |---|---|---|---|
 | 1 | Backup mode `Continuous7Days` on dev | Not done | One-way. Gain 8h/support-ticket → 7-day self-service, free tier; lose Geo backup redundancy permanently |
+| 2 | Semantic ranker left enabled (`semanticSearch: 'free'`) | Left on | Free unless a query asks for it, and none does. Off is a one-line template change; on contradicts nothing but reads as if it might |
 
 Settled, and kept here only because reversing them is expensive: **index tier** (Basic, with `content`
 `retrievable: false` — Basic→S1 needs a new service and a full reindex) and **delete propagation**
 (hard delete plus immediate index delete; the `_ts` high-water mark seeing no deletes is measured,
-not assumed).
+not assumed — and now visible in `azure/search/datasources/`, none of which declares a
+`dataDeletionDetectionPolicy`).
 
 ## Out of scope
 

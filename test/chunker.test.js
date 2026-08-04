@@ -20,7 +20,9 @@ const para = (n, ch = 'a') => ch.repeat(n);
 
 const {
   maxChunkSize: MAX,
-  overlapSize: OVERLAP
+  overlapSize: OVERLAP,
+  targetChunkSize: TARGET,
+  minChunkSize: MIN
 } = require('../src/config');
 
 /** Do two chunks share a run of text? The question the old overlap test never asked. */
@@ -58,7 +60,10 @@ test('chunkMarkdown', async (t) => {
     assert.ok(chunks.length <= 4, `expected accumulation, got ${chunks.length} chunks`);
     assert.ok(chunks.length >= 2, 'and it should still split a 6000-char document');
     for (const c of chunks.slice(0, -1)) {
-      assert.ok(c.content.length >= 2000, 'non-final chunks should be near the target');
+      // Derived from TARGET rather than hard-coded at 2000, so this asserts the configured target
+      // actually reaches the chunker instead of asserting a number that happens to match it.
+      assert.ok(c.content.length >= TARGET * 0.8,
+        `non-final chunks should be near the target (${TARGET}), got ${c.content.length}`);
     }
   });
 
@@ -168,8 +173,8 @@ test('createChunkAccumulator', async (t) => {
     assert.ok(chunks.length > 0);
     assert.ok(chunks[chunks.length - 1].content.endsWith('tail'),
       'the tail must be appended to the last chunk');
-    assert.ok(chunks[chunks.length - 1].content.length > 100,
-      'and must not have become a chunk of its own');
+    assert.ok(chunks[chunks.length - 1].content.length > MIN,
+      `and must not have become a chunk of its own (MIN=${MIN})`);
   });
 
   await t.test('blank sections are skipped without consuming an index', () => {
@@ -179,5 +184,117 @@ test('createChunkAccumulator', async (t) => {
   await t.test('nothing in yields nothing out', () => {
     assert.deepStrictEqual(feed([]), []);
     assert.deepStrictEqual(feed(['', '  ']), []);
+  });
+});
+
+// The size constants are not free parameters once a corpus exists. Chunk ids are built from
+// `chunkIndex`, so re-chunking the same document at a different TARGET or MIN produces a different
+// number of chunks with different ids — the old rows are not overwritten, they are orphaned, and
+// they stay searchable because the AI Search indexer's `_ts` high-water mark never revisits a row
+// it has already seen.
+//
+// The behavioural tests above read these values from `src/config.js`, which proves the configured
+// number reaches the chunker but CANNOT notice the number changing — they move with it. This is the
+// canary that does not move. It exists to fail, loudly, the moment someone edits a default or sets
+// the env var, so that re-chunking the corpus is a decision rather than an accident.
+test('the chunk size defaults are pinned, because changing one orphans the corpus', () => {
+  const { maxChunkSize, targetChunkSize, minChunkSize, overlapSize } = require('../src/config');
+
+  assert.deepStrictEqual(
+    { maxChunkSize, targetChunkSize, minChunkSize, overlapSize },
+    { maxChunkSize: 4000, targetChunkSize: 2500, minChunkSize: 100, overlapSize: 200 },
+    'Chunk sizing changed. Every chunk already written was produced at the OLD sizes and will not ' +
+    'be replaced by a re-run — it will be duplicated and left searchable. If this change is ' +
+    'intended, purge and re-extract the corpus, then update these expected values in the same commit.'
+  );
+});
+
+// The intake cleaner. docling emits `<!-- image -->` for every picture and it cannot be turned off
+// (image_export_mode admits only placeholder/embedded/referenced), so the markup reaches the
+// chunker on every document and used to reach the index and the Deep Search snippet with it.
+test('intake cleaning', async (t) => {
+  await t.test('image placeholders never reach a chunk', () => {
+    const chunks = chunkMarkdown('The proponent <!-- image --> filed a report.');
+
+    assert.strictEqual(chunks.length, 1);
+    assert.ok(!/<!--/.test(chunks[0].content), 'placeholder markup survived into the chunk');
+    assert.ok(chunks[0].content.includes('proponent'), 'and the surrounding words must survive');
+    assert.ok(chunks[0].content.includes('filed a report'));
+  });
+
+  await t.test('a section that is nothing but placeholders produces no chunk', () => {
+    assert.deepStrictEqual(chunkMarkdown('<!-- image -->'), []);
+    assert.deepStrictEqual(chunkMarkdown('<!-- image -->\n\n<!--image-->\n\n<!--  IMAGE  -->'), []);
+  });
+
+  await t.test('placeholder-only sections do not consume a chunkIndex', () => {
+    // chunkIndex is dense because ids are built from it. A placeholder section that reserved an
+    // index would leave a hole and the ids would stop lining up with the chunk count.
+    const body = Array.from({ length: 6 }, (_, i) => para(500, String.fromCharCode(97 + i)));
+    const withImages = body.flatMap(p => [p, '<!-- image -->']);
+
+    assert.deepStrictEqual(
+      chunkMarkdown(withImages.join('\n\n')).map(c => c.chunkIndex),
+      chunkMarkdown(body.join('\n\n')).map(c => c.chunkIndex)
+    );
+  });
+
+  await t.test('a chunk of pure separator furniture is dropped', () => {
+    // A horizontal rule carries no words, so it can never be the right answer to a query — it only
+    // occupies an index entry and a result slot.
+    const rule = '_'.repeat(3000);
+    const chunks = chunkMarkdown([para(3000, 'a'), rule, para(3000, 'b')].join('\n\n'));
+
+    // By SHARE, not `^furniture-only$`: every chunk carries 200 characters of overlap from its
+    // neighbour, so even a pure rule is never entirely underscores and an exact-match assertion
+    // would pass whether or not the drop fired.
+    for (const c of chunks) {
+      const furniture = (c.content.match(/[_.=-]/g) || []).length;
+      assert.ok(furniture / c.content.length < 0.9,
+        `a chunk that is ${Math.round(100 * furniture / c.content.length)}% furniture reached the index`);
+    }
+  });
+
+  await t.test('a table of contents is KEPT — dot leaders are not damage', () => {
+    // The rule that makes this safe is `alphaRatio < 0.35`. Measured on the corpus, a real TOC runs
+    // separatorRatio 0.40-0.58 while carrying alphaRatio 0.37-0.56, because it is mostly section
+    // titles with dot leaders between them. Those titles are findable content.
+    const toc = Array.from({ length: 40 }, (_, i) =>
+      `Section ${i} Environmental Assessment Certificate Application ${'.'.repeat(20)} ${i * 3}`
+    ).join('\n');
+    const chunks = chunkMarkdown([para(3000, 'a'), toc, para(3000, 'b')].join('\n\n'));
+
+    assert.ok(chunks.some(c => c.content.includes('Environmental Assessment Certificate')),
+      'the table of contents was dropped as furniture');
+  });
+
+  await t.test('damaged OCR text is KEPT, because it is still text', () => {
+    // The restraint that matters. classify() would call this garbage on `vowelless-tokens`, but
+    // dropping it would delete the hardest OCR documents from the index and turn a measurable
+    // extraction problem into an invisible one.
+    const salad = Array.from({ length: 300 }, () => 'brtn wgh mrkt schm').join(' ');
+    const chunks = chunkMarkdown([para(3000, 'a'), salad, para(3000, 'b')].join('\n\n'));
+
+    assert.ok(chunks.some(c => c.content.includes('brtn wgh mrkt')),
+      'damaged text must stay searchable — the retrieval run is what judges it');
+  });
+
+  await t.test('a document made entirely of furniture still produces one chunk', () => {
+    // Otherwise "extracted but entirely furniture" becomes indistinguishable from "never
+    // extracted", which is the STARVED signal the audit relies on.
+    const chunks = chunkMarkdown('_'.repeat(3000));
+
+    assert.strictEqual(chunks.length, 1);
+  });
+
+  await t.test('the streaming path cleans identically to the whole-string path', () => {
+    // Two chunking rules would make the corpus depend on which door a document came through.
+    const sections = [para(2600, 'a'), '<!-- image -->', '_'.repeat(3000), para(2600, 'b')];
+    const acc = createChunkAccumulator();
+    const streamed = [];
+    for (const s of sections) streamed.push(...acc.push(s));
+    streamed.push(...acc.end());
+
+    assert.deepStrictEqual(streamed, chunkMarkdown(sections.join('\n\n')));
   });
 });

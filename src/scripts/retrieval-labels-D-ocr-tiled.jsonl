@@ -1,5 +1,16 @@
-# stratum D-ocr-tiled -- 2 labels
+# stratum D-ocr-tiled -- 9 labels
 # Phrases come from an INDEPENDENT reader (poppler's pdftotext, or a page
 # render read by eye), never from the docling extraction under measurement.
+# The seven eye:render lines were read off the PNGs in /root/demi-tiled-review/
+# on 2026-08-04 -- title blocks, legends and sheet notes, transcribed verbatim
+# including the sheets' own typos, which is why "PROJCET" and "occuring" are
+# absent here: a phrase is only useful if a searcher would plausibly type it.
 {"documentId": "5886b418a4acd4014b81ff76", "phrase": "Northern Access Route Conceptual Plan and TM", "note": "pdftotext | D-ocr-tiled | realChars=329"}
 {"documentId": "5887e1afd876de1347b51409", "phrase": "ICE FRONT OBSERVATIONS SHOWN FOR THE YEARS", "note": "eye:pdftotext-output | D-ocr-tiled | realChars=1070"}
+{"documentId": "58869332de49fe015163a0c9", "phrase": "CROSS SECTIONS N AND A THROUGH NORTH WASTE DUMPS", "note": "eye:render | D-ocr-tiled | Peace River Coal, Roman Coal Mine, title block"}
+{"documentId": "5886b588a4acd4014b8200c0", "phrase": "SOUTH WEST AND WEST FORK PITS BENCH DESIGN", "note": "eye:render | D-ocr-tiled | Galore Creek, BGC Engineering, title block"}
+{"documentId": "5886b8a7a4acd4014b820282", "phrase": "METES AND BOUNDS DESCRIPTION FOR CROWN LAND APPLICATION", "note": "eye:render | D-ocr-tiled | East Toba and Montrose, Plutonic Power, title block"}
+{"documentId": "5886d880a4acd4014b8209a4", "phrase": "NORTH WEST STAVE RIVER FACILITY POWERHOUSE GENERAL ARRANGEMENT", "note": "eye:render | D-ocr-tiled | Upper Harrison Hydroelectric, title block"}
+{"documentId": "5886f55feed3c0016f85701b", "phrase": "Map produced by Eagle Mapping Services Ltd from aerial photography", "note": "eye:render | D-ocr-tiled | Eagle Rock Quarry, sheet note beside the scale bar"}
+{"documentId": "5887c6fe1c7dcc1212fecc69", "phrase": "PRECAST REINFORCED CONCRETE VARIABLE DEPTH CATCH BASIN", "note": "eye:render | D-ocr-tiled | Sea-to-Sky corridor, Retta Lake, catch basin detail callout"}
+{"documentId": "5887cf1bff41b812b1cfc7b2", "phrase": "WESTERN COAL CORP SYNCLINE TYPICAL GEOLOGICAL CROSS SECTION", "note": "eye:render | D-ocr-tiled | Hermann Mine, title block"}

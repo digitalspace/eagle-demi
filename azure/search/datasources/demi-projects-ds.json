@@ -1,0 +1,19 @@
+{
+  "name": "demi-projects-ds",
+  "description": null,
+  "type": "cosmosdb",
+  "subtype": null,
+  "credentials": {
+    "connectionString": null
+  },
+  "container": {
+    "name": "projects",
+    "query": "SELECT c.id, c.name, c.abbreviation AS displayName, c.description, c.proponentName AS proponent, c.sector, c.projectState AS status, c.region, c.eagleId AS legacyEagleId, c.centroid, c.read, c.isPublished, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
+  },
+  "dataChangeDetectionPolicy": {
+    "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",
+    "highWaterMarkColumnName": "_ts"
+  },
+  "dataDeletionDetectionPolicy": null,
+  "encryptionKey": null
+}
