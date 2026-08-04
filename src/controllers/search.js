@@ -77,6 +77,13 @@ exports.search = async (req, res) => {
                 region: doc.region || 'British Columbia',
                 description: doc.description || 'No project description provided.',
                 proponent: { name: doc.proponent || 'Proponent Organization' },
+                // Pre-escaped display markup from the analyzer, keyed by INDEX field. `name` falls
+                // back to `displayName` the same way the plain value above does, so the two never
+                // disagree about which string the card is showing.
+                highlighted: {
+                  name: (doc.highlighted || {}).name || (doc.highlighted || {}).displayName || '',
+                  description: (doc.highlighted || {}).description || ''
+                },
                 isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true,
                 sources: doc.sources || {},
                 nrptiRecords: []
@@ -178,7 +185,11 @@ exports.search = async (req, res) => {
                 projectName: 'Associated Project',
                 read: Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : ['public'],
                 isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true,
-                description: doc.description || 'Official document extracted from central registry.'
+                description: doc.description || 'Official document extracted from central registry.',
+                // Pre-escaped display markup from the analyzer. Empty when the field itself is
+                // empty, in which case the frontend falls back to the default text above — that
+                // default is ours, not the user's, so there is nothing to highlight in it.
+                highlighted: doc.highlighted
               }));
 
               // Hydrate project names under the CALLER's access — never systemAccess(), which

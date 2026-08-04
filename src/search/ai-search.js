@@ -373,6 +373,25 @@ function snippetFrom(hit) {
 }
 
 /**
+ * Display markup for one RETRIEVABLE field of a hit — the analyzer's own idea of what matched.
+ *
+ * Differs from `snippetFrom` in its fallback: chunk `content` is not retrievable, so there is
+ * nothing to fall back to, whereas these fields are selected and always present. A field the query
+ * did not match therefore comes back as escaped plain text rather than '', so the caller can bind
+ * one string unconditionally and escaping happens exactly once, here.
+ *
+ * Azure returns the whole value for a short field like `name` and windowed fragments for a long one
+ * like `description`, which is why the join matches `snippetFrom`'s.
+ */
+function markedField(hit, field) {
+  const fragments = (hit['@search.highlights'] || {})[field] || [];
+  if (fragments.length > 0) return fragments.map(balanceFragment).join(' … ');
+
+  const raw = hit[field];
+  return raw === undefined || raw === null ? '' : escapeHtml(String(raw));
+}
+
+/**
  * Escape one highlight fragment and convert its sentinels into balanced `<mark>` tags.
  *
  * Emits a tag only where a sentinel has a partner: an orphaned closer is dropped rather than
@@ -446,10 +465,26 @@ async function searchProjects(opts = {}) {
     // missing field in the response. `trackProjectId` was in this list and is not in the index
     // (it is an int in Cosmos), which turned all project search into a silent fallback.
     select: 'id,name,displayName,description,proponent,sector,status,region,centroid,' +
-      'legacyEagleId,read,isPublished'
+      'legacyEagleId,read,isPublished',
+    // Only the fields the result card renders. Highlighting a field nobody displays costs a
+    // response body for nothing.
+    highlight: 'name,displayName,description'
   });
 
-  return { count, items: value };
+  return {
+    count,
+    items: value.map(hit => ({
+      ...hit,
+      // The analyzer's own account of what it matched. The browser used to reconstruct this with a
+      // regex and a Levenshtein, which marks words the index never hit and misses the stemmed ones
+      // it did — `en.microsoft` matched `flooding` for `flood`, and the client marked neither.
+      highlighted: {
+        name: markedField(hit, 'name'),
+        displayName: markedField(hit, 'displayName'),
+        description: markedField(hit, 'description')
+      }
+    }))
+  };
 }
 
 /**
@@ -488,7 +523,8 @@ async function searchDocuments(opts = {}) {
     top,
     prefix: true,
     searchFields: 'displayName,documentFileName,description',
-    select
+    select,
+    highlight: 'displayName,description'
   });
 
   const items = [...direct.value];
@@ -527,7 +563,19 @@ async function searchDocuments(opts = {}) {
     }
   }
 
-  return { count: Math.max(direct.count, items.length), items };
+  // Leg two's documents matched on their PROJECT's name, not their own metadata, so they carry no
+  // `@search.highlights` — `markedField` returns their escaped text and the card renders unmarked,
+  // which is the honest result: nothing in that document's own fields matched the query.
+  return {
+    count: Math.max(direct.count, items.length),
+    items: items.map(hit => ({
+      ...hit,
+      highlighted: {
+        displayName: markedField(hit, 'displayName'),
+        description: markedField(hit, 'description')
+      }
+    }))
+  };
 }
 
 /** Project ids beyond this add nothing: the document page is capped long before they matter. */

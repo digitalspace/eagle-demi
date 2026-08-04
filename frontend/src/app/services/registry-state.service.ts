@@ -1056,18 +1056,30 @@ export class RegistryStateService {
             }
           };
 
+          // Server markup only survives where the field it describes survives. Both `name` and
+          // `description` can be replaced below by text of OUR invention, and marking a phrase
+          // inside a sentence the user never searched — because we wrote it — is worse than not
+          // marking at all. Where it is dropped, the renderer falls back to client marking.
+          const name = p.name || 'Unnamed Project';
+          const description = this.generateFallbackDescription(p, rawMetadata);
+          const highlighted = {
+            name: p.name ? (p.highlighted?.name || '') : '',
+            description: description === p.description ? (p.highlighted?.description || '') : ''
+          };
+
           return {
             _id: p._id,
             id: p.id || p.trackProjectId || p._id,
             trackProjectId: p.trackProjectId || p.id,
             legacyEagleId: p.legacyEagleId || p._id,
-            name: p.name || 'Unnamed Project',
+            name,
+            highlighted,
             sector: (p.sector && p.sector !== 'Other') ? p.sector : (rawMetadata.type_name || rawMetadata.trackAttributes?.type_name || 'Other'),
             status: p.status || rawMetadata.trackAttributes?.project_state_name || 'Active',
             centroid: this.parseCentroid(p.centroid),
             gatingState: (p.isPublished === false) ? 'staged' : 'admitted',
             region: p.region || 'British Columbia',
-            description: this.generateFallbackDescription(p, rawMetadata),
+            description,
             proponent: this.generateFallbackProponent(p, rawMetadata),
             rawMetadata: rawMetadata,
             sources: p.sources,
@@ -1093,9 +1105,15 @@ export class RegistryStateService {
           }
 
           let snippet = d.description || d.textSnippet || '';
+          // Carried only while the text is the SERVER's; dropped the moment we substitute our own.
+          let snippetHtml = d.highlighted?.description || '';
           if (!snippet || snippet === 'Unnamed Document' || snippet === 'Untitled Document' || snippet === 'No project description provided') {
             snippet = `Official document for ${resolvedProjectName}, containing environmental assessment logs, regulatory compliance checklists, and public review feedback index files.`;
+            snippetHtml = '';
           }
+          // Same rule for the title: the block above rebuilds it from the filename when the record
+          // has no usable name, and the index highlighted the name it actually holds.
+          const displayNameHtml = displayName === d.displayName ? (d.highlighted?.displayName || '') : '';
 
           return {
             id: d._id,
@@ -1108,7 +1126,8 @@ export class RegistryStateService {
             projectId: projId,
             projectName: resolvedProjectName,
             gatingState: (d.isPublished === false) ? 'staged' : 'admitted',
-            textSnippet: snippet
+            textSnippet: snippet,
+            highlighted: { displayName: displayNameHtml, textSnippet: snippetHtml }
           };
         });
         this.documents.set(mappedDocs);
@@ -1508,6 +1527,23 @@ export class RegistryStateService {
     }
 
     return true;
+  }
+
+  /**
+   * Display markup for one result field, preferring what the SEARCH SERVICE matched.
+   *
+   * `highlightText` below marks whatever a case-insensitive regex over the raw query can find. The
+   * index does not work that way: `en.microsoft` stems, so a search for `flood` matches `flooding`
+   * and the client marks neither, while a query token that only survived as a fuzzy variant gets
+   * marked here as if it were an exact hit. Server markup is the analyzer's own account of the
+   * match, already escaped and balanced.
+   *
+   * The fallback is not dead code. Results from the Cosmos path carry no highlights — there is no
+   * analyzer in that path to ask — and neither do fields the frontend substituted its own text
+   * into, so client marking stays the answer for both.
+   */
+  highlightField(serverMarkup: string | undefined | null, text: string, query: string): string {
+    return serverMarkup || this.highlightText(text, query);
   }
 
   highlightText(text: string, query: string): string {
