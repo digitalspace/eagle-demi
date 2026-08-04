@@ -17,7 +17,7 @@ const INDEXED_CONTAINERS = ['chunks', 'documents', 'projects'];
  *
  * Exposed through the API rather than read out of band: Cosmos sits behind a private endpoint on a
  * keyless account, so the app's managed identity is the only thing that can read it, and this is
- * the app. Reused as the pre-cutover gate for any bulk load — see MIGRATION.md §F.
+ * the app. Reused as the pre-cutover gate for any bulk load — see the wiki's ADR-005 (Cosmos full-text search ruled out).
  */
 async function getIndexProgress() {
   // No USE_COSMOS_NOSQL gate. It used to return null when the flag was unset, which is now the

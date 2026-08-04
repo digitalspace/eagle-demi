@@ -110,7 +110,7 @@ test('ai-search query construction', async (t) => {
   });
 
   // The outer ` AND ` was the suspect behind recall@10 ≈ 0.5 and an ` OR ` arm cleared it
-  // (MIGRATION.md §A). This pins that the join stayed AND — a later reader should not re-derive
+  // (wiki: Search-and-Retrieval). This pins that the join stayed AND — a later reader should not re-derive
   // the experiment from the absence of a knob.
   await t.test('terms are joined with AND', () => {
     assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], false), 'peace AND river');

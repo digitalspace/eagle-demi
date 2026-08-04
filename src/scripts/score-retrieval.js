@@ -42,7 +42,7 @@
  *
  * Cosmos and AI Search are both private-endpoint-only and keyless, so this must run INSIDE the app
  * container over the App Service SSH tunnel — not Kudu's /api/command, whose SCM container has no
- * managed-identity endpoint. See MIGRATION.md for the recipe.
+ * managed-identity endpoint. See README.md for the recipe.
  *
  * Usage:
  *   node src/scripts/score-retrieval.js --labels labels.jsonl [--top 10] [--no-fuzzy]
