@@ -50,8 +50,8 @@ function splitText(text) {
  * Incremental chunker. Feed it one section at a time, call `end()` when there are no more.
  *
  * This exists so the streaming ingest path and the whole-string path share ONE set of chunk
- * boundary rules. A second copy would drift, and this repo has already paid for that once — the
- * whole reason `CLAUDE.md` stopped restating `MIGRATION.md`. `chunkMarkdown` below is a thin
+ * boundary rules. A second copy would drift, and this repo has already paid for that once.
+ * `chunkMarkdown` below is a thin
  * wrapper over this, which is what keeps `test/chunker.test.js` meaningful for both callers.
  *
  * Both methods RETURN the chunks they emitted, so a streaming caller can flush as it goes and

@@ -26,7 +26,7 @@
  *
  * Cosmos is private-endpoint-only and keyless, so this must run INSIDE the app container over the
  * App Service SSH tunnel — not Kudu's /api/command, whose SCM container has no managed-identity
- * endpoint. See MIGRATION.md for the recipe.
+ * endpoint. See README.md for the recipe.
  *
  * Usage:
  *   node src/scripts/audit-chunk-quality.js [--docs 400] [--chunks-per-doc 5]
@@ -259,7 +259,7 @@ async function scoreDocument(doc, chunksPerDoc) {
 
 /**
  * @param {string[]} argv  CLI-style arguments, so the SSH wrapper and the CLI share one entry
- *                         point. See MIGRATION.md — a standalone script in the app container
+ *                         point. See README.md — a standalone script in the app container
  *                         needs /proc/1/environ and a crypto shim, which the wrapper supplies.
  */
 async function audit(argv = []) {

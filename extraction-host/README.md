@@ -5,8 +5,8 @@ installs or updates the host; this directory exists so the code stops living on 
 
 ## Why it is off-platform, and why that is not what this changes
 
-Extraction runs on a GPU box outside Azure because serverless GPU was priced and rejected
-(`MIGRATION.md` §A). That decision stands. What was wrong was not *where* the code ran but that it
+Extraction runs on a GPU box outside Azure because serverless GPU was priced and rejected (see the
+wiki's Extraction-Pipeline page). That decision stands. What was wrong was not *where* the code ran but that it
 existed **only** there — plus scratch copies on the host that already differed in length from the
 running version, so "the source" was ambiguous.
 
@@ -27,7 +27,6 @@ copies `read[]` from the live document, so this host cannot widen any document's
 | `ingest.py` | 254 | Posts finished markdown back to the API, with the paging and retry behaviour |
 | `test_poolfix.py` | 264 | Regression checks for the process-pool fix |
 | `systemd/` | — | The three units as deployed: `gpu-extractor`, `gpu-ingest`, `doc-ocr-service` |
-| `HANDOFF.md` | 147 | Operating notes written on the host |
 
 Secrets, run state and extracted output are **not** here, and `.gitignore` enforces that rather than
 relying on care at commit time. In particular `gpu-extractor.env` holds a live `DEMI_ADMIN_KEY`.

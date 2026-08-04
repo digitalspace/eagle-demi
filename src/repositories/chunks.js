@@ -23,7 +23,7 @@ const { eq, selectWhere, pageOptions } = require('./_sql');
 /**
  * `chunks` is the only chunk container. A second one, `chunks_fts`, briefly existed because a
  * full-text policy is IMMUTABLE and could not be added to this one in place — that whole approach
- * was ruled out on 2026-07-31 (fuzzy is a silent no-op even enrolled, MIGRATION.md §F), and the
+ * was ruled out on 2026-07-31 (fuzzy is a silent no-op even enrolled, wiki ADR-005), and the
  * container is gone. Deep Search moves to Azure AI Search, which indexes this container from the
  * outside and needs no policy on it.
  *

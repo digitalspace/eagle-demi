@@ -357,7 +357,7 @@ exports.deleteDocument = async (req, res) => {
  *
  * `extraction` is OPTIONAL provenance describing how the text was produced. It exists because the
  * extraction host routes each document — a `pypdfium2` text-layer probe keeps digital PDFs on a
- * CPU path and only sends text-poor ones to OCR (MIGRATION.md §A) — and that decision used to be
+ * CPU path and only sends text-poor ones to OCR (wiki: Extraction-Pipeline) — and that decision used to be
  * discarded. Without it, a text-layer artefact and an OCR error are indistinguishable after the
  * fact, so "the OCR is bad" cannot be evidenced or disproved. Absent on every row written before
  * this existed, which is itself the honest signal for "unknown path".
