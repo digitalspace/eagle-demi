@@ -1,0 +1,17 @@
+# stratum C-ocr-pdfium -- 14 labels
+# Phrases come from an INDEPENDENT reader (poppler's pdftotext, or a page
+# render read by eye), never from the docling extraction under measurement.
+{"documentId": "5887d059ff41b812b1cfce46", "phrase": "Sediments from the proposed Lodgepole mine will move downstream and accumulate", "note": "eye:render | C-ocr-pdfium | realChars=1862"}
+{"documentId": "5887e264ad20ac134d915f01", "phrase": "ENVIRONMENT ASSESSMENT OF THE PROPOSED CACHE CREEK LANDFILL EXTENSION PROJECT", "note": "eye:render | C-ocr-pdfium | realChars=2293"}
+{"documentId": "5887d1f63fa55712b70ab3d8", "phrase": "Schaft Creek Mine Project Application Information Requirements", "note": "eye:render | C-ocr-pdfium | realChars=11300"}
+{"documentId": "5886fc5beed3c0016f857079", "phrase": "in full support of the Eagle Rock Quarry Project", "note": "eye:render | C-ocr-pdfium | realChars=1079"}
+{"documentId": "5887e26cad20ac134d915f28", "phrase": "the Ashcroft Indian Band is of the opinion that the Cache Creek Landfill", "note": "eye:render | C-ocr-pdfium | realChars=338"}
+{"documentId": "5887d32837e29512bded560d", "phrase": "Proponent's Record of Consultation with Agencies", "note": "eye:render | C-ocr-pdfium | realChars=10603"}
+{"documentId": "58870362eed3c0016f8570c4", "phrase": "Stewart Bulk Terminals Location of Soucie Gravel Lease", "note": "eye:render | C-ocr-pdfium | realChars=379"}
+{"documentId": "5886e4bbeed3c0016f856ee9", "phrase": "Appendix B Pump Test Data Definition of Terms", "note": "eye:render | C-ocr-pdfium | realChars=94416"}
+{"documentId": "5ca2484141e20f0024bcee7f", "phrase": "Review and Comments on Taseko's February 20, 2019, Water Quality Mitigation Responses", "note": "eye:render | C-ocr-pdfium | realChars=4807"}
+{"documentId": "5886e1a4a4acd4014b820a83", "phrase": "construction and operation of the Upper Harrison Water Power Project", "note": "eye:render | C-ocr-pdfium | realChars=27847"}
+{"documentId": "5887e2a8ad20ac134d916047", "phrase": "Janes Freedman Kyle Law Corporation", "note": "eye:render | C-ocr-pdfium | realChars=471108"}
+{"documentId": "5887e102f64627133ae5b2e4", "phrase": "Summary Report Monitoring Program for Debolt Saline Water Project", "note": "eye:render | C-ocr-pdfium | realChars=8579"}
+{"documentId": "5886e658eed3c0016f856f0e", "phrase": "City of Cranbrook Residential Well Reference", "note": "pdftotext | C-ocr-pdfium | realChars=30312"}
+{"documentId": "5887df83f64627133ae5abd6", "phrase": "the proposed CCS Sunrise Secure Landfill Project and the section 10 Order", "note": "eye:render | C-ocr-pdfium | realChars=826"}

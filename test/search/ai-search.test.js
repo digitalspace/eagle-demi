@@ -94,6 +94,33 @@ test('ai-search query construction', async (t) => {
       '(river OR river~1) AND and AND (creek OR creek~1)');
   });
 
+  // The outer ` AND ` was the suspect behind recall@10 ≈ 0.5 and an ` OR ` arm cleared it
+  // (MIGRATION.md §A). This pins that the join stayed AND — a later reader should not re-derive
+  // the experiment from the absence of a knob.
+  await t.test('terms are joined with AND', () => {
+    assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], false), 'peace AND river');
+    // The per-term (t OR t~1) group is a DIFFERENT OR and must survive intact — flattening it
+    // would change what fuzzy means, not just how terms combine.
+    assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], true),
+      '(peace OR peace~1) AND (river OR river~1)');
+  });
+
+  // Measured 2026-08-04: the label "Sediments from the proposed Lodgepole mine will move
+  // downstream and accumulate" returned 0 hits with fuzzy on and 1 with fuzzy off, against a chunk
+  // holding the sentence verbatim. `mine` and `from` are removed by en.microsoft, so `mine~1`
+  // demanded a literal the index does not hold and the AND join zeroed the whole query.
+  await t.test('analyzer stopwords get no unanalyzed variant', () => {
+    assert.strictEqual(aiSearch.buildQuery(['sediments', 'from', 'mine'], true),
+      '(sediments OR sediments~1) AND from AND mine');
+    // The plain term must SURVIVE — it analyzes away and is dropped harmlessly. Removing the term
+    // outright would be a different change, and one that alters what the user asked for.
+    assert.ok(aiSearch.buildQuery(['from'], true).includes('from'));
+    // Case-insensitive: labels are full of sentence-cased and ALL-CAPS text.
+    assert.strictEqual(aiSearch.buildQuery(['With', 'THOSE'], true), 'With AND THOSE');
+    // A non-stopword of the same length still fuzzes, or the fix would be a blanket disable.
+    assert.strictEqual(aiSearch.buildQuery(['mine', 'lake'], true), 'mine AND (lake OR lake~1)');
+  });
+
   await t.test('term count is capped', () => {
     const many = Array.from({ length: 40 }, (_, i) => `t${i}`).join(' ');
     assert.strictEqual(aiSearch.tokenize(many).length, 16);

@@ -168,12 +168,42 @@ const MIN_FUZZY_LENGTH = 4;
 const LUCENE_OPERATORS = new Set(['AND', 'OR', 'NOT']);
 
 /**
+ * Terms `en.microsoft` REMOVES at query time, and which must therefore never get a `~1` variant.
+ *
+ * The plain term is analyzed, so a stopword is dropped from the query and costs nothing. The fuzzy
+ * variant is NOT analyzed, so `mine~1` resurrects the stopword as a literal — and the index side
+ * dropped it too, so the clause matches nothing. `(mine OR mine~1)` therefore collapses to an
+ * unsatisfiable clause, and under the ` AND ` join ONE of those zeroes the entire query.
+ *
+ * Measured on the live index 2026-08-04, not guessed: the label
+ * "Sediments from the proposed Lodgepole mine will move downstream and accumulate" returned 0 hits
+ * with fuzzy on and 1 with fuzzy off, against a chunk that holds the sentence verbatim. `from`,
+ * `mine`, `that` and `with` are the ones an EA corpus hits constantly.
+ *
+ * Only terms of >= MIN_FUZZY_LENGTH are listed: shorter stopwords never get a variant, so they are
+ * already harmless — verified, adding `the` or `of` to a query leaves its hit count unchanged.
+ *
+ * To regenerate: for each candidate, `searchChunks({keywords: word, fuzzy: false})`. A count of 0
+ * means the analyzer removed it. There is no cheaper route — the Analyze API needs a data-plane
+ * role the app identity does not hold (403).
+ */
+const ANALYZER_STOPWORDS = new Set([
+  'from', 'hers', 'herself', 'himself', 'itself', 'mine', 'myself', 'ours', 'ourselves', 'that',
+  'their', 'theirs', 'them', 'themselves', 'these', 'they', 'this', 'those', 'with', 'yourself'
+]);
+
+/**
  * `(term OR term~1)` per term, ANDed together.
  *
  * The OR is not redundant. A fuzzy term bypasses the query analyzer, so it matches only against
  * what is already in the index; the plain term goes through `en.microsoft` and picks up stemming.
  * Measured on the live index, the bare fuzzy form happened to match too — because the INDEX side
  * is lemmatised — but that is a property of the current analyzer, and the OR does not depend on it.
+ *
+ * The outer ` AND ` was tested as the recall suspect and CLEARED: an ` OR ` arm moved pooled
+ * recall@10 0.549 → 0.577 at n=71, half a standard error, with recall@1 and MRR worse and the
+ * discriminating `text` stratum flat. See MIGRATION.md §A — the knob is not carried in the code
+ * because the question it answered is closed.
  */
 function buildQuery(terms, fuzzy, prefix = false) {
   const last = terms.length - 1;
@@ -181,12 +211,17 @@ function buildQuery(terms, fuzzy, prefix = false) {
     .map((raw, i) => {
       const t = LUCENE_OPERATORS.has(raw) ? raw.toLowerCase() : raw;
       const parts = [t];
-      if (fuzzy && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}~1`);
+      // A stopword gets NO unanalyzed variant. Both `~1` and `*` bypass the query analyzer, so on a
+      // term the analyzer removes they demand a literal the index does not hold, and the clause
+      // becomes unsatisfiable — fatal under a conjunction. The plain term stays: it analyzes away
+      // and is dropped harmlessly, which is the behaviour that was already correct.
+      const analyzed = !ANALYZER_STOPWORDS.has(t.toLowerCase());
+      if (fuzzy && analyzed && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}~1`);
       // Prefix on the LAST term only — the one still being typed. Applying it to every term would
       // match `pipe` inside `pipeline` in the middle of a phrase and blur the query; applying it
       // to none loses search-as-you-type, which Typesense provided via `prefix=true` and the
       // frontend relies on because it searches on debounced keystrokes.
-      if (prefix && i === last && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}*`);
+      if (prefix && analyzed && i === last && t.length >= MIN_FUZZY_LENGTH) parts.push(`${t}*`);
       return parts.length > 1 ? `(${parts.join(' OR ')})` : t;
     })
     .join(' AND ');

@@ -4,7 +4,7 @@
 > facts and the traps. Full design rationale: wiki `ADR-004-Read-ACL-Authorization-Model` and
 > `Environment-Reality-and-Operational-Gotchas`.
 
-**Last updated:** 2026-08-01 · **State:** migration complete. Dev runs on Cosmos DB for NoSQL with
+**Last updated:** 2026-08-04 · **State:** migration complete. Dev runs on Cosmos DB for NoSQL with
 Azure AI Search. Only Phase 8's Azure teardown is open.
 
 ---
@@ -191,7 +191,12 @@ it as dead code.** Priced 2026-07-30 and rejected for now: Container Apps server
 canadacentral is T4 $0.317/hr, A100 $2.29/hr, and a GPU needs a whole new workload-profiles
 environment.
 
-#### Quality — measured 2026-07-31. OCR is not the problem
+#### Quality — measured 2026-07-31. "OCR is not the problem" — HEADLINE RETRACTED 2026-08-03
+
+**The numbers below stand; the verdict they were read as does not.** The retrieval run found a
+defect these heuristics are structurally unable to see (word-joining — every glued fragment is
+pronounceable, so it scores clean). Read this section as "the heuristics found little", not as
+"the extraction is fine". The scorecard below is the verdict metric.
 
 `src/scripts/audit-chunk-quality.js` scored **1,299 chunks across 400 extracted documents**:
 
@@ -204,9 +209,10 @@ environment.
 | **OCR word-salad** (`vowelless-tokens`, e.g. `Cnstum dlld`) | **3 chunks — 0.23%** |
 | Documents whose text is nothing but `<!-- image -->` | 8 of 77 sampled, all **presentation decks** |
 
-**OCR debris is 0.23% of chunks.** The dominant real defect is different — slide-deck PDFs extract
-to **nothing but image placeholders**. Those documents are in the index and unfindable by content,
-which is worse than noisy text and is a routing/OCR-coverage question, not an engine-quality one.
+**OCR debris is 0.23% of chunks.** The dominant defect *visible to these heuristics* was different —
+PDFs extracting to **nothing but image placeholders**, in the index and unfindable by content, which
+is worse than noisy text. **That one is fixed**: the tiling run recovered 1,855 of 2,039 and the
+residue is 166 documents (0.27%), accepted as a floor. See the tiling section below.
 
 **Caveats that belong with the number.** The 15.8% still counts table-of-contents pages as garbage,
 so real damage is lower. The 400 documents were taken in Cosmos scan order, which skews heavily
@@ -482,7 +488,12 @@ fails to find these. Without it a uniform ~0.5 could not be distinguished from a
 ##### Half the misses are not a corpus problem, and a self-phrase probe proved which half
 
 A uniform ~0.5 across unrelated strata looks like index coverage, not text quality — `demi-chunks`
-held 80,354 rows on 2026-08-01 against 995,316 chunks in Cosmos. So each of the 22 missed documents
+held 80,354 rows on 2026-08-01 against 995,316 chunks in Cosmos. **That juxtaposition is not
+evidence of a gap and should stop being repeated as one**: §G records the first chunk index run at
+**80,355 items, count equal to Cosmos `DocumentCount` exactly**, and the 995,316 postdates it — the
+corpus grew on 2026-08-02, the index number is simply older than the corpus number. Re-reading it is
+still worth doing (it confirms the `PT5M` indexer kept up), but it is a confirmation, not a mystery.
+So each of the 22 missed documents
 was re-queried with a phrase taken from **its own extracted markdown**. That deliberately violates
 the independence rule, which is the point: a self-phrase MUST retrieve its own document if that
 document is indexed at all, so the two hypotheses predict different answers.
@@ -492,7 +503,19 @@ retrieval failure. The other 8 used generic or numeric self-phrases (`REPORT Pre
 `6070000 6075000 …`) matching 68–6,759 chunks each and were outranked at `top: 10`. **That is a weak
 probe, not evidence of absence from the index** — it says nothing either way.
 
-##### The dominant defect is word-JOINING, and it is OCR-path-specific
+**What this probe does NOT establish, added 2026-08-04.** It proves the documents are indexed. It
+cannot identify *why* the human label missed, because a self-phrase is contiguous within one chunk
+and composed of tokens that survived extraction **by construction** — so it is predicted to succeed
+by the word-joining hypothesis and by the query-shape hypothesis below equally. Per this repo's own
+rule, a probe that cannot fail proves nothing about the question it is being used to answer. It
+answered "are they indexed" (yes) and was then read as answering "so the cause is word-joining",
+which it cannot.
+
+##### The dominant EXTRACTION defect is word-JOINING, and it is OCR-path-specific
+
+*(Heading narrowed 2026-08-04. The 23–29× measurement is solid and is the dominant defect in the
+extracted text. That it is the dominant cause of the retrieval misses is a separate claim, and it
+has not been established — see "the query is a strict conjunction" below.)*
 
 The self-phrases showed it directly, because they are quoted from the extraction:
 
@@ -552,6 +575,303 @@ important half of the picture because word-joining does not explain it.
 **One hypothesis tested and rejected**: that misses cluster on structured page furniture (numbered
 headings, table captions, all-caps map annotations) rather than running prose. Measured 0.50 (n=10)
 against 0.62 (n=29) — well inside noise at those sizes. Recorded so nobody re-runs it.
+
+##### The query is a strict conjunction — tested 2026-08-04, and it is NOT the cause
+
+`buildQuery` joins every term with **` AND `** (`src/search/ai-search.js:178-193`). Under
+`queryType: 'full'` that makes every term mandatory: a chunk is a candidate only if it contains
+**all** of them, and BM25 ranks only within what survives that filter. Recall@10 is therefore capped
+by `P(all N terms co-occur in one ~2500-character chunk)`, and no ranking work recovers a document
+the conjunction already excluded. §G described the per-term shape `(term OR term~1)` and never
+recorded the join between terms; this is that omission.
+
+**Measured locally, not inferred** — `tokenize` splits on `[^\p{L}\p{N}]+`, so the real label
+`Table 5.1 Expected Case Concentrations (mg/L) of Key Parameters in Morrison Lake` becomes 14
+mandatory conjuncts:
+
+```
+Table 5 1 Expected Case Concentrations mg L of Key Parameters in Morrison Lake
+        ^ ^                            ^  ^                                     under MIN_FUZZY_LENGTH
+```
+
+Seven are shorter than four characters, so they get **no fuzzy expansion** and must match exactly.
+`5.1` is one token on the index side under `en.microsoft`; the query demands standalone `5` **and**
+standalone `1`. If those do not match, the conjunction fails on a document whose text is perfect.
+An EA corpus is dense in `5.1`, `Table 3-2`, `mg/L`, `PH12-3-3` — and the text-stratum labels are
+drawn from exactly those pages.
+
+**What is measured and what is not.** The tokenization above is measured. That the index side fails
+to match `5`/`1` against `5.1` is the untested step, and it needs the service to settle.
+
+**Why it was the leading candidate.** It predicted a ~40% loss independent of extraction path, which
+is what the strata show; word-joining does not explain a stratum that barely joins; and both
+previously tested hypotheses (label length, page furniture) were properties of the *label*, while
+this is a property of the *query builder* and had never been examined.
+
+**The discriminating experiment, and its answer.** The prediction table written before the run:
+
+| | OR-join lifts `ocr` | OR-join lifts `text` |
+|---|---|---|
+| word-joining dominates | yes, modestly | **no** |
+| the conjunction dominates | yes | **yes, sharply** |
+
+Run 2026-08-04, both arms paired in one session against one index state, `--top 10`, fuzzy on,
+changing **only** the outer join in `buildQuery` (`src/search/ai-search.js`). The `text` row is the
+discriminating one, and it did not move:
+
+| stratum | n | AND r@1 / r@5 / r@10 / MRR | OR r@1 / r@5 / r@10 / MRR | miss→hit | hit→miss |
+|---|---|---|---|---|---|
+| `A-text` | 15 | 0.267 / 0.400 / **0.533** / 0.331 | 0.267 / 0.467 / **0.533** / 0.356 | 1 | 1 |
+| `retrieval-labels-text` (pypdf) | 25 | 0.360 / 0.600 / **0.600** / 0.480 | 0.280 / 0.600 / **0.640** / 0.433 | 1 | 0 |
+| `B-ocr-legacy` | 15 | 0.200 / 0.333 / **0.533** / 0.258 | 0.267 / 0.400 / **0.467** / 0.306 | 0 | 1 |
+| `C-ocr-pdfium` | 14 | 0.143 / 0.429 / **0.500** / 0.233 | 0.214 / 0.357 / **0.643** / 0.293 | 2 | 0 |
+| `D-ocr-tiled` | 2 | 0.500 / 0.500 / 0.500 / 0.500 | 0.500 / 0.500 / 0.500 / 0.500 | 0 | 0 |
+| **control — textless** | 3 | **0 / 0 / 0 / 0** | **0 / 0 / 0 / 0** | 0 | 0 |
+
+**Pooled, control excluded: n=71, recall@10 0.549 → 0.577. One SE ≈ 0.059.** The move is half a
+standard error. Discordant pairs — the only statistic a paired run at this n earns — are **4
+miss→hit against 2 hit→miss**, which is not a lopsided split and carries no significance.
+
+**The four guards, stated before the run:**
+
+1. **The AND arm reproduced the 2026-08-03 baseline exactly** — `A-text` 0.5333/0.3306,
+   `B-ocr-legacy` 0.5333/0.2580, `C-ocr-pdfium` 0.5000/0.2328, `D` 0.5, control 0. The index did not
+   move under the experiment, so the pairing is valid. The one difference is explained, not drift:
+   the pypdf set reads 0.600 at n=25 where the baseline read 0.625 at n=24, because `ff2616a` fixed
+   the standalone-`AND` 400 that had errored one label out of the old denominator. The same 15
+   documents were found.
+2. **The negative control stayed at 0 in both arms.** An OR join is exactly the change that could
+   make textless documents start scoring by coincidence; it did not.
+3. **recall@1 and MRR did not survive.** On the largest set the OR arm went 0.360 → 0.280 at rank 1
+   and 0.480 → 0.433 MRR. OR admits candidates; it does not place them.
+4. **The knob demonstrably reached the wire.** Median `matchingChunks` per label went from ~15–21
+   under AND to **525,000–775,000** under OR — four to five orders of magnitude, i.e. essentially
+   corpus-wide candidate sets. The null result is a real measurement, not an unthreaded flag.
+
+**Verdict: the conjunction is rejected as the cause of the ~0.5 recall.** The observed cell is the
+top row of the prediction table (`text` unmoved), and even the `ocr` half is equivocal —
+`C-ocr-pdfium` gained two labels while `B-ocr-legacy` lost one.
+
+**The mechanism check refutes it a second time, independently.** Bucketing labels by "contains a
+token `tokenize` splits on punctuation" (`5.1`, `mg/L`, `PH12-3-3`) — the free companion analysis —
+puts the entire nominal lift in the **wrong** bucket: punctuation-split phrases went 0.611 → 0.583
+(n=36, *down*), plain phrases 0.486 → 0.571 (n=35). If manufactured conjuncts were the mechanism,
+the lift would land on the split bucket. It lands on the other one, which is what noise looks like.
+
+**What this buys, beyond closing a hypothesis.** Under the OR arm the candidate set is effectively
+the whole corpus and BM25 alone chooses the top 10 — and the missed documents *stayed* missed. A
+document that is excluded by a filter reappears when the filter is removed; these did not. That is
+positive evidence that the misses are not a candidate-selection problem at all, and points back at
+whether the phrase is in the extracted text in a matchable form. It does **not** single out
+word-joining, which remains uncontrolled.
+
+It also weakens the seam-straddling case below on the same logic: a phrase split across two disjoint
+chunks satisfies no *conjunctive* query but would match both halves under a disjunctive one, so it
+should have surfaced here. Recall barely moved.
+
+**Reproducing this.** The label sets are now committed (`src/scripts/retrieval-labels-{A-text,
+B-ocr-legacy,C-ocr-pdfium,D-ocr-tiled,E-control-textless}.jsonl`) — until 2026-08-04 they existed
+only on one host, and no number in this section was reproducible from a checkout.
+`score-retrieval.js --labels <file> --top 10`, run inside the app container over the SSH tunnel
+(§ "How the seed had to run"), gives the AND arm. The OR arm was produced by changing the join in
+`buildQuery` — `.join(' AND ')` → `.join(' OR ')`, one line — and re-running the same command;
+write the two reports to different `--out` files, because two reports off one labels file are
+otherwise indistinguishable.
+
+**The knob is not in the code.** The experiment ran behind a temporary `anyTerms` parameter, which
+was removed once it answered: the arm is rejected, no controller would ever pass it, and a live
+search parameter that exists only to be false is a thing to maintain rather than a finding. Flipping
+the join permanently would trade rank-1 precision for nothing.
+
+**`MAX_TERMS = 16`'s stated rationale is backwards.** `ai-search.js:41` reads *"beyond this the query
+grows without adding recall; BM25 is already dominated by the rest."* Under a conjunction each extra
+term is a **filter**, not a ranking contribution — it can only *reduce* recall. The cap is currently
+protecting recall by accident, and the comment as written would justify removing it.
+
+##### The phrase is in the chunk — the misses are search-side (measured 2026-08-04)
+
+The probe every earlier hypothesis was missing. All four rejected explanations were about the
+*query*; nobody had checked the link in the middle. `src/scripts/probe-phrase-presence.js` reads each
+labelled document's chunks **from Cosmos** and finds the strictest rung at which the phrase is
+present: `exact` → `whitespace` (collapse+lowercase) → `punct` (NFKD, all `\p{P}\p{S}` to space) →
+`despaced` (all spaces deleted, both sides).
+
+It must read Cosmos. `content` is `retrievable: false`, so the search service cannot return chunk
+text on **any** plane — a data-plane query returns highlight fragments only. An earlier note in
+`TODO.md` said otherwise and was wrong.
+
+**Result, 71 labels plus the 3-label textless control:**
+
+| | phrase present (`exact`/`whitespace`/`punct`) | `despaced` | `straddle-*` | not contiguous |
+|---|---|---|---|---|
+| **retrieval hit** (n=39) | 32 | 2 | 0 | 5 |
+| **retrieval miss** (n=32) | **25** | **3** | **0** | 4 |
+
+**78% of the misses have the phrase sitting verbatim in a stored chunk.** On the `text` strata it is
+16 of 17. Extraction is not what is costing recall.
+
+**Word-joining is 3 of 32 misses — 9%, all OCR strata, all `joined`.** It is real, it is measured,
+and it is an order of magnitude smaller than the 23–29× token-rate figure implies for *retrieval*.
+The rung is symmetric (`Tum ble r Ridge` matches it too), so the script reports `joined` vs `split`
+from the space-count delta; every case found was `joined`.
+
+**`straddle-*` is ZERO.** Not one label in 74 was present only across a chunk seam. The overlap
+defect below is real as a chunker bug and costs approximately nothing in retrieval — the ~3–4%
+estimate was never measured, and the measurement is 0/74.
+
+**The guard fired, and the answer is that the guard was wrong.** Five retrieval *hits* classified as
+non-contiguous, which the pre-stated guard called "instrument broken, stop". Checked before reading
+anything else: all five have `coverage: 1` and no missing tokens, and the chunk for
+`5887df83f64627133ae5abd6` reads *"the proposed CCS Sunrise Secure Landfill Project **(proposed
+Project)** and the section 10 Order"* against a label that dropped the parenthetical. The instrument
+is right and the guard's premise was wrong: **the ladder tests contiguity, while search tests token
+co-occurrence within a chunk.** Under the ` AND ` join a document ranks when one chunk holds all the
+terms in any order — contiguity was never required. `absent` in this report means "not contiguous",
+and `coverage` is what says whether the words are there at all.
+
+##### So where do the misses go? Not coverage, not ranking — the fuzzy term (2026-08-04)
+
+Follow-ups, same session:
+
+- **Re-scored at `--top 50`.** Of the 25 misses whose phrase is verbatim in a chunk, only 4 appear at
+  rank 11–50. **21 are not in the top 50 at all**, and two return `matchingChunks: 0` — a query whose
+  exact phrase is in Cosmos matching *nothing corpus-wide*. That is not a ranking problem.
+- **Index coverage is ruled out, properly this time.** `searchChunks({matchAll: true})` — the
+  `matchAll` path already existed and no caller used it — reports **1,128,736 rows in `demi-chunks`**
+  against ~1.13M chunks in Cosmos. The `PT5M` indexer kept up. The open "re-read it to confirm" in
+  `TODO.md` is now closed. Spot-checked per document too: both sampled miss documents have 2 chunks
+  in Cosmos and 2 indexed.
+
+That leaves the query analyzer, and `buildQuery` has a mechanism sitting in plain sight. It emits
+`(term OR term~1)`, and — as `ai-search.js:170-176` already says — **a fuzzy term bypasses the query
+analyzer**. So `~1` demands a literal against an index side that is lemmatised and stopword-stripped
+under `en.microsoft`. A phrase like *"Sediments **from** the proposed Lodgepole mine **will** move"*
+carries several stopwords; each contributes a clause that can match nothing, and under the ` AND `
+join one such clause zeroes the entire query. That is exactly the `matchingChunks: 0` signature.
+
+**Tested by re-scoring with `--no-fuzzy`, paired on the same labels:**
+
+| stratum | n | fuzzy r@1 / r@10 / MRR | **no-fuzzy** r@1 / r@10 / MRR | miss→hit | hit→miss |
+|---|---|---|---|---|---|
+| `A-text` | 15 | 0.267 / 0.533 / 0.331 | 0.200 / **0.667** / 0.361 | 2 | 0 |
+| `retrieval-labels-text` | 25 | 0.360 / 0.600 / 0.480 | **0.440** / **0.640** / 0.527 | 1 | 0 |
+| `B-ocr-legacy` | 15 | 0.200 / 0.533 / 0.258 | 0.200 / 0.533 / 0.293 | 0 | 0 |
+| `C-ocr-pdfium` | 14 | 0.143 / 0.500 / 0.233 | 0.143 / **0.643** / 0.277 | 3 | 1 |
+| `D-ocr-tiled` | 2 | 0.500 / 0.500 / 0.500 | 0.500 / 0.500 / 0.500 | 0 | 0 |
+
+**Pooled recall@10 0.549 → 0.620 (+0.070, ~1.2 SE), on 6 miss→hit against 1 hit→miss.** Unlike the
+OR-join arm, **MRR improved in every stratum** and no stratum got worse — recall and ranking moved
+together, which is what a real fix looks like rather than a candidate-set dilution.
+
+**Not shipped as a blanket change** — turning fuzzy off wholesale would cost the typo tolerance it
+was added for. The fix below targets the interaction instead.
+
+##### The fix: no unanalyzed variant on a term the analyzer removes (2026-08-04)
+
+**Confirmed on one document, which is what turned this from a story into a cause.** Label
+*"Sediments from the proposed Lodgepole mine will move downstream and accumulate"*, document
+`5887d059ff41b812b1cfce46`, one chunk, holding that sentence **verbatim** and **indexed** (Cosmos 1
+chunk, index 1 row; individual words from the chunk match under a `documentId` filter). Querying the
+full phrase restricted to that document:
+
+| | count |
+|---|---|
+| `fuzzy: true` (production) | **0** |
+| `fuzzy: false` | **1** |
+
+**Mechanism, stated precisely.** `en.microsoft` removes some words at query time — measured by
+single-term search with fuzzy off, which returns 0 for `from`, `mine`, `that`, `with`, `those` and
+the reflexive pronouns. For such a term the analyzed side of `(term OR term~1)` contributes nothing,
+so **the unanalyzed `~1` side becomes the only thing the clause can match** — and it matches by edit
+distance against whatever unrelated tokens happen to sit within distance 1. The clause is then a
+near-random *mandatory* filter: `from` matches 81,731 chunks corpus-wide but **0** inside the target
+document, so the conjunction discards the one right answer. Without fuzzy the term analyzes away and
+is dropped harmlessly, which is why `--no-fuzzy` found it.
+
+Two things that look like the cause and are not, both measured and both worth not re-testing:
+
+- **Short stopwords are innocent.** `the`, `of`, `and`, `d` return 0 as single-term queries, which
+  looks damning, but adding them to a real query changes its hit count by nothing (9132 → 9132,
+  126 → 126). They are under `MIN_FUZZY_LENGTH`, so they never get a variant, and the analyzer drops
+  them. A single-term probe cannot tell "analyzer removed it" from "matches nothing" — that
+  conflation sent this investigation down a wrong path for an hour.
+- **Index coverage, again.** All three zero-match documents have every Cosmos chunk present in the
+  index.
+
+**The list is measured, not guessed** (`ANALYZER_STOPWORDS`, `ai-search.js`): 20 terms of
+≥ `MIN_FUZZY_LENGTH`. Sweeping all **360** distinct ≥4-char terms in the label corpus found exactly
+6 analyzer-removed words, 5 already listed; the sixth was `monirose`, OCR garbage that returns 0
+because it is genuinely absent, **not** because it is a stopword — and a rare misspelling is exactly
+the case fuzzy exists to rescue, so it must stay out of the list. Regenerate with
+`searchChunks({keywords: word, fuzzy: false})`; the Analyze API is a 403 for the app identity.
+
+**Result, paired, both arms in one session:**
+
+| stratum | n | before r@10 / MRR | after r@10 / MRR |
+|---|---|---|---|
+| `A-text` | 15 | 0.533 / 0.331 | **0.600** / 0.364 |
+| `C-ocr-pdfium` | 14 | 0.500 / 0.233 | **0.643** / 0.340 |
+| `B-ocr-legacy` | 15 | 0.533 / 0.258 | 0.533 / 0.258 |
+| `D-ocr-tiled` | 2 | 0.500 / 0.500 | 0.500 / 0.500 |
+| `retrieval-labels-text` | 25 | 0.600 / 0.480 | 0.600 / 0.480 |
+| **control — textless** | 3 | **0** | **0** |
+
+**Pooled recall@10 0.549 → 0.592, on 3 miss→hit and 0 hit→miss.** No stratum regressed and the
+control held. The three recovered documents come back at ranks **2, 1, 2** — near the top, which is
+what removing a blocking clause should look like when the chunk holds the phrase verbatim, and each
+of the three contains a listed stopword.
+
+**Honest limits.** n=71 with 3 discordant pairs is McNemar p = 0.25; the case rests on the
+single-document proof and on the change being non-harmful by construction (it only ever deletes an
+unsatisfiable clause), not on the aggregate. Blanket `--no-fuzzy` still scores 2 labels higher
+(44 vs 42) — that residue is **not** more stopwords, since the vocabulary sweep came back clean. It
+is fuzzy diluting BM25 on ordinary terms, a ranking effect rather than a zeroing one, and worth its
+own experiment before anyone trades away typo tolerance for it.
+
+##### Chunk overlap is not applied on the common path — measured 2026-08-04
+
+`chunker.js` documents itself as "paragraph/section-aware with overlap" and `OVERLAP_SIZE=200` is
+configured, but `emit()` calls `splitText()`, which returns the block **unchanged** when it is under
+`MAX_CHUNK_SIZE` (4000). Blocks are emitted once they pass `TARGET_CHUNK_SIZE` (2500), so the
+typical chunk is 2500–4000 characters and never reaches the overlapping branch.
+
+Measured by running the real `chunkMarkdown` over 40 × 300-character paragraphs:
+
+```
+chunk lengths          2743, 2751, 2752, 2752, 1222
+consecutive pairs sharing an OVERLAP_SIZE boundary    0 of 4
+a phrase spanning a seam, found in any single chunk   no
+oversized-single-block path (10,000 chars)            2 of 2 pairs DO overlap
+```
+
+**Overlap works only in the branch where it is rare and is absent in the branch that produces nearly
+every chunk.** Consecutive chunks are strictly disjoint, so a phrase crossing a seam cannot satisfy a
+conjunctive query from any single chunk — it compounds the finding above rather than standing alone
+(seam-straddling is on the order of 3–4% of phrases at these sizes, not 40%). The fix belongs in
+`emit()`, not `splitText()`. `test/chunker.test.js`'s "a single oversized paragraph is split, with
+overlap" asserts only `length <= 4000` and never asserts overlap, which is why this survived.
+
+Note the constraint below — chunk ids derive from the split, so this and any other chunker change
+must land in ONE re-ingest, not two.
+
+##### `pageNumber` is a sequence number, and the text path already has the real one
+
+`chunker.js:57-58` explains the field as a sequence number because "docling returns one markdown
+string with no page boundaries". True for the OCR path. **Not true for the text path**, which is
+34,153 documents — 56% of the corpus: `extract_text` iterates pages explicitly and joins them with
+`\n\n`, discarding the page index at the moment it holds it.
+
+Consequence: search results cannot cite a page, and a summariser built on these chunks cannot
+produce a verifiable citation. The field is already in the schema, already selected by
+`searchChunks`, and already returned to callers — carrying a meaningless number. Cheapest correct
+version is for the host to emit `[{page, markdown}]` on the text path and thread it through
+`createChunkAccumulator`; the OCR path keeps sequence numbers. Group it with the overlap fix into
+the same single re-ingest.
+
+**Re-ingest does not need the GPU** — the extracted markdown is retained on the host in `sent/`
+(the 166-residue count was independently reproduced from `sent/*.md`), and the ingest path moved
+43,003 chunks in 2.2 minutes during the cascade recovery. Verify retention across the full corpus
+before planning on it.
 
 **The AND/OR/NOT 400 was hit independently by both label sets** — `EAST TOBA AND MONIROSE …` and
 `TERRESTRIAL ECOSYSTEM MAPPING (TEM) POLYGONS AND FIELD PLOT LOCATIONS`. 2 of 72 labels across two
@@ -867,7 +1187,10 @@ only counts rows cannot see a malformed row.**
 
 Query shape: `(term OR term~1)` per term, plus `term*` prefix on the LAST term only — Typesense ran
 `prefix=true` and the frontend searches on debounced keystrokes, so without it results thin out
-mid-typing.
+mid-typing. **The per-term groups are then joined with ` AND `, which this section omitted until
+2026-08-04.** That join is the whole query semantics: every term is mandatory, so recall is capped
+before BM25 ever ranks anything. It is the leading untested explanation for the text-stratum
+retrieval misses — see §A, "the query is a strict conjunction".
 
 ---
 

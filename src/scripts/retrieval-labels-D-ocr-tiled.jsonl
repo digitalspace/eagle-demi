@@ -1,0 +1,5 @@
+# stratum D-ocr-tiled -- 2 labels
+# Phrases come from an INDEPENDENT reader (poppler's pdftotext, or a page
+# render read by eye), never from the docling extraction under measurement.
+{"documentId": "5886b418a4acd4014b81ff76", "phrase": "Northern Access Route Conceptual Plan and TM", "note": "pdftotext | D-ocr-tiled | realChars=329"}
+{"documentId": "5887e1afd876de1347b51409", "phrase": "ICE FRONT OBSERVATIONS SHOWN FOR THE YEARS", "note": "eye:pdftotext-output | D-ocr-tiled | realChars=1070"}

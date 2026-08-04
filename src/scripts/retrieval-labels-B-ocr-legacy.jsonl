@@ -1,0 +1,18 @@
+# stratum B-ocr-legacy -- 15 labels
+# Phrases come from an INDEPENDENT reader (poppler's pdftotext, or a page
+# render read by eye), never from the docling extraction under measurement.
+{"documentId": "5886b47aeed3c0016f8563a2", "phrase": "Cascade Heritage Power Project proposed by Powerhouse Developments", "note": "eye:render | B-ocr-legacy | realChars=1981"}
+{"documentId": "5887cfbcff41b812b1cfcb68", "phrase": "opposition to the Kitimat-Summit Lake Pipeline Looping Project", "note": "eye:render | B-ocr-legacy | realChars=1978"}
+{"documentId": "5887d02fff41b812b1cfcd8f", "phrase": "Lodgepole Coal Mine Project Public Comment Form", "note": "eye:render | B-ocr-legacy | realChars=1976"}
+{"documentId": "588695dfeed3c0016f855507", "phrase": "Comments on Jumbo Glacier Resort Proposal", "note": "eye:render | B-ocr-legacy | realChars=908"}
+{"documentId": "5887d1033fa55712b70aafdc", "phrase": "Opposition to Glacier Howser private power project", "note": "eye:render | B-ocr-legacy | realChars=2940"}
+{"documentId": "58869537a4acd4014b81f1ff", "phrase": "Adaptive Management Strategy Agreement Deltaport Third Berth Project", "note": "eye:render | B-ocr-legacy | realChars=2211"}
+{"documentId": "5886baeda4acd4014b8203d3", "phrase": "a link to a MoFR website concerning engineering topics in regards to IPPs", "note": "eye:render | B-ocr-legacy | realChars=3892"}
+{"documentId": "5887d37e37e29512bded57f8", "phrase": "subject: Interior \u2013 Lower Mainland (ILM) Transmission Reinforcement Project", "note": "pdftotext | B-ocr-legacy | realChars=95984"}
+{"documentId": "5886940ceed3c0016f85525d", "phrase": "Standard Reference Materials for Quality Control in the Environmental", "note": "eye:render | B-ocr-legacy | realChars=2177"}
+{"documentId": "5886b670a4acd4014b82014f", "phrase": "Acceptance of Application for Environmental Assessment Certificate for the Kitimat LNG", "note": "eye:render | B-ocr-legacy | realChars=8090"}
+{"documentId": "5e45a0e4c981fe002101fe51", "phrase": "Cedar LNG Export Development Ltd. wishes to continue the assessment of its project", "note": "eye:render | B-ocr-legacy | realChars=466"}
+{"documentId": "5888e536817b85ae43cf7991", "phrase": "6.1.3 Expanded view of Southwest corner of RK\u2019s Tenure 50", "note": "pdftotext | B-ocr-legacy | realChars=136568"}
+{"documentId": "5886b66ceed3c0016f85653c", "phrase": "Public Comment Submissions for the Tulsequah Chief Mine Project", "note": "eye:render | B-ocr-legacy | realChars=4216"}
+{"documentId": "5887c8210a48e01275833763", "phrase": "General Area Licence of Occupation for Development for the Meikle Wind Energy Project", "note": "eye:render | B-ocr-legacy | realChars=26983"}
+{"documentId": "58869fbcde49fe015163a896", "phrase": "the run of the river projects being proposed in Bute inlet", "note": "eye:render | B-ocr-legacy | realChars=686"}
