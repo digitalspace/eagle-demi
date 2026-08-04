@@ -1,6 +1,6 @@
 # DEMI — TODO
 
-**Updated 2026-08-03.** Actionable work only. Rationale + measured facts in `MIGRATION.md`; agent
+**Updated 2026-08-04.** Actionable work only. Rationale + measured facts in `MIGRATION.md`; agent
 rules in `CLAUDE.md`. **Record finding once, in file that owns topic.**
 
 Status: **dev only, no test/prod.** Items = backlog, not incidents.
@@ -13,8 +13,10 @@ Status: **dev only, no test/prod.** Items = backlog, not incidents.
 datasets — `demi-chunks`, `demi-projects`, `demi-documents` — indexers on `PT5M`. Typesense deleted
 2026-07-31, code and infrastructure both; `az containerapp list -g c4b0a8-dev-rg` return nothing.
 `demi-chunks` held 80,354 rows on 2026-08-01; Cosmos held **995,316** chunks after the 2026-08-02
-run, plus ~133K more from the 2026-08-03 oversize ingest. The index count has not been re-read (see
-below).
+run, plus ~133K more from the 2026-08-03 oversize ingest. **Not a coverage gap** — the first index
+run matched Cosmos `DocumentCount` exactly (`MIGRATION.md` §G), so the index number is simply older
+than the corpus. Re-read it to confirm the `PT5M` indexer kept up; that is a confirmation, not a
+mystery, and it stopped being a candidate explanation for the recall numbers.
 
 Cosmos counts read live 2026-08-02: **projects 2,248** (the 393 figure predate the NRPTI sync),
 documents 60,578, records 48,086, boundaries 281.
@@ -24,10 +26,14 @@ dev object store + 5,802 whose false failure flags were cleared. `.err` on the h
 the genuinely unextractable. **166 documents extract to nothing** — accepted as a floor 2026-08-03
 (0.27%). Ingest handles any document size via the NDJSON path — `MIGRATION.md` §A for all of it.
 
-**Retrieval measured 2026-08-03, first real run of the scorecard: recall@10 ≈ 0.5.** The cause is
-word-joining on the OCR path, not index coverage — a self-phrase probe confirmed 14 of 22 missed
-documents are indexed. Same run found a public 400 on any query containing a standalone `AND`/`OR`/
-`NOT`; fixed. §3 and `MIGRATION.md` §A.
+**Retrieval measured 2026-08-03, first real run of the scorecard: recall@10 ≈ 0.5.** Index coverage
+is ruled out — a self-phrase probe confirmed 14 of 22 missed documents are indexed. **The cause is
+not settled.** Word-joining on the OCR path is measured and real (23–29×) but does not explain the
+`text` stratum, which loses ~40% at n=39. The leading untested explanation is the **query builder's
+strict ` AND ` join**, which makes every term mandatory and caps recall before BM25 ranks anything —
+a property of the query, not of the extraction, and cheap to test. Corrected 2026-08-04; the
+self-phrase probe proves indexing and cannot discriminate the two causes. Same run found a public
+400 on any query containing a standalone `AND`/`OR`/`NOT`; fixed. §3 and `MIGRATION.md` §A.
 
 **`indexProgress` in `/db/stats` and `/admin/index-progress` is COSMOS index-build percent, not
 Azure AI Search.** `src/controllers/db.js:22-37` calls `cosmosNoSql.indexProgress`. `chunks: 100`
@@ -105,7 +111,14 @@ Numbers + caveats in `MIGRATION.md` §A. OCR *word-salad* is still 0.23% of chun
 sampled documents had zero bad chunks — but **"OCR is not the problem" no longer survives the
 retrieval run.** The 2026-08-03 scorecard found a different OCR defect the heuristics cannot see:
 **word-JOINING** (`tovoicemyopposition`), 23–29× more frequent on the OCR path. Every glued fragment
-is pronounceable, so it scores clean and still costs the search. In this order:
+is pronounceable, so it scores clean and still costs the search.
+
+**Ordering rule, added 2026-08-04: nothing expensive runs before the cheap experiment that could
+invalidate it.** Two search-side candidates were found by reading the query path — the strict ` AND `
+join, and chunk overlap that never fires on the common path. **Their mechanisms are measured; their
+effect on recall is not** (`MIGRATION.md` §A holds both, and is explicit about which half is which).
+Both are free to test, both predict the `text`-stratum loss that word-joining cannot, and neither
+had been examined. Settle them before spending GPU hours re-extracting 60k documents. In this order:
 
 - [x] **Large-format sheets extracting to nothing — FIXED 2026-08-02/03 by 3x3 tiling.** 2,039
       documents re-run, 0 failed, **1,855 (91%) now hold real text**. Full account in
@@ -122,18 +135,44 @@ is pronounceable, so it scores clean and still costs the search. In this order:
       Labels came from independent readers (`pdftotext`, page renders read by eye) rather than
       waiting on a human — see §A for why that satisfies the discipline. **At n≈15 the strata are
       statistically indistinguishable; do not rank them.**
-- [ ] **Word-joining on the OCR path — the finding that needs a decision.** The extraction holds
+- [ ] **FIRST — re-score with an ` OR ` join. Minutes, no GPU, no re-extraction, no re-index.**
+      `buildQuery` makes every term mandatory, so recall is capped before BM25 ranks anything, and
+      `tokenize` turns `Table 5.1 … (mg/L)` into 14 conjuncts including bare `5` and `1` (measured).
+      Re-run `score-retrieval.js` over the same 47 labels changing only the join. **Paired** on the
+      same labels, so n=47 is adequate here even though it is inadequate for ranking strata. Free
+      companion: bucket the existing labels by "contains a punctuation-split token" and compare.
+      Mechanism, token dump and the prediction table in `MIGRATION.md` §A. **This gates the
+      word-joining decision and the `text`-stratum question below.**
+- [ ] **Word-joining on the OCR path — decision, gated on the item above.** The extraction holds
       `tovoicemyopposition`, `ENVIRONMENTALASSESSMENT`, `OfficeofthePremier`: **23–29× more glued
       tokens on the OCR path than the text path** (measured, 400 docs/stratum). Heuristics score it
-      clean because every fragment is pronounceable. It is the confirmed cause of retrieval misses
-      on OCR-path documents. Options, none cheap: RapidOCR detection/merge tuning, a decompounding
-      step at index time, or a different OCR engine. **Decide before any re-extraction run.**
-- [ ] **`text`-stratum misses are unexplained — and NOT sampling noise.** Re-scored at **n=39**
-      (pooling the 2026-08-01 pypdf labels, cherry-picked from `demi-todo-corrections`, with the
-      2026-08-03 set; zero document overlap): **recall@10 = 0.590**, one SE ~8 points. The text path
-      loses ~40% of labels and word-joining does not explain it, since that stratum barely joins.
-      Two hypotheses already tested and rejected: label length, and structured page furniture vs
-      prose. **This is now the biggest open question in extraction quality.**
+      clean because every fragment is pronounceable. **Real, and the dominant defect in the
+      extracted text — but "confirmed cause of the retrieval misses" was an overstatement** (the
+      self-phrase probe that appeared to establish it cannot discriminate; corrected 2026-08-04).
+      Options, none cheap: RapidOCR detection/merge tuning, a decompounding step at index time, or a
+      different OCR engine. **Decide after the OR-join result, and before any re-extraction run.**
+- [ ] **`text`-stratum misses — now have a candidate explanation, still untested.** Re-scored at
+      **n=39** (pooling the 2026-08-01 pypdf labels, cherry-picked from `demi-todo-corrections`,
+      with the 2026-08-03 set; zero document overlap): **recall@10 = 0.590**, one SE ~8 points. The
+      text path loses ~40% of labels and word-joining does not explain it, since that stratum barely
+      joins. Three hypotheses tested and rejected: label length, structured page furniture vs prose,
+      and index coverage. **The strict ` AND ` join predicts exactly this — a path-independent loss
+      — and is what the item above tests.**
+- [ ] **Chunk overlap never fires on the common path — measured 2026-08-04.** `emit()` calls
+      `splitText()`, which returns any block under `MAX_CHUNK_SIZE` (4000) unchanged, and blocks are
+      emitted at `TARGET_CHUNK_SIZE` (2500). Measured on real `chunkMarkdown` output: **0 of 4
+      consecutive pairs overlap**; the oversized-single-block branch overlaps 2 of 2. Consecutive
+      chunks are strictly disjoint, so a seam-straddling phrase satisfies no conjunctive query.
+      Smaller than the item above (~3–4% of phrases, not 40%) and it compounds it. Fix in `emit()`,
+      not `splitText()`. `test/chunker.test.js`'s "…split, with overlap" never asserts overlap —
+      that is why it survived.
+- [ ] **`pageNumber` is fabricated, and the text path already holds the real value.** 34,153
+      documents (56% of the corpus) go through `extract_text`, which iterates pages and discards the
+      index. No page citations are possible today, for search results or for any summariser built on
+      these chunks. Host emits `[{page, markdown}]` on the text path; OCR path keeps sequence
+      numbers. **Land this and the overlap fix in ONE re-ingest** — chunk ids derive from the split,
+      so each change orphans the previous chunks. Re-ingest needs no GPU if `sent/*.md` is still
+      retained corpus-wide; verify that first.
 - [ ] **`src/scripts/retrieval-labels-ocr.jsonl` — 25 CANDIDATES, not labels.** Seeded from document
       titles, which are metadata and not verified to be on the page; 12 marked STARVED. Scoring them
       as-is measures the title, not the extraction. Open each scan, confirm the words appear, edit or
@@ -147,7 +186,29 @@ is pronounceable, so it scores clean and still costs the search. In this order:
       costing retrieval. Worth doing as tidying; do not expect it to move recall. **Not** an OCR
       re-run.
 
-### 4. Needs a human, not code
+### 4. `eagle-api` accepts a hardcoded API key on the DEMI sync route — found 2026-08-04
+
+Not this repo, but DEMI is the counterparty and nobody else is looking at it.
+`eagle-api/api/controllers/demi.js:22-23`:
+
+```js
+const expectedKey = process.env.DOCLING_API_KEY || 'eagle-demi-api-key';
+if (!apiKey || apiKey !== expectedKey) {
+```
+
+Three problems in two lines, all of which DEMI already fixed on its own side and eagle-api did not:
+
+- **Hardcoded fallback.** Unset the env var and `syncDocumentFromDemi` authenticates against a
+  literal committed to a public repository.
+- **`!==` instead of `crypto.timingSafeEqual`** — the rule is in `CLAUDE.md` and `src/helpers/auth.js`
+  follows it.
+- **Outbound credential reused as an inbound secret.** This is the same conflation recorded under
+  "Secret rotation" in `MIGRATION.md`: `DOCLING_API_KEY` was DEMI's only admin credential until
+  `4bddede` split `ADMIN_API_KEY` out. DEMI removed it from `validKeys`; eagle-api still trusts it.
+
+Fix: distinct `DEMI_SYNC_KEY`, no default, fail closed when unset, `timingSafeEqual`.
+
+### 5. Needs a human, not code
 
 - **AI Services Hub registration.** Platform documents that *"Provisioning Azure AI services is
   managed through the AI Services Hub in the Landing Zones"*, requested via
@@ -180,14 +241,44 @@ is pronounceable, so it scores clean and still costs the search. In this order:
 
 ## Backlog
 
+- **The extraction host's code is unversioned.** Keeping the GPU box itself off-platform is settled
+  and correct (`MIGRATION.md` §A) — this is about the source, which is separable. `worker.py` is
+  ~1,200 lines holding essentially every hard-won fact the project owns: pdfium's non-thread-safety
+  (found after 468 failures in two minutes), the docling-parse SIGTRAP that `PYTHONFAULTHANDLER=1`
+  does not cover, the tiling measurement table, routing thresholds, the `CONVERTERS=3` OOM ceiling.
+  The rationale survives in `MIGRATION.md`; the code implementing it exists only on the host and in
+  scratch copies that already differ in length. Committing it under `extraction-host/` with host,
+  env and keys excluded costs one commit, changes no deployment, and makes its ~45 self-checks
+  CI-runnable. **Also check `gpu-extractor.env` permissions** — a live `DEMI_ADMIN_KEY` was reported
+  sitting in a world-readable scratch path; if confirmed, rotate rather than just move it.
+- **No RU observability on a serverless account.** `query()` returns `requestCharge` and **no caller
+  in `src/` reads it**, against ~1.13M chunks with indexers pulling every 5 minutes. One log line on
+  the ingest path establishes a baseline. Related: `bulkVerified` explicitly ignores
+  `retryAfterInMs` in favour of linear backoff, and `bulk()` discards results from earlier 100-op
+  sub-requests when a later one throws, so the retry re-sends the whole pending set — correct,
+  because upserts are idempotent, but the RU is paid twice.
+- **Typesense references outlive Typesense** (deleted 2026-07-31): `chunker.js:4`, `config.js:81`,
+  `chunker.test.js:4-8`, and `chunks.js:39-40`, which cites `transform-nosql.js` — a file that does
+  not exist. More than a naming tidy: `TARGET_CHUNK_SIZE = 2500` was derived from a Typesense
+  in-memory-index RAM argument, and chunk size is a direct input to the conjunction problem in §3.
+  Re-derive it against AI Search rather than relabelling it.
+- **Nothing in Azure extracts text, and `src/extract.js` should lose its Mongo writer.** Ingest
+  exists (external host POSTs markdown to `POST /documents/:id/chunks`); `src/extract.js` runs only
+  under `require.main === module`. Deliberate — serverless GPU priced and rejected. **Do not delete
+  as dead code**: that covers the docling client and the 10-page batching, which is the whole point
+  of keeping the file. It does **not** cover the Mongo write path, which does `deleteMany` then
+  `insertMany` — leaving a window where a live document has zero chunks, exactly what
+  `replaceForDocument` was written to avoid. Exported, exposed as `yarn extract`, no test file at
+  all. Drop that half.
+- **Two test gaps worth closing.** Nothing asserts the config knobs reach the chunker — the chunker
+  tests assert loose bounds against literals, while a silent env change to `TARGET`/`MAX`/`OVERLAP`
+  orphans every chunk already written. And `cosmos.bulk()`'s >100-op chunking is untested, including
+  the discard-on-throw behaviour above.
 - **`wwwroot` debris.** Twelve ad-hoc probe scripts at the root of the deployed app —
   `_auditwrap.js`, `_copy.js`, `_copy.log`, `_derive.js`, `_fetch.js`, `_fts.js`, `_idx.js`,
   `_isolate.js`, `_meta.js`, `_param.js`, `_purgewrap.js`, `_syncwrap.js` — plus an empty
   `src/models/`. None in the repo, none reachable as routes, but `config-zip` merge never remove
   them. Clean out through Kudu VFS.
-- **Nothing in Azure extracts text.** Ingest exists (external host POST markdown to
-  `POST /documents/:id/chunks`); `src/extract.js` run only under `require.main === module`.
-  Deliberate — serverless GPU priced and rejected. **Do not delete as dead code.**
 - **CI blocked.** `AZURE_CLIENT_ID` missing from repo secrets. Need Entra app registration +
   federated credential; creating one need Microsoft Graph, which conditional access block.
 - ~~**`azure-deploy-prod.yaml` / `-test.yaml` trigger on every push to `main`**~~ — **done
