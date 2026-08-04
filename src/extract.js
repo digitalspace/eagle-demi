@@ -1,32 +1,28 @@
 'use strict';
 
 /**
- * extract.js — Bulk document extraction worker for eagle-demi.
+ * extract.js — the docling-serve client, and the PDF page-batching that makes it survive large
+ * documents.
  *
- * Queries MongoDB for unextracted Documents, downloads each file from MinIO,
- * sends to docling-serve for text extraction, and writes DocumentChunk records
- * back to MongoDB. The AI Search indexer picks up the new chunks on its schedule and
- * syncs them to Typesense automatically.
+ * NOT a worker. It used to be one: it queried MongoDB for unextracted Documents, downloaded each
+ * file, sent it to docling-serve, and wrote DocumentChunk records back to Mongo. Every part of that
+ * loop is gone, along with the `mongodb` dependency it was the last user of. What extraction
+ * happens today happens on the external host, which POSTs markdown to
+ * `POST /documents/:id/chunks` — see `README.md`.
  *
- * Supported file types: PDF (including scanned/OCR), DOCX, DOC, PPTX, XLSX
- * (anything docling-serve supports — configured server-side).
+ * Kept, deliberately, because extraction-inside-Azure is deferred rather than cancelled
+ * (`MIGRATION.md` §A has the pricing that deferred it) and these two functions are the part worth
+ * keeping: the docling request shape, its timeout handling, and the batching that stops a 5,000-page
+ * PDF from being sent as one request. Reviving extraction means writing a new driver around these,
+ * against Cosmos NoSQL — never against Mongo, which no longer exists in this project.
  *
- * Usage:
- *   node src/extract.js                     # full batch (resumable)
- *   node src/extract.js --retry-failed      # re-extract previous failures
- *   node src/extract.js --doc-id <mongoId>  # single document
- *   node src/extract.js --dry-run           # count eligible only
- *
- * Exit codes: 0 = success, 1 = fatal error
+ * Supported file types: PDF (including scanned/OCR), DOCX, DOC, PPTX, XLSX — anything
+ * docling-serve is configured to accept, server-side.
  */
 
 // Node 20+ provides fetch, FormData, Blob as globals — no import needed.
-// Native Cosmos DB / MinIO extraction helper
 const { PDFDocument } = require('pdf-lib');
-const { MongoClient } = require('mongodb');
 const config = require('./config');
-const storage = require('./storage');
-const { chunkMarkdown } = require('./chunker');
 
 // Pages per batch when pre-splitting large PDFs (caps peak worker memory)
 const BATCH_PAGES = parseInt(process.env.DEMI_BATCH_PAGES || '10', 10);
@@ -39,55 +35,6 @@ const SUPPORTED_EXTENSIONS = new Set([
   'pptx', 'PPTX', '.pptx', '.PPTX',
   'xlsx', 'XLSX', '.xlsx', '.XLSX',
 ]);
-
-// Only process non-deleted documents
-const BASE_FILTER = {
-  isDeleted:   { $ne: true },
-};
-
-// ── MongoDB helpers ───────────────────────────────────────────────────────────
-
-async function getDb(client) {
-  return client.db(config.mongoDb);
-}
-
-/**
- * Build id→name lookup for Projects so chunks get a denormalised projectName.
- * Projects store their name in different fields depending on legislation.
- */
-async function buildProjectLookup(db) {
-  const projects = await db.collection('projects')
-    .find({}, { projection: {
-      _id: 1, name: 1, displayName: 1,
-      currentLegislationYear: 1,
-      legislation_2018: 1, legislation_2002: 1, legislation_1996: 1
-    }})
-    .toArray();
-
-  return new Map(projects.map(p => {
-    const legKey = p.currentLegislationYear || 'legislation_2018';
-    const leg = p[legKey] || p.legislation_2018 || p.legislation_2002 || p.legislation_1996 || {};
-    const name = leg.name || leg.shortName || p.name || p.displayName || '';
-    return [p._id.toString(), name];
-  }));
-}
-
-/**
- * Build id→label lookup for List items (type, milestone, etc.)
- */
-async function buildListLookup(db) {
-  const lists = await db.collection('epic')
-    .find({ _schemaName: 'List' }, { projection: { _id: 1, name: 1 } })
-    .toArray();
-  return new Map(lists.map(l => [l._id.toString(), l.name || '']));
-}
-
-function resolveLabel(val, listLookup) {
-  if (!val) return undefined;
-  const s = val.toString();
-  if (listLookup && listLookup.has(s)) return listLookup.get(s);
-  return s;
-}
 
 // Object storage lives in src/storage/. It used to live here, and the HTTP controllers
 // imported this batch script purely to borrow its client — while this script read `s3Key`
@@ -142,25 +89,35 @@ async function extractWithDocling(buffer, filename) {
  * batches sent to docling-serve one at a time so peak memory stays bounded
  * regardless of document size. Non-PDF inputs (and PDFs pdf-lib cannot parse)
  * are sent whole. Batch markdown is concatenated in page order.
+ *
  * @param {Buffer} buffer
  * @param {string} filename
+ * @param {object} [opts]
+ * @param {Function} [opts.extract]  the docling call, injectable so the batching can be tested
+ *                                   without a docling-serve instance
  * @returns {Promise<string>}
  */
-async function splitAndExtract(buffer, filename) {
+async function splitAndExtract(buffer, filename, opts = {}) {
+  const extract = opts.extract || extractWithDocling;
   const isPdf = /\.pdf$/i.test(filename);
-  if (!isPdf) return extractWithDocling(buffer, filename);
+  if (!isPdf) return extract(buffer, filename);
 
   let srcPdf;
+  let pageCount;
   try {
     srcPdf = await PDFDocument.load(buffer, { ignoreEncryption: true });
+    // getPageCount() is INSIDE the try on purpose. A truncated PDF often loads and only fails when
+    // the page tree is walked, so leaving this outside meant that whole class threw out of here
+    // instead of degrading to a whole-file send — the opposite of what this fallback promises, and
+    // docling-serve can frequently read what pdf-lib cannot.
+    pageCount = srcPdf.getPageCount();
   } catch (err) {
     // Unparseable PDF — fall back to whole-file send
     console.warn(`    pdf-lib parse failed (${err.message}); sending whole file`);
-    return extractWithDocling(buffer, filename);
+    return extract(buffer, filename);
   }
 
-  const pageCount = srcPdf.getPageCount();
-  if (pageCount <= BATCH_PAGES) return extractWithDocling(buffer, filename);
+  if (pageCount <= BATCH_PAGES) return extract(buffer, filename);
 
   const totalBatches = Math.ceil(pageCount / BATCH_PAGES);
   const baseName = filename.replace(/\.[^.]+$/, '');
@@ -176,187 +133,17 @@ async function splitAndExtract(buffer, filename) {
     copied.forEach((p) => batchDoc.addPage(p));
     const batchBuf = Buffer.from(await batchDoc.save());
 
-    const md = await extractWithDocling(batchBuf, `${baseName}-batch${b + 1}.pdf`);
+    // Sequential, not Promise.all: the point of batching is to bound peak memory, and issuing
+    // every batch at once would hold the whole document in flight again.
+    const md = await extract(batchBuf, `${baseName}-batch${b + 1}.pdf`);
     parts.push(md);
   }
   return parts.join('\n\n');
 }
 
-// ── Chunk persistence ─────────────────────────────────────────────────────────
-
-/**
- * Delete existing chunks for a document and insert fresh ones.
- * Returns the count of chunks written.
- */
-async function replaceChunks(db, docId, doc, pageChunks, projectName, listLookup) {
-  const col = db.collection('epic');
-
-  // Delete stale chunks first so re-runs stay clean
-  await col.deleteMany({ _schemaName: 'DocumentChunk', documentId: String(docId) });
-
-  if (pageChunks.length === 0) return 0;
-
-  const records = pageChunks.map(({ pageNumber, chunkIndex, content }) => ({
-    _schemaName:  'DocumentChunk',
-    documentId:   String(docId),
-    project:      doc.project || undefined,
-    projectId:    doc.project ? String(doc.project) : undefined,
-    pageNumber,
-    chunkIndex,
-    content,
-    documentName: doc.displayName || doc.documentFileName || '',
-    projectName:  projectName || undefined,
-    documentType: resolveLabel(doc.type, listLookup),
-    milestone:    resolveLabel(doc.milestone, listLookup),
-    datePosted:   doc.datePosted || undefined,
-    read:         doc.read || (doc.isPublished === false ? ['sysadmin', 'staff'] : ['public']),
-    dateAdded:    Date.now(),
-  }));
-
-  await col.insertMany(records, { ordered: false });
-  return records.length;
-}
-
-/**
- * Mark a Document record with extraction outcome.
- */
-async function markDocument(db, docId, pageCount, error) {
-  const col = db.collection('documents');
-  const update = error
-    ? { $set: { contentExtracted: true, contentExtractedAt: new Date(), contentPageCount: 0, contentExtractionError: String(error), extractionMethod: 'docling' } }
-    : { $set: { contentExtracted: true, contentExtractedAt: new Date(), contentPageCount: pageCount, contentExtractionError: null, extractionMethod: 'docling' } };
-  await col.updateOne({ _id: String(docId) }, update);
-}
-
-// ── Core per-document logic ───────────────────────────────────────────────────
-
-async function processDocument(db, doc, projectLookup, listLookup) {
-  const docId      = doc._id.toString();
-  const objectPath = doc.s3Key;
-
-  if (!objectPath) {
-    await markDocument(db, docId, 0, 'No s3Key');
-    return { docId, status: 'skipped', reason: 'no s3Key' };
-  }
-
-  try {
-    const buffer   = await storage.getBuffer(objectPath);
-    const filename = doc.documentFileName || objectPath.split('/').pop() || 'document';
-    const markdown = await splitAndExtract(buffer, filename);
-    const chunks   = chunkMarkdown(markdown);
-
-    const projectName = doc.project ? projectLookup.get(doc.project.toString()) : undefined;
-    const count       = await replaceChunks(db, docId, doc, chunks, projectName, listLookup);
-
-    await markDocument(db, docId, count, null);
-    return { docId, status: 'ok', chunks: count };
-  } catch (err) {
-    await markDocument(db, docId, 0, err.message);
-    return { docId, status: 'error', reason: err.message };
-  }
-}
-
-// ── Entry point ───────────────────────────────────────────────────────────────
-
-async function main() {
-  const args        = process.argv.slice(2);
-  const retryFailed = args.includes('--retry-failed');
-  const dryRun      = args.includes('--dry-run');
-  const docIdIdx    = args.indexOf('--doc-id');
-  const docIdArg    = docIdIdx !== -1 ? args[docIdIdx + 1] : null;
-
-  // src/config.js falls back to mongodb://localhost:27017/epic when nothing is configured. Once
-  // MONGODB_URI comes off the App Service (Phase 8 teardown), that fallback would connect to
-  // nothing and report zero documents to extract — a silent no-op dressed as a clean run.
-  // An explicitly-set localhost still works; only "configured nowhere" is refused.
-  if (!process.env.COSMOSDB_URI && !process.env.MONGODB_URI &&
-      !process.env.COSMOSDB_HOST && !process.env.MONGODB_HOST) {
-    throw new Error('No database configured: set COSMOSDB_URI or MONGODB_URI (or COSMOSDB_HOST/MONGODB_HOST).');
-  }
-
-  const client = new MongoClient(config.mongoUri);
-  await client.connect();
-  const db = await getDb(client);
-  const col = db.collection('documents');
-
-  try {
-    // ── Build filter ────────────────────────────────────────────────────────
-    let filter;
-
-    if (docIdArg) {
-      // Single-document mode: override everything
-      filter = { _id: String(docIdArg) };
-    } else {
-      const extRegex = new RegExp(`\\.(${[...SUPPORTED_EXTENSIONS].map(ext => ext.replace('.', '')).join('|')})$`, 'i');
-      filter = {
-        ...BASE_FILTER,
-        s3Key: { $exists: true, $ne: '', $regex: extRegex },
-      };
-
-      if (retryFailed) {
-        // Re-extract documents that failed previously (error set, zero chunks)
-        filter.contentExtracted    = true;
-        filter.contentPageCount    = 0;
-        filter.contentExtractionError = { $ne: null };
-      } else {
-        // Default: only documents never successfully extracted
-        filter.contentExtracted = { $ne: true };
-      }
-    }
-
-    const total = await col.countDocuments(filter);
-    console.log(`\nMode: ${docIdArg ? `single doc ${docIdArg}` : retryFailed ? 'retry-failed' : 'full batch'}`);
-    console.log(`Eligible documents: ${total}`);
-
-    if (dryRun || total === 0) {
-      await client.close();
-      return;
-    }
-
-    // ── Load lookups ────────────────────────────────────────────────────────
-    const [projectLookup, listLookup] = await Promise.all([
-      buildProjectLookup(db),
-      buildListLookup(db),
-    ]);
-
-    // ── Process in batches ──────────────────────────────────────────────────
-    console.log(`Storage: ${JSON.stringify(storage.describe())}`);
-    const cursor = col.find(filter, {
-      projection: {
-        _id: 1, s3Key: 1, project: 1,
-        displayName: 1, documentFileName: 1,
-        type: 1, milestone: 1, datePosted: 1, isPublished: 1, read: 1,
-      },
-    });
-
-    let ok = 0, errors = 0, skipped = 0;
-
-    while (await cursor.hasNext()) {
-      const doc = await cursor.next();
-      const result = await processDocument(db, doc, projectLookup, listLookup);
-      if (result.status === 'ok')      { ok++;      console.log(`  ✓ ${result.docId} — ${result.chunks} chunks`); }
-      else if (result.status === 'skipped') { skipped++; console.log(`  - ${result.docId} — skipped: ${result.reason}`); }
-      else                             { errors++;  console.error(`  ✗ ${result.docId} — ${result.reason}`); }
-    }
-
-    console.log(`\nDone. ok=${ok} errors=${errors} skipped=${skipped}`);
-  } finally {
-    await client.close();
-  }
-}
-
 module.exports = {
+  extractWithDocling,
   splitAndExtract,
-  replaceChunks,
-  markDocument,
-  processDocument,
-  buildProjectLookup,
-  buildListLookup
+  BATCH_PAGES,
+  SUPPORTED_EXTENSIONS
 };
-
-if (require.main === module) {
-  main().catch(err => {
-    console.error('Fatal:', err.message);
-    process.exit(1);
-  });
-}

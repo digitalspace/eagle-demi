@@ -995,11 +995,23 @@ and the `/db/seed`, `/sync`, `/admin/sync`, `/admin/seed-track` routes that drov
 `readFilter` tier 3 went with `helpers/access.js`; `readClause` in `access-sql.js` never had that
 tier, because every seeder writes `read[]` explicitly.
 
-**`mongodb` stays in `package.json`.** `src/extract.js:26` is its only remaining user, and that file
-is deferred-not-dead. Deleting the account breaks its configured `MONGODB_URI`; nothing live
-regresses, because extraction runs on LXC 109 through the API. A guard in `main()` throws when no
-Mongo URI env is configured, so a post-teardown run errors instead of silently connecting to
-localhost and reporting zero documents.
+**`mongodb` is GONE from `package.json`** (2026-08-04). It stayed for a while because
+`src/extract.js` was its only user and that file is deferred-not-dead — with a `main()` guard that
+threw when no Mongo URI was configured, so a post-teardown run errored instead of silently
+connecting to localhost and reporting zero documents.
+
+That guard is gone too, because what it guarded is gone: once the account was unreachable, the
+Mongo-driven half of `extract.js` could not run in either direction, so keeping it meant keeping a
+script whose only possible outcome was that error. The file was reduced to what the deferral was
+actually protecting — `extractWithDocling` and `splitAndExtract`, the docling client and the
+10-page PDF batching — and the query loop, `replaceChunks` (a `deleteMany`→`insertMany` that left a
+window with zero chunks for a live document), `markDocument` and the `yarn extract*` scripts were
+deleted with it. The dead `mongoUri`/`cosmosDbUri` builders in `src/config.js` went at the same
+time; nothing read them, and they defaulted to `localhost:27017`.
+
+`splitAndExtract` got its first test in the process, which caught a real bug: `getPageCount()` sat
+outside the try that was supposed to make an unparseable PDF fall back to a whole-file send, so a
+PDF that loads but has a broken page tree threw instead of degrading.
 
 **Left to do** — exact resource list and the checked hazards in `TODO.md` item 1. In short:
 `azure/main.bicep:69` + `:89`, `azure/modules/cosmos-db.bicep`, `api-web-app.bicep:22-24` and
