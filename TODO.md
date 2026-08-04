@@ -315,17 +315,20 @@ Left behind there, non-blocking and not ours to land: four now-unread `Document`
 
 ## Backlog
 
-- **`demi-api-dev` is running 2026-08-01 code — NONE of the search fixes are live.** Found
-  2026-08-04 while running the scoring experiment inside the container: `src/search/ai-search.js`
-  there has **no `ANALYZER_STOPWORDS`**, so the deployed app still emits the unanalyzed `~1` variant
-  on analyzer-removed terms — the near-random mandatory filter that PR #1 fixed. The label files are
-  absent too. So the corpus improvements measured since then (**recall@10 0.549 → 0.592 → 0.620**)
-  exist in `main` and **not** in the environment anyone would look at.
-  Nothing is broken by this and nobody uses DEMI, so it is not urgent — but any future measurement
-  taken through the *app* rather than through a script will disagree with `MIGRATION.md` §A, and
-  that is exactly the kind of contradiction that costs a day. Deploy, or record the app's version
-  next to any number taken from it. Note `config-zip` **merges**, so a deploy will not remove
-  anything the sweep already cleaned. `worker.py` (1,193
+- ~~**`demi-api-dev` was running 2026-08-01 code.**~~ — **DEPLOYED 2026-08-04.** It had no
+  `ANALYZER_STOPWORDS`, so the live app still emitted the unanalyzed `~1` on analyzer-removed terms
+  and every improvement measured since (**recall@10 0.549 → 0.592 → 0.620**) existed only in `main`.
+  Now current, verified by the discriminating probe rather than by the deployment status: the phrase
+  *"Sediments from the proposed Lodgepole mine will move downstream and accumulate"* returned
+  **0 results with `fuzzy=true` before and 1 after**, against a chunk that holds it verbatim.
+  `/projects` and `/documents` 200, `/search` still `count: 29392`.
+  **`config-zip` alone is NOT enough — the running Node process keeps the old modules.** After the
+  deploy reported success and the new file was confirmed on disk through Kudu VFS, the app still
+  served the OLD behaviour; it took a `stop`/`start` (never `restart`) to reload. Anyone verifying a
+  deploy by reading the deployed file, or by trusting the deployment status, will conclude it worked
+  when it has not. **Check behaviour, not bytes.**
+  Deploy from a checkout with `node_modules` installed: `ENABLE_ORYX_BUILD=false`, so nothing is
+  installed server-side and a package built without them ships an app that 500s on every request. `worker.py` (1,193
   lines), `ingest.py`, `test_poolfix.py`, `HANDOFF.md` and the three systemd units now live under
   `extraction-host/`, with a `.gitignore` excluding the env file, every `.bak`/`.pre-poolfix` scratch
   copy and ~44 GB of run state. Verified on the staged bytes: no literal key material, no private

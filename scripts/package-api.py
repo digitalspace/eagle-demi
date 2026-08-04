@@ -7,7 +7,12 @@ def package_api(repo_root, zip_path):
     # Pruned at the REPO ROOT ONLY. Excluding "dist" at every depth also strips
     # node_modules/**/dist (e.g. @mongodb-js/saslprep) and ships an app that 500s on every
     # request. Do not reintroduce that.
-    root_exclude_dirs = {".git", "frontend", ".angular", "dist", "coverage", ".deploy_archives", "tmp", "__pycache__"}
+    # `extraction-host` is vendored SOURCE for a machine outside Azure — Python the Node app never
+    # loads. Shipping it would put worker.py and three systemd units at the app root, which is the
+    # same class of debris the 2026-08-04 wwwroot sweep had to clean out by hand. Excluded at the
+    # root only, like `frontend`.
+    root_exclude_dirs = {".git", "frontend", "extraction-host", ".angular", "dist", "coverage",
+                         ".deploy_archives", "tmp", "__pycache__"}
     exclude_extensions = {".zip", ".tar.gz", ".map", ".md"}
 
     # The boundary seeder reads the checked-in GeoJSON exports, which live under frontend/ because
