@@ -135,6 +135,18 @@ export class RegistryStateService {
   // innocent-looking empty list — an outage should never be mistaken for "no results".
   loadError = signal<string | null>(null);
 
+  // Index-wide match totals from the API, NOT the number of rows rendered. There is no paging, so
+  // a column showing `results.length` is really showing pageSize and reads as "that is all there
+  // is". Null when the backend did not report one — the keywordless Cosmos list path has no total.
+  projectMatchCount = signal<number | null>(null);
+  documentMatchCount = signal<number | null>(null);
+  chunkMatchCount = signal<number | null>(null);
+
+  // Cancels the in-flight search when a newer one starts. Without this the last request to
+  // RESOLVE wins each signal rather than the last one issued, and fetchWithRetry's backoff sleeps
+  // make that window seconds wide — so a stale response can overwrite a fresh one.
+  private searchAbort: AbortController | null = null;
+
   // Computed alphabetical list of boundary names in active layer
   activeBoundaryNames = computed(() => {
     const bLayer = this.activeBoundaryLayer();
@@ -413,6 +425,10 @@ export class RegistryStateService {
         }
         return res;
       } catch (err) {
+        // A cancelled request is not a failure. Retrying it would resurrect a search the user has
+        // already moved past AND spend two 1s sleeps doing it, which is the opposite of what the
+        // abort was for.
+        if (this.isAbortError(err)) throw err;
         if (attempt < retries) {
           console.warn(`[FetchRetry] Network error for ${url}. Retrying attempt ${attempt + 1}/${retries}...`, err);
           await new Promise(r => setTimeout(r, delayMs));
@@ -422,6 +438,11 @@ export class RegistryStateService {
       }
     }
     return fetch(url, options);
+  }
+
+  /** Cancellation, however the platform spells it. Safari uses a plain Error with this name. */
+  private isAbortError(err: unknown): boolean {
+    return Boolean(err) && (err as { name?: string }).name === 'AbortError';
   }
 
   /**
@@ -854,6 +875,22 @@ export class RegistryStateService {
   }
 
 
+  /**
+   * Column header count: "12", or "12 of 1,204" when the index matched more than is on screen.
+   *
+   * The bare length was misleading. There is no paging, so a full column showed pageSize and read
+   * as "that is all there is" — and the client-side sector/region/gating filters cut it further,
+   * below a total the user was never shown. Only widen to the two-part form when the numbers
+   * actually differ; "12 of 12" is noise.
+   */
+  resultCountLabel(shown: number | null | undefined, total: number | null): string {
+    // A null length is the loading sentinel, not an empty result. Pairing it with a stale total
+    // would flash "0 of 1,204" between every keystroke.
+    if (shown === null || shown === undefined) return '0';
+    if (total === null || total <= shown) return String(shown);
+    return `${shown} of ${total.toLocaleString()}`;
+  }
+
   // Load datasets from Express api, falling back to rich mock data if empty/fails
   async loadData() {
     this.loadError.set(null);
@@ -908,74 +945,95 @@ export class RegistryStateService {
       return;
     }
 
+    // Supersede whatever is still in flight. The three requests below are independent of each
+    // other but NOT of the next keystroke — without this they race, and the loser can win.
+    this.searchAbort?.abort();
+    const abort = new AbortController();
+    this.searchAbort = abort;
+    const signal = abort.signal;
+
     try {
       const basePath = this.getBasePath();
 
       console.log('[Registry] Loading real-time projects and documents from central dev database...');
 
       const q = this.searchQuery();
-      const sector = this.sectorFilter();
 
       this.projects.set(null);
       this.documents.set(null);
 
       let projParams = `dataset=Project&pageSize=500`;
       if (q) projParams += `&keywords=${encodeURIComponent(q)}&fuzzy=true`;
-      if (sector !== 'all') {
-        projParams += `&and[sector]=${encodeURIComponent(sector)}`;
-      }
+      // Sector is NOT sent. The controller reads only dataset/keywords/fuzzy/pageSize, so the old
+      // `and[sector]` param was decoration; the real filtering is client-side in
+      // filteredProjectsNoQuery, whose prefix/substring matching an OData `eq` would not reproduce.
 
-      console.log('[Registry loadData] Sector filter signal value:', sector);
       console.log('[Registry loadData] Fetching projects from URL:', `${basePath}/search?${projParams}`);
 
-      const resProj = await this.fetchWithRetry(`${basePath}/search?${projParams}`);
-      if (!resProj.ok) throw new Error(`Projects API returned status ${resProj.status}`);
-      const apiProjects = await resProj.json();
+      // Issued together, not in sequence. Nothing here depends on anything else here, and three
+      // serial round trips cost the user three times the latency for no reason.
+      const projPromise = this.fetchWithRetry(`${basePath}/search?${projParams}`, { signal })
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`Projects API returned status ${res.status}`);
+          return res.json();
+        });
 
-      let resultsDoc = [];
       let docParams = `dataset=Document&pageSize=500`;
       if (q) {
         docParams += `&keywords=${encodeURIComponent(q)}&fuzzy=true`;
       }
-      
-      const resDoc = await this.fetchWithRetry(`${basePath}/search?${docParams}`);
-      if (!resDoc.ok) throw new Error(`Documents API returned status ${resDoc.status}`);
-      const apiDocuments = await resDoc.json();
-      resultsDoc = apiDocuments[0]?.searchResults || [];
+
+      const docPromise = this.fetchWithRetry(`${basePath}/search?${docParams}`, { signal })
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`Documents API returned status ${res.status}`);
+          return res.json();
+        });
 
       // Full-text matches from inside the documents. Only meaningful with a query, and a failure
-      // here must not take the whole page down — metadata results are still worth showing.
-      if (q) {
-        this.documentChunks.set(null);
-        try {
-          const chunkParams = `dataset=DocumentChunk&pageSize=50&keywords=${encodeURIComponent(q)}&fuzzy=true`;
-          const resChunk = await this.fetchWithRetry(`${basePath}/search?${chunkParams}`);
-          if (resChunk.ok) {
-            const apiChunks = await resChunk.json();
-            const resultsChunk = apiChunks[0]?.searchResults || [];
-            this.documentChunks.set(resultsChunk.map((c: any) => ({
-              id: String(c._id),
-              documentId: String(c.documentId || ''),
-              projectId: c.project || '',
-              projectName: c.projectName || 'Associated Project',
-              documentName: c.documentName || 'Untitled Document',
-              documentType: c.documentType || 'PDF Document',
-              pageNumber: Number(c.pageNumber) || 0,
-              content: c.content || '',
-              snippet: c.snippet || ''
-            })));
-          } else {
-            this.documentChunks.set([]);
-          }
-        } catch (chunkErr) {
-          console.warn('[Registry] Full-text chunk search failed:', chunkErr);
-          this.documentChunks.set([]);
-        }
+      // here must not take the whole page down — metadata results are still worth showing. That is
+      // why this leg keeps its own catch instead of riding the shared one below.
+      if (q) this.documentChunks.set(null);
+      const chunkPromise = q
+        ? this.fetchWithRetry(
+          `${basePath}/search?dataset=DocumentChunk&pageSize=50&keywords=${encodeURIComponent(q)}&fuzzy=true`,
+          { signal }
+        )
+          .then(async (res) => (res.ok ? res.json() : null))
+          .catch((chunkErr) => {
+            if (this.isAbortError(chunkErr)) throw chunkErr;
+            console.warn('[Registry] Full-text chunk search failed:', chunkErr);
+            return null;
+          })
+        : Promise.resolve(null);
+
+      const [apiProjects, apiDocuments, apiChunks] = await Promise.all([
+        projPromise, docPromise, chunkPromise
+      ]);
+
+      const resultsDoc = apiDocuments[0]?.searchResults || [];
+      this.documentMatchCount.set(apiDocuments[0]?.count ?? null);
+
+      if (apiChunks) {
+        const resultsChunk = apiChunks[0]?.searchResults || [];
+        this.chunkMatchCount.set(apiChunks[0]?.count ?? null);
+        this.documentChunks.set(resultsChunk.map((c: any) => ({
+          id: String(c._id),
+          documentId: String(c.documentId || ''),
+          projectId: c.project || '',
+          projectName: c.projectName || 'Associated Project',
+          documentName: c.documentName || 'Untitled Document',
+          documentType: c.documentType || 'PDF Document',
+          pageNumber: Number(c.pageNumber) || 0,
+          content: c.content || '',
+          snippet: c.snippet || ''
+        })));
       } else {
+        this.chunkMatchCount.set(null);
         this.documentChunks.set([]);
       }
 
       const resultsProj = apiProjects[0]?.searchResults || [];
+      this.projectMatchCount.set(apiProjects[0]?.count ?? null);
 
       console.log('[Registry loadData] Projects fetched count:', resultsProj.length);
 
@@ -1058,12 +1116,20 @@ export class RegistryStateService {
         this.documents.set([]);
       }
     } catch (err) {
+      // A superseded search is not an outage. Leave every signal alone: a newer loadData() is
+      // already running and owns them now, and clearing them here would blank the results the
+      // user is about to see — or raise an error banner for a request we cancelled ourselves.
+      if (this.isAbortError(err)) return;
+
       // Do NOT silently substitute mock data here. Doing so made a broken backend render as
       // a healthy demo full of fictional projects, masking outages and every other bug.
       // Mocks are opt-in via USE_MOCK_DATA only; otherwise surface the failure.
       console.error('[Registry loadData] API search fetch failed:', err);
       this.projects.set([]);
       this.documents.set([]);
+      this.projectMatchCount.set(null);
+      this.documentMatchCount.set(null);
+      this.chunkMatchCount.set(null);
       this.loadError.set(
         'Could not load registry data from the API. This is a connection or server error — ' +
         'the list below is empty, not filtered.'

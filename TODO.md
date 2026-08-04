@@ -69,12 +69,28 @@ label set is ~0.059 and both shipped improvements are inside it.
 
 ## Search UI
 
+- [ ] **Highlighting for projects and documents is done in the browser.** Only the chunk index asks
+      AI Search for `highlight`; project and document hits are marked up client-side by a regex and
+      a hand-rolled Levenshtein in `registry-state.service.ts`. Asking the service to highlight
+      `displayName,description` would delete that code and match what the analyzer actually matched
+      — the local matcher can mark a word the index never hit, and miss a stemmed one it did.
+- [ ] **No facets.** The sector chips are a hardcoded list of four, and nothing displays a count per
+      value. Facets would make them real, but `sector`/`region`/`status` must be `facetable` in the
+      index first, which is not a mutable field property — it needs a reindex. Cost is the reindex,
+      not the query.
+- [ ] **The index, indexer and data-source definitions exist only in the live service.** Nothing in
+      git can rebuild them, and `publicNetworkAccess: Disabled` means they were hand-POSTed from
+      inside the VNet. Export the three of each to JSON via Kudu and commit them. Read-only, no
+      deployment risk, and it is the difference between a rebuildable environment and an
+      unrepeatable one.
 - [ ] **There is no result paging.** `searchChunks` sends only `top` (default 20, hard cap 250) and
       never sends `$skip`; the controller has no offset and the frontend has no load-more. Left alone
       deliberately — nobody uses DEMI yet, and this is a decision for whoever owns the search UI. If
       it is ever wanted: `$skip` caps at 100,000 and deep skips degrade, and score-ordered paging is
       unstable across requests, so infinite scroll needs a deterministic tiebreak in `$orderby` rather
-      than score alone. `@odata.count` is already requested, so a total is free.
+      than score alone. `@odata.count` is already requested and, since 2026-08-04, returned by all
+      three datasets and shown in the column headers — so the user can now see how much a page is
+      hiding, which is the argument for paging rather than a substitute for it.
 
 ## Needs a human, not code
 

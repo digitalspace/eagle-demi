@@ -50,7 +50,9 @@ exports.search = async (req, res) => {
           const { filter, empty } = filterFor(access, 'id');
 
           if (!empty) {
-            const { items } = await aiSearch.searchProjects({
+            // `count` is the index-wide total, not the page. The frontend shows it so a column
+            // header stops reporting `pageSize` as though it were the number of matches.
+            const { items, count } = await aiSearch.searchProjects({
               filter,
               keywords,
               fuzzy,
@@ -80,7 +82,7 @@ exports.search = async (req, res) => {
                 nrptiRecords: []
               }));
 
-              return res.json([{ searchResults }]);
+              return res.json([{ searchResults, count }]);
             }
 
             // Nothing matched. Answer that, rather than falling through to the keywordless Cosmos
@@ -154,7 +156,7 @@ exports.search = async (req, res) => {
           const projectScope = filterFor(access, 'id');
 
           if (!empty) {
-            const { items } = await aiSearch.searchDocuments({
+            const { items, count } = await aiSearch.searchDocuments({
               filter,
               // Passed so the project-name leg can run under the caller's project visibility.
               // Undefined would disable that leg entirely; null legitimately means "unrestricted".
@@ -191,7 +193,7 @@ exports.search = async (req, res) => {
                 }
               }
 
-              return res.json([{ searchResults: mappedDocs }]);
+              return res.json([{ searchResults: mappedDocs, count }]);
             }
 
             // See the project branch: no matches is an answer, not a reason to list the corpus.
