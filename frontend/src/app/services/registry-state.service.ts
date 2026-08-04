@@ -1,5 +1,5 @@
 import { Injectable, signal, computed, effect, untracked, inject } from '@angular/core';
-import { Project, Document, DocumentChunk } from '../models/registry.models';
+import { Project, Document, DocumentChunk, SummaryCitation } from '../models/registry.models';
 import { MOCK_PROJECTS, MOCK_DOCUMENTS } from '../mocks/mock-registry.data';
 import { ConfigService, AppConfig } from './config.service';
 
@@ -52,6 +52,16 @@ export class RegistryStateService {
   isAuthenticated = signal<boolean>(false);
   isUnauthorized = signal<boolean>(false);
   userName = signal<string>('');
+
+  // AI summary of the current search — step 5 of the pipeline, see wiki ADR-006. Privileged-only,
+  // so for an anonymous visitor this stays null and no request is ever issued.
+  //
+  // null carries two meanings and the template distinguishes them with summaryLoading: null while
+  // loading is the shimmer, null after loading is "no panel". Same null-sentinel convention the
+  // three result columns already use.
+  summary = signal<string | null>(null);
+  summaryCitations = signal<SummaryCitation[]>([]);
+  summaryLoading = signal<boolean>(false);
 
   // UI Interactive States (using Signals)
   currentRole = signal<'public' | 'admin'>('public');
@@ -940,8 +950,12 @@ export class RegistryStateService {
       this.projects.set(buildMockProjects());
       this.documents.set(this.mockDocuments);
       // No mock chunks: extracted text has no fixture, and [] reads as "none" rather than
-      // hanging on the loading sentinel forever.
+      // hanging on the loading sentinel forever. Same for the summary — demo mode must not reach
+      // the API, and a stuck shimmer is worse than an absent panel.
       this.documentChunks.set([]);
+      this.summary.set(null);
+      this.summaryCitations.set([]);
+      this.summaryLoading.set(false);
       return;
     }
 
@@ -1006,9 +1020,40 @@ export class RegistryStateService {
           })
         : Promise.resolve(null);
 
-      const [apiProjects, apiDocuments, apiChunks] = await Promise.all([
-        projPromise, docPromise, chunkPromise
+      // The AI summary. Requested ONLY when there is a query and the user is signed in — the
+      // endpoint is privileged-only, so for an anonymous visitor a request would be a guaranteed
+      // 401. Not issuing it also keeps that 401 away from the fetch interceptor's token-refresh
+      // path, which would otherwise fire a refresh-and-replay on every keystroke of a logged-out
+      // search. Its own catch, like the chunk leg: a failed summary must not cost the user the
+      // three result columns.
+      const wantsSummary = !!q && this.isAuthenticated();
+      this.summaryLoading.set(wantsSummary);
+      if (!wantsSummary) {
+        this.summary.set(null);
+        this.summaryCitations.set([]);
+      }
+      const summaryPromise = wantsSummary
+        ? this.fetchWithRetry(
+          `${basePath}/search/summary?keywords=${encodeURIComponent(q)}&fuzzy=true`,
+          { signal }
+        )
+          .then(async (res) => (res.ok ? res.json() : null))
+          .catch((sumErr) => {
+            if (this.isAbortError(sumErr)) throw sumErr;
+            console.warn('[Registry] Summary failed:', sumErr);
+            return null;
+          })
+        : Promise.resolve(null);
+
+      const [apiProjects, apiDocuments, apiChunks, apiSummary] = await Promise.all([
+        projPromise, docPromise, chunkPromise, summaryPromise
       ]);
+
+      // `summary: null` with a reason is a legitimate answer, not a failure — the corpus had
+      // nothing, or the feature is off. Both render as no panel.
+      this.summary.set(apiSummary?.summary ?? null);
+      this.summaryCitations.set(apiSummary?.citations ?? []);
+      this.summaryLoading.set(false);
 
       const resultsDoc = apiDocuments[0]?.searchResults || [];
       this.documentMatchCount.set(apiDocuments[0]?.count ?? null);
@@ -1130,6 +1175,11 @@ export class RegistryStateService {
       this.projectMatchCount.set(null);
       this.documentMatchCount.set(null);
       this.chunkMatchCount.set(null);
+      // Clear the shimmer too. The summary leg has its own catch, so reaching here means one of the
+      // other three failed — but the panel would otherwise shimmer forever behind an error banner.
+      this.summary.set(null);
+      this.summaryCitations.set([]);
+      this.summaryLoading.set(false);
       this.loadError.set(
         'Could not load registry data from the API. This is a connection or server error — ' +
         'the list below is empty, not filtered.'

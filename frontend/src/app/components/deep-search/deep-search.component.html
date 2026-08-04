@@ -28,6 +28,36 @@
     </div>
   </div>
 
+  <!--
+    AI summary — step 5 of the search pipeline, see wiki ADR-006. Privileged-only: the service
+    issues no request at all for an anonymous visitor, so this stays absent rather than erroring.
+
+    `flex-shrink: 0` in the stylesheet is load-bearing. The page is a fixed-height flex column with
+    overflow hidden; without it this panel steals height from the three result columns instead of
+    taking its own.
+  -->
+  @if (service.summaryLoading() || service.summary()) {
+    <div class="summary-panel">
+      <h2 class="summary-title">
+        <i class="fa-solid fa-wand-magic-sparkles"></i> Summary
+        <span class="summary-badge">AI-generated from the results below</span>
+      </h2>
+      @if (service.summaryLoading()) {
+        <div class="summary-shimmer"></div>
+        <div class="summary-shimmer short"></div>
+      } @else {
+        <p class="summary-text">{{ service.summary() }}</p>
+        @if (service.summaryCitations().length > 0) {
+          <div class="summary-citations">
+            @for (c of service.summaryCitations(); track c.chunkId) {
+              <span class="summary-citation" [title]="'Page ' + c.pageNumber">[{{ c.n }}]</span>
+            }
+          </div>
+        }
+      }
+    </div>
+  }
+
   <!-- Dual list column layout -->
   <div class="search-results-grid">
     <!-- Projects Section -->

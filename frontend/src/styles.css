@@ -685,6 +685,70 @@ header {
 }
 
 /* Dual Column Layout */
+/*
+ * AI summary panel — sits between the hero and the results grid. See wiki ADR-006.
+ *
+ * `flex-shrink: 0` is not cosmetic. `.search-page-container` is a fixed-height flex column with
+ * `overflow: hidden` and `.search-results-grid` is `flex: 1`; a shrinkable panel here would take
+ * its height out of the three result columns instead of out of the page.
+ */
+.summary-panel {
+  flex-shrink: 0;
+  margin: 0 1.5rem;
+  padding: 1rem 1.25rem;
+  background: var(--white);
+  border: 1px solid var(--border, #e5e7eb);
+  border-left: 3px solid #6366f1;
+  border-radius: 12px;
+}
+.summary-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+/* The label is a disclosure, not decoration: a generated paragraph sitting above real search
+   results must say what it is, or it reads as retrieved fact. */
+.summary-badge {
+  font-size: 0.7rem;
+  font-weight: 500;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+}
+.summary-text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+.summary-citations {
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.summary-citation {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: #f3f4f6;
+  color: #4b5563;
+}
+/* Same gradient and the same `loading-pulse-shimmer` keyframe the result columns use — one loading
+   idiom on the page, not two that drift apart. */
+.summary-shimmer {
+  height: 0.9rem;
+  margin-bottom: 0.4rem;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #f2f4f7 25%, #e1e5eb 50%, #f2f4f7 75%);
+  background-size: 200% 100%;
+  animation: loading-pulse-shimmer 1.5s infinite linear;
+}
+.summary-shimmer.short { width: 60%; margin-bottom: 0; }
+
 .search-results-grid {
   display: flex;
   flex: 1;

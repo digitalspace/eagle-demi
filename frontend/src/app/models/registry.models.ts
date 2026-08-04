@@ -51,3 +51,18 @@ export interface DocumentChunk {
   content: string;
   snippet: string;
 }
+
+/**
+ * One `[n]` citation in an AI summary, resolved back to the chunk it points at.
+ *
+ * The model only ever emits a source NUMBER — it never sees a chunk id, so it cannot invent one.
+ * The API maps those numbers back to real ids before they reach the browser, which is what lets the
+ * panel render a citation as a link rather than as bare text.
+ */
+export interface SummaryCitation {
+  n: number;
+  chunkId: string;
+  documentId: string;
+  projectId: string;
+  pageNumber: number;
+}
