@@ -179,6 +179,79 @@ describe('RegistryStateService', () => {
     });
   });
 
+  // Before cancellation existed, the last request to RESOLVE won each signal rather than the last
+  // one issued — and fetchWithRetry's backoff sleeps made that window seconds wide.
+  describe('search cancellation', () => {
+    const jsonResponse = (payload: unknown) => new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    it('cancels a superseded search without raising the error banner', async () => {
+      spyOn(window, 'fetch').and.callFake((_input: any, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) {
+            reject(new DOMException('aborted', 'AbortError'));
+            return;
+          }
+          signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          setTimeout(() => resolve(jsonResponse([{ searchResults: [] }])), 5);
+        })
+      );
+
+      // The second call supersedes the first. The first must die quietly: a request we cancelled
+      // ourselves is not an outage, and blanking the signals here would wipe the newer results.
+      const first = service.loadData();
+      const second = service.loadData();
+      await Promise.all([first, second]);
+
+      expect(service.loadError()).toBeNull();
+    });
+
+    it('issues the three searches together, each cancellable', async () => {
+      const inits: (RequestInit | undefined)[] = [];
+      spyOn(window, 'fetch').and.callFake((_input: any, init?: RequestInit) => {
+        inits.push(init);
+        return Promise.resolve(jsonResponse([{ searchResults: [], count: 7 }]));
+      });
+
+      service.searchQuery.set('pipeline');
+      await service.loadData();
+
+      expect(inits.length).toBe(3);
+      expect(inits.every(i => !!i?.signal)).toBeTrue();
+    });
+
+    it('records the index-wide total the API reports', async () => {
+      spyOn(window, 'fetch').and.callFake(() =>
+        Promise.resolve(jsonResponse([{ searchResults: [], count: 1204 }]))
+      );
+
+      service.searchQuery.set('pipeline');
+      await service.loadData();
+
+      expect(service.projectMatchCount()).toBe(1204);
+      expect(service.documentMatchCount()).toBe(1204);
+      expect(service.chunkMatchCount()).toBe(1204);
+    });
+  });
+
+  // A column header showing results.length was really showing pageSize, and read as "that is all
+  // there is" — there is no paging.
+  describe('resultCountLabel', () => {
+    it('names the total only when it exceeds the rows on screen', () => {
+      expect(service.resultCountLabel(12, 1204)).toBe('12 of 1,204');
+      expect(service.resultCountLabel(12, 12)).toBe('12');
+      expect(service.resultCountLabel(12, null)).toBe('12');
+    });
+
+    it('treats the loading sentinel as zero rather than pairing it with a stale total', () => {
+      expect(service.resultCountLabel(undefined, 1204)).toBe('0');
+      expect(service.resultCountLabel(null, 1204)).toBe('0');
+    });
+  });
+
   // The fetch interceptor used to decide "is this our API?" with url.includes(basePath).
   // With the '/api' fallback that matches any third-party URL containing those characters,
   // which would attach the user's Bearer token to it.

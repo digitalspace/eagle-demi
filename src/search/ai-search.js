@@ -15,6 +15,8 @@
  * VNet — which the App Service is. See the wiki's BC-Gov-Azure-Landing-Zone page.
  */
 
+const { randomUUID } = require('crypto');
+
 const API_VERSION = '2024-07-01';
 
 /**
@@ -104,24 +106,95 @@ async function getToken() {
   return tokenCache.token;
 }
 
-async function request(path, body) {
-  const { endpoint } = config();
-  const res = await fetch(`${endpoint}${path}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${await getToken()}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(body)
-  });
+/**
+ * Statuses worth a second attempt.
+ *
+ * 429 is throttling — the service is Basic at one replica, so a burst of keystroke-driven searches
+ * can genuinely exceed it. 503 is a transient service-side failure. Nothing else belongs here: a
+ * 400 from a field name that is not in the index returns the same 400 every time, and a 403 from a
+ * missing data-plane role is a deployment fact, not a blip. Retrying either triples the latency of
+ * a guaranteed failure.
+ */
+const RETRY_STATUSES = new Set([429, 503]);
+const MAX_ATTEMPTS = 3;
 
-  if (!res.ok) {
+/**
+ * Fail long before the platform does.
+ *
+ * App Service aborts the request at 240s. A search that hangs until then holds a worker slot on a
+ * 224 MB instance for four minutes, and the caller — the frontend, searching on a 300ms debounce —
+ * gave up long before. 30s is well past any healthy query against this corpus.
+ */
+const REQUEST_TIMEOUT_MS = 30000;
+
+/**
+ * How long to wait before retrying.
+ *
+ * `Retry-After` is in seconds and is what the service actually wants; honour it when present.
+ * Otherwise linear backoff, matching `bulkVerified` in `db/cosmos-nosql.js` rather than inventing a
+ * second backoff style in the same codebase.
+ */
+function retryDelayMs(res, attempt) {
+  const header = res.headers && typeof res.headers.get === 'function'
+    ? res.headers.get('retry-after')
+    : null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.min(seconds * 1000, 10000);
+  return 1000 * attempt;
+}
+
+async function request(path, body, opts = {}) {
+  const { endpoint } = config();
+  const maxAttempts = opts.maxAttempts || MAX_ATTEMPTS;
+  const timeoutMs = opts.timeoutMs || REQUEST_TIMEOUT_MS;
+  // One id for the whole call, retries included. The point is to find every attempt at ONE logical
+  // request in the service-side logs; separate ids per attempt would hide that they are related.
+  const clientRequestId = randomUUID();
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let res;
+    try {
+      res = await fetch(`${endpoint}${path}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${await getToken()}`,
+          'Content-Type': 'application/json',
+          'x-ms-client-request-id': clientRequestId
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+    } catch (err) {
+      // A timeout surfaces as a TimeoutError from the signal, never as a status. NOT retried: the
+      // call has already spent the full budget waiting, and if the service is that slow another
+      // two attempts make the queue worse rather than better.
+      throw new Error(
+        `${path.split('?')[0]} failed after ${timeoutMs}ms (${err.name}) [${clientRequestId}]`,
+        { cause: err }
+      );
+    }
+
+    if (res.ok) return res.json();
+
     // The status matters: 403 (missing data-plane role) and 404 (wrong index name) both return
     // JSON that reads like an empty result if only the body is inspected.
     const detail = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status} ${detail.slice(0, 300)}`);
+
+    if (RETRY_STATUSES.has(res.status) && attempt < maxAttempts) {
+      const delay = retryDelayMs(res, attempt);
+      console.warn(
+        `[ai-search] HTTP ${res.status} on ${path.split('?')[0]}, retrying in ${delay}ms ` +
+        `(attempt ${attempt}/${maxAttempts}) [${clientRequestId}]`
+      );
+      await new Promise(r => setTimeout(r, delay));
+      continue;
+    }
+
+    throw new Error(`HTTP ${res.status} ${detail.slice(0, 300)} [${clientRequestId}]`);
   }
-  return res.json();
+
+  // Unreachable: the loop either returns, retries, or throws. Here only if maxAttempts < 1.
+  throw new Error(`[ai-search] no attempt made for ${path} [${clientRequestId}]`);
 }
 
 /**
@@ -517,7 +590,7 @@ function quoteList(values) {
  * padding replaced by a DIGIT COUNT of the stripped padding (`…YzA=` indexes as `…YzA1`).
  * Re-implementing that here would delete nothing while reporting success the day it drifts.
  */
-async function deleteChunksForDocument(documentId) {
+async function deleteChunksForDocument(documentId, opts = {}) {
   const { configured, index } = config();
   if (!configured) {
     warnUnconfigured();
@@ -525,40 +598,66 @@ async function deleteChunksForDocument(documentId) {
   }
 
   const id = String(documentId);
+  // 25 rounds x 1000 keys = 25,000 chunks, comfortably past the largest document in the corpus.
+  // A cap rather than an open loop: if a delete ever silently fails, this must be loud and bounded
+  // rather than spinning against the index forever.
+  const maxRounds = opts.maxRounds || 25;
+  let deleted = 0;
+  let previousRemaining = Infinity;
+
   try {
-    const found = await request(`/indexes/${index}/docs/search?api-version=${API_VERSION}`, {
-      search: '*',
-      filter: `documentId eq '${id.replace(/'/g, "''")}'`,
-      select: 'id',
-      // A document can hold thousands of chunks; this is the page cap, and `count` tells us
-      // whether a second pass is needed rather than leaving the rest silently indexed.
-      top: 1000,
-      count: true
-    });
+    for (let round = 1; round <= maxRounds; round++) {
+      const found = await request(`/indexes/${index}/docs/search?api-version=${API_VERSION}`, {
+        search: '*',
+        filter: `documentId eq '${id.replace(/'/g, "''")}'`,
+        select: 'id',
+        // The page cap, not the document's size. `count` reports how many are really left, which
+        // is what decides whether another round is needed.
+        top: 1000,
+        count: true
+      });
 
-    const keys = (found.value || []).map(d => d.id).filter(Boolean);
-    if (keys.length === 0) return 0;
+      const keys = (found.value || []).map(d => d.id).filter(Boolean);
+      if (keys.length === 0) return deleted;
 
-    await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, {
-      value: keys.map(key => ({ '@search.action': 'delete', id: key }))
-    });
+      const remaining = found['@odata.count'] ?? keys.length;
+      // Deletes are not read-your-write on this service, so a round CAN legitimately re-see keys it
+      // just removed. What is not legitimate is the total never falling: that means the delete is
+      // not landing, and another 24 rounds of the same call will not change it.
+      if (round > 1 && remaining >= previousRemaining) {
+        console.warn(
+          `[ai-search] document ${id} still reports ${remaining} indexed chunks after ` +
+          `${deleted} deletions; stopping without progress. Its remaining text stays searchable.`
+        );
+        return deleted;
+      }
+      previousRemaining = remaining;
 
-    const total = found['@odata.count'] ?? keys.length;
-    if (total > keys.length) {
-      console.warn(
-        `[ai-search] document ${id} has ${total} indexed chunks; deleted the first ${keys.length}. ` +
-        'Re-run the delete to clear the remainder.'
-      );
+      await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, {
+        value: keys.map(key => ({ '@search.action': 'delete', id: key }))
+      });
+      deleted += keys.length;
+
+      if (remaining <= keys.length) return deleted;
     }
-    return keys.length;
+
+    console.warn(
+      `[ai-search] document ${id} exceeded ${maxRounds} delete rounds after ${deleted} deletions. ` +
+      'Re-run the delete to clear the remainder.'
+    );
+    return deleted;
   } catch (err) {
     // Best-effort by design: the Cosmos rows are already gone and the caller has already
     // succeeded. Loud, because the consequence is searchable text for a deleted document.
+    //
+    // Returns what was actually removed before the failure, not 0 — a later round throwing does not
+    // un-delete the earlier ones, and reporting 0 would understate `indexEntriesRemoved` in the
+    // purge summary.
     console.error(
-      `[ai-search] could not remove indexed chunks for document ${id} (${err.message}). ` +
-      'Its text remains searchable until this is retried.'
+      `[ai-search] could not remove indexed chunks for document ${id} (${err.message}) ` +
+      `after deleting ${deleted}. Its remaining text stays searchable until this is retried.`
     );
-    return 0;
+    return deleted;
   }
 }
 

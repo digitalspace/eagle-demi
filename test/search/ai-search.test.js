@@ -24,9 +24,15 @@ function captureFetch(t, responder) {
   global.fetch = async (url, init) => {
     calls.push({ url, init, body: init && init.body ? JSON.parse(init.body) : null });
     const result = responder(calls.length - 1);
+    // `throws` models a transport-level failure — the shape a request timeout arrives in, which is
+    // an exception from the abort signal rather than any HTTP status.
+    if (result.throws) throw result.throws;
     return {
       ok: result.ok !== false,
       status: result.status || 200,
+      // Retry-After is read off the real Headers API, so the stub has to answer `get()` rather
+      // than expose a plain object.
+      headers: { get: (name) => (result.headers || {})[String(name).toLowerCase()] ?? null },
       json: async () => result.json || {},
       text: async () => JSON.stringify(result.json || {})
     };
@@ -283,5 +289,112 @@ test('ai-search delete propagation', async (t) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
     await aiSearch.deleteChunksForDocument("d1' or id ne '");
     assert.strictEqual(calls[0].body.filter, "documentId eq 'd1'' or id ne '''");
+  });
+
+  // The reason this loops at all. `top: 1000` is a page cap, not a document size — before this,
+  // a document over 1000 chunks had the first page deleted and the rest left permanently
+  // searchable, because the indexer's high-water mark never revisits a deleted row.
+  await t.test('a document larger than one page is deleted across rounds', async (tt) => {
+    const page = (n) => Array.from({ length: n }, (_, i) => ({ id: `KEY-${i}` }));
+    const calls = captureFetch(tt, (i) => {
+      switch (i) {
+        case 0: return { json: { value: page(1000), '@odata.count': 2500 } };
+        case 2: return { json: { value: page(1000), '@odata.count': 1500 } };
+        case 4: return { json: { value: page(500), '@odata.count': 500 } };
+        default: return { json: {} };   // the three delete calls
+      }
+    });
+
+    assert.strictEqual(await aiSearch.deleteChunksForDocument('big'), 2500);
+    assert.strictEqual(calls.length, 6, 'three search rounds, each followed by its delete');
+    assert.ok(calls[5].url.includes('/docs/index'));
+    assert.strictEqual(calls[5].body.value.length, 500);
+  });
+
+  // Deletes are not read-your-write here, so re-seeing keys is normal. A total that never falls is
+  // not: it means nothing is landing, and 24 more identical rounds will not change that.
+  await t.test('a round that makes no progress stops rather than looping', async (tt) => {
+    const page = Array.from({ length: 1000 }, (_, i) => ({ id: `KEY-${i}` }));
+    const calls = captureFetch(tt, () => ({ json: { value: page, '@odata.count': 2000 } }));
+
+    assert.strictEqual(await aiSearch.deleteChunksForDocument('stuck'), 1000);
+    assert.strictEqual(calls.length, 3, 'search, delete, then one probe that showed no progress');
+  });
+
+  await t.test('the round cap bounds a document that never drains', async (tt) => {
+    // Always reports one page left and one more than it returns, so the count keeps falling and
+    // the no-progress guard never fires. Only the cap can stop this.
+    let remaining = 100000;
+    const page = Array.from({ length: 1000 }, (_, i) => ({ id: `KEY-${i}` }));
+    const calls = captureFetch(tt, (i) => {
+      if (i % 2 === 1) return { json: {} };
+      remaining -= 1000;
+      return { json: { value: page, '@odata.count': remaining } };
+    });
+
+    assert.strictEqual(await aiSearch.deleteChunksForDocument('endless', { maxRounds: 4 }), 4000);
+    assert.strictEqual(calls.length, 8, 'four rounds, then stop');
+  });
+});
+
+test('ai-search request resilience', async (t) => {
+  // Basic tier at one replica throttles under a burst of keystroke-driven searches. The Cosmos
+  // client next door already retries 429; this path had nothing.
+  await t.test('a 429 is retried and then succeeds', async (tt) => {
+    const calls = captureFetch(tt, (i) => i === 0
+      ? { ok: false, status: 429, headers: { 'retry-after': '0.01' }, json: {} }
+      : { json: { value: [], '@odata.count': 0 } });
+
+    const result = await aiSearch.searchChunks({ keywords: 'peace river', filter: null });
+
+    assert.strictEqual(result.count, 0);
+    assert.strictEqual(calls.length, 2, 'the throttled attempt was retried');
+  });
+
+  await t.test('Retry-After is honoured over the default backoff', async (tt) => {
+    captureFetch(tt, (i) => i === 0
+      ? { ok: false, status: 503, headers: { 'retry-after': '0.01' }, json: {} }
+      : { json: { value: [] } });
+
+    const started = Date.now();
+    await aiSearch.searchChunks({ keywords: 'peace', filter: null });
+    // The default for attempt 1 is a full second; honouring the header must beat it clearly.
+    assert.ok(Date.now() - started < 500, 'waited the header value, not the default backoff');
+  });
+
+  // A 400 from a field name that is not in the index returns the same 400 every time. Retrying it
+  // triples the latency of a guaranteed failure — and this is the exact status that broke project
+  // search once already.
+  await t.test('a 400 is not retried', async (tt) => {
+    const calls = captureFetch(tt, () => ({ ok: false, status: 400, json: { error: 'bad field' } }));
+
+    await assert.rejects(
+      () => aiSearch.searchChunks({ keywords: 'peace', filter: null }),
+      /HTTP 400/
+    );
+    assert.strictEqual(calls.length, 1, 'no retry on a deterministic failure');
+  });
+
+  await t.test('a timeout rejects rather than hanging, and is not retried', async (tt) => {
+    const timeout = Object.assign(new Error('The operation was aborted'), { name: 'TimeoutError' });
+    const calls = captureFetch(tt, () => ({ throws: timeout }));
+
+    await assert.rejects(
+      () => aiSearch.searchChunks({ keywords: 'peace', filter: null }),
+      /TimeoutError/
+    );
+    assert.strictEqual(calls.length, 1, 'the budget was already spent; retrying makes it worse');
+  });
+
+  await t.test('every attempt of one call carries the same correlation id', async (tt) => {
+    const calls = captureFetch(tt, (i) => i === 0
+      ? { ok: false, status: 429, headers: { 'retry-after': '0.01' }, json: {} }
+      : { json: { value: [] } });
+
+    await aiSearch.searchChunks({ keywords: 'peace', filter: null });
+
+    const ids = calls.map(c => c.init.headers['x-ms-client-request-id']);
+    assert.ok(ids[0], 'the header is sent');
+    assert.strictEqual(ids[0], ids[1], 'retries share the id so the logs relate them');
   });
 });
