@@ -685,6 +685,88 @@ grows without adding recall; BM25 is already dominated by the rest."* Under a co
 term is a **filter**, not a ranking contribution — it can only *reduce* recall. The cap is currently
 protecting recall by accident, and the comment as written would justify removing it.
 
+##### The phrase is in the chunk — the misses are search-side (measured 2026-08-04)
+
+The probe every earlier hypothesis was missing. All four rejected explanations were about the
+*query*; nobody had checked the link in the middle. `src/scripts/probe-phrase-presence.js` reads each
+labelled document's chunks **from Cosmos** and finds the strictest rung at which the phrase is
+present: `exact` → `whitespace` (collapse+lowercase) → `punct` (NFKD, all `\p{P}\p{S}` to space) →
+`despaced` (all spaces deleted, both sides).
+
+It must read Cosmos. `content` is `retrievable: false`, so the search service cannot return chunk
+text on **any** plane — a data-plane query returns highlight fragments only. An earlier note in
+`TODO.md` said otherwise and was wrong.
+
+**Result, 71 labels plus the 3-label textless control:**
+
+| | phrase present (`exact`/`whitespace`/`punct`) | `despaced` | `straddle-*` | not contiguous |
+|---|---|---|---|---|
+| **retrieval hit** (n=39) | 32 | 2 | 0 | 5 |
+| **retrieval miss** (n=32) | **25** | **3** | **0** | 4 |
+
+**78% of the misses have the phrase sitting verbatim in a stored chunk.** On the `text` strata it is
+16 of 17. Extraction is not what is costing recall.
+
+**Word-joining is 3 of 32 misses — 9%, all OCR strata, all `joined`.** It is real, it is measured,
+and it is an order of magnitude smaller than the 23–29× token-rate figure implies for *retrieval*.
+The rung is symmetric (`Tum ble r Ridge` matches it too), so the script reports `joined` vs `split`
+from the space-count delta; every case found was `joined`.
+
+**`straddle-*` is ZERO.** Not one label in 74 was present only across a chunk seam. The overlap
+defect below is real as a chunker bug and costs approximately nothing in retrieval — the ~3–4%
+estimate was never measured, and the measurement is 0/74.
+
+**The guard fired, and the answer is that the guard was wrong.** Five retrieval *hits* classified as
+non-contiguous, which the pre-stated guard called "instrument broken, stop". Checked before reading
+anything else: all five have `coverage: 1` and no missing tokens, and the chunk for
+`5887df83f64627133ae5abd6` reads *"the proposed CCS Sunrise Secure Landfill Project **(proposed
+Project)** and the section 10 Order"* against a label that dropped the parenthetical. The instrument
+is right and the guard's premise was wrong: **the ladder tests contiguity, while search tests token
+co-occurrence within a chunk.** Under the ` AND ` join a document ranks when one chunk holds all the
+terms in any order — contiguity was never required. `absent` in this report means "not contiguous",
+and `coverage` is what says whether the words are there at all.
+
+##### So where do the misses go? Not coverage, not ranking — the fuzzy term (2026-08-04)
+
+Follow-ups, same session:
+
+- **Re-scored at `--top 50`.** Of the 25 misses whose phrase is verbatim in a chunk, only 4 appear at
+  rank 11–50. **21 are not in the top 50 at all**, and two return `matchingChunks: 0` — a query whose
+  exact phrase is in Cosmos matching *nothing corpus-wide*. That is not a ranking problem.
+- **Index coverage is ruled out, properly this time.** `searchChunks({matchAll: true})` — the
+  `matchAll` path already existed and no caller used it — reports **1,128,736 rows in `demi-chunks`**
+  against ~1.13M chunks in Cosmos. The `PT5M` indexer kept up. The open "re-read it to confirm" in
+  `TODO.md` is now closed. Spot-checked per document too: both sampled miss documents have 2 chunks
+  in Cosmos and 2 indexed.
+
+That leaves the query analyzer, and `buildQuery` has a mechanism sitting in plain sight. It emits
+`(term OR term~1)`, and — as `ai-search.js:170-176` already says — **a fuzzy term bypasses the query
+analyzer**. So `~1` demands a literal against an index side that is lemmatised and stopword-stripped
+under `en.microsoft`. A phrase like *"Sediments **from** the proposed Lodgepole mine **will** move"*
+carries several stopwords; each contributes a clause that can match nothing, and under the ` AND `
+join one such clause zeroes the entire query. That is exactly the `matchingChunks: 0` signature.
+
+**Tested by re-scoring with `--no-fuzzy`, paired on the same labels:**
+
+| stratum | n | fuzzy r@1 / r@10 / MRR | **no-fuzzy** r@1 / r@10 / MRR | miss→hit | hit→miss |
+|---|---|---|---|---|---|
+| `A-text` | 15 | 0.267 / 0.533 / 0.331 | 0.200 / **0.667** / 0.361 | 2 | 0 |
+| `retrieval-labels-text` | 25 | 0.360 / 0.600 / 0.480 | **0.440** / **0.640** / 0.527 | 1 | 0 |
+| `B-ocr-legacy` | 15 | 0.200 / 0.533 / 0.258 | 0.200 / 0.533 / 0.293 | 0 | 0 |
+| `C-ocr-pdfium` | 14 | 0.143 / 0.500 / 0.233 | 0.143 / **0.643** / 0.277 | 3 | 1 |
+| `D-ocr-tiled` | 2 | 0.500 / 0.500 / 0.500 | 0.500 / 0.500 / 0.500 | 0 | 0 |
+
+**Pooled recall@10 0.549 → 0.620 (+0.070, ~1.2 SE), on 6 miss→hit against 1 hit→miss.** Unlike the
+OR-join arm, **MRR improved in every stratum** and no stratum got worse — recall and ranking moved
+together, which is what a real fix looks like rather than a candidate-set dilution.
+
+**Not yet significant, and not yet shipped.** 6/1 discordant is McNemar p ≈ 0.125. The mechanism is
+sound and the direction is consistent across five strata, but "consistent" is not "confirmed", and
+turning fuzzy off wholesale would cost the typo tolerance it was added for. The honest next step is
+to fix the *interaction* rather than the feature: drop the `~1` variant for terms the `en.microsoft`
+analyzer would remove or fold, so fuzzy survives where it helps and stops manufacturing unsatisfiable
+conjuncts where it does not.
+
 ##### Chunk overlap is not applied on the common path — measured 2026-08-04
 
 `chunker.js` documents itself as "paragraph/section-aware with overlap" and `OVERLAP_SIZE=200` is
