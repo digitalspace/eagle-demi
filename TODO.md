@@ -272,8 +272,15 @@ Left behind there, non-blocking and not ours to land: four now-unread `Document`
   The rationale survives in `MIGRATION.md`; the code implementing it exists only on the host and in
   scratch copies that already differ in length. Committing it under `extraction-host/` with host,
   env and keys excluded costs one commit, changes no deployment, and makes its ~45 self-checks
-  CI-runnable. **Also check `gpu-extractor.env` permissions** — a live `DEMI_ADMIN_KEY` was reported
-  sitting in a world-readable scratch path; if confirmed, rotate rather than just move it.
+  CI-runnable. **`gpu-extractor.env` permissions — CHECKED 2026-08-04, the exposure does not
+  reproduce and no rotation is needed.** The file is `600 root:root` inside a `700 /root`, as is its
+  `.bak`. Grepping the literal 48-char value across `/tmp`, `/var/tmp`, `/var/log`, `/home`, `/srv`,
+  `/opt` and `/root` returns those two files and nothing else; it is absent from `.bash_history` and
+  `.python_history`. Every consumer reads `os.environ["DEMI_ADMIN_KEY"]` — `worker.py:80`, the ten
+  `scratch/*.py` probes, `ingest.py` — and the one world-readable file that names it,
+  `/tmp/trap_probe2.py`, does `os.environ.setdefault("DEMI_ADMIN_KEY", "test")`. The `644` on the
+  scratch scripts is real but harmless: they hold no value, and `/root` is not traversable. Do not
+  re-check this.
 - **No RU observability on a serverless account.** `query()` returns `requestCharge` and **no caller
   in `src/` reads it**, against ~1.13M chunks with indexers pulling every 5 minutes. One log line on
   the ingest path establishes a baseline. Related: `bulkVerified` explicitly ignores
@@ -326,11 +333,15 @@ Left behind there, non-blocking and not ours to land: four now-unread `Document`
     the repoint that once served `[]` with HTTP 200.
   - **`STORAGE_BACKEND` not set.** `src/config.js:69` default to `minio`, which is right for dev, so
     nothing broken — but the "never a side effect" rule is being carried by a default.
-- **`azure-deploy-dev.yaml` would deploy `main.bicep`** on any push to `main` touching `azure/**`,
-  and redeploy the API in the same run. `main.bicep` never instantiate `cosmos-nosql.bicep`,
-  `ai-search.bicep`, `identity.bicep`, `document-storage.bicep` or `frontend-web-app.bicep`, and
-  there is no VNet in the RG — so it does not describe dev. Inert only because CI cannot auth.
-  **Fix the template before fixing the credential.**
+- ~~**`azure-deploy-dev.yaml` would deploy `main.bicep`** on any push to `main` touching
+  `azure/**`.~~ — **defused 2026-08-04.** The `deploy-infra` job is now `validate-infra`: it runs
+  `az bicep build` and nothing else. The `az group create`, `arm-deploy` and Azure login steps are
+  gone, so the job cannot deploy even once a credential exists — it is validation-only by
+  construction, not by lack of auth. Both app-deploy jobs still gate on it, so a broken template
+  still blocks a release. `main.bicep` **still does not describe dev** (never instantiates
+  `cosmos-nosql.bicep`, `ai-search.bicep`, `identity.bicep`, `document-storage.bicep` or
+  `frontend-web-app.bicep`; no VNet in the RG) — rewriting it is still open, it just is no longer a
+  loaded gun pointed at the CI credential. Infrastructure changes go through `az` by hand meanwhile.
 
 ---
 

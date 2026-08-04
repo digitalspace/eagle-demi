@@ -2,9 +2,18 @@
 # Build and Deploy DEMI to Azure Dev
 # =============================================================================
 # Triggered on push to main branch (when azure or application files change) or
-# workflow_dispatch. Provisions Bicep IaC with DEMI tags, deploys Angular frontend
-# to Azure Web App (demi-frontend-dev), and deploys Node.js Express API to Azure
+# workflow_dispatch. Validates the Bicep template, deploys the Angular frontend to
+# Azure Web App (demi-frontend-dev), and deploys the Node.js Express API to Azure
 # Web App (demi-api-dev).
+#
+# This workflow does NOT deploy infrastructure, and must not be changed back.
+# `azure/main.bicep` does not describe dev: it never instantiates cosmos-nosql,
+# ai-search, identity, document-storage or frontend-web-app, and there is no VNet
+# in the resource group. Deploying it would not converge dev, it would damage it.
+# The only reason that was ever harmless is that CI cannot authenticate
+# (AZURE_CLIENT_ID is missing) — so the hazard would arrive the moment somebody
+# fixed the credential. Infrastructure changes go through `az` by hand until the
+# template is rewritten to match reality. See TODO.md.
 # =============================================================================
 
 name: Deploy DEMI to Azure Dev
@@ -37,53 +46,30 @@ env:
   LOCATION: 'canadacentral'
 
 jobs:
-  deploy-infra:
-    name: Provision Infrastructure (Bicep)
+  validate-infra:
+    name: Validate Infrastructure Template (Bicep)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-
+      # No Azure login: `az bicep build` compiles locally. That is deliberate — it
+      # keeps this gate working while CI has no credential, and it makes deploying
+      # from here impossible rather than merely unauthenticated.
       - name: Validate Bicep Template
         run: |
           az bicep build --file ./azure/main.bicep
 
-      - name: Create Resource Group if not exists
-        uses: azure/cli@v2
-        with:
-          inlineScript: |
-            az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.LOCATION }} --tags Project=DEMI Application=eagle-demi Environment=dev CostCenter=c4b0a8 ManagedBy=Bicep
-
-      - name: Deploy Bicep IaC
-        uses: azure/arm-deploy@v1
-        with:
-          scope: resourcegroup
-          resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
-          template: ./azure/main.bicep
-          parameters: ./azure/main.bicepparam minioAccessKey="${{ secrets.MINIO_ACCESS_KEY }}" minioSecretKey="${{ secrets.MINIO_SECRET_KEY }}"
-
-      - name: Report Infrastructure Failure to Job Summary
+      - name: Report Validation Failure to Job Summary
         if: failure()
-        uses: azure/cli@v2
-        with:
-          inlineScript: |
-            echo "### ❌ Infrastructure Deployment Failed" >> $GITHUB_STEP_SUMMARY
-            echo "#### Azure Deployment Error Diagnostics:" >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
-            az deployment group list -g ${{ env.AZURE_RESOURCE_GROUP }} --query "[0].properties.error" -o json >> $GITHUB_STEP_SUMMARY 2>&1 || echo "No deployment error details found." >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        run: |
+          echo "### ❌ Bicep template failed to compile" >> $GITHUB_STEP_SUMMARY
+          echo "Fix \`azure/main.bicep\` — the app deploy jobs are gated on this." >> $GITHUB_STEP_SUMMARY
 
 
   deploy-frontend:
     name: Build & Deploy Frontend (Azure Web App)
-    needs: deploy-infra
+    needs: validate-infra
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -128,7 +114,7 @@ jobs:
 
   deploy-api:
     name: Build & Deploy API (Azure Function App)
-    needs: deploy-infra
+    needs: validate-infra
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
