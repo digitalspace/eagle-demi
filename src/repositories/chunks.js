@@ -114,7 +114,7 @@ function assertAcl(chunkItems) {
  */
 async function upsertBatch(access, documentId, chunkItems) {
   assertAcl(chunkItems);
-  if (chunkItems.length === 0) return { succeeded: 0, failed: 0, statusCounts: {} };
+  if (chunkItems.length === 0) return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0 };
 
   const pk = String(documentId);
   return cosmos.bulkVerified(CONTAINER, chunkItems.map(resourceBody => ({
@@ -138,7 +138,7 @@ async function deleteSurplus(access, documentId, keepIds) {
     .filter(id => !keep.has(String(id)))
     .map(id => ({ operationType: 'Delete', partitionKey: pk, id: String(id) }));
 
-  if (operations.length === 0) return { succeeded: 0, failed: 0, statusCounts: {} };
+  if (operations.length === 0) return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0 };
   return cosmos.bulkVerified(CONTAINER, operations);
 }
 
@@ -163,7 +163,7 @@ async function replaceForDocument(access, documentId, chunkItems) {
   }
 
   // Same shape as bulkVerified's return — `failed` is a COUNT, so callers can test it uniformly.
-  if (operations.length === 0) return { succeeded: 0, failed: 0, statusCounts: {} };
+  if (operations.length === 0) return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0 };
 
   // bulkVerified, never bulk: bulk does not throw on partial failure, and counting what was SENT
   // is the bug that reported 60,578 documents written when 56,317 existed.

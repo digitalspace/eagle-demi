@@ -61,8 +61,37 @@ page 1 forever — a count taken that way read 21,000 when the answer was 1,511.
 **Phase 8 deployed + verified live 2026-08-01.** Mongo-API layer gone from app. Clean week run to
 **2026-08-08**; only Azure teardown left. Evidence in `MIGRATION.md` §B.
 
-**Cost.** AI Search Basic fixed ~$75-81/mo whether queried or idle. `demi-budget-dev` window open
-2026-08-01, so first real post-Typesense reading arrive then.
+**Cost — first post-Typesense reading taken 2026-08-04, and the budget will be exceeded.**
+`demi-budget-dev` is **100 CAD/month**; Cost Management reports **26.08 CAD** month-to-date over
+Aug 1–4 (the budget API's own `currentSpend` says 24.56 — same story, it lags). That is roughly
+**6.5 CAD/day, i.e. ~200 CAD/month, about 2× the budget.** Breakdown, MTD:
+
+| Service | MTD (CAD) | ~/month | Note |
+|---|---|---|---|
+| Azure Cognitive Search | 9.55 | ~74 | Basic, fixed whether queried or idle. Confirms the ~$75-81 estimate |
+| **Microsoft Defender for Cloud** | **6.29** | **~48** | **Was not recorded anywhere. Second-largest line** |
+| Azure Cosmos DB | 4.67 | ~36 | Serverless RU + storage on ~1.13M chunks |
+| Virtual Network | 3.80 | ~29 | **Three** private endpoints, not one |
+| Azure App Service | 1.70 | ~13 | B1 Basic |
+| Storage | 0.07 | ~0.5 | |
+
+Two corrections to what this file used to say:
+
+- **Defender for Cloud is ~24% of the bill and nobody had counted it.** 14 plans sit on `Standard`
+  (`VirtualMachines`, `SqlServers`, `AppServices`, `StorageAccounts`, `SqlServerVirtualMachines`,
+  `KeyVaults`, `Arm`, `OpenSourceRelationalDatabases`, `CosmosDbs`, `Containers`, `CloudPosture`,
+  `AI`, `Discovery`, `FoundationalCspm`) on a dev subscription holding one App Service, one Cosmos
+  account and one storage account. **Do not turn these off.** This is a BC Gov landing zone and
+  Defender tiers are almost certainly set by platform/security policy, not by this team — ask before
+  touching, and treat it as a question for the platform team rather than a saving to take.
+- **"The private endpoint is the only flat recurring charge (~$7/mo)" is wrong.** `c4b0a8-dev-rg`
+  holds **three**: `demi-mongo-pe` (MongoDB), `pe-cosmos-nosql-dev` (Sql) and `pe-demi-search-dev`
+  (searchService). The ~29 CAD/mo is split across all three, so the Phase 8 teardown removes roughly
+  a third of it — around 10 CAD/mo, not the whole line. The other two are load-bearing.
+
+Read it with `az rest --method post .../Microsoft.CostManagement/query?api-version=2023-03-01`
+grouping on `ServiceName`. **`az consumption usage list` does not work here** — it returns
+`pretaxCost` as the literal string `"None"` on this subscription.
 
 ---
 
