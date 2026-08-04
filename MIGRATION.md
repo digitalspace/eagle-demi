@@ -760,12 +760,70 @@ join one such clause zeroes the entire query. That is exactly the `matchingChunk
 OR-join arm, **MRR improved in every stratum** and no stratum got worse — recall and ranking moved
 together, which is what a real fix looks like rather than a candidate-set dilution.
 
-**Not yet significant, and not yet shipped.** 6/1 discordant is McNemar p ≈ 0.125. The mechanism is
-sound and the direction is consistent across five strata, but "consistent" is not "confirmed", and
-turning fuzzy off wholesale would cost the typo tolerance it was added for. The honest next step is
-to fix the *interaction* rather than the feature: drop the `~1` variant for terms the `en.microsoft`
-analyzer would remove or fold, so fuzzy survives where it helps and stops manufacturing unsatisfiable
-conjuncts where it does not.
+**Not shipped as a blanket change** — turning fuzzy off wholesale would cost the typo tolerance it
+was added for. The fix below targets the interaction instead.
+
+##### The fix: no unanalyzed variant on a term the analyzer removes (2026-08-04)
+
+**Confirmed on one document, which is what turned this from a story into a cause.** Label
+*"Sediments from the proposed Lodgepole mine will move downstream and accumulate"*, document
+`5887d059ff41b812b1cfce46`, one chunk, holding that sentence **verbatim** and **indexed** (Cosmos 1
+chunk, index 1 row; individual words from the chunk match under a `documentId` filter). Querying the
+full phrase restricted to that document:
+
+| | count |
+|---|---|
+| `fuzzy: true` (production) | **0** |
+| `fuzzy: false` | **1** |
+
+**Mechanism, stated precisely.** `en.microsoft` removes some words at query time — measured by
+single-term search with fuzzy off, which returns 0 for `from`, `mine`, `that`, `with`, `those` and
+the reflexive pronouns. For such a term the analyzed side of `(term OR term~1)` contributes nothing,
+so **the unanalyzed `~1` side becomes the only thing the clause can match** — and it matches by edit
+distance against whatever unrelated tokens happen to sit within distance 1. The clause is then a
+near-random *mandatory* filter: `from` matches 81,731 chunks corpus-wide but **0** inside the target
+document, so the conjunction discards the one right answer. Without fuzzy the term analyzes away and
+is dropped harmlessly, which is why `--no-fuzzy` found it.
+
+Two things that look like the cause and are not, both measured and both worth not re-testing:
+
+- **Short stopwords are innocent.** `the`, `of`, `and`, `d` return 0 as single-term queries, which
+  looks damning, but adding them to a real query changes its hit count by nothing (9132 → 9132,
+  126 → 126). They are under `MIN_FUZZY_LENGTH`, so they never get a variant, and the analyzer drops
+  them. A single-term probe cannot tell "analyzer removed it" from "matches nothing" — that
+  conflation sent this investigation down a wrong path for an hour.
+- **Index coverage, again.** All three zero-match documents have every Cosmos chunk present in the
+  index.
+
+**The list is measured, not guessed** (`ANALYZER_STOPWORDS`, `ai-search.js`): 20 terms of
+≥ `MIN_FUZZY_LENGTH`. Sweeping all **360** distinct ≥4-char terms in the label corpus found exactly
+6 analyzer-removed words, 5 already listed; the sixth was `monirose`, OCR garbage that returns 0
+because it is genuinely absent, **not** because it is a stopword — and a rare misspelling is exactly
+the case fuzzy exists to rescue, so it must stay out of the list. Regenerate with
+`searchChunks({keywords: word, fuzzy: false})`; the Analyze API is a 403 for the app identity.
+
+**Result, paired, both arms in one session:**
+
+| stratum | n | before r@10 / MRR | after r@10 / MRR |
+|---|---|---|---|
+| `A-text` | 15 | 0.533 / 0.331 | **0.600** / 0.364 |
+| `C-ocr-pdfium` | 14 | 0.500 / 0.233 | **0.643** / 0.340 |
+| `B-ocr-legacy` | 15 | 0.533 / 0.258 | 0.533 / 0.258 |
+| `D-ocr-tiled` | 2 | 0.500 / 0.500 | 0.500 / 0.500 |
+| `retrieval-labels-text` | 25 | 0.600 / 0.480 | 0.600 / 0.480 |
+| **control — textless** | 3 | **0** | **0** |
+
+**Pooled recall@10 0.549 → 0.592, on 3 miss→hit and 0 hit→miss.** No stratum regressed and the
+control held. The three recovered documents come back at ranks **2, 1, 2** — near the top, which is
+what removing a blocking clause should look like when the chunk holds the phrase verbatim, and each
+of the three contains a listed stopword.
+
+**Honest limits.** n=71 with 3 discordant pairs is McNemar p = 0.25; the case rests on the
+single-document proof and on the change being non-harmful by construction (it only ever deletes an
+unsatisfiable clause), not on the aggregate. Blanket `--no-fuzzy` still scores 2 labels higher
+(44 vs 42) — that residue is **not** more stopwords, since the vocabulary sweep came back clean. It
+is fuzzy diluting BM25 on ordinary terms, a ranking effect rather than a zeroing one, and worth its
+own experiment before anyone trades away typo tolerance for it.
 
 ##### Chunk overlap is not applied on the common path — measured 2026-08-04
 

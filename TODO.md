@@ -32,11 +32,13 @@ the genuinely unextractable. **166 documents extract to nothing** — accepted a
 extraction-side.** The chunk-presence probe reads each labelled document's chunks out of Cosmos:
 **25 of 32 misses (78%) have the phrase sitting verbatim in a stored chunk**, 16 of 17 on the `text`
 strata. Word-joining is **3 of 32 misses (9%)**, all OCR. Seam-straddling is **0 of 74**. Five
-candidates are now dead — label length, page furniture, index coverage, the strict ` AND ` join, and
-extraction damage as the main term. The live lead is the **fuzzy `~1` variant**, which bypasses the
-query analyzer and so demands literals from a lemmatised, stopword-stripped index; under ` AND ` one
-such clause zeroes the query. `--no-fuzzy` lifts pooled recall@10 **0.549 → 0.620** with MRR up in
-every stratum — suggestive, not yet significant. §3 and `MIGRATION.md` §A.
+candidates are dead — label length, page furniture, index coverage, the strict ` AND ` join, and
+extraction damage as the main term. **One cause found and fixed 2026-08-04:** on terms
+`en.microsoft` removes (`from`, `mine`, `that`, `with`, `those`, reflexive pronouns) the unanalyzed
+`~1` variant is the only matchable half of its clause, so it acts as a near-random *mandatory*
+filter. Proved on a document whose chunk holds the phrase verbatim and is indexed: **0 hits with
+fuzzy on, 1 with it off**. Pooled recall@10 **0.549 → 0.592**, 3 miss→hit, 0 hit→miss, control still
+0. §3 and `MIGRATION.md` §A.
 
 **`indexProgress` in `/db/stats` and `/admin/index-progress` is COSMOS index-build percent, not
 Azure AI Search.** `src/controllers/db.js:22-37` calls `cosmosNoSql.indexProgress`. `chunks: 100`
@@ -158,18 +160,24 @@ is left is search-side and free to test. In this order:
       *retrieval*, where 78% of misses have the phrase intact. RapidOCR tuning, index-time
       decompounding and a different OCR engine are all still available and all still expensive —
       revisit only after the search-side lead below is closed, and expect a ceiling of about 9 points.
-- [ ] **NEXT — the fuzzy `~1` variant manufactures unsatisfiable conjuncts. Cheap, and it is the
-      live lead.** `buildQuery` emits `(term OR term~1)` and a fuzzy term **bypasses the query
-      analyzer** (the code comment at `ai-search.js:170-176` already says so), so `~1` demands a
-      literal from an index side that `en.microsoft` has lemmatised and stopword-stripped. Under
-      ` AND `, one unsatisfiable clause zeroes the whole query — which is exactly the
-      `matchingChunks: 0` seen on labels whose phrase is verbatim in Cosmos. Measured: `--no-fuzzy`
-      lifts pooled recall@10 **0.549 → 0.620** (+0.070, ~1.2 SE) on **6 miss→hit vs 1 hit→miss**,
-      with **MRR up in every stratum and none worse** — recall and ranking moving together, unlike
-      the OR arm. McNemar p ≈ 0.125, so suggestive, not confirmed. **Do not just turn fuzzy off**:
-      that discards the typo tolerance it exists for. Fix the interaction — skip the `~1` variant for
-      terms the analyzer would remove or fold, keep it for the rest — then re-score paired. Numbers
-      and mechanism in `MIGRATION.md` §A.
+- [x] **The fuzzy `~1` variant on analyzer-removed terms — FOUND, FIXED and re-scored 2026-08-04.**
+      `en.microsoft` removes `from`, `mine`, `that`, `with`, `those` and the reflexive pronouns at
+      query time. For those, the analyzed side of `(term OR term~1)` contributes nothing, so the
+      **unanalyzed `~1` side becomes the only thing the clause can match** — by edit distance,
+      against unrelated tokens — turning it into a near-random *mandatory* filter that discards the
+      right answer. Proved on one document: a chunk holding
+      *"Sediments from the proposed Lodgepole mine will move downstream and accumulate"* verbatim and
+      indexed returned **0 with fuzzy on and 1 with fuzzy off**. Fix: `ANALYZER_STOPWORDS` in
+      `ai-search.js` — no `~1` (and no `*`) on those terms, the plain term stays and analyzes away
+      harmlessly. **Pooled recall@10 0.549 → 0.592, 3 miss→hit and 0 hit→miss, recovered at ranks
+      2/1/2, no stratum worse, control still 0.** The 20-term list is measured, not guessed, and a
+      sweep of all 360 distinct ≥4-char terms in the label corpus found no others. Full account,
+      including the two false leads it cost, in `MIGRATION.md` §A.
+- [ ] **Residue: blanket `--no-fuzzy` still scores 2 labels higher (44 vs 42).** Not more stopwords —
+      the vocabulary sweep came back clean. It is fuzzy diluting BM25 on ordinary terms, i.e. a
+      ranking effect rather than a zeroing one. Worth one experiment before anyone trades typo
+      tolerance away for it: score with `~1` kept but down-weighted (`term~1^0.5`) so the fuzzy arm
+      stops competing with the exact arm on score.
 - [x] **`text`-stratum misses — ANSWERED 2026-08-04: the text is there, the search does not return
       it.** 16 of 17 `text`-stratum misses have the phrase verbatim in a stored chunk, and
       `retrieval-labels-text` classified **25 of 25 `exact`**. Six hypotheses tested; the surviving
