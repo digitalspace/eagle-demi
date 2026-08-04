@@ -1,0 +1,22 @@
+{
+  "name": "demi-documents-indexer",
+  "description": null,
+  "dataSourceName": "demi-documents-ds",
+  "skillsetName": null,
+  "targetIndexName": "demi-documents",
+  "disabled": null,
+  "schedule": {
+    "interval": "PT5M",
+    "startTime": "2026-07-31T22:11:15.01Z"
+  },
+  "parameters": {
+    "batchSize": null,
+    "maxFailedItems": 0,
+    "maxFailedItemsPerBatch": 0,
+    "base64EncodeKeys": null,
+    "configuration": {}
+  },
+  "fieldMappings": [],
+  "outputFieldMappings": [],
+  "encryptionKey": null
+}

@@ -1,0 +1,36 @@
+{
+  "name": "demi-chunks-indexer",
+  "description": null,
+  "dataSourceName": "demi-chunks-ds",
+  "skillsetName": null,
+  "targetIndexName": "demi-chunks",
+  "disabled": null,
+  "schedule": {
+    "interval": "PT5M",
+    "startTime": "2026-07-31T20:45:56.768Z"
+  },
+  "parameters": {
+    "batchSize": null,
+    "maxFailedItems": 0,
+    "maxFailedItemsPerBatch": 0,
+    "base64EncodeKeys": null,
+    "configuration": {}
+  },
+  "fieldMappings": [
+    {
+      "sourceFieldName": "id",
+      "targetFieldName": "id",
+      "mappingFunction": {
+        "name": "base64Encode",
+        "parameters": null
+      }
+    },
+    {
+      "sourceFieldName": "id",
+      "targetFieldName": "chunkId",
+      "mappingFunction": null
+    }
+  ],
+  "outputFieldMappings": [],
+  "encryptionKey": null
+}

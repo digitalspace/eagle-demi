@@ -1,0 +1,22 @@
+{
+  "name": "demi-projects-indexer",
+  "description": null,
+  "dataSourceName": "demi-projects-ds",
+  "skillsetName": null,
+  "targetIndexName": "demi-projects",
+  "disabled": null,
+  "schedule": {
+    "interval": "PT5M",
+    "startTime": "2026-07-31T22:11:12.053Z"
+  },
+  "parameters": {
+    "batchSize": null,
+    "maxFailedItems": 0,
+    "maxFailedItemsPerBatch": 0,
+    "base64EncodeKeys": null,
+    "configuration": {}
+  },
+  "fieldMappings": [],
+  "outputFieldMappings": [],
+  "encryptionKey": null
+}
