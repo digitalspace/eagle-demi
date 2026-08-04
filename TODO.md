@@ -223,11 +223,17 @@ is left is search-side and free to test. In this order:
       2/1/2, no stratum worse, control still 0.** The 20-term list is measured, not guessed, and a
       sweep of all 360 distinct ≥4-char terms in the label corpus found no others. Full account,
       including the two false leads it cost, in `MIGRATION.md` §A.
-- [ ] **Residue: blanket `--no-fuzzy` still scores 2 labels higher (44 vs 42).** Not more stopwords —
-      the vocabulary sweep came back clean. It is fuzzy diluting BM25 on ordinary terms, i.e. a
-      ranking effect rather than a zeroing one. Worth one experiment before anyone trades typo
-      tolerance away for it: score with `~1` kept but down-weighted (`term~1^0.5`) so the fuzzy arm
-      stops competing with the exact arm on score.
+- [x] **Residue: blanket `--no-fuzzy` scored 2 labels higher (44 vs 42) — CLOSED 2026-08-04, and the
+      down-weight SHIPPED.** The diagnosis held: it was fuzzy diluting BM25 on ordinary terms, a
+      ranking effect. Keeping `~1` but scoring it at `^0.5` recovers the residue **without** trading
+      away typo tolerance — it lands on the same 44 labels. Paired run, 71 labels plus control:
+      **pooled recall@10 0.592 → 0.620, recall@1 0.282 → 0.310, MRR 0.382 → 0.403, 2 miss→hit,
+      0 hit→miss, no stratum regressed, control 0 in both arms.** All three metrics move together,
+      which is the pre-stated ship condition `anyTerms` failed. **But 2 discordant pairs is not
+      significant** — one SE ≈ 0.059 and the move is half that, so treat 0.620 as the same number as
+      0.592 until the label debt below is paid. Shipped as the constant `FUZZY_BOOST` in
+      `ai-search.js`; the `--fuzzy-boost` experiment plumbing was removed in the same PR. Full
+      account, including the eight ranks that moved, in `MIGRATION.md` §A.
 - [x] **`text`-stratum misses — ANSWERED 2026-08-04: the text is there, the search does not return
       it.** 16 of 17 `text`-stratum misses have the phrase verbatim in a stored chunk, and
       `retrieval-labels-text` classified **25 of 25 `exact`**. Six hypotheses tested; the surviving
@@ -235,24 +241,34 @@ is left is search-side and free to test. In this order:
       `content` is `retrievable: false`, so it can **not** be read with a data-plane query either —
       the search service returns highlight fragments only, and Cosmos is the sole source of chunk
       text. `src/scripts/probe-phrase-presence.js` is the instrument.
-- [ ] **Chunk overlap never fires on the common path — measured 2026-08-04.** `emit()` calls
+- [x] **Chunk overlap never fired on the common path — FIXED 2026-08-04.** `emit()` called
       `splitText()`, which returns any block under `MAX_CHUNK_SIZE` (4000) unchanged, and blocks are
-      emitted at `TARGET_CHUNK_SIZE` (2500). Measured on real `chunkMarkdown` output: **0 of 4
-      consecutive pairs overlap**; the oversized-single-block branch overlaps 2 of 2. Consecutive
-      chunks are strictly disjoint, so a seam-straddling phrase satisfies no conjunctive query.
-      Fix in `emit()`, not `splitText()`. `test/chunker.test.js`'s "…split, with overlap" never
-      asserts overlap — that is why it survived. **Its retrieval cost is now MEASURED at zero:
-      0 of 74 labels were present only across a seam** (`straddle-*`, chunk-presence probe
-      2026-08-04). The old "~3–4% of phrases" was an estimate and it was high. Still a real chunker
-      defect worth fixing on its own terms — but it buys no recall, so it rides the `pageNumber`
-      re-ingest rather than justifying one.
-- [ ] **`pageNumber` is fabricated, and the text path already holds the real value.** 34,153
-      documents (56% of the corpus) go through `extract_text`, which iterates pages and discards the
-      index. No page citations are possible today, for search results or for any summariser built on
-      these chunks. Host emits `[{page, markdown}]` on the text path; OCR path keeps sequence
-      numbers. **Land this and the overlap fix in ONE re-ingest** — chunk ids derive from the split,
-      so each change orphans the previous chunks. Re-ingest needs no GPU if `sent/*.md` is still
-      retained corpus-wide; verify that first.
+      emitted at `TARGET_CHUNK_SIZE` (2500), so consecutive chunks were strictly disjoint (measured:
+      **0 of 4 consecutive pairs overlapped**; the oversized-single-block branch overlapped 2 of 2,
+      which is why it looked fine). Fixed in `emit()`: the previous chunk's tail is prepended to the
+      next block, joined with `\n\n` because that is how the blocks sat in the source. The
+      `MIN_CHUNK_SIZE` floor measures the block's OWN text, or overlap would rescue every sliver.
+      **Its retrieval cost was MEASURED at zero — 0 of 74 labels were present only across a seam**
+      (the old "~3–4% of phrases" was an estimate, and it was high), so this buys no recall and was
+      done purely so the code does what it claims. **The deployed corpus is unchanged**: future
+      writes only, and no re-ingest is planned. The old test asserted only `length > 1` and the size
+      ceiling, which is why the bug survived; the new cross-block test was run against the old
+      chunker and fails there.
+- [ ] **`pageNumber` is fabricated, and it is a CITATION feature nobody is using. Do not build it
+      yet.** Correcting this entry, which previously claimed the text path already held the real
+      value — **it does not, on either path.** `extraction-host/worker.py:471` `extract_text` builds
+      a per-page list and then returns `"\n\n".join(p.strip() for p in pages if p.strip())`,
+      discarding the index **and dropping blank pages**, so it cannot be recovered by counting
+      separators; the OCR path joins 25-page batches (`OCR_BATCH_PAGES`), one
+      `export_to_markdown()` per batch, not per page. The ingest payload carries paragraphs, and
+      `createChunkAccumulator` invents the number. So this needs host + wire-protocol + API changes
+      **and** re-extraction — **not** a re-chunk, and it does not ride anything.
+      Its value is jumping to the source, and nothing jumps: no PDF viewer and no `#page=` anchor
+      anywhere in the frontend, which renders it honestly as `Passage {{ pageNumber }}`. **If
+      citations are ever wanted**, the cheap slice is the text path — 56% of the corpus, pypdfium2,
+      no GPU — but it still needs source PDFs (~1,496 already 404 in the dev object store), and
+      whether a browser honours `#page=N` on a presigned URL depends on the object being served
+      inline rather than as an attachment, which is unverified.
 - [ ] **`src/scripts/retrieval-labels-ocr.jsonl` — 25 CANDIDATES, not labels.** Seeded from document
       titles, which are metadata and not verified to be on the page; 12 marked STARVED. Scoring them
       as-is measures the title, not the extraction. Open each scan, confirm the words appear, edit or
@@ -299,7 +315,17 @@ Left behind there, non-blocking and not ours to land: four now-unread `Document`
 
 ## Backlog
 
-- ~~**The extraction host's code is unversioned.**~~ — **done 2026-08-04.** `worker.py` (1,193
+- **`demi-api-dev` is running 2026-08-01 code — NONE of the search fixes are live.** Found
+  2026-08-04 while running the scoring experiment inside the container: `src/search/ai-search.js`
+  there has **no `ANALYZER_STOPWORDS`**, so the deployed app still emits the unanalyzed `~1` variant
+  on analyzer-removed terms — the near-random mandatory filter that PR #1 fixed. The label files are
+  absent too. So the corpus improvements measured since then (**recall@10 0.549 → 0.592 → 0.620**)
+  exist in `main` and **not** in the environment anyone would look at.
+  Nothing is broken by this and nobody uses DEMI, so it is not urgent — but any future measurement
+  taken through the *app* rather than through a script will disagree with `MIGRATION.md` §A, and
+  that is exactly the kind of contradiction that costs a day. Deploy, or record the app's version
+  next to any number taken from it. Note `config-zip` **merges**, so a deploy will not remove
+  anything the sweep already cleaned. `worker.py` (1,193
   lines), `ingest.py`, `test_poolfix.py`, `HANDOFF.md` and the three systemd units now live under
   `extraction-host/`, with a `.gitignore` excluding the env file, every `.bak`/`.pre-poolfix` scratch
   copy and ~44 GB of run state. Verified on the staged bytes: no literal key material, no private
