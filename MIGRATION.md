@@ -919,8 +919,20 @@ logged request header or a compromised extraction host was full admin. Split out
 
 ### B. Phase 8 — decommission the MongoDB-API account
 
-**Code done, deployed and verified live 2026-08-01. Azure resources still standing; clean week runs
-to 2026-08-08.**
+**Code done, deployed and verified live 2026-08-01. App settings and the private endpoint removed
+2026-08-04 — the rollback is burned. The account itself still stands.**
+
+**The clean week was ended early on purpose, and the reasoning is worth keeping.** A soak window
+measures latent regressions under real traffic; DEMI has none — dev-only, no users, active
+development. What replaced it was two measurements. First, the account was already idle: exactly one
+non-zero hour of `TotalRequests` in the 48 hours to 2026-08-04 (62 requests), and zero on the day
+itself, before and after the change. Second, waiting was not buying recoverability — backup is
+**Periodic, 8-hour retention**, so after deletion there is a support-ticket restore for eight hours
+and then nothing. The window protected *reachability*, not the data, and reachability is worth
+little when nothing is reaching for it.
+
+**Generalise it:** a soak period is an instrument, and an instrument with no signal on its input
+measures nothing. Check whether traffic exists before spending days waiting on it.
 
 Live evidence, five probes, one output file each:
 

@@ -97,11 +97,40 @@ grouping on `ServiceName`. **`az consumption usage list` does not work here** �
 
 ## Open work
 
-### 1. Phase 8 Azure teardown — earliest 2026-08-08
+### 1. Phase 8 Azure teardown — steps 1 and 2 DONE 2026-08-04, account deletion still open
 
-Code and template both done. Only `az` mutations left, and none run before the clean week end.
-Rollback until then is `git revert` plus the app settings still on `demi-api-dev` — **the template
-edits did not touch either**, so rollback is intact.
+**The clean week to 2026-08-08 was ended early, deliberately.** Its purpose was to let a latent
+regression surface under real traffic before the rollback was burned — and there is no traffic:
+DEMI is dev-only, nobody uses it, and it is under active development. Seven idle days prove what
+three idle days already proved. Two measurements replaced the calendar:
+
+- **The account was already idle.** `TotalRequests` over the 48 hours to 2026-08-04 had exactly one
+  non-zero hour (62 requests, 2026-08-03 15:00). Aug 4 total, before and after the change: **0**.
+- **The wait was not buying recoverability anyway.** Backup is **Periodic with 8-hour retention**
+  (240-min interval, Geo). Once the account is deleted, a support-ticket restore is possible for
+  eight hours and then not at all. The calendar never protected the data — the un-deleted account
+  did.
+
+- [x] **Bicep, done 2026-08-01.** `cosmosDb` module + `mongodbConnectionString` wiring out of
+      `main.bicep`; `azure/modules/cosmos-db.bicep` deleted; `api-web-app.bicep` param and all four
+      settings it fed deleted; stale `azure/main.json` deleted.
+- [x] **App settings, done 2026-08-04. THE ROLLBACK IS NOW BURNED.** `MONGODB_URI` and
+      `MONGODB_DATABASE` removed from `demi-api-dev`, and the two documented drifts fixed in the
+      same restart rather than earning three: `COSMOS_NOSQL_DATABASE=demi` and
+      `STORAGE_BACKEND=minio` are now explicit instead of being carried by code defaults. Settings
+      count unchanged at 33 — exactly two out, exactly two in, nothing else touched. `stop`/`start`,
+      not `restart`. Verified after: `/projects` and `/documents` return 200 with the same `_etag`s
+      as before the change, and `/search` returns the same `count: 29392`.
+- [x] **`demi-mongo-pe` + its NIC deleted 2026-08-04.** The NIC goes with the endpoint; no orphan
+      left. `pe-cosmos-nosql-dev` and `pe-demi-search-dev` remain and are load-bearing. App verified
+      healthy after deletion. **Reversible**: recreate with `az network private-endpoint create`
+      against subnet `c4b0a8-dev-networking/.../c4b0a8-dev-vwan-spoke/subnets/c4b0a8-dev-cond-ext-pe-subnet`,
+      group `MongoDB`, connection name `demi-mongo-pe-conn`, `canadacentral`.
+- [ ] **Account `demi-mongo-dev-pcbd7cygyic52` — the one-way step, deliberately still open.** It is
+      now unreachable (no private endpoint) but intact. Delete when satisfied nothing lives only
+      there; remember the 8-hour restore window. Data-loss risk is low but not zero: Cosmos NoSQL is
+      the reconciled source of truth and the extraction host still holds 53,174 `sent/*.md`, so
+      chunks are re-derivable without a GPU.
 
 - [x] **Bicep, done 2026-08-01.** `cosmosDb` module + `mongodbConnectionString` wiring out of
       `main.bicep`; `azure/modules/cosmos-db.bicep` deleted; `api-web-app.bicep` param and all four
