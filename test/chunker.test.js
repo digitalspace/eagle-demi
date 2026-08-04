@@ -20,7 +20,9 @@ const para = (n, ch = 'a') => ch.repeat(n);
 
 const {
   maxChunkSize: MAX,
-  overlapSize: OVERLAP
+  overlapSize: OVERLAP,
+  targetChunkSize: TARGET,
+  minChunkSize: MIN
 } = require('../src/config');
 
 /** Do two chunks share a run of text? The question the old overlap test never asked. */
@@ -58,7 +60,10 @@ test('chunkMarkdown', async (t) => {
     assert.ok(chunks.length <= 4, `expected accumulation, got ${chunks.length} chunks`);
     assert.ok(chunks.length >= 2, 'and it should still split a 6000-char document');
     for (const c of chunks.slice(0, -1)) {
-      assert.ok(c.content.length >= 2000, 'non-final chunks should be near the target');
+      // Derived from TARGET rather than hard-coded at 2000, so this asserts the configured target
+      // actually reaches the chunker instead of asserting a number that happens to match it.
+      assert.ok(c.content.length >= TARGET * 0.8,
+        `non-final chunks should be near the target (${TARGET}), got ${c.content.length}`);
     }
   });
 
@@ -168,8 +173,8 @@ test('createChunkAccumulator', async (t) => {
     assert.ok(chunks.length > 0);
     assert.ok(chunks[chunks.length - 1].content.endsWith('tail'),
       'the tail must be appended to the last chunk');
-    assert.ok(chunks[chunks.length - 1].content.length > 100,
-      'and must not have become a chunk of its own');
+    assert.ok(chunks[chunks.length - 1].content.length > MIN,
+      `and must not have become a chunk of its own (MIN=${MIN})`);
   });
 
   await t.test('blank sections are skipped without consuming an index', () => {
@@ -180,4 +185,26 @@ test('createChunkAccumulator', async (t) => {
     assert.deepStrictEqual(feed([]), []);
     assert.deepStrictEqual(feed(['', '  ']), []);
   });
+});
+
+// The size constants are not free parameters once a corpus exists. Chunk ids are built from
+// `chunkIndex`, so re-chunking the same document at a different TARGET or MIN produces a different
+// number of chunks with different ids — the old rows are not overwritten, they are orphaned, and
+// they stay searchable because the AI Search indexer's `_ts` high-water mark never revisits a row
+// it has already seen.
+//
+// The behavioural tests above read these values from `src/config.js`, which proves the configured
+// number reaches the chunker but CANNOT notice the number changing — they move with it. This is the
+// canary that does not move. It exists to fail, loudly, the moment someone edits a default or sets
+// the env var, so that re-chunking the corpus is a decision rather than an accident.
+test('the chunk size defaults are pinned, because changing one orphans the corpus', () => {
+  const { maxChunkSize, targetChunkSize, minChunkSize, overlapSize } = require('../src/config');
+
+  assert.deepStrictEqual(
+    { maxChunkSize, targetChunkSize, minChunkSize, overlapSize },
+    { maxChunkSize: 4000, targetChunkSize: 2500, minChunkSize: 100, overlapSize: 200 },
+    'Chunk sizing changed. Every chunk already written was produced at the OLD sizes and will not ' +
+    'be replaced by a re-run — it will be duplicated and left searchable. If this change is ' +
+    'intended, purge and re-extract the corpus, then update these expected values in the same commit.'
+  );
 });

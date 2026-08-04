@@ -5,7 +5,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { bulkVerified } = require('../../src/db/cosmos-nosql');
+const { bulk, bulkVerified } = require('../../src/db/cosmos-nosql');
 
 // Cosmos rejects a whole bulk REQUEST — not individual operations — when serverless throughput
 // runs out, and the SDK surfaces that as a thrown error with no per-operation statuses. Measured
@@ -142,5 +142,78 @@ test('bulkVerified reports the RU actually billed', async (t) => {
     const res = await bulkVerified('chunks', ops(2), { ...fast, bulkFn: async (p) => ok(p) });
 
     assert.strictEqual(res.requestCharge, 0, 'a missing charge must not poison the sum');
+  });
+});
+
+// Cosmos rejects a bulk REQUEST carrying more than 100 operations. `bulk()` splits for that, and
+// the split only ever matters on a large partition — the seeder's 8,000-document projects — so a
+// regression here would surface in production and nowhere else.
+test('bulk splits requests at the 100-operation ceiling', async (t) => {
+  // Records what each request received. `bulk()` reads `container.items.bulk`, so the fake only
+  // has to satisfy that one path.
+  const spyContainer = (respond) => {
+    const sent = [];
+    const containerFn = () => ({ items: { bulk: async (chunk) => { sent.push(chunk); return respond(chunk, sent.length); } } });
+    return { sent, containerFn };
+  };
+
+  await t.test('250 operations go out as 100 / 100 / 50', async () => {
+    const { sent, containerFn } = spyContainer((chunk) => chunk.map(() => ({ statusCode: 200 })));
+
+    const res = await bulk('chunks', ops(250), { containerFn });
+
+    assert.deepStrictEqual(sent.map(c => c.length), [100, 100, 50]);
+    assert.strictEqual(res.length, 250, 'one result per input operation, not per request');
+  });
+
+  await t.test('an exact multiple of 100 does not emit a trailing empty request', async () => {
+    // `i += 100` over a length-200 array stops at 200, but an off-by-one here would send a third,
+    // empty request that Cosmos rejects outright.
+    const { sent, containerFn } = spyContainer((chunk) => chunk.map(() => ({ statusCode: 200 })));
+
+    await bulk('chunks', ops(200), { containerFn });
+
+    assert.deepStrictEqual(sent.map(c => c.length), [100, 100]);
+  });
+
+  await t.test('results come back in INPUT order, not request-completion order', async () => {
+    // The concatenation is what lets `bulkVerified` line result[i] up with operations[i]. If the
+    // order slipped, it would retry the wrong operations and report success for ones that failed.
+    const { containerFn } = spyContainer((chunk) => chunk.map(op => ({ statusCode: 200, id: op.id })));
+
+    const res = await bulk('chunks', ops(250), { containerFn });
+
+    assert.deepStrictEqual(res.map(r => r.id).slice(0, 3), ['c0', 'c1', 'c2']);
+    assert.strictEqual(res[249].id, 'c249', 'the last operation must land last');
+  });
+
+  await t.test('a throw mid-way discards the earlier results rather than returning a short array', async () => {
+    // The dangerous failure is a SILENT one: returning the first 100 results after the second
+    // request died would tell `bulkVerified` that 100 operations succeeded and the other 150 were
+    // never attempted — indistinguishable from a partition that only had 100 rows.
+    const { sent, containerFn } = spyContainer((chunk, n) => {
+      if (n === 2) throw Object.assign(new Error('Bulk request errored with: The request rate is too large.'), { code: 429 });
+      return chunk.map(() => ({ statusCode: 200 }));
+    });
+
+    await assert.rejects(
+      () => bulk('chunks', ops(250), { containerFn }),
+      /request rate is too large/,
+      'the throw must reach the caller, which is what makes bulkVerified retry the whole batch'
+    );
+    assert.strictEqual(sent.length, 2, 'and the third request must never be sent');
+  });
+
+  await t.test('no operations means no request at all', async () => {
+    const { sent, containerFn } = spyContainer((chunk) => chunk.map(() => ({ statusCode: 200 })));
+
+    assert.deepStrictEqual(await bulk('chunks', [], { containerFn }), []);
+    assert.strictEqual(sent.length, 0);
+  });
+
+  await t.test('without a container it returns [] rather than throwing', async () => {
+    // This is the no-Cosmos-client case the seam exists to work around, and it must stay harmless:
+    // the scripts import this module long before they connect.
+    assert.deepStrictEqual(await bulk('chunks', ops(5), { containerFn: () => null }), []);
   });
 });
