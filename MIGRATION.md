@@ -576,7 +576,7 @@ important half of the picture because word-joining does not explain it.
 headings, table captions, all-caps map annotations) rather than running prose. Measured 0.50 (n=10)
 against 0.62 (n=29) — well inside noise at those sizes. Recorded so nobody re-runs it.
 
-##### The query is a strict conjunction — the leading untested explanation (2026-08-04)
+##### The query is a strict conjunction — tested 2026-08-04, and it is NOT the cause
 
 `buildQuery` joins every term with **` AND `** (`src/search/ai-search.js:178-193`). Under
 `queryType: 'full'` that makes every term mandatory: a chunk is a candidate only if it contains
@@ -603,26 +603,82 @@ drawn from exactly those pages.
 **What is measured and what is not.** The tokenization above is measured. That the index side fails
 to match `5`/`1` against `5.1` is the untested step, and it needs the service to settle.
 
-**Why this is the leading candidate for the text-stratum misses.** It predicts a ~40% loss that is
-independent of extraction path, which is what the strata actually show; word-joining does not
-explain a stratum that barely joins; and both previously tested hypotheses (label length, page
-furniture) were properties of the *label*, while this is a property of the *query builder* and was
-never examined.
+**Why it was the leading candidate.** It predicted a ~40% loss independent of extraction path, which
+is what the strata show; word-joining does not explain a stratum that barely joins; and both
+previously tested hypotheses (label length, page furniture) were properties of the *label*, while
+this is a property of the *query builder* and had never been examined.
 
-**The discriminating experiment — no GPU, no re-extraction, no re-index.** Re-run
-`score-retrieval.js` over the same 47 labels changing only the join to ` OR `. Competing hypotheses
-predict different answers, which is the bar this repo holds probes to:
+**The discriminating experiment, and its answer.** The prediction table written before the run:
 
 | | OR-join lifts `ocr` | OR-join lifts `text` |
 |---|---|---|
 | word-joining dominates | yes, modestly | **no** |
 | the conjunction dominates | yes | **yes, sharply** |
 
-A **paired** before/after on the same labels is far more powerful than the between-strata comparison
-correctly declined at n≈15: the ±25-point interval applies to ranking two independent strata, not to
-a within-label change. **n=47 is adequate for this experiment while remaining inadequate for ranking
-strata.** Free companion analysis on data already collected: bucket the existing labels by "contains
-a token punctuation-splitting fragments" (decimals, units, hyphenated ids) and compare recall.
+Run 2026-08-04, both arms paired in one session against one index state, `--top 10`, fuzzy on,
+changing **only** the join (`anyTerms`, `src/search/ai-search.js:178-201`). The `text` row is the
+discriminating one, and it did not move:
+
+| stratum | n | AND r@1 / r@5 / r@10 / MRR | OR r@1 / r@5 / r@10 / MRR | miss→hit | hit→miss |
+|---|---|---|---|---|---|
+| `A-text` | 15 | 0.267 / 0.400 / **0.533** / 0.331 | 0.267 / 0.467 / **0.533** / 0.356 | 1 | 1 |
+| `retrieval-labels-text` (pypdf) | 25 | 0.360 / 0.600 / **0.600** / 0.480 | 0.280 / 0.600 / **0.640** / 0.433 | 1 | 0 |
+| `B-ocr-legacy` | 15 | 0.200 / 0.333 / **0.533** / 0.258 | 0.267 / 0.400 / **0.467** / 0.306 | 0 | 1 |
+| `C-ocr-pdfium` | 14 | 0.143 / 0.429 / **0.500** / 0.233 | 0.214 / 0.357 / **0.643** / 0.293 | 2 | 0 |
+| `D-ocr-tiled` | 2 | 0.500 / 0.500 / 0.500 / 0.500 | 0.500 / 0.500 / 0.500 / 0.500 | 0 | 0 |
+| **control — textless** | 3 | **0 / 0 / 0 / 0** | **0 / 0 / 0 / 0** | 0 | 0 |
+
+**Pooled, control excluded: n=71, recall@10 0.549 → 0.577. One SE ≈ 0.059.** The move is half a
+standard error. Discordant pairs — the only statistic a paired run at this n earns — are **4
+miss→hit against 2 hit→miss**, which is not a lopsided split and carries no significance.
+
+**The four guards, stated before the run:**
+
+1. **The AND arm reproduced the 2026-08-03 baseline exactly** — `A-text` 0.5333/0.3306,
+   `B-ocr-legacy` 0.5333/0.2580, `C-ocr-pdfium` 0.5000/0.2328, `D` 0.5, control 0. The index did not
+   move under the experiment, so the pairing is valid. The one difference is explained, not drift:
+   the pypdf set reads 0.600 at n=25 where the baseline read 0.625 at n=24, because `ff2616a` fixed
+   the standalone-`AND` 400 that had errored one label out of the old denominator. The same 15
+   documents were found.
+2. **The negative control stayed at 0 in both arms.** An OR join is exactly the change that could
+   make textless documents start scoring by coincidence; it did not.
+3. **recall@1 and MRR did not survive.** On the largest set the OR arm went 0.360 → 0.280 at rank 1
+   and 0.480 → 0.433 MRR. OR admits candidates; it does not place them.
+4. **The knob demonstrably reached the wire.** Median `matchingChunks` per label went from ~15–21
+   under AND to **525,000–775,000** under OR — four to five orders of magnitude, i.e. essentially
+   corpus-wide candidate sets. The null result is a real measurement, not an unthreaded flag.
+
+**Verdict: the conjunction is rejected as the cause of the ~0.5 recall.** The observed cell is the
+top row of the prediction table (`text` unmoved), and even the `ocr` half is equivocal —
+`C-ocr-pdfium` gained two labels while `B-ocr-legacy` lost one.
+
+**The mechanism check refutes it a second time, independently.** Bucketing labels by "contains a
+token `tokenize` splits on punctuation" (`5.1`, `mg/L`, `PH12-3-3`) — the free companion analysis —
+puts the entire nominal lift in the **wrong** bucket: punctuation-split phrases went 0.611 → 0.583
+(n=36, *down*), plain phrases 0.486 → 0.571 (n=35). If manufactured conjuncts were the mechanism,
+the lift would land on the split bucket. It lands on the other one, which is what noise looks like.
+
+**What this buys, beyond closing a hypothesis.** Under the OR arm the candidate set is effectively
+the whole corpus and BM25 alone chooses the top 10 — and the missed documents *stayed* missed. A
+document that is excluded by a filter reappears when the filter is removed; these did not. That is
+positive evidence that the misses are not a candidate-selection problem at all, and points back at
+whether the phrase is in the extracted text in a matchable form. It does **not** single out
+word-joining, which remains uncontrolled.
+
+It also weakens the seam-straddling case below on the same logic: a phrase split across two disjoint
+chunks satisfies no *conjunctive* query but would match both halves under a disjunctive one, so it
+should have surfaced here. Recall barely moved.
+
+**Reproducing this.** The label sets are now committed (`src/scripts/retrieval-labels-{A-text,
+B-ocr-legacy,C-ocr-pdfium,D-ocr-tiled,E-control-textless}.jsonl`) — until 2026-08-04 they existed
+only on one host, and no number in this section was reproducible from a checkout. Both arms:
+`score-retrieval.js --labels <file> --top 10 [--any-terms]`, run inside the app container over the
+SSH tunnel (§ "How the seed had to run"). `report.query.anyTerms` records the arm, because two
+reports off one labels file are otherwise indistinguishable.
+
+**Not productised.** `anyTerms` defaults to false and no controller passes it; `controllers/search.js`
+builds its `searchChunks` argument from an explicit key whitelist, so nothing reachable over HTTP can
+set it. On these numbers flipping the default would trade rank-1 precision for nothing.
 
 **`MAX_TERMS = 16`'s stated rationale is backwards.** `ai-search.js:41` reads *"beyond this the query
 grows without adding recall; BM25 is already dominated by the rest."* Under a conjunction each extra

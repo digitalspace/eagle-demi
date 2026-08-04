@@ -28,12 +28,12 @@ the genuinely unextractable. **166 documents extract to nothing** — accepted a
 
 **Retrieval measured 2026-08-03, first real run of the scorecard: recall@10 ≈ 0.5.** Index coverage
 is ruled out — a self-phrase probe confirmed 14 of 22 missed documents are indexed. **The cause is
-not settled.** Word-joining on the OCR path is measured and real (23–29×) but does not explain the
-`text` stratum, which loses ~40% at n=39. The leading untested explanation is the **query builder's
-strict ` AND ` join**, which makes every term mandatory and caps recall before BM25 ranks anything —
-a property of the query, not of the extraction, and cheap to test. Corrected 2026-08-04; the
-self-phrase probe proves indexing and cannot discriminate the two causes. Same run found a public
-400 on any query containing a standalone `AND`/`OR`/`NOT`; fixed. §3 and `MIGRATION.md` §A.
+still not settled, and one candidate is now dead.** Word-joining on the OCR path is measured and
+real (23–29×) but does not explain the `text` stratum, which loses ~40% at n=39. The **strict
+` AND ` join** was the leading explanation; it was **tested 2026-08-04 and rejected** — pooled
+recall@10 0.549 → 0.577 at n=71, half a standard error, `text` stratum unmoved, and the nominal lift
+lands in the wrong bucket. Same run found a public 400 on any query containing a standalone
+`AND`/`OR`/`NOT`; fixed. §3 and `MIGRATION.md` §A.
 
 **`indexProgress` in `/db/stats` and `/admin/index-progress` is COSMOS index-build percent, not
 Azure AI Search.** `src/controllers/db.js:22-37` calls `cosmosNoSql.indexProgress`. `chunks: 100`
@@ -114,11 +114,11 @@ retrieval run.** The 2026-08-03 scorecard found a different OCR defect the heuri
 is pronounceable, so it scores clean and still costs the search.
 
 **Ordering rule, added 2026-08-04: nothing expensive runs before the cheap experiment that could
-invalidate it.** Two search-side candidates were found by reading the query path — the strict ` AND `
-join, and chunk overlap that never fires on the common path. **Their mechanisms are measured; their
-effect on recall is not** (`MIGRATION.md` §A holds both, and is explicit about which half is which).
-Both are free to test, both predict the `text`-stratum loss that word-joining cannot, and neither
-had been examined. Settle them before spending GPU hours re-extracting 60k documents. In this order:
+invalidate it.** It earned its keep on the first try — the ` AND ` join was the leading explanation
+and the cheap experiment killed it, for the price of an afternoon and no GPU. The remaining
+search-side candidate is chunk overlap that never fires on the common path; its mechanism is
+measured, its effect on recall is not, and the OR-join result argues against it too. Still settle
+what is free before spending GPU hours re-extracting 60k documents. In this order:
 
 - [x] **Large-format sheets extracting to nothing — FIXED 2026-08-02/03 by 3x3 tiling.** 2,039
       documents re-run, 0 failed, **1,855 (91%) now hold real text**. Full account in
@@ -135,37 +135,57 @@ had been examined. Settle them before spending GPU hours re-extracting 60k docum
       Labels came from independent readers (`pdftotext`, page renders read by eye) rather than
       waiting on a human — see §A for why that satisfies the discipline. **At n≈15 the strata are
       statistically indistinguishable; do not rank them.**
-- [ ] **FIRST — re-score with an ` OR ` join. Minutes, no GPU, no re-extraction, no re-index.**
-      `buildQuery` makes every term mandatory, so recall is capped before BM25 ranks anything, and
-      `tokenize` turns `Table 5.1 … (mg/L)` into 14 conjuncts including bare `5` and `1` (measured).
-      Re-run `score-retrieval.js` over the same 47 labels changing only the join. **Paired** on the
-      same labels, so n=47 is adequate here even though it is inadequate for ranking strata. Free
-      companion: bucket the existing labels by "contains a punctuation-split token" and compare.
-      Mechanism, token dump and the prediction table in `MIGRATION.md` §A. **This gates the
-      word-joining decision and the `text`-stratum question below.**
-- [ ] **Word-joining on the OCR path — decision, gated on the item above.** The extraction holds
-      `tovoicemyopposition`, `ENVIRONMENTALASSESSMENT`, `OfficeofthePremier`: **23–29× more glued
-      tokens on the OCR path than the text path** (measured, 400 docs/stratum). Heuristics score it
-      clean because every fragment is pronounceable. **Real, and the dominant defect in the
-      extracted text — but "confirmed cause of the retrieval misses" was an overstatement** (the
-      self-phrase probe that appeared to establish it cannot discriminate; corrected 2026-08-04).
+- [x] **The ` OR ` join — RAN 2026-08-04, and the conjunction is REJECTED as the cause.** Both arms
+      paired in one session, 71 labels plus control. **recall@10 0.549 → 0.577, one SE ≈ 0.059** —
+      half a standard error, on 4 miss→hit against 2 hit→miss. The `text` stratum, the
+      discriminating one, did not move at all (0.533 → 0.533). All four pre-stated guards hold: the
+      AND arm reproduced the 2026-08-03 baseline exactly, the textless control stayed at 0 in both
+      arms, and median `matchingChunks` went ~20 → ~660,000, so the knob demonstrably reached the
+      wire. **recall@1 and MRR got worse** on the largest set (0.360 → 0.280, MRR 0.480 → 0.433), so
+      flipping the default would cost precision and buy nothing. Full numbers, guards and the
+      mechanism bucket in `MIGRATION.md` §A. `anyTerms` stays default-false and unreachable over
+      HTTP. **Label sets are now committed** (`src/scripts/retrieval-labels-{A-text,B-ocr-legacy,
+      C-ocr-pdfium,D-ocr-tiled,E-control-textless}.jsonl`) — they had existed only on one host, so
+      no §A number was reproducible from a checkout.
+- [ ] **Word-joining on the OCR path — the gate cleared, and it is back to being the leading
+      explanation. Still not confirmed.** The extraction holds `tovoicemyopposition`,
+      `ENVIRONMENTALASSESSMENT`, `OfficeofthePremier`: **23–29× more glued tokens on the OCR path
+      than the text path** (measured, 400 docs/stratum). Heuristics score it clean because every
+      fragment is pronounceable. Real, and the dominant defect in the extracted text. The OR-join
+      run raises the prior without testing it: with the conjunction removed the candidate set was
+      effectively the whole corpus and BM25 alone chose, **and the missed documents stayed missed** —
+      a filter problem reappears when the filter is lifted, and these did not. That points at the
+      text not being in matchable form, which is what word-joining does. It does not single it out:
+      it is equally consistent with any defect that leaves the phrase unmatchable, and **word-joining
+      still cannot explain the `text` stratum**, which barely joins and lost the same ~40%.
       Options, none cheap: RapidOCR detection/merge tuning, a decompounding step at index time, or a
-      different OCR engine. **Decide after the OR-join result, and before any re-extraction run.**
-- [ ] **`text`-stratum misses — now have a candidate explanation, still untested.** Re-scored at
-      **n=39** (pooling the 2026-08-01 pypdf labels, cherry-picked from `demi-todo-corrections`,
-      with the 2026-08-03 set; zero document overlap): **recall@10 = 0.590**, one SE ~8 points. The
-      text path loses ~40% of labels and word-joining does not explain it, since that stratum barely
-      joins. Three hypotheses tested and rejected: label length, structured page furniture vs prose,
-      and index coverage. **The strict ` AND ` join predicts exactly this — a path-independent loss
-      — and is what the item above tests.**
+      different OCR engine. **Before committing GPU hours, find a cheap probe that isolates it** —
+      e.g. score a set of OCR-stratum labels whose phrases are known to be glued in the extraction
+      against a matched set that is not. Same discipline that just saved a re-extraction run.
+- [ ] **`text`-stratum misses — back to having NO candidate explanation. This is now the sharpest
+      open question in retrieval.** Re-scored at **n=39** (pooling the 2026-08-01 pypdf labels with
+      the 2026-08-03 set; zero document overlap): **recall@10 = 0.590**, one SE ~8 points. The text
+      path loses ~40% of labels, word-joining does not explain it (that stratum barely joins), and
+      as of 2026-08-04 **four** hypotheses have been tested and rejected: label length, structured
+      page furniture vs prose, index coverage, and the strict ` AND ` join — the last was the
+      leading one and moved the stratum by zero. These labels were read out of each source PDF's own
+      text layer by an independent extractor, so the words are demonstrably on the page. Next probe
+      should attack the remaining link nobody has instrumented: whether the phrase survives into the
+      **chunk** as indexed. Pull the actual `content` for a handful of missed documents from inside
+      the VNet and read it — `content` is `retrievable: false`, so this needs a data-plane query,
+      not the public API.
 - [ ] **Chunk overlap never fires on the common path — measured 2026-08-04.** `emit()` calls
       `splitText()`, which returns any block under `MAX_CHUNK_SIZE` (4000) unchanged, and blocks are
       emitted at `TARGET_CHUNK_SIZE` (2500). Measured on real `chunkMarkdown` output: **0 of 4
       consecutive pairs overlap**; the oversized-single-block branch overlaps 2 of 2. Consecutive
       chunks are strictly disjoint, so a seam-straddling phrase satisfies no conjunctive query.
-      Smaller than the item above (~3–4% of phrases, not 40%) and it compounds it. Fix in `emit()`,
-      not `splitText()`. `test/chunker.test.js`'s "…split, with overlap" never asserts overlap —
-      that is why it survived.
+      Smaller than the item above (~3–4% of phrases, not 40%). Fix in `emit()`, not `splitText()`.
+      `test/chunker.test.js`'s "…split, with overlap" never asserts overlap — that is why it
+      survived. **Demoted 2026-08-04: the OR-join run argues against this being a retrieval cause.**
+      A seam-straddling phrase satisfies no conjunctive query but matches both halves under a
+      disjunctive one, so it should have surfaced when the join was lifted; recall barely moved.
+      Still a real chunker defect worth fixing on its own terms — just not a recall fix, and it
+      still has to ride the same re-ingest as `pageNumber`.
 - [ ] **`pageNumber` is fabricated, and the text path already holds the real value.** 34,153
       documents (56% of the corpus) go through `extract_text`, which iterates pages and discards the
       index. No page citations are possible today, for search results or for any summariser built on
