@@ -119,13 +119,15 @@ function authenticate(req, onSuccess, onFailure) {
         return onFailure(401, `Unauthorized. JWT verification failed: ${err.message}`);
       }
 
-      const roles = decoded.realm_access?.roles || [];
-      const hasPermission = roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
-
-      if (!hasPermission) {
-        return onFailure(403, 'Forbidden. User does not possess admin or staff permissions.');
-      }
-
+      // AUTHENTICATION ONLY. A verified token is a verified token — whether its bearer may reach
+      // a given route is the route's decision, and it is made in `middleware/auth.js`.
+      //
+      // This function used to reject any token without sysadmin/staff/demi-admin. That is correct
+      // for admin routes and wrong for the other caller: `middleware/passiveAuth.js` caught the
+      // 403, logged "continuing as anonymous", and left `req.user` unset. So a valid Keycloak user
+      // carrying `project:207` or any other role type was indistinguishable from a logged-out
+      // visitor, `resolveAccess()` never returned TIER.SCOPED, and `projectScopeFor()` could never
+      // fire — it reads roles off a `req.user` the 403 had already prevented from existing.
       return onSuccess(decoded);
     });
     return;
