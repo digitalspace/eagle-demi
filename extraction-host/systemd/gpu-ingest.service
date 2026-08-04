@@ -1,0 +1,21 @@
+[Unit]
+Description=DEMI backfill ingest — replay out/*.md into Azure
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/gpu-extractor
+EnvironmentFile=/root/gpu-extractor/gpu-extractor.env
+ExecStart=/root/gpu-extractor/venv/bin/python /root/gpu-extractor/ingest.py
+# ingest.py drains out/ and exits, so "restart always" is the loop: every 5 minutes it picks up
+# whatever the extractor has produced since. Sent files move to sent/, so a run only ever does
+# outstanding work and re-running costs nothing. Deliberately separate from gpu-extractor so an
+# API deploy or a Typesense resize can never interrupt the GPU run.
+Restart=always
+RestartSec=300
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,41 @@
+# The extraction host's source is versioned here. Its SECRETS, STATE and DATA are not, and this
+# file is the mechanism rather than care at commit time.
+#
+# The host holds ~44 GB of run artefacts next to these four files. Nothing in this list is
+# reconstructable-but-large; it is all either a credential or a record of one run.
+
+# Credentials. gpu-extractor.env carries a live DEMI_ADMIN_KEY (mode 600, inside a mode 700 /root).
+*.env
+*.env.*
+!*.env.example
+
+# Scratch copies that already differ from the deployed source — the reason this directory exists.
+*.bak
+*.pre-poolfix
+*.orig
+
+# Run state and output. progress.jsonl is 18 MB, ingest.jsonl 6 MB, reconcile-docs.json 17 MB.
+*.jsonl
+*.log
+progress*.json
+worklist.json
+reconcile-*.json
+purge-*.json
+placeholder-only.json
+false-failures.txt
+
+# Extracted markdown, downloads, caches, and the point-in-time backups taken during re-runs.
+sent/
+out/
+cache/
+dead/
+scratch/
+*-backup/
+false_failures/
+retry_err/
+stale_err/
+
+# Python
+venv/
+__pycache__/
+*.pyc
