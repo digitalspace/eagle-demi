@@ -36,7 +36,7 @@
  *
  * Cosmos is private-endpoint-only and keyless, so a live run must execute INSIDE the app
  * container over the App Service SSH tunnel — not Kudu's /api/command, whose SCM container has no
- * managed-identity endpoint. See MIGRATION.md for the full recipe.
+ * managed-identity endpoint. See README.md for the full recipe.
  */
 
 const documents = require('../repositories/documents');

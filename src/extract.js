@@ -11,7 +11,7 @@
  * `POST /documents/:id/chunks` — see `README.md`.
  *
  * Kept, deliberately, because extraction-inside-Azure is deferred rather than cancelled
- * (`MIGRATION.md` §A has the pricing that deferred it) and these two functions are the part worth
+ * (the wiki's Extraction-Pipeline page has the pricing that deferred it) and these two functions are the part worth
  * keeping: the docling request shape, its timeout handling, and the batching that stops a 5,000-page
  * PDF from being sent as one request. Reviving extraction means writing a new driver around these,
  * against Cosmos NoSQL — never against Mongo, which no longer exists in this project.

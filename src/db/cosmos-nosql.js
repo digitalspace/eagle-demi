@@ -177,7 +177,7 @@ async function query(containerName, spec, options = {}) {
  *
  * A query against a partially built index answers short rather than erroring, so every cutover
  * that lands rows in bulk has to wait on this. Permanent operational reading, not a debugging
- * aid — see MIGRATION.md §F.
+ * aid — see the wiki's ADR-005.
  *
  * Returns null when the header is absent (the SDK only emits it with populateQuotaInfo, and only
  * for containers that have one).

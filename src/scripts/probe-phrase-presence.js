@@ -12,7 +12,7 @@
  * It reads Cosmos, not the search index. `content` is `retrievable: false`, so the search service
  * cannot return chunk text on any plane — only `@search.highlights` fragments come back. Cosmos is
  * the only place the text can be read, which also means this must run INSIDE the app container over
- * the App Service SSH tunnel; see MIGRATION.md for the recipe.
+ * the App Service SSH tunnel; see README.md for the recipe.
  *
  * Read-only. It opens no writer and touches no index.
  */

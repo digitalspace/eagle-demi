@@ -6,7 +6,7 @@
  * Replaces helpers/access.js (MongoDB filter objects) during the NoSQL migration. Both exist
  * until the cutover; this one has no Mongo dependency.
  *
- * Two ORTHOGONAL dimensions — this is the scaling decision, see MIGRATION.md:
+ * Two ORTHOGONAL dimensions — this is the scaling decision, see the wiki's Architecture page:
  *
  *   1. WHAT KIND of access  -> `read[]` holds role TYPES only ('public', 'sysadmin',
  *      'staff', 'project-team'…). Bounded (~6 values) and indexed at /read/[]/?.
