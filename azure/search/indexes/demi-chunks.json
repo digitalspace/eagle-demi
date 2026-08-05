@@ -115,7 +115,7 @@
       "type": "Edm.String",
       "searchable": true,
       "filterable": false,
-      "retrievable": false,
+      "retrievable": true,
       "stored": true,
       "sortable": false,
       "facetable": false,
@@ -142,6 +142,22 @@
     "k1": null,
     "b": null
   },
-  "semantic": null,
+  "semantic": {
+    "defaultConfiguration": null,
+    "configurations": [
+      {
+        "name": "demi-chunks-semantic",
+        "prioritizedFields": {
+          "titleField": null,
+          "prioritizedContentFields": [
+            {
+              "fieldName": "content"
+            }
+          ],
+          "prioritizedKeywordsFields": []
+        }
+      }
+    ]
+  },
   "vectorSearch": null
 }

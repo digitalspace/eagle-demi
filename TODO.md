@@ -25,16 +25,30 @@ metadata.
 Pooled recall@10 is 0.590 at n=78 (recall@1 0.308, MRR 0.392). One standard error is ~0.056, so it
 is the same number as the 0.620 recorded at n=71 — the labels moved, the retrieval did not.
 
-## Retrieval — a ranking failure, not an extraction one
+## Retrieval — the ranking failure is fixed
 
-- [ ] **A document with the exact phrase in its only chunk does not reach the top 10.**
-      `58869332de49fe015163a0c9` ("CROSS SECTIONS N AND A THROUGH NORTH WASTE DUMPS") probes as
-      `class: exact`, coverage 1.0, one chunk, not truncated, not stale — and ranks 0. Extraction is
-      fine; BM25 puts ten other documents above it. Every tiled hit ranks **1st or nowhere**:
-      recall@1, @5 and @10 are all 0.333, so nothing in that stratum ever lands at 2–10.
-      The cross-tab of the 9 tiled labels: 4 missing because the text really is absent, 1 word-joining,
-      1 pure ranking failure — and 2 of the 3 hits surfaced *without* the phrase being fully extracted.
-      Worth understanding before any more extraction effort: this one is not an extraction problem.
+Closed 2026-08-05. It was a ranking problem, and a reranker fixed it.
+`58869332de49fe015163a0c9` ("CROSS SECTIONS N AND A THROUGH NORTH WASTE DUMPS") ranked **11** under
+BM25 and ranks **2** with semantic reranking on. Paired run, 78 labels, one session:
+
+| | recall@1 | recall@10 | recall@50 | MRR |
+|---|---|---|---|---|
+| BM25 | 0.308 | 0.590 | 0.705 | 0.398 |
+| + semantic ranker | **0.372** | **0.628** | 0.705 | **0.472** |
+
+5 miss→hit and 2 hit→miss at k=10; 23 labels moved up, 7 down, 25 unchanged. `found@50` is
+identical at 55 in both arms — the check that L1 was untouched, since a reranker can only reorder
+what BM25 already retrieved. The textless control stays 0 in both arms.
+
+Honest limit: 5 versus 2 discordant pairs is not significant on its own (one SE ~0.056). The case
+is that all three metrics move together with nothing regressing — the bar `FUZZY_BOOST` cleared and
+`anyTerms` failed. Scorecards in `src/scripts/scorecards/2026-08-05-*`.
+
+- [ ] **Nothing measures this for natural-language queries.** All 78 labels are verbatim phrases
+      lifted off a page, which is exact-match lexical retrieval — the weakest case for a reranker
+      trained on natural language. It won anyway. But the queries real users type are the case the
+      feature is actually for, and no label set covers them; there is no query log to build one from
+      because nobody uses DEMI yet. The gain above is a floor, not an estimate.
 
 ## Extraction
 
@@ -97,6 +111,21 @@ is the same number as the 0.620 recorded at n=71 — the labels moved, the retri
       live group — but it has never actually run, and `azure-deploy-dev.yaml`'s infra job was
       reduced to `az bicep build` on 2026-08-04. Deploying it for the first time is its own
       decision, needing a credential that does not exist.
+
+## Semantic ranker — two things to watch, now that it is live
+
+- [ ] **`content` is `retrievable: true` and the index no longer stops whole chunks leaving.**
+      Semantic configuration fields must be searchable *and* retrievable, so it had to flip. The
+      guarantee now lives in `searchChunks`'s explicit `select` list, which excludes `content` —
+      adding it there is not a display tweak, it starts returning full chunk text to every caller.
+      Verified on the live index that L2 still reads the field with `select` excluding it, so
+      nothing else had to change. Watch that `select`.
+- [ ] **Ranking can degrade silently and nothing alerts.** Basic tier allows 2 concurrent semantic
+      requests per search unit against a frontend that searches on debounced keystrokes, so
+      `semanticErrorHandling: 'partial'` returning BM25 order is an expected path, not an edge. The
+      reason is logged (`[ai-search] semantic reranking did not run: …`) and `rerankerScore` is
+      absent on the hits, but nothing watches either. Under load the product may be serving the
+      unranked order most of the time while the scorecard measures the ranked one.
 
 ## Search UI
 
@@ -162,10 +191,10 @@ prompt/completion tokens on every call. Watch the logged p95 rather than assumin
 | # | Question | Default | Cost of reversing |
 |---|---|---|---|
 | 1 | Backup mode `Continuous7Days` on dev | Not done | One-way. Gain 8h/support-ticket → 7-day self-service, free tier; lose Geo backup redundancy permanently |
-| 2 | Semantic ranker left enabled (`semanticSearch: 'free'`) | Left on | Free unless a query asks for it, and none does. Off is a one-line template change; on contradicts nothing but reads as if it might |
+| 2 | ~~Semantic ranker left enabled~~ | **Closed 2026-08-05: in use** | It is now the shipped ranking on `demi-chunks` — see above. Every Deep Search is a billable semantic query against an unpublished monthly free allowance; exhausting it returns HTTP 402, which the code catches once and degrades to BM25 for the rest of the month. Watch for that warning before assuming ranking is live |
 
-Settled, and kept here only because reversing them is expensive: **index tier** (Basic, with `content`
-`retrievable: false` — Basic→S1 needs a new service and a full reindex) and **delete propagation**
+Settled, and kept here only because reversing them is expensive: **index tier** (Basic — Basic→S1
+needs a new service and a full reindex) and **delete propagation**
 (hard delete plus immediate index delete; the `_ts` high-water mark seeing no deletes is measured,
 not assumed — and now visible in `azure/search/datasources/`, none of which declares a
 `dataDeletionDetectionPolicy`).

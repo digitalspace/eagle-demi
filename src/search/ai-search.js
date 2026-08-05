@@ -3,8 +3,10 @@
 /**
  * Azure AI Search — the Deep Search backend over extracted document text.
  *
- * Classic lexical BM25 only. No vectors, no semantic ranker: retrieval is keyword matching and AI
- * is a summariser over the final top-N, not a retriever.
+ * Retrieval is lexical BM25. No vectors and no embedding pipeline: AI is a summariser over the
+ * final top-N, not a retriever. Chunk search additionally asks Azure's semantic ranker to REORDER
+ * what BM25 already found — see SEMANTIC_CONFIGURATION. That is a reranker over the top 50, not a
+ * second retrieval path; it cannot surface anything the keyword query missed.
  *
  * Deliberately plain `fetch` against the REST API rather than `@azure/search-documents`. Two
  * calls are needed — search and delete — and the SDK would be a new dependency for what a request
@@ -190,7 +192,12 @@ async function request(path, body, opts = {}) {
       continue;
     }
 
-    throw new Error(`HTTP ${res.status} ${detail.slice(0, 300)} [${clientRequestId}]`);
+    // `status` is carried on the error, not just formatted into its message. `runSearch` has to
+    // distinguish 402 (semantic ranker's free allowance is spent) from every other failure, and
+    // string-matching an error message to make a control-flow decision is how that breaks silently.
+    const err = new Error(`HTTP ${res.status} ${detail.slice(0, 300)} [${clientRequestId}]`);
+    err.status = res.status;
+    throw err;
   }
 
   // Unreachable: the loop either returns, retries, or throws. Here only if maxAttempts < 1.
@@ -329,6 +336,44 @@ function buildQuery(terms, fuzzy, prefix = false) {
 }
 
 /**
+ * Semantic reranking (L2), applied ON TOP of the Lucene query rather than instead of it.
+ *
+ * `semanticQuery` is the load-bearing choice. The other route — `queryType: 'semantic'` — accepts
+ * ONLY plain text: both simple and full Lucene syntax are rejected. Taking it would silently throw
+ * away every measured thing `buildQuery` does: the `(term OR term~1^0.5)` fuzzy arm, FUZZY_BOOST,
+ * the ANALYZER_STOPWORDS guard that stops a conjunction collapsing to zero hits, the operator
+ * lowercasing that prevents a hard 400, and the trailing `*` that makes search-as-you-type work.
+ *
+ * With `semanticQuery`, `search` keeps the Lucene expression and drives retrieval (L1) exactly as
+ * before; the plain-text copy is used only to rescore what L1 already found. Available in the
+ * API_VERSION this module already pins.
+ *
+ * Azure rescores at most the top 50 of L1, so this can only reorder — it can never surface a
+ * document the Lucene query failed to match.
+ */
+const SEMANTIC_CONFIGURATION = 'demi-chunks-semantic';
+
+let semanticExhaustedWarned = false;
+
+/**
+ * 402 means the semantic ranker's monthly free allowance is spent, for the rest of the month.
+ *
+ * Not a blip and not retryable — it is not in RETRY_STATUSES for that reason. Left unhandled it
+ * would turn every Deep Search into a 500 until the calendar rolls over, which is a far worse
+ * outcome than serving the BM25 order the product ran on until now. So it degrades instead, and
+ * says so once per process rather than on every keystroke.
+ */
+function warnSemanticExhausted() {
+  if (semanticExhaustedWarned) return;
+  semanticExhaustedWarned = true;
+  console.warn(
+    '[ai-search] HTTP 402: the semantic ranker free allowance is exhausted for this month. ' +
+    'Falling back to BM25 ordering for the rest of the month. This is DEGRADED RANKING, not a ' +
+    'failure — switch the service to the standard semantic plan to restore it.'
+  );
+}
+
+/**
  * One search request. Every dataset goes through here so the ACL filter, the query shape and the
  * "null filter means unrestricted, empty filter is a bug" rule are written once.
  */
@@ -352,7 +397,44 @@ async function runSearch(index, opts = {}) {
   // Omitted entirely when null. An empty-string filter is UNRESTRICTED, not "no matches".
   if (opts.filter) body.filter = opts.filter;
 
-  const data = await request(`/indexes/${index}/docs/search?api-version=${API_VERSION}`, body);
+  // `matchAll` is excluded deliberately: `search: '*'` has no relevance signal to rescore, so
+  // semantic ranking does nothing on it — and Azure bills per non-empty semantic query.
+  const semantic = opts.semantic === true && !opts.matchAll;
+  if (semantic) {
+    // The TOKENIZED terms rejoined, not opts.keywords verbatim. `tokenize` is what strips Lucene
+    // operator characters, and operator syntax inside the semantic string is explicitly unsupported.
+    body.semanticQuery = terms.join(' ');
+    body.semanticConfiguration = SEMANTIC_CONFIGURATION;
+    // Degrade rather than fail. A 1-SU Basic service allows 2 concurrent semantic requests, and the
+    // frontend searches on a debounced keystroke — being over that is the expected path, not an
+    // edge. `partial` returns the BM25 order instead of erroring.
+    body.semanticErrorHandling = 'partial';
+  }
+
+  const path = `/indexes/${index}/docs/search?api-version=${API_VERSION}`;
+
+  let data;
+  try {
+    data = await request(path, body);
+  } catch (err) {
+    if (!semantic || err.status !== 402) throw err;
+    warnSemanticExhausted();
+    delete body.semanticQuery;
+    delete body.semanticConfiguration;
+    delete body.semanticErrorHandling;
+    data = await request(path, body);
+  }
+
+  // Whether L2 actually ran is invisible in the results — the same shape comes back either way, in
+  // a different order. Unlogged, a service that is silently serving BM25 all day looks exactly like
+  // one where reranking is working, and the scorecard would be measuring something no user gets.
+  if (semantic && data['@search.semanticPartialResponseReason']) {
+    console.warn(
+      `[ai-search] semantic reranking did not run: ` +
+      `${data['@search.semanticPartialResponseReason']} — results are in BM25 order`
+    );
+  }
+
   const value = data.value || [];
   return { value, count: data['@odata.count'] ?? value.length };
 }
@@ -429,7 +511,23 @@ async function searchChunks(opts = {}) {
 
   const { value, count } = await runSearch(index, {
     ...opts,
-    // `content` is not retrievable — the API never ships whole chunks, only the matched span.
+    // ON by default, and only here — `demi-chunks` is the only index with a semantic
+    // configuration, and asking for one that does not exist is a 400. Measured on 78 labels,
+    // 2026-08-05, paired run in one session against the same corpus:
+    //
+    //   recall@1   0.308 -> 0.372     recall@10  0.590 -> 0.628     MRR  0.398 -> 0.472
+    //   5 miss->hit and 2 hit->miss at k=10; 23 labels moved up, 7 down, 25 unchanged
+    //   found@50 unchanged at 55 in BOTH arms, which is the check that L1 was untouched
+    //
+    // All three metrics move together with nothing regressing — the same bar FUZZY_BOOST cleared
+    // and `anyTerms` failed. 5 vs 2 discordant pairs is not significant on its own (one SE ~0.056);
+    // the case is the consistent direction, not the aggregate. Pass `semantic: false` to opt out,
+    // which is how the scorecard measures the BM25 arm.
+    semantic: opts.semantic !== false,
+    // This `select` is what stops the API shipping whole chunks — it did not used to be. `content`
+    // was `retrievable: false`, so the index enforced it; semantic ranking requires its configured
+    // fields to be retrievable, so that flipped and the guarantee now lives HERE. Adding `content`
+    // to this list is not a display tweak: it starts returning full chunk text to every caller.
     select: 'chunkId,documentId,projectId,pageNumber,read',
     highlight: 'content'
   });
@@ -442,7 +540,11 @@ async function searchChunks(opts = {}) {
       projectId: hit.projectId,
       pageNumber: hit.pageNumber,
       read: hit.read,
-      snippet: snippetFrom(hit)
+      snippet: snippetFrom(hit),
+      // Present only when L2 actually ran, so it doubles as the answer to "was this reranked?" —
+      // undefined both when semantic was not asked for and when it was asked for but degraded to
+      // a partial response. Nothing in the API forwards it; it is for instruments and diagnosis.
+      rerankerScore: hit['@search.rerankerScore']
     }))
   };
 }

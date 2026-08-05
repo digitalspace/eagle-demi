@@ -39,12 +39,33 @@ if either is missing.
 
 ## What the export confirmed
 
-- `content` on `demi-chunks` is `retrievable: false`, analyzer `en.microsoft`. Highlighting still
-  works on a non-retrievable field, which is why the API can return a snippet but never the whole
-  chunk.
+- `content` on `demi-chunks` uses analyzer `en.microsoft`. It **was** `retrievable: false`, which is
+  what stopped whole chunks leaving the service; semantic ranking requires its configured fields to
+  be retrievable, so on 2026-08-05 it flipped to `true` and that guarantee moved into
+  `searchChunks`'s `select` list. Highlighting was never affected either way.
 - No data source declares a `dataDeletionDetectionPolicy`. The `_ts` high-water mark cannot see
   deletes — measured, and now visible in the definition itself, which is why the app deletes from
   the index directly rather than waiting for the indexer.
+
+## The semantic configuration
+
+`demi-chunks.json` carries `demi-chunks-semantic`, with `content` as the sole
+`prioritizedContentFields` entry — there is no title or keywords field to prioritise, because
+`content` is the only searchable field in the index. The other two indexes have no semantic
+configuration and must not be sent one: naming a configuration that does not exist is a 400.
+
+Adding it was a **no-rebuild** change. `retrievable` and semantic configurations are the two named
+exceptions to Azure's drop-and-rebuild rule, so nothing was re-extracted and nothing re-indexed —
+the same applies if it ever has to be reverted. A PUT still needs the temporary **Search Service
+Contributor** grant, and still carries the complete schema, which is why this file has to stay
+accurate.
+
+Measured on the live index rather than assumed: **L2 reads `content` even though the query's
+`select` excludes it.** Microsoft's transparency note says the reranker "cannot reach back to the
+search index to access other fields… that weren't returned in the query response", which would have
+forced `content` into `select` and made the API ship whole chunks. It is loose wording — the
+how-it-works page is right that inputs come from the fields named in the semantic *configuration*.
+Ten hits came back with ten distinct `@search.rerankerScore` values under the app's real `select`.
 
 ## What it contradicted
 
