@@ -125,9 +125,13 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       v19 are no longer supported". `first_patched_version: null` means "no fix in the affected
       major", not "no fix anywhere": Dependabot's first run proposed 20.3.x as ordinary **version**
       updates (PRs #33/#34/#40, all closed) and every one failed `Test & Build Frontend`, which is
-      the evidence that this is a migration and not a bump. `.github/dependabot.yml` now ignores
-      Angular majors — with the pattern `@angular/*`, since `@angular*` silently does not match in
-      `ignore.dependency-name` even though it does match in `groups.patterns`.
+      the evidence that this is a migration and not a bump. `.github/dependabot.yml` now freezes the
+      whole toolchain — `@angular/*`, `@angular-devkit/*`, `@angular-eslint/*`, `angular-eslint` and
+      `zone.js` — because those are version-locked to each other: PR #42 bumped only
+      `@angular-devkit/build-angular`, to 21.2.19, and the build died on "`@angular/build` supports
+      Angular versions ^21.0.0, but detected Angular version 19.2.25 instead". **Deleting that
+      `ignore:` block is step one of the upgrade.** Framework and toolchain have to move in one
+      commit; a half-upgraded pair does not build at all.
       They are not theoretical: XSS via i18n event-handler attributes, hydration DOM clobbering and
       response-cache poisoning, `HttpTransferCache` cache-key ambiguity, and a DoS via OOM in date
       formatting — all in code the bundler compiles into what `demi-frontend-dev` serves.
