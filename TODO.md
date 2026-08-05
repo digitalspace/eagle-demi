@@ -104,9 +104,14 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       on authorization in the test/prod subscriptions. Each environment needs its own identity,
       credential and role assignments. Both are `workflow_dispatch` only, so nothing fires by
       accident meanwhile.
-- [ ] **App registration `acb4198f-64db-4485-9638-a894e2d2c99b` is unused.** Left over from the
-      app-registration route, superseded by the managed identity. It has no federated credential
-      and no role assignment. Delete it.
+- [ ] **App registration `acb4198f-64db-4485-9638-a894e2d2c99b` — KEPT deliberately, not for CI.**
+      Left from the app-registration route before `demi-cicd-dev` superseded it. Not deleted: app
+      registrations are hard to provision in this tenant, and human federated sign-in is precisely
+      what the landing zone says they are for. It holds no role assignment, so it grants nothing
+      today. It DOES still carry the GitHub Actions federated credential `github-eagle-demi-main`
+      (subject `repo:digitalspace/eagle-demi:ref:refs/heads/main`) — dormant while the app has no
+      permissions, live the moment it gets any, from a PUBLIC repo. Settle that before wiring this
+      app to sign-in.
 - [ ] **Deploy workflow actions still target Node 20.** `actions/checkout@v4`,
       `actions/setup-node@v4` and `azure/login@v2` are force-run on Node 24 with a deprecation
       warning on every run.
