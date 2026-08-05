@@ -18,6 +18,7 @@
  */
 
 const { randomUUID } = require('crypto');
+const { logger } = require('../utils/logger');
 
 const API_VERSION = '2024-07-01';
 
@@ -75,7 +76,7 @@ function config() {
 function warnUnconfigured() {
   if (unconfiguredWarned) return;
   unconfiguredWarned = true;
-  console.warn(
+  logger.warn(
     '[ai-search] SEARCH_ENDPOINT is not set; chunk search is unavailable and returns empty ' +
     'results. This is NOT "no matches" — it is a missing configuration.'
   );
@@ -184,7 +185,7 @@ async function request(path, body, opts = {}) {
 
     if (RETRY_STATUSES.has(res.status) && attempt < maxAttempts) {
       const delay = retryDelayMs(res, attempt);
-      console.warn(
+      logger.warn(
         `[ai-search] HTTP ${res.status} on ${path.split('?')[0]}, retrying in ${delay}ms ` +
         `(attempt ${attempt}/${maxAttempts}) [${clientRequestId}]`
       );
@@ -374,7 +375,7 @@ let semanticExhausted = false;
 function noteSemanticExhausted() {
   if (semanticExhausted) return;
   semanticExhausted = true;
-  console.warn(
+  logger.warn(
     '[ai-search] HTTP 402: the semantic ranker free allowance is exhausted for this month. ' +
     'Falling back to BM25 ordering for the rest of the month. This is DEGRADED RANKING, not a ' +
     'failure — switch the service to the standard semantic plan to restore it.'
@@ -439,7 +440,7 @@ async function runSearch(index, opts = {}) {
   // a different order. Unlogged, a service that is silently serving BM25 all day looks exactly like
   // one where reranking is working, and the scorecard would be measuring something no user gets.
   if (semantic && data['@search.semanticPartialResponseReason']) {
-    console.warn(
+    logger.warn(
       `[ai-search] semantic reranking did not run: ` +
       `${data['@search.semanticPartialResponseReason']} — results are in BM25 order`
     );
@@ -719,7 +720,7 @@ async function deleteFromIndex(index, id) {
     });
     return 1;
   } catch (err) {
-    console.error(
+    logger.error(
       `[ai-search] could not remove ${index}/${id} (${err.message}). ` +
       'It remains searchable until this is retried.'
     );
@@ -785,7 +786,7 @@ async function deleteChunksForDocument(documentId, opts = {}) {
       // just removed. What is not legitimate is the total never falling: that means the delete is
       // not landing, and another 24 rounds of the same call will not change it.
       if (round > 1 && remaining >= previousRemaining) {
-        console.warn(
+        logger.warn(
           `[ai-search] document ${id} still reports ${remaining} indexed chunks after ` +
           `${deleted} deletions; stopping without progress. Its remaining text stays searchable.`
         );
@@ -801,7 +802,7 @@ async function deleteChunksForDocument(documentId, opts = {}) {
       if (remaining <= keys.length) return deleted;
     }
 
-    console.warn(
+    logger.warn(
       `[ai-search] document ${id} exceeded ${maxRounds} delete rounds after ${deleted} deletions. ` +
       'Re-run the delete to clear the remainder.'
     );
@@ -813,7 +814,7 @@ async function deleteChunksForDocument(documentId, opts = {}) {
     // Returns what was actually removed before the failure, not 0 — a later round throwing does not
     // un-delete the earlier ones, and reporting 0 would understate `indexEntriesRemoved` in the
     // purge summary.
-    console.error(
+    logger.error(
       `[ai-search] could not remove indexed chunks for document ${id} (${err.message}) ` +
       `after deleting ${deleted}. Its remaining text stays searchable until this is retried.`
     );

@@ -22,6 +22,7 @@
 
 // Node 20+ provides fetch, FormData, Blob as globals — no import needed.
 const { PDFDocument } = require('pdf-lib');
+const { logger } = require('./utils/logger');
 const config = require('./config');
 
 // Pages per batch when pre-splitting large PDFs (caps peak worker memory)
@@ -113,7 +114,7 @@ async function splitAndExtract(buffer, filename, opts = {}) {
     pageCount = srcPdf.getPageCount();
   } catch (err) {
     // Unparseable PDF — fall back to whole-file send
-    console.warn(`    pdf-lib parse failed (${err.message}); sending whole file`);
+    logger.warn(`    pdf-lib parse failed (${err.message}); sending whole file`);
     return extract(buffer, filename);
   }
 

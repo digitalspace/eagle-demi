@@ -686,9 +686,10 @@ test('semantic reranking', async (t) => {
     // Throttling returns the BM25 order with a reason and HTTP 200. Unlogged, a service silently
     // serving unranked results looks identical to one where reranking works.
     const warnings = [];
-    const originalWarn = console.warn;
-    console.warn = (msg) => warnings.push(String(msg));
-    tt.after(() => { console.warn = originalWarn; });
+    const { logger } = require('../../src/utils/logger');
+    const originalWarn = logger.warn;
+    logger.warn = (msg) => warnings.push(String(msg));
+    tt.after(() => { logger.warn = originalWarn; });
 
     captureFetch(tt, () => ({
       json: {

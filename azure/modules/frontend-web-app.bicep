@@ -8,6 +8,9 @@ param environmentName string
 @description('Default resource tags')
 param tags object
 
+@description('Application Insights connection string. Empty disables telemetry, which is the local-development case.')
+param appInsightsConnectionString string = ''
+
 var frontendAppName = 'demi-frontend-${environmentName}'
 var frontendAppPlanName = 'demi-frontend-plan-${environmentName}'
 
@@ -44,6 +47,12 @@ resource frontendWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'WEBSITE_HTTPLOGGING_RETENTION_DAYS'
           value: '3'
+        }
+        // Present so the static SPA's platform logs land in the same Application Insights resource
+        // as the API. No SDK is wired into the Angular bundle — this is the pm2/App Service side only.
+        {
+          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+          value: appInsightsConnectionString
         }
       ]
       cors: {

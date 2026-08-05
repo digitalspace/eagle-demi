@@ -1,6 +1,7 @@
 'use strict';
 
 const { authenticate } = require('../helpers/auth');
+const { logger } = require('../utils/logger');
 
 /**
  * Passive auth: populate req.user when credentials are valid, otherwise continue as
@@ -21,7 +22,7 @@ module.exports = (req, res, next) => {
     (status, error) => {
       const presented = req.header('Authorization') || req.header('X-Api-Key');
       if (presented) {
-        console.warn(
+        logger.warn(
           `[passiveAuth] Rejected credential on ${req.method} ${req.originalUrl || req.url} ` +
           `(${status}: ${error}). Continuing as anonymous.`
         );

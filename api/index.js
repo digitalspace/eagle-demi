@@ -1,5 +1,22 @@
 'use strict';
 
+// Azure Monitor has to start before anything else is required. The distro instruments modules by
+// hooking `require`, so any library loaded ahead of it — http, express, winston — is captured as
+// the uninstrumented original and never reports.
+//
+// Guarded on the connection string so `yarn start` (src/server.js, plain Express) and the test
+// suite run untouched: no connection string, no telemetry, no exporter retry noise in the console.
+// Winston instrumentation is opt-in; the distro leaves it off by default, and it is the whole
+// reason the existing logger's output reaches Application Insights at all.
+if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
+  const { useAzureMonitor } = require('@azure/monitor-opentelemetry');
+  useAzureMonitor({
+    instrumentationOptions: {
+      winston: { enabled: true }
+    }
+  });
+}
+
 const { app } = require('@azure/functions');
 const { Readable } = require('stream');
 const EventEmitter = require('events');
