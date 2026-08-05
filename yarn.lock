@@ -2019,7 +2019,7 @@ __metadata:
     minio: ^7.0.8
     multer: ^2.2.0
     pdf-lib: ^1.17.1
-    serverless-http: ^3.2.0
+    serverless-http: ^4.0.0
     swagger-ui-express: ^5.0.1
     winston: ^3.19.0
     yamljs: ^0.3.0
@@ -3636,10 +3636,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"serverless-http@npm:^3.2.0":
-  version: 3.2.0
-  resolution: "serverless-http@npm:3.2.0"
-  checksum: aaa3b6e416ad25931bf00c3a1c31cb5f9a56c678ca8a6bc99749b90bb49ee6e8c53d7edd6bc0b587a171bb8c39c6093dc9980cb0142b8c18881533859d3b769f
+"serverless-http@npm:^4.0.0":
+  version: 4.0.0
+  resolution: "serverless-http@npm:4.0.0"
+  checksum: 16903f36dfc4db66727dd1634c847647d8888429a15bc42a2e846e638166b09ba2fd8544d23150b4310cbb9cdee9e335e8354454bfb41b4abfd1c2f113707a23
   languageName: node
   linkType: hard
 
