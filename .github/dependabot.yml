@@ -35,25 +35,47 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    # Angular majors are ignored deliberately. The app is pinned at 19.2.25 and
-    # Angular 19 is past end-of-life, so every major is a framework migration —
-    # two majors to reach 21 (LTS). The upgrade is tracked in TODO.md as real work.
+    # The Angular TOOLCHAIN is frozen, not just the `@angular/*` packages. Every
+    # entry below is version-locked to the framework major, so bumping any one of
+    # them alone produces a build that cannot compile the other Angular 19 halves.
+    # The app is pinned at 19.2.25, Angular 19 is past end-of-life, and reaching 21
+    # (LTS) is two majors — a migration, tracked in TODO.md, not a dependency bump.
     #
-    # ‼️ The pattern must be `@angular/*`, NOT `@angular*`. `groups.patterns` and
-    # `ignore.dependency-name` do not use the same matcher: with `@angular*` the
-    # group matched (Angular packages were kept out of the `build-tooling`
-    # catch-all) while the ignore silently did not, and the first Dependabot run
-    # opened PRs #33, #34 and #40 bumping Angular 19.2.25 to 20.3.x. Every one
-    # failed `Test & Build Frontend`. Verified 2026-08-05.
+    # Two matcher traps, both hit for real on 2026-08-05:
+    #
+    #  1. `groups.patterns` and `ignore.dependency-name` do NOT share a matcher.
+    #     `@angular*` matched the group but silently did not match the ignore, so
+    #     PRs #33/#34/#40 bumped Angular 19.2.25 to 20.3.x.
+    #  2. Narrowing that to `@angular/*` then stopped covering `@angular-devkit/*`,
+    #     which is a DIFFERENT SCOPE. PR #42 bumped @angular-devkit/build-angular
+    #     19.2.27 to 21.2.19, pulling in @angular/build@21, and the build failed
+    #     with: "@angular/build supports Angular versions ^21.0.0, but detected
+    #     Angular version 19.2.25 instead."
+    #
+    # So: list every scope explicitly, and ignore them ENTIRELY rather than only
+    # majors. `zone.js` is on 0.x, where a breaking change ships as a MINOR
+    # (0.15 -> 0.16 requires a newer Angular), so a semver-major filter would let
+    # it through. Nothing is lost by the blanket ignore: Angular 19 is EOL, so
+    # there are no patch releases left to take.
+    #
+    # Deleting this whole `ignore:` block is step one of the Angular upgrade.
     ignore:
       - dependency-name: '@angular/*'
-        update-types: ['version-update:semver-major']
+      - dependency-name: '@angular-devkit/*'
+      - dependency-name: '@angular-eslint/*'
+      - dependency-name: 'angular-eslint'
+      - dependency-name: 'zone.js'
     groups:
       # First matching group wins, so Angular is listed ahead of the catch-all.
+      # These are ignored above, so the group only matters once the ignore is
+      # lifted — at which point one grouped PR is what you want, not eight.
       angular:
         patterns:
           - '@angular/*'
+          - '@angular-devkit/*'
+          - '@angular-eslint/*'
           - 'angular-eslint'
+          - 'zone.js'
       build-tooling:
         patterns:
           - '*'
