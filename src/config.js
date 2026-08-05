@@ -109,6 +109,16 @@ const config = {
   // nothing and must never take the three result columns down with it.
   summaryTimeoutMs:  parseInt(process.env.SUMMARY_TIMEOUT_MS || '20000', 10),
 
+  // USD per million tokens, for turning the usage the deployment reports into a number a human can
+  // read. Defaults are 4o-mini-class list rates.
+  //
+  // This yields an ESTIMATE and must be labelled as one wherever it is shown. Azure bills on its
+  // own meter with its own rounding, list rates change without this file changing, and any
+  // negotiated or committed-use discount is invisible here. It is for spotting a query that costs
+  // 50x the others — not for reconciling an invoice.
+  summaryCostPerMTokIn:  parseFloat(process.env.SUMMARY_COST_PER_MTOK_IN  || '0.15'),
+  summaryCostPerMTokOut: parseFloat(process.env.SUMMARY_COST_PER_MTOK_OUT || '0.60'),
+
   // Keycloak & Token Authentication
   keycloakUrl:           process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',
