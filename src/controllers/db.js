@@ -1,6 +1,7 @@
 'use strict';
 
 const { systemAccess } = require('../helpers/access-sql');
+const { logger } = require('../utils/logger');
 const projectsRepo = require('../repositories/projects');
 const documentsRepo = require('../repositories/documents');
 const boundariesRepo = require('../repositories/boundaries');
@@ -118,14 +119,14 @@ async function runNrptiSyncHandler(req, res) {
     const isAsync = req.query.async === 'true';
 
     if (isAsync) {
-      syncNrptiData().catch((err) => console.error('Background NRPTI sync error:', err));
+      syncNrptiData().catch((err) => logger.error('Background NRPTI sync error:', { error: err.message, stack: err.stack }));
       return res.json({
         success: true,
         message: 'NRPTI sync process triggered in background.'
       });
     }
 
-    console.log(' Starting manual NRPTI sync...');
+    logger.info(' Starting manual NRPTI sync...');
     const results = await syncNrptiData();
     res.json({
       success: true,
@@ -133,7 +134,7 @@ async function runNrptiSyncHandler(req, res) {
       results
     });
   } catch (err) {
-    console.error('NRPTI sync error:', err);
+    logger.error('NRPTI sync error:', { error: err.message, stack: err.stack });
     res.status(500).json({ success: false, error: err.message });
   }
 }

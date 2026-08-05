@@ -13,6 +13,7 @@
  */
 
 const config = require('../config');
+const { logger } = require('../utils/logger');
 
 let credential = null;
 let tokenCache = null;
@@ -157,7 +158,7 @@ async function summarize(keywords, chunks) {
   if (!config.foundryEndpoint || !config.foundryDeployment) {
     // Configured on but not configured for. Loud, because silently returning null here looks
     // identical to a query that legitimately found nothing.
-    console.error('[summarize] SUMMARY_ENABLED is true but FOUNDRY_ENDPOINT/FOUNDRY_DEPLOYMENT is unset');
+    logger.error('[summarize] SUMMARY_ENABLED is true but FOUNDRY_ENDPOINT/FOUNDRY_DEPLOYMENT is unset');
     return { summary: null, citations: [], usage: null, reason: 'not_configured' };
   }
 
@@ -194,7 +195,7 @@ async function summarize(keywords, chunks) {
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      console.error(`[summarize] ${res.status} from the deployment: ${body.slice(0, 300)}`);
+      logger.error(`[summarize] ${res.status} from the deployment: ${body.slice(0, 300)}`);
       return { summary: null, citations: [], usage: null, reason: 'upstream_error' };
     }
 
@@ -204,7 +205,7 @@ async function summarize(keywords, chunks) {
     // The cost meter. Without it the budget question is unanswerable, and this is the cheapest
     // moment to add it — see the cost probe in ADR-006.
     if (data?.usage) {
-      console.log(
+      logger.info(
         `[summarize] tokens prompt=${data.usage.prompt_tokens} completion=${data.usage.completion_tokens} ` +
         `chunks=${used.length}`
       );
@@ -220,7 +221,7 @@ async function summarize(keywords, chunks) {
     // Additive feature, non-fatal failure. An aborted or failed summary renders no panel; it must
     // never take the three result columns down with it.
     const reason = err.name === 'AbortError' ? 'timeout' : 'error';
-    console.error(`[summarize] ${reason}: ${err.message}`);
+    logger.error(`[summarize] ${reason}: ${err.message}`);
     return { summary: null, citations: [], usage: null, reason };
   } finally {
     clearTimeout(timer);

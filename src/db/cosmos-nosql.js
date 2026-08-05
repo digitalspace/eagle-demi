@@ -18,6 +18,7 @@
  */
 
 const { CosmosClient } = require('@azure/cosmos');
+const { logger } = require('../utils/logger');
 
 let clientInstance = null;
 let databaseInstance = null;
@@ -48,7 +49,7 @@ function initCosmosClient() {
 
   const endpoint = process.env.COSMOS_ENDPOINT;
   if (!endpoint) {
-    console.warn('[Cosmos] COSMOS_ENDPOINT is not set; data access is unavailable.');
+    logger.warn('[Cosmos] COSMOS_ENDPOINT is not set; data access is unavailable.');
     return null;
   }
 
@@ -65,10 +66,10 @@ function initCosmosClient() {
       aadCredentials: new DefaultAzureCredential(credentialOptions)
     });
     databaseInstance = clientInstance.database(DATABASE_ID);
-    console.log(`[Cosmos] Connected to database "${DATABASE_ID}" at ${endpoint}`);
+    logger.info(`[Cosmos] Connected to database "${DATABASE_ID}" at ${endpoint}`);
     return databaseInstance;
   } catch (err) {
-    console.error('[Cosmos] Client initialization failed:', err.message);
+    logger.error(`[Cosmos] Client initialization failed: ${err.message}`);
     return null;
   }
 }

@@ -141,7 +141,18 @@ module documentStorage './modules/document-storage.bicep' = if (deployDocumentSt
   }
 }
 
-// 5. REST API — Linux App Service on a B1 plan, integrated into the landing-zone subnet.
+// 5. Azure Monitor — Log Analytics workspace plus workspace-based Application Insights. Deployed
+// before the apps because they consume its connection string; nothing else depends on it.
+module observability './modules/observability.bicep' = {
+  name: 'deploy-observability'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+  }
+}
+
+// 6. REST API — Linux App Service on a B1 plan, integrated into the landing-zone subnet.
 //
 // Not Consumption (Y1) despite `kind: 'functionapp'`: the live plan is B1, because the app holds a
 // warm worker and the 224 MB heap ceiling the scripts are written against is a B1 instance.
@@ -159,20 +170,22 @@ module apiWebApp './modules/api-web-app.bicep' = {
     identityClientId: identity.outputs.clientId
     cosmosEndpoint: cosmos.outputs.cosmosEndpoint
     searchEndpoint: search.outputs.searchEndpoint
+    appInsightsConnectionString: observability.outputs.connectionString
   }
 }
 
-// 6. Angular frontend — a second Linux App Service on its own B1 plan.
+// 7. Angular frontend — a second Linux App Service on its own B1 plan.
 module frontendWebApp './modules/frontend-web-app.bicep' = {
   name: 'deploy-frontend-web-app'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
+    appInsightsConnectionString: observability.outputs.connectionString
   }
 }
 
-// 7. Cost budget alerts. AI Search Basic is a fixed monthly charge whether queried or idle, which
+// 8. Cost budget alerts. AI Search Basic is a fixed monthly charge whether queried or idle, which
 // is what moved the ceiling to 100.
 module costBudget './modules/cost-budget.bicep' = {
   name: 'deploy-cost-budget'
@@ -189,3 +202,4 @@ output frontendWebAppHostName string = frontendWebApp.outputs.frontendWebAppHost
 output searchEndpoint string = search.outputs.searchEndpoint
 output cosmosEndpoint string = cosmos.outputs.cosmosEndpoint
 output identityClientId string = identity.outputs.clientId
+output logAnalyticsWorkspaceName string = observability.outputs.workspaceName

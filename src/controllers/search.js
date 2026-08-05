@@ -4,6 +4,7 @@
 // which is a read rather than a search — goes to the Cosmos NoSQL repositories. It used to go to
 // the Mongo-API models; that was the last data-layer split in this file and it is gone.
 const { resolveAccess } = require('../helpers/access-sql');
+const { logger } = require('../utils/logger');
 const { filterFor } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
 const documentsRepo = require('../repositories/documents');
@@ -108,7 +109,7 @@ exports.search = async (req, res) => {
           // A backend FAULT is different from no matches, and is the one case still worth the
           // database's answer — logged loudly, because an empty page and a broken search look
           // identical from outside.
-          console.error('[search] project search failed, falling back to Cosmos:', err.message);
+          logger.error(`[search] project search failed, falling back to Cosmos: ${err.message}`);
         }
       }
 
@@ -155,7 +156,7 @@ exports.search = async (req, res) => {
 
         return res.json([{ searchResults: mapped }]);
       } catch (cosmosErr) {
-        console.error('[search] Cosmos DB fallback failed:', cosmosErr.message);
+        logger.error(`[search] Cosmos DB fallback failed: ${cosmosErr.message}`);
         return res.json([{ searchResults: [] }]);
       }
     } else if (dataset === 'Document') {
@@ -216,7 +217,7 @@ exports.search = async (req, res) => {
 
           return res.json([{ searchResults: [] }]);
         } catch (err) {
-          console.error('[search] document search failed, falling back to Cosmos:', err.message);
+          logger.error(`[search] document search failed, falling back to Cosmos: ${err.message}`);
         }
       }
 
@@ -254,7 +255,7 @@ exports.search = async (req, res) => {
 
         return res.json([{ searchResults: mappedDocs }]);
       } catch (cosmosErr) {
-        console.error('[search] Document Cosmos DB fallback failed:', cosmosErr.message);
+        logger.error(`[search] Document Cosmos DB fallback failed: ${cosmosErr.message}`);
         return res.json([{ searchResults: [] }]);
       }
     } else if (dataset === 'DocumentChunk') {
@@ -337,14 +338,14 @@ exports.search = async (req, res) => {
         // same fact as "nothing matched". 200 rather than 5xx because the frontend retries 5xx
         // twice at 1s (registry-state.service.ts fetchWithRetry) and lands on an empty chunk list
         // regardless, so a status code only buys latency on every search.
-        console.error('[search] chunk search failed:', err.message);
+        logger.error(`[search] chunk search failed: ${err.message}`);
         return res.json([{ searchResults: [] }]);
       }
     } else {
       return res.status(400).json({ error: `Invalid or unsupported dataset: ${dataset}` });
     }
   } catch (err) {
-    console.error('[demi-api search] Top-level search error:', err);
+    logger.error('[demi-api search] Top-level search error:', { error: err.message, stack: err.stack });
     return res.json([{ searchResults: [] }]);
   }
 };
@@ -454,7 +455,7 @@ exports.summarize = async (req, res) => {
   } catch (err) {
     // Additive: the panel disappears, the results columns do not. 200 rather than 5xx for the same
     // reason the chunk search does it — the frontend retries 5xx and lands here again regardless.
-    console.error('[search/summary] failed:', err.message);
+    logger.error(`[search/summary] failed: ${err.message}`);
     return res.json({ summary: null, citations: [], reason: 'error' });
   }
 };

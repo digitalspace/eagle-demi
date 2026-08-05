@@ -75,6 +75,9 @@ param keycloakUrl string = environmentName == 'prod'
 @description('Keycloak realm')
 param keycloakRealm string = 'eao-epic'
 
+@description('Application Insights connection string. Empty disables telemetry, which is the local-development case.')
+param appInsightsConnectionString string = ''
+
 var apiAppName = 'demi-api-${environmentName}'
 var appServicePlanName = 'demi-plan-${environmentName}'
 var storageAccountName = take('demistg${environmentName}${uniqueString(resourceGroup().id)}', 24)
@@ -156,6 +159,19 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'WEBSITE_RUN_FROM_PACKAGE'
           value: '1'
+        }
+        // Azure Monitor. The Functions host reads this to emit request, dependency and exception
+        // telemetry with no code involved; `api/index.js` reads the same variable to decide whether
+        // to start the OpenTelemetry distro that carries the winston lines.
+        {
+          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+          value: appInsightsConnectionString
+        }
+        // The distro in application code owns instrumentation. Leaving the platform agent on as
+        // well means two SDKs instrumenting the same process, which double-counts telemetry.
+        {
+          name: 'APPLICATIONINSIGHTS_ENABLE_AGENT'
+          value: 'false'
         }
         // The identity above, named. DefaultAzureCredential has no way to choose between several
         // user-assigned identities on one app, so without this it fails to authenticate at all.

@@ -113,7 +113,7 @@ exports.downloadDocument = async (req, res) => {
       displayName: doc.displayName || null
     });
   } catch (err) {
-    console.error('[Document Controller] Presigned download failed:', err.message);
+    logger.error(`[Document Controller] Presigned download failed: ${err.message}`);
     return res.status(500).json({ error: 'Failed to generate download link.' });
   }
 };
@@ -307,7 +307,7 @@ exports.deleteDocument = async (req, res) => {
       const result = await chunks.removeForDocument(systemAccess(), existing.id);
       removedChunks = result.succeeded || 0;
     } catch (err) {
-      console.error('[Document Controller] Chunk removal failed:', err.message);
+      logger.error(`[Document Controller] Chunk removal failed: ${err.message}`);
     }
 
     // Best-effort, and the ONLY thing that removes this document from search: the indexer's
@@ -649,7 +649,7 @@ exports.ingestChunks = async (req, res) => {
 
     return res.json({ id: doc.id, chunks: items.length, extraction: provenance || null });
   } catch (err) {
-    console.error('[Document Controller] Chunk ingest failed:', err.message);
+    logger.error(`[Document Controller] Chunk ingest failed: ${err.message}`);
     return res.status(500).json({ error: err.message });
   }
 };

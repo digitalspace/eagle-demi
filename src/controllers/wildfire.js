@@ -11,6 +11,7 @@
  */
 
 const { syncWildfiresData } = require('../scripts/sync-wildfires');
+const { logger } = require('../utils/logger');
 
 exports.syncWildfiresAdmin = async (req, res) => {
   try {
@@ -18,7 +19,7 @@ exports.syncWildfiresAdmin = async (req, res) => {
     const result = await syncWildfiresData();
     res.json({ success: true, result });
   } catch (err) {
-    console.error('[Wildfire Controller] Admin sync error:', err);
+    logger.error('[Wildfire Controller] Admin sync error:', { error: err.message, stack: err.stack });
     res.status(500).json({ error: err.message });
   }
 };

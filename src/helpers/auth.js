@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { logger } = require('../utils/logger');
 const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
 const config = require('../config');
@@ -95,7 +96,7 @@ function authenticate(req, onSuccess, onFailure) {
         // the JWKS path, which cannot succeed while keycloak is disabled.
         return onFailure(401, 'Unauthorized. Invalid Bearer token structure.');
       }
-      console.warn('[demi-api] Warning: keycloakEnabled is false in non-test environment.');
+      logger.warn('[demi-api] Warning: keycloakEnabled is false in non-test environment.');
       return onFailure(401, 'Unauthorized. Keycloak signature verification required.');
     }
 
@@ -115,7 +116,7 @@ function authenticate(req, onSuccess, onFailure) {
 
     jwt.verify(token, getKey, options, (err, decoded) => {
       if (err) {
-        console.error('[demi-api] JWT verification error:', err.message);
+        logger.error(`[demi-api] JWT verification error: ${err.message}`);
         return onFailure(401, `Unauthorized. JWT verification failed: ${err.message}`);
       }
 
