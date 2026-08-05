@@ -112,9 +112,10 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       (subject `repo:digitalspace/eagle-demi:ref:refs/heads/main`) — dormant while the app has no
       permissions, live the moment it gets any, from a PUBLIC repo. Settle that before wiring this
       app to sign-in.
-- [ ] **Deploy workflow actions still target Node 20.** `actions/checkout@v4`,
-      `actions/setup-node@v4` and `azure/login@v2` are force-run on Node 24 with a deprecation
-      warning on every run.
+- [ ] **`azure/arm-deploy@v2` shipped unverified.** Bumped from `v1` on 2026-08-05 with every other
+      action, but the only workflows using it are test and prod, which cannot authorize a deploy, so
+      nothing exercised it. Its last release was 2024-02-13; `azure/bicep-deploy` is the maintained
+      successor. Swap when test CI gets an identity, or the first test deploy discovers this.
 - [ ] **`demi-identity-dev` briefly held Website Contributor on `demi-api-dev`** (assignment
       `29745ac3`, 2026-08-05, removed same day). Worth knowing that
       `Microsoft.Authorization/roleAssignments/delete` is denied at this RG even though *create*
@@ -126,11 +127,12 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       download link fails to sign — it is not implied by `Storage Blob Data Contributor`.
 - [ ] **`main.bicep` has never been deployed and still should not be.** It now describes dev
       accurately — `az deployment group what-if` reports zero creates and zero deletes against the
-      live group — but it has never actually run, and `azure-deploy-dev.yaml`'s infra job was
-      reduced to `az bicep build` on 2026-08-04. Deploying it for the first time is its own
-      decision. CI cannot make that decision by accident: `demi-cicd-dev` holds Website Contributor
-      on two App Services and nothing at resource-group scope, so it cannot run an ARM deployment
-      even if a login step were added back to `validate-infra`.
+      live group — but it has never actually run. The dev infra job was reduced to `az bicep build`
+      on 2026-08-04 and moved out of the deploy path entirely on 2026-08-05, into `pr.yaml` as
+      `validate-bicep`. Deploying the template for the first time is its own decision. CI cannot
+      make that decision by accident: `demi-cicd-dev` holds Website Contributor on two App Services
+      and nothing at resource-group scope, so it cannot run an ARM deployment even if a job were
+      added back.
 
 ## Semantic ranker — two things to watch, now that it is live
 

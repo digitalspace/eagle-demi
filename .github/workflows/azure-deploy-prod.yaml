@@ -42,10 +42,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -56,13 +56,13 @@ jobs:
           az bicep build --file ./azure/main.bicep
 
       - name: Create Resource Group if not exists
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.LOCATION }} --tags Project=DEMI Application=eagle-demi Environment=prod CostCenter=c4b0a8 ManagedBy=Bicep
 
       - name: Deploy Bicep IaC
-        uses: azure/arm-deploy@v1
+        uses: azure/arm-deploy@v2
         with:
           scope: resourcegroup
           resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
@@ -71,7 +71,7 @@ jobs:
 
       - name: Report Infrastructure Failure to Job Summary
         if: failure()
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             echo "### ❌ Infrastructure Deployment Failed" >> $GITHUB_STEP_SUMMARY
@@ -87,10 +87,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -107,14 +107,14 @@ jobs:
           zip -r /tmp/frontend.zip .
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy Frontend Zip to Azure Web App
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az webapp deploy -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-frontend-prod --src-path /tmp/frontend.zip --type zip
@@ -132,10 +132,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -162,14 +162,14 @@ jobs:
           "
 
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy API Zip to Azure Function App
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az functionapp deployment source config-zip -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-api-prod --src /tmp/api.zip

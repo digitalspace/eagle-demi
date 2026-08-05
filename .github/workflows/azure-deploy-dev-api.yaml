@@ -1,0 +1,110 @@
+# =============================================================================
+# Build and Deploy the DEMI API to Azure Dev
+# =============================================================================
+# Deploys the Node.js Express API to the Azure Function App `demi-api-dev`.
+#
+# API only. The frontend has its own file, `azure-deploy-dev-frontend.yaml`, and its
+# own trigger. They were one workflow until 2026-08-05, which meant an Angular-only
+# change redeployed the API and a controller change rebuilt the frontend. The two
+# target different App Services and share no build output, so they now run
+# independently — including their concurrency groups.
+#
+# This workflow deploys the application only. It must NEVER deploy infrastructure.
+# `azure/main.bicep` does not describe dev: it never instantiates cosmos-nosql,
+# ai-search, identity, document-storage or frontend-web-app, and there is no VNet in
+# the resource group. An ARM deployment from here would not converge dev, it would
+# damage it. Infrastructure changes go through `az` by hand until the template is
+# rewritten to match reality. See TODO.md.
+#
+# The credential is scoped to match: `demi-cicd-dev` holds Website Contributor on
+# demi-api-dev and demi-frontend-dev individually, nothing at resource-group scope,
+# so it cannot run an ARM deployment even if a job were added. Keep it that way — do
+# not add an infra job, and do not widen the role assignment.
+#
+# Bicep still gets validated, in `pr.yaml`. A template that will not compile is a
+# pull-request problem; it has no bearing on whether a zipdeploy should run.
+# =============================================================================
+
+name: Deploy DEMI API to Azure Dev
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # `scripts/package-api.py` is the authority on what ends up in the package, and
+      # these paths mirror it. Two are easy to miss:
+      #   - root `public/` is not in its `root_exclude_dirs`, so it ships.
+      #   - `frontend/public/assets/geojson/**` is re-included by `include_subpaths` —
+      #     the boundary seeder reads it at runtime in Azure. It is the one path under
+      #     `frontend/` that belongs to the API package, so it fires BOTH workflows.
+      #     That is correct, not a bug.
+      - 'src/**'
+      - 'api/**'
+      - 'public/**'
+      - 'index.js'
+      - 'host.json'
+      - 'package.json'
+      - 'yarn.lock'
+      - 'frontend/public/assets/geojson/**'
+      - '.github/workflows/azure-deploy-dev-api.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-azure-dev-api
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_SUBSCRIPTION_ID: 'd2f8d048-2af3-44fd-81cc-858c040001f2' # c4b0a8-dev - EPIC.AI
+  AZURE_RESOURCE_GROUP: 'c4b0a8-dev-rg'
+
+jobs:
+  deploy-api:
+    name: Build & Deploy API (Azure Function App)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # Dependencies only. Packaging belongs to `scripts/package-api.py`, which the deploy script
+      # calls. The inline zip that used to live here pruned only frontend/.git/dist/.angular, so it
+      # shipped .claude, test, azure, .github and scripts into wwwroot — exactly the debris
+      # `scripts/validate-deploy.sh` checks for.
+      - name: Install Dependencies
+        run: |
+          corepack enable
+          yarn install --immutable
+
+      - name: Azure Login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      # `scripts/deploy-azure.sh`, not `az functionapp deployment source config-zip`. The CLI
+      # reports success from its own exit code, which is not the same fact as the deployment
+      # succeeding: on 2026-08-05 an oversized package left Kudu at status 1 for over thirty
+      # minutes, the client was killed, and Azure went on listing an OLDER deployment as active —
+      # a mismatch that reverts the app on the next container recycle.
+      #
+      # The script instead POSTs /api/zipdeploy?isAsync=true, polls the deployment RECORD to a
+      # terminal state (4 = success, 3 = failed), and then probes /api/search/summary for a 401 to
+      # prove the NEW build is the one answering. A plain `run:` step for the reason above.
+      - name: Deploy API
+        run: ./scripts/deploy-azure.sh api ${{ env.AZURE_RESOURCE_GROUP }}
+
+      - name: Report API Failure to Job Summary
+        if: failure()
+        run: |
+          echo "### ❌ API Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Check step logs above for details on packaging or Azure Function App deployment errors." >> $GITHUB_STEP_SUMMARY

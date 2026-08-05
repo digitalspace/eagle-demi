@@ -1,0 +1,97 @@
+# =============================================================================
+# Build and Deploy the DEMI Frontend to Azure Dev
+# =============================================================================
+# Deploys the Angular frontend to the Azure Web App `demi-frontend-dev`.
+#
+# Frontend only. The API has its own file, `azure-deploy-dev-api.yaml`, and its own
+# trigger. They were one workflow until 2026-08-05, which meant an Angular-only
+# change redeployed the API and a controller change rebuilt the frontend. The two
+# target different App Services and share no build output, so they now run
+# independently — including their concurrency groups.
+#
+# This workflow deploys the application only. It must NEVER deploy infrastructure.
+# `azure/main.bicep` does not describe dev: it never instantiates cosmos-nosql,
+# ai-search, identity, document-storage or frontend-web-app, and there is no VNet in
+# the resource group. An ARM deployment from here would not converge dev, it would
+# damage it. Infrastructure changes go through `az` by hand until the template is
+# rewritten to match reality. See TODO.md.
+#
+# The credential is scoped to match: `demi-cicd-dev` holds Website Contributor on
+# demi-api-dev and demi-frontend-dev individually, nothing at resource-group scope,
+# so it cannot run an ARM deployment even if a job were added. Keep it that way — do
+# not add an infra job, and do not widen the role assignment.
+#
+# Bicep still gets validated, in `pr.yaml`. A template that will not compile is a
+# pull-request problem; it has no bearing on whether a zipdeploy should run.
+# =============================================================================
+
+name: Deploy DEMI Frontend to Azure Dev
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # `frontend/**` is the whole trigger. The deploy runs `yarn --cwd frontend build`
+      # and ships `frontend/dist`, so nothing outside this directory can change the
+      # bundle. Root package.json / yarn.lock are the API's manifest — frontend has its
+      # own — so they are deliberately absent.
+      - 'frontend/**'
+      - '.github/workflows/azure-deploy-dev-frontend.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-azure-dev-frontend
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_SUBSCRIPTION_ID: 'd2f8d048-2af3-44fd-81cc-858c040001f2' # c4b0a8-dev - EPIC.AI
+  AZURE_RESOURCE_GROUP: 'c4b0a8-dev-rg'
+
+jobs:
+  deploy-frontend:
+    name: Build & Deploy Frontend (Azure Web App)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # Dependencies only. The build belongs to the deploy script, which runs
+      # `yarn --cwd frontend build` itself — `angular.json` sets
+      # `defaultConfiguration: production`, so there is nothing to pass.
+      - name: Install Frontend Dependencies
+        run: |
+          corepack enable
+          yarn --cwd frontend install --immutable
+
+      - name: Azure Login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      # `scripts/deploy-azure.sh`, not `az webapp deploy`. Beyond deploying, it PRUNES the
+      # superseded hashed bundles that zipdeploy's merge leaves behind — by 2026-08-05 that was
+      # 19 assets, 5.6 MB, of which 3 were referenced. The old workflow never pruned at all.
+      #
+      # A plain `run:` step, not `azure/cli`: that action runs in a container, and the script
+      # needs THIS host's `az` login for `az account get-access-token`. `ubuntu-latest` already
+      # ships az, python3, curl and zip.
+      - name: Deploy Frontend
+        run: ./scripts/deploy-azure.sh frontend ${{ env.AZURE_RESOURCE_GROUP }}
+
+      - name: Report Frontend Failure to Job Summary
+        if: failure()
+        run: |
+          echo "### ❌ Frontend Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Check step logs above for details on build or Azure Web App deployment errors." >> $GITHUB_STEP_SUMMARY

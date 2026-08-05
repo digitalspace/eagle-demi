@@ -1,7 +1,13 @@
 # =============================================================================
 # PR Validation
 # =============================================================================
-# Runs linting, tests, and builds for API and Frontend on pull requests.
+# Runs linting, tests, and builds for API and Frontend on pull requests, and
+# compiles the Bicep template.
+#
+# `validate-bicep` moved here from the dev deploy workflow on 2026-08-05, where it
+# gated both app deploys. That was backwards: dev deploys no infrastructure at all,
+# so a template that will not compile has no bearing on whether a zipdeploy should
+# run. It does have a bearing on whether a pull request is mergeable.
 # =============================================================================
 
 name: PR Validation
@@ -22,10 +28,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -47,10 +53,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -65,3 +71,23 @@ jobs:
 
       - name: Build Frontend
         run: yarn --cwd frontend build
+
+  validate-bicep:
+    name: Validate Bicep Template
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # No Azure login: `az bicep build` compiles locally, and `ubuntu-latest` ships az.
+      # Keeping it loginless is deliberate — it makes deploying from this workflow
+      # impossible rather than merely unauthenticated.
+      - name: Validate Bicep Template
+        run: az bicep build --file ./azure/main.bicep
+
+      - name: Report Validation Failure to Job Summary
+        if: failure()
+        run: |
+          echo "### ❌ Bicep template failed to compile" >> $GITHUB_STEP_SUMMARY
+          echo "Fix \`azure/main.bicep\`." >> $GITHUB_STEP_SUMMARY
