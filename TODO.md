@@ -122,8 +122,12 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       alerts on `@angular/core`, `@angular/common` and `@angular/compiler` has
       `first_patched_version: null` with a vulnerable range of `<= 19.2.25`. There is nothing to
       upgrade to inside 19 — angular.dev lists v22 active, v21 LTS, v20 LTS to Nov 2026, and "v2 to
-      v19 are no longer supported". Dependabot will therefore never open a PR for these, and
-      `.github/dependabot.yml` ignores Angular majors so it does not try weekly and fail.
+      v19 are no longer supported". `first_patched_version: null` means "no fix in the affected
+      major", not "no fix anywhere": Dependabot's first run proposed 20.3.x as ordinary **version**
+      updates (PRs #33/#34/#40, all closed) and every one failed `Test & Build Frontend`, which is
+      the evidence that this is a migration and not a bump. `.github/dependabot.yml` now ignores
+      Angular majors — with the pattern `@angular/*`, since `@angular*` silently does not match in
+      `ignore.dependency-name` even though it does match in `groups.patterns`.
       They are not theoretical: XSS via i18n event-handler attributes, hydration DOM clobbering and
       response-cache poisoning, `HttpTransferCache` cache-key ambiguity, and a DoS via OOM in date
       formatting — all in code the bundler compiles into what `demi-frontend-dev` serves.
@@ -131,12 +135,14 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       Angular 21, so there is a migration to copy rather than invent. Two majors, so it is real work
       and not a dependency bump. Until it happens the open-alert floor is 7 — a count below that
       means somebody dismissed an alert instead of fixing it.
-- [ ] **Test and prod CI still cannot deploy.** Both workflows read the same `AZURE_CLIENT_ID`, and
-      `demi-cicd-dev` holds no role outside `c4b0a8-dev-rg`. The federated credential is on the
-      `main` branch subject, so a `workflow_dispatch` from `main` would authenticate and then fail
-      on authorization in the test/prod subscriptions. Each environment needs its own identity,
-      credential and role assignments. Both are `workflow_dispatch` only, so nothing fires by
-      accident meanwhile.
+- [ ] **Test and prod have no deploy path at all — the workflows were deleted 2026-08-05.** Nothing
+      is deployed in either subscription and neither has a resource group, so the files were dead
+      weight naming prod resources in a public repo. Rebuilding them needs, per environment: a
+      managed identity, a federated credential on subject
+      `repo:digitalspace/eagle-demi:environment:{test,prod}` matching a GitHub environment of that
+      name, role assignments in that subscription, and for prod a decision on required reviewers.
+      Copy the dev pair as the shape. Also settle the release model first — prod is supposed to
+      deploy a tag verified on test, which neither deleted workflow actually enforced.
 - [ ] **App registration `acb4198f-64db-4485-9638-a894e2d2c99b` — KEPT deliberately, not for CI.**
       Left from the app-registration route before `demi-cicd-dev` superseded it. Not deleted: app
       registrations are hard to provision in this tenant, and human federated sign-in is precisely
@@ -145,10 +151,14 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       (subject `repo:digitalspace/eagle-demi:ref:refs/heads/main`) — dormant while the app has no
       permissions, live the moment it gets any, from a PUBLIC repo. Settle that before wiring this
       app to sign-in.
-- [ ] **`azure/arm-deploy@v2` shipped unverified.** Bumped from `v1` on 2026-08-05 with every other
-      action, but the only workflows using it are test and prod, which cannot authorize a deploy, so
-      nothing exercised it. Its last release was 2024-02-13; `azure/bicep-deploy` is the maintained
-      successor. Swap when test CI gets an identity, or the first test deploy discovers this.
+- [ ] **`MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `TYPESENSE_API_KEY`, `OPENSHIFT_TOKEN` and
+      `OPENSHIFT_URL` are now unreferenced repo secrets.** The two `MINIO_*` were read only by the
+      deleted test/prod workflows, as Bicep parameters; `TYPESENSE_API_KEY` outlived Typesense
+      (deleted 2026-07-31) and `OPENSHIFT_*` predate the move off OpenShift entirely. Nothing in
+      `.github/workflows/` references any of them — confirmed by grep, not assumed. They are live
+      credentials sitting in a **public** repo's settings, reachable by any workflow that asks, so
+      the decision is delete-and-rotate rather than leave-and-forget. MinIO itself is still in use at
+      runtime; those values come from Azure app settings, not from here.
 - [ ] **`demi-identity-dev` briefly held Website Contributor on `demi-api-dev`** (assignment
       `29745ac3`, 2026-08-05, removed same day). Worth knowing that
       `Microsoft.Authorization/roleAssignments/delete` is denied at this RG even though *create*

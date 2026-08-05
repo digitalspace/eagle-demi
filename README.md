@@ -302,7 +302,21 @@ federated credential, with no client secret anywhere:
 | Identity | `demi-cicd-dev`, client `37ff78d5-23b0-49bc-b324-02ff63755da1` |
 | Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:digitalspace/eagle-demi:ref:refs/heads/main`, audience `api://AzureADTokenExchange` |
 | RBAC | Website Contributor on `demi-api-dev` and `demi-frontend-dev` **individually** — nothing at resource-group scope |
-| Repo secrets | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`. The subscription id is a literal in the workflow `env:` |
+| Config | All four values live on the **`dev` GitHub environment**, nothing at repo scope and nothing hardcoded: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`; variables `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` |
+
+**Declaring `environment: dev` changes the OIDC subject claim, and that is the trap.** With an
+environment the claim becomes `repo:digitalspace/eagle-demi:environment:dev` rather than
+`repo:digitalspace/eagle-demi:ref:refs/heads/main`, so `demi-cicd-dev` carries **two** federated
+credentials:
+
+| Name | Subject | Used by |
+|---|---|---|
+| `gh-main` | `repo:digitalspace/eagle-demi:ref:refs/heads/main` | nothing today — kept as the fallback if a job ever drops its environment |
+| `gh-env-dev` | `repo:digitalspace/eagle-demi:environment:dev` | both dev deploy workflows |
+
+Rename the environment, or delete `gh-env-dev`, and Azure Login fails with `AADSTS700213: No matching
+federated identity record found for presented assertion subject`. The subject is the whole contract;
+it is not derived from anything the workflow can set.
 
 **A managed identity, deliberately, not an app registration.** A UAMI carries federated credentials
 just as an Entra application does, but creating and configuring one is pure ARM. The app-registration
@@ -321,13 +335,17 @@ whatever principal the CLI session holds, a human locally and the managed identi
 `preflight_identity` prints that principal and refuses to run under `GITHUB_ACTIONS` as anything but
 a service principal, so a deploy authenticated as a person fails instead of proceeding.
 
-Only dev has an identity. Test and prod workflows read the same secrets but `demi-cicd-dev` has no
-role in those subscriptions, so they authenticate and then fail on authorization. Each environment
-needs its own.
+**There are no test or prod deploy workflows.** They were deleted on 2026-08-05. Both subscriptions
+exist (`c4b0a8-test`, `c4b0a8-prod`) but neither holds a resource group, there is nothing deployed in
+either, and `demi-cicd-dev` has no role outside dev — so the two workflows could only ever
+authenticate and then fail on authorization. Keeping dead deploy paths in a **public** repo is
+liability without benefit: they named prod resources, referenced `MINIO_*` secrets, and carried
+`azure/arm-deploy` steps against a Bicep template that has never run.
 
-**Only dev deploys on a push to `main`.** Test and prod are `workflow_dispatch` only. They used to
-carry the same push trigger, which would have deployed both on every merge with no tag and no
-approval. That was inert only while no credential existed; one exists now, so do not restore it.
+Recreating them is not a copy job. Each environment needs its own managed identity, its own federated
+credential — subject `repo:digitalspace/eagle-demi:environment:test` or `:environment:prod`, matching
+its GitHub environment — its own role assignments, and for prod a decision about required reviewers
+on the environment. Build them from the dev pair when that work actually starts.
 
 **`azure/main.bicep` does not describe the running environment.** It never instantiates
 `cosmos-nosql.bicep`, `ai-search.bicep`, `identity.bicep`, `document-storage.bicep` or

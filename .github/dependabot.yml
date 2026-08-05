@@ -36,18 +36,23 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     # Angular majors are ignored deliberately. The app is pinned at 19.2.25 and
-    # Angular 19 is past end-of-life, so there is no patch release to take and
-    # every major is a framework migration — two majors to reach 21 (LTS). An
-    # automatic weekly PR for that would fail CI forever and bury the ones worth
-    # reading. The upgrade is tracked in TODO.md as real work instead.
+    # Angular 19 is past end-of-life, so every major is a framework migration —
+    # two majors to reach 21 (LTS). The upgrade is tracked in TODO.md as real work.
+    #
+    # ‼️ The pattern must be `@angular/*`, NOT `@angular*`. `groups.patterns` and
+    # `ignore.dependency-name` do not use the same matcher: with `@angular*` the
+    # group matched (Angular packages were kept out of the `build-tooling`
+    # catch-all) while the ignore silently did not, and the first Dependabot run
+    # opened PRs #33, #34 and #40 bumping Angular 19.2.25 to 20.3.x. Every one
+    # failed `Test & Build Frontend`. Verified 2026-08-05.
     ignore:
-      - dependency-name: '@angular*'
+      - dependency-name: '@angular/*'
         update-types: ['version-update:semver-major']
     groups:
       # First matching group wins, so Angular is listed ahead of the catch-all.
       angular:
         patterns:
-          - '@angular*'
+          - '@angular/*'
           - 'angular-eslint'
       build-tooling:
         patterns:

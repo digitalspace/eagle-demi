@@ -58,14 +58,20 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  AZURE_SUBSCRIPTION_ID: 'd2f8d048-2af3-44fd-81cc-858c040001f2' # c4b0a8-dev - EPIC.AI
-  AZURE_RESOURCE_GROUP: 'c4b0a8-dev-rg'
-
 jobs:
   deploy-api:
     name: Build & Deploy API (Azure Function App)
     runs-on: ubuntu-latest
+    # Subscription, resource group and the two Azure ids all come from this
+    # environment — nothing about dev is hardcoded here any more.
+    #
+    # Declaring an environment CHANGES THE OIDC SUBJECT CLAIM. It becomes
+    # `repo:digitalspace/eagle-demi:environment:dev` instead of
+    # `...:ref:refs/heads/main`, so the `gh-main` federated credential on
+    # demi-cicd-dev no longer matches on its own. A second credential, `gh-env-dev`,
+    # carries the environment subject. Remove the environment and Azure Login fails
+    # with AADSTS700213; rename it and it fails the same way.
+    environment: dev
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -89,7 +95,7 @@ jobs:
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       # `scripts/deploy-azure.sh`, not `az functionapp deployment source config-zip`. The CLI
       # reports success from its own exit code, which is not the same fact as the deployment
@@ -101,7 +107,7 @@ jobs:
       # terminal state (4 = success, 3 = failed), and then probes /api/search/summary for a 401 to
       # prove the NEW build is the one answering. A plain `run:` step for the reason above.
       - name: Deploy API
-        run: ./scripts/deploy-azure.sh api ${{ env.AZURE_RESOURCE_GROUP }}
+        run: ./scripts/deploy-azure.sh api ${{ vars.AZURE_RESOURCE_GROUP }}
 
       - name: Report API Failure to Job Summary
         if: failure()
