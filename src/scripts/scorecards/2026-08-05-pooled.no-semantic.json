@@ -1,0 +1,1213 @@
+{
+  "started": "2026-08-05T05:35:37.230Z",
+  "query": {
+    "labelsFile": "/tmp/demi/labels/pooled.jsonl",
+    "out": "/tmp/demi/out/pooled.no-semantic.json",
+    "top": 50,
+    "fuzzy": true,
+    "semantic": false,
+    "note": "queries go through searchChunks(), the path the API serves"
+  },
+  "labels": 78,
+  "scored": 78,
+  "errored": 0,
+  "found": 55,
+  "recallAt": {
+    "1": 0.3077,
+    "5": 0.5128,
+    "10": 0.5897,
+    "20": 0.641,
+    "50": 0.7051
+  },
+  "recallKsNotMeasured": [],
+  "mrr": 0.3983,
+  "misses": [
+    {
+      "documentId": "5887c7af0a48e0127583359f",
+      "phrase": "any environmental impacts from those activities, the environmental protection and",
+      "rank": 0,
+      "line": 4
+    },
+    {
+      "documentId": "595fb4383fdcd0001d9f48c1",
+      "phrase": "Health and Safety Plans are not Environmental Management Plans",
+      "rank": 0,
+      "line": 17
+    },
+    {
+      "documentId": "588690d2e036fb0105768d5e",
+      "phrase": "Project Environmental Assessment Application Review. Consultant’s report prepared for",
+      "rank": 0,
+      "line": 18
+    },
+    {
+      "documentId": "5886b47aeed3c0016f8563a2",
+      "phrase": "Cascade Heritage Power Project proposed by Powerhouse Developments",
+      "rank": 0,
+      "line": 22
+    },
+    {
+      "documentId": "5887cfbcff41b812b1cfcb68",
+      "phrase": "opposition to the Kitimat-Summit Lake Pipeline Looping Project",
+      "rank": 0,
+      "line": 23
+    },
+    {
+      "documentId": "588695dfeed3c0016f855507",
+      "phrase": "Comments on Jumbo Glacier Resort Proposal",
+      "rank": 0,
+      "line": 25
+    },
+    {
+      "documentId": "5886baeda4acd4014b8203d3",
+      "phrase": "a link to a MoFR website concerning engineering topics in regards to IPPs",
+      "rank": 0,
+      "line": 28
+    },
+    {
+      "documentId": "5886940ceed3c0016f85525d",
+      "phrase": "Standard Reference Materials for Quality Control in the Environmental",
+      "rank": 0,
+      "line": 30
+    },
+    {
+      "documentId": "5887e264ad20ac134d915f01",
+      "phrase": "ENVIRONMENT ASSESSMENT OF THE PROPOSED CACHE CREEK LANDFILL EXTENSION PROJECT",
+      "rank": 0,
+      "line": 41
+    },
+    {
+      "documentId": "5887d1f63fa55712b70ab3d8",
+      "phrase": "Schaft Creek Mine Project Application Information Requirements",
+      "rank": 0,
+      "line": 42
+    },
+    {
+      "documentId": "5887d32837e29512bded560d",
+      "phrase": "Proponent's Record of Consultation with Agencies",
+      "rank": 0,
+      "line": 45
+    },
+    {
+      "documentId": "5886b418a4acd4014b81ff76",
+      "phrase": "Northern Access Route Conceptual Plan and TM",
+      "rank": 0,
+      "line": 61
+    },
+    {
+      "documentId": "5886b588a4acd4014b8200c0",
+      "phrase": "SOUTH WEST AND WEST FORK PITS BENCH DESIGN",
+      "rank": 0,
+      "line": 64
+    },
+    {
+      "documentId": "5886b8a7a4acd4014b820282",
+      "phrase": "METES AND BOUNDS DESCRIPTION FOR CROWN LAND APPLICATION",
+      "rank": 0,
+      "line": 65
+    },
+    {
+      "documentId": "5886d880a4acd4014b8209a4",
+      "phrase": "NORTH WEST STAVE RIVER FACILITY POWERHOUSE GENERAL ARRANGEMENT",
+      "rank": 0,
+      "line": 66
+    },
+    {
+      "documentId": "5886f55feed3c0016f85701b",
+      "phrase": "Map produced by Eagle Mapping Services Ltd from aerial photography",
+      "rank": 0,
+      "line": 67
+    },
+    {
+      "documentId": "588693fde036fb010576917a",
+      "phrase": "Public Health Act, Industrial Camp Regulation",
+      "rank": 0,
+      "line": 82
+    },
+    {
+      "documentId": "5886913be036fb0105768f2e",
+      "phrase": "Objectives and Canadian Ambient Air Quality Objectives for NO2, SO2, CO,",
+      "rank": 0,
+      "line": 84
+    },
+    {
+      "documentId": "5886908ce036fb0105768bbc",
+      "phrase": "Freshwater Aquatic Resources Assessment Boundaries",
+      "rank": 0,
+      "line": 88
+    },
+    {
+      "documentId": "588690bce036fb0105768cd9",
+      "phrase": "TERRESTRIAL ECOSYSTEM MAPPING (TEM) POLYGONS AND FIELD PLOT LOCATIONS,",
+      "rank": 0,
+      "line": 89
+    },
+    {
+      "documentId": "58869572e036fb01057691e3",
+      "phrase": "obtained from Teck Coal Limited. DATUM: NAD 83 PROJECTION: UTM ZONE 11",
+      "rank": 0,
+      "line": 91
+    },
+    {
+      "documentId": "5886ad8ca4acd4014b81fc5c",
+      "phrase": "Table 6.1-1 (cont’d) Comprehensive List of Marine Environmental Subcomponents",
+      "rank": 0,
+      "line": 92
+    },
+    {
+      "documentId": "588690a1e036fb0105768c4a",
+      "phrase": "SAULTEAU FIRST NATIONS ASSERTED TRADITIONAL TERRITORY",
+      "rank": 0,
+      "line": 95
+    }
+  ],
+  "rankedBelowFirst": [
+    {
+      "documentId": "58869244a4acd4014b81ecb7",
+      "phrase": "Subject: EA Review - Ashcroft Ranch Landfill Project",
+      "rank": 13,
+      "line": 5
+    },
+    {
+      "documentId": "58869356de49fe015163a118",
+      "phrase": "Rail Line and Rail Loop Regional Study Area",
+      "rank": 41,
+      "line": 7
+    },
+    {
+      "documentId": "5887c7191c7dcc1212fecd14",
+      "phrase": "Isobel Doyle – Parterre Env. Cons. Services Ltd.",
+      "rank": 6,
+      "line": 8
+    },
+    {
+      "documentId": "5887e16ed876de1347b512b3",
+      "phrase": "Site C Clean Energy Project – Aboriginal Group Amendment Report",
+      "rank": 28,
+      "line": 9
+    },
+    {
+      "documentId": "58869647a4acd4014b81f2f6",
+      "phrase": "container forecasting indicates that container traffic through major",
+      "rank": 2,
+      "line": 10
+    },
+    {
+      "documentId": "5886921ceed3c0016f854db8",
+      "phrase": "NP vs. AP by Lithology",
+      "rank": 3,
+      "line": 12
+    },
+    {
+      "documentId": "5887de499b566a12e7f69ca0",
+      "phrase": "KSM Project Area Structural Geology Assessment",
+      "rank": 2,
+      "line": 15
+    },
+    {
+      "documentId": "58868ffae036fb0105768867",
+      "phrase": "Report To Jorgelina Muscatello, STANTEC CONSULTING LTD.~BURNABY",
+      "rank": 8,
+      "line": 16
+    },
+    {
+      "documentId": "5887d02fff41b812b1cfcd8f",
+      "phrase": "Lodgepole Coal Mine Project Public Comment Form",
+      "rank": 10,
+      "line": 24
+    },
+    {
+      "documentId": "5887d1033fa55712b70aafdc",
+      "phrase": "Opposition to Glacier Howser private power project",
+      "rank": 5,
+      "line": 26
+    },
+    {
+      "documentId": "5887d37e37e29512bded57f8",
+      "phrase": "subject: Interior – Lower Mainland (ILM) Transmission Reinforcement Project",
+      "rank": 4,
+      "line": 29
+    },
+    {
+      "documentId": "5886b670a4acd4014b82014f",
+      "phrase": "Acceptance of Application for Environmental Assessment Certificate for the Kitimat LNG",
+      "rank": 4,
+      "line": 31
+    },
+    {
+      "documentId": "5886b66ceed3c0016f85653c",
+      "phrase": "Public Comment Submissions for the Tulsequah Chief Mine Project",
+      "rank": 16,
+      "line": 34
+    },
+    {
+      "documentId": "5887c8210a48e01275833763",
+      "phrase": "General Area Licence of Occupation for Development for the Meikle Wind Energy Project",
+      "rank": 10,
+      "line": 35
+    },
+    {
+      "documentId": "58869fbcde49fe015163a896",
+      "phrase": "the run of the river projects being proposed in Bute inlet",
+      "rank": 8,
+      "line": 36
+    },
+    {
+      "documentId": "5886fc5beed3c0016f857079",
+      "phrase": "in full support of the Eagle Rock Quarry Project",
+      "rank": 33,
+      "line": 43
+    },
+    {
+      "documentId": "5887e26cad20ac134d915f28",
+      "phrase": "the Ashcroft Indian Band is of the opinion that the Cache Creek Landfill",
+      "rank": 2,
+      "line": 44
+    },
+    {
+      "documentId": "5886e4bbeed3c0016f856ee9",
+      "phrase": "Appendix B Pump Test Data Definition of Terms",
+      "rank": 3,
+      "line": 47
+    },
+    {
+      "documentId": "5ca2484141e20f0024bcee7f",
+      "phrase": "Review and Comments on Taseko's February 20, 2019, Water Quality Mitigation Responses",
+      "rank": 7,
+      "line": 48
+    },
+    {
+      "documentId": "5886e1a4a4acd4014b820a83",
+      "phrase": "construction and operation of the Upper Harrison Water Power Project",
+      "rank": 15,
+      "line": 49
+    },
+    {
+      "documentId": "5887e102f64627133ae5b2e4",
+      "phrase": "Summary Report Monitoring Program for Debolt Saline Water Project",
+      "rank": 4,
+      "line": 51
+    },
+    {
+      "documentId": "5886e658eed3c0016f856f0e",
+      "phrase": "City of Cranbrook Residential Well Reference",
+      "rank": 5,
+      "line": 52
+    },
+    {
+      "documentId": "5887df83f64627133ae5abd6",
+      "phrase": "the proposed CCS Sunrise Secure Landfill Project and the section 10 Order",
+      "rank": 3,
+      "line": 53
+    },
+    {
+      "documentId": "58869332de49fe015163a0c9",
+      "phrase": "CROSS SECTIONS N AND A THROUGH NORTH WASTE DUMPS",
+      "rank": 11,
+      "line": 63
+    },
+    {
+      "documentId": "5886ad96e036fb0105769539",
+      "phrase": "3.2.1 BC Oil and Gas Commission Noise Control Best Practices Guideline",
+      "rank": 30,
+      "line": 77
+    },
+    {
+      "documentId": "5886b775eed3c0016f8565ed",
+      "phrase": "Tulsequah Chief Mine - Air Cushion Barge Transportation System - Project Description",
+      "rank": 28,
+      "line": 79
+    },
+    {
+      "documentId": "5886a285a4acd4014b81f814",
+      "phrase": "surrounding Burns Lake that includes Donald Landing, Palling, Decker Lake, Sheraton, and",
+      "rank": 2,
+      "line": 83
+    },
+    {
+      "documentId": "588696eda4acd4014b81f30e",
+      "phrase": "Grassland Habitats. In the Chilliwack Forest District, there is",
+      "rank": 2,
+      "line": 86
+    },
+    {
+      "documentId": "5886afeae036fb01057695b7",
+      "phrase": "3.1 CONSULTATION TO DATE WITH SCHEDULE B ABORIGINAL",
+      "rank": 5,
+      "line": 87
+    },
+    {
+      "documentId": "58869132e036fb0105768efb",
+      "phrase": "Mayor Michael Smith - West Vancouver, West Vancouver, British Columbia",
+      "rank": 2,
+      "line": 90
+    },
+    {
+      "documentId": "58869407e036fb0105769180",
+      "phrase": "Recommendation 3 - Baseline Studies for Breeding and Terrestrial Habitat",
+      "rank": 2,
+      "line": 97
+    }
+  ],
+  "errors": [],
+  "results": [
+    {
+      "documentId": "5887c7af0a48e0127583359f",
+      "phrase": "any environmental impacts from those activities, the environmental protection and",
+      "note": "pdftotext | A-text | realChars=2451",
+      "line": 4,
+      "rank": 0,
+      "matchingChunks": 5551,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "5886c263eed3c0016f856a4e"
+    },
+    {
+      "documentId": "58869244a4acd4014b81ecb7",
+      "phrase": "Subject: EA Review - Ashcroft Ranch Landfill Project",
+      "note": "pdftotext | A-text | realChars=1759",
+      "line": 5,
+      "rank": 13,
+      "matchingChunks": 20,
+      "termsQueried": 7,
+      "atTermCap": false,
+      "topHitDocumentId": "58869225a4acd4014b81ec68"
+    },
+    {
+      "documentId": "5887e23dad20ac134d915e33",
+      "phrase": "Subject: Harper Creek Project – Geotechnical Review Comments",
+      "note": "pdftotext | A-text | realChars=13160",
+      "line": 6,
+      "rank": 1,
+      "matchingChunks": 3,
+      "termsQueried": 7,
+      "atTermCap": false,
+      "topHitDocumentId": "5887e23dad20ac134d915e33"
+    },
+    {
+      "documentId": "58869356de49fe015163a118",
+      "phrase": "Rail Line and Rail Loop Regional Study Area",
+      "note": "pdftotext | A-text | realChars=847",
+      "line": 7,
+      "rank": 41,
+      "matchingChunks": 190,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "58869393de49fe015163a199"
+    },
+    {
+      "documentId": "5887c7191c7dcc1212fecd14",
+      "phrase": "Isobel Doyle – Parterre Env. Cons. Services Ltd.",
+      "note": "pdftotext | A-text | realChars=1155",
+      "line": 8,
+      "rank": 6,
+      "matchingChunks": 15,
+      "termsQueried": 7,
+      "atTermCap": false,
+      "topHitDocumentId": "5887c7191c7dcc1212fecd15"
+    },
+    {
+      "documentId": "5887e16ed876de1347b512b3",
+      "phrase": "Site C Clean Energy Project – Aboriginal Group Amendment Report",
+      "note": "pdftotext | A-text | realChars=8196",
+      "line": 9,
+      "rank": 28,
+      "matchingChunks": 743,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "5887e16dd876de1347b512ad"
+    },
+    {
+      "documentId": "58869647a4acd4014b81f2f6",
+      "phrase": "container forecasting indicates that container traffic through major",
+      "note": "pdftotext | A-text | realChars=3837",
+      "line": 10,
+      "rank": 2,
+      "matchingChunks": 8,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "5886937ba4acd4014b81ef58"
+    },
+    {
+      "documentId": "5886b002e036fb01057695b8",
+      "phrase": "1) Inform further engagement between Plateau, EAO, and Aboriginal groups",
+      "note": "pdftotext | A-text | realChars=3811",
+      "line": 11,
+      "rank": 1,
+      "matchingChunks": 5,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "5886b002e036fb01057695b8"
+    },
+    {
+      "documentId": "5886921ceed3c0016f854db8",
+      "phrase": "NP vs. AP by Lithology",
+      "note": "eye:pdftotext-output | A-text | realChars=260",
+      "line": 12,
+      "rank": 3,
+      "matchingChunks": 32,
+      "termsQueried": 5,
+      "atTermCap": false,
+      "topHitDocumentId": "58869013e036fb0105768916"
+    },
+    {
+      "documentId": "58923129b637cc02bea162a7",
+      "phrase": "Traffic Control Manual Traffic Control Manual",
+      "note": "pdftotext | A-text | realChars=387698",
+      "line": 13,
+      "rank": 1,
+      "matchingChunks": 584,
+      "termsQueried": 6,
+      "atTermCap": false,
+      "topHitDocumentId": "58923129b637cc02bea162a7"
+    },
+    {
+      "documentId": "5887dfacf64627133ae5ac9a",
+      "phrase": "Development Approvals Infrastructure- Please delete BCMTI",
+      "note": "pdftotext | A-text | realChars=63531",
+      "line": 14,
+      "rank": 1,
+      "matchingChunks": 2,
+      "termsQueried": 6,
+      "atTermCap": false,
+      "topHitDocumentId": "5887dfacf64627133ae5ac9a"
+    },
+    {
+      "documentId": "5887de499b566a12e7f69ca0",
+      "phrase": "KSM Project Area Structural Geology Assessment",
+      "note": "pdftotext | A-text | realChars=46789",
+      "line": 15,
+      "rank": 2,
+      "matchingChunks": 80,
+      "termsQueried": 6,
+      "atTermCap": false,
+      "topHitDocumentId": "5887de4b9b566a12e7f69ca7"
+    },
+    {
+      "documentId": "58868ffae036fb0105768867",
+      "phrase": "Report To Jorgelina Muscatello, STANTEC CONSULTING LTD.~BURNABY",
+      "note": "pdftotext | A-text | realChars=6492",
+      "line": 16,
+      "rank": 8,
+      "matchingChunks": 9,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "58868fdfe036fb01057687b6"
+    },
+    {
+      "documentId": "595fb4383fdcd0001d9f48c1",
+      "phrase": "Health and Safety Plans are not Environmental Management Plans",
+      "note": "pdftotext | A-text | realChars=26690",
+      "line": 17,
+      "rank": 0,
+      "matchingChunks": 9752,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "5887e0d1f64627133ae5b1e6"
+    },
+    {
+      "documentId": "588690d2e036fb0105768d5e",
+      "phrase": "Project Environmental Assessment Application Review. Consultant’s report prepared for",
+      "note": "pdftotext | A-text | realChars=289444",
+      "line": 18,
+      "rank": 0,
+      "matchingChunks": 1312,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "58869501a4acd4014b81f1b9"
+    },
+    {
+      "documentId": "5886b47aeed3c0016f8563a2",
+      "phrase": "Cascade Heritage Power Project proposed by Powerhouse Developments",
+      "note": "eye:render | B-ocr-legacy | realChars=1981",
+      "line": 22,
+      "rank": 0,
+      "matchingChunks": 493,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "5886b09deed3c0016f85612f"
+    },
+    {
+      "documentId": "5887cfbcff41b812b1cfcb68",
+      "phrase": "opposition to the Kitimat-Summit Lake Pipeline Looping Project",
+      "note": "eye:render | B-ocr-legacy | realChars=1978",
+      "line": 23,
+      "rank": 0,
+      "matchingChunks": 3,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "5887cfd5ff41b812b1cfcbec"
+    },
+    {
+      "documentId": "5887d02fff41b812b1cfcd8f",
+      "phrase": "Lodgepole Coal Mine Project Public Comment Form",
+      "note": "eye:render | B-ocr-legacy | realChars=1976",
+      "line": 24,
+      "rank": 10,
+      "matchingChunks": 152,
+      "termsQueried": 7,
+      "atTermCap": false,
+      "topHitDocumentId": "5887d03fff41b812b1cfcdd9"
+    },
+    {
+      "documentId": "588695dfeed3c0016f855507",
+      "phrase": "Comments on Jumbo Glacier Resort Proposal",
+      "note": "eye:render | B-ocr-legacy | realChars=908",
+      "line": 25,
+      "rank": 0,
+      "matchingChunks": 787,
+      "termsQueried": 6,
+      "atTermCap": false,
+      "topHitDocumentId": "5886975aeed3c0016f8555ca"
+    },
+    {
+      "documentId": "5887d1033fa55712b70aafdc",
+      "phrase": "Opposition to Glacier Howser private power project",
+      "note": "eye:render | B-ocr-legacy | realChars=2940",
+      "line": 26,
+      "rank": 5,
+      "matchingChunks": 36,
+      "termsQueried": 7,
+      "atTermCap": false,
+      "topHitDocumentId": "5887d1143fa55712b70ab029"
+    },
+    {
+      "documentId": "58869537a4acd4014b81f1ff",
+      "phrase": "Adaptive Management Strategy Agreement Deltaport Third Berth Project",
+      "note": "eye:render | B-ocr-legacy | realChars=2211",
+      "line": 27,
+      "rank": 1,
+      "matchingChunks": 69,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "58869537a4acd4014b81f1ff"
+    },
+    {
+      "documentId": "5886baeda4acd4014b8203d3",
+      "phrase": "a link to a MoFR website concerning engineering topics in regards to IPPs",
+      "note": "eye:render | B-ocr-legacy | realChars=3892",
+      "line": 28,
+      "rank": 0,
+      "matchingChunks": 0,
+      "termsQueried": 13,
+      "atTermCap": false,
+      "topHitDocumentId": null
+    },
+    {
+      "documentId": "5887d37e37e29512bded57f8",
+      "phrase": "subject: Interior – Lower Mainland (ILM) Transmission Reinforcement Project",
+      "note": "pdftotext | B-ocr-legacy | realChars=95984",
+      "line": 29,
+      "rank": 4,
+      "matchingChunks": 18,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "5888e5ba817b85ae43cf7c05"
+    },
+    {
+      "documentId": "5886940ceed3c0016f85525d",
+      "phrase": "Standard Reference Materials for Quality Control in the Environmental",
+      "note": "eye:render | B-ocr-legacy | realChars=2177",
+      "line": 30,
+      "rank": 0,
+      "matchingChunks": 539,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "58877dd6a4acd4014b821021"
+    },
+    {
+      "documentId": "5886b670a4acd4014b82014f",
+      "phrase": "Acceptance of Application for Environmental Assessment Certificate for the Kitimat LNG",
+      "note": "eye:render | B-ocr-legacy | realChars=8090",
+      "line": 31,
+      "rank": 4,
+      "matchingChunks": 16,
+      "termsQueried": 11,
+      "atTermCap": false,
+      "topHitDocumentId": "5886b68ba4acd4014b820169"
+    },
+    {
+      "documentId": "5e45a0e4c981fe002101fe51",
+      "phrase": "Cedar LNG Export Development Ltd. wishes to continue the assessment of its project",
+      "note": "eye:render | B-ocr-legacy | realChars=466",
+      "line": 32,
+      "rank": 1,
+      "matchingChunks": 2,
+      "termsQueried": 13,
+      "atTermCap": false,
+      "topHitDocumentId": "5e45a0e4c981fe002101fe51"
+    },
+    {
+      "documentId": "5888e536817b85ae43cf7991",
+      "phrase": "6.1.3 Expanded view of Southwest corner of RK’s Tenure 50",
+      "note": "pdftotext | B-ocr-legacy | realChars=136568",
+      "line": 33,
+      "rank": 1,
+      "matchingChunks": 2,
+      "termsQueried": 13,
+      "atTermCap": false,
+      "topHitDocumentId": "5888e536817b85ae43cf7991"
+    },
+    {
+      "documentId": "5886b66ceed3c0016f85653c",
+      "phrase": "Public Comment Submissions for the Tulsequah Chief Mine Project",
+      "note": "eye:render | B-ocr-legacy | realChars=4216",
+      "line": 34,
+      "rank": 16,
+      "matchingChunks": 36,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "5888e543817b85ae43cf79c5"
+    },
+    {
+      "documentId": "5887c8210a48e01275833763",
+      "phrase": "General Area Licence of Occupation for Development for the Meikle Wind Energy Project",
+      "note": "eye:render | B-ocr-legacy | realChars=26983",
+      "line": 35,
+      "rank": 10,
+      "matchingChunks": 10,
+      "termsQueried": 13,
+      "atTermCap": false,
+      "topHitDocumentId": "5887c8210a48e01275833762"
+    },
+    {
+      "documentId": "58869fbcde49fe015163a896",
+      "phrase": "the run of the river projects being proposed in Bute inlet",
+      "note": "eye:render | B-ocr-legacy | realChars=686",
+      "line": 36,
+      "rank": 8,
+      "matchingChunks": 46,
+      "termsQueried": 11,
+      "atTermCap": false,
+      "topHitDocumentId": "58869e41de49fe015163a823"
+    },
+    {
+      "documentId": "5887d059ff41b812b1cfce46",
+      "phrase": "Sediments from the proposed Lodgepole mine will move downstream and accumulate",
+      "note": "eye:render | C-ocr-pdfium | realChars=1862",
+      "line": 40,
+      "rank": 1,
+      "matchingChunks": 1,
+      "termsQueried": 11,
+      "atTermCap": false,
+      "topHitDocumentId": "5887d059ff41b812b1cfce46"
+    },
+    {
+      "documentId": "5887e264ad20ac134d915f01",
+      "phrase": "ENVIRONMENT ASSESSMENT OF THE PROPOSED CACHE CREEK LANDFILL EXTENSION PROJECT",
+      "note": "eye:render | C-ocr-pdfium | realChars=2293",
+      "line": 41,
+      "rank": 0,
+      "matchingChunks": 36,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "5887e269ad20ac134d915f1b"
+    },
+    {
+      "documentId": "5887d1f63fa55712b70ab3d8",
+      "phrase": "Schaft Creek Mine Project Application Information Requirements",
+      "note": "eye:render | C-ocr-pdfium | realChars=11300",
+      "line": 42,
+      "rank": 0,
+      "matchingChunks": 295,
+      "termsQueried": 7,
+      "atTermCap": false,
+      "topHitDocumentId": "5887d1f33fa55712b70ab3c8"
+    },
+    {
+      "documentId": "5886fc5beed3c0016f857079",
+      "phrase": "in full support of the Eagle Rock Quarry Project",
+      "note": "eye:render | C-ocr-pdfium | realChars=1079",
+      "line": 43,
+      "rank": 33,
+      "matchingChunks": 51,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "5886fb82eed3c0016f85706a"
+    },
+    {
+      "documentId": "5887e26cad20ac134d915f28",
+      "phrase": "the Ashcroft Indian Band is of the opinion that the Cache Creek Landfill",
+      "note": "eye:render | C-ocr-pdfium | realChars=338",
+      "line": 44,
+      "rank": 2,
+      "matchingChunks": 7,
+      "termsQueried": 13,
+      "atTermCap": false,
+      "topHitDocumentId": "5886921ca4acd4014b81ec4d"
+    },
+    {
+      "documentId": "5887d32837e29512bded560d",
+      "phrase": "Proponent's Record of Consultation with Agencies",
+      "note": "eye:render | C-ocr-pdfium | realChars=10603",
+      "line": 45,
+      "rank": 0,
+      "matchingChunks": 983,
+      "termsQueried": 7,
+      "atTermCap": false,
+      "topHitDocumentId": "5886b64aa4acd4014b820140"
+    },
+    {
+      "documentId": "58870362eed3c0016f8570c4",
+      "phrase": "Stewart Bulk Terminals Location of Soucie Gravel Lease",
+      "note": "eye:render | C-ocr-pdfium | realChars=379",
+      "line": 46,
+      "rank": 1,
+      "matchingChunks": 6,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "58870362eed3c0016f8570c4"
+    },
+    {
+      "documentId": "5886e4bbeed3c0016f856ee9",
+      "phrase": "Appendix B Pump Test Data Definition of Terms",
+      "note": "eye:render | C-ocr-pdfium | realChars=94416",
+      "line": 47,
+      "rank": 3,
+      "matchingChunks": 21,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "5887de359b566a12e7f69c3e"
+    },
+    {
+      "documentId": "5ca2484141e20f0024bcee7f",
+      "phrase": "Review and Comments on Taseko's February 20, 2019, Water Quality Mitigation Responses",
+      "note": "eye:render | C-ocr-pdfium | realChars=4807",
+      "line": 48,
+      "rank": 7,
+      "matchingChunks": 9,
+      "termsQueried": 13,
+      "atTermCap": false,
+      "topHitDocumentId": "5d7be3ec26583700218b95e7"
+    },
+    {
+      "documentId": "5886e1a4a4acd4014b820a83",
+      "phrase": "construction and operation of the Upper Harrison Water Power Project",
+      "note": "eye:render | C-ocr-pdfium | realChars=27847",
+      "line": 49,
+      "rank": 15,
+      "matchingChunks": 186,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "5886da28a4acd4014b8209d3"
+    },
+    {
+      "documentId": "5887e2a8ad20ac134d916047",
+      "phrase": "Janes Freedman Kyle Law Corporation",
+      "note": "eye:render | C-ocr-pdfium | realChars=471108",
+      "line": 50,
+      "rank": 1,
+      "matchingChunks": 186,
+      "termsQueried": 5,
+      "atTermCap": false,
+      "topHitDocumentId": "5887e2a8ad20ac134d916047"
+    },
+    {
+      "documentId": "5887e102f64627133ae5b2e4",
+      "phrase": "Summary Report Monitoring Program for Debolt Saline Water Project",
+      "note": "eye:render | C-ocr-pdfium | realChars=8579",
+      "line": 51,
+      "rank": 4,
+      "matchingChunks": 5,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "5887e103f64627133ae5b2ec"
+    },
+    {
+      "documentId": "5886e658eed3c0016f856f0e",
+      "phrase": "City of Cranbrook Residential Well Reference",
+      "note": "pdftotext | C-ocr-pdfium | realChars=30312",
+      "line": 52,
+      "rank": 5,
+      "matchingChunks": 14,
+      "termsQueried": 6,
+      "atTermCap": false,
+      "topHitDocumentId": "5887e370ad20ac134d916405"
+    },
+    {
+      "documentId": "5887df83f64627133ae5abd6",
+      "phrase": "the proposed CCS Sunrise Secure Landfill Project and the section 10 Order",
+      "note": "eye:render | C-ocr-pdfium | realChars=826",
+      "line": 53,
+      "rank": 3,
+      "matchingChunks": 4,
+      "termsQueried": 12,
+      "atTermCap": false,
+      "topHitDocumentId": "5887df7ef64627133ae5abc4"
+    },
+    {
+      "documentId": "5886b418a4acd4014b81ff76",
+      "phrase": "Northern Access Route Conceptual Plan and TM",
+      "note": "pdftotext | D-ocr-tiled | realChars=329",
+      "line": 61,
+      "rank": 0,
+      "matchingChunks": 3,
+      "termsQueried": 7,
+      "atTermCap": false,
+      "topHitDocumentId": "5886b3eea4acd4014b81ff4f"
+    },
+    {
+      "documentId": "5887e1afd876de1347b51409",
+      "phrase": "ICE FRONT OBSERVATIONS SHOWN FOR THE YEARS",
+      "note": "eye:pdftotext-output | D-ocr-tiled | realChars=1070",
+      "line": 62,
+      "rank": 1,
+      "matchingChunks": 21,
+      "termsQueried": 7,
+      "atTermCap": false,
+      "topHitDocumentId": "5887e1afd876de1347b51409"
+    },
+    {
+      "documentId": "58869332de49fe015163a0c9",
+      "phrase": "CROSS SECTIONS N AND A THROUGH NORTH WASTE DUMPS",
+      "note": "eye:render | D-ocr-tiled | Peace River Coal, Roman Coal Mine, title block",
+      "line": 63,
+      "rank": 11,
+      "matchingChunks": 123,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "58869348de49fe015163a0fb"
+    },
+    {
+      "documentId": "5886b588a4acd4014b8200c0",
+      "phrase": "SOUTH WEST AND WEST FORK PITS BENCH DESIGN",
+      "note": "eye:render | D-ocr-tiled | Galore Creek, BGC Engineering, title block",
+      "line": 64,
+      "rank": 0,
+      "matchingChunks": 200,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "5888e59d817b85ae43cf7b80"
+    },
+    {
+      "documentId": "5886b8a7a4acd4014b820282",
+      "phrase": "METES AND BOUNDS DESCRIPTION FOR CROWN LAND APPLICATION",
+      "note": "eye:render | D-ocr-tiled | East Toba and Montrose, Plutonic Power, title block",
+      "line": 65,
+      "rank": 0,
+      "matchingChunks": 28,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "5887e217ad20ac134d915d85"
+    },
+    {
+      "documentId": "5886d880a4acd4014b8209a4",
+      "phrase": "NORTH WEST STAVE RIVER FACILITY POWERHOUSE GENERAL ARRANGEMENT",
+      "note": "eye:render | D-ocr-tiled | Upper Harrison Hydroelectric, title block",
+      "line": 66,
+      "rank": 0,
+      "matchingChunks": 8,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "5886da28a4acd4014b8209d3"
+    },
+    {
+      "documentId": "5886f55feed3c0016f85701b",
+      "phrase": "Map produced by Eagle Mapping Services Ltd from aerial photography",
+      "note": "eye:render | D-ocr-tiled | Eagle Rock Quarry, sheet note beside the scale bar",
+      "line": 67,
+      "rank": 0,
+      "matchingChunks": 7,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "5886ec78eed3c0016f856f8c"
+    },
+    {
+      "documentId": "5887c6fe1c7dcc1212fecc69",
+      "phrase": "PRECAST REINFORCED CONCRETE VARIABLE DEPTH CATCH BASIN",
+      "note": "eye:render | D-ocr-tiled | Sea-to-Sky corridor, Retta Lake, catch basin detail callout",
+      "line": 68,
+      "rank": 1,
+      "matchingChunks": 1,
+      "termsQueried": 7,
+      "atTermCap": false,
+      "topHitDocumentId": "5887c6fe1c7dcc1212fecc69"
+    },
+    {
+      "documentId": "5887cf1bff41b812b1cfc7b2",
+      "phrase": "WESTERN COAL CORP SYNCLINE TYPICAL GEOLOGICAL CROSS SECTION",
+      "note": "eye:render | D-ocr-tiled | Hermann Mine, title block",
+      "line": 69,
+      "rank": 1,
+      "matchingChunks": 2,
+      "termsQueried": 8,
+      "atTermCap": false,
+      "topHitDocumentId": "5887cf1bff41b812b1cfc7b2"
+    },
+    {
+      "documentId": "5886a7f4a4acd4014b81f94e",
+      "phrase": "Table 5.1 Expected Case Concentrations (mg/L) of Key Parameters in Morrison Lake",
+      "note": "text path, source text layer p20, 74 chunks",
+      "line": 74,
+      "rank": 1,
+      "matchingChunks": 3,
+      "termsQueried": 14,
+      "atTermCap": false,
+      "topHitDocumentId": "5886a7f4a4acd4014b81f94e"
+    },
+    {
+      "documentId": "588692b1eed3c0016f854f55",
+      "phrase": "• Troy Hromadnik, RPF, Planning Forester of West Fraser Mills, Williams Lake",
+      "note": "text path, source text layer p9, 20 chunks",
+      "line": 75,
+      "rank": 1,
+      "matchingChunks": 1,
+      "termsQueried": 11,
+      "atTermCap": false,
+      "topHitDocumentId": "588692b1eed3c0016f854f55"
+    },
+    {
+      "documentId": "58869ab1a4acd4014b81f553",
+      "phrase": "VC Activities Nature of Impact Mitigation Residual Impact Monitoring Commitments",
+      "note": "text path, source text layer p4, 15 chunks",
+      "line": 76,
+      "rank": 1,
+      "matchingChunks": 38,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "58869ab1a4acd4014b81f553"
+    },
+    {
+      "documentId": "5886ad96e036fb0105769539",
+      "phrase": "3.2.1 BC Oil and Gas Commission Noise Control Best Practices Guideline",
+      "note": "text path, source text layer p17, 24 chunks",
+      "line": 77,
+      "rank": 30,
+      "matchingChunks": 207,
+      "termsQueried": 13,
+      "atTermCap": false,
+      "topHitDocumentId": "594afac43de5f3001a5f8a8f"
+    },
+    {
+      "documentId": "5886b234a4acd4014b81fde8",
+      "phrase": "Theme Class Feature Type Activity Type Use Intensity Attractant Firearm",
+      "note": "text path, source text layer p24, 34 chunks",
+      "line": 78,
+      "rank": 1,
+      "matchingChunks": 2,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "5886b234a4acd4014b81fde8"
+    },
+    {
+      "documentId": "5886b775eed3c0016f8565ed",
+      "phrase": "Tulsequah Chief Mine - Air Cushion Barge Transportation System - Project Description",
+      "note": "text path, source text layer p4, 6 chunks",
+      "line": 79,
+      "rank": 28,
+      "matchingChunks": 129,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "5886b6efeed3c0016f856599"
+    },
+    {
+      "documentId": "58869553a4acd4014b81f220",
+      "phrase": "2.4 Sand Bar Stabilization by Dendritic Channel Modification",
+      "note": "text path, source text layer p34, 24 chunks",
+      "line": 80,
+      "rank": 1,
+      "matchingChunks": 9,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "58869553a4acd4014b81f220"
+    },
+    {
+      "documentId": "588691fbeed3c0016f854d57",
+      "phrase": " Bellefontaine, K.A. 1998. Prosperity Gold-Copper Project: BC MEM Status of",
+      "note": "text path, source text layer p50, 103 chunks",
+      "line": 81,
+      "rank": 1,
+      "matchingChunks": 3,
+      "termsQueried": 12,
+      "atTermCap": false,
+      "topHitDocumentId": "588691fbeed3c0016f854d57"
+    },
+    {
+      "documentId": "588693fde036fb010576917a",
+      "phrase": "Public Health Act, Industrial Camp Regulation",
+      "note": "text path, source text layer p4, 17 chunks",
+      "line": 82,
+      "rank": 0,
+      "matchingChunks": 241,
+      "termsQueried": 6,
+      "atTermCap": false,
+      "topHitDocumentId": "58869740de49fe015163a4c4"
+    },
+    {
+      "documentId": "5886a285a4acd4014b81f814",
+      "phrase": "surrounding Burns Lake that includes Donald Landing, Palling, Decker Lake, Sheraton, and",
+      "note": "text path, source text layer p25, 103 chunks",
+      "line": 83,
+      "rank": 2,
+      "matchingChunks": 2,
+      "termsQueried": 12,
+      "atTermCap": false,
+      "topHitDocumentId": "5886a0aba4acd4014b81f783"
+    },
+    {
+      "documentId": "5886913be036fb0105768f2e",
+      "phrase": "Objectives and Canadian Ambient Air Quality Objectives for NO2, SO2, CO,",
+      "note": "text path, source text layer p51, 147 chunks",
+      "line": 84,
+      "rank": 0,
+      "matchingChunks": 256,
+      "termsQueried": 11,
+      "atTermCap": false,
+      "topHitDocumentId": "58872edbeed3c0016f8571c9"
+    },
+    {
+      "documentId": "5886906be036fb0105768b12",
+      "phrase": "Table 2 Summary of Potential Project Residual Effects Extending onto Federal Lands",
+      "note": "text path, source text layer p5, 13 chunks",
+      "line": 85,
+      "rank": 1,
+      "matchingChunks": 22,
+      "termsQueried": 12,
+      "atTermCap": false,
+      "topHitDocumentId": "5886906be036fb0105768b12"
+    },
+    {
+      "documentId": "588696eda4acd4014b81f30e",
+      "phrase": "Grassland Habitats. In the Chilliwack Forest District, there is",
+      "note": "text path, source text layer p2, 6 chunks",
+      "line": 86,
+      "rank": 2,
+      "matchingChunks": 15,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "5886979ca4acd4014b81f3b0"
+    },
+    {
+      "documentId": "5886afeae036fb01057695b7",
+      "phrase": "3.1 CONSULTATION TO DATE WITH SCHEDULE B ABORIGINAL",
+      "note": "text path, source text layer p8, 16 chunks",
+      "line": 87,
+      "rank": 5,
+      "matchingChunks": 1844,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "5886b110e036fb01057695e1"
+    },
+    {
+      "documentId": "5886908ce036fb0105768bbc",
+      "phrase": "Freshwater Aquatic Resources Assessment Boundaries",
+      "note": "text path, source text layer p1, 5 chunks",
+      "line": 88,
+      "rank": 0,
+      "matchingChunks": 638,
+      "termsQueried": 5,
+      "atTermCap": false,
+      "topHitDocumentId": "58868f6ee036fb0105768277"
+    },
+    {
+      "documentId": "588690bce036fb0105768cd9",
+      "phrase": "TERRESTRIAL ECOSYSTEM MAPPING (TEM) POLYGONS AND FIELD PLOT LOCATIONS,",
+      "note": "text path, source text layer p4, 16 chunks",
+      "line": 89,
+      "rank": 0,
+      "matchingChunks": 190,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "5886969fde49fe015163a451"
+    },
+    {
+      "documentId": "58869132e036fb0105768efb",
+      "phrase": "Mayor Michael Smith - West Vancouver, West Vancouver, British Columbia",
+      "note": "text path, source text layer p38, 155 chunks",
+      "line": 90,
+      "rank": 2,
+      "matchingChunks": 4,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "58869143e036fb0105768f4a"
+    },
+    {
+      "documentId": "58869572e036fb01057691e3",
+      "phrase": "obtained from Teck Coal Limited. DATUM: NAD 83 PROJECTION: UTM ZONE 11",
+      "note": "text path, source text layer p22, 75 chunks",
+      "line": 91,
+      "rank": 0,
+      "matchingChunks": 4,
+      "termsQueried": 12,
+      "atTermCap": false,
+      "topHitDocumentId": "58868f56e036fb0105768107"
+    },
+    {
+      "documentId": "5886ad8ca4acd4014b81fc5c",
+      "phrase": "Table 6.1-1 (cont’d) Comprehensive List of Marine Environmental Subcomponents",
+      "note": "text path, source text layer p6, 5 chunks",
+      "line": 92,
+      "rank": 0,
+      "matchingChunks": 0,
+      "termsQueried": 12,
+      "atTermCap": false,
+      "topHitDocumentId": null
+    },
+    {
+      "documentId": "58869193e036fb0105768fc8",
+      "phrase": "Table 5.16-5 Criteria Used to Characterize Residual Effects on Marine Benthic Habitat",
+      "note": "text path, source text layer p16, 43 chunks",
+      "line": 93,
+      "rank": 1,
+      "matchingChunks": 3,
+      "termsQueried": 14,
+      "atTermCap": false,
+      "topHitDocumentId": "58869193e036fb0105768fc8"
+    },
+    {
+      "documentId": "588695fdde49fe015163a439",
+      "phrase": "Stlixwim Hydro Corporation Proposed Right-of-Way Wildfire Risk Management System",
+      "note": "text path, source text layer p6, 17 chunks",
+      "line": 94,
+      "rank": 1,
+      "matchingChunks": 22,
+      "termsQueried": 11,
+      "atTermCap": false,
+      "topHitDocumentId": "588695fdde49fe015163a439"
+    },
+    {
+      "documentId": "588690a1e036fb0105768c4a",
+      "phrase": "SAULTEAU FIRST NATIONS ASSERTED TRADITIONAL TERRITORY",
+      "note": "text path, source text layer p3, 8 chunks",
+      "line": 95,
+      "rank": 0,
+      "matchingChunks": 138,
+      "termsQueried": 6,
+      "atTermCap": false,
+      "topHitDocumentId": "58868fbfe036fb01057686b5"
+    },
+    {
+      "documentId": "5886b304a4acd4014b81fe5f",
+      "phrase": "• Main Phase, Late Phase, Breccias, Felsite Dykes. Carbonate exceeds NP",
+      "note": "text path, source text layer p18, 17 chunks",
+      "line": 96,
+      "rank": 1,
+      "matchingChunks": 1,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "5886b304a4acd4014b81fe5f"
+    },
+    {
+      "documentId": "58869407e036fb0105769180",
+      "phrase": "Recommendation 3 - Baseline Studies for Breeding and Terrestrial Habitat",
+      "note": "text path, source text layer p3, 8 chunks",
+      "line": 97,
+      "rank": 2,
+      "matchingChunks": 24,
+      "termsQueried": 9,
+      "atTermCap": false,
+      "topHitDocumentId": "594951641b1afb001dc13748"
+    },
+    {
+      "documentId": "5886a36ea4acd4014b81f851",
+      "phrase": "App T. PBM Waste Rock Storage Alternatives Rev 1.doc",
+      "note": "text path, source text layer p6, 15 chunks",
+      "line": 98,
+      "rank": 1,
+      "matchingChunks": 13,
+      "termsQueried": 10,
+      "atTermCap": false,
+      "topHitDocumentId": "5886a36ea4acd4014b81f851"
+    }
+  ]
+}

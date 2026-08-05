@@ -1,0 +1,81 @@
+{
+  "started": "2026-08-05T05:36:15.158Z",
+  "query": {
+    "labelsFile": "/tmp/demi/labels/retrieval-labels-E-control-textless.jsonl",
+    "out": "/tmp/demi/out/retrieval-labels-E-control-textless.semantic.json",
+    "top": 50,
+    "fuzzy": true,
+    "semantic": true,
+    "note": "queries go through searchChunks(), the path the API serves"
+  },
+  "labels": 3,
+  "scored": 3,
+  "errored": 0,
+  "found": 0,
+  "recallAt": {
+    "1": 0,
+    "5": 0,
+    "10": 0,
+    "20": 0,
+    "50": 0
+  },
+  "recallKsNotMeasured": [],
+  "mrr": 0,
+  "misses": [
+    {
+      "documentId": "5886bb66a4acd4014b820404",
+      "phrase": "Fluvial Geomorphic Classification Sampling Locations",
+      "rank": 0,
+      "line": 4
+    },
+    {
+      "documentId": "5886b06da4acd4014b81fd69",
+      "phrase": "Whistler Nordic Centre",
+      "rank": 0,
+      "line": 5
+    },
+    {
+      "documentId": "5886b929a4acd4014b8202d5",
+      "phrase": "EAST TOBA AND MONIROSE HYDROELECTRIC PROJECT",
+      "rank": 0,
+      "line": 6
+    }
+  ],
+  "rankedBelowFirst": [],
+  "errors": [],
+  "results": [
+    {
+      "documentId": "5886bb66a4acd4014b820404",
+      "phrase": "Fluvial Geomorphic Classification Sampling Locations",
+      "note": "eye:render | E-control-textless | realChars=0",
+      "line": 4,
+      "rank": 0,
+      "matchingChunks": 9,
+      "termsQueried": 5,
+      "atTermCap": false,
+      "topHitDocumentId": "5886bc2ea4acd4014b82045c"
+    },
+    {
+      "documentId": "5886b06da4acd4014b81fd69",
+      "phrase": "Whistler Nordic Centre",
+      "note": "pdftotext | E-control-textless | realChars=8",
+      "line": 5,
+      "rank": 0,
+      "matchingChunks": 1386,
+      "termsQueried": 3,
+      "atTermCap": false,
+      "topHitDocumentId": "5886b0a1a4acd4014b81fd7e"
+    },
+    {
+      "documentId": "5886b929a4acd4014b8202d5",
+      "phrase": "EAST TOBA AND MONIROSE HYDROELECTRIC PROJECT",
+      "note": "pdftotext | E-control-textless | realChars=12",
+      "line": 6,
+      "rank": 0,
+      "matchingChunks": 835,
+      "termsQueried": 6,
+      "atTermCap": false,
+      "topHitDocumentId": "5886bccba4acd4014b8204a1"
+    }
+  ]
+}

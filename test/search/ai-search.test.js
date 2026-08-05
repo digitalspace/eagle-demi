@@ -510,14 +510,34 @@ test('project and document search return the analyzer\'s highlights', async (t) 
 });
 
 test('semantic reranking', async (t) => {
-  await t.test('off by default — no caller pays for a feature it did not ask for', async (tt) => {
+  await t.test('on by default for chunks — it is the shipped ranking', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
 
     await aiSearch.searchChunks({ filter: null, keywords: 'peace river' });
 
+    assert.strictEqual(calls[0].body.semanticConfiguration, 'demi-chunks-semantic');
+  });
+
+  await t.test('semantic: false opts out — the scorecard needs a BM25 arm', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: false });
+
     assert.strictEqual(calls[0].body.semanticQuery, undefined);
     assert.strictEqual(calls[0].body.semanticConfiguration, undefined);
     assert.strictEqual(calls[0].body.semanticErrorHandling, undefined);
+  });
+
+  await t.test('NEVER on projects or documents — those indexes have no semantic configuration, ' +
+    'and naming one that does not exist is a 400', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchProjects({ filter: null, keywords: 'peace river' });
+    await aiSearch.searchDocuments({ filter: null, keywords: 'peace river' });
+
+    for (const call of calls) {
+      assert.strictEqual(call.body.semanticConfiguration, undefined);
+    }
   });
 
   await t.test('on, it adds L2 WITHOUT disturbing the Lucene query that drives L1', async (tt) => {
@@ -596,14 +616,28 @@ test('semantic reranking', async (t) => {
       assert.strictEqual(count, 1);
     });
 
-  await t.test('402 without semantic still throws — only the fallback path is special',
+  await t.test('a 402 on the NON-semantic query throws — the fallback is not a blanket catch',
     async (tt) => {
-      captureFetch(tt, () => ({ ok: false, status: 402, json: { error: 'nope' } }));
+      const calls = captureFetch(tt, () => ({ ok: false, status: 402, json: { error: 'nope' } }));
+
+      await assert.rejects(
+        () => aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: false }),
+        /HTTP 402/
+      );
+      assert.strictEqual(calls.length, 1, 'nothing to strip, so nothing to retry');
+    });
+
+  await t.test('a 402 that persists after stripping semantic is surfaced, not looped',
+    async (tt) => {
+      // The fallback retries ONCE. If the second attempt fails too, that is a real failure and
+      // must reach the caller rather than becoming a third attempt or a silent empty result.
+      const calls = captureFetch(tt, () => ({ ok: false, status: 402, json: { error: 'nope' } }));
 
       await assert.rejects(
         () => aiSearch.searchChunks({ filter: null, keywords: 'peace river' }),
         /HTTP 402/
       );
+      assert.strictEqual(calls.length, 2, 'one semantic attempt, one stripped retry, then stop');
     });
 
   await t.test('403 is not swallowed by the 402 fallback', async (tt) => {
