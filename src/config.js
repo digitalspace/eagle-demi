@@ -85,6 +85,40 @@ const config = {
   logCappedSizeBytes:    parseInt(process.env.LOG_CAPPED_SIZE_BYTES || '52428800', 10), // 50MB
   logCappedMaxDocuments: parseInt(process.env.LOG_CAPPED_MAX_DOCUMENTS || '100000', 10),
 
+  // AI summarizer (see wiki ADR-006). Step 5 of the search pipeline and the only one that touches
+  // a model — retrieval is untouched lexical BM25.
+  //
+  // Keyless: the deployment is reached with the app's managed identity, so there is NO key here and
+  // none is wanted. `foundryEndpoint` is a hostname; this repo is public.
+  //
+  // Defaults to OFF. The endpoint does not exist until the Foundry account is provisioned, and a
+  // summariser that half-works is worse than one that is plainly absent — every caller path returns
+  // `{ summary: null }` while this is false.
+  summaryEnabled:    process.env.SUMMARY_ENABLED === 'true',
+  foundryEndpoint:   process.env.FOUNDRY_ENDPOINT || '',
+  foundryDeployment: process.env.FOUNDRY_DEPLOYMENT || '',
+  foundryApiVersion: process.env.FOUNDRY_API_VERSION || '2024-10-21',
+
+  // The cost and latency ceiling, enforced before the request rather than hoped for after it.
+  // 8 × 1500 chars ≈ 3k input tokens ≈ $0.0006/query. Raising either raises the bill linearly, so
+  // they are configuration and the probe asserts p95 prompt_tokens stays under the implied cap.
+  summaryMaxChunks:  parseInt(process.env.SUMMARY_MAX_CHUNKS || '8', 10),
+  summaryMaxChars:   parseInt(process.env.SUMMARY_MAX_CHARS  || '1500', 10),
+  summaryMaxTokens:  parseInt(process.env.SUMMARY_MAX_TOKENS || '400', 10),
+  // Well inside the App Service 240 s request ceiling. The panel is additive: a timeout renders
+  // nothing and must never take the three result columns down with it.
+  summaryTimeoutMs:  parseInt(process.env.SUMMARY_TIMEOUT_MS || '20000', 10),
+
+  // USD per million tokens, for turning the usage the deployment reports into a number a human can
+  // read. Defaults are 4o-mini-class list rates.
+  //
+  // This yields an ESTIMATE and must be labelled as one wherever it is shown. Azure bills on its
+  // own meter with its own rounding, list rates change without this file changing, and any
+  // negotiated or committed-use discount is invisible here. It is for spotting a query that costs
+  // 50x the others — not for reconciling an invoice.
+  summaryCostPerMTokIn:  parseFloat(process.env.SUMMARY_COST_PER_MTOK_IN  || '0.15'),
+  summaryCostPerMTokOut: parseFloat(process.env.SUMMARY_COST_PER_MTOK_OUT || '0.60'),
+
   // Keycloak & Token Authentication
   keycloakUrl:           process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',

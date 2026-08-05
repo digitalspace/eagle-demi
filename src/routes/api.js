@@ -47,6 +47,9 @@ router.post('/admin/sync/nrpti', authMiddleware, dbController.runNrptiSyncHandle
 
 // Search Route
 router.get('/search', passiveAuthMiddleware, searchController.search);
+// authMiddleware, NOT passiveAuth — the summary is privileged-only in v1 while cost, abuse and the
+// wider disclosure surface of a synthesised paraphrase are measured. See wiki ADR-006.
+router.get('/search/summary', authMiddleware, searchController.summarize);
 
 // Compliance Records Routes
 router.get('/records', passiveAuthMiddleware, recordController.getRecords);

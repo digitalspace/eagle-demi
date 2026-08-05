@@ -8,6 +8,9 @@ const { filterFor } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
 const documentsRepo = require('../repositories/documents');
 const projectsRepo = require('../repositories/projects');
+const chunksRepo = require('../repositories/chunks');
+const summarizer = require('../ai/summarize');
+const config = require('../config');
 
 /**
  * A stored GeoJSON point as the frontend wants it: `[lng, lat]`.
@@ -343,5 +346,115 @@ exports.search = async (req, res) => {
   } catch (err) {
     console.error('[demi-api search] Top-level search error:', err);
     return res.json([{ searchResults: [] }]);
+  }
+};
+
+/**
+ * `GET /api/search/summary?keywords=…` — step 5 of the pipeline. See wiki ADR-006.
+ *
+ * PRIVILEGED ONLY. Mounted on `authMiddleware`, not `passiveAuthMiddleware`: anonymous callers get
+ * a 401 and never reach this function. That is deliberate for v1 — a <mark> fragment discloses a
+ * phrase, a synthesised cross-chunk paraphrase discloses substance, so the first version is gated
+ * to a small known population while cost and abuse are measured. `GET /api/search` is untouched and
+ * stays public.
+ *
+ * Retrieval here is the SAME BM25 call the results columns already made. Nothing about ranking,
+ * query construction or the ACL changes; this endpoint adds a step after them.
+ */
+exports.summarize = async (req, res) => {
+  const keywords = req.query.keywords || req.query.q || '';
+  if (!keywords) {
+    return res.json({ summary: null, citations: [], reason: 'no_query' });
+  }
+
+  try {
+    const access = resolveAccess(req);
+    const { filter, empty } = filterFor(access);
+
+    // Same fail-closed branch as the chunk search, for the same reason: OData has no `false`
+    // literal, so a caller who may see nothing cannot be expressed as a filter. Issuing the request
+    // without one would summarise the entire corpus.
+    if (empty) {
+      return res.json({ summary: null, citations: [], reason: 'no_results' });
+    }
+
+    const { items } = await aiSearch.searchChunks({
+      filter,
+      keywords,
+      fuzzy: req.query.fuzzy === 'true',
+      top: config.summaryMaxChunks
+    });
+
+    if (items.length === 0) {
+      // The model is never called. This is the grounding guarantee the nonsense-term probe checks:
+      // a build that returns prose here is answering from model knowledge, not from the corpus.
+      return res.json({ summary: null, citations: [], reason: 'no_results' });
+    }
+
+    // The index cannot supply the text — `content` is retrievable:false — so it comes from Cosmos.
+    // `getById` takes the caller's access and re-applies the ACL at the database. The search filter
+    // above already excluded anything unreadable; this is the second of two load-bearing gates, not
+    // a belt-and-braces one, and a null here means the row moved out of reach between the two reads.
+    const fetched = await Promise.all(
+      items.map(c => chunksRepo.getById(access, String(c.chunkId), String(c.documentId)))
+    );
+
+    const chunks = items
+      .map((item, i) => ({ item, row: fetched[i] }))
+      .filter(({ row }) => row && row.content)
+      .map(({ item, row }) => ({
+        chunkId: String(item.chunkId),
+        documentId: String(item.documentId || ''),
+        projectId: String(item.projectId || ''),
+        pageNumber: item.pageNumber ?? 0,
+        content: row.content
+      }));
+
+    const { summary, citations, reason, usage, estimatedCostUsd } =
+      await summarizer.summarize(keywords, chunks);
+
+    // Hydrate ONLY the chunks the model actually cited — at most a handful, and usually fewer than
+    // were sent. Two bounded reads under the CALLER's access, never systemAccess(): a name is a
+    // disclosure about the row it describes, so it must not outlive the ACL that governs the row.
+    // Same pair of calls the chunk-search branch makes above.
+    const cited = citations.map(i => chunks[i]);
+    const [citedDocs, citedProjects] = cited.length > 0
+      ? await Promise.all([
+        documentsRepo.listByIds(access, cited.map(c => c.documentId), cited.map(c => c.projectId)),
+        projectsRepo.listByIds(access, cited.map(c => c.projectId))
+      ])
+      : [[], []];
+    const docById = new Map(citedDocs.map(d => [String(d.id), d]));
+    const projById = new Map(citedProjects.map(p => [String(p.id), p]));
+
+    return res.json({
+      summary,
+      // Resolved back to the chunks they point at, so the UI can render a source list rather than
+      // a bare number. Indices are into the array actually sent to the model.
+      citations: cited.map((c, idx) => {
+        const parent = docById.get(c.documentId);
+        const project = projById.get(c.projectId);
+        return {
+          n: citations[idx] + 1,
+          chunkId: c.chunkId,
+          documentId: c.documentId,
+          projectId: c.projectId,
+          pageNumber: c.pageNumber,
+          documentName:
+            (parent && (parent.displayName || parent.documentFileName)) || 'Untitled Document',
+          projectName: (project && project.name) || 'Associated Project'
+        };
+      }),
+      // Returned so the page can show what the answer cost. An ESTIMATE from reported tokens and
+      // configured list rates — see estimateCostUsd. Null when the model was never called.
+      usage: usage || null,
+      estimatedCostUsd: estimatedCostUsd ?? null,
+      ...(reason ? { reason } : {})
+    });
+  } catch (err) {
+    // Additive: the panel disappears, the results columns do not. 200 rather than 5xx for the same
+    // reason the chunk search does it — the frontend retries 5xx and lands here again regardless.
+    console.error('[search/summary] failed:', err.message);
+    return res.json({ summary: null, citations: [], reason: 'error' });
   }
 };

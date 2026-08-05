@@ -14,11 +14,8 @@ export class AppComponent {
   service = inject(RegistryStateService);
   router = inject(Router);
 
-  setDemoRole(role: 'public' | 'admin') {
-    this.service.setDemoRole(role);
-    if (role === 'public' && this.router.url === '/intake') {
-      this.router.navigate(['/map']);
-    }
+  login() {
+    this.service.loginKeycloak();
   }
 
   openSwagger() {

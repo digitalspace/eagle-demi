@@ -56,7 +56,7 @@
             >
               <span style="display:inline-block; width: 6px; height: 6px; background:#2e7559; border-radius:50%"></span> Admitted
             </div>
-            @if (service.currentRole() === 'admin') {
+            @if (service.isStaff()) {
               <div 
                 class="chip" 
                 [class.active]="service.gatingFilter() === 'staged'" 
@@ -511,12 +511,12 @@
       <div class="widget-text">
         Map viewport filters the records dynamically. Zoom or drag the map to refine queries.
       </div>
-      <div class="stats-grid" [style.grid-template-columns]="service.currentRole() === 'admin' ? '1fr 1fr' : '1fr'">
+      <div class="stats-grid" [style.grid-template-columns]="service.isStaff() ? '1fr 1fr' : '1fr'">
         <div class="stat-box">
           <div class="stat-value">{{ service.viewportCount() }}</div>
           <div class="stat-label">In Viewport</div>
         </div>
-        @if (service.currentRole() === 'admin') {
+        @if (service.isStaff()) {
           <div class="stat-box">
             <div class="stat-value">{{ service.stagedCount() }}</div>
             <div class="stat-label">Staged/Hold</div>
