@@ -52,7 +52,7 @@ kudu_token() {
 }
 
 # This script carries NO credential. `az account get-access-token` returns a token for whoever the
-# az CLI is currently signed in as: a human on a workstation, or — after `azure/login@v2` — the
+# az CLI is currently signed in as: a human on a workstation, or — after `azure/login` — the
 # federated service principal on a CI runner. Same code, different principal, nothing stored.
 #
 # Fail fast and say WHICH principal, for two reasons. Without a token every Kudu call gets a 401,

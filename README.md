@@ -280,6 +280,20 @@ Build the package from a checkout that already has `node_modules` installed — 
 workflow installs dependencies, logs in, and calls `./scripts/deploy-azure.sh`, so CI and a manual
 deploy cannot drift.
 
+The frontend and the API are **separate workflows with separate triggers**, so a change to one does
+not redeploy the other:
+
+| Workflow | Deploys | Fires on a push to `main` touching |
+|---|---|---|
+| `azure-deploy-dev-frontend.yaml` | `demi-frontend-dev` | `frontend/**` |
+| `azure-deploy-dev-api.yaml` | `demi-api-dev` | `src/**`, `api/**`, `public/**`, `index.js`, `host.json`, `package.json`, `yarn.lock`, `frontend/public/assets/geojson/**` |
+
+Both also accept `workflow_dispatch`. The API's paths mirror `scripts/package-api.py`, which decides
+what actually ships — root `public/` is not excluded there, and `frontend/public/assets/geojson/**`
+is explicitly re-included because the boundary seeder reads it at runtime, so that one path fires
+both workflows. Adding a directory to the package without adding it here gives you a deploy that
+silently never runs.
+
 GitHub Actions authenticates as the user-assigned managed identity **`demi-cicd-dev`** through a
 federated credential, with no client secret anywhere:
 
@@ -319,12 +333,13 @@ approval. That was inert only while no credential existed; one exists now, so do
 `cosmos-nosql.bicep`, `ai-search.bicep`, `identity.bicep`, `document-storage.bicep` or
 `frontend-web-app.bicep`, and there is no VNet in the resource group. Rewriting it is open work.
 
-It is not a loaded gun, though, and now for two independent reasons. `azure-deploy-dev.yaml`'s
-`deploy-infra` job was replaced by `validate-infra` on 2026-08-04, which runs `az bicep build` and
-nothing else — the login and `arm-deploy` steps are gone, so it is validation-only by construction
-rather than by lack of auth. And the CI identity is scoped to two App Services, so it could not run
-an ARM deployment even if a login step came back. Both app-deploy jobs still gate on it, so a broken
-template blocks a release. Infrastructure changes go through `az` by hand meanwhile.
+It is not a loaded gun, though, and now for two independent reasons. **No dev workflow contains an
+infra job at all** — the `deploy-infra` job became a loginless `validate-infra` on 2026-08-04, and
+that in turn moved to `pr.yaml` as `validate-bicep` on 2026-08-05 when the deploy workflows were
+split. A template that will not compile is a pull-request problem; it has no bearing on whether a
+zipdeploy should run, so it no longer blocks one. And the CI identity is scoped to two App Services,
+so it could not run an ARM deployment even if a job came back. Infrastructure changes go through
+`az` by hand meanwhile.
 
 Things that will cost you time if you rediscover them:
 
