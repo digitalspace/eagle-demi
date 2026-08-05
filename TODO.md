@@ -98,10 +98,23 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
 
 ## Infrastructure
 
-- [ ] **CI is blocked.** `AZURE_CLIENT_ID` is missing from repo secrets. It needs an Entra app
-      registration with a federated credential, and creating one needs Microsoft Graph, which
-      conditional access blocks. Manual deploy is the working path meanwhile, and every merge to
-      `main` will keep showing a red "Deploy DEMI to Azure Dev" that fails at the Azure Login step.
+- [ ] **Test and prod CI still cannot deploy.** Both workflows read the same `AZURE_CLIENT_ID`, and
+      `demi-cicd-dev` holds no role outside `c4b0a8-dev-rg`. The federated credential is on the
+      `main` branch subject, so a `workflow_dispatch` from `main` would authenticate and then fail
+      on authorization in the test/prod subscriptions. Each environment needs its own identity,
+      credential and role assignments. Both are `workflow_dispatch` only, so nothing fires by
+      accident meanwhile.
+- [ ] **App registration `acb4198f-64db-4485-9638-a894e2d2c99b` is unused.** Left over from the
+      app-registration route, superseded by the managed identity. It has no federated credential
+      and no role assignment. Delete it.
+- [ ] **Deploy workflow actions still target Node 20.** `actions/checkout@v4`,
+      `actions/setup-node@v4` and `azure/login@v2` are force-run on Node 24 with a deprecation
+      warning on every run.
+- [ ] **`demi-identity-dev` briefly held Website Contributor on `demi-api-dev`** (assignment
+      `29745ac3`, 2026-08-05, removed same day). Worth knowing that
+      `Microsoft.Authorization/roleAssignments/delete` is denied at this RG even though *create*
+      succeeds — the `permissions` API reports `actions: ["*"]`, `notActions: []`, which is
+      misleading. Removing a role assignment needs someone with more rights.
 - [ ] **Phase 3b, blob storage.** Code and Bicep written, nothing deployed or copied; wired into
       `main.bicep` behind `deployDocumentStorage`, which defaults false. The argument is
       per-environment isolation, not cost. Needs `Storage Blob Delegator` on the identity or every
@@ -110,7 +123,9 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       accurately — `az deployment group what-if` reports zero creates and zero deletes against the
       live group — but it has never actually run, and `azure-deploy-dev.yaml`'s infra job was
       reduced to `az bicep build` on 2026-08-04. Deploying it for the first time is its own
-      decision, needing a credential that does not exist.
+      decision. CI cannot make that decision by accident: `demi-cicd-dev` holds Website Contributor
+      on two App Services and nothing at resource-group scope, so it cannot run an ARM deployment
+      even if a login step were added back to `validate-infra`.
 
 ## Semantic ranker — two things to watch, now that it is live
 

@@ -7,8 +7,14 @@
 #
 # NO push trigger. Test is where a release candidate is verified before prod deploys
 # the same tag, so it deploys on request, not on merge. This used to fire on every
-# push to main, inert only because AZURE_CLIENT_ID is missing from repo secrets. Do
-# not restore the push trigger when that credential lands.
+# push to main, inert only because no credential existed. AZURE_CLIENT_ID is now real
+# (2026-08-05), so that safety net is gone — do not restore the push trigger.
+#
+# This workflow cannot deploy yet in any case. AZURE_CLIENT_ID is `demi-cicd-dev`, a
+# managed identity in c4b0a8-dev-rg holding Website Contributor on the two DEV App
+# Services and nothing else. Azure Login here succeeds (the federated credential is
+# on the `main` branch subject) and then every step fails on authorization. Test
+# needs its own identity, federated credential and role assignments.
 # =============================================================================
 
 name: Deploy DEMI to Azure Test

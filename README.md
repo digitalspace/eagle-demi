@@ -276,23 +276,55 @@ Auto-seeding them is what produced 3,382 synthetic project rows in the old datab
 Build the package from a checkout that already has `node_modules` installed — `ENABLE_ORYX_BUILD` is
 `false`, so nothing installs dependencies on the Azure side.
 
-GitHub Actions workflows exist for dev/test/prod (`.github/workflows/azure-deploy-*.yaml`) but **CI
-cannot currently authenticate** — `AZURE_CLIENT_ID` is missing from repo secrets. The script above is
-the working path.
+**CI deploys dev on every push to `main`**, working since 2026-08-05. It runs the same script — the
+workflow installs dependencies, logs in, and calls `./scripts/deploy-azure.sh`, so CI and a manual
+deploy cannot drift.
+
+GitHub Actions authenticates as the user-assigned managed identity **`demi-cicd-dev`** through a
+federated credential, with no client secret anywhere:
+
+| | |
+|---|---|
+| Identity | `demi-cicd-dev`, client `37ff78d5-23b0-49bc-b324-02ff63755da1` |
+| Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:digitalspace/eagle-demi:ref:refs/heads/main`, audience `api://AzureADTokenExchange` |
+| RBAC | Website Contributor on `demi-api-dev` and `demi-frontend-dev` **individually** — nothing at resource-group scope |
+| Repo secrets | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`. The subscription id is a literal in the workflow `env:` |
+
+**A managed identity, deliberately, not an app registration.** A UAMI carries federated credentials
+just as an Entra application does, but creating and configuring one is pure ARM. The app-registration
+route needs Microsoft Graph to create the service principal and the credential, and conditional
+access blocks Graph here — browser sign-in has no browser on a server, and device-code flow is denied
+tenant-wide. The landing zone points the same way: managed identity first, app registration only for
+human sign-in, multi-tenant or M365 integration, and by request rather than self-service.
+
+`demi-cicd-dev` is separate from the runtime identity `demi-identity-dev` on purpose. The runtime
+identity holds Cosmos Data Contributor, Search Index Data Contributor and OpenAI User; a federated
+credential on it would let any workflow on `main`, in a **public** repo, mint a token with full
+database access.
+
+The script carries no credential of its own — `az account get-access-token` returns a token for
+whatever principal the CLI session holds, a human locally and the managed identity in CI. Its
+`preflight_identity` prints that principal and refuses to run under `GITHUB_ACTIONS` as anything but
+a service principal, so a deploy authenticated as a person fails instead of proceeding.
+
+Only dev has an identity. Test and prod workflows read the same secrets but `demi-cicd-dev` has no
+role in those subscriptions, so they authenticate and then fail on authorization. Each environment
+needs its own.
 
 **Only dev deploys on a push to `main`.** Test and prod are `workflow_dispatch` only. They used to
 carry the same push trigger, which would have deployed both on every merge with no tag and no
-approval the moment the missing credential landed. Do not restore it.
+approval. That was inert only while no credential existed; one exists now, so do not restore it.
 
 **`azure/main.bicep` does not describe the running environment.** It never instantiates
 `cosmos-nosql.bicep`, `ai-search.bicep`, `identity.bicep`, `document-storage.bicep` or
 `frontend-web-app.bicep`, and there is no VNet in the resource group. Rewriting it is open work.
 
-It is not a loaded gun, though: `azure-deploy-dev.yaml`'s `deploy-infra` job was replaced by
-`validate-infra` on 2026-08-04, which runs `az bicep build` and nothing else. The login and
-`arm-deploy` steps are gone, so it cannot deploy even once a credential exists — validation-only by
-construction rather than by lack of auth. Both app-deploy jobs still gate on it, so a broken template
-blocks a release. Infrastructure changes go through `az` by hand meanwhile.
+It is not a loaded gun, though, and now for two independent reasons. `azure-deploy-dev.yaml`'s
+`deploy-infra` job was replaced by `validate-infra` on 2026-08-04, which runs `az bicep build` and
+nothing else — the login and `arm-deploy` steps are gone, so it is validation-only by construction
+rather than by lack of auth. And the CI identity is scoped to two App Services, so it could not run
+an ARM deployment even if a login step came back. Both app-deploy jobs still gate on it, so a broken
+template blocks a release. Infrastructure changes go through `az` by hand meanwhile.
 
 Things that will cost you time if you rediscover them:
 
