@@ -155,6 +155,17 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       (subject `repo:digitalspace/eagle-demi:ref:refs/heads/main`) — dormant while the app has no
       permissions, live the moment it gets any, from a PUBLIC repo. Settle that before wiring this
       app to sign-in.
+- [ ] **CI runs Yarn 1 against a Yarn 4 repo, so `--immutable` is not enforced.** Neither
+      `package.json` declares `packageManager`, so `corepack enable` on `ubuntu-latest` falls back to
+      the preinstalled **1.22.22** — visible in any build log as `yarn run v1.22.22`. Yarn 1 does not
+      recognise `--immutable` and ignores it, so `yarn install --immutable` in `pr.yaml` and both
+      deploy workflows guarantees nothing: the lockfile can drift and CI stays green. It already has
+      — `yarn --cwd frontend install --immutable` under local Yarn 4.12.0 fails with "The lockfile
+      would have been modified by this install" against a `main` whose CI is green.
+      Fix is one line per manifest, `"packageManager": "yarn@4.12.0"`, but land it deliberately:
+      the moment corepack activates Yarn 4, `--immutable` starts being enforced and that drift
+      becomes a hard CI failure until `frontend/yarn.lock` is regenerated. Do the regeneration in
+      the same PR.
 - [ ] **Five API majors are pending, and CI cannot judge them.** Dependabot proposed express
       4.22.2 → 5.2.1, helmet 7 → 8, jwks-rsa 3 → 4, minio 7 → 8 and serverless-http 3 → 4 (PR #35,
       closed — they are now individual PRs instead of one green group). Each needs reading:
@@ -167,8 +178,11 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
         `scripts/validate-deploy.sh`. A break here ships silently. Needs a presign + fetch check.
       - **jwks-rsa 4** — `src/helpers/auth.js` passes `jwksRequestsPerMinute`; confirm it survives.
       - **helmet 8** — only `contentSecurityPolicy: false` is set, so low risk.
-      - **serverless-http 4** — **nothing in the repo requires it.** Verify and drop the dependency
-        rather than upgrade it; it is packaged into `wwwroot` for nothing today.
+      - ~~**serverless-http 4**~~ — done: nothing required it, so the dependency was removed rather
+        than upgraded (PR #51 closed).
+      `test/app.boot.test.js` now covers the first half of the express question — it mounts
+      `src/app.js`, serves a real request and checks the 404 fallback, so a path-to-regexp rejection
+      fails CI instead of dev.
 - [ ] **`MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `TYPESENSE_API_KEY`, `OPENSHIFT_TOKEN` and
       `OPENSHIFT_URL` are now unreferenced repo secrets.** The two `MINIO_*` were read only by the
       deleted test/prod workflows, as Bicep parameters; `TYPESENSE_API_KEY` outlived Typesense
