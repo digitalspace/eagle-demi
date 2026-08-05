@@ -48,14 +48,20 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  AZURE_SUBSCRIPTION_ID: 'd2f8d048-2af3-44fd-81cc-858c040001f2' # c4b0a8-dev - EPIC.AI
-  AZURE_RESOURCE_GROUP: 'c4b0a8-dev-rg'
-
 jobs:
   deploy-frontend:
     name: Build & Deploy Frontend (Azure Web App)
     runs-on: ubuntu-latest
+    # Subscription, resource group and the two Azure ids all come from this
+    # environment — nothing about dev is hardcoded here any more.
+    #
+    # Declaring an environment CHANGES THE OIDC SUBJECT CLAIM. It becomes
+    # `repo:digitalspace/eagle-demi:environment:dev` instead of
+    # `...:ref:refs/heads/main`, so the `gh-main` federated credential on
+    # demi-cicd-dev no longer matches on its own. A second credential, `gh-env-dev`,
+    # carries the environment subject. Remove the environment and Azure Login fails
+    # with AADSTS700213; rename it and it fails the same way.
+    environment: dev
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -78,7 +84,7 @@ jobs:
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       # `scripts/deploy-azure.sh`, not `az webapp deploy`. Beyond deploying, it PRUNES the
       # superseded hashed bundles that zipdeploy's merge leaves behind — by 2026-08-05 that was
@@ -88,7 +94,7 @@ jobs:
       # needs THIS host's `az` login for `az account get-access-token`. `ubuntu-latest` already
       # ships az, python3, curl and zip.
       - name: Deploy Frontend
-        run: ./scripts/deploy-azure.sh frontend ${{ env.AZURE_RESOURCE_GROUP }}
+        run: ./scripts/deploy-azure.sh frontend ${{ vars.AZURE_RESOURCE_GROUP }}
 
       - name: Report Frontend Failure to Job Summary
         if: failure()
