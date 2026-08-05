@@ -1,6 +1,7 @@
 {
   "name": "eagle-demi",
   "version": "1.0.0",
+  "packageManager": "yarn@4.12.0",
   "description": "DEMI central repository and extraction worker API",
   "main": "api/index.js",
   "scripts": {

@@ -155,17 +155,20 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       (subject `repo:digitalspace/eagle-demi:ref:refs/heads/main`) — dormant while the app has no
       permissions, live the moment it gets any, from a PUBLIC repo. Settle that before wiring this
       app to sign-in.
-- [ ] **CI runs Yarn 1 against a Yarn 4 repo, so `--immutable` is not enforced.** Neither
-      `package.json` declares `packageManager`, so `corepack enable` on `ubuntu-latest` falls back to
-      the preinstalled **1.22.22** — visible in any build log as `yarn run v1.22.22`. Yarn 1 does not
-      recognise `--immutable` and ignores it, so `yarn install --immutable` in `pr.yaml` and both
-      deploy workflows guarantees nothing: the lockfile can drift and CI stays green. It already has
-      — `yarn --cwd frontend install --immutable` under local Yarn 4.12.0 fails with "The lockfile
-      would have been modified by this install" against a `main` whose CI is green.
-      Fix is one line per manifest, `"packageManager": "yarn@4.12.0"`, but land it deliberately:
-      the moment corepack activates Yarn 4, `--immutable` starts being enforced and that drift
-      becomes a hard CI failure until `frontend/yarn.lock` is regenerated. Do the regeneration in
-      the same PR.
+- [x] **CI was running Yarn 1 against a Yarn 4 repo — fixed 2026-08-05.** Neither `package.json`
+      declared `packageManager`, so `corepack enable` on `ubuntu-latest` fell back to the
+      preinstalled **1.22.22** (visible in any build log as `yarn run v1.22.22`). Yarn 1 does not
+      recognise `--immutable` and ignores it, so every `yarn install --immutable` in `pr.yaml` and
+      the deploy workflows guaranteed **nothing** — CI resolved dependencies fresh from the registry
+      on every run and the lockfiles were decorative. That is a reproducibility hole and a supply
+      chain one: a fresh resolve installs whatever is in range, which is the exact thing a lockfile
+      prevents. It stopped being theoretical when PR #48's build died on `Couldn't find any versions
+      for "@jsonjoy.com/fs-node-utils" that matches "4.68.0"` while the lockfile pinned **4.64.0**.
+      Both manifests now pin `yarn@4.12.0`, and both lockfiles were regenerated under it —
+      normalisation only, **zero package version changes**: 423 root and 1106 frontend resolutions
+      before and after, differing only in Yarn's internal `#~builtin` → `#optional!builtin` patch
+      notation. `cacheKey` moved `10` → `10c0`, which is what the old locks having been written by
+      an older Yarn looked like.
 - [ ] **Five API majors are pending, and CI cannot judge them.** Dependabot proposed express
       4.22.2 → 5.2.1, helmet 7 → 8, jwks-rsa 3 → 4, minio 7 → 8 and serverless-http 3 → 4 (PR #35,
       closed — they are now individual PRs instead of one green group). Each needs reading:
