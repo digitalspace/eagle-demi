@@ -10,10 +10,17 @@
 # `azure/main.bicep` does not describe dev: it never instantiates cosmos-nosql,
 # ai-search, identity, document-storage or frontend-web-app, and there is no VNet
 # in the resource group. Deploying it would not converge dev, it would damage it.
-# The only reason that was ever harmless is that CI cannot authenticate
-# (AZURE_CLIENT_ID is missing) — so the hazard would arrive the moment somebody
-# fixed the credential. Infrastructure changes go through `az` by hand until the
-# template is rewritten to match reality. See TODO.md.
+# Infrastructure changes go through `az` by hand until the template is rewritten
+# to match reality. See TODO.md.
+#
+# That guard used to rest on CI having no credential at all. It no longer does —
+# AZURE_CLIENT_ID is now a real federated identity — so `validate-infra` having no
+# Azure login is the ONLY thing standing between this file and a bad infra deploy.
+# Do not add a login step to it.
+#
+# The credential is scoped to match: Website Contributor on demi-api-dev and
+# demi-frontend-dev individually, nothing at resource-group scope. It cannot run
+# an ARM deployment even if a login step were added.
 # =============================================================================
 
 name: Deploy DEMI to Azure Dev
@@ -80,17 +87,13 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install & Build Frontend
+      # Dependencies only. The build belongs to the deploy script, which runs
+      # `yarn --cwd frontend build` itself — `angular.json` sets
+      # `defaultConfiguration: production`, so there is nothing to pass.
+      - name: Install Frontend Dependencies
         run: |
-          cd frontend
           corepack enable
-          yarn install --immutable
-          yarn build --configuration production
-          
-          # Zip dist output for Web App deployment
-          DIST_DIR=$(test -d dist/browser && echo "dist/browser" || echo "dist")
-          cd $DIST_DIR
-          zip -r /tmp/frontend.zip .
+          yarn --cwd frontend install --immutable
 
       - name: Azure Login
         uses: azure/login@v2
@@ -99,11 +102,15 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy Frontend Zip to Azure Web App
-        uses: azure/cli@v2
-        with:
-          inlineScript: |
-            az webapp deploy -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-frontend-dev --src-path /tmp/frontend.zip --type zip
+      # `scripts/deploy-azure.sh`, not `az webapp deploy`. Beyond deploying, it PRUNES the
+      # superseded hashed bundles that zipdeploy's merge leaves behind — by 2026-08-05 that was
+      # 19 assets, 5.6 MB, of which 3 were referenced. This workflow never pruned at all.
+      #
+      # A plain `run:` step, not `azure/cli@v2`: that action runs in a container, and the script
+      # needs THIS host's `az` login for `az account get-access-token`. `ubuntu-latest` already
+      # ships az, python3, curl and zip.
+      - name: Deploy Frontend
+        run: ./scripts/deploy-azure.sh frontend ${{ env.AZURE_RESOURCE_GROUP }}
 
       - name: Report Frontend Failure to Job Summary
         if: failure()
@@ -125,27 +132,14 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install Dependencies & Package API
+      # Dependencies only. Packaging belongs to `scripts/package-api.py`, which the deploy script
+      # calls. The inline zip that used to live here pruned only frontend/.git/dist/.angular, so it
+      # shipped .claude, test, azure, .github and scripts into wwwroot — exactly the debris
+      # `scripts/validate-deploy.sh` checks for.
+      - name: Install Dependencies
         run: |
           corepack enable
           yarn install --immutable
-          
-          python3 -c "
-          import zipfile, os
-          with zipfile.ZipFile('/tmp/api.zip', 'w', zipfile.ZIP_DEFLATED) as z:
-              for root, dirs, files in os.walk('.'):
-                  # Prune ONLY at the repo root. Excluding these names at every depth also
-                  # removed node_modules/**/dist (e.g. @mongodb-js/saslprep), which ships a
-                  # broken app that 500s on every request.
-                  if os.path.normpath(root) == '.':
-                      dirs[:] = [d for d in dirs if d not in ['frontend', '.git', 'dist', '.angular']]
-                  for file in files:
-                      if file.endswith('.pyc') or file.endswith('.log'): continue
-                      # Never ship local secrets — app settings supply env vars in Azure.
-                      if file == '.env' or file.startswith('.env.'): continue
-                      p = os.path.join(root, file)
-                      z.write(p, os.path.relpath(p, '.'))
-          "
 
       - name: Azure Login
         uses: azure/login@v2
@@ -154,11 +148,17 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy API Zip to Azure Function App
-        uses: azure/cli@v2
-        with:
-          inlineScript: |
-            az functionapp deployment source config-zip -g ${{ env.AZURE_RESOURCE_GROUP }} -n demi-api-dev --src /tmp/api.zip
+      # `scripts/deploy-azure.sh`, not `az functionapp deployment source config-zip`. The CLI
+      # reports success from its own exit code, which is not the same fact as the deployment
+      # succeeding: on 2026-08-05 an oversized package left Kudu at status 1 for over thirty
+      # minutes, the client was killed, and Azure went on listing an OLDER deployment as active —
+      # a mismatch that reverts the app on the next container recycle.
+      #
+      # The script instead POSTs /api/zipdeploy?isAsync=true, polls the deployment RECORD to a
+      # terminal state (4 = success, 3 = failed), and then probes /api/search/summary for a 401 to
+      # prove the NEW build is the one answering. A plain `run:` step for the reason above.
+      - name: Deploy API
+        run: ./scripts/deploy-azure.sh api ${{ env.AZURE_RESOURCE_GROUP }}
 
       - name: Report API Failure to Job Summary
         if: failure()

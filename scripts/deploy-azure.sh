@@ -47,6 +47,29 @@ kudu_token() {
     --query accessToken -o tsv
 }
 
+# This script carries NO credential. `az account get-access-token` returns a token for whoever the
+# az CLI is currently signed in as: a human on a workstation, or — after `azure/login@v2` — the
+# federated service principal on a CI runner. Same code, different principal, nothing stored.
+#
+# Fail fast and say WHICH principal, for two reasons. Without a token every Kudu call gets a 401,
+# the upload check only looks for 409, and wait_for_deployment then polls for twenty minutes before
+# giving up — a confusing way to report "not logged in". And printing the principal is what makes
+# it visible in a CI log that the deploy ran as the service principal and not as somebody's account.
+preflight_identity() {
+  local who type
+  who=$(az account show --query user.name -o tsv 2>/dev/null || true)
+  type=$(az account show --query user.type -o tsv 2>/dev/null || true)
+  if [ -z "$who" ] || [ -z "$(kudu_token)" ]; then
+    echo -e "${RED}✗ no Azure token. Run 'az login', or check the Azure Login step.${NC}" >&2
+    exit 2
+  fi
+  echo -e "${BLUE}Authenticated as:${NC} ${who} (${type})"
+  if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$type" != "servicePrincipal" ]; then
+    echo -e "${RED}✗ CI must deploy as a service principal, not '${type}'.${NC}" >&2
+    exit 2
+  fi
+}
+
 kudu() { # kudu <app> <method> <path> [curl args...]
   local app="$1" method="$2" path="$3"; shift 3
   curl -sS --max-time 120 -X "$method" \
@@ -80,6 +103,7 @@ wait_for_deployment() {
 echo -e "${BLUE}====================================================${NC}"
 echo -e "${BLUE} Azure Direct Deployment: ${YELLOW}${TARGET}${BLUE} -> ${YELLOW}${RESOURCE_GROUP}${NC}"
 echo -e "${BLUE}====================================================${NC}"
+preflight_identity
 
 deploy_api() {
   echo -e "\n${BLUE}[1/4] Packaging API source code...${NC}"
