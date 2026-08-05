@@ -7,8 +7,15 @@
 #
 # NO push trigger. Prod deploys an exact tag that was verified on test first, and it
 # deploys because a human asked. This used to fire on every push to main - no tag, no
-# approval - which was inert only because AZURE_CLIENT_ID is missing from repo secrets.
-# Do not restore the push trigger when that credential lands.
+# approval - which was inert only because no credential existed. AZURE_CLIENT_ID is
+# now real (2026-08-05), so that safety net is gone — do not restore the push trigger.
+#
+# This workflow cannot deploy yet in any case. AZURE_CLIENT_ID is `demi-cicd-dev`, a
+# managed identity in c4b0a8-dev-rg holding Website Contributor on the two DEV App
+# Services and nothing else. Azure Login here succeeds (the federated credential is
+# on the `main` branch subject) and then every step fails on authorization. Prod needs
+# its own identity, federated credential and role assignments — and, before that, a
+# decision about gating a prod credential behind a GitHub environment with reviewers.
 # =============================================================================
 
 name: Deploy DEMI to Azure Prod

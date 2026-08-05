@@ -27,7 +27,11 @@ set -euo pipefail
 # already set on this app. Its `clean=true` is silently dropped too (`CleanOutputPath False`) —
 # the only reason that failure did not wipe wwwroot and take the API down.
 #
-# SCM basic auth is DISABLED by landing-zone policy, so Kudu needs an AAD bearer token.
+# Kudu is called with an AAD bearer token, never publishing credentials. This was written when
+# landing-zone policy had SCM basic auth disabled; measured 2026-08-05, both apps report
+# `scm allow=True` and `ftp allow=True`, so that is no longer true and may flip back under policy
+# remediation. Bearer is correct either way and stores no credential, so nothing here depends on
+# which way the setting currently sits.
 
 TARGET="${1:-all}"
 RESOURCE_GROUP="${2:-c4b0a8-dev-rg}"
