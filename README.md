@@ -356,6 +356,50 @@ More, including the Kudu and basic-auth situation, in
 
 ---
 
+## Repository security
+
+Enabled 2026-08-05. The repo is **public**, so all of this is free — none of it needs an Advanced
+Security licence.
+
+| | |
+|---|---|
+| Secret scanning | Scans the full history on every branch. Zero alerts |
+| **Push protection** | Blocks a push containing a recognised credential, instead of reporting it once it is already public |
+| Dependabot alerts + security updates | Opens PRs for advisories; no config needed for that part |
+| Code scanning | CodeQL default setup — `actions`, `javascript-typescript`, `python`. No workflow file to maintain |
+
+**Push protection is the enforcement behind "never ship `.env`".** That rule was previously a
+convention, and this repository has already shipped a `.env` carrying `MONGODB_PASSWORD`,
+`TYPESENSE_API_KEY`, `MINIO_SECRET_KEY` and `DOCLING_API_KEY` into `wwwroot` once.
+`scripts/package-api.py` excludes `.env` at every depth; push protection stops it a step earlier, at
+the commit. Note it only blocks pattern types with low false-positive rates — it is a backstop, not
+a substitute for keeping secrets in app settings.
+
+`secret_scanning_validity_checks`, `non_provider_patterns` and `ai_detection` are deliberately off:
+unlike push protection, those sit behind paid Secret Protection.
+
+**Reading the Dependabot count.** The raw number overstates the exposure. Only `frontend/dist` is
+deployed, never `frontend/node_modules`, so advisories on the Angular build toolchain are a CI
+supply-chain concern and not a production one. The API is the opposite — its package includes
+`node_modules`, so a root-lockfile advisory does reach `demi-api-dev`. Group by
+`dependency.manifest_path` and `dependency.scope` before deciding anything:
+
+```bash
+gh api "repos/digitalspace/eagle-demi/dependabot/alerts?state=open&per_page=100" \
+  --jq '[.[]|{man:.dependency.manifest_path,scope:.dependency.scope,
+              fixable:(.security_vulnerability.first_patched_version!=null)}]
+        |group_by(.man+.scope)|map({manifest:.[0].man,scope:.[0].scope,n:length})'
+```
+
+Grouping and routine version updates come from `.github/dependabot.yml`. Angular majors are ignored
+there on purpose — see the Angular 19 end-of-life entry in `TODO.md`.
+
+**GitHub Code Quality is not enabled.** It went GA on 2026-07-20 and bills $10 per active committer
+per month, counted org-wide, and it is not in the free public-repo set. It is also UI-only, with no
+REST API, so it cannot be scripted. CodeQL above provides the same analysis engine at no cost.
+
+---
+
 ## Frontend
 
 Angular app under `frontend/`, built to `frontend/dist`.

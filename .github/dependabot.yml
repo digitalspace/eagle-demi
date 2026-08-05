@@ -1,0 +1,66 @@
+# =============================================================================
+# Dependabot
+# =============================================================================
+# This file is NOT what fixes security alerts — Dependabot security updates work
+# without any config, and opened PR #27 for brace-expansion before this existed.
+# What it buys is grouping: 40 of the 47 open alerts have a fix, and ungrouped
+# that is 40 pull requests. It also adds routine version updates, so the backlog
+# stops rebuilding between security advisories.
+#
+# Two npm entries because the API and the frontend are separate Yarn 4 projects
+# with their own lockfiles. `npm` is the correct ecosystem for Yarn — there is no
+# `yarn` value.
+# =============================================================================
+
+version: 2
+
+updates:
+  # The API — root package.json / yarn.lock. These ship: the package includes
+  # node_modules, so a vulnerable dependency here reaches demi-api-dev.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      api-dependencies:
+        patterns:
+          - '*'
+
+  # The Angular frontend. Only `frontend/dist` is deployed, never node_modules,
+  # so build-tooling advisories here are a CI supply-chain concern rather than a
+  # production one. The bundled runtime packages are the exception.
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Angular majors are ignored deliberately. The app is pinned at 19.2.25 and
+    # Angular 19 is past end-of-life, so there is no patch release to take and
+    # every major is a framework migration — two majors to reach 21 (LTS). An
+    # automatic weekly PR for that would fail CI forever and bury the ones worth
+    # reading. The upgrade is tracked in TODO.md as real work instead.
+    ignore:
+      - dependency-name: '@angular*'
+        update-types: ['version-update:semver-major']
+    groups:
+      # First matching group wins, so Angular is listed ahead of the catch-all.
+      angular:
+        patterns:
+          - '@angular*'
+          - 'angular-eslint'
+      build-tooling:
+        patterns:
+          - '*'
+
+  # Keeps the action versions bumped in PR #26 (checkout v7, setup-node v7,
+  # azure/login v3, azure/cli v3, arm-deploy v2) from going stale again — that
+  # drift is what produced a Node 20 deprecation warning on every job.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns:
+          - '*'
