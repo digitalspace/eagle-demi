@@ -2160,12 +2160,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@eslint/config-helpers@npm:^0.6.0":
-  version: 0.6.0
-  resolution: "@eslint/config-helpers@npm:0.6.0"
+"@eslint/config-helpers@npm:^0.7.0":
+  version: 0.7.0
+  resolution: "@eslint/config-helpers@npm:0.7.0"
   dependencies:
-    "@eslint/core": "npm:^1.2.1"
-  checksum: f9af20e8b60b0ba27edb74b8eb40c0c5d51a9bf9baf9e053bb57833a87cb0a1c49b4dfaad88fc24d49c907ad1324c8a0b668684fa9c321351dac4bc9155ec10a
+    "@eslint/core": ^1.2.1
+  checksum: 8/4367648fb52061a7142404eab8c4f5d7406a75c0e6aa6f90fd38846f7f07b8be3755c05b1e7d601fabbbb4e5a95f97e3b4aa865ab359e80dcc24d659489f1173
   languageName: node
   linkType: hard
 
@@ -4958,6 +4958,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"brace-expansion@npm:^5.0.8":
+  version: 5.0.9
+  resolution: "brace-expansion@npm:5.0.9"
+  dependencies:
+    balanced-match: ^4.0.2
+  checksum: 8/81d14bf63c4683fa03163320a0686ee34e67c4fba8525c26949cae42aae6020369a3263f01345ec456a8bc572ab762f85216d6700997ae9ef3eeecb7f3d8b28a
+  languageName: node
+  linkType: hard
+
 "braces@npm:^3.0.2, braces@npm:^3.0.3, braces@npm:~3.0.2":
   version: 3.0.3
   resolution: "braces@npm:3.0.3"
@@ -5591,15 +5600,15 @@ __metadata:
     "@types/jasmine": ~5.1.0
     "@types/proj4": ^2.19.0
     angular-eslint: ^22.1.0
-    eslint: ^10.7.0
-    globals: ^17.7.0
+    eslint: ^10.8.0
+    globals: ^17.9.0
     jasmine-core: ~5.6.0
     karma: ~6.4.0
     karma-chrome-launcher: ~3.2.0
     karma-coverage: ~2.2.0
     karma-jasmine: ~5.1.0
-    karma-jasmine-html-reporter: ~2.1.0
-    proj4: ^2.20.9
+    karma-jasmine-html-reporter: ~2.2.0
+    proj4: ^2.21.0
     rxjs: ~7.8.0
     tslib: ^2.3.0
     typescript: ~5.7.2
@@ -6175,40 +6184,40 @@ __metadata:
   languageName: node
   linkType: hard
 
-"eslint@npm:^10.7.0":
-  version: 10.7.0
-  resolution: "eslint@npm:10.7.0"
+"eslint@npm:^10.8.0":
+  version: 10.8.0
+  resolution: "eslint@npm:10.8.0"
   dependencies:
-    "@eslint-community/eslint-utils": "npm:^4.8.0"
-    "@eslint-community/regexpp": "npm:^4.12.2"
-    "@eslint/config-array": "npm:^0.23.5"
-    "@eslint/config-helpers": "npm:^0.6.0"
-    "@eslint/core": "npm:^1.2.1"
-    "@eslint/plugin-kit": "npm:^0.7.2"
-    "@humanfs/node": "npm:^0.16.6"
-    "@humanwhocodes/module-importer": "npm:^1.0.1"
-    "@humanwhocodes/retry": "npm:^0.4.2"
-    "@types/estree": "npm:^1.0.6"
-    ajv: "npm:^6.14.0"
-    cross-spawn: "npm:^7.0.6"
-    debug: "npm:^4.3.2"
-    escape-string-regexp: "npm:^4.0.0"
-    eslint-scope: "npm:^9.1.2"
-    eslint-visitor-keys: "npm:^5.0.1"
-    espree: "npm:^11.2.0"
-    esquery: "npm:^1.7.0"
-    esutils: "npm:^2.0.2"
-    fast-deep-equal: "npm:^3.1.3"
-    file-entry-cache: "npm:^8.0.0"
-    find-up: "npm:^5.0.0"
-    glob-parent: "npm:^6.0.2"
-    ignore: "npm:^5.2.0"
-    imurmurhash: "npm:^0.1.4"
-    is-glob: "npm:^4.0.0"
-    json-stable-stringify-without-jsonify: "npm:^1.0.1"
-    minimatch: "npm:^10.2.4"
-    natural-compare: "npm:^1.4.0"
-    optionator: "npm:^0.9.3"
+    "@eslint-community/eslint-utils": ^4.8.0
+    "@eslint-community/regexpp": ^4.12.2
+    "@eslint/config-array": ^0.23.5
+    "@eslint/config-helpers": ^0.7.0
+    "@eslint/core": ^1.2.1
+    "@eslint/plugin-kit": ^0.7.2
+    "@humanfs/node": ^0.16.6
+    "@humanwhocodes/module-importer": ^1.0.1
+    "@humanwhocodes/retry": ^0.4.2
+    "@types/estree": ^1.0.6
+    ajv: ^6.14.0
+    cross-spawn: ^7.0.6
+    debug: ^4.3.2
+    escape-string-regexp: ^4.0.0
+    eslint-scope: ^9.1.2
+    eslint-visitor-keys: ^5.0.1
+    espree: ^11.2.0
+    esquery: ^1.7.0
+    esutils: ^2.0.2
+    fast-deep-equal: ^3.1.3
+    file-entry-cache: ^8.0.0
+    find-up: ^5.0.0
+    glob-parent: ^6.0.2
+    ignore: ^5.2.0
+    imurmurhash: ^0.1.4
+    is-glob: ^4.0.0
+    json-stable-stringify-without-jsonify: ^1.0.1
+    minimatch: ^10.2.5
+    natural-compare: ^1.4.0
+    optionator: ^0.9.3
   peerDependencies:
     jiti: "*"
   peerDependenciesMeta:
@@ -6216,7 +6225,7 @@ __metadata:
       optional: true
   bin:
     eslint: bin/eslint.js
-  checksum: d9415f506730c098ab8897da39f5719cdf9d1026c9511c322d4a272677f904b7d43ff423d63ee941c9a03d74d1a75563ce2668886734b1f293b22e57911a6dd6
+  checksum: 8/3c746957d5e95fc888c44c2cd3e61696d7c152273b4c521ee36a4b6ed8f58a34d0ccd3d85a2924404d8c0731cff687d2a64047842cda4e76d34ffe0c453e0b25
   languageName: node
   linkType: hard
 
@@ -6759,10 +6768,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"globals@npm:^17.7.0":
-  version: 17.7.0
-  resolution: "globals@npm:17.7.0"
-  checksum: e83f791acf537b85fa1632ac48a45432a1999a61acd9f955b5c2145f66d6b5000a7945029874b6184fa2dfac8d33af03885a5a7ffa457866f1bcf0b40d0c1291
+"globals@npm:^17.9.0":
+  version: 17.9.0
+  resolution: "globals@npm:17.9.0"
+  checksum: 8/16657a4355cff42b2315177a9dfe9d2c2f8885045269143a4219afeeae780ff0300b24d56ca0bf0506ebb9735bbe901681d9d86ef9d2813c25ee3f2c7ad851c6
   languageName: node
   linkType: hard
 
@@ -7599,14 +7608,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"karma-jasmine-html-reporter@npm:~2.1.0":
-  version: 2.1.0
-  resolution: "karma-jasmine-html-reporter@npm:2.1.0"
+"karma-jasmine-html-reporter@npm:~2.2.0":
+  version: 2.2.0
+  resolution: "karma-jasmine-html-reporter@npm:2.2.0"
   peerDependencies:
-    jasmine-core: ^4.0.0 || ^5.0.0
+    jasmine-core: ^4.0.0 || ^5.0.0 || ^6.0.0
     karma: ^6.0.0
     karma-jasmine: ^5.0.0
-  checksum: c20b0b52eada370d66fb06eda1a767f2043fecc6c4647691c889f4f62aa0f8948811dc64f033ebab02085a2e27e79099034ebe1699facf4e24e6bbc5ad0c203f
+  checksum: 8/e5bb449d6586b1b8daf05d3d742062701b533ba0165fe2df0c3037787af3b771f74bb3734f0449d3d97c91af4757a16582ea8baa0beaf613790851845a97597f
   languageName: node
   linkType: hard
 
@@ -8168,6 +8177,15 @@ __metadata:
   dependencies:
     brace-expansion: "npm:^5.0.5"
   checksum: 6bb058bd6324104b9ec2f763476a35386d05079c1f5fe4fbf1f324a25237cd4534d6813ecd71f48208f4e635c1221899bef94c3c89f7df55698fe373aaae20fd
+  languageName: node
+  linkType: hard
+
+"minimatch@npm:^10.2.5":
+  version: 10.2.6
+  resolution: "minimatch@npm:10.2.6"
+  dependencies:
+    brace-expansion: ^5.0.8
+  checksum: 8/6f3d0ba7654a6d667dc1787a3684192d65e130cbcf02c1b0cf0d0b2f7f69ab41703d4d255dc171632dc25994527a35fb6ea7d44cc6132e4d93de5a2efb210bd1
   languageName: node
   linkType: hard
 
@@ -9215,7 +9233,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"proj4@npm:*, proj4@npm:^2.20.9":
+"proj4@npm:*":
   version: 2.20.9
   resolution: "proj4@npm:2.20.9"
   dependencies:
@@ -9227,6 +9245,21 @@ __metadata:
     geotiff:
       optional: true
   checksum: 9917dc75627a3198b0226741a04e29ecd084f3613ba4a9359815fddab4f579d3135cf68d3ba914659470c45a5ca9c3d52b6f68a43365d6b9484d8603761ecdf9
+  languageName: node
+  linkType: hard
+
+"proj4@npm:^2.21.0":
+  version: 2.21.0
+  resolution: "proj4@npm:2.21.0"
+  dependencies:
+    mgrs: 1.0.0
+    wkt-parser: ^1.5.5
+  peerDependencies:
+    geotiff: "*"
+  peerDependenciesMeta:
+    geotiff:
+      optional: true
+  checksum: 8/ec649286ad2da952b2d7b211bd1a7d6360ee0b3e0f88aacd996386eebc95f0d5ee1934359c4537e3fbfb3ac666533dfb00c907cc900ae9ea5dbc8d4ae6d1ee8c
   languageName: node
   linkType: hard
 
