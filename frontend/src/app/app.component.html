@@ -18,7 +18,12 @@
     <button class="nav-tab" routerLink="/search" routerLinkActive="active">
       <i class="fa-solid fa-magnifying-glass"></i> Deep Text Search
     </button>
-    @if (service.currentRole() === 'admin') {
+    <!-- Visible to everyone: the page itself explains the staff gate and offers a login, which is
+         the point of it. Contrast /intake below, which is guarded and hidden. -->
+    <button class="nav-tab" routerLink="/summary" routerLinkActive="active">
+      <i class="fa-solid fa-wand-magic-sparkles"></i> AI Summary
+    </button>
+    @if (service.isStaff()) {
       <button class="nav-tab" routerLink="/intake" routerLinkActive="active">
         <i class="fa-solid fa-cloud-arrow-up"></i> Document Intake
       </button>
@@ -28,33 +33,29 @@
     </button>
   </div>
 
+  <!--
+    Authentication is the only state control. The "EPIC Staff View / Public Citizen View" pill that
+    used to sit here was both a view toggle AND the app's only login button, so the two questions —
+    "who are you" and "what are you looking at" — could disagree. To see the public site, log out.
+  -->
   <div style="display: flex; align-items: center; gap: 1.25rem;">
-    <!-- Interactive Role Segment Control -->
-    <div style="display: flex; background: rgba(0, 0, 0, 0.15); padding: 0.25rem; border-radius: 9999px; border: 1px solid rgba(255, 255, 255, 0.15);">
-      <button 
-        class="toggle-btn"
-        [class.active]="service.currentRole() === 'admin'"
-        (click)="setDemoRole('admin')"
-      >
-        <i class="fa-solid fa-shield-halved"></i> EPIC Staff View
-      </button>
-      <button 
-        class="toggle-btn"
-        [class.active]="service.currentRole() === 'public'"
-        (click)="setDemoRole('public')"
-      >
-        <i class="fa-solid fa-globe"></i> Public Citizen View
-      </button>
-    </div>
-    
-    <!-- Keycloak SSO Identity HUD -->
     @if (service.authEnabled() && service.isAuthenticated()) {
-      <div class="user-identity-badge">
-        <i class="fa-solid fa-user-check"></i>
-        <span>Logged in as <strong>{{ service.userName() }}</strong> @if (service.isUnauthorized()) { <span style="color: #ff4d4f; font-weight: bold;">(Unauthorized)</span> } @else { (Staff) }</span>
+      <div class="user-identity-badge" [class.unauthorized]="service.isUnauthorized()">
+        <i class="fa-solid" [class.fa-user-check]="!service.isUnauthorized()" [class.fa-user-lock]="service.isUnauthorized()"></i>
+        @if (service.isUnauthorized()) {
+          <!-- Reachable and, until now, silent: the account is real but carries none of
+               sysadmin / staff / demi-admin. Say so; a second login cannot fix it. -->
+          <span><strong>{{ service.userName() }}</strong> — this account does not have EPIC staff access</span>
+        } @else {
+          <span>Logged in as <strong>{{ service.userName() }}</strong> (Staff)</span>
+        }
       </div>
       <button class="btn-logout" (click)="logout()">
         <i class="fa-solid fa-sign-out-alt"></i> Logout
+      </button>
+    } @else if (service.authEnabled()) {
+      <button class="btn-login" (click)="login()">
+        <i class="fa-solid fa-right-to-bracket"></i> Staff Login
       </button>
     }
   </div>

@@ -91,12 +91,20 @@ is the same number as the 0.620 recorded at n=71 — the labels moved, the retri
 
 ## Needs a human, not code
 
-- [ ] **AI Services Hub registration.** The platform documents that provisioning Azure AI services is
-      managed through the AI Services Hub, requested via <https://bcgov.github.io/ai-hub-tracking/>.
-      `demi-search-dev` was created directly, without that request. Nothing blocked it and nothing is
-      broken, but the process was skipped — submit before this goes past dev.
-- [ ] **Verify scoped and fragment access tiers end to end.** Unit-tested only; no scoped Keycloak
-      role exists yet. Create a `project:<id>` role on a test user.
+- [ ] **AI Services Hub registration — now blocking, not just owed.** Provisioning Azure AI services
+      is managed through the AI Services Hub, requested via <https://bcgov.github.io/ai-hub-tracking/>.
+      `demi-search-dev` was created directly, without that request. The summariser needs a
+      `Microsoft.CognitiveServices` account (`azure/modules/foundry.bicep`), which is squarely what
+      that process governs — so this is no longer a debt to settle before prod, it gates the deploy.
+      Code is written and dark-launched behind `SUMMARY_ENABLED=false`, so nothing is waiting on it
+      except the account itself. See
+      [ADR-006](https://github.com/digitalspace/eagle-demi/wiki/ADR-006-AI-Summarization-over-BM25).
+- [ ] **Verify scoped and fragment access tiers end to end.** The reason this was never observed is
+      now known and fixed: `helpers/auth.js` rejected any non-privileged Keycloak token inside
+      *authentication*, so `passiveAuth` dropped it and `req.user` stayed unset — TIER.SCOPED was
+      unreachable in production regardless of the role. Fixed on `fix/auth-scoped-tier` and
+      regression-tested. What remains is genuinely human: create a `project:<id>` role on a test
+      user and confirm the filter narrows against real data.
 - [ ] **Verify boundary rendering at all three frontend fidelities.** The API contract is verified
       (`/boundaries` and `/boundaries/<name>` both 200); the visual result is not.
 - [ ] **Look at server-side highlighting on dev.** Shipped and unit-tested, but the visible result
@@ -112,6 +120,11 @@ this team controls, and dropping it means losing fuzzy search. Defender for Clou
 second-largest line and is almost certainly set by platform policy — ask the platform team, do not
 turn plans off. Breakdown in
 [Azure Environments](https://github.com/digitalspace/eagle-demi/wiki/Azure-Environments).
+
+The AI summariser adds a new line, and it is the first one that is **per-token rather than per-hour**:
+roughly $0.0006 a query, so ~$0.63/mo at a thousand queries. Small, but it scales with use rather
+than with time, which is why the endpoint is privileged-only and why `summarize.js` logs
+prompt/completion tokens on every call. Watch the logged p95 rather than assuming the estimate.
 
 ## Open decisions
 

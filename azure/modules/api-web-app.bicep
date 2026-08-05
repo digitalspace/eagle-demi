@@ -25,6 +25,15 @@ param searchEndpoint string = ''
 @description('Azure AI Search index holding document chunks')
 param searchIndex string = 'demi-chunks'
 
+@description('Foundry account endpoint for the AI summariser. Empty leaves the summary panel off rather than failing search.')
+param foundryEndpoint string = ''
+
+@description('Foundry model deployment name for the AI summariser')
+param foundryDeployment string = ''
+
+@description('Master switch for the AI summariser. Off by default — the endpoint does not exist until the Foundry account is provisioned, and a half-working summariser is worse than an absent one.')
+param summaryEnabled bool = false
+
 @description('Subnet ID for Virtual Network Integration')
 param apiSubnetId string = ''
 
@@ -229,6 +238,22 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SEARCH_INDEX'
           value: searchIndex
+        }
+        // AI summariser — step 5 of the search pipeline, privileged-only. No key here either: the
+        // Foundry account has disableLocalAuth and the app calls it with the same user-assigned
+        // identity. Retrieval is unaffected by all three of these; with SUMMARY_ENABLED false the
+        // summary endpoint returns `{summary: null}` and the results columns are untouched.
+        {
+          name: 'SUMMARY_ENABLED'
+          value: string(summaryEnabled)
+        }
+        {
+          name: 'FOUNDRY_ENDPOINT'
+          value: foundryEndpoint
+        }
+        {
+          name: 'FOUNDRY_DEPLOYMENT'
+          value: foundryDeployment
         }
         // Keycloak / SSO — MUST be pinned per environment. Without these the API falls
         // back to src/config.js defaults, which point at the DEV realm, so a dev-realm

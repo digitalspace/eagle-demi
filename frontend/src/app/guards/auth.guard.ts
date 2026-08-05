@@ -6,14 +6,15 @@ export const authGuard: CanActivateFn = async (_route, _state) => {
   const service = inject(RegistryStateService);
   const router = inject(Router);
 
-  if (!service.authEnabled()) {
-    return true;
-  }
-
-  // Keycloak resolves asynchronously; deciding before it settles would reject valid admins
+  // Keycloak resolves asynchronously; deciding before it settles would reject valid staff.
+  // `isStaff` short-circuits to true when auth is disabled, so this await is harmless there —
+  // `authSettled()` resolves immediately on that path.
   await service.authReady;
 
-  if (service.isAuthenticated() && !service.isUnauthorized()) {
+  // The SAME predicate the nav and the filters use. These were two different questions before —
+  // nav visibility on a role toggle, route activation on the Keycloak signals — so a staff member
+  // in "public view" lost the nav tab but could still reach the route by typing the URL.
+  if (service.isStaff()) {
     return true;
   }
 

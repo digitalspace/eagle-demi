@@ -1,5 +1,5 @@
 import { Injectable, signal, computed, effect, untracked, inject } from '@angular/core';
-import { Project, Document, DocumentChunk } from '../models/registry.models';
+import { Project, Document, DocumentChunk, SummaryCitation } from '../models/registry.models';
 import { MOCK_PROJECTS, MOCK_DOCUMENTS } from '../mocks/mock-registry.data';
 import { ConfigService, AppConfig } from './config.service';
 
@@ -53,15 +53,70 @@ export class RegistryStateService {
   isUnauthorized = signal<boolean>(false);
   userName = signal<string>('');
 
+  /**
+   * THE one answer to "may this person see staff-only things".
+   *
+   * There used to be a second notion — a `currentRole` signal flipped by a "EPIC Staff View /
+   * Public Citizen View" toggle in the header — and the two drifted apart in both directions: a
+   * signed-in staffer could sit in "public" while holding the privileged dataset in memory, and
+   * with Keycloak disabled the toggle handed out the full admin UI with no credentials at all.
+   * Worse, that toggle was the app's ONLY route to a login. It is gone. Authentication is the
+   * state: to see the public site, log out.
+   *
+   * Derived, never assigned — nothing can set this out of step with the token it comes from.
+   *
+   * Keycloak off is a local-dev configuration, not a permission. The UI opens so the app is
+   * workable offline; the API still returns the public corpus, because there is no token to send.
+   */
+  isStaff = computed(() =>
+    !this.authEnabled() ? true : this.isAuthenticated() && !this.isUnauthorized()
+  );
+
+  // AI summary of the current search — step 5 of the pipeline, see wiki ADR-006. Privileged-only,
+  // so for an anonymous visitor this stays null and no request is ever issued.
+  //
+  // null carries two meanings and the template distinguishes them with summaryLoading: null while
+  // loading is the shimmer, null after loading is "no panel". Same null-sentinel convention the
+  // three result columns already use.
+  summary = signal<string | null>(null);
+  summaryCitations = signal<SummaryCitation[]>([]);
+  summaryLoading = signal<boolean>(false);
+  summaryReason = signal<string | null>(null);
+
+  /**
+   * What the last answer cost, in USD, and the token counts behind it.
+   *
+   * An ESTIMATE the API derives from reported usage and configured list rates — the page must label
+   * it as one. It exists because this is the first per-token line in a project already running
+   * ~2x its budget: a number on screen is how a query that costs fifty times the others gets
+   * noticed the same day rather than on the invoice.
+   */
+  summaryCostUsd = signal<number | null>(null);
+  summaryUsage = signal<{ prompt_tokens?: number; completion_tokens?: number } | null>(null);
+
+  /**
+   * The summariser's question — deliberately NOT `searchQuery`.
+   *
+   * Search state on this service is global: `searchQuery` and every result signal are shared by
+   * deep-search and map-explorer, and nothing clears them on navigation. A separate signal is what
+   * stops typing on one page from silently rewriting the other, and it means `loadSummary()` can
+   * run without disturbing a single result column.
+   */
+  summaryQuery = signal<string>('');
+
   // UI Interactive States (using Signals)
-  currentRole = signal<'public' | 'admin'>('public');
   activeTab = signal<'projects' | 'documents'>('projects');
   searchQuery = signal<string>('');
   debouncedSearchQuery = signal<string>('');
   gatingFilter = signal<'all' | 'admitted' | 'staged'>('all');
   sectorFilter = signal<string>('all');
   regionFilter = signal<string>('all');
-  activePage = signal<'map' | 'search' | 'intake'>('map');
+  // NOTE for whoever adds a document or project list to the summariser page: the two big computeds
+  // branch on this. `filteredProjects`/`filteredDocuments` return [] only when this is 'search'
+  // (:281, :313), and documents are constrained to map-matched projects whenever it is NOT
+  // 'search' (:322). 'summary' therefore takes the second path. Inert today — that page reads
+  // neither computed — but it is a trap, not a default.
+  activePage = signal<'map' | 'search' | 'intake' | 'summary'>('map');
 
   intakeProjectId = signal<string>('');
   intakeProjectSearchQuery = signal<string>('');
@@ -171,7 +226,7 @@ export class RegistryStateService {
     const gating = this.gatingFilter();
     const sector = this.sectorFilter();
     const region = this.regionFilter();
-    const role = this.currentRole();
+    const staff = this.isStaff();
     const bLayer = this.activeBoundaryLayer();
     const bFilter = this.boundaryFilter();
 
@@ -207,7 +262,7 @@ export class RegistryStateService {
 
     return projs.filter(p => {
       // 1. Role access gating
-      if (role === 'public' && p.gatingState !== 'admitted') return false;
+      if (!staff && p.gatingState !== 'admitted') return false;
 
       // 2. Gating filter selection
       if (gating !== 'all' && p.gatingState !== gating) return false;
@@ -293,7 +348,7 @@ export class RegistryStateService {
   filteredDocuments = computed(() => {
     const query = this.debouncedSearchQuery().toLowerCase().trim();
     const gating = this.gatingFilter();
-    const role = this.currentRole();
+    const staff = this.isStaff();
     
     // Track active filtered projects to align document list with active map/region filters!
     const projs = this.filteredProjectsNoQuery() || [];
@@ -312,7 +367,7 @@ export class RegistryStateService {
       if (this.activePage() !== 'search' && !matchedProjectIds.has(d.projectId)) return false;
 
       // 1. Role access gating
-      if (role === 'public' && d.gatingState !== 'admitted') return false;
+      if (!staff && d.gatingState !== 'admitted') return false;
 
       // 2. Gating filter selection
       if (gating !== 'all' && d.gatingState !== gating) return false;
@@ -515,6 +570,12 @@ export class RegistryStateService {
               .catch((err: any) => {
                 refreshPromise = null;
                 console.warn('[Fetch Interceptor] Keycloak token refresh failed:', err);
+                // The session is over. Say so, rather than leaving `isAuthenticated` true forever —
+                // nothing else in the app ever set it back to false, so an expired token used to
+                // leave the header claiming a live session and `isStaff()` granting staff UI over
+                // data the API had already started refusing.
+                this.isAuthenticated.set(false);
+                this.userName.set('');
                 throw err;
               });
           }
@@ -565,7 +626,6 @@ export class RegistryStateService {
         sessionStorage.removeItem('isLoggedIn');
         localStorage.removeItem('isLoggedIn');
         this.isAuthenticated.set(false);
-        this.currentRole.set('public');
         this.authSettled();
         return;
       }
@@ -583,7 +643,6 @@ export class RegistryStateService {
       if (!isOAuthCallback && !previouslyLoggedIn) {
         console.log('[Keycloak] Public visitor detected; skipping SSO redirect and running in public mode.');
         this.isAuthenticated.set(false);
-        this.currentRole.set('public');
         this.authSettled();
         return;
       }
@@ -620,17 +679,14 @@ export class RegistryStateService {
           
           if (hasPermission) {
             this.isUnauthorized.set(false);
-            this.currentRole.set('admin');
           } else {
             console.warn('[Keycloak] User authenticated but lacks required admin/staff roles:', roles);
             this.isUnauthorized.set(true);
-            this.currentRole.set('public');
           }
         } else {
           sessionStorage.removeItem('isLoggedIn');
           localStorage.removeItem('isLoggedIn');
           this.isAuthenticated.set(false);
-          this.currentRole.set('public');
         }
         // Load data only after keycloak status is resolved, so the Bearer token is attached
         this.authSettled();
@@ -640,7 +696,6 @@ export class RegistryStateService {
         sessionStorage.removeItem('isLoggedIn');
         localStorage.removeItem('isLoggedIn');
         this.isAuthenticated.set(false);
-        this.currentRole.set('public');
         this.authSettled();
       });
     } catch (err) {
@@ -940,7 +995,8 @@ export class RegistryStateService {
       this.projects.set(buildMockProjects());
       this.documents.set(this.mockDocuments);
       // No mock chunks: extracted text has no fixture, and [] reads as "none" rather than
-      // hanging on the loading sentinel forever.
+      // hanging on the loading sentinel forever. The summary signals are NOT touched here —
+      // `loadSummary()` owns them and has its own mock-mode branch.
       this.documentChunks.set([]);
       return;
     }
@@ -1006,6 +1062,11 @@ export class RegistryStateService {
           })
         : Promise.resolve(null);
 
+      // NO summary leg here. The summariser lives on its own page with its own query and its own
+      // fetch (`loadSummary`), so an ordinary keyword search costs three requests per debounce and
+      // never a model call. It briefly rode along on this fan-out, gated on `isAuthenticated()`
+      // alone — which meant an authenticated-but-unauthorized user fired a guaranteed 401 on every
+      // keystroke, straight into the interceptor's refresh-and-replay.
       const [apiProjects, apiDocuments, apiChunks] = await Promise.all([
         projPromise, docPromise, chunkPromise
       ]);
@@ -1156,19 +1217,85 @@ export class RegistryStateService {
     }
   }
 
-  // Set demo role and trigger login if required
-  setDemoRole(role: 'public' | 'admin') {
-    if (role === 'admin' && this.authEnabled() && this.isUnauthorized()) {
-      // Already authenticated but missing the required realm role — a fresh login
-      // round-trip won't change that, it'll just bounce straight back (feels like a loop).
-      console.warn('[Keycloak] Authenticated but missing required admin/staff role; staying public.');
+  // `setDemoRole` lived here. It was three branches: log in, flip a signal, or — for an
+  // authenticated user missing the realm role — warn to the console and return, leaving a
+  // clickable button that did nothing. Its login branch was also the app's only route to Keycloak,
+  // which is why a view toggle and an auth control had become the same widget. Replaced by an
+  // explicit Login/Logout pair in the header and the derived `isStaff`.
+
+  private summaryAbort: AbortController | null = null;
+
+  /**
+   * Ask the summariser. Calls `/search/summary` and NOTHING else.
+   *
+   * Deliberately not part of `loadData()`: it touches no result signal, so the three search columns
+   * are untouched whether this succeeds, fails or is never called. That separation is also what
+   * keeps a model call off every keystroke of an ordinary keyword search.
+   *
+   * Gated on `isStaff()`, not `isAuthenticated()`. The endpoint is privileged-only, so an
+   * authenticated user WITHOUT a staff role would otherwise send a guaranteed 401 straight into
+   * the fetch interceptor's refresh-and-replay — the exact storm not sending it avoids.
+   */
+  async loadSummary() {
+    const q = this.summaryQuery().trim();
+
+    this.summaryAbort?.abort();
+
+    if (!q || !this.isStaff()) {
+      this.summary.set(null);
+      this.summaryCitations.set([]);
+      this.summaryReason.set(null);
+      this.summaryCostUsd.set(null);
+      this.summaryUsage.set(null);
+      this.summaryLoading.set(false);
       return;
     }
-    if (role === 'admin' && this.authEnabled() && !this.isAuthenticated()) {
-      this.loginKeycloak();
-    } else {
-      this.currentRole.set(role);
-      this.resetSelection();
+
+    if (this.config.USE_MOCK_DATA) {
+      // Demo mode must not reach the API. `null` with a reason renders as "nothing to show"
+      // rather than hanging on the loading sentinel.
+      this.summary.set(null);
+      this.summaryCitations.set([]);
+      this.summaryReason.set('mock_mode');
+      this.summaryLoading.set(false);
+      return;
+    }
+
+    const abort = new AbortController();
+    this.summaryAbort = abort;
+
+    this.summaryLoading.set(true);
+    this.summary.set(null);
+    this.summaryCitations.set([]);
+    this.summaryReason.set(null);
+    this.summaryCostUsd.set(null);
+    this.summaryUsage.set(null);
+
+    try {
+      const res = await this.fetchWithRetry(
+        `${this.getBasePath()}/search/summary?keywords=${encodeURIComponent(q)}&fuzzy=true`,
+        { signal: abort.signal }
+      );
+      if (!res.ok) throw new Error(`Summary API returned status ${res.status}`);
+      const data = await res.json();
+
+      this.summary.set(data?.summary ?? null);
+      this.summaryCitations.set(data?.citations ?? []);
+      this.summaryCostUsd.set(data?.estimatedCostUsd ?? null);
+      this.summaryUsage.set(data?.usage ?? null);
+      // `summary: null` with a reason is a legitimate answer, not a failure — the corpus had
+      // nothing, or the feature is switched off. The page distinguishes them for the user.
+      this.summaryReason.set(data?.reason ?? null);
+    } catch (err) {
+      // A superseded request is not an outage: a newer loadSummary() owns these signals now, so
+      // leave them alone rather than blanking the answer the user is about to read.
+      if (this.isAbortError(err)) return;
+      console.error('[Registry loadSummary] failed:', err);
+      this.summary.set(null);
+      this.summaryCitations.set([]);
+      this.summaryReason.set('error');
+    } finally {
+      if (this.summaryAbort === abort) this.summaryLoading.set(false);
     }
   }
 
@@ -1617,9 +1744,32 @@ export class RegistryStateService {
       .replace(/'/g, '&#x27;');
   }
 
-  logout() {
+  /**
+   * Log out — and, now that the role toggle is gone, the ONLY way to see the public site.
+   *
+   * Local state is cleared BEFORE the redirect rather than left to it. This used to lean entirely
+   * on `window.location.href`, so every path that did not navigate — a null client, a blocked
+   * redirect — left the header reading "Logged in as …" over a session that no longer existed.
+   */
+  /**
+   * Drop every trace of the session from local state.
+   *
+   * Split out of `logout()` so it can be asserted without a test navigating the runner away — the
+   * redirect below is the untestable half, and it is not the half that was broken.
+   */
+  clearAuthState() {
     sessionStorage.removeItem('isLoggedIn');
     localStorage.removeItem('isLoggedIn');
+
+    this.isAuthenticated.set(false);
+    this.isUnauthorized.set(false);
+    this.userName.set('');
+    this.resetSelection();
+  }
+
+  logout() {
+    this.clearAuthState();
+
     if (this.keycloak) {
       const idToken = this.keycloak.idToken;
       const clientId = this.config.KEYCLOAK_CLIENT_ID || 'eagle-admin-console';
@@ -1636,6 +1786,13 @@ export class RegistryStateService {
       }
 
       window.location.href = logoutUrl;
+      return;
     }
+
+    // No Keycloak client — the library never loaded, or init fell through to offline mode. There
+    // is no end-session endpoint to visit, but the signals above are already public, so reload to
+    // drop any privileged rows still resident in memory. Previously this returned silently and the
+    // Logout button appeared to do nothing.
+    window.location.reload();
   }
 }
