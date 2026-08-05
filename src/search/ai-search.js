@@ -353,19 +353,27 @@ function buildQuery(terms, fuzzy, prefix = false) {
  */
 const SEMANTIC_CONFIGURATION = 'demi-chunks-semantic';
 
-let semanticExhaustedWarned = false;
+/**
+ * Latched once a 402 says the monthly allowance is spent. Gates the request, not just the log.
+ *
+ * Without the gate, every later search still asks for reranking, still gets 402, and still pays a
+ * second round trip to retry stripped — for the rest of the month. The allowance resets monthly
+ * and App Service restarts long before that, so a process-lifetime latch is the whole lifetime
+ * that matters; there is nothing to un-latch it for.
+ */
+let semanticExhausted = false;
 
 /**
  * 402 means the semantic ranker's monthly free allowance is spent, for the rest of the month.
  *
  * Not a blip and not retryable — it is not in RETRY_STATUSES for that reason. Left unhandled it
  * would turn every Deep Search into a 500 until the calendar rolls over, which is a far worse
- * outcome than serving the BM25 order the product ran on until now. So it degrades instead, and
- * says so once per process rather than on every keystroke.
+ * outcome than serving the BM25 order the product ran on until now. So it degrades instead, stops
+ * asking, and says so once per process rather than on every keystroke.
  */
-function warnSemanticExhausted() {
-  if (semanticExhaustedWarned) return;
-  semanticExhaustedWarned = true;
+function noteSemanticExhausted() {
+  if (semanticExhausted) return;
+  semanticExhausted = true;
   console.warn(
     '[ai-search] HTTP 402: the semantic ranker free allowance is exhausted for this month. ' +
     'Falling back to BM25 ordering for the rest of the month. This is DEGRADED RANKING, not a ' +
@@ -399,7 +407,9 @@ async function runSearch(index, opts = {}) {
 
   // `matchAll` is excluded deliberately: `search: '*'` has no relevance signal to rescore, so
   // semantic ranking does nothing on it — and Azure bills per non-empty semantic query.
-  const semantic = opts.semantic === true && !opts.matchAll;
+  // `semanticExhausted` is the same idea after a 402: asking again cannot succeed this month, and
+  // asking anyway costs every search a wasted round trip before the stripped retry.
+  const semantic = opts.semantic === true && !opts.matchAll && !semanticExhausted;
   if (semantic) {
     // The TOKENIZED terms rejoined, not opts.keywords verbatim. `tokenize` is what strips Lucene
     // operator characters, and operator syntax inside the semantic string is explicitly unsupported.
@@ -418,7 +428,7 @@ async function runSearch(index, opts = {}) {
     data = await request(path, body);
   } catch (err) {
     if (!semantic || err.status !== 402) throw err;
-    warnSemanticExhausted();
+    noteSemanticExhausted();
     delete body.semanticQuery;
     delete body.semanticConfiguration;
     delete body.semanticErrorHandling;
@@ -822,7 +832,9 @@ module.exports = {
   // is right to treat the first as a degraded state and return []; an instrument is not, and must
   // refuse to publish a zero it cannot distinguish from an unset app setting.
   config,
-  // Exported for tests.
+  // Exported for tests. The 402 latch is process-wide and deliberately has no production reset —
+  // without this seam one 402 test would silently disable semantic for every test after it.
+  resetSemanticExhausted: () => { semanticExhausted = false; },
   tokenize,
   buildQuery,
   snippetFrom,

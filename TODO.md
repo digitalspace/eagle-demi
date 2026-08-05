@@ -126,6 +126,12 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       reason is logged (`[ai-search] semantic reranking did not run: …`) and `rerankerScore` is
       absent on the hits, but nothing watches either. Under load the product may be serving the
       unranked order most of the time while the scorecard measures the ranked one.
+- [ ] **The 402 latch does not un-latch when the month rolls over.** A single 402 turns semantic off
+      for the life of the process, which is what stops every later search paying a wasted 402 plus a
+      retry. But the allowance resets monthly and the latch does not, so a process that spans the
+      rollover keeps serving BM25 until it restarts. Fine today — App Service recycles well inside a
+      month — and the trade is deliberate: the alternative is re-probing on some timer nobody would
+      tune. If the app ever gets long-lived, restart it after a 402 rather than waiting.
 
 ## Search UI
 
@@ -191,7 +197,7 @@ prompt/completion tokens on every call. Watch the logged p95 rather than assumin
 | # | Question | Default | Cost of reversing |
 |---|---|---|---|
 | 1 | Backup mode `Continuous7Days` on dev | Not done | One-way. Gain 8h/support-ticket → 7-day self-service, free tier; lose Geo backup redundancy permanently |
-| 2 | ~~Semantic ranker left enabled~~ | **Closed 2026-08-05: in use** | It is now the shipped ranking on `demi-chunks` — see above. Every Deep Search is a billable semantic query against an unpublished monthly free allowance; exhausting it returns HTTP 402, which the code catches once and degrades to BM25 for the rest of the month. Watch for that warning before assuming ranking is live |
+| 2 | ~~Semantic ranker left enabled~~ | **Closed 2026-08-05: in use** | It is now the shipped ranking on `demi-chunks` — see above. Every Deep Search is a billable semantic query against an unpublished monthly free allowance; exhausting it returns HTTP 402, which the code catches once, latches, and degrades to BM25 for the rest of the process — it stops asking rather than paying a 402 plus a retry on every later search. Watch for that warning before assuming ranking is live |
 
 Settled, and kept here only because reversing them is expensive: **index tier** (Basic — Basic→S1
 needs a new service and a full reindex) and **delete propagation**

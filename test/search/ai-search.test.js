@@ -510,6 +510,11 @@ test('project and document search return the analyzer\'s highlights', async (t) 
 });
 
 test('semantic reranking', async (t) => {
+  // The 402 latch is module state that survives a test. Without this, the first test to exhaust
+  // the allowance turns semantic OFF for every test declared after it, and the assertions that
+  // semantic IS requested would pass for the wrong reason — or fail depending on file order.
+  t.beforeEach(() => aiSearch.resetSemanticExhausted());
+
   await t.test('on by default for chunks — it is the shipped ranking', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
 
@@ -614,6 +619,31 @@ test('semantic reranking', async (t) => {
       assert.strictEqual(calls[1].body.search, calls[0].body.search, 'same L1 query');
       assert.strictEqual(items[0].documentId, 'd1');
       assert.strictEqual(count, 1);
+    });
+
+  await t.test('after a 402 it stops ASKING — later searches cost one round trip, not two',
+    async (tt) => {
+      // The point of the latch. The allowance is spent for the rest of the month, so a later
+      // search asking again cannot succeed — it just pays a 402 before the stripped retry. Without
+      // the gate that is every Deep Search, twice, until the calendar rolls over.
+      const calls = captureFetch(tt, (i) => (
+        i === 0
+          ? { ok: false, status: 402, json: { error: 'Free Query Semantic Usage exceeded' } }
+          : { json: { value: [], '@odata.count': 0 } }
+      ));
+
+      await aiSearch.searchChunks({ filter: null, keywords: 'peace river' });
+      assert.strictEqual(calls.length, 2, 'first search: 402 then the stripped retry');
+
+      await aiSearch.searchChunks({ filter: null, keywords: 'site c' });
+
+      assert.strictEqual(calls.length, 3, 'second search is ONE request, not another 402 + retry');
+      assert.strictEqual(calls[2].body.semanticQuery, undefined, 'no longer asks for reranking');
+      assert.strictEqual(calls[2].body.semanticConfiguration, undefined);
+      assert.strictEqual(calls[2].body.semanticErrorHandling, undefined);
+      // L1 is untouched by the latch — degraded ranking, not degraded retrieval.
+      assert.strictEqual(calls[2].body.queryType, 'full');
+      assert.ok(calls[2].body.search.includes('site'), 'still the full Lucene query');
     });
 
   await t.test('a 402 on the NON-semantic query throws — the fallback is not a blanket catch',
