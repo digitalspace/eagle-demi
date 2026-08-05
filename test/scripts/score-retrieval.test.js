@@ -129,7 +129,23 @@ test('summarize omits recall@k beyond --top and names what it did not measure', 
   const s = summarize([{ documentId: 'a', phrase: 'p', line: 1, rank: 1 }], 3);
 
   assert.deepStrictEqual(Object.keys(s.recallAt), ['1']);
-  assert.deepStrictEqual(s.recallKsNotMeasured, [5, 10]);
+  assert.deepStrictEqual(s.recallKsNotMeasured, [5, 10, 20, 50]);
+});
+
+// The regression this pins: a consumer reading recallAt['50'] off a run that never measured 50.
+// Every k the run DID measure must be present, so nobody has to fall back to a default that
+// silently substitutes a shallower number for a deeper one.
+test('summarize reports the deep cutoffs when --top actually reaches them', () => {
+  const results = [1, 12, 30, 45, 0].map((rank, i) => ({
+    documentId: `d${i}`, phrase: 'p', line: i + 1, rank
+  }));
+
+  const s = summarize(results, 50);
+
+  assert.deepStrictEqual(Object.keys(s.recallAt), ['1', '5', '10', '20', '50']);
+  assert.deepStrictEqual(s.recallKsNotMeasured, []);
+  assert.strictEqual(s.recallAt[10], 0.2);
+  assert.strictEqual(s.recallAt[50], 0.8);
 });
 
 // The reason this guard exists, found by running the CLI locally before it had one: with

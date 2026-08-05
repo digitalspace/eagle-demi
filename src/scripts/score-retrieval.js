@@ -46,20 +46,36 @@
  *
  * Usage:
  *   node src/scripts/score-retrieval.js --labels labels.jsonl [--top 10] [--no-fuzzy]
- *                                       [--out report.json]
+ *                                       [--semantic] [--out report.json]
+ *
+ * `--semantic` BILLS. Azure charges per non-empty semantic query against a monthly free allowance
+ * whose size is not published, and exhausting it returns HTTP 402 for the rest of the month — for
+ * the live API as well as this script. One pass over the full label set is ~78 billable queries.
  */
 
 const aiSearch = require('../search/ai-search');
 const { systemAccess } = require('../helpers/access-sql');
 const { filterFor } = require('../helpers/access-odata');
 
-const DEFAULTS = { labels: '', top: 10, fuzzy: true, out: '' };
+const DEFAULTS = { labels: '', top: 10, fuzzy: true, semantic: false, out: '' };
 
 // Reported at, not below. `tokenize` caps a query at 16 terms, so a longer phrase silently loses
 // its tail — and a label that lost words is not the label the human wrote.
 const TERM_CAP = 16;
 
-const RECALL_KS = [1, 5, 10];
+/**
+ * Reported cutoffs. 20 and 50 are here because their absence produced a wrong answer.
+ *
+ * A comparison read `recallAt['50']` off a report that only had keys 1, 5 and 10, fell through to
+ * its `recallAt['10']` default, and concluded there was no headroom above rank 10 — while nine
+ * labels sat at ranks 11 to 41. `summarize` filters `k <= top`, so a `--top 10` run still reports
+ * exactly the three it always did; this only means a deeper run reports its own depth instead of
+ * leaving it to be recomputed by hand from `rankedBelowFirst`.
+ *
+ * 50 is not an arbitrary ceiling: it is the window Azure's semantic ranker rescores, so it is the
+ * band any reranking experiment lives or dies in.
+ */
+const RECALL_KS = [1, 5, 10, 20, 50];
 
 function parseArgs(argv) {
   const args = { ...DEFAULTS };
@@ -69,6 +85,10 @@ function parseArgs(argv) {
     else if (a === '--top') args.top = parseInt(argv[++i], 10);
     else if (a === '--fuzzy') args.fuzzy = true;
     else if (a === '--no-fuzzy') args.fuzzy = false;
+    // Default OFF, so the unflagged invocation stays the historical baseline and every scorecard
+    // already committed remains comparable to a fresh run of the same command.
+    else if (a === '--semantic') args.semantic = true;
+    else if (a === '--no-semantic') args.semantic = false;
     else if (a === '--out') args.out = String(argv[++i]);
     else throw new Error(`[score-retrieval] unknown argument: ${a}`);
   }
@@ -183,6 +203,7 @@ async function scoreLabel(label, args, filter) {
   const { items, count } = await aiSearch.searchChunks({
     keywords: label.phrase,
     fuzzy: args.fuzzy,
+    semantic: args.semantic,
     top: args.top,
     filter
   });
@@ -248,6 +269,7 @@ async function score(argv = []) {
       out: args.out || null,
       top: args.top,
       fuzzy: args.fuzzy,
+      semantic: args.semantic,
       note: 'queries go through searchChunks(), the path the API serves'
     },
     ...summarize(results, args.top),

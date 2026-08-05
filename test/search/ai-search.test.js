@@ -508,3 +508,136 @@ test('project and document search return the analyzer\'s highlights', async (t) 
       'escaped plain text, with no <mark>');
   });
 });
+
+test('semantic reranking', async (t) => {
+  await t.test('off by default — no caller pays for a feature it did not ask for', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchChunks({ filter: null, keywords: 'peace river' });
+
+    assert.strictEqual(calls[0].body.semanticQuery, undefined);
+    assert.strictEqual(calls[0].body.semanticConfiguration, undefined);
+    assert.strictEqual(calls[0].body.semanticErrorHandling, undefined);
+  });
+
+  await t.test('on, it adds L2 WITHOUT disturbing the Lucene query that drives L1', async (tt) => {
+    // The whole reason for `semanticQuery` over `queryType: 'semantic'`. If this assertion ever
+    // fails, retrieval has been silently downgraded to plain text and every measured fix in
+    // buildQuery — fuzzy arm, boost, stopword guard — is gone.
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchChunks({ filter: null, keywords: 'peace river', fuzzy: true, semantic: true });
+
+    assert.strictEqual(calls[0].body.queryType, 'full');
+    assert.strictEqual(calls[0].body.search,
+      '(peace OR peace~1^0.5) AND (river OR river~1^0.5)');
+    assert.strictEqual(calls[0].body.semanticQuery, 'peace river');
+    assert.strictEqual(calls[0].body.semanticConfiguration, 'demi-chunks-semantic');
+    assert.strictEqual(calls[0].body.semanticErrorHandling, 'partial');
+  });
+
+  await t.test('the L1 query is byte-identical with semantic on and off', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    const opts = { filter: null, keywords: 'Site C AND clean-energy', fuzzy: true, prefix: true };
+    await aiSearch.searchChunks({ ...opts });
+    await aiSearch.searchChunks({ ...opts, semantic: true });
+
+    assert.strictEqual(calls[1].body.search, calls[0].body.search);
+    assert.strictEqual(calls[1].body.queryType, calls[0].body.queryType);
+  });
+
+  await t.test('semanticQuery carries no Lucene operators', async (tt) => {
+    // `tokenize` is the thing that strips them. Operator syntax inside the semantic string is
+    // unsupported, and `~`/`^`/`(` reaching it would be sent as literal text to the ranker.
+    //
+    // The `2` of `^2` survives on purpose: tokenize keeps digits, and it is right that it does —
+    // drawing numbers and section numbers are content in this corpus, not syntax. What must not
+    // survive is the operator CHARACTER.
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchChunks({
+      filter: null, keywords: 'waste~ dumps^2 (north)', fuzzy: true, semantic: true
+    });
+
+    assert.strictEqual(calls[0].body.semanticQuery, 'waste dumps 2 north');
+    assert.ok(!/[~^()]/.test(calls[0].body.semanticQuery));
+  });
+
+  await t.test('matchAll never asks for reranking — there is no relevance to rescore', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchChunks({ filter: null, matchAll: true, semantic: true });
+
+    assert.strictEqual(calls[0].body.search, '*');
+    assert.strictEqual(calls[0].body.semanticQuery, undefined);
+  });
+
+  await t.test('402 retries once WITHOUT the semantic parameters and still returns results',
+    async (tt) => {
+      // The free allowance is spent for the rest of the MONTH. Rethrowing would 500 every Deep
+      // Search until the calendar rolls over; serving the BM25 order is what the product ran on
+      // until now.
+      const calls = captureFetch(tt, (i) => (
+        i === 0
+          ? { ok: false, status: 402, json: { error: 'Free Query Semantic Usage exceeded' } }
+          : { json: { value: [{ chunkId: 'c1', documentId: 'd1' }], '@odata.count': 1 } }
+      ));
+
+      const { items, count } = await aiSearch.searchChunks({
+        filter: null, keywords: 'peace river', semantic: true
+      });
+
+      assert.strictEqual(calls.length, 2, 'exactly one retry, not the 3-attempt retry loop');
+      assert.strictEqual(calls[1].body.semanticQuery, undefined);
+      assert.strictEqual(calls[1].body.semanticConfiguration, undefined);
+      assert.strictEqual(calls[1].body.search, calls[0].body.search, 'same L1 query');
+      assert.strictEqual(items[0].documentId, 'd1');
+      assert.strictEqual(count, 1);
+    });
+
+  await t.test('402 without semantic still throws — only the fallback path is special',
+    async (tt) => {
+      captureFetch(tt, () => ({ ok: false, status: 402, json: { error: 'nope' } }));
+
+      await assert.rejects(
+        () => aiSearch.searchChunks({ filter: null, keywords: 'peace river' }),
+        /HTTP 402/
+      );
+    });
+
+  await t.test('403 is not swallowed by the 402 fallback', async (tt) => {
+    // A missing data-plane role must stay loud. Degrading it to a BM25 retry would hide a
+    // deployment fault behind working-looking results.
+    const calls = captureFetch(tt, () => ({ ok: false, status: 403, json: { error: 'forbidden' } }));
+
+    await assert.rejects(
+      () => aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: true }),
+      /HTTP 403/
+    );
+    assert.strictEqual(calls.length, 1, 'no retry');
+  });
+
+  await t.test('a partial response is reported, not passed off as reranked', async (tt) => {
+    // Throttling returns the BM25 order with a reason and HTTP 200. Unlogged, a service silently
+    // serving unranked results looks identical to one where reranking works.
+    const warnings = [];
+    const originalWarn = console.warn;
+    console.warn = (msg) => warnings.push(String(msg));
+    tt.after(() => { console.warn = originalWarn; });
+
+    captureFetch(tt, () => ({
+      json: {
+        value: [{ chunkId: 'c1', documentId: 'd1' }],
+        '@search.semanticPartialResponseReason': 'capacityOverloaded'
+      }
+    }));
+
+    const { items } = await aiSearch.searchChunks({
+      filter: null, keywords: 'peace river', semantic: true
+    });
+
+    assert.strictEqual(items.length, 1, 'results still served');
+    assert.ok(warnings.some(w => w.includes('capacityOverloaded')), 'the reason is logged');
+  });
+});
