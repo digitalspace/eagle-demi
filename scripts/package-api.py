@@ -11,8 +11,14 @@ def package_api(repo_root, zip_path):
     # loads. Shipping it would put worker.py and three systemd units at the app root, which is the
     # same class of debris the 2026-08-04 wwwroot sweep had to clean out by hand. Excluded at the
     # root only, like `frontend`.
-    root_exclude_dirs = {".git", "frontend", "extraction-host", ".angular", "dist", "coverage",
-                         ".deploy_archives", "tmp", "__pycache__"}
+    # `.claude` holds agent scratch AND `.claude/worktrees/*`, which are full git checkouts of this
+    # same repository. Without this exclusion the package was 202 MB — 697 MB of it uncompressed
+    # `.claude` against under 1 MB of actual `src` — and the deploy hung: Kudu sat at status 1 for
+    # over thirty minutes where a healthy deploy of this app finishes in about thirty seconds.
+    # `.git` was already excluded for the same reason; a worktree is the same problem wearing a
+    # different directory name.
+    root_exclude_dirs = {".git", ".claude", "frontend", "extraction-host", ".angular", "dist",
+                         "coverage", ".deploy_archives", "tmp", "__pycache__"}
     exclude_extensions = {".zip", ".tar.gz", ".map", ".md"}
 
     # The boundary seeder reads the checked-in GeoJSON exports, which live under frontend/ because
