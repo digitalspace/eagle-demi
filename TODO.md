@@ -51,6 +51,37 @@ is the same number as the 0.620 recorded at n=71 — the labels moved, the retri
       placeholders and their separator-furniture rows; only new ingest is clean. Nothing here is
       worth a re-extraction on its own — fold it into whatever re-extraction happens next.
 
+## NRPTI ingest
+
+- [ ] **NRPTI auto-seeds projects that are not projects, and nothing ever removes them.**
+      `src/scripts/sync-nrpti.js` tries five ways to link a compliance record to an existing project
+      (`_epicProjectId`, exact name, normalized name, name segments, token inclusion) and then, at
+      Priority 4, **invents one** from `item.projectName || item.location` — a synthetic id
+      `8000000 + hash(name) % 1000000`, `projectState: 'Compliance Record Ingest'`, a centroid
+      hardcoded to Victoria, and `read: ['public', …]` so it is publicly listed like a real project.
+      Many of those names are facilities, locations or record titles, not EPIC projects, so the
+      registry gains rows that no project ever existed for.
+      The fix is to delete Priority 4: link only when Track or Eagle already has the project, and
+      leave the record unlinked otherwise. Two things must be decided at the same time, because both
+      are load-bearing:
+      - **What an unlinked record becomes.** Today the no-name path writes `projectId: ''`, which is
+        the empty-string partition — reachable by no scoped read, so the record is ingested and then
+        invisible. Either that is accepted deliberately (an unmatched-records bucket someone can
+        query) or unmatched records should not be written at all. Do not leave it as an accident.
+      - **The link is not free to change later.** `projectId` is the records container's PARTITION
+        KEY, so re-pointing a record at the right project is a delete plus an insert, not an update.
+      - [ ] **Purge the seeded stragglers**, which is a separate job from the gate: a script over
+            `metadata.seededFromNrpti === true` / `sourceSystem === 'nrpti'` that deletes the project
+            AND calls `aiSearch.deleteFromIndex` for it. Indexers never see deletes — drop that
+            second half and the phantom projects stay searchable forever even once Cosmos is clean.
+            Then re-point or drop the records that referenced them.
+      Measured 2026-08-05, and the measurement is thin: `/api/projects` returns 382 rows, all
+      `sourceSystem: 'track'`, and the first 250 rows of the `demi-projects` index carry no synthetic
+      id — so under PUBLIC access, on dev, there is nothing to purge right now and the gate is what
+      actually matters before the next `POST /admin/sync/nrpti`. That read cannot see past ACLs and
+      the list endpoint ignores `pageNum`, so it is not proof the containers are clean. Count with
+      `systemAccess()` before concluding the purge is a no-op.
+
 ## Infrastructure
 
 - [ ] **CI is blocked.** `AZURE_CLIENT_ID` is missing from repo secrets. It needs an Entra app
@@ -102,7 +133,7 @@ is the same number as the 0.620 recorded at n=71 — the labels moved, the retri
 - [ ] **Verify scoped and fragment access tiers end to end.** The reason this was never observed is
       now known and fixed: `helpers/auth.js` rejected any non-privileged Keycloak token inside
       *authentication*, so `passiveAuth` dropped it and `req.user` stayed unset — TIER.SCOPED was
-      unreachable in production regardless of the role. Fixed on `fix/auth-scoped-tier` and
+      unreachable in production regardless of the role. Fixed in PR #15 (`b7d61ae`) and
       regression-tested. What remains is genuinely human: create a `project:<id>` role on a test
       user and confirm the filter narrows against real data.
 - [ ] **Verify boundary rendering at all three frontend fidelities.** The API contract is verified
