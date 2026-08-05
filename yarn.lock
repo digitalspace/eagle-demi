@@ -1962,7 +1962,7 @@ __metadata:
     eslint: "npm:^10.7.0"
     express: "npm:^5.2.1"
     globals: "npm:^17.9.0"
-    helmet: "npm:^7.1.0"
+    helmet: "npm:^8.3.0"
     jsonwebtoken: "npm:^9.0.2"
     jwks-rsa: "npm:^4.1.0"
     minio: "npm:^8.0.7"
@@ -2484,10 +2484,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"helmet@npm:^7.1.0":
-  version: 7.2.0
-  resolution: "helmet@npm:7.2.0"
-  checksum: 10c0/7ba8503519cabc1d6410330b710da3ac01a4ff66e7e10cb68c4d73c96803a2e86ce45c71f3127dfb8ef3ea2e91c7b8316726191873f80d0572f8826878b2854e
+"helmet@npm:^8.3.0":
+  version: 8.3.0
+  resolution: "helmet@npm:8.3.0"
+  checksum: 10c0/69f33ca716ed3ce34f1f2f48ce8618846dfa9c89e3a15d6bccefc882541e8b028517448c6b0e7450792fd23e5580bfe6d410d4f22bedc2a94f6b1188817a059a
   languageName: node
   linkType: hard
 
