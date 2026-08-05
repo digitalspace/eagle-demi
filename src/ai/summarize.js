@@ -68,6 +68,26 @@ const SYSTEM_PROMPT = [
 ].join('\n');
 
 /**
+ * What this query cost, in USD, from the token counts the deployment reported.
+ *
+ * AN ESTIMATE, and every surface that shows it must say so. Azure bills on its own meter with its
+ * own rounding, the list rates live in config and drift from reality the moment Microsoft changes
+ * them, and any committed-use or negotiated discount is invisible here. Useful for spotting the
+ * query that cost fifty times the others; useless for reconciling an invoice.
+ *
+ * Returns null rather than 0 when usage is absent — "not measured" and "free" are different facts.
+ */
+function estimateCostUsd(usage) {
+  if (!usage) return null;
+  const inTok = Number(usage.prompt_tokens) || 0;
+  const outTok = Number(usage.completion_tokens) || 0;
+  return (
+    (inTok / 1e6) * config.summaryCostPerMTokIn +
+    (outTok / 1e6) * config.summaryCostPerMTokOut
+  );
+}
+
+/**
  * Trim a chunk to the configured ceiling.
  *
  * Cost is bounded here, before the request, rather than discovered on the bill. Cutting on a word
@@ -193,7 +213,8 @@ async function summarize(keywords, chunks) {
     return {
       summary: text,
       citations: parseCitations(text, used.length),
-      usage: data?.usage || null
+      usage: data?.usage || null,
+      estimatedCostUsd: estimateCostUsd(data?.usage)
     };
   } catch (err) {
     // Additive feature, non-fatal failure. An aborted or failed summary renders no panel; it must
@@ -208,6 +229,7 @@ async function summarize(keywords, chunks) {
 
 module.exports = {
   summarize,
+  estimateCostUsd,
   // Exported for tests: prompt shape bounds the bill, and citation parsing bounds what the UI links.
   buildPrompt,
   parseCitations,

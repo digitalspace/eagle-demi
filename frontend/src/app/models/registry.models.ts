@@ -65,4 +65,11 @@ export interface SummaryCitation {
   documentId: string;
   projectId: string;
   pageNumber: number;
+  /**
+   * Hydrated server-side, under the caller's access, for cited chunks only. Names are a disclosure
+   * about the row they describe, so they are resolved behind the same ACL rather than joined in the
+   * browser from a separate search response.
+   */
+  documentName: string;
+  projectName: string;
 }

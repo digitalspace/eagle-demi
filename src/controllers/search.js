@@ -399,19 +399,45 @@ exports.summarize = async (req, res) => {
         content: row.content
       }));
 
-    const { summary, citations, reason } = await summarizer.summarize(keywords, chunks);
+    const { summary, citations, reason, usage, estimatedCostUsd } =
+      await summarizer.summarize(keywords, chunks);
+
+    // Hydrate ONLY the chunks the model actually cited — at most a handful, and usually fewer than
+    // were sent. Two bounded reads under the CALLER's access, never systemAccess(): a name is a
+    // disclosure about the row it describes, so it must not outlive the ACL that governs the row.
+    // Same pair of calls the chunk-search branch makes above.
+    const cited = citations.map(i => chunks[i]);
+    const [citedDocs, citedProjects] = cited.length > 0
+      ? await Promise.all([
+        documentsRepo.listByIds(access, cited.map(c => c.documentId), cited.map(c => c.projectId)),
+        projectsRepo.listByIds(access, cited.map(c => c.projectId))
+      ])
+      : [[], []];
+    const docById = new Map(citedDocs.map(d => [String(d.id), d]));
+    const projById = new Map(citedProjects.map(p => [String(p.id), p]));
 
     return res.json({
       summary,
-      // Resolved back to the chunks they point at, so the UI links a citation rather than printing
+      // Resolved back to the chunks they point at, so the UI can render a source list rather than
       // a bare number. Indices are into the array actually sent to the model.
-      citations: citations.map(i => ({
-        n: i + 1,
-        chunkId: chunks[i].chunkId,
-        documentId: chunks[i].documentId,
-        projectId: chunks[i].projectId,
-        pageNumber: chunks[i].pageNumber
-      })),
+      citations: cited.map((c, idx) => {
+        const parent = docById.get(c.documentId);
+        const project = projById.get(c.projectId);
+        return {
+          n: citations[idx] + 1,
+          chunkId: c.chunkId,
+          documentId: c.documentId,
+          projectId: c.projectId,
+          pageNumber: c.pageNumber,
+          documentName:
+            (parent && (parent.displayName || parent.documentFileName)) || 'Untitled Document',
+          projectName: (project && project.name) || 'Associated Project'
+        };
+      }),
+      // Returned so the page can show what the answer cost. An ESTIMATE from reported tokens and
+      // configured list rates — see estimateCostUsd. Null when the model was never called.
+      usage: usage || null,
+      estimatedCostUsd: estimatedCostUsd ?? null,
       ...(reason ? { reason } : {})
     });
   } catch (err) {

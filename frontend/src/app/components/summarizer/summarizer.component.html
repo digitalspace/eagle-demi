@@ -1,0 +1,144 @@
+<div class="summarizer-page-container">
+
+  @if (!service.isStaff()) {
+    <!--
+      The endpoint is privileged-only by design (ADR-006), so an anonymous visitor would otherwise
+      sit on a page that can never produce anything. Explain the gate rather than render an empty
+      tool, and rather than hiding the route and leaving no explanation at all.
+    -->
+    <div class="summarizer-gate">
+      <i class="fa-solid fa-wand-magic-sparkles"></i>
+      <h1>AI Summary</h1>
+      @if (service.isUnauthorized()) {
+        <p>
+          You are signed in as <strong>{{ service.userName() }}</strong>, but this account does not
+          have EPIC staff access. Signing in again will not change that — ask an administrator for
+          the <code>staff</code> role.
+        </p>
+      } @else {
+        <p>
+          Ask a question and get a short answer drawn from the document registry, with citations to
+          the passages it came from. This tool is available to EPIC staff.
+        </p>
+        <button class="btn-gate-login" (click)="service.loginKeycloak()">
+          <i class="fa-solid fa-right-to-bracket"></i> Staff Login
+        </button>
+      }
+    </div>
+  } @else {
+
+    <div class="summarizer-hero">
+      <h1><i class="fa-solid fa-wand-magic-sparkles"></i> AI Summary</h1>
+      <p>
+        The registry is searched exactly as Deep Text Search searches it, and the top matching
+        passages are summarised — every claim cites the passage it came from.
+      </p>
+
+      <div class="summarizer-ask-box">
+        <input
+          type="text"
+          placeholder="e.g. pipeline watercourse crossing mitigation"
+          [value]="service.summaryQuery()"
+          (input)="onQueryInput($event)"
+          (keydown)="onKeydown($event)"
+          [disabled]="service.summaryLoading()"
+        />
+        <button
+          class="btn-ask"
+          (click)="ask()"
+          [disabled]="service.summaryLoading() || !service.summaryQuery().trim()"
+        >
+          @if (service.summaryLoading()) {
+            <i class="fa-solid fa-circle-notch fa-spin"></i> Reading…
+          } @else {
+            <i class="fa-solid fa-paper-plane"></i> Ask
+          }
+        </button>
+      </div>
+      <!--
+        The wording here is load-bearing, not a hedge. Retrieval is conjunctive BM25: every content
+        word in the box must appear in the SAME passage before anything is retrieved at all. A long
+        natural-language question therefore narrows to nothing, and the model is never even called.
+        Promising a chat box we cannot serve would send people away thinking the corpus was empty.
+      -->
+      <p class="summarizer-disclaimer">
+        <i class="fa-solid fa-circle-info"></i>
+        Keywords work better than full sentences — every word you type has to appear in the same
+        passage. Answers are generated from retrieved passages only and cannot draw on anything
+        outside the registry, so always check the cited sources.
+      </p>
+    </div>
+
+    @if (service.summaryLoading()) {
+      <div class="summary-panel">
+        <div class="summary-shimmer"></div>
+        <div class="summary-shimmer"></div>
+        <div class="summary-shimmer short"></div>
+      </div>
+    } @else if (service.summary()) {
+      <div class="summary-panel">
+        <h2 class="summary-title">
+          Answer
+          <span class="summary-badge">AI-generated from the sources below</span>
+        </h2>
+        <p class="summary-text">{{ service.summary() }}</p>
+        @if (service.summaryCostUsd() !== null) {
+          <!-- Labelled "est." deliberately. Derived from reported tokens and configured list rates,
+               not from Azure's meter — good for spotting an outlier query, not for reconciling a
+               bill. See estimateCostUsd in src/ai/summarize.js. -->
+          <div class="summary-cost" [title]="'Estimated from list rates, not billed amounts'">
+            <i class="fa-solid fa-coins"></i>
+            est. {{ service.summaryCostUsd() | currency:'USD':'symbol':'1.4-4' }}
+            @if (service.summaryUsage(); as u) {
+              <span class="summary-cost-tokens">
+                &middot; {{ u.prompt_tokens }} in / {{ u.completion_tokens }} out
+              </span>
+            }
+          </div>
+        }
+      </div>
+
+      @if (service.summaryCitations().length > 0) {
+        <div class="summary-sources">
+          <h2 class="summary-title">Sources</h2>
+          @for (c of service.summaryCitations(); track c.chunkId) {
+            <div class="summary-source-card">
+              <span class="summary-citation">[{{ c.n }}]</span>
+              <div>
+                <div class="summary-source-doc">{{ c.documentName }}</div>
+                <div class="summary-source-meta">
+                  {{ c.projectName }} &middot; passage {{ c.pageNumber }}
+                </div>
+              </div>
+            </div>
+          }
+        </div>
+      }
+    } @else if (service.summaryReason()) {
+      <!-- A null summary WITH a reason is an answer, not a failure. Say which. -->
+      <div class="summary-panel summary-empty">
+        @switch (service.summaryReason()) {
+          @case ('no_results') {
+            <p>Nothing in the registry matched that. Try different or fewer words.</p>
+          }
+          @case ('disabled') {
+            <p>The summariser is switched off in this environment.</p>
+          }
+          @case ('not_configured') {
+            <p>The summariser is enabled but not yet configured. This is a deployment issue, not your query.</p>
+          }
+          @case ('mock_mode') {
+            <p>Demo mode is active, so no live registry data is available to summarise.</p>
+          }
+          @case ('timeout') {
+            <p>The summariser took too long to answer. Try again, or narrow the question.</p>
+          }
+          @default {
+            <p>The summariser could not answer that. The search results themselves are unaffected.</p>
+          }
+        }
+      </div>
+    }
+
+  }
+</div>

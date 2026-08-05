@@ -296,3 +296,112 @@ describe('RegistryStateService', () => {
     });
   });
 });
+
+/**
+ * `isStaff` is the single predicate deciding staff-only nav, the /intake route guard, and the
+ * gating filters on projects and documents. It replaced a `currentRole` signal that a header
+ * toggle could set independently of Keycloak — the two drifted apart in both directions, and
+ * nothing covered either of them.
+ */
+describe('RegistryStateService — isStaff', () => {
+  let service: RegistryStateService;
+
+  beforeEach(() => {
+    localStorage.clear();
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting(), RegistryStateService]
+    });
+    service = TestBed.inject(RegistryStateService);
+    service.authEnabled.set(true);
+  });
+
+  it('is false for an anonymous visitor', () => {
+    service.isAuthenticated.set(false);
+    service.isUnauthorized.set(false);
+    expect(service.isStaff()).toBe(false);
+  });
+
+  it('is true for an authenticated user carrying a staff role', () => {
+    service.isAuthenticated.set(true);
+    service.isUnauthorized.set(false);
+    expect(service.isStaff()).toBe(true);
+  });
+
+  it('is false for an authenticated user WITHOUT a staff role', () => {
+    // The state that used to render a clickable-but-dead "EPIC Staff View" button, and that made
+    // the summary endpoint fire a guaranteed 401 on every keystroke.
+    service.isAuthenticated.set(true);
+    service.isUnauthorized.set(true);
+    expect(service.isStaff()).toBe(false);
+  });
+
+  it('is true when Keycloak is disabled, so local dev is workable', () => {
+    // A configuration, not a permission: there is no token to send, so the API still answers with
+    // the public corpus.
+    service.authEnabled.set(false);
+    service.isAuthenticated.set(false);
+    expect(service.isStaff()).toBe(true);
+  });
+
+  it('follows the auth signals rather than being assignable', () => {
+    // The point of deriving it: there is no setter, so no second notion can drift out of step.
+    expect((service as unknown as { isStaff: { set?: unknown } }).isStaff.set).toBeUndefined();
+  });
+
+  it('clearAuthState drops staff access without waiting for the redirect', () => {
+    // logout() used to change no signal at all, leaning entirely on the redirect — so any path
+    // that did not navigate left the header claiming a session that no longer existed.
+    service.isAuthenticated.set(true);
+    service.isUnauthorized.set(false);
+    service.userName.set('someone');
+    expect(service.isStaff()).toBe(true);
+
+    service.clearAuthState();
+
+    expect(service.isAuthenticated()).toBe(false);
+    expect(service.isUnauthorized()).toBe(false);
+    expect(service.isStaff()).toBe(false);
+    expect(service.userName()).toBe('');
+    expect(localStorage.getItem('isLoggedIn')).toBeNull();
+  });
+});
+
+describe('RegistryStateService — loadSummary gating', () => {
+  let service: RegistryStateService;
+
+  beforeEach(() => {
+    localStorage.clear();
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting(), RegistryStateService]
+    });
+    service = TestBed.inject(RegistryStateService);
+    service.authEnabled.set(true);
+  });
+
+  it('issues NO request when the user is not staff', async () => {
+    // The whole reason the gate is `isStaff` and not `isAuthenticated`: the endpoint is
+    // privileged-only, so a non-staff request is a guaranteed 401 straight into the fetch
+    // interceptor's refresh-and-replay.
+    const fetchSpy = spyOn(window, 'fetch');
+    service.isAuthenticated.set(true);
+    service.isUnauthorized.set(true);
+    service.summaryQuery.set('pipeline');
+
+    await service.loadSummary();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(service.summary()).toBeNull();
+    expect(service.summaryLoading()).toBe(false);
+  });
+
+  it('issues NO request for an empty question', async () => {
+    const fetchSpy = spyOn(window, 'fetch');
+    service.isAuthenticated.set(true);
+    service.isUnauthorized.set(false);
+    service.summaryQuery.set('   ');
+
+    await service.loadSummary();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
