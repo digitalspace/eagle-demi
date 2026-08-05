@@ -21,6 +21,13 @@ concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Every job here only reads the checkout — none comment, label or push. Without this
+# block the GITHUB_TOKEN gets the repository default, which is broader; CodeQL flags
+# it as `actions/missing-workflow-permissions`. It also keeps Dependabot's PRs working,
+# since those already run with a read-only token.
+permissions:
+  contents: read
+
 jobs:
   test-api:
     name: Test & Lint API

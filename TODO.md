@@ -98,6 +98,39 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
 
 ## Infrastructure
 
+- [ ] **CodeQL's first scan found 39 alerts (36 high, 3 medium). Three clusters, not 39 problems.**
+      The 3 medium were `actions/missing-workflow-permissions` on `pr.yaml` and are already fixed —
+      it now declares `permissions: contents: read`. What is left:
+      - **~30 x `js/missing-rate-limiting`** across `src/routes/api.js` and `src/app.js:126`. One
+        root cause, one fix: there is no rate limiter mounted on the Express app at all. An
+        `express-rate-limit` on the router closes the whole cluster. Worth doing on its own merits —
+        `/api/search` fans out to Azure AI Search on debounced keystrokes, and Basic tier allows 2
+        concurrent semantic requests per search unit.
+      - **`js/insecure-helmet-configuration`** at `src/app.js:41` — helmet is mounted with
+        `contentSecurityPolicy: false`. Decide whether the frontend can live under a CSP; if it can,
+        turn it on, and if it cannot, dismiss the alert with that reason rather than leaving it open.
+      - **`js/incomplete-multi-character-sanitization`** at
+        `frontend/src/app/services/registry-state.service.ts:1707`. Read it before judging — a
+        partial sanitizer is worse than none because it looks handled.
+      - **4 x `js/path-injection`** in `src/controllers/nosql/document.js` (171, 177, 189, 220) are
+        **false positives** — every one is `fs.promises.unlink(file.path)`, and `file.path` comes
+        from `multer({ dest: config.uploadDir })`, which generates its own random filename and never
+        derives it from `originalname`. Dismiss as "used in tests"/"false positive" with that note so
+        they stop reappearing; do not "fix" them.
+- [ ] **Angular 19 is end-of-life and carries 7 unfixable advisories.** `frontend/package.json`
+      resolves `@angular/*` to **19.2.25**, the newest 19.x, and every one of the 7 open Dependabot
+      alerts on `@angular/core`, `@angular/common` and `@angular/compiler` has
+      `first_patched_version: null` with a vulnerable range of `<= 19.2.25`. There is nothing to
+      upgrade to inside 19 — angular.dev lists v22 active, v21 LTS, v20 LTS to Nov 2026, and "v2 to
+      v19 are no longer supported". Dependabot will therefore never open a PR for these, and
+      `.github/dependabot.yml` ignores Angular majors so it does not try weekly and fail.
+      They are not theoretical: XSS via i18n event-handler attributes, hydration DOM clobbering and
+      response-cache poisoning, `HttpTransferCache` cache-key ambiguity, and a DoS via OOM in date
+      formatting — all in code the bundler compiles into what `demi-frontend-dev` serves.
+      **Target 21** (LTS to ~Nov 2027) rather than 22; `eagle-public` in this workspace already runs
+      Angular 21, so there is a migration to copy rather than invent. Two majors, so it is real work
+      and not a dependency bump. Until it happens the open-alert floor is 7 — a count below that
+      means somebody dismissed an alert instead of fixing it.
 - [ ] **Test and prod CI still cannot deploy.** Both workflows read the same `AZURE_CLIENT_ID`, and
       `demi-cicd-dev` holds no role outside `c4b0a8-dev-rg`. The federated credential is on the
       `main` branch subject, so a `workflow_dispatch` from `main` would authenticate and then fail
