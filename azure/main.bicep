@@ -73,6 +73,14 @@ param readerPrincipalId string = ''
 @description('Deploy the Phase 3b document storage account. Off: dev still reads MinIO.')
 param deployDocumentStorage bool = false
 
+// The kill switch for the summariser, and the only one that costs nothing to leave on. The Foundry
+// account below bills PER TOKEN rather than per hour, so an idle deployment is free; what scales
+// with use is queries, and `GET /api/search/summary` is privileged-only for exactly that reason.
+// False leaves the account standing and makes the endpoint answer `{summary: null, reason:
+// 'disabled'}` — retrieval is untouched either way.
+@description('Turn the AI summariser on. The Foundry account is deployed regardless; this is the app-side switch.')
+param summaryEnabled bool = true
+
 // Mandatory Cost Management Tags applied across ALL resources
 var defaultTags = {
   Project: 'DEMI'
@@ -152,7 +160,23 @@ module observability './modules/observability.bicep' = {
   }
 }
 
-// 6. REST API — Linux App Service on a B1 plan, integrated into the landing-zone subnet.
+// 6. Microsoft Foundry — the summariser behind `GET /api/search/summary`, and the only resource
+// here that touches a model. Retrieval stays lexical BM25 in `demi-search-dev`.
+module foundry './modules/foundry.bicep' = {
+  name: 'deploy-foundry'
+  params: {
+    // `location` is deliberately NOT passed: the module defaults to canadaeast, the only Canadian
+    // region offering a Standard (in-country) deployment. `peLocation` is where the private endpoint
+    // goes, and a PE is a NIC in its subnet — so it stays canadacentral with everything else.
+    environmentName: environmentName
+    tags: defaultTags
+    identityPrincipalId: identity.outputs.principalId
+    peSubnetId: privateEndpointSubnetId
+    peLocation: location
+  }
+}
+
+// 7. REST API — Linux App Service on a B1 plan, integrated into the landing-zone subnet.
 //
 // Not Consumption (Y1) despite `kind: 'functionapp'`: the live plan is B1, because the app holds a
 // warm worker and the 224 MB heap ceiling the scripts are written against is a B1 instance.
@@ -171,10 +195,13 @@ module apiWebApp './modules/api-web-app.bicep' = {
     cosmosEndpoint: cosmos.outputs.cosmosEndpoint
     searchEndpoint: search.outputs.searchEndpoint
     appInsightsConnectionString: observability.outputs.connectionString
+    summaryEnabled: summaryEnabled
+    foundryEndpoint: foundry.outputs.foundryEndpoint
+    foundryDeployment: foundry.outputs.deploymentName
   }
 }
 
-// 7. Angular frontend — a second Linux App Service on its own B1 plan.
+// 8. Angular frontend — a second Linux App Service on its own B1 plan.
 module frontendWebApp './modules/frontend-web-app.bicep' = {
   name: 'deploy-frontend-web-app'
   params: {
@@ -185,7 +212,7 @@ module frontendWebApp './modules/frontend-web-app.bicep' = {
   }
 }
 
-// 8. Cost budget alerts. AI Search Basic is a fixed monthly charge whether queried or idle, which
+// 9. Cost budget alerts. AI Search Basic is a fixed monthly charge whether queried or idle, which
 // is what moved the ceiling to 100.
 module costBudget './modules/cost-budget.bicep' = {
   name: 'deploy-cost-budget'
