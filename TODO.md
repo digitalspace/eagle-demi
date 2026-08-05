@@ -157,14 +157,19 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
 
 ## Needs a human, not code
 
-- [ ] **AI Services Hub registration — now blocking, not just owed.** Provisioning Azure AI services
-      is managed through the AI Services Hub, requested via <https://bcgov.github.io/ai-hub-tracking/>.
-      `demi-search-dev` was created directly, without that request. The summariser needs a
-      `Microsoft.CognitiveServices` account (`azure/modules/foundry.bicep`), which is squarely what
-      that process governs — so this is no longer a debt to settle before prod, it gates the deploy.
-      Code is written and dark-launched behind `SUMMARY_ENABLED=false`, so nothing is waiting on it
-      except the account itself. See
-      [ADR-006](https://github.com/digitalspace/eagle-demi/wiki/ADR-006-AI-Summarization-over-BM25).
+- [x] **AI Services Hub registration — retracted, it never gated anything.** This entry claimed the
+      Hub governs provisioning a `Microsoft.CognitiveServices` account and that the summariser was
+      blocked on filing a request. Checked instead of inferred: <https://bcgov.github.io/ai-hub-tracking/>
+      documents OIDC trust setup and GitHub workflows, with no project inventory and no approval
+      queue, and three Azure OpenAI accounts already exist across the EPIC subscriptions —
+      `ai-epic-poc-east` (test), `c4b0a8-dev-cond-ext-oai` (dev), `ai-condition-extractor-prod`
+      (prod) — each created directly by a named individual. `demi-search-dev` was created the same
+      way. The claim was propagated into ADR-006 and `foundry.bicep`; both are corrected.
+- [ ] **See the summariser in a browser.** `demi-foundry-dev` is deployed and `GET /api/search/summary`
+      returns grounded summaries with citations, usage and cost (verified 2026-08-05 with an
+      `X-Api-Key`). The `/summary` page is in the deployed frontend bundle, but every route into it
+      needs a staff Keycloak login, so the rendering — answer card, sources list, `est. $…` line —
+      has not been seen. Log in on `demi-frontend-dev.azurewebsites.net/summary` and look.
 - [ ] **Verify scoped and fragment access tiers end to end.** The reason this was never observed is
       now known and fixed: `helpers/auth.js` rejected any non-privileged Keycloak token inside
       *authentication*, so `passiveAuth` dropped it and `req.user` stayed unset — TIER.SCOPED was
@@ -187,10 +192,13 @@ second-largest line and is almost certainly set by platform policy — ask the p
 turn plans off. Breakdown in
 [Azure Environments](https://github.com/digitalspace/eagle-demi/wiki/Azure-Environments).
 
-The AI summariser adds a new line, and it is the first one that is **per-token rather than per-hour**:
-roughly $0.0006 a query, so ~$0.63/mo at a thousand queries. Small, but it scales with use rather
-than with time, which is why the endpoint is privileged-only and why `summarize.js` logs
-prompt/completion tokens on every call. Watch the logged p95 rather than assuming the estimate.
+The AI summariser adds a new line, and it is the first one that is **per-token rather than per-hour**.
+It is now live in dev, so this is measured rather than arithmetic: **$0.00050 a query** at 2,835
+prompt / 124 completion tokens, ~11 s end to end (`keywords=wildlife mitigation`, 5 citations,
+2026-08-05). A second query cost $0.00052. So ~$0.50/mo at a thousand queries — the pre-deploy
+estimate of $0.0006 was close and slightly high. It scales with use rather than with time, which is
+why the endpoint is privileged-only and why `summarize.js` logs prompt/completion tokens on every
+call. Watch the logged p95 rather than assuming the estimate.
 
 ## Open decisions
 

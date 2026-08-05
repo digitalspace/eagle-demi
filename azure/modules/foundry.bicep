@@ -6,14 +6,20 @@
 // decision, rejected alternatives and limitations: wiki ADR-006.
 //
 // COST IS PER TOKEN, NOT PER HOUR. Unlike AI Search Basic — a fixed ~$75-81/mo whether queried or
-// idle — this account bills only what is asked of it. At 8 chunks x 1500 chars that is roughly
-// $0.0006 a query, so ~$0.63/mo at a thousand. The bill scales with query volume, which is why the
-// endpoint is privileged-only in v1 and why `summarize.js` logs prompt/completion tokens on every
-// call: without that meter the budget question is unanswerable.
+// idle — this account bills only what is asked of it. Measured on the live dev deployment
+// 2026-08-05: **$0.00050 a query** at 2,835 prompt / 124 completion tokens, ~11 s end to end. So
+// ~$0.50/mo at a thousand queries. The bill scales with query volume, which is why the endpoint is
+// privileged-only in v1 and why `summarize.js` logs prompt/completion tokens on every call: without
+// that meter the budget question is unanswerable.
 //
-// ‼️ BEFORE DEPLOYING: provisioning a Microsoft.CognitiveServices account is what the BC Gov AI
-// Services Hub process governs — https://bcgov.github.io/ai-hub-tracking/. It was skipped for
-// `demi-search-dev`. Submit the request first this time.
+// This module used to carry a banner saying the BC Gov AI Services Hub gates provisioning here and
+// that a request had to be filed first. That was wrong, and it was inferred rather than checked.
+// https://bcgov.github.io/ai-hub-tracking/ documents OIDC trust setup and GitHub workflows — it is a
+// platform offering with no project inventory and no approval queue. Three Azure OpenAI accounts
+// already exist across the EPIC subscriptions, created directly by named individuals:
+// `ai-epic-poc-east` (test, 2025-06-19), `c4b0a8-dev-cond-ext-oai` (dev, 2026-03-04) and
+// `ai-condition-extractor-prod` (prod, 2026-06-01). `demi-search-dev` was created the same way.
+// Nothing gates this deployment.
 
 @description('Location for the Foundry account. See the canadaeast note below — this is deliberately NOT the resource group location.')
 param location string = 'canadaeast'
@@ -33,11 +39,11 @@ param peSubnetId string = ''
 @description('Region of the PE subnet. A private endpoint lives with its SUBNET, not with the resource it targets — this is canadacentral while the account is canadaeast.')
 param peLocation string = resourceGroup().location
 
-@description('Model to deploy. A small chat model: the job is compressing eight retrieved chunks into three sentences, not open-ended reasoning.')
-param modelName string = 'gpt-5-mini'
+@description('Model to deploy. A small chat model: the job is compressing eight retrieved chunks into three sentences, not open-ended reasoning. See the Standard-SKU note above the deployment resource before changing it.')
+param modelName string = 'gpt-4.1-mini'
 
 @description('Model version. Pinned rather than floating, so a summary that regresses is attributable to a deliberate change.')
-param modelVersion string
+param modelVersion string = '2025-04-14'
 
 @description('Tokens-per-minute, in thousands. The hard ceiling on spend and the reason a runaway loop cannot produce a surprise bill.')
 param capacity int = 10
@@ -86,6 +92,17 @@ resource foundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
 
 // The model deployment. `Standard` — see the canadaeast note above; `GlobalStandard` would defeat
 // the reason this account is in canadaeast at all.
+//
+// WHY `gpt-4.1-mini` AND NOT A NEWER MINI. `az cognitiveservices model list -l canadaeast` on
+// 2026-08-05: gpt-4.1-mini (2025-04-14) is the ONLY small chat model offering `Standard` there.
+// gpt-5-mini, gpt-5.4-mini, gpt-4o-mini and o4-mini are all GlobalStandard-only, so deploying any
+// of them here fails outright against the SKU below — and switching this module to GlobalStandard
+// to make one fit would move inference out of the country, which is the whole reason for canadaeast.
+//
+// The gpt-5 family is also a CODE change, not a parameter: it rejects any `temperature` other than
+// 1 and takes `max_completion_tokens` rather than `max_tokens`. `src/ai/summarize.js:190-191` sends
+// `temperature: 0` and `max_tokens` deliberately — the summariser is compression, not composition,
+// and two identical searches returning two different summaries reads as a bug.
 resource deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: foundry
   name: modelName
@@ -102,19 +119,26 @@ resource deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01
   }
 }
 
-// Cognitive Services User — the data-plane read role. Enough to call chat completions on a
-// deployment, and nothing else: it cannot create, modify or delete deployments, so a compromised
-// API instance cannot provision itself a larger model.
-var cognitiveServicesUser = subscriptionResourceId(
+// Cognitive Services OpenAI User — the role that actually permits inference. It can call chat
+// completions on a deployment and nothing else: it cannot create, modify or delete deployments, so
+// a compromised API instance cannot provision itself a larger model.
+//
+// This was `Cognitive Services User` (a97b65f3-…) and that is NOT the OpenAI data-plane role. It
+// governs the account and its keys, so with `disableLocalAuth: true` it grants effectively nothing
+// here. The failure is silent and misleading: the request reaches the account over the private
+// endpoint and comes back `401 Access denied due to invalid subscription key or wrong API
+// endpoint`, which reads as a networking or endpoint problem rather than a missing role. Measured
+// 2026-08-05 — swapping to this role turned the same request into a summary with no other change.
+var cognitiveServicesOpenAiUser = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
-  'a97b65f3-24c7-4388-baec-2e87135dc908'
+  '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
 )
 
 resource identityRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: foundry
-  name: guid(foundry.id, identityPrincipalId, cognitiveServicesUser)
+  name: guid(foundry.id, identityPrincipalId, cognitiveServicesOpenAiUser)
   properties: {
-    roleDefinitionId: cognitiveServicesUser
+    roleDefinitionId: cognitiveServicesOpenAiUser
     principalId: identityPrincipalId
     principalType: 'ServicePrincipal'
   }
@@ -128,6 +152,22 @@ resource identityRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 //
 // The A-record appears roughly TEN MINUTES after the deployment returns. A DNS check before then
 // resolves the public address and looks exactly like a missing zone — it is not. Wait, then retest.
+//
+// THIS RESOURCE FAILS ON EVERY RUN OF THIS TEMPLATE, and the error names the wrong resource:
+// `AccountProvisioningStateInvalid … Account demi-foundry-dev in state Accepted`. Every deployment
+// re-PUTs the account, that PUT is async and returns before the account settles, and a private
+// endpoint cannot attach to a target mid-update. ARM ordering does not fix it — the account
+// operation is already reported Succeeded when the PE is attempted. Observed on the first-ever
+// deploy and on two clean re-runs, 2026-08-05.
+//
+// So the PE is created out of band and this block is here to describe it, not to deploy it:
+//
+//   az network private-endpoint create -g <rg> -n pe-demi-foundry-dev -l canadacentral \
+//     --subnet <peSubnetId> --private-connection-resource-id <account id> \
+//     --group-id account --connection-name plsc-demi-foundry-dev
+//
+// Read a failure here as "the PE already exists", check it, and move on. The account, the model
+// deployment and the role assignment all succeed on the same run.
 // NOTE the location: `peLocation`, not `location`. A private endpoint is a NIC in the subnet, so it
 // must be created in the subnet's region — canadacentral — even though the account it fronts lives
 // in canadaeast. Using `location` here fails deployment outright.
