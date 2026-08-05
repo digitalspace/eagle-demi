@@ -155,6 +155,20 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       (subject `repo:digitalspace/eagle-demi:ref:refs/heads/main`) — dormant while the app has no
       permissions, live the moment it gets any, from a PUBLIC repo. Settle that before wiring this
       app to sign-in.
+- [ ] **Five API majors are pending, and CI cannot judge them.** Dependabot proposed express
+      4.22.2 → 5.2.1, helmet 7 → 8, jwks-rsa 3 → 4, minio 7 → 8 and serverless-http 3 → 4 (PR #35,
+      closed — they are now individual PRs instead of one green group). Each needs reading:
+      - **express 5** — no `req.param()`, `app.del` or wildcard/optional route patterns in `src/`,
+        so the usual path-to-regexp v8 breakage does not apply here. But **no test in `test/` mounts
+        the app**, so a passing suite says nothing about the router. Add a boot test before taking
+        this, or the first evidence will be dev.
+      - **minio 8** — `src/storage/minio.js` is the live path to `nrs.objectstore.gov.bc.ca` behind
+        every document download, and NOTHING probes it: not `yarn test`, not
+        `scripts/validate-deploy.sh`. A break here ships silently. Needs a presign + fetch check.
+      - **jwks-rsa 4** — `src/helpers/auth.js` passes `jwksRequestsPerMinute`; confirm it survives.
+      - **helmet 8** — only `contentSecurityPolicy: false` is set, so low risk.
+      - **serverless-http 4** — **nothing in the repo requires it.** Verify and drop the dependency
+        rather than upgrade it; it is packaged into `wwwroot` for nothing today.
 - [ ] **`MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `TYPESENSE_API_KEY`, `OPENSHIFT_TOKEN` and
       `OPENSHIFT_URL` are now unreferenced repo secrets.** The two `MINIO_*` were read only by the
       deleted test/prod workflows, as Bicep parameters; `TYPESENSE_API_KEY` outlived Typesense

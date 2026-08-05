@@ -23,9 +23,22 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      # minor+patch ONLY. A group is for things you merge on green CI without
+      # reading them, and a major is never that.
+      #
+      # Without this, the first run produced PR #35: express 4.22.2 -> 5.2.1,
+      # helmet 7 -> 8, jwks-rsa 3 -> 4, minio 7 -> 8 and serverless-http 3 -> 4,
+      # in one PR, green. Green proved nothing — no test in `test/` mounts the
+      # Express app, so nothing exercised Express 5's router at all, and neither
+      # CI nor `scripts/validate-deploy.sh` touches MinIO, which is the live
+      # object store behind every document download. Majors now arrive one per
+      # PR, with their own changelog, to be read.
       api-dependencies:
         patterns:
           - '*'
+        update-types:
+          - minor
+          - patch
 
   # The Angular frontend. Only `frontend/dist` is deployed, never node_modules,
   # so build-tooling advisories here are a CI supply-chain concern rather than a
@@ -76,9 +89,14 @@ updates:
           - '@angular-eslint/*'
           - 'angular-eslint'
           - 'zone.js'
+      # Same rule as the API group, for the same reason — PR #42 carried
+      # @types/jasmine 5 -> 6 and jasmine-core 5 -> 6 alongside ordinary bumps.
       build-tooling:
         patterns:
           - '*'
+        update-types:
+          - minor
+          - patch
 
   # Keeps the action versions bumped in PR #26 (checkout v7, setup-node v7,
   # azure/login v3, azure/cli v3, arm-deploy v2) from going stale again — that
