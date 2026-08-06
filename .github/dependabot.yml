@@ -48,13 +48,13 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-    # The Angular TOOLCHAIN is frozen, not just the `@angular/*` packages. Every
-    # entry below is version-locked to the framework major, so bumping any one of
-    # them alone produces a build that cannot compile the other Angular 19 halves.
-    # The app is pinned at 19.2.25, Angular 19 is past end-of-life, and reaching 21
-    # (LTS) is two majors — a migration, tracked in TODO.md, not a dependency bump.
+    # The Angular toolchain was frozen here while the app sat on 19.2.25, which is
+    # past end-of-life. The freeze was lifted 2026-08-06, when the frontend moved to
+    # Angular 22 and TypeScript 6.
     #
-    # Two matcher traps, both hit for real on 2026-08-05:
+    # What the freeze taught, and why the `angular` group below lists every scope:
+    # framework and toolchain are version-locked to each other, so they move in one
+    # PR or not at all. Two matcher traps, both hit for real on 2026-08-05:
     #
     #  1. `groups.patterns` and `ignore.dependency-name` do NOT share a matcher.
     #     `@angular*` matched the group but silently did not match the ignore, so
@@ -65,23 +65,12 @@ updates:
     #     with: "@angular/build supports Angular versions ^21.0.0, but detected
     #     Angular version 19.2.25 instead."
     #
-    # So: list every scope explicitly, and ignore them ENTIRELY rather than only
-    # majors. `zone.js` is on 0.x, where a breaking change ships as a MINOR
-    # (0.15 -> 0.16 requires a newer Angular), so a semver-major filter would let
-    # it through. Nothing is lost by the blanket ignore: Angular 19 is EOL, so
-    # there are no patch releases left to take.
-    #
-    # Deleting this whole `ignore:` block is step one of the Angular upgrade.
-    ignore:
-      - dependency-name: '@angular/*'
-      - dependency-name: '@angular-devkit/*'
-      - dependency-name: '@angular-eslint/*'
-      - dependency-name: 'angular-eslint'
-      - dependency-name: 'zone.js'
+    # `zone.js` stays in the group for the same reason it was in the ignore: it is on
+    # 0.x, where a breaking change ships as a MINOR (0.15 -> 0.16 needs a newer
+    # Angular), so a semver-major filter would let it through on its own.
     groups:
       # First matching group wins, so Angular is listed ahead of the catch-all.
-      # These are ignored above, so the group only matters once the ignore is
-      # lifted — at which point one grouped PR is what you want, not eight.
+      # One grouped PR is what you want here, not eight.
       angular:
         patterns:
           - '@angular/*'

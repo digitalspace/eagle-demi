@@ -409,8 +409,10 @@ gh api "repos/digitalspace/eagle-demi/dependabot/alerts?state=open&per_page=100"
         |group_by(.man+.scope)|map({manifest:.[0].man,scope:.[0].scope,n:length})'
 ```
 
-Grouping and routine version updates come from `.github/dependabot.yml`. Angular majors are ignored
-there on purpose — see the Angular 19 end-of-life entry in `TODO.md`.
+Grouping and routine version updates come from `.github/dependabot.yml`. Angular is no longer
+ignored there — the freeze was lifted on 2026-08-06 with the move to Angular 22 — but it is still
+grouped, because the framework and its toolchain are version-locked and a half-bumped pair does not
+build. See the Angular entry in `TODO.md`.
 
 **GitHub Code Quality is not enabled.** It went GA on 2026-07-20 and bills $10 per active committer
 per month, counted org-wide, and it is not in the free public-repo set. It is also UI-only, with no
