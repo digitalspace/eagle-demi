@@ -1358,6 +1358,47 @@ export class RegistryStateService {
     this.selectedProject.set(null);
   }
 
+  /**
+   * Read one document by id, for callers that hold ids rather than a loaded row — an AI summary
+   * citation, for instance.
+   *
+   * `projectId` is the Cosmos partition key. Passing it turns a cross-partition query into a point
+   * read, so supply it whenever the caller already knows it.
+   *
+   * Returns null when the API says 403/404. A document the caller may not read and a document that
+   * does not exist are deliberately the same answer here: both mean "nothing to show", and telling
+   * them apart in the UI would leak the existence of hidden rows.
+   */
+  async fetchDocument(documentId: string, projectId?: string): Promise<Document | null> {
+    const query = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
+    const res = await fetch(`${this.getBasePath()}/documents/${encodeURIComponent(documentId)}${query}`);
+    if (res.status === 403 || res.status === 404) return null;
+    if (!res.ok) throw new Error(`Could not load the document (HTTP ${res.status}).`);
+    return await res.json();
+  }
+
+  /**
+   * Ask the API for a short-lived presigned URL for a document's stored file.
+   *
+   * The API gates this by the same read ACL as the metadata, so a document the user cannot see
+   * returns 403 rather than a link. Throws with a message meant for the user.
+   *
+   * ponytail: map-explorer.component.ts has this same fetch inline; point it here next time that
+   * file is touched.
+   */
+  async getDownloadUrl(documentId: string, projectId?: string): Promise<string> {
+    const query = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
+    const res = await fetch(`${this.getBasePath()}/documents/${encodeURIComponent(documentId)}/download${query}`);
+    if (!res.ok) {
+      throw new Error(res.status === 403
+        ? 'You do not have permission to download this document.'
+        : `Could not prepare download (HTTP ${res.status}).`);
+    }
+    const { url } = await res.json();
+    if (!url) throw new Error('The API did not return a download link.');
+    return url;
+  }
+
   // Handle ingestion
   async uploadDocument(file: File) {
     if (!this.intakeProjectValid()) return;
