@@ -67,34 +67,47 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
 
 ## NRPTI ingest
 
-- [ ] **NRPTI auto-seeds projects that are not projects, and nothing ever removes them.**
-      `src/scripts/sync-nrpti.js` tries five ways to link a compliance record to an existing project
-      (`_epicProjectId`, exact name, normalized name, name segments, token inclusion) and then, at
-      Priority 4, **invents one** from `item.projectName || item.location` — a synthetic id
-      `8000000 + hash(name) % 1000000`, `projectState: 'Compliance Record Ingest'`, a centroid
-      hardcoded to Victoria, and `read: ['public', …]` so it is publicly listed like a real project.
-      Many of those names are facilities, locations or record titles, not EPIC projects, so the
-      registry gains rows that no project ever existed for.
-      The fix is to delete Priority 4: link only when Track or Eagle already has the project, and
-      leave the record unlinked otherwise. Two things must be decided at the same time, because both
-      are load-bearing:
-      - **What an unlinked record becomes.** Today the no-name path writes `projectId: ''`, which is
-        the empty-string partition — reachable by no scoped read, so the record is ingested and then
-        invisible. Either that is accepted deliberately (an unmatched-records bucket someone can
-        query) or unmatched records should not be written at all. Do not leave it as an accident.
-      - **The link is not free to change later.** `projectId` is the records container's PARTITION
-        KEY, so re-pointing a record at the right project is a delete plus an insert, not an update.
-      - [ ] **Purge the seeded stragglers**, which is a separate job from the gate: a script over
-            `metadata.seededFromNrpti === true` / `sourceSystem === 'nrpti'` that deletes the project
-            AND calls `aiSearch.deleteFromIndex` for it. Indexers never see deletes — drop that
-            second half and the phantom projects stay searchable forever even once Cosmos is clean.
-            Then re-point or drop the records that referenced them.
+The auto-seed is gone from the code. What is left is operational: nobody has run the purge or the
+first gated sync against dev.
+
+- [x] **NRPTI no longer invents projects — Priority 4 deleted 2026-08-06.**
+      `src/scripts/sync-nrpti.js` used to fall through its five linking strategies and **create** a
+      project from `item.projectName || item.location`: synthetic id `8000000 + hash(name) % 1000000`,
+      `projectState: 'Compliance Record Ingest'`, a centroid hardcoded to Victoria, and
+      `read: ['public', …]` so it listed publicly beside real Track projects. Many of those strings
+      are facilities, locations or record titles. Track owns the registry; a sync does not add to it.
+      The ladder is now `resolveProjectLink()` — pure, exported, and unit-tested one case per
+      priority. **An unmatched record is dropped, not written.** There is no `projectId: ''` bucket:
+      the run logs the skip count and the top 20 unresolvable names, and that log is the only record
+      of them. `simpleHash` went with Priority 4.
+      Correcting the reason this entry used to give: the empty-string partition was *not* invisible.
+      `scopeClause` restricts on the partition key for `TIER.SCOPED` only, so `GET /records` with no
+      `project` param returned unlinked records to an anonymous caller. They were unreachable by
+      scoped reads and by `/records?project=X`, not by everyone.
+- [x] **`records.buildCriteria` treated `projectId: ''` as "no filter".** Found while writing the
+      purge. A falsy `if (projectId)` meant asking for the unlinked partition returned the WHOLE
+      container — so the sweep below would have deleted every compliance record. Both the criterion
+      and the `partitionKey` are presence tests now, with a repository test asserting the SQL.
+- [ ] **Run `purge-nrpti-seeded.js` on dev, then re-sync.** The script exists and is tested; nothing
+      has been executed. Dry run by default, `--live` to delete, and it must run INSIDE the app
+      container over the SSH tunnel because Cosmos is private-endpoint-only and keyless. Per seeded
+      project it deletes the records first, then the project, then calls
+      `aiSearch.deleteFromIndex(indexes().projects, id)` — that last call is the point, because
+      indexers work off a `_ts` high-water mark and never see deletes, so skipping it leaves phantom
+      projects searchable forever even once Cosmos is clean. It refuses any project that owns
+      documents, and leaves alone anything carrying `sourceSystem: 'nrpti'` without
+      `metadata.seededFromNrpti`. It also sweeps the `''` partition.
+      Deleting the records is required rather than tidy: `projectId` is the partition key, so a
+      re-sync that re-ingests the same NRPTI `_id` under a different `projectId` writes a NEW item
+      and orphans the old one.
       Measured 2026-08-05, and the measurement is thin: `/api/projects` returns 382 rows, all
       `sourceSystem: 'track'`, and the first 250 rows of the `demi-projects` index carry no synthetic
-      id — so under PUBLIC access, on dev, there is nothing to purge right now and the gate is what
-      actually matters before the next `POST /admin/sync/nrpti`. That read cannot see past ACLs and
-      the list endpoint ignores `pageNum`, so it is not proof the containers are clean. Count with
-      `systemAccess()` before concluding the purge is a no-op.
+      id. That read cannot see past ACLs and the list endpoint ignores `pageNum`, so it is not proof.
+      **Count with `systemAccess()` first** — `projectsRepo.listBySourceSystem(systemAccess(), 'nrpti')`
+      — and that count is also what decides the `ponytail:` note in `sync-nrpti.js`: the
+      seeded-projects-last `sort()` is dead the moment the purge reports 0, and should be deleted then.
+      After the purge, `POST /admin/sync/nrpti?async=true` and check the run reports a non-zero
+      `totalUnlinked`. A seeded project appearing after that means Priority 4 came back.
 
 ## Infrastructure
 
