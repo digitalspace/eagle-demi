@@ -102,15 +102,61 @@
         <div class="summary-sources">
           <h2 class="summary-title">Sources</h2>
           @for (c of service.summaryCitations(); track c.chunkId) {
-            <div class="summary-source-card">
+            <!-- A real <button>, not a div with a click handler: this has to open from the
+                 keyboard, and the expanded panel has to be announced. -->
+            <button
+              type="button"
+              class="summary-source-card"
+              [class.open]="expandedChunkId() === c.chunkId"
+              [attr.aria-expanded]="expandedChunkId() === c.chunkId"
+              [attr.aria-controls]="'source-detail-' + c.chunkId"
+              (click)="toggleCitation(c)">
               <span class="summary-citation">[{{ c.n }}]</span>
-              <div>
+              <div class="summary-source-body">
                 <div class="summary-source-doc">{{ c.documentName }}</div>
                 <div class="summary-source-meta">
                   {{ c.projectName }} &middot; passage {{ c.pageNumber }}
                 </div>
               </div>
-            </div>
+              <i class="fa-solid fa-chevron-down summary-source-chevron" aria-hidden="true"></i>
+            </button>
+
+            @if (expandedChunkId() === c.chunkId) {
+              <div class="summary-source-detail" [id]="'source-detail-' + c.chunkId" role="region">
+                @if (detailLoading()) {
+                  <div class="summary-shimmer"></div>
+                  <div class="summary-shimmer short"></div>
+                } @else if (detailError()) {
+                  <p class="summary-source-error">{{ detailError() }}</p>
+                } @else {
+                  <!-- Nested rather than an `@else if (…; as doc)`: the `as` alias is only allowed
+                       on `@if`, not on `@else if`. -->
+                  @if (expandedDoc(); as doc) {
+                    <p><strong>File name:</strong> <code>{{ doc.documentFileName }}</code></p>
+                    @if (doc.documentType) {
+                      <p><strong>Type:</strong> {{ doc.documentType }}</p>
+                    }
+                    @if (doc.orcsCode) {
+                      <p><strong>ORCS:</strong> {{ doc.orcsCode }}</p>
+                    }
+                    <p><strong>Project:</strong> {{ doc.projectName || c.projectName }}</p>
+                  }
+                }
+
+                <button
+                  type="button"
+                  class="summary-source-download"
+                  [disabled]="downloadingChunkId() === c.chunkId"
+                  (click)="download(c)">
+                  <i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i>
+                  {{ downloadingChunkId() === c.chunkId ? 'Preparing…' : 'Download' }}
+                </button>
+
+                @if (downloadError()) {
+                  <p class="summary-source-error">{{ downloadError() }}</p>
+                }
+              </div>
+            }
           }
         </div>
       }

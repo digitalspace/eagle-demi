@@ -434,4 +434,41 @@ describe('RegistryStateService — loadSummary gating', () => {
 
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  // Opening a document from an AI summary citation. Both methods take the projectId the citation
+  // already carries — it is the Cosmos partition key, and omitting it costs a cross-partition query.
+
+  it('sends the partition key when fetchDocument is given a projectId', async () => {
+    const fetchSpy = spyOn(window, 'fetch').and.resolveTo(new Response(JSON.stringify({ id: 'doc1' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+
+    const doc = await service.fetchDocument('doc1', 'proj1');
+
+    expect(fetchSpy.calls.mostRecent().args[0]).toContain('/documents/doc1?project=proj1');
+    expect(doc).toEqual({ id: 'doc1' } as any);
+  });
+
+  it('returns null rather than throwing when fetchDocument is refused', async () => {
+    spyOn(window, 'fetch').and.resolveTo(new Response('{}', { status: 403 }));
+
+    await expectAsync(service.fetchDocument('doc1', 'proj1')).toBeResolvedTo(null);
+  });
+
+  it('returns the presigned url from getDownloadUrl', async () => {
+    spyOn(window, 'fetch').and.resolveTo(new Response(JSON.stringify({ url: 'https://store/file.pdf' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+
+    await expectAsync(service.getDownloadUrl('doc1', 'proj1')).toBeResolvedTo('https://store/file.pdf');
+  });
+
+  it('throws a permission message when the download is refused', async () => {
+    spyOn(window, 'fetch').and.resolveTo(new Response('{}', { status: 403 }));
+
+    await expectAsync(service.getDownloadUrl('doc1', 'proj1'))
+      .toBeRejectedWithError('You do not have permission to download this document.');
+  });
 });
