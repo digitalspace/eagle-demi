@@ -8,10 +8,11 @@
 // COST IS PER TOKEN, NOT PER HOUR. Unlike AI Search Basic — a fixed ~$75-81/mo whether queried or
 // idle — this account bills only what is asked of it. Measured on the live dev deployment
 // 2026-08-05: 2,835 prompt / 124 completion tokens, ~11 s end to end. Priced against the canadaeast
-// `gpt 4.1 mini Inp/Outp regnl` retail meters ($0.484 / $1.936 per 1M) that is **~$0.0016 a query**,
-// so ~$1.61/mo at a thousand queries. The tokens and latency are measured; the dollar figure is
-// derived from list rates and is an estimate. An earlier revision of this comment said $0.00050,
-// which priced gpt-4o-mini rather than the gpt-4.1-mini actually deployed below. The bill scales
+// `gpt 4.1 mini Inp/Outp regnl` retail meters (0.70 / 2.70 CAD per 1M) that is **~0.0023 CAD a
+// query**, so ~2.32 CAD/mo at a thousand queries. CAD because this subscription bills in CAD, like
+// every other cost figure here. The tokens and latency are measured; the dollar figure is derived
+// from list rates and is an estimate. An earlier revision of this comment said $0.00050, which
+// priced gpt-4o-mini in USD rather than the gpt-4.1-mini actually deployed below. The bill scales
 // with query volume, which is why the endpoint is privileged-only in v1 and why `summarize.js` logs
 // prompt/completion tokens on every call: without that meter the budget question is unanswerable.
 //

@@ -411,7 +411,7 @@ exports.summarize = async (req, res) => {
         content: row.content
       }));
 
-    const { summary, citations, reason, usage, estimatedCostUsd } =
+    const { summary, citations, reason, usage, estimatedCostCad } =
       await summarizer.summarize(keywords, chunks);
 
     // Hydrate ONLY the chunks the model actually cited — at most a handful, and usually fewer than
@@ -447,9 +447,9 @@ exports.summarize = async (req, res) => {
         };
       }),
       // Returned so the page can show what the answer cost. An ESTIMATE from reported tokens and
-      // configured list rates — see estimateCostUsd. Null when the model was never called.
+      // configured list rates — see estimateCostCad. Null when the model was never called.
       usage: usage || null,
-      estimatedCostUsd: estimatedCostUsd ?? null,
+      estimatedCostCad: estimatedCostCad ?? null,
       ...(reason ? { reason } : {})
     });
   } catch (err) {

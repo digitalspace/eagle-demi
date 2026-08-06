@@ -69,7 +69,11 @@ const SYSTEM_PROMPT = [
 ].join('\n');
 
 /**
- * What this query cost, in USD, from the token counts the deployment reported.
+ * What this query cost, in CAD, from the token counts the deployment reported.
+ *
+ * CAD because the subscription is billed in CAD and every other cost figure in this repo is too —
+ * see the rates in config. A per-query number in a second currency is one someone has to convert
+ * before it can be set against the budget it draws down.
  *
  * AN ESTIMATE, and every surface that shows it must say so. Azure bills on its own meter with its
  * own rounding, the list rates live in config and drift from reality the moment Microsoft changes
@@ -78,7 +82,7 @@ const SYSTEM_PROMPT = [
  *
  * Returns null rather than 0 when usage is absent — "not measured" and "free" are different facts.
  */
-function estimateCostUsd(usage) {
+function estimateCostCad(usage) {
   if (!usage) return null;
   const inTok = Number(usage.prompt_tokens) || 0;
   const outTok = Number(usage.completion_tokens) || 0;
@@ -215,7 +219,7 @@ async function summarize(keywords, chunks) {
       summary: text,
       citations: parseCitations(text, used.length),
       usage: data?.usage || null,
-      estimatedCostUsd: estimateCostUsd(data?.usage)
+      estimatedCostCad: estimateCostCad(data?.usage)
     };
   } catch (err) {
     // Additive feature, non-fatal failure. An aborted or failed summary renders no panel; it must
@@ -230,7 +234,7 @@ async function summarize(keywords, chunks) {
 
 module.exports = {
   summarize,
-  estimateCostUsd,
+  estimateCostCad,
   // Exported for tests: prompt shape bounds the bill, and citation parsing bounds what the UI links.
   buildPrompt,
   parseCitations,

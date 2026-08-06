@@ -45,7 +45,7 @@ param minioAccessKey string
 @secure()
 param minioSecretKey string
 
-@description('Monthly Budget Limit in USD')
+@description('Monthly Budget Limit in CAD — the subscription\'s billing currency. See cost-budget.bicep.')
 param budgetAmount int = 100
 
 @description('Notification Email Addresses for Cost Alerts')
