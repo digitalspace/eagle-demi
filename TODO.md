@@ -304,12 +304,23 @@ turn plans off. Breakdown in
 [Azure Environments](https://github.com/digitalspace/eagle-demi/wiki/Azure-Environments).
 
 The AI summariser adds a new line, and it is the first one that is **per-token rather than per-hour**.
-It is now live in dev, so this is measured rather than arithmetic: **$0.00050 a query** at 2,835
-prompt / 124 completion tokens, ~11 s end to end (`keywords=wildlife mitigation`, 5 citations,
-2026-08-05). A second query cost $0.00052. So ~$0.50/mo at a thousand queries — the pre-deploy
-estimate of $0.0006 was close and slightly high. It scales with use rather than with time, which is
-why the endpoint is privileged-only and why `summarize.js` logs prompt/completion tokens on every
-call. Watch the logged p95 rather than assuming the estimate.
+It is now live in dev, and the token counts are measured: 2,835 prompt / 124 completion tokens, ~11 s
+end to end (`keywords=wildlife mitigation`, 5 citations, 2026-08-05). The dollar figure is *derived*
+from those counts, not measured — Azure bills on its own meter and nobody has reconciled an invoice
+here. At the canadaeast `gpt 4.1 mini Inp/Outp regnl` retail rates ($0.484 / $1.936 per 1M) that is
+**~$0.0016 a query**, so ~$1.61/mo at a thousand queries.
+
+This figure read $0.00050 until 2026-08-06. That was wrong: `config.js` carried 4o-mini list rates
+($0.15 / $0.60) while `foundry.bicep` deploys gpt-4.1-mini on the regional `Standard` SKU, so every
+cost shown in the UI and quoted in the docs was 3.2x low. The formula in `estimateCostUsd` was never
+the problem — the constants it multiplied were. The pre-deploy ADR-006 estimate of $0.0006 was
+likewise low by 2.6x for the same reason: it priced a model that is not deployed. The corrected line
+is still ~2% of AI Search Basic, so nothing decided on the old number changes.
+
+It scales with use rather than with time, which is why the endpoint is privileged-only and why
+`summarize.js` logs prompt/completion tokens on every call. Watch the logged p95 rather than assuming
+the estimate, and re-check the rates against `prices.azure.com` whenever the deployment's model or
+SKU changes — the constants do not follow the bicep on their own.
 
 ## Open decisions
 

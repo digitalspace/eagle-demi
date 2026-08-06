@@ -100,7 +100,7 @@ const config = {
   foundryApiVersion: process.env.FOUNDRY_API_VERSION || '2024-10-21',
 
   // The cost and latency ceiling, enforced before the request rather than hoped for after it.
-  // 8 × 1500 chars ≈ 3k input tokens ≈ $0.0006/query. Raising either raises the bill linearly, so
+  // 8 × 1500 chars ≈ 3k input tokens ≈ $0.0015/query. Raising either raises the bill linearly, so
   // they are configuration and the probe asserts p95 prompt_tokens stays under the implied cap.
   summaryMaxChunks:  parseInt(process.env.SUMMARY_MAX_CHUNKS || '8', 10),
   summaryMaxChars:   parseInt(process.env.SUMMARY_MAX_CHARS  || '1500', 10),
@@ -110,14 +110,21 @@ const config = {
   summaryTimeoutMs:  parseInt(process.env.SUMMARY_TIMEOUT_MS || '20000', 10),
 
   // USD per million tokens, for turning the usage the deployment reports into a number a human can
-  // read. Defaults are 4o-mini-class list rates.
+  // read.
+  //
+  // These rates are MODEL- AND SKU-SPECIFIC and must track `azure/modules/foundry.bicep`. They are
+  // the `gpt 4.1 mini Inp regnl` / `Outp regnl` retail meters in canadaeast — regional, because the
+  // deployment's `sku.name` is `Standard`. Changing `modelName`, or moving that SKU to
+  // `GlobalStandard` (a cheaper meter: $0.40 / $1.60), makes these wrong and every displayed cost
+  // wrong with them. They previously carried 4o-mini rates ($0.15 / $0.60) against a gpt-4.1-mini
+  // deployment and understated every query by 3.2x.
   //
   // This yields an ESTIMATE and must be labelled as one wherever it is shown. Azure bills on its
   // own meter with its own rounding, list rates change without this file changing, and any
   // negotiated or committed-use discount is invisible here. It is for spotting a query that costs
   // 50x the others — not for reconciling an invoice.
-  summaryCostPerMTokIn:  parseFloat(process.env.SUMMARY_COST_PER_MTOK_IN  || '0.15'),
-  summaryCostPerMTokOut: parseFloat(process.env.SUMMARY_COST_PER_MTOK_OUT || '0.60'),
+  summaryCostPerMTokIn:  parseFloat(process.env.SUMMARY_COST_PER_MTOK_IN  || '0.484'),
+  summaryCostPerMTokOut: parseFloat(process.env.SUMMARY_COST_PER_MTOK_OUT || '1.936'),
 
   // Keycloak & Token Authentication
   keycloakUrl:           process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',

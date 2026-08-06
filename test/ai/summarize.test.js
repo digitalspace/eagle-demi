@@ -5,7 +5,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 const config = require('../../src/config');
-const { summarize, buildPrompt, parseCitations, truncate, SYSTEM_PROMPT } = require('../../src/ai/summarize');
+const { summarize, buildPrompt, parseCitations, truncate, estimateCostUsd, SYSTEM_PROMPT } = require('../../src/ai/summarize');
 
 const chunk = (n, content) => ({
   chunkId: `doc1::p0::c${n}`,
@@ -114,6 +114,32 @@ test('parseCitations', async (t) => {
   await t.test('handles text with no citations at all', () => {
     assert.deepStrictEqual(parseCitations('the sources do not answer this question', 3), []);
     assert.deepStrictEqual(parseCitations(null, 3), []);
+  });
+});
+
+test('estimateCostUsd', async (t) => {
+  await t.test('prices the measured dev query against the configured rates', () => {
+    // 2,835 prompt / 124 completion tokens, measured on dev 2026-08-05. Pinned because the rates
+    // in config are model- AND sku-specific: they carried 4o-mini values against a gpt-4.1-mini
+    // deployment and understated every query by 3.2x, and nothing else in the suite would notice.
+    const usd = estimateCostUsd({ prompt_tokens: 2835, completion_tokens: 124 });
+    const expected = (2835 / 1e6) * config.summaryCostPerMTokIn
+                   + (124 / 1e6) * config.summaryCostPerMTokOut;
+
+    assert.ok(Math.abs(usd - expected) < 1e-12);
+    assert.ok(usd > 0.0015 && usd < 0.0018, `expected ~$0.0016 a query, got ${usd}`);
+  });
+
+  await t.test('returns null, not zero, when usage was never reported', () => {
+    // "Not measured" and "free" are different facts, and the UI hides the line on null.
+    for (const input of [null, undefined]) {
+      assert.strictEqual(estimateCostUsd(input), null);
+    }
+  });
+
+  await t.test('treats missing or unusable token counts as zero', () => {
+    assert.strictEqual(estimateCostUsd({}), 0);
+    assert.strictEqual(estimateCostUsd({ prompt_tokens: 'nonsense' }), 0);
   });
 });
 
