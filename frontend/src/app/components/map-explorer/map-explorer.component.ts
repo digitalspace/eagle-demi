@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, AfterViewInit, inject, effect, signal, computed, untracked } from '@angular/core';
+import { Component, OnInit, OnDestroy, AfterViewInit, inject, effect, signal, computed, untracked, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Project, Document } from '../../models/registry.models';
@@ -10,6 +10,7 @@ declare const L: any;
   standalone: true,
   imports: [CommonModule],
   templateUrl: './map-explorer.component.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
 })
 export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {

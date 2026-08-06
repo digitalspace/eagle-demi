@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { RegistryStateService } from './registry-state.service';
 
@@ -10,7 +10,7 @@ describe('RegistryStateService', () => {
     localStorage.clear();
     TestBed.configureTestingModule({
       providers: [
-        provideHttpClient(),
+        provideHttpClient(withXhr()),
         provideHttpClientTesting(),
         RegistryStateService
       ]
@@ -339,7 +339,7 @@ describe('RegistryStateService — isStaff', () => {
   beforeEach(() => {
     localStorage.clear();
     TestBed.configureTestingModule({
-      providers: [provideHttpClient(), provideHttpClientTesting(), RegistryStateService]
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), RegistryStateService]
     });
     service = TestBed.inject(RegistryStateService);
     service.authEnabled.set(true);
@@ -402,7 +402,7 @@ describe('RegistryStateService — loadSummary gating', () => {
   beforeEach(() => {
     localStorage.clear();
     TestBed.configureTestingModule({
-      providers: [provideHttpClient(), provideHttpClientTesting(), RegistryStateService]
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), RegistryStateService]
     });
     service = TestBed.inject(RegistryStateService);
     service.authEnabled.set(true);

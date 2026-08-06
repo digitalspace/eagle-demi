@@ -1,4 +1,4 @@
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnInit, inject, ChangeDetectionStrategy } from '@angular/core';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Project } from '../../models/registry.models';
 
@@ -7,6 +7,7 @@ import { Project } from '../../models/registry.models';
   standalone: true,
   imports: [],
   templateUrl: './document-intake.component.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
 })
 export class DocumentIntakeComponent implements OnInit {

@@ -1,4 +1,4 @@
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnInit, inject, ChangeDetectionStrategy } from '@angular/core';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Project, Document } from '../../models/registry.models';
 
@@ -7,6 +7,7 @@ import { Project, Document } from '../../models/registry.models';
   standalone: true,
   imports: [],
   templateUrl: './deep-search.component.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
 })
 export class DeepSearchComponent implements OnInit {
