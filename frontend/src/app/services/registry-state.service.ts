@@ -84,14 +84,14 @@ export class RegistryStateService {
   summaryReason = signal<string | null>(null);
 
   /**
-   * What the last answer cost, in USD, and the token counts behind it.
+   * What the last answer cost, in CAD, and the token counts behind it.
    *
    * An ESTIMATE the API derives from reported usage and configured list rates — the page must label
    * it as one. It exists because this is the first per-token line in a project already running
    * ~2x its budget: a number on screen is how a query that costs fifty times the others gets
    * noticed the same day rather than on the invoice.
    */
-  summaryCostUsd = signal<number | null>(null);
+  summaryCostCad = signal<number | null>(null);
   summaryUsage = signal<{ prompt_tokens?: number; completion_tokens?: number } | null>(null);
 
   /**
@@ -1245,7 +1245,7 @@ export class RegistryStateService {
       this.summary.set(null);
       this.summaryCitations.set([]);
       this.summaryReason.set(null);
-      this.summaryCostUsd.set(null);
+      this.summaryCostCad.set(null);
       this.summaryUsage.set(null);
       this.summaryLoading.set(false);
       return;
@@ -1268,7 +1268,7 @@ export class RegistryStateService {
     this.summary.set(null);
     this.summaryCitations.set([]);
     this.summaryReason.set(null);
-    this.summaryCostUsd.set(null);
+    this.summaryCostCad.set(null);
     this.summaryUsage.set(null);
 
     try {
@@ -1281,7 +1281,7 @@ export class RegistryStateService {
 
       this.summary.set(data?.summary ?? null);
       this.summaryCitations.set(data?.citations ?? []);
-      this.summaryCostUsd.set(data?.estimatedCostUsd ?? null);
+      this.summaryCostCad.set(data?.estimatedCostCad ?? null);
       this.summaryUsage.set(data?.usage ?? null);
       // `summary: null` with a reason is a legitimate answer, not a failure — the corpus had
       // nothing, or the feature is switched off. The page distinguishes them for the user.

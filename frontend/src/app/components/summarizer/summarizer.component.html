@@ -82,13 +82,13 @@
           <span class="summary-badge">AI-generated from the sources below</span>
         </h2>
         <p class="summary-text">{{ service.summary() }}</p>
-        @if (service.summaryCostUsd() !== null) {
+        @if (service.summaryCostCad() !== null) {
           <!-- Labelled "est." deliberately. Derived from reported tokens and configured list rates,
                not from Azure's meter — good for spotting an outlier query, not for reconciling a
-               bill. See estimateCostUsd in src/ai/summarize.js. -->
+               bill. See estimateCostCad in src/ai/summarize.js. -->
           <div class="summary-cost" [title]="'Estimated from list rates, not billed amounts'">
             <i class="fa-solid fa-coins"></i>
-            est. {{ service.summaryCostUsd() | currency:'USD':'symbol':'1.4-4' }}
+            est. {{ service.summaryCostCad() | currency:'CAD':'symbol':'1.4-4' }}
             @if (service.summaryUsage(); as u) {
               <span class="summary-cost-tokens">
                 &middot; {{ u.prompt_tokens }} in / {{ u.completion_tokens }} out
