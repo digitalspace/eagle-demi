@@ -914,6 +914,9 @@ header {
 .summary-source-detail code {
   font-size: 0.75rem;
   word-break: break-all;
+  /* Angular collapses the whitespace between </strong> and <code>, so the gap is put back here
+     rather than with an &nbsp; in the template. */
+  margin-left: 0.25rem;
 }
 
 .summary-source-download {
