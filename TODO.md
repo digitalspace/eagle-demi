@@ -106,8 +106,22 @@ first gated sync against dev.
       **Count with `systemAccess()` first** — `projectsRepo.listBySourceSystem(systemAccess(), 'nrpti')`
       — and that count is also what decides the `ponytail:` note in `sync-nrpti.js`: the
       seeded-projects-last `sort()` is dead the moment the purge reports 0, and should be deleted then.
-      After the purge, `POST /admin/sync/nrpti?async=true` and check the run reports a non-zero
-      `totalUnlinked`. A seeded project appearing after that means Priority 4 came back.
+      After the purge, `POST /admin/sync/nrpti?async=true` and read `totalUnlinked` from the
+      `Background NRPTI sync complete` log line — the async response cannot carry it. A seeded
+      project appearing after that means Priority 4 came back.
+      An index delete that fails is now a `stage: 'index'` failure and exits 1: nothing can retry
+      it, because the Cosmos row is already gone and `listBySourceSystem` will not return it again.
+      Delete that id from `demi-projects` by hand if it appears.
+- [ ] **A dropped record is never revisited by a delta sync.** `since` is caller-supplied, so once
+      `resolveProjectLink()` returns null for a record it stays out of Cosmos even after Track adds
+      the project its name would now match. Only a full `since`-less `POST /admin/sync/nrpti`
+      re-ingests it. Run one after any batch of new Track projects, or the compliance history for
+      those projects starts at the sync date rather than at the record dates.
+- [ ] **`documents.buildCriteria` still treats `projectId: ''` as "no filter"** (`documents.js:20`,
+      and the `partitionKey` at `:45`) — the same shape as the records bug fixed above. Not live:
+      no caller passes `''` and nothing sweeps a documents `''` partition. Worth aligning before
+      something does. `records.getById`'s falsy `projectId` is fine by contrast — it degrades to an
+      ACL-gated cross-partition query, not a wider result set.
 
 ## Infrastructure
 

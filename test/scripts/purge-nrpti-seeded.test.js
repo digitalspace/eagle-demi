@@ -70,7 +70,7 @@ function fakeDocuments(byProject = {}) {
  * the wrong opts key would silently fall through to the REAL client, which on a machine with a
  * populated .env issues live deletes against the dev index.
  */
-function fakeIndex() {
+function fakeIndex(opts = {}) {
   const state = { deleted: [] };
   return {
     state,
@@ -79,7 +79,8 @@ function fakeIndex() {
     },
     async deleteFromIndex(index, id) {
       state.deleted.push([index, id]);
-      return 1;
+      // The real one logs and returns 0 instead of throwing, so 0 is the ONLY failure signal.
+      return opts.failFor === id ? 0 : 1;
     }
   };
 }
@@ -151,6 +152,36 @@ test('the AI Search delete is not optional — indexers never see a Cosmos delet
   for (const [indexName] of index.state.deleted) {
     assert.strictEqual(indexName, 'demi-projects');
   }
+});
+
+test('a failed index delete is a failure, because no re-run can retry it', async () => {
+  // The Cosmos row is gone by this point, so `listBySourceSystem` will never return this project
+  // again and the indexer's `_ts` high-water mark cannot see the delete. Unreported, the phantom
+  // stays searchable forever and the script exits 0 — the exact outcome the purge exists to avoid.
+  const index = fakeIndex({ failFor: '8000456' });
+
+  const summary = await purgeSeeded(['--live'], {
+    projects: fakeProjects(TWO_SEEDED),
+    records: fakeRecords(RECORDS),
+    documents: fakeDocuments(),
+    index
+  });
+
+  assert.strictEqual(summary.projectsRemoved, 2);       // the Cosmos side did succeed
+  assert.strictEqual(summary.indexEntriesRemoved, 1);
+  assert.strictEqual(summary.failures.length, 1);
+  assert.strictEqual(summary.failures[0].id, '8000456');
+  assert.strictEqual(summary.failures[0].stage, 'index');
+  assert.match(summary.failures[0].message, /by hand/);
+});
+
+test('a dry run does not report an index failure — it never calls the index', async () => {
+  const index = fakeIndex({ failFor: '8000456' });
+  const summary = await purgeSeeded([], {
+    projects: fakeProjects(TWO_SEEDED), records: fakeRecords(RECORDS), documents: fakeDocuments(), index
+  });
+  assert.deepStrictEqual(index.state.deleted, []);
+  assert.deepStrictEqual(summary.failures, []);
 });
 
 test('a project sourced nrpti without the seed marker is reported, never deleted', async () => {

@@ -167,12 +167,21 @@ async function purgeSeeded(argv = [], opts = {}) {
       continue;
     }
 
-    // Best-effort, like the DELETE /projects/:id path: the row is already gone from Cosmos, so an
-    // index failure must not turn a successful purge into a failed one. `deleteFromIndex` logs and
-    // returns 0 rather than throwing. Nothing reconciles it afterwards — the `_ts` high-water mark
-    // cannot see a delete — so a failure here leaves the phantom searchable until the purge is
-    // re-run. Records are not indexed; `indexes()` covers chunks, projects and documents only.
-    summary.indexEntriesRemoved += await index.deleteFromIndex(index.indexes().projects, project.id);
+    // The Cosmos row is already gone, so an index failure must not abort the rest of the sweep —
+    // `deleteFromIndex` logs and returns 0 rather than throwing. But it MUST be reported: re-running
+    // the purge cannot retry it, because `listBySourceSystem` no longer returns a project that is
+    // no longer in Cosmos, and the `_ts` high-water mark means the indexer never notices the delete
+    // either. Unreported, the phantom stays searchable forever and the script still exits 0.
+    // Records are not indexed; `indexes()` covers chunks, projects and documents only.
+    const indexRemoved = await index.deleteFromIndex(index.indexes().projects, project.id);
+    summary.indexEntriesRemoved += indexRemoved;
+    if (args.live && indexRemoved === 0) {
+      summary.failures.push({
+        id: project.id,
+        stage: 'index',
+        message: 'index delete failed — remove this id from the projects index by hand, a re-run cannot'
+      });
+    }
   }
 
   // The empty-string partition: where unmatched records landed before the sync stopped writing
@@ -230,10 +239,12 @@ if (require.main === module) {
   purgeSeeded(process.argv.slice(2))
     .then(summary => {
       // A partial purge must not exit 0 — a wrapper would read that as "safe to re-run the sync".
-      process.exit(summary.failures.length ? 1 : 0);
+      // `exitCode` rather than `exit()`: stdout is async when piped, and the failure list and the
+      // unresolvable names are printed immediately before this. `exit()` can cut them off.
+      process.exitCode = summary.failures.length ? 1 : 0;
     })
     .catch(err => {
       console.error('[purge-nrpti] Fatal:', err);
-      process.exit(1);
+      process.exitCode = 1;
     });
 }
