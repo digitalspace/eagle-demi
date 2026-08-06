@@ -132,6 +132,12 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       Angular versions ^21.0.0, but detected Angular version 19.2.25 instead". **Deleting that
       `ignore:` block is step one of the upgrade.** Framework and toolchain have to move in one
       commit; a half-upgraded pair does not build at all.
+      **The Angular freeze is now what holds the remaining alerts open.** As of 2026-08-06 there are
+      33, all in `frontend/yarn.lock`: 7 runtime (the Angular set below, unfixable) and 26
+      development-scope in the build toolchain, which cannot move while `@angular-devkit/*` is
+      pinned to 19. None of them ship — only `frontend/dist` is deployed, never `node_modules` — so
+      this is a CI supply-chain exposure, not a production one. The upgrade clears both groups at
+      once.
       They are not theoretical: XSS via i18n event-handler attributes, hydration DOM clobbering and
       response-cache poisoning, `HttpTransferCache` cache-key ambiguity, and a DoS via OOM in date
       formatting — all in code the bundler compiles into what `demi-frontend-dev` serves.
@@ -169,23 +175,28 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       before and after, differing only in Yarn's internal `#~builtin` → `#optional!builtin` patch
       notation. `cacheKey` moved `10` → `10c0`, which is what the old locks having been written by
       an older Yarn looked like.
-- [ ] **Five API majors are pending, and CI cannot judge them.** Dependabot proposed express
-      4.22.2 → 5.2.1, helmet 7 → 8, jwks-rsa 3 → 4, minio 7 → 8 and serverless-http 3 → 4 (PR #35,
-      closed — they are now individual PRs instead of one green group). Each needs reading:
-      - **express 5** — no `req.param()`, `app.del` or wildcard/optional route patterns in `src/`,
-        so the usual path-to-regexp v8 breakage does not apply here. But **no test in `test/` mounts
-        the app**, so a passing suite says nothing about the router. Add a boot test before taking
-        this, or the first evidence will be dev.
-      - **minio 8** — `src/storage/minio.js` is the live path to `nrs.objectstore.gov.bc.ca` behind
-        every document download, and NOTHING probes it: not `yarn test`, not
-        `scripts/validate-deploy.sh`. A break here ships silently. Needs a presign + fetch check.
-      - **jwks-rsa 4** — `src/helpers/auth.js` passes `jwksRequestsPerMinute`; confirm it survives.
-      - **helmet 8** — only `contentSecurityPolicy: false` is set, so low risk.
-      - ~~**serverless-http 4**~~ — done: nothing required it, so the dependency was removed rather
-        than upgraded (PR #51 closed).
-      `test/app.boot.test.js` now covers the first half of the express question — it mounts
-      `src/app.js`, serves a real request and checks the 404 fallback, so a path-to-regexp rejection
-      fails CI instead of dev.
+- [x] **The five API majors are done — taken individually, each against a probe, 2026-08-05.**
+      They arrived as one green group PR (#35, closed) whose greenness meant nothing. Split up and
+      landed one at a time, each with a BEFORE reading so the check could actually fail:
+      - **express 4.22.2 → 5.2.1** (#48). `src/` has no `req.param()`, no `app.del` and no wildcard
+        or optional route patterns, so path-to-regexp v8 had nothing to reject — but that came from
+        reading the source, not from CI, because no test mounted the app. `test/app.boot.test.js`
+        was written first and is the evidence: it mounts `src/app.js`, serves `/api/config` and
+        checks the 404 fallback, and passed under 5.2.1 in CI before the merge.
+      - **minio 7.1.3 → 8.0.7** (#49). `src/storage/minio.js` is the live path to
+        `nrs.objectstore.gov.bc.ca` behind every download, and nothing tests it. Probed end to end
+        against a real document, before and after: `/api/documents/:id/download` → 200 with an
+        AWS4-signed URL, and that URL → 206 with actual bytes. Identical both sides.
+      - **jwks-rsa 3.2.2 → 4.1.0** (#50). Breaking changes are jose v6 and Node ≥ 20.19; this runs
+        Node 22, and `jwksRequestsPerMinute` survived. Probe was a token with an unknown `kid`,
+        forcing a real JWKS lookup: 401 before and after. A broken client answers 500, not 401.
+      - **helmet 7.2.0 → 8.3.0** (#54). Only `contentSecurityPolicy: false` is set. Compared the
+        full security-header set before and after — byte-identical, nothing regressed.
+      - **serverless-http 3 → 4** (#51) — not upgraded. Nothing in the repo required it, so the
+        dependency was deleted instead.
+      `scripts/validate-deploy.sh` 25/25 after each. **Root `yarn.lock` now has zero Dependabot
+      alerts.** The probes were one-off, not committed — the minio and auth ones are worth keeping
+      if these are ever upgraded again.
 - [ ] **`MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `TYPESENSE_API_KEY`, `OPENSHIFT_TOKEN` and
       `OPENSHIFT_URL` are now unreferenced repo secrets.** The two `MINIO_*` were read only by the
       deleted test/prod workflows, as Bicep parameters; `TYPESENSE_API_KEY` outlived Typesense
