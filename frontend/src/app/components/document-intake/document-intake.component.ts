@@ -1,12 +1,11 @@
 import { Component, OnInit, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Project } from '../../models/registry.models';
 
 @Component({
   selector: 'app-document-intake',
   standalone: true,
-  imports: [CommonModule],
+  imports: [],
   templateUrl: './document-intake.component.html',
   styleUrls: []
 })

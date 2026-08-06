@@ -1,12 +1,11 @@
 import { Component, OnInit, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Project, Document } from '../../models/registry.models';
 
 @Component({
   selector: 'app-deep-search',
   standalone: true,
-  imports: [CommonModule],
+  imports: [],
   templateUrl: './deep-search.component.html',
   styleUrls: []
 })
