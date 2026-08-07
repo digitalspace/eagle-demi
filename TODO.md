@@ -134,8 +134,13 @@ first gated sync against dev.
         `/api/search` fans out to Azure AI Search on debounced keystrokes, and Basic tier allows 2
         concurrent semantic requests per search unit.
       - **`js/insecure-helmet-configuration`** at `src/app.js:41` — helmet is mounted with
-        `contentSecurityPolicy: false`. Decide whether the frontend can live under a CSP; if it can,
-        turn it on, and if it cannot, dismiss the alert with that reason rather than leaving it open.
+        `contentSecurityPolicy: false`. **Decided 2026-08-06: dismiss, do not implement.** The
+        question was "can the frontend live under a CSP", and the answer is that the API does not
+        serve the frontend at all — the `express.static` mounts and SPA routes that suggested it did
+        are deleted (see below). What is left is exactly one HTML page, swagger-ui at `/api-docs`,
+        whose inline initializer script and inline styles a default CSP blocks. A policy that
+        exempts the only page it covers protects nothing, so this is dismissed with that reason
+        rather than implemented — see "Needs a human".
       - **`js/incomplete-multi-character-sanitization`** at
         `frontend/src/app/services/registry-state.service.ts:1707`. Read it before judging — a
         partial sanitizer is worse than none because it looks handled.
@@ -144,6 +149,24 @@ first gated sync against dev.
         from `multer({ dest: config.uploadDir })`, which generates its own random filename and never
         derives it from `originalname`. Dismiss as "used in tests"/"false positive" with that note so
         they stop reappearing; do not "fix" them.
+- [x] **The API served a dead copy of the frontend, and two of its routes hung. Deleted
+      2026-08-06.** `src/app.js` mounted `express.static('../public')` on `/`, `/admin` and `/demo`
+      plus a `res.sendFile` SPA fallback for `/map`, `/search` and `/intake`. `public/` is
+      **untracked**, so no clone has it and nothing was ever there in Azure: the static mounts fell
+      through to the 404 and were dead weight. The sendFile routes did worse — measured on dev,
+      `GET /map` returned **no response at all for 90 s**, and App Service holds such a request for
+      its full 240 s timeout. Three unauthenticated routes that each pin a request that long matter
+      on a single-worker B1.
+      **The rule this leaves behind: never `res.sendFile`, or any streaming response, under the
+      Functions adapter.** `api/index.js` fabricates `res` as a bare EventEmitter and resolves its
+      promise inside `res.end`; `send` streams instead and, on the missing-file path, never calls
+      it. Under a real `http.Server` the same request fails fast with a 500 carrying the ENOENT —
+      which is why this was invisible locally and had to be found by asking the deployed API.
+      Two things fell out of it: `/search` was never an SPA route at all, because
+      `app.use('/', apiRoutes)` already mounted the search endpoint at the root and shadowed it; and
+      `scripts/package-api.py` did not exclude `public/`, so a deploy from a working tree holding a
+      stale build would have shipped it into `wwwroot`, where zipdeploy's merge makes it permanent.
+      Both now pinned by tests (`test/app.boot.test.js`, `test/scripts/package-api.test.js`).
 - [ ] **Angular 19 is end-of-life and carries 7 unfixable advisories.** `frontend/package.json`
       resolves `@angular/*` to **19.2.25**, the newest 19.x, and every one of the 7 open Dependabot
       alerts on `@angular/core`, `@angular/common` and `@angular/compiler` has
@@ -258,12 +281,32 @@ first gated sync against dev.
       adding it there is not a display tweak, it starts returning full chunk text to every caller.
       Verified on the live index that L2 still reads the field with `select` excluding it, so
       nothing else had to change. Watch that `select`.
-- [ ] **Ranking can degrade silently and nothing alerts.** Basic tier allows 2 concurrent semantic
-      requests per search unit against a frontend that searches on debounced keystrokes, so
-      `semanticErrorHandling: 'partial'` returning BM25 order is an expected path, not an edge. The
-      reason is logged (`[ai-search] semantic reranking did not run: …`) and `rerankerScore` is
-      absent on the hits, but nothing watches either. Under load the product may be serving the
-      unranked order most of the time while the scorecard measures the ranked one.
+- [x] **Ranking degradation is now readable — `GET /admin/index-progress`, 2026-08-06.** Basic tier
+      allows 2 concurrent semantic requests per search unit against a frontend that searches on
+      debounced keystrokes, so `semanticErrorHandling: 'partial'` returning BM25 order is an expected
+      path, not an edge, and it answers 200 in the same response shape. `search.semantic` on that
+      endpoint reports `requested`, `partial`, derived `ranked`, `lastPartialReason`, `lastPartialAt`,
+      `exhausted` and `exhaustedAt`. A 402 counts as `partial`, because the search that provoked it
+      served the stripped retry's BM25 order. **If `partial` tracks `requested` one-for-one under
+      ordinary single-user load, that is the finding this was built for** — it means the scorecard is
+      measuring an order no user gets.
+      Per-process, and back to zero on every recycle: it answers "since this process started, was
+      ranking running?" and nothing longer. That is the honest resolution on a single-worker B1, and
+      it is not a time series — see the entry below for why a time series is not available.
+- [ ] **Nothing DEMI logs is retained anywhere. `useAzureMonitor` has never started.** Measured
+      2026-08-06: `api/index.js` starts the Azure Monitor OpenTelemetry distro only
+      `if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING)`, and `demi-api-dev` has no such app
+      setting. Nor could it have a working one — `az group resource list` on `c4b0a8-dev-rg` shows
+      neither `demi-logs-dev` nor `demi-insights-dev`, only the portal-created orphan
+      `workspace-c4b0a8devrgYb8e` that `azure/modules/observability.bicep` was written to replace.
+      That module has never been deployed, because `main.bicep` has never been deployed.
+      So every "the reason is logged" claim in this file means "written to the App Service log
+      stream", which is visible only to somebody already watching, and gone after. That is the exact
+      failure `observability.bicep`'s own header describes, and it is why the ranking entry above had
+      to become counters on an endpoint rather than an alert rule on a log line.
+      Fixing it is not code: deploy the observability module, then set
+      `APPLICATIONINSIGHTS_CONNECTION_STRING` on both app services. Blocked behind the standing
+      decision on first deploying `main.bicep`, and on RG-scope rights `demi-cicd-dev` does not hold.
 - [ ] **The 402 latch does not un-latch when the month rolls over.** A single 402 turns semantic off
       for the life of the process, which is what stops every later search paying a wasted 402 plus a
       retry. But the allowance resets monthly and the latch does not, so a process that spans the
@@ -319,6 +362,10 @@ first gated sync against dev.
 - [ ] **Look at server-side highlighting on dev.** Shipped and unit-tested, but the visible result
       has not been eyeballed. Azure returns windowed fragments for a long field, so a long project
       description now renders as fragments joined by an ellipsis rather than in full.
+- [ ] **Dismiss `js/insecure-helmet-configuration` in the GitHub UI**, with the reason recorded
+      under Infrastructure above: the API serves exactly one HTML page, swagger-ui at `/api-docs`,
+      which needs inline script and style, so a CSP would have to exempt the only page it covers.
+      Decided rather than deferred — leaving it open reads as work nobody got to.
 - [ ] **Delete the 12 merged branches on `origin`.** From PRs #1–#10, #12 and #13.
       `git push --delete` is barred by settings deny, so this needs a human or the GitHub UI.
 
