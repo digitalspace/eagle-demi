@@ -702,3 +702,60 @@ test('PUT bodies cannot hand-craft an ACL', async (t) => {
     assert.strictEqual(saved.isPublished, false);
   });
 });
+
+// Defect A: a chunk's read[] is a snapshot copied at ingest, and nothing used to refresh it. An
+// unpublished document kept chunks carrying `public` — in Cosmos, and in the AI Search index
+// indefinitely, because unpublishing never advanced their `_ts` and the indexer is a high-water
+// mark.
+test('unpublishing a document restricts its chunks too', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const existingDoc = { id: 'd1', projectId: 'p1', read: ['public', 'sysadmin'], isPublished: true };
+
+  await t.test('the chunk ACL is patched with the SAME read[] the document got', async () => {
+    const patched = { ...existingDoc, isPublished: false, read: ['sysadmin', 'staff', 'demi-admin'] };
+    let seen;
+    t.mock.method(documents, 'getById', async () => existingDoc);
+    t.mock.method(projects, 'getById', async () => ({ id: 'p1', read: ['public'] }));
+    t.mock.method(documents, 'setPublished', async () => patched);
+    t.mock.method(chunksRepo, 'setAclForDocument', async (access, documentId, read) => {
+      seen = { documentId, read };
+      return { succeeded: 3, failed: 0, chunks: 3 };
+    });
+
+    await documentController.setDocumentPublished(
+      { params: { id: 'd1' }, query: {}, body: { isPublished: false }, user: ADMIN_USER }, mockRes());
+
+    assert.ok(seen, 'the chunks must be patched — otherwise the text stays readable');
+    assert.strictEqual(seen.documentId, 'd1');
+    assert.deepStrictEqual(seen.read, patched.read,
+      'a chunk must never out-rank its document, so the ACLs must be identical');
+  });
+
+  await t.test('a failed chunk patch is surfaced, not swallowed', async () => {
+    t.mock.method(documents, 'getById', async () => existingDoc);
+    t.mock.method(projects, 'getById', async () => ({ id: 'p1', read: ['public'] }));
+    t.mock.method(documents, 'setPublished', async () => ({ ...existingDoc, read: ['sysadmin'] }));
+    t.mock.method(chunksRepo, 'setAclForDocument', async () => { throw new Error('bulk failed'); });
+
+    const res = mockRes();
+    await documentController.setDocumentPublished(
+      { params: { id: 'd1' }, query: {}, body: { isPublished: false }, user: ADMIN_USER }, res);
+
+    assert.strictEqual(res.statusCode, 500,
+      'an operator who is told the document is restricted must not be told that falsely');
+  });
+
+  await t.test('a document that was never extracted patches nothing and still succeeds', async () => {
+    t.mock.method(documents, 'getById', async () => existingDoc);
+    t.mock.method(projects, 'getById', async () => ({ id: 'p1', read: ['public'] }));
+    t.mock.method(documents, 'setPublished', async () => ({ ...existingDoc, read: ['sysadmin'] }));
+    t.mock.method(chunksRepo, 'setAclForDocument', async () => ({ succeeded: 0, failed: 0, chunks: 0 }));
+
+    const res = mockRes();
+    await documentController.setDocumentPublished(
+      { params: { id: 'd1' }, query: {}, body: { isPublished: false }, user: ADMIN_USER }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+  });
+});

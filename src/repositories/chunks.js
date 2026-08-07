@@ -123,6 +123,43 @@ async function upsertBatch(access, documentId, chunkItems) {
 }
 
 /**
+ * Rewrite the ACL on every chunk of one document.
+ *
+ * A chunk's `read[]` is a SNAPSHOT of its document's, copied at ingest. Nothing used to refresh it,
+ * so unpublishing a document left its chunks carrying `public` — and because the AI Search indexer
+ * is a `_ts` high-water mark, those rows were never re-read either, leaving the index copy stale
+ * *indefinitely* rather than for the usual PT5M. Patching here advances `_ts`, so the next indexer
+ * pass picks the change up and the lag becomes the ordinary one.
+ *
+ * A bulk PATCH, not an upsert: an upsert would have to read every chunk back first, and `content`
+ * makes that a multi-megabyte round trip for a large document. All of a document's chunks share one
+ * partition, and the average document holds ~19 of them, so this is normally a single request.
+ *
+ * @param {string} documentId
+ * @param {string[]} read  the document's new ACL — a chunk must never out-rank its document
+ */
+async function setAclForDocument(access, documentId, read) {
+  if (!Array.isArray(read) || read.length === 0) {
+    throw new TypeError('[chunks] setAclForDocument requires a non-empty read[] ACL');
+  }
+
+  const ids = await idsForDocument(access, documentId);
+  if (ids.length === 0) {
+    return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0, chunks: 0 };
+  }
+
+  const pk = String(documentId);
+  const result = await cosmos.bulkVerified(CONTAINER, ids.map(id => ({
+    operationType: 'Patch',
+    partitionKey: pk,
+    id: String(id),
+    resourceBody: { operations: [{ op: 'set', path: '/read', value: read }] }
+  })));
+
+  return { ...result, chunks: ids.length };
+}
+
+/**
  * Delete every chunk of this document whose id is NOT in `keepIds` — the tail half of a streamed
  * replace.
  *
@@ -183,6 +220,7 @@ module.exports = {
   listVisible,
   getById,
   idsForDocument,
+  setAclForDocument,
   replaceForDocument,
   upsertBatch,
   deleteSurplus,

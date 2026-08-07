@@ -324,13 +324,25 @@ lifted. Those fail if the gate regresses. A live probe would not.
 
 #### Findings
 
-- [ ] **Restricting a document takes effect in search up to 5 minutes late.** The indexers are the
-      only writers to the index — `docs/index` is used exclusively for `delete` actions, there is no
-      merge/upload path — so an ACL change in Cosmos reaches `demi-chunks` and `demi-documents` only
-      on the next `PT5M` high-water-mark pass. The API restricts instantly; Deep Search does not.
-      Pushing the change directly is not obviously right: a document unpublish means updating every
-      chunk of that document, which for a large PDF is thousands of index rows and a race against
-      the indexer. Stated as a known ceiling rather than fixed.
+- [x] **CORRECTION — this entry said the search lag was `PT5M`. For `demi-chunks` it was
+      UNBOUNDED, and it was a live access-control bug. Fixed 2026-08-07.** The `PT5M` figure holds
+      only for `demi-documents`, whose rows *are* rewritten by `documents.setPublished`. A chunk's
+      `read[]` is a snapshot copied from its document at ingest, and **nothing refreshed it** — the
+      only writes to the `chunks` container were ingest and delete. So unpublishing never advanced
+      those rows' `_ts`, the high-water-mark indexer never re-read them, and the index kept
+      `read: ['public']` for a restricted document **indefinitely**.
+      Two independent defects, either of which leaked on its own:
+      **(A)** no propagation — now `chunks.setAclForDocument` bulk-Patches every chunk of the
+      document on `PUT /documents/:id/published`, which advances `_ts` so the indexer picks it up and
+      the lag becomes the ordinary `PT5M`. Average document is ~19 chunks, so one request.
+      **(B)** the search controller hydrated parent documents under the caller's ACL and then used
+      the result **only as a label**, so a chunk whose parent was withheld came back anyway carrying
+      its `snippet` — the real extracted text, rendered by the frontend through `[innerHTML]` — and
+      labelled `'Untitled Document'`. It is now the gate: a chunk whose parent is not visible is
+      dropped, and the returned `count` is post-filter.
+      Latent rather than exploited only because every document in dev is public. Both fixes are
+      covered by tests **shown to fail when the fix is reverted**, which is the only discriminating
+      evidence available against an all-public corpus.
 - [ ] **`content` is `retrievable: true` on `demi-chunks`.** The only thing keeping whole chunk text
       out of API responses is the explicit `select` list in `searchChunks` (pinned by a test).
       Nothing reads `content` from the index — the summariser reads it from Cosmos, which is the
@@ -370,6 +382,29 @@ in the audit sections above; this is only what is still outstanding.
 - [ ] **Rotate the MinIO key and OpenShift token at source.** The repo side is already deleted; the
       credentials themselves are still live. Oldest open item in this file.
 
+### 1b. The project ceiling — next change, designed and decided
+
+- [ ] **Unpublishing a project cascades to nothing.** `resolveDocumentAcl` checks the parent when a
+      document is WRITTEN (`published = requested && parentIsPublic`) and nothing re-evaluates it, so
+      a project unpublished afterwards leaves its documents carrying `read: ['public']` — still
+      listable, still downloadable. No chunks needed to leak.
+      **Documents within a project carry independent visibility**, so a blanket cascade is wrong in
+      the other direction: it would make re-publishing a project blanket-publish every document
+      someone had deliberately restricted, unrecoverably.
+      **Decided approach — denormalise `projectIsPublished` onto documents**, the pattern the
+      workspace already uses on Typesense `document_chunks`. The project becomes a real ceiling and
+      no document's own `read[]` is ever touched: `visible = read[] matches AND (projectIsPublished
+      OR privileged)`. On a project publish change, bulk-Patch that ONE field across its documents —
+      single-partition on `/projectId`, ~80 requests for the largest project. Chunks need nothing,
+      because the search gate now derives them from the parent document.
+      Needs: the predicate option (alongside `unsetIsPublic`), `/projectIsPublished/?` in the Cosmos
+      index, the field on `demi-documents` + its datasource + `access-odata.js`, and a backfill of
+      ~60,578 rows.
+      **Ordering trap:** `c.projectIsPublished = true` against an undefined field is NOT true, so
+      shipping the predicate before the backfill makes every document vanish — the same shape that
+      nearly blanked the map with the boundary ACL. Backfill first, or ship
+      `(NOT IS_DEFINED(c.projectIsPublished) OR c.projectIsPublished = true)` and tighten after.
+
 ### 2. Decisions, not work — nobody can proceed until someone chooses
 
 - [ ] **May `GET /projects` narrow its payload?** 2.32 MB for 382 projects, 65.8% of it raw upstream
@@ -380,10 +415,6 @@ in the audit sections above; this is only what is still outstanding.
       no indexing policy so Cosmos indexes every path it is given. Removing them from the Bicep does
       NOT delete them — that is a hand-run `az cosmosdb sql container delete`, and the template
       change alone would only create drift.
-- [ ] **Is a 5-minute stale-ACL window in search acceptable?** Restricting a document takes effect
-      immediately in the API and up to `PT5M` later in Deep Search, because the indexers are the
-      only writers. The alternative — pushing index updates on ACL change — means rewriting every
-      chunk of that document against a running indexer. Worth a decision rather than a default.
 
 ### 3. Hardening — real, none urgent
 

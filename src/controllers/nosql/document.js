@@ -287,6 +287,42 @@ exports.setDocumentPublished = async (req, res) => {
     const updated = await documents.setPublished(
       existing.id, existing.projectId, published, SECURE_ROLES
     );
+
+    // The chunks carry a SNAPSHOT of this ACL, taken at ingest, and nothing else refreshes it.
+    // Without this the extracted text of a document just made private stays readable — in Cosmos,
+    // and in the AI Search index indefinitely, because unpublishing never advanced the chunks'
+    // `_ts` and the indexer is a high-water mark. Patching them advances it.
+    //
+    // AFTER the document patch, deliberately: a failure here leaves the document private and its
+    // chunks over-permissive, which the search gate now covers. The reverse order could leave the
+    // document public while its chunks were locked down, which nothing covers.
+    const acl = updated && Array.isArray(updated.read) && updated.read.length > 0
+      ? updated.read
+      : (published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]);
+
+    try {
+      const chunkAcl = await chunks.setAclForDocument(systemAccess(), existing.id, acl);
+      if (chunkAcl.failed > 0) {
+        logger.error('[Document Controller] chunk ACL patch partially failed', {
+          documentId: existing.id, ...chunkAcl
+        });
+        return res.status(500).json({
+          success: false,
+          error: 'Document visibility changed, but its extracted text was not fully updated.'
+        });
+      }
+    } catch (aclErr) {
+      // Surfaced, never swallowed: a half-applied ACL is worse than a failed one, because the
+      // operator believes the document is restricted.
+      logger.error('[Document Controller] chunk ACL patch failed', {
+        documentId: existing.id, error: aclErr.message
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'Document visibility changed, but its extracted text was not updated.'
+      });
+    }
+
     return res.json(updated);
   } catch (err) {
     return serverError(res, err, 'document controller failed');
