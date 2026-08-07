@@ -37,14 +37,35 @@ already watching, and gone after. That is the observability entry under Infrastr
 outranks the rest of a hardening pass for the obvious reason: you cannot harden what you cannot
 observe. It is also the entry with the least code in it and the most permission.
 
-Two things the rate-limiter fix leaves for that pass, neither urgent:
-- **The limiter has never been measured under load.** The discriminating probe is 301 requests in
-  one window from one caller — the 301st must be 429. The pre-#73 build could not produce that
-  answer (320/320 returned 200), which is what makes it a probe rather than a formality.
-- **The access invariants are a spec with no test asserting them as a set.** The sharp edge is
-  recorded in `CLAUDE.md`: OData has no `false` literal, so a null or empty filter is UNRESTRICTED.
-  A search route that forgets the `empty` flag fails **open**, and there is no retained log to
-  notice it.
+Both of the things the rate-limiter fix left for that pass are now done, and the first is worth
+reading before anyone plans a load test here:
+- **The limiter is verified on dev, and it cost four requests — not 301.** This entry used to name
+  a 301-request probe (the 301st must be 429). That works, but a cheaper probe discriminates just as
+  hard: `express-rate-limit` emits `draft-7` headers, so `GET /api/config` reports the counter
+  directly. Four separate connections, one window, 2026-08-07:
+  `remaining=297 → 296 → 295 → 294`, `ratelimit-policy: 300;w=60`.
+  **That is the whole bug, inverted.** The pre-#73 build minted a new key per TCP connection, so it
+  would have answered `299` every time no matter how many requests arrived — a monotonic decrement
+  is something only a stable key can produce.
+  The honest limit: this verifies the KEY, not the 429 at the boundary. Once the key is stable,
+  reaching zero is arithmetic inside `express-rate-limit` rather than anything this repo wrote.
+  Do not spend a 300-request run against a single-worker B1 to re-learn this.
+- **The access invariants now have a suite asserting them as a set** —
+  `test/helpers/access-coverage.test.js`. The helper tests could already show that `visibilityFor`
+  emits the right predicate; nothing could show that a read path *uses* one. It asserts every
+  repository routes through `_sql.js`'s `selectWhere`/`countWhere` (which is also how "counts use
+  the same predicate as reads" holds by construction), and that every `cosmos.readItem` is followed
+  by `canRead`, since a point read bypasses the query predicate entirely.
+  `api-keys`, `boundaries` and `wildfires` are allowlisted with the reason each needs no gate, so a
+  NEW repository fails the suite until somebody classifies it. Verified it can fail: stripping the
+  `canRead` from `projects.js:77` turns it red with that exact diagnostic.
+  It scans source text rather than parsing an AST, which is a deliberate ceiling — it cannot stop
+  someone determined to route the call through a variable, and it does stop someone who forgot.
+  Forgetting is the failure that actually happens here.
+  **Still uncovered, and the reason a behavioural suite may earn its place later:** OData has no
+  `false` literal, so a null or empty filter is UNRESTRICTED. A search route that forgets the
+  `empty` flag fails **open**, and a structural scan cannot see that — it would see `filterFor`
+  being called and be satisfied.
 
 ---
 
@@ -372,6 +393,16 @@ first gated sync against dev.
       `scripts/validate-deploy.sh` 25/25 after each. **Root `yarn.lock` now has zero Dependabot
       alerts.** The probes were one-off, not committed — the minio and auth ones are worth keeping
       if these are ever upgraded again.
+- [x] **The one Dependabot alert is build-toolchain only — dismissed 2026-08-07.** Medium,
+      `@hono/node-server`, path traversal in `serve-static`. Traced rather than assumed:
+      `@hono/node-server` ← `@modelcontextprotocol/sdk` ← `@angular/cli@22.1.3`, which is the
+      Angular CLI's own MCP server for editor assistants. It is absent from the browser bundle and
+      from the API entirely — `yarn why` in `frontend/` is the whole chain, and nothing in
+      `frontend/src` imports either package. Reaching the vulnerability means running the CLI's MCP
+      server and exposing its static handler, which no workflow and no runtime here does.
+      Dismissed as "not affected" with that chain on the alert. Written down here for the same
+      reason the CodeQL dismissals are: a dismissal is invisible to anyone reading the repo, and the
+      next reader would otherwise re-derive it or "fix" it by pinning a transitive dev dependency.
 - [ ] **The unreferenced repo secrets are DELETED; rotating them at source is the open half.**
       `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `TYPESENSE_API_KEY`, `OPENSHIFT_TOKEN` and
       `OPENSHIFT_URL` were live credentials in a **public** repo's settings, reachable by any
