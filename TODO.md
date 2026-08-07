@@ -25,7 +25,7 @@ Nothing here is a separate list to maintain — it says which gate each open ent
 | Gate | Open entries waiting on it |
 |---|---|
 | **Nothing — do it** | Rotate the MinIO key and OpenShift token at source (the repo side is already deleted) |
-| **A dev run + `az login`** | The NRPTI re-sync — **compliance history is absent until it runs**; minting the first real service key |
+| **A dev run + `az login`** | Minting the first real service key; widening the unlinked-name sample to see how much of the dropped 97% is real |
 | **RG-scope rights nobody holds yet** | Observability / `APPLICATIONINSIGHTS_CONNECTION_STRING`; the first `main.bicep` deploy; removing role assignment `29745ac3`; Phase 3b blob storage |
 | **A human in a browser, staff login** | The `/summary` render; boundary rendering at three fidelities; server-side highlighting; scoped and fragment access tiers |
 | **A decision, not work** | Test/prod deploy path and the release model; app registration `acb4198f` |
@@ -128,8 +128,9 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
 
 ## NRPTI ingest
 
-The auto-seed is gone from the code and the phantoms it left are purged from dev. What is left is
-one operational step: the re-sync that puts compliance records back against real projects.
+The auto-seed is gone, the phantoms it left are purged from dev, and the re-sync has run clean. What
+is left is a question rather than a task: the ladder links 3% of NRPTI records, and nobody has
+checked how much of the other 97% is real.
 
 - [x] **NRPTI no longer invents projects — Priority 4 deleted 2026-08-06.**
       `src/scripts/sync-nrpti.js` used to fall through its five linking strategies and **create** a
@@ -180,17 +181,30 @@ one operational step: the re-sync that puts compliance records back against real
       no-retry reason. Delete that id from `demi-projects` by hand if it appears.
       Record counts are deletions, not attempts: `cosmos.remove` answers `false` on a 404 and the
       summary only counts a `true`.
-- [ ] **Re-sync NRPTI — compliance history is absent until it runs.** The purge removed the 44,120
-      records that pointed at phantoms, which is correct and leaves a gap: nothing has re-ingested
-      them against real Track projects. Run a **`since`-less** sync so records dropped while the
-      phantoms existed are revisited; `since` is caller-supplied and a delta run will not go back
-      for them.
-      Either `POST /admin/sync/nrpti?async=true` — reading `totalUnlinked` from the
-      `Background NRPTI sync complete` log line, because the async response cannot carry it — or run
-      `syncNrptiData()` in-container through a wrapper, which returns the summary directly and does
-      not depend on catching a log line that nothing retains.
-      **The check that matters afterwards: `sourceSystem: 'nrpti'` projects must still count 0.**
-      Anything else means Priority 4 came back.
+- [x] **Re-synced 2026-08-07, and every check passed.** A `since`-less run, in-container through a
+      wrapper so the summary came back directly rather than via a log line nothing retains.
+      `totalIngested: 3556`, `totalLinkedExisting: 3556` — every written record linked to a real
+      Track project — across **191** projects. Afterwards: **393 projects (unchanged, so nothing was
+      invented), `sourceSystem: 'nrpti'` = 0, unlinked (`''`) records = 0**, and `records` holds
+      exactly 3,556. That `nrpti = 0` is the check this entry existed for: Priority 4 did not
+      come back.
+- [ ] **97% of NRPTI records do not link, and nobody has looked at why.** The same run reports
+      `totalUnlinked: 104468` against 3,556 ingested — 108,024 records offered, **96.7% dropped** —
+      across `unlinkedDistinctNames: 10636`.
+      **Dropping them is right, and the names prove it.** The largest unlinked value is
+      `British Columbia` with **49,459** records, then `(no project name)` 2,815, then
+      `North Okanagan`, `East Kootenay`, `West Kootenay`, `Columbia-Kootenay`, `North Peace`,
+      `North Coast`, `North Island`, `South Peace`, `Central Island`, `Sunshine Coast`,
+      `Township of Langley`. Those are regions and municipalities. Under the old auto-seed
+      `British Columbia` alone became one phantom project holding 49,459 compliance records — this
+      list *is* the mechanism that produced the 1,855 phantoms, seen from the other side.
+      **The open question is the remainder.** Of 10,636 distinct unlinked names, how many are real
+      project names `resolveProjectLink()` simply fails to match? Nobody has counted, and 97% is a
+      large enough share that the answer matters before this runs anywhere but dev. The cheap first
+      cut is to sort the unlinked names by count, drop the obvious geography, and see what is left —
+      the run already reports the top 20, so this needs a wider sample rather than new code.
+      Do NOT answer it by loosening the ladder speculatively: a looser match links a record to the
+      WRONG project, which is worse than dropping it and is invisible once written.
 - [ ] **A dropped record is never revisited by a delta sync.** `since` is caller-supplied, so once
       `resolveProjectLink()` returns null for a record it stays out of Cosmos even after Track adds
       the project its name would now match. Only a full `since`-less `POST /admin/sync/nrpti`
