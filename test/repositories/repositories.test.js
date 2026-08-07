@@ -142,6 +142,21 @@ test('documents repository', async (t) => {
     assert.match(calls[0].spec.query, /EXISTS/);
   });
 
+  await t.test("projectId '' selects the unlinked partition here too", async () => {
+    // Same distinction the records repository already makes. Nothing passes `''` to documents
+    // today; this test is what keeps a falsy check from creeping back before something does, at
+    // which point "the unlinked partition" would silently mean "every document".
+    const calls = captureQuery(t);
+    await documents.listVisible(ADMIN, { projectId: '' });
+
+    assert.match(calls[0].spec.query, /c\.projectId = @projectId/);
+    assert.deepStrictEqual(
+      calls[0].spec.parameters.filter(p => p.name === '@projectId'),
+      [{ name: '@projectId', value: '' }]
+    );
+    assert.strictEqual(calls[0].options.partitionKey, '');
+  });
+
   await t.test('extracted:false emits an equality, not a $ne translation', async () => {
     const calls = captureQuery(t);
     await documents.listVisible(ADMIN, { extracted: false });

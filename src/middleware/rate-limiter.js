@@ -1,60 +1,60 @@
 'use strict';
 
-const hits = new Map();
-const WINDOW_MS = 60 * 1000; // 1 minute window
-const MAX_REQUESTS = 300;     // 300 requests per minute per IP
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 
-const isServerless = Boolean(process.env.FUNCTIONS_WORKER_RUNTIME || process.env.AZURE_FUNCTIONS_ENVIRONMENT);
+/**
+ * Per-caller request limit.
+ *
+ * This replaced a hand-rolled limiter that had never limited anything in Azure. It keyed on
+ * `req.headers['x-forwarded-for']` whole, and App Service APPENDS `<client-ip>:<port>` to that
+ * header — the port changes with the TCP connection, so nearly every request produced a new key and
+ * the 300/minute ceiling was never reached. Measured against dev on 2026-08-07: 320 requests inside
+ * one window all answered 200. Reproduced deterministically in the test beside this file, where the
+ * old shape survives 400 requests and the fixed one stops at 300.
+ *
+ * Two things were wrong and either alone still breaks it:
+ *
+ *  1. **Take the LAST comma-separated entry.** Everything before it is caller-supplied — a client
+ *     can send its own `X-Forwarded-For` and App Service appends the real address after it. Keying
+ *     on the whole string, or on the first entry, lets a caller mint a fresh bucket per request just
+ *     by varying a header.
+ *  2. **Strip the port.** That is the part that made the limit unreachable even for a caller not
+ *     trying to evade it.
+ *
+ * `ipKeyGenerator` is the library's own helper: it normalises IPv6 to a /64 so a caller with a
+ * routed prefix cannot mint a bucket per address.
+ */
 
-// Clean up stale entries periodically
-if (!isServerless) {
-  const cleanupTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [ip, data] of hits.entries()) {
-      if (now - data.startTime > WINDOW_MS) {
-        hits.delete(ip);
-      }
-    }
-  }, 5 * 60 * 1000);
-  // unref so the interval never holds the process open on shutdown
-  if (cleanupTimer && cleanupTimer.unref) {
-    cleanupTimer.unref();
-  }
+/** The one definition of "who is this caller", shared with the request logger. */
+function callerIp(req) {
+  const forwarded = String((req.headers && req.headers['x-forwarded-for']) || '');
+  const last = forwarded.split(',').pop().trim();
+  // IPv4 arrives as `1.2.3.4:5678`; bare IPv6 contains colons of its own, so only strip a port when
+  // the tail is a plain `:digits` on something that is not already bracketed.
+  const withoutPort = /^\[.*\]:\d+$/.test(last)
+    ? last.replace(/^\[(.*)\]:\d+$/, '$1')
+    : last.replace(/^([^:]+):\d+$/, '$1');
+
+  return withoutPort || (req.socket && req.socket.remoteAddress) || '127.0.0.1';
 }
 
-function inlineCleanup(now) {
-  if (hits.size > 1000) {
-    for (const [ip, data] of hits.entries()) {
-      if (now - data.startTime > WINDOW_MS) {
-        hits.delete(ip);
-      }
-    }
-  }
-}
+const WINDOW_MS = 60 * 1000;
+const MAX_REQUESTS = 300;
 
-module.exports = (req, res, next) => {
-  // Skip rate limiting in test environment
-  if (process.env.NODE_ENV === 'test') {
-    return next();
-  }
+const limiter = rateLimit({
+  windowMs: WINDOW_MS,
+  limit: MAX_REQUESTS,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  // In-memory on purpose. demi-api-dev is a single-worker B1, so there is one process and nothing
+  // to share; a Redis store would be a second service to run for no gain.
+  keyGenerator: (req) => ipKeyGenerator(callerIp(req)),
+  // Several suites make more than 300 requests against a mounted app.
+  skip: () => process.env.NODE_ENV === 'test',
+  message: { error: 'Too many requests. Please slow down.' }
+});
 
-  const ip = req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '127.0.0.1';
-  const now = Date.now();
-  if (isServerless) {
-    inlineCleanup(now);
-  }
-
-  let record = hits.get(ip);
-  if (!record || (now - record.startTime > WINDOW_MS)) {
-    record = { count: 1, startTime: now };
-    hits.set(ip, record);
-    return next();
-  }
-
-  record.count += 1;
-  if (record.count > MAX_REQUESTS) {
-    return res.status(429).json({ error: 'Too many requests. Please slow down.' });
-  }
-
-  return next();
-};
+module.exports = limiter;
+module.exports.callerIp = callerIp;
+module.exports.MAX_REQUESTS = MAX_REQUESTS;
+module.exports.WINDOW_MS = WINDOW_MS;

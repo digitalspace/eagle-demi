@@ -1,6 +1,7 @@
 'use strict';
 
 const { logger } = require('../utils/logger');
+const { callerIp } = require('./rate-limiter');
 
 module.exports = (req, res, next) => {
   const start = process.hrtime();
@@ -10,7 +11,10 @@ module.exports = (req, res, next) => {
     const diff = process.hrtime(start);
     const timeMs = ((diff[0] * 1e9 + diff[1]) / 1e6).toFixed(2);
     const { method, originalUrl } = req;
-    const ip = req.headers['x-forwarded-for'] || (req.socket && req.socket.remoteAddress) || '127.0.0.1';
+    // Same resolver the rate limiter keys on, so the log and the limit can never disagree about
+    // who a caller is. It used to log the raw X-Forwarded-For, which is caller-supplied ahead of
+    // the entry App Service appends — an attacker-chosen string in the audit trail.
+    const ip = callerIp(req);
     const { statusCode } = res;
     const contentLength = res.get('Content-Length') || 0;
 
