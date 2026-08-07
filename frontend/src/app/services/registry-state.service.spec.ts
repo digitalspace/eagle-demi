@@ -347,6 +347,37 @@ describe('RegistryStateService', () => {
     });
   });
 
+  // Reached whenever the text ITSELF carries <mark> — the document-snippet path in map-explorer,
+  // where the text is extracted from an uploaded PDF. The result is bound with [innerHTML].
+  describe('sanitizeHighlight', () => {
+    it('keeps the mark tags', () => {
+      expect(service.highlightText('Peace <mark>River</mark>', ''))
+        .toBe('Peace <mark>River</mark>');
+    });
+
+    it('does NOT decode escaped markup back into live markup', () => {
+      // The defect this replaced: the entity table ran LAST and turned this into a real <img>
+      // element immediately before the string reached [innerHTML]. Fails on the old code.
+      const out = service.highlightText('&lt;img src=x onerror=alert(1)&gt; <mark>hit</mark>', '');
+      expect(out).not.toContain('<img');
+      expect(out).toContain('&lt;img');
+    });
+
+    it('drops a tag nested inside another tag', () => {
+      // A regression guard, not a demonstration: the old single-pass strip handled this one,
+      // because `[^>]*` swallows the nested `<` rather than letting the outer tag re-form.
+      const out = service.highlightText('<scr<script>ipt>alert(1)</script> <mark>hit</mark>', '');
+      expect(out).not.toContain('<script');
+      expect(out).toContain('<mark>hit</mark>');
+    });
+
+    it('still resolves entities for display, including ones no table listed', () => {
+      // `&eacute;` was in the old table; `&sect;` never was, and used to render literally.
+      expect(service.highlightText('caf&eacute; &#8212; &sect;1 <mark>hit</mark>', ''))
+        .toBe('café — §1 <mark>hit</mark>');
+    });
+  });
+
   // The fetch interceptor used to decide "is this our API?" with url.includes(basePath).
   // With the '/api' fallback that matches any third-party URL containing those characters,
   // which would attach the user's Bearer token to it.

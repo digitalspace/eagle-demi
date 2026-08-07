@@ -55,13 +55,68 @@ function fetchJson(url) {
   });
 }
 
-function simpleHash(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash << 5) - hash + str.charCodeAt(i);
-    hash |= 0;
+/**
+ * Resolve a compliance record to a project that ALREADY EXISTS, or null.
+ *
+ * Five strategies, loosest last. There is deliberately no sixth that invents a project: this used
+ * to fall through to auto-seeding one from `projectName || location`, and many of those strings
+ * are facilities, locations or record titles rather than EPIC projects, so the registry filled
+ * with rows no project ever existed for. Track owns the registry; a sync does not add to it.
+ *
+ * Pure — no repository, no network — so the ladder is testable without standing up Cosmos or
+ * reaching NRPTI. That is the only reason it is a function rather than inline.
+ *
+ * @param {{epicProjectId: any, rawProjName: string}} item
+ * @param {{eagleIdToProjMap: Map, exactNameToProjMap: Map, normalizedNameToProjMap: Map}} maps
+ * @returns {string|null}
+ */
+function resolveProjectLink({ epicProjectId, rawProjName }, maps) {
+  const { eagleIdToProjMap, exactNameToProjMap, normalizedNameToProjMap } = maps;
+
+  // Priority 1: Match by _epicProjectId
+  if (epicProjectId && eagleIdToProjMap.has(String(epicProjectId))) {
+    return eagleIdToProjMap.get(String(epicProjectId));
   }
-  return Math.abs(hash);
+
+  if (!rawProjName) return null;
+
+  // Priority 2: Match by exact project name
+  const exactKey = rawProjName.toLowerCase();
+  if (exactNameToProjMap.has(exactKey)) {
+    return exactNameToProjMap.get(exactKey);
+  }
+
+  // Priority 3: Match by normalized project name
+  const normKey = normalizeProjectName(rawProjName);
+  if (normKey && normalizedNameToProjMap.has(normKey)) {
+    return normalizedNameToProjMap.get(normKey);
+  }
+
+  // Priority 3b: Match by multi-segment parts (split by ' - ', ',', '/', ';')
+  const parts = rawProjName.split(/ - |,|\/|;/);
+  for (let p = parts.length - 1; p >= 0; p--) {
+    const partNorm = normalizeProjectName(parts[p]);
+    if (partNorm && normalizedNameToProjMap.has(partNorm)) {
+      return normalizedNameToProjMap.get(partNorm);
+    }
+  }
+
+  // Priority 3c: Match by token inclusion (e.g. existing norm "brule" in "conuma coal chetwynd bc
+  // brule coal mine"). Length >= 4 so a short token cannot swallow unrelated names.
+  if (normKey) {
+    for (const [existingNormKey, projId] of normalizedNameToProjMap.entries()) {
+      if (existingNormKey.length >= 4 && (
+        normKey === existingNormKey ||
+        normKey.startsWith(`${existingNormKey} `) ||
+        normKey.endsWith(` ${existingNormKey}`) ||
+        normKey.includes(` ${existingNormKey} `)
+      )) {
+        return projId;
+      }
+    }
+  }
+
+  return null;
 }
 
 async function syncNrptiData(options = {}) {
@@ -72,6 +127,10 @@ async function syncNrptiData(options = {}) {
   // systemAccess() — a sync reconciles the whole registry, and it takes no arguments so it
   // cannot be derived from a request. This script is never on the request path.
   const { items: existingProjects } = await projectsRepo.listVisible(systemAccess());
+  // Order previously auto-seeded projects last so a real Track project wins the name maps. Nothing
+  // creates these any more — the auto-seed is deleted — so this only matters until
+  // `purge-nrpti-seeded.js` has run live and reported 0.
+  // ponytail: delete this sort once that purge reports 0 on dev; it is dead the moment it does.
   existingProjects.sort((a, b) => {
     const aIsAuto = a.metadata?.sourceSystem === 'nrpti' ? 1 : 0;
     const bIsAuto = b.metadata?.sourceSystem === 'nrpti' ? 1 : 0;
@@ -110,9 +169,14 @@ async function syncNrptiData(options = {}) {
 
   console.log(`[NRPTI Sync] Loaded ${existingProjects.length} existing projects for linking.`);
 
+  const maps = { eagleIdToProjMap, exactNameToProjMap, normalizedNameToProjMap };
+
   let totalIngested = 0;
   let totalLinkedExisting = 0;
-  let totalAutoSeededProjects = 0;
+  let totalUnlinked = 0;
+  // The ONLY trace an unmatched record leaves, now that none is written. Counted by name so the
+  // log says which upstream strings the linker cannot resolve, rather than just how many.
+  const unlinkedNames = new Map();
   const projectStats = new Map();
 
   for (const dataset of DATASETS) {
@@ -149,123 +213,36 @@ async function syncNrptiData(options = {}) {
           if (itemDate < sinceDate) continue;
         }
 
-        let linkedProjId = null;
         const rawProjName = (item.projectName || item.location || '').trim();
+        const linkedProjId = resolveProjectLink(
+          { epicProjectId: item._epicProjectId, rawProjName },
+          maps
+        );
 
-        // Priority 1: Match by _epicProjectId
-        if (item._epicProjectId && eagleIdToProjMap.has(String(item._epicProjectId))) {
-          linkedProjId = eagleIdToProjMap.get(String(item._epicProjectId));
+        // Unmatched records are DROPPED, not written. There is no unmatched bucket: a record
+        // written with `projectId: ''` would sit in the empty-string partition, unreachable by any
+        // scoped or per-project read while still listing publicly from `GET /records`, and
+        // re-pointing it later is a delete plus an insert because `projectId` is the partition key.
+        // The log line at the end of the run is the record of what was skipped.
+        if (!linkedProjId) {
+          totalUnlinked++;
+          const key = rawProjName || '(no project name)';
+          unlinkedNames.set(key, (unlinkedNames.get(key) || 0) + 1);
+          continue;
         }
+        totalLinkedExisting++;
 
-        // Priority 2: Match by exact project name
-        if (!linkedProjId && rawProjName) {
-          const exactKey = rawProjName.toLowerCase();
-          if (exactNameToProjMap.has(exactKey)) {
-            linkedProjId = exactNameToProjMap.get(exactKey);
-          }
+        if (!projectStats.has(linkedProjId)) {
+          projectStats.set(linkedProjId, { total: 0, orders: 0, inspections: 0, tickets: 0, lastDate: null });
         }
-
-        // Priority 3: Match by normalized project name
-        if (!linkedProjId && rawProjName) {
-          const normKey = normalizeProjectName(rawProjName);
-          if (normKey && normalizedNameToProjMap.has(normKey)) {
-            linkedProjId = normalizedNameToProjMap.get(normKey);
-          }
-        }
-
-        // Priority 3b: Match by multi-segment parts (split by ' - ', ',', '/', ';')
-        if (!linkedProjId && rawProjName) {
-          const parts = rawProjName.split(/ - |,|\/|;/);
-          for (let p = parts.length - 1; p >= 0; p--) {
-            const partNorm = normalizeProjectName(parts[p]);
-            if (partNorm && normalizedNameToProjMap.has(partNorm)) {
-              linkedProjId = normalizedNameToProjMap.get(partNorm);
-              break;
-            }
-          }
-        }
-
-        // Priority 3c: Match by token inclusion (e.g. existing norm "brule" in "conuma coal chetwynd bc brule coal mine")
-        if (!linkedProjId && rawProjName) {
-          const normRaw = normalizeProjectName(rawProjName);
-          if (normRaw) {
-            for (const [existingNormKey, projId] of normalizedNameToProjMap.entries()) {
-              if (existingNormKey.length >= 4 && (normRaw === existingNormKey || normRaw.startsWith(`${existingNormKey} `) || normRaw.endsWith(` ${existingNormKey}`) || normRaw.includes(` ${existingNormKey} `))) {
-                linkedProjId = projId;
-                break;
-              }
-            }
-          }
-        }
-
-        // Priority 4: Auto-seed new project if unmatched!
-        if (!linkedProjId && rawProjName) {
-          const exactKey = rawProjName.toLowerCase().trim();
-          const normKey = normalizeProjectName(rawProjName);
-          const syntheticTrackId = 8000000 + (simpleHash(rawProjName) % 1000000);
-          const newProjId = String(syntheticTrackId);
-
-          const seededProject = {
-            id: newProjId,
-            sourceSystem: 'nrpti',
-            trackProjectId: syntheticTrackId,
-            name: rawProjName,
-            region: item.location || 'BC',
-            regionalDistrict: '',
-            municipality: '',
-            electoralDistrict: '',
-            description: `Auto-seeded from NRPTI compliance records for ${rawProjName}.`,
-            proponentName: item.issuedTo?.companyName || item.issuedTo?.fullName || '',
-            projectState: 'Compliance Record Ingest',
-            projectType: dataset || 'Compliance',
-            centroid: {
-              type: 'Point',
-              coordinates: [-123.3656, 48.4284]
-            },
-            isPublished: true,
-            read: ['public', 'sysadmin', 'staff', 'demi-admin'],
-            sources: {
-              track: null,
-              eagle: null,
-              nrpti: {
-                recordCount: 0,
-                orderCount: 0,
-                inspectionCount: 0,
-                ticketCount: 0,
-                lastRecordDate: null,
-                isPrimarySource: true
-              }
-            },
-            metadata: {
-              sourceSystem: 'nrpti',
-              seededFromNrpti: true,
-              seededAt: new Date().toISOString()
-            }
-          };
-
-          await projectsRepo.upsert(seededProject);
-          linkedProjId = newProjId;
-          totalAutoSeededProjects++;
-
-          exactNameToProjMap.set(exactKey, newProjId);
-          if (normKey) normalizedNameToProjMap.set(normKey, newProjId);
-        } else if (linkedProjId) {
-          totalLinkedExisting++;
-        }
-
-        if (linkedProjId) {
-          if (!projectStats.has(linkedProjId)) {
-            projectStats.set(linkedProjId, { total: 0, orders: 0, inspections: 0, tickets: 0, lastDate: null });
-          }
-          const stats = projectStats.get(linkedProjId);
-          stats.total++;
-          if (dataset === 'Order') stats.orders++;
-          if (dataset === 'Inspection') stats.inspections++;
-          if (dataset === 'Ticket') stats.tickets++;
-          if (item.dateIssued) {
-            const issueDate = new Date(item.dateIssued);
-            if (!stats.lastDate || issueDate > stats.lastDate) stats.lastDate = issueDate;
-          }
+        const stats = projectStats.get(linkedProjId);
+        stats.total++;
+        if (dataset === 'Order') stats.orders++;
+        if (dataset === 'Inspection') stats.inspections++;
+        if (dataset === 'Ticket') stats.tickets++;
+        if (item.dateIssued) {
+          const issueDate = new Date(item.dateIssued);
+          if (!stats.lastDate || issueDate > stats.lastDate) stats.lastDate = issueDate;
         }
 
         const dateIssued = item.dateIssued ? new Date(item.dateIssued).toISOString() : null;
@@ -277,9 +254,10 @@ async function syncNrptiData(options = {}) {
           // `dataset`, not `nrptiSchemaName`. The latter was only ever the Typesense index field
           // name, so every query filtering on it matched nothing — no Cosmos item carries it.
           dataset: item._schemaName || dataset,
-          // `projectId` is the container's PARTITION KEY. Writing the Mongo-era `project` instead
-          // would land every record in the empty-string partition, unreachable by any scoped read.
-          projectId: linkedProjId ? String(linkedProjId) : '',
+          // `projectId` is the container's PARTITION KEY, and always a real project here — the
+          // unmatched path returned above rather than falling through to the empty-string
+          // partition.
+          projectId: String(linkedProjId),
           recordName: item.recordName || item.title || `${dataset} Record`,
           recordType: item.recordType || dataset,
           recordSubtype: item.recordSubtype || '',
@@ -321,9 +299,28 @@ async function syncNrptiData(options = {}) {
   await recalculateAllProjectComplianceStats();
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  console.log(`[NRPTI Sync] Ingestion finished in ${duration}s. Total: ${totalIngested} records (${totalLinkedExisting} linked existing, ${totalAutoSeededProjects} auto-seeded new projects).`);
+  console.log(`[NRPTI Sync] Ingestion finished in ${duration}s. Total: ${totalIngested} records ingested (${totalLinkedExisting} linked to existing projects, ${totalUnlinked} skipped as unlinked).`);
 
-  return { totalIngested, totalLinkedExisting, totalAutoSeededProjects, linkedProjectCount: projectStats.size };
+  const unlinkedSample = Array.from(unlinkedNames.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([name, count]) => ({ name, count }));
+
+  if (unlinkedSample.length) {
+    console.log(`[NRPTI Sync] ${unlinkedNames.size} distinct unmatched project names. Top ${unlinkedSample.length}:`);
+    for (const { name, count } of unlinkedSample) {
+      console.log(`[NRPTI Sync]   ${count} x ${name}`);
+    }
+  }
+
+  return {
+    totalIngested,
+    totalLinkedExisting,
+    totalUnlinked,
+    unlinkedDistinctNames: unlinkedNames.size,
+    unlinkedSample,
+    linkedProjectCount: projectStats.size
+  };
 }
 
 /**
@@ -391,4 +388,9 @@ if (require.main === module) {
     });
 }
 
-module.exports = { syncNrptiData, recalculateAllProjectComplianceStats };
+module.exports = {
+  syncNrptiData,
+  recalculateAllProjectComplianceStats,
+  resolveProjectLink,
+  normalizeProjectName
+};

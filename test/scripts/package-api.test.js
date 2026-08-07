@@ -63,6 +63,18 @@ test('API deploy package', async (t) => {
     );
   });
 
+  await t.test('does NOT ship public/ — an untracked local build output', () => {
+    // Nothing serves it since the static mounts left src/app.js, and zipdeploy merges into
+    // wwwroot, so packaging a stale bundle once would leave it there permanently. This packager
+    // runs from the operator's working tree, which is exactly where a stale build lives.
+    const publicEntries = [...entries].filter(e => e.startsWith('public/'));
+    assert.deepStrictEqual(
+      publicEntries,
+      [],
+      `public/ must not be packaged, found: ${publicEntries.join(', ')}`
+    );
+  });
+
   await t.test('ships every runtime entry point', () => {
     for (const f of ['index.js', 'api/index.js', 'host.json', 'package.json']) {
       assert.ok(entries.has(f), `${f} must be packaged`);
