@@ -76,35 +76,19 @@
           <div class="filter-accordion-content">
             <div class="filter-section" style="margin-top: 0.5rem;">
               <div class="filter-label">Project Sector</div>
-              <div class="chips-container">
-                <div 
-                  class="chip" 
-                  [class.active]="service.sectorFilter() === 'all'" 
-                  (click)="setSectorFilter('all')"
-                >
-                  All Sectors
-                </div>
-                <div 
-                  class="chip" 
-                  [class.active]="service.sectorFilter() === 'Energy'" 
-                  (click)="setSectorFilter('Energy')"
-                >
-                  Energy
-                </div>
-                <div 
-                  class="chip" 
-                  [class.active]="service.sectorFilter() === 'Mining'" 
-                  (click)="setSectorFilter('Mining')"
-                >
-                  Mining
-                </div>
-                <div 
-                  class="chip" 
-                  [class.active]="service.sectorFilter() === 'Transportation'" 
-                  (click)="setSectorFilter('Transportation')"
-                >
-                  Transportation
-                </div>
+              <!-- Built from the data, not a hardcoded list: 33 sector values exist on dev, and the
+                   four literal chips this replaces matched the wrong sets — Transportation matched
+                   nothing at all. Same scrollable container as the Region chips below. -->
+              <div class="chips-container" style="max-height: 120px; overflow-y: auto; padding-bottom: 4px;">
+                @for (s of service.sectorOptions(); track s.value) {
+                  <div
+                    class="chip"
+                    [class.active]="service.sectorFilter() === s.value"
+                    (click)="setSectorFilter(s.value)"
+                  >
+                    {{ s.label }} ({{ s.count }})
+                  </div>
+                }
               </div>
             </div>
           </div>

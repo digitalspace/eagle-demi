@@ -121,6 +121,55 @@ describe('RegistryStateService', () => {
     expect(service.filteredProjects()).toEqual([]);
   });
 
+  it('should build sector chips from the data, merging whitespace twins, and select them exactly', () => {
+    // Every value here is a real one from dev, including the trailing-space twin. The chips this
+    // replaced were Energy / Mining / Transportation matched by substring: 'Coal Mines' was
+    // reachable by none of them, 'Power Plants' was not 'Energy', and the two Groundwater rows
+    // would have counted as two different sectors.
+    const mockProjects: any[] = [
+      { id: 'p1', name: 'Coal A', sector: 'Coal Mines', gatingState: 'admitted' },
+      { id: 'p2', name: 'Coal B', sector: 'Coal Mines', gatingState: 'admitted' },
+      { id: 'p3', name: 'Plant A', sector: 'Power Plants', gatingState: 'admitted' },
+      { id: 'p4', name: 'Water A', sector: 'Groundwater Extraction', gatingState: 'admitted' },
+      { id: 'p5', name: 'Water B', sector: 'Groundwater Extraction ', gatingState: 'admitted' },
+      { id: 'p6', name: 'Unclassified', gatingState: 'admitted' }
+    ];
+    service.projects.set(mockProjects);
+
+    const options = service.sectorOptions();
+
+    // 'all' leads and counts every matching project, including the one with no sector.
+    expect(options[0]).toEqual({ value: 'all', label: 'All Sectors', count: 6 });
+    // Sorted by count, and the whitespace pair is ONE entry of 2, not two of 1.
+    expect(options.slice(1)).toEqual([
+      { value: 'Coal Mines', label: 'Coal Mines', count: 2 },
+      { value: 'Groundwater Extraction', label: 'Groundwater Extraction', count: 2 },
+      { value: 'Power Plants', label: 'Power Plants', count: 1 }
+    ]);
+
+    // Clicking a chip returns exactly the count it advertised.
+    service.sectorFilter.set('Coal Mines');
+    expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p1', 'p2']);
+
+    service.sectorFilter.set('Groundwater Extraction');
+    expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p4', 'p5']);
+  });
+
+  it('should count sectors under the OTHER active filters, so a chip cannot promise rows it will not return', () => {
+    const mockProjects: any[] = [
+      { id: 'p1', name: 'Coal A', sector: 'Coal Mines', gatingState: 'admitted', region: 'Peace' },
+      { id: 'p2', name: 'Coal B', sector: 'Coal Mines', gatingState: 'admitted', region: 'Skeena' }
+    ];
+    service.projects.set(mockProjects);
+    service.regionFilter.set('Peace');
+
+    const coal = service.sectorOptions().find(o => o.value === 'Coal Mines');
+    expect(coal!.count).toBe(1);
+
+    service.sectorFilter.set('Coal Mines');
+    expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p1']);
+  });
+
   it('should bypass project-matching check for filteredDocuments when on the search page', () => {
     const mockProjects: any[] = [
       { id: 'p1', name: 'Mine A', sector: 'Mining', gatingState: 'admitted', region: 'Thompson-Okanagan' }
