@@ -329,12 +329,28 @@ first gated sync against dev.
 
 ## Search UI
 
-- [ ] **Facets are NOT blocked — the reason recorded here was wrong.** `sector`, `region` and
-      `status` on `demi-projects` are already `facetable: true`, as is every field in both metadata
-      indexes; see `azure/search/indexes/`. This entry previously said they needed a reindex because
-      `facetable` is not a mutable field property. True in general, moot here: the fields were
-      created facetable. What remains is a `facets` parameter on the query and UI to render the
-      counts — the sector chips are still a hardcoded list of four with no count per value.
+- [x] **The sector chips were not missing counts, they were matching the wrong projects. Fixed
+      2026-08-06.** This entry used to describe the work as a `facets` parameter plus UI. Measured
+      against dev first: `/api/search?dataset=Project&pageSize=500` returns **382 projects across 33
+      distinct sector values**, and the four hardcoded chips matched by substring, so
+      **`Transportation` matched 0 of 382** (nothing in the corpus contains that word — the values
+      are `Transmission Pipelines`, `Public Highways`, `Railways`, `Airports`, `Marine Port
+      Facilities`), `Energy` missed `Power Plants` (87, the largest sector) and caught only `Energy
+      Storage Facilities` (22), and the `startsWith('mine')` special case missed `Coal Mines` (32)
+      while catching `Mineral Mines`. Chips are now built from the data with a count each, matched
+      exactly on the trimmed value; the live render is 31 chips led by `All Sectors (382)`.
+      Values are TRIMMED before grouping because the data carries whitespace twins —
+      `Groundwater Extraction` ×9 beside `Groundwater Extraction ` ×9, same for `Shoreline
+      Modification` and `Water Diversion` — which is why 33 raw values render as 30 chips.
+      **No `facets` parameter, deliberately.** 382 < the `pageSize=500` the loader already asks for,
+      so the browser holds the whole corpus and the counts come from the SAME predicate the chip
+      then applies (`matchesProjectFilters`, called once with `skipSector`) — which is the only way
+      a count is guaranteed to equal what clicking it returns. A server facet could not promise that
+      next to the region filter, which is geometric (`isPointInPolygon`), not a field equality Azure
+      can count. Ceiling recorded in the code: past `pageSize` these become counts of a page, and
+      the answer then is paging or a server facet, not a bigger number in the URL.
+      The fields are all still `facetable: true` in `azure/search/indexes/`, so a server facet
+      remains available the day the corpus outgrows one page.
 - [ ] **There is no result paging.** `searchChunks` sends only `top` (default 20, hard cap 250) and
       never sends `$skip`; the controller has no offset and the frontend has no load-more. Left alone
       deliberately — nobody uses DEMI yet, and this is a decision for whoever owns the search UI. If

@@ -221,19 +221,18 @@ export class RegistryStateService {
   readonly mockProjects: Project[] = MOCK_PROJECTS;
   readonly mockDocuments: Document[] = MOCK_DOCUMENTS;
 
-  // Projects matching active filters (excluding query)
-  filteredProjectsNoQuery = computed(() => {
-    const gating = this.gatingFilter();
-    const sector = this.sectorFilter();
+  /**
+   * Everything the per-project predicate needs that is resolved ONCE, not per row.
+   *
+   * The two geometry lookups are the reason this exists separately: finding the selected region or
+   * boundary polygon inside the filter callback would repeat a `find()` over every boundary for
+   * every project.
+   */
+  private projectFilterContext() {
     const region = this.regionFilter();
-    const staff = this.isStaff();
     const bLayer = this.activeBoundaryLayer();
     const bFilter = this.boundaryFilter();
 
-    const projs = this.projects();
-    if (projs === null) return null;
-
-    // --- Optimization 1: Find active boundary geometry once before starting the loop ---
     let selectedBoundaryGeom: any = null;
     if (bFilter !== 'all' && bFilter !== '' && bLayer !== 'none') {
       const cache = this.loadedBoundariesGeoJSON();
@@ -246,12 +245,11 @@ export class RegistryStateService {
       }
     }
 
-    // --- Optimization 2: Find active region geometry once before starting the loop ---
     let selectedRegionGeom: any = null;
     if (region !== 'all') {
       const geo = this.regionalBoundariesGeoJSON();
       if (geo) {
-        const feature = geo.features.find((f: any) => 
+        const feature = geo.features.find((f: any) =>
           (f.properties?.regionName || '').toLowerCase() === region.toLowerCase()
         );
         if (feature) {
@@ -260,62 +258,144 @@ export class RegistryStateService {
       }
     }
 
-    return projs.filter(p => {
-      // 1. Role access gating
-      if (!staff && p.gatingState !== 'admitted') return false;
+    return {
+      gating: this.gatingFilter(),
+      sector: this.sectorFilter(),
+      region,
+      staff: this.isStaff(),
+      bLayer,
+      bFilter,
+      selectedRegionGeom,
+      selectedBoundaryGeom
+    };
+  }
 
-      // 2. Gating filter selection
-      if (gating !== 'all' && p.gatingState !== gating) return false;
+  /**
+   * Does one project survive the active filters?
+   *
+   * Shared by `filteredProjectsNoQuery` and `sectorOptions` deliberately. The counts on the sector
+   * chips have to be produced by the SAME predicate the chip then applies, or a chip promises rows
+   * that clicking it cannot deliver. `skipSector` is what lets the counts answer "how many would
+   * this chip give me", which is a question about every filter EXCEPT sector.
+   */
+  private matchesProjectFilters(p: Project, ctx: ReturnType<RegistryStateService['projectFilterContext']>, skipSector = false): boolean {
+    // 1. Role access gating
+    if (!ctx.staff && p.gatingState !== 'admitted') return false;
 
-      // 3. Sector filter selection
-      if (sector !== 'all') {
-        const pSector = (p.sector || '').toLowerCase();
-        const fSector = sector.toLowerCase();
-        if (fSector === 'mining') {
-          if (!pSector.startsWith('mine') && !pSector.includes('mining')) return false;
-        } else {
-          if (!pSector.includes(fSector)) return false;
+    // 2. Gating filter selection
+    if (ctx.gating !== 'all' && p.gatingState !== ctx.gating) return false;
+
+    // 3. Sector filter selection.
+    //
+    // Exact match on the trimmed value, because the chips are now built FROM these values —
+    // see `sectorOptions`. It used to be a substring test with a special case for mining, over a
+    // hardcoded list of Energy/Mining/Transportation, and measured against dev data on 2026-08-06
+    // that list was wrong in three ways at once: nothing in the corpus contains "transportation"
+    // so the chip matched 0 of 382 projects; "Energy" missed `Power Plants`, the largest sector at
+    // 87; and `startsWith('mine')` missed `Coal Mines` (32) while catching `Mineral Mines`.
+    if (!skipSector && ctx.sector !== 'all') {
+      if ((p.sector || '').trim() !== ctx.sector) return false;
+    }
+
+    // 3b. Region filter selection
+    if (ctx.region !== 'all') {
+      const pRegion = (p.region || '').toLowerCase();
+      const fRegion = ctx.region.toLowerCase();
+      if (pRegion) {
+        if (!pRegion.includes(fRegion) && !fRegion.includes(pRegion)) return false;
+      } else if (ctx.selectedRegionGeom && p.centroid) {
+        const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
+        if (ctx.selectedRegionGeom.type === 'Polygon') {
+          if (!this.isPointInPolygon(point, ctx.selectedRegionGeom.coordinates)) return false;
+        } else if (ctx.selectedRegionGeom.type === 'MultiPolygon') {
+          if (!this.isPointInMultiPolygon(point, ctx.selectedRegionGeom.coordinates)) return false;
         }
       }
+    }
 
-      // 3b. Region filter selection
-      if (region !== 'all') {
-        const pRegion = (p.region || '').toLowerCase();
-        const fRegion = region.toLowerCase();
-        if (pRegion) {
-          if (!pRegion.includes(fRegion) && !fRegion.includes(pRegion)) return false;
-        } else if (selectedRegionGeom && p.centroid) {
-          const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
-          if (selectedRegionGeom.type === 'Polygon') {
-            if (!this.isPointInPolygon(point, selectedRegionGeom.coordinates)) return false;
-          } else if (selectedRegionGeom.type === 'MultiPolygon') {
-            if (!this.isPointInMultiPolygon(point, selectedRegionGeom.coordinates)) return false;
-          }
+    // 3c. Administrative Boundary filter selection (prioritize tagged properties over ray casting)
+    if (ctx.bFilter !== 'all' && ctx.bFilter !== '' && ctx.bLayer !== 'none') {
+      const fFilter = ctx.bFilter.toLowerCase();
+      let targetProp = '';
+      if (ctx.bLayer === 'regionalDistricts') targetProp = (p.regionalDistrict || '').toLowerCase();
+      else if (ctx.bLayer === 'municipalities') targetProp = (p.municipality || '').toLowerCase();
+      else if (ctx.bLayer === 'electoralDistricts') targetProp = (p.electoralDistrict || '').toLowerCase();
+
+      if (targetProp) {
+        if (!targetProp.includes(fFilter) && !fFilter.includes(targetProp)) return false;
+      } else if (ctx.selectedBoundaryGeom && p.centroid) {
+        const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
+        if (ctx.selectedBoundaryGeom.type === 'Polygon') {
+          if (!this.isPointInPolygon(point, ctx.selectedBoundaryGeom.coordinates)) return false;
+        } else if (ctx.selectedBoundaryGeom.type === 'MultiPolygon') {
+          if (!this.isPointInMultiPolygon(point, ctx.selectedBoundaryGeom.coordinates)) return false;
         }
       }
+    }
 
-      // 3c. Administrative Boundary filter selection (prioritize tagged properties over ray casting)
-      if (bFilter !== 'all' && bFilter !== '' && bLayer !== 'none') {
-        const fFilter = bFilter.toLowerCase();
-        let targetProp = '';
-        if (bLayer === 'regionalDistricts') targetProp = (p.regionalDistrict || '').toLowerCase();
-        else if (bLayer === 'municipalities') targetProp = (p.municipality || '').toLowerCase();
-        else if (bLayer === 'electoralDistricts') targetProp = (p.electoralDistrict || '').toLowerCase();
+    return true;
+  }
 
-        if (targetProp) {
-          if (!targetProp.includes(fFilter) && !fFilter.includes(targetProp)) return false;
-        } else if (selectedBoundaryGeom && p.centroid) {
-          const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
-          if (selectedBoundaryGeom.type === 'Polygon') {
-            if (!this.isPointInPolygon(point, selectedBoundaryGeom.coordinates)) return false;
-          } else if (selectedBoundaryGeom.type === 'MultiPolygon') {
-            if (!this.isPointInMultiPolygon(point, selectedBoundaryGeom.coordinates)) return false;
-          }
-        }
-      }
+  // Projects matching active filters (excluding query)
+  filteredProjectsNoQuery = computed(() => {
+    const projs = this.projects();
+    if (projs === null) return null;
 
-      return true;
-    });
+    const ctx = this.projectFilterContext();
+    return projs.filter(p => this.matchesProjectFilters(p, ctx));
+  });
+
+  /**
+   * The sector chips: every sector present in the data, with the count each one would return.
+   *
+   * Built from the loaded projects rather than an AI Search `facets` parameter. At 382 projects
+   * against the `pageSize=500` the loader already asks for, the browser holds the whole corpus, so
+   * a client-side count is complete AND is produced by the same predicate the chip applies — a
+   * server facet could not promise the second, because the neighbouring region filter is geometric
+   * (`isPointInPolygon`) rather than a field equality Azure could count.
+   *
+   * CEILING: honest only while the loaded page IS the corpus. Past `pageSize` these silently become
+   * counts of a page. The answer then is paging or a server-side facet, not a bigger number in the
+   * URL — the API caps list reads at 1000 whatever is asked.
+   *
+   * Values are trimmed before grouping. The live data carries whitespace twins —
+   * `Groundwater Extraction` ×9 alongside `Groundwater Extraction ` ×9, and the same for
+   * `Shoreline Modification` and `Water Diversion` — which would otherwise show as two chips
+   * splitting one sector's count.
+   */
+  sectorOptions = computed<{ value: string; label: string; count: number }[]>(() => {
+    const projs = this.projects();
+    if (projs === null) return [];
+
+    const ctx = this.projectFilterContext();
+    const counts = new Map<string, number>();
+    let total = 0;
+
+    for (const p of projs) {
+      if (!this.matchesProjectFilters(p, ctx, true)) continue;
+      total++;
+      const value = (p.sector || '').trim();
+      if (!value) continue;
+      counts.set(value, (counts.get(value) || 0) + 1);
+    }
+
+    // The selected sector always has a chip, even at zero. The list is counted under the OTHER
+    // active filters, so narrowing the region can empty the sector the user picked — and without
+    // this its chip would simply vanish, leaving a map with no projects, no chip rendered active,
+    // and nothing to click to get back. A `(0)` chip says "this is still your filter, and it now
+    // matches nothing", which is the true statement.
+    const selected = this.sectorFilter();
+    if (selected !== 'all' && !counts.has(selected)) counts.set(selected, 0);
+
+    // `all` leads the list so the whole chip row is one loop and the sentinel cannot drift from the
+    // options beside it. Its count is every matching project, including those with no sector at
+    // all — which is why it is counted separately rather than summed from the map.
+    return [
+      { value: 'all', label: 'All Sectors', count: total },
+      ...[...counts.entries()]
+        .map(([value, count]) => ({ value, label: value, count }))
+        .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+    ];
   });
 
   // Dynamic Filtering Computations (Signals are automatically tracked!)
