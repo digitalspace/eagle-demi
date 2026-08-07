@@ -365,6 +365,62 @@ const SEMANTIC_CONFIGURATION = 'demi-chunks-semantic';
 let semanticExhausted = false;
 
 /**
+ * How often reranking was asked for, and how often it did not happen.
+ *
+ * Degradation here is invisible from the outside: `semanticErrorHandling: 'partial'` answers 200
+ * with the same response shape in BM25 order, so a service reranking nothing looks exactly like one
+ * reranking everything. Both paths already log — but nothing retains that log. `api/index.js`
+ * starts the Azure Monitor distro only when APPLICATIONINSIGHTS_CONNECTION_STRING is set, and it is
+ * not set on demi-api-dev; neither demi-logs-dev nor demi-insights-dev exists, because
+ * `azure/modules/observability.bicep` has never been deployed. The warning reaches the App Service
+ * log stream and nowhere else, which means it is seen only by someone already watching.
+ *
+ * These counters are the reading that works without that pipeline. They are per-process and start
+ * again at zero on every recycle, which answers "since this process started, was ranking running?"
+ * and nothing longer. That is the right resolution for a single-worker B1, and it is not a time
+ * series — the durable version is an alert on the log line, once the workspace exists.
+ */
+const semanticCounters = {
+  requested: 0,
+  partial: 0,
+  lastPartialReason: null,
+  lastPartialAt: null,
+  exhaustedAt: null
+};
+
+/**
+ * What the counters say right now, plus the one number a reader actually wants.
+ *
+ * `ranked` is derived rather than counted: a search is ranked exactly when it asked and did not
+ * degrade, and two counters that can drift apart would eventually disagree about the same search.
+ * `exhausted` repeats the latch so a caller reading this does not have to infer it from a
+ * timestamp being non-null.
+ */
+function semanticStats() {
+  return {
+    ...semanticCounters,
+    ranked: semanticCounters.requested - semanticCounters.partial,
+    exhausted: semanticExhausted
+  };
+}
+
+/**
+ * One search that asked for reranking and got the BM25 order anyway.
+ *
+ * Whether L2 ran is invisible in the results — the same shape comes back either way, in a different
+ * order. Both the log line and the counter live here so the two can never disagree about what
+ * counted as degraded.
+ */
+function notePartialRerank(reason) {
+  semanticCounters.partial++;
+  semanticCounters.lastPartialReason = String(reason);
+  semanticCounters.lastPartialAt = new Date().toISOString();
+  logger.warn(
+    `[ai-search] semantic reranking did not run: ${reason} — results are in BM25 order`
+  );
+}
+
+/**
  * 402 means the semantic ranker's monthly free allowance is spent, for the rest of the month.
  *
  * Not a blip and not retryable — it is not in RETRY_STATUSES for that reason. Left unhandled it
@@ -375,6 +431,7 @@ let semanticExhausted = false;
 function noteSemanticExhausted() {
   if (semanticExhausted) return;
   semanticExhausted = true;
+  semanticCounters.exhaustedAt = new Date().toISOString();
   logger.warn(
     '[ai-search] HTTP 402: the semantic ranker free allowance is exhausted for this month. ' +
     'Falling back to BM25 ordering for the rest of the month. This is DEGRADED RANKING, not a ' +
@@ -420,6 +477,7 @@ async function runSearch(index, opts = {}) {
     // frontend searches on a debounced keystroke — being over that is the expected path, not an
     // edge. `partial` returns the BM25 order instead of erroring.
     body.semanticErrorHandling = 'partial';
+    semanticCounters.requested++;
   }
 
   const path = `/indexes/${index}/docs/search?api-version=${API_VERSION}`;
@@ -430,6 +488,10 @@ async function runSearch(index, opts = {}) {
   } catch (err) {
     if (!semantic || err.status !== 402) throw err;
     noteSemanticExhausted();
+    // Counted as a degraded search, not just a latch event: this request was asked to rerank and
+    // the order it served is BM25. Leave it out and `ranked` claims a ranked result for the one
+    // search that provoked the 402.
+    notePartialRerank('the monthly allowance is exhausted (HTTP 402)');
     delete body.semanticQuery;
     delete body.semanticConfiguration;
     delete body.semanticErrorHandling;
@@ -440,10 +502,7 @@ async function runSearch(index, opts = {}) {
   // a different order. Unlogged, a service that is silently serving BM25 all day looks exactly like
   // one where reranking is working, and the scorecard would be measuring something no user gets.
   if (semantic && data['@search.semanticPartialResponseReason']) {
-    logger.warn(
-      `[ai-search] semantic reranking did not run: ` +
-      `${data['@search.semanticPartialResponseReason']} — results are in BM25 order`
-    );
+    notePartialRerank(data['@search.semanticPartialResponseReason']);
   }
 
   const value = data.value || [];
@@ -833,9 +892,17 @@ module.exports = {
   // is right to treat the first as a degraded state and return []; an instrument is not, and must
   // refuse to publish a zero it cannot distinguish from an unset app setting.
   config,
+  semanticStats,
   // Exported for tests. The 402 latch is process-wide and deliberately has no production reset —
-  // without this seam one 402 test would silently disable semantic for every test after it.
-  resetSemanticExhausted: () => { semanticExhausted = false; },
+  // without this seam one 402 test would silently disable semantic for every test after it. The
+  // counters reset with it for the same reason: a partial response asserted in one test would
+  // otherwise still be in the totals the next test reads.
+  resetSemanticExhausted: () => {
+    semanticExhausted = false;
+    Object.assign(semanticCounters, {
+      requested: 0, partial: 0, lastPartialReason: null, lastPartialAt: null, exhaustedAt: null
+    });
+  },
   tokenize,
   buildQuery,
   snippetFrom,

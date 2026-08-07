@@ -6,6 +6,7 @@ const projectsRepo = require('../repositories/projects');
 const documentsRepo = require('../repositories/documents');
 const boundariesRepo = require('../repositories/boundaries');
 const recordsRepo = require('../repositories/records');
+const aiSearch = require('../search/ai-search');
 
 /**
  * Containers whose index-build state is worth reporting. A bulk load leaves the index lagging the
@@ -53,12 +54,17 @@ async function getIndexProgressHandler(req, res) {
     // neither the app's env nor its managed identity. One string removes the guess, and this is
     // exactly the fact that went wrong when chunk writes were pointed at `chunks_fts`.
     const chunks = require('../repositories/chunks');
+    // `semantic` belongs on this endpoint for the same reason the container name does: it is a
+    // fact about the deployed process that nothing else can observe. Reranking degrades to BM25
+    // with a 200 and an identical response shape, so `partial` climbing against `requested` is the
+    // only reading that separates "ranking is live" from "the scorecard measures an order no user
+    // gets". It reads a plain object — no container query, so this stays the cheap endpoint.
     res.json({
       success: true,
       active: true,
       database: 'demi',
       indexProgress: progress,
-      search: { container: chunks.CONTAINER }
+      search: { container: chunks.CONTAINER, semantic: aiSearch.semanticStats() }
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -119,7 +125,12 @@ async function runNrptiSyncHandler(req, res) {
     const isAsync = req.query.async === 'true';
 
     if (isAsync) {
-      syncNrptiData().catch((err) => logger.error('Background NRPTI sync error:', { error: err.message, stack: err.stack }));
+      // The async response cannot carry the summary, and the sync reports to stdout only — so the
+      // skip count and the unresolvable names an unmatched record leaves behind would exist
+      // nowhere durable. This is the only trace of what the run dropped.
+      syncNrptiData()
+        .then((results) => logger.info('Background NRPTI sync complete', results))
+        .catch((err) => logger.error('Background NRPTI sync error:', { error: err.message, stack: err.stack }));
       return res.json({
         success: true,
         message: 'NRPTI sync process triggered in background.'
