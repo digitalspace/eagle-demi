@@ -155,12 +155,22 @@ function transformBoundary(item, opts = {}) {
     throw new TypeError(`[seed] boundary ${item._id} has no simplifiedGeometry`);
   }
 
+  // Reference geography is public by default — that is what every seeded row is. `seedAcl`
+  // preserves an upstream `read[]` verbatim when the source supplies one, so a restricted
+  // shapefile keeps its restriction through a re-seed instead of being republished.
+  const read = Array.isArray(item.read) && item.read.length > 0
+    ? seedAcl(item.read)
+    : ['public', ...SECURE_ROLES];
+
   return {
     id: String(item._id),
     type: item.type,
     name: item.name || '',
     code: item.code ? String(item.code) : '',
     simplifiedGeometry: geometry,
+    read,
+    // read[] is authoritative; isPublished mirrors it, never the other way round.
+    isPublished: read.includes('public'),
     updatedAt: opts.now || new Date().toISOString()
   };
 }

@@ -14,7 +14,8 @@ const {
   scopeClause,
   andClauses,
   visibilityFor,
-  canRead
+  canRead,
+  systemAccess
 } = require('../../src/helpers/access-sql');
 
 // These tests assert the EMITTED SQL and parameters, not just behaviour. Authorization is the
@@ -213,8 +214,39 @@ test('project scope arrives as Keycloak roles', async (t) => {
     assert.strictEqual(scopeClause(access, 'projectId').clause, 'false');
   });
 
-  await t.test('privileged roles ignore scope entirely', () => {
+  await t.test('a privileged caller is still narrowed by its scope', () => {
+    // This used to assert the opposite — that privilege discarded the scope — which is exactly the
+    // leak: a credential minted as `roles:['staff'], projectScope:['207']` read the whole corpus,
+    // so the restriction its issuer asked for did nothing and said nothing.
     const access = resolveAccess(withRoles('sysadmin', 'project:207'));
+    assert.strictEqual(access.tier, TIER.SCOPED);
+    assert.deepStrictEqual(access.projectScope, ['207']);
+
+    // Privilege lifts the ROLE predicate; the project narrowing survives.
+    const { clause, params } = visibilityFor(access, 'projectId');
+    assert.strictEqual(clause, '(c.projectId IN (@scope0))');
+    assert.deepStrictEqual(params, [{ name: '@scope0', value: '207' }]);
+  });
+
+  await t.test('a scoped privileged caller still reads private rows INSIDE its scope', () => {
+    // Scope narrows which projects; it must not downgrade the caller to public within them.
+    const access = resolveAccess(withRoles('staff', 'project:207'));
+    const inScopePrivate = { projectId: '207', read: ['sysadmin'], isPublished: false };
+    const outOfScope = { projectId: '999', read: ['sysadmin'], isPublished: false };
+
+    assert.strictEqual(canRead(inScopePrivate, access), true);
+    assert.strictEqual(canRead(outOfScope, access), false, 'scope binds the point read too');
+  });
+
+  await t.test('an unscoped privileged caller is unrestricted, as before', () => {
+    const access = resolveAccess(withRoles('sysadmin'));
+    assert.strictEqual(access.tier, TIER.PRIVILEGED);
+    assert.strictEqual(access.projectScope, null);
+    assert.strictEqual(visibilityFor(access, 'projectId').clause, 'true');
+  });
+
+  await t.test('systemAccess() cannot be scoped — it takes no request', () => {
+    const access = systemAccess();
     assert.strictEqual(access.tier, TIER.PRIVILEGED);
     assert.strictEqual(access.projectScope, null);
     assert.strictEqual(visibilityFor(access, 'projectId').clause, 'true');

@@ -63,7 +63,14 @@ async function countVisible(access, opts = {}) {
     partitionField: PARTITION_FIELD,
     criteria: buildCriteria(opts)
   });
-  const value = await cosmos.queryValue(CONTAINER, spec);
+  // The partitionKey ONLY — not the caller's pageSize or continuation token, which mean nothing
+  // for a single-row aggregate. Without this a count carrying a projectId still fanned out across
+  // every partition while the matching read did not.
+  const value = await cosmos.queryValue(CONTAINER, spec, pageOptions({
+    partitionKey: opts.projectId !== undefined && opts.projectId !== null
+      ? String(opts.projectId)
+      : undefined
+  }));
   return value || 0;
 }
 

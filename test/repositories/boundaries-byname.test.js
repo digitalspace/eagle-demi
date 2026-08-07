@@ -7,9 +7,12 @@ const assert = require('node:assert');
 
 const cosmos = require('../../src/db/cosmos-nosql');
 const boundaries = require('../../src/repositories/boundaries');
+const { TIER, systemAccess } = require('../../src/helpers/access-sql');
 
 // The frontend calls /boundaries/<name> with NO type. Requiring the partition key turned `type`
 // into the string "undefined", which matches nothing and 404s every lookup.
+
+const ANON = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null };
 
 test('getByName works with and without a type', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -21,12 +24,12 @@ test('getByName works with and without a type', async (t) => {
       return { items: [{ id: 'b1', name: 'Bulkley-Nechako' }] };
     });
 
-    const r = await boundaries.getByName('Bulkley-Nechako');
+    const r = await boundaries.getByName(ANON, 'Bulkley-Nechako');
     assert.strictEqual(r.id, 'b1');
-    assert.match(spec.query, /WHERE c\.name = @name/);
+    assert.match(spec.query, /c\.name = @name/);
     assert.ok(!/c\.type/.test(spec.query), 'must not filter on an absent type');
     assert.ok(!('partitionKey' in options), 'must not scope to partition "undefined"');
-    assert.deepStrictEqual(spec.parameters.map(p => p.name), ['@name']);
+    assert.ok(spec.parameters.some(p => p.name === '@name'));
   });
 
   await t.test('with a type -> single-partition query', async () => {
@@ -36,22 +39,113 @@ test('getByName works with and without a type', async (t) => {
       return { items: [{ id: 'b1' }] };
     });
 
-    await boundaries.getByName('Bulkley-Nechako', 'Regional District');
-    assert.match(spec.query, /c\.type = @type AND c\.name = @name/);
+    await boundaries.getByName(ANON, 'Bulkley-Nechako', 'Regional District');
+    assert.match(spec.query, /c\.type = @type/);
+    assert.match(spec.query, /c\.name = @name/);
     assert.strictEqual(options.partitionKey, 'Regional District');
   });
 
-  await t.test('an empty-string type is treated as absent', () => {
-    return (async () => {
-      let options;
-      t.mock.method(cosmos, 'query', async (c, s, o) => { options = o; return { items: [] }; });
-      await boundaries.getByName('X', '');
-      assert.ok(!('partitionKey' in options));
-    })();
+  await t.test('an empty-string type is treated as absent', async () => {
+    let options;
+    t.mock.method(cosmos, 'query', async (c, s, o) => { options = o; return { items: [] }; });
+    await boundaries.getByName(ANON, 'X', '');
+    assert.ok(!('partitionKey' in options));
   });
 
   await t.test('no match returns null rather than undefined', async () => {
     t.mock.method(cosmos, 'query', async () => ({ items: [] }));
-    assert.strictEqual(await boundaries.getByName('nope'), null);
+    assert.strictEqual(await boundaries.getByName(ANON, 'nope'), null);
+  });
+});
+
+// Boundaries were the one container that could not express a restriction at all. These assert the
+// gate is real in BOTH directions — a probe that only shows the public case cannot fail.
+test('boundaries are ACL-gated', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('an anonymous read carries the role predicate', async () => {
+    let spec;
+    t.mock.method(cosmos, 'query', async (c, s) => { spec = s; return { items: [] }; });
+
+    await boundaries.listByType(ANON, { type: 'Regional District' });
+    assert.match(spec.query, /c\.read/, 'the ACL predicate must be in the emitted SQL');
+    assert.ok(spec.parameters.some(p => p.value === 'public'));
+  });
+
+  await t.test('a privileged read is unrestricted', async () => {
+    let spec;
+    t.mock.method(cosmos, 'query', async (c, s) => { spec = s; return { items: [] }; });
+
+    await boundaries.listByType(systemAccess(), {});
+    assert.ok(!/c\.read/.test(spec.query), 'privileged collapses the ACL clause, as elsewhere');
+  });
+
+  await t.test('project scope does NOT apply — boundaries have no project axis', async () => {
+    // A project-scoped caller must still see public geography. Scoping on a field the items do
+    // not carry would match nothing and blank the map.
+    let spec;
+    t.mock.method(cosmos, 'query', async (c, s) => { spec = s; return { items: [] }; });
+
+    const scoped = { tier: TIER.SCOPED, roles: ['public'], projectScope: ['207'] };
+    await boundaries.listByType(scoped, {});
+    assert.ok(!/@scope0/.test(spec.query), 'no project narrowing on this container');
+    assert.match(spec.query, /c\.read/, 'but the role ACL still applies');
+  });
+
+  await t.test('a staff-only boundary is withheld from a point read', async () => {
+    // The case that motivated the change: a shapefile that must not be public.
+    const staffOnly = { id: 'b9', type: 'Regional District', read: ['sysadmin', 'staff'], isPublished: false };
+    t.mock.method(cosmos, 'readItem', async () => staffOnly);
+
+    assert.strictEqual(
+      await boundaries.getById(ANON, 'b9', 'Regional District'), null,
+      'canRead must withhold it — readItem bypasses the query predicate'
+    );
+
+    const staff = { tier: TIER.PUBLIC, roles: ['public', 'staff'], projectScope: null };
+    assert.strictEqual((await boundaries.getById(staff, 'b9', 'Regional District')).id, 'b9');
+  });
+
+
+  await t.test('the 281 pre-ACL rows stay visible — they carry NEITHER field', async () => {
+    // The regression this nearly shipped. Seeded boundaries have no read[] and no isPublished, so
+    // the ordinary fallback arm (`no read[] AND isPublished = true`) is FALSE against them and the
+    // map would go blank for every anonymous caller on deploy.
+    let spec;
+    t.mock.method(cosmos, 'query', async (c, s) => { spec = s; return { items: [] }; });
+
+    await boundaries.listByType(ANON, {});
+
+    assert.ok(
+      !/isPublished/.test(spec.query),
+      'this container drops the isPublished half of the unset-ACL arm'
+    );
+    assert.match(spec.query, /NOT IS_DEFINED\(c\.read\) OR ARRAY_LENGTH\(c\.read\) = 0/);
+  });
+
+  await t.test('a legacy row passes the point-read gate too', async () => {
+    const legacy = { id: 'b1', type: 'Regional District', name: 'Bulkley-Nechako' };
+    t.mock.method(cosmos, 'readItem', async () => legacy);
+
+    assert.strictEqual(
+      (await boundaries.getById(ANON, 'b1', 'Regional District')).id, 'b1',
+      'a list that returns it and a point read that withholds it would be worse than either'
+    );
+  });
+
+  await t.test('but a restricted row is still withheld — the allowance is not a bypass', async () => {
+    const restricted = { id: 'b9', type: 'Regional District', read: ['sysadmin'], isPublished: false };
+    t.mock.method(cosmos, 'readItem', async () => restricted);
+
+    assert.strictEqual(await boundaries.getById(ANON, 'b9', 'Regional District'), null);
+  });
+
+  await t.test('counts share the read predicate', async () => {
+    let spec;
+    t.mock.method(cosmos, 'queryValue', async (c, s) => { spec = s; return 0; });
+
+    await boundaries.countVisible(ANON, {});
+    assert.match(spec.query, /SELECT VALUE COUNT\(1\)/);
+    assert.match(spec.query, /c\.read/, 'a count that ignores the ACL leaks the hidden total');
   });
 });

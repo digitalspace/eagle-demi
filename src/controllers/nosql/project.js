@@ -12,6 +12,7 @@
 
 const projects = require('../../repositories/projects');
 const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 
 exports.getProjects = async (req, res) => {
@@ -27,7 +28,9 @@ exports.getProjects = async (req, res) => {
       regionalDistrict,
       municipality,
       electoralDistrict,
-      pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 5000),
+      // 1000 is the real ceiling — pageOptions clamps to it, so a larger number here
+      // only looked like it did something.
+      pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 1000),
       continuationToken: req.query.continuationToken
     });
 
@@ -36,7 +39,7 @@ exports.getProjects = async (req, res) => {
     if (continuationToken) res.setHeader('x-continuation-token', continuationToken);
     return res.json(items);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'project controller failed');
   }
 };
 
@@ -52,7 +55,7 @@ exports.getProject = async (req, res) => {
     }
     return res.json(project);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'project controller failed');
   }
 };
 
@@ -89,7 +92,7 @@ exports.createProject = async (req, res) => {
 
     return res.status(201).json(saved);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'project controller failed');
   }
 };
 
@@ -103,11 +106,27 @@ exports.updateProject = async (req, res) => {
 
     // The partition key is the id, so it must not be reassigned by a request body — in Cosmos
     // that is a delete-and-reinsert, not an update.
-    const { id: _ignoredId, trackProjectId: _ignoredTrackId, ...changes } = req.body;
+    //
+    // `read` is derived from `isPublished` rather than taken verbatim, so the two cannot disagree:
+    // read[] is authoritative and isPublished mirrors it. Spreading the body straight in let a
+    // writer hand-craft an ACL that no gate had ever seen.
+    const {
+      id: _ignoredId, trackProjectId: _ignoredTrackId,
+      read: _ignoredRead, isPublished,
+      ...changes
+    } = req.body;
+
+    const acl = isPublished === undefined
+      ? { read: existing.read, isPublished: existing.isPublished }
+      : {
+        isPublished: isPublished === true,
+        read: isPublished === true ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]
+      };
 
     const saved = await projects.upsert({
       ...existing,
       ...changes,
+      ...acl,
       id: existing.id,
       trackProjectId: existing.trackProjectId,
       updatedAt: new Date().toISOString()
@@ -115,7 +134,7 @@ exports.updateProject = async (req, res) => {
 
     return res.json(saved);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'project controller failed');
   }
 };
 
@@ -137,6 +156,6 @@ exports.deleteProject = async (req, res) => {
 
     return res.json({ message: 'Project deleted successfully', deleted: existing, removedFromSearch });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'project controller failed');
   }
 };

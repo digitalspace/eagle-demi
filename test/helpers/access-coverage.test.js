@@ -37,25 +37,32 @@ const REPO_DIR = path.join(__dirname, '..', '..', 'src', 'repositories');
  * Repositories that legitimately hold no ACL gate, each with the reason it does not need one.
  *
  * A name earns a place here by being unreachable by an ungated caller, NOT by being inconvenient
- * to gate. The route citations are the evidence; if a route moves, this suite keeps passing and the
- * reason silently rots, which is the known ceiling of an allowlist.
- * ponytail: reasons are prose, unverified against the router. Assert the middleware chain here too
- * if a route ever moves out from behind requireWrite without anyone noticing.
+ * to gate. The reason is prose; the ROUTER is the evidence, and it is asserted below rather than
+ * cited — line-number citations rot. They already did: these entries pointed at routes/api.js:106
+ * and :115 until the NRPTI removal shifted every line, and the suite kept passing while the
+ * evidence silently stopped matching. `requireWritePrefixes` is the executable replacement.
+ *
+ * `boundaries.js` used to be listed here as "public reference data, deliberately unrestricted".
+ * That described the corpus, not the requirement — a staff-only shapefile could not be expressed
+ * at all. It is gated now, so it is not an exception.
  */
 const UNGATED = {
   'api-keys.js':
-    'Every route is behind authMiddleware + requireWrite (routes/api.js:115-120). The registry is ' +
-    'the credential store itself — there is no caller tier that may read part of it.',
-  'boundaries.js':
-    'Administrative geography, public reference data. Reads are passiveAuth (routes/api.js:106-107) ' +
-    'and deliberately unrestricted; every write is behind requireWrite (:108-110).',
+    'The registry is the credential store itself — there is no caller tier that may read part of ' +
+    'it, so every route is write-gated rather than ACL-filtered.',
   'wildfires.js':
     'No read path at all. GET /wildfires was removed for having no consumer — the frontend reads ' +
-    'the DataBC WFS directly — leaving only POST /admin/sync/wildfires, gated (routes/api.js:65).',
+    'the DataBC WFS directly — leaving only the admin sync.',
   '_sql.js':
     'Not a repository. This is the shared query builder where visibilityFor is composed, so it is ' +
     'the thing the others are asserted to route through.'
 };
+
+/**
+ * Path prefixes that must be behind `requireWrite` on EVERY method, checked against the router.
+ * This is what the allowlist reasons above assert, expressed as something that can fail.
+ */
+const requireWritePrefixes = ['/admin/api-keys', '/admin/sync/'];
 
 /** @returns {{name: string, source: string}[]} every repository module, allowlisted or not. */
 function repositories() {
@@ -129,5 +136,37 @@ test('access gate coverage', async (t) => {
         `${name} is allowlisted without a usable reason — the next reader has to re-derive it`
       );
     }
+  });
+
+  await t.test('the allowlisted routes really are write-gated', () => {
+    // The executable half of the reasons above. An allowlist entry says "no ACL needed because
+    // nothing unprivileged can reach it" — this reads the router and checks that is still true,
+    // so moving a route out from behind requireWrite fails here instead of rotting a comment.
+    const router = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'src', 'routes', 'api.js'), 'utf8'
+    );
+
+    const routes = [...router.matchAll(/router\.(get|post|put|delete)\(\s*'([^']+)'\s*,([^;]*?)\);/g)]
+      .map(m => ({ method: m[1], path: m[2], chain: m[3] }));
+
+    assert.ok(routes.length >= 20, `expected the router, parsed ${routes.length} routes`);
+
+    for (const prefix of requireWritePrefixes) {
+      const matching = routes.filter(r => r.path.startsWith(prefix));
+      assert.ok(matching.length > 0, `no route matches ${prefix} — the allowlist reason is stale`);
+      for (const r of matching) {
+        assert.ok(
+          /\bauthMiddleware\b/.test(r.chain) && /\brequireWrite\b/.test(r.chain),
+          `${r.method.toUpperCase()} ${r.path} is not behind authMiddleware + requireWrite, ` +
+          'so the repository it reaches can no longer be allowlisted out of the ACL gate.'
+        );
+      }
+    }
+
+    // wildfires is allowlisted specifically for having NO read path. Assert the absence.
+    assert.strictEqual(
+      routes.filter(r => r.method === 'get' && r.path.startsWith('/wildfires')).length, 0,
+      'a GET /wildfires route exists again — wildfires.js now needs a real ACL gate'
+    );
   });
 });
