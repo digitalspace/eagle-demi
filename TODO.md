@@ -139,18 +139,19 @@ first gated sync against dev.
 
 ## Infrastructure
 
-- [ ] **38 CodeQL alerts open on `main`, all high — and 37 of them are two decisions, not 37
-      problems.** Counted 2026-08-07, after #59–#65:
-      31 `js/missing-rate-limiting`, 4 `js/path-injection`, 1 `js/insecure-helmet-configuration`,
-      1 `js/clear-text-logging`, 1 `js/insufficient-password-hash`. The 3 medium
-      `actions/missing-workflow-permissions` from the first scan are fixed — `pr.yaml` declares
-      `permissions: contents: read` — and `js/incomplete-multi-character-sanitization` is closed by
-      the fix recorded below. **Only the rate-limiting cluster is real work**; every other alert
-      here is decided-and-dismissible, listed under "Needs a human".
-      - **31 x `js/missing-rate-limiting`** across `src/routes/api.js` and `src/app.js:126` — up
-        from ~30 because #60 added the `/admin/api-keys` routes, and it will keep tracking the route
-        count until this is fixed. One root cause, one fix: there is no rate limiter mounted on the
-        Express app at all. An `express-rate-limit` on the router closes the whole cluster. Worth
+- [ ] **31 CodeQL alerts open on `main`, and they are now ONE problem.** After #59–#65 there were
+      38; the 7 that were decisions rather than defects were dismissed with their reasons on
+      2026-08-07, so what is left is a single cluster. That is the point of the number: it used to
+      be a pile to triage and is now a backlog item with one fix.
+      The 3 medium `actions/missing-workflow-permissions` from the first scan are fixed — `pr.yaml`
+      declares `permissions: contents: read` — and `js/incomplete-multi-character-sanitization` is
+      closed by the fix recorded below. The dismissed 7 are kept written down here because a
+      dismissal is invisible until someone re-derives the reasoning:
+      - **31 x `js/missing-rate-limiting`** across `src/routes/api.js` and `src/app.js:126` — the
+        only open cluster, up from ~30 because #60 added the `/admin/api-keys` routes, and it will
+        keep tracking the route count until this is fixed. One root cause, one fix: there is no
+        rate limiter mounted on the Express app at all. An `express-rate-limit` on the router closes
+        the whole cluster. Worth
         doing on its own merits — `/api/search` fans out to Azure AI Search on debounced keystrokes,
         and Basic tier allows 2 concurrent semantic requests per search unit.
       - **`js/insecure-helmet-configuration`** at `src/app.js:41` — helmet is mounted with
@@ -159,8 +160,8 @@ first gated sync against dev.
         serve the frontend at all — the `express.static` mounts and SPA routes that suggested it did
         are deleted (see below). What is left is exactly one HTML page, swagger-ui at `/api-docs`,
         whose inline initializer script and inline styles a default CSP blocks. A policy that
-        exempts the only page it covers protects nothing, so this is dismissed with that reason
-        rather than implemented — see "Needs a human".
+        exempts the only page it covers protects nothing. **Dismissed 2026-08-07** as "won't fix"
+        with that reason.
       - **`js/incomplete-multi-character-sanitization`** in
         `frontend/src/app/services/registry-state.service.ts` — **fixed 2026-08-06, and the alert
         named the smaller half of it.** `sanitizeHighlight` stripped tags with a single-pass
@@ -177,21 +178,21 @@ first gated sync against dev.
       - **4 x `js/path-injection`** in `src/controllers/nosql/document.js` (171, 177, 189, 220) are
         **false positives** — every one is `fs.promises.unlink(file.path)`, and `file.path` comes
         from `multer({ dest: config.uploadDir })`, which generates its own random filename and never
-        derives it from `originalname`. Dismiss as "used in tests"/"false positive" with that note so
-        they stop reappearing; do not "fix" them.
+        derives it from `originalname`. **Dismissed 2026-08-07** as false positives with that note;
+        do not "fix" them if they reappear.
       - **`js/clear-text-logging`** at `src/scripts/copy-blobs-to-azure.js:146` — also a **false
         positive**, and it was missing from this entry rather than newly appeared. The line is
         `console.log('Destination:', JSON.stringify(azure.describe()))`, and `describe()`
         (`src/storage/azureBlob.js:133`) returns `{backend, account, container, keyPrefix: null}` —
         resource names, no credential. CodeQL flags it because `config.*` reaches a log sink, not
-        because a secret does.
+        because a secret does. **Dismissed 2026-08-07.**
       - **`js/insufficient-password-hash`** at `src/helpers/api-key.js:31` — **new with #60, and a
         false positive.** The digest is SHA-256 over 32 bytes of `crypto.randomBytes`, not over a
         human-chosen password. A KDF exists to make guessing a low-entropy secret expensive; there
         is nothing to guess here, so bcrypt/argon2 would buy nothing and add latency to every
         authenticated request. What matters is that the compare is constant-time, which
         `api-key.js:verify` does with `timingSafeEqual`. The reasoning is already in that file's
-        header — dismiss with it.
+        header. **Dismissed 2026-08-07** with it.
 - [x] **Angular 19 → 22 and TypeScript 5.7 → 6.0, done 2026-08-06.** 19.2.25 was end-of-life and
       carried 7 runtime advisories with `first_patched_version: null` — XSS via i18n event-handler
       attributes, hydration DOM clobbering and response-cache poisoning, `HttpTransferCache`
@@ -337,10 +338,11 @@ first gated sync against dev.
       Nothing is broken while it is missing: `ADMIN_API_KEY` still authenticates, and that
       break-glass path is exactly how the first registry key is meant to be minted anyway. It is
       checked BEFORE the registry branch so a key-shaped `ADMIN_API_KEY` cannot shadow it.
-      **The documentation for this is unpushed.** `README.md` on `main` links
-      `ADR-007-Service-to-Service-Credentials` and `Connecting-an-Application-to-DEMI`; the wiki's
-      local HEAD is `beb585b` and its remote is `f63d794`, so both links 404 for everyone right now.
-      ADR-007 already carries the out-of-band container note. Push the wiki.
+      The documentation is live: `ADR-007-Service-to-Service-Credentials` and
+      `Connecting-an-Application-to-DEMI` were pushed to the wiki on 2026-08-07, which is what the
+      `README.md` links point at. ADR-007 carries the out-of-band container note. The lesson worth
+      keeping: the wiki is a **separate git repository** that no CI touches, so a README link merged
+      to `main` can 404 for as long as nobody pushes it — these two did.
 - [ ] **`main.bicep` has never been deployed and still should not be.** It now describes dev
       accurately — `az deployment group what-if` reports zero creates and zero deletes against the
       live group — but it has never actually run. The dev infra job was reduced to `az bicep build`
@@ -463,26 +465,22 @@ first gated sync against dev.
 - [ ] **Look at server-side highlighting on dev.** Shipped and unit-tested, but the visible result
       has not been eyeballed. Azure returns windowed fragments for a long field, so a long project
       description now renders as fragments joined by an ellipsis rather than in full.
-- [ ] **Dismiss 7 CodeQL alerts in the GitHub UI** — every open alert except the rate-limiting
-      cluster. Each is decided rather than deferred, and leaving them open reads as work nobody got
-      to; the reasons are all in the Infrastructure entry above, one line each:
-      - `js/insecure-helmet-configuration` — the API serves exactly one HTML page, swagger-ui at
-        `/api-docs`, which needs inline script and style, so a CSP would have to exempt the only
-        page it covers.
-      - 4 x `js/path-injection` — `fs.promises.unlink(file.path)` where multer generated the name.
-      - `js/clear-text-logging` — the logged object is `{backend, account, container}`, no secret.
-      - `js/insufficient-password-hash` — SHA-256 over 32 CSPRNG bytes, not a password; the compare
-        is `timingSafeEqual`.
-      Dismissing these takes the open count from 38 to 31, and then the number means something: it
-      is the rate-limiter cluster and nothing else.
-- [ ] **Delete the 21 branches on `origin` whose PRs are merged, and stop it recurring.** It was 12
-      (PRs #1–#10, #12, #13); #59–#65 added 7 more. The recurrence is one setting —
-      `delete_branch_on_merge` is **false** on this repository — so flip that first and the list
-      stops growing while the backlog is cleared. `git push --delete` is barred by settings deny, so
-      the deletions need a human or the GitHub UI.
-      Count it with `gh pr list --state merged` intersected against `git ls-remote --heads`, never
-      `git branch --merged`: these are squash merges, so a merged branch's tip is not an ancestor of
-      `main` and `--merged` reports 1.
+- [x] **7 CodeQL alerts dismissed with their reasons, 2026-08-07.** Every open alert except the
+      rate-limiting cluster: `js/insecure-helmet-configuration` as "won't fix", the 4
+      `js/path-injection`, `js/clear-text-logging` and `js/insufficient-password-hash` as false
+      positives. The reasons are on the alerts AND in the Infrastructure entry above, because a
+      dismissal comment is invisible to anyone reading the repo. Open count 38 → 31, and the number
+      now means one thing: the rate-limiter cluster.
+- [ ] **`delete_branch_on_merge` is still false — flip it.** The 21 stale branches it produced are
+      gone (deleted 2026-08-07; `origin` now holds `main`, the open Dependabot branches and nothing
+      else), but the setting that made them accumulate is unchanged, so the pile rebuilds one merge
+      at a time. One checkbox in repository settings, or
+      `gh api -X PATCH repos/digitalspace/eagle-demi -f delete_branch_on_merge=true`.
+      When it does need counting again: `gh pr list --state merged` intersected against
+      `git ls-remote --heads`, never `git branch --merged` — these are squash merges, so a merged
+      branch's tip is not an ancestor of `main` and `--merged` reports 1.
+      Local worktrees under `.claude/worktrees/` still point at several of the deleted branches.
+      Harmless, but `git worktree prune` and a look at the locked one is overdue.
 
 ## Cost
 
