@@ -110,6 +110,10 @@ first gated sync against dev.
       Measured 2026-08-05, and the measurement is thin: `/api/projects` returns 382 rows, all
       `sourceSystem: 'track'`, and the first 250 rows of the `demi-projects` index carry no synthetic
       id. That read cannot see past ACLs and the list endpoint ignores `pageNum`, so it is not proof.
+      **And it is now known to be far off.** `GET /db/stats` counts under `systemAccess()` and
+      reports **2,248 projects** (2026-08-07) against those 382 public rows. That gap is not by
+      itself evidence of seeded phantoms — unpublished Track projects live in it too — but it is
+      1,866 rows nobody has looked at, and the purge cannot be called a no-op until something has.
       **Count with `systemAccess()` first** — `projectsRepo.listBySourceSystem(systemAccess(), 'nrpti')`
       — and that count is also what decides the `ponytail:` note in `sync-nrpti.js`: the
       seeded-projects-last `sort()` is dead the moment the purge reports 0, and should be deleted then.
@@ -321,28 +325,25 @@ first gated sync against dev.
       `main.bicep` behind `deployDocumentStorage`, which defaults false. The argument is
       per-environment isolation, not cost. Needs `Storage Blob Delegator` on the identity or every
       download link fails to sign — it is not implied by `Storage Blob Data Contributor`.
-- [ ] **Service credentials are LIVE on dev and cannot work: the `apikeys` container does not
-      exist.** #60 shipped per-consumer registry keys — `X-Api-Key: demi_<env>_<keyId>_<secret>`,
-      minted through `POST /admin/api-keys`, with their own roles, expiry and revocation — plus the
-      `demi-service-read` read-only tier and `requireWrite` on every mutating route. All of that is
-      deployed, because a merge to `main` deploys dev. But `src/repositories/api-keys.js` reads a
-      Cosmos container called `apikeys` that is declared **only** in
-      `azure/modules/cosmos-nosql.bicep`, and that template has never run — see the entry below,
-      which is deliberate and does not change for this. So today `POST /admin/api-keys` throws on
-      the upsert and every registry-format key 401s.
-      **This is not a code fix and it is not a reason to deploy `main.bicep`.** Container creation
-      is a control-plane call: create `apikeys` on `demi-cosmos-dev`, database `demi`, partition key
-      `/id` — the id IS the public keyId, which is what makes verification a single-partition point
-      read on the hot path of every keyed request. The Bicep declaration exists so the template
-      keeps describing dev accurately, not as the delivery mechanism.
-      Nothing is broken while it is missing: `ADMIN_API_KEY` still authenticates, and that
-      break-glass path is exactly how the first registry key is meant to be minted anyway. It is
-      checked BEFORE the registry branch so a key-shaped `ADMIN_API_KEY` cannot shadow it.
-      The documentation is live: `ADR-007-Service-to-Service-Credentials` and
-      `Connecting-an-Application-to-DEMI` were pushed to the wiki on 2026-08-07, which is what the
-      `README.md` links point at. ADR-007 carries the out-of-band container note. The lesson worth
-      keeping: the wiki is a **separate git repository** that no CI touches, so a README link merged
-      to `main` can 404 for as long as nobody pushes it — these two did.
+- [x] **Service credentials work — the `apikeys` container was created 2026-08-07.** #60 shipped
+      per-consumer registry keys (`X-Api-Key: demi_<env>_<keyId>_<secret>`, minted through
+      `POST /admin/api-keys`, with their own roles, expiry and revocation), the `demi-service-read`
+      read-only tier, and `requireWrite` on every mutating route. It deployed the moment it merged,
+      and for a few hours it could not work: `src/repositories/api-keys.js` reads a Cosmos container
+      declared **only** in `azure/modules/cosmos-nosql.bicep`, a template that has never run.
+      Fixed WITHOUT deploying that template, which is the point worth keeping: container creation is
+      control-plane, so it is one `az cosmosdb sql container create -g c4b0a8-dev-rg
+      -a demi-cosmos-dev -d demi -n apikeys --partition-key-path /id`, with the same indexing policy
+      the Bicep declares (`/createdAt` indexed; `/*`, `/hash` and `/_etag` excluded — nothing
+      queries by the digest, and an index is one more copy of it). The Bicep declaration exists so
+      the template keeps describing dev, not as the delivery mechanism.
+      Verified end to end: `GET /api/admin/api-keys` with the break-glass key answers **200 `[]`**,
+      which is the discriminator — it proves the container exists AND that the app reaches it over
+      the private endpoint. The Azure MCP cannot do this check: its Cosmos tools are data-plane and
+      the account firewall answers 403 to anything off the VNet, so the control plane (ARM) is the
+      only way in from a laptop.
+      **The registry is empty, so `ADMIN_API_KEY` is still the only credential.** Minting the first
+      real key is the next step, and that is what break-glass is for.
 - [ ] **`main.bicep` has never been deployed and still should not be.** It now describes dev
       accurately — `az deployment group what-if` reports zero creates and zero deletes against the
       live group — but it has never actually run. The dev infra job was reduced to `az bicep build`
@@ -379,9 +380,14 @@ first gated sync against dev.
       2026-08-06: `api/index.js` starts the Azure Monitor OpenTelemetry distro only
       `if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING)`, and `demi-api-dev` has no such app
       setting. Nor could it have a working one — `az group resource list` on `c4b0a8-dev-rg` shows
-      neither `demi-logs-dev` nor `demi-insights-dev`, only the portal-created orphan
-      `workspace-c4b0a8devrgYb8e` that `azure/modules/observability.bicep` was written to replace.
-      That module has never been deployed, because `main.bicep` has never been deployed.
+      neither `demi-logs-dev` nor `demi-insights-dev`. The portal-created orphan
+      `workspace-c4b0a8devrgYb8e` that `azure/modules/observability.bicep` was written to replace is
+      **deleted** (2026-08-07) — it had ingested zero rows and no diagnostic setting anywhere pointed
+      at it, so it was never going to become the pipeline. The two `setByPolicy-LogAnalytics`
+      settings on Cosmos and AI Search go to the landing zone's own
+      `bcgov-managed-lz-live-la` in a different subscription; platform telemetry, not ours, and not
+      queryable as an app log. That module has never been deployed, because `main.bicep` has never
+      been deployed.
       So every "the reason is logged" claim in this file means "written to the App Service log
       stream", which is visible only to somebody already watching, and gone after. That is the exact
       failure `observability.bicep`'s own header describes, and it is why the ranking entry above had

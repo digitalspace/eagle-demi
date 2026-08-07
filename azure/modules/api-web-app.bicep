@@ -180,17 +180,20 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           value: identityClientId
         }
         // Cosmos DB for NoSQL. Keyless, so there is no connection string — just where it is and
-        // which database. COSMOS_DATABASE is the older name and is still read as a fallback.
+        // which database.
+        //
+        // No COSMOS_DATABASE. This template used to set it too, with a comment claiming it was
+        // "still read as a fallback" — it is not: `src/db/cosmos-nosql.js:38` reads
+        // COSMOS_NOSQL_DATABASE and nothing else, and no other file reads COSMOS_DATABASE at all.
+        // On dev it held `epic`, the Mongo-era database name, so the one thing it did was make the
+        // deployed configuration look like it still pointed at a database that no longer exists.
+        // Removed from dev 2026-08-07 and from here, so the template keeps describing dev.
         {
           name: 'COSMOS_ENDPOINT'
           value: cosmosEndpoint
         }
         {
           name: 'COSMOS_NOSQL_DATABASE'
-          value: cosmosDatabase
-        }
-        {
-          name: 'COSMOS_DATABASE'
           value: cosmosDatabase
         }
         // No Cosmos DB for MongoDB API settings. COSMOSDB_URI, COSMOSDB_DATABASE, MONGODB_URI and
