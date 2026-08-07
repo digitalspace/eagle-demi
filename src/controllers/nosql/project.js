@@ -11,17 +11,16 @@
  */
 
 const projects = require('../../repositories/projects');
-const fragments = require('../../repositories/fragments');
 const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const aiSearch = require('../../search/ai-search');
 
 exports.getProjects = async (req, res) => {
   try {
     const access = resolveAccess(req);
-    const { regionalDistrict, municipality, electoralDistrict, includeNrpti, includeSeeded } = req.query;
+    const { regionalDistrict, municipality, electoralDistrict, includeSeeded } = req.query;
 
     // Provenance filter, orthogonal to visibility. Default is Track-sourced projects only.
-    const allowNonTrack = includeNrpti === 'true' || includeSeeded === 'true';
+    const allowNonTrack = includeSeeded === 'true';
 
     const { items, continuationToken } = await projects.listVisible(access, {
       trackOnly: !allowNonTrack,
@@ -52,26 +51,6 @@ exports.getProject = async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
     return res.json(project);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-};
-
-/**
- * Fragments the caller may see for a project (e.g. the NRPTI aggregate).
- * A caller without the fragment's roles simply gets fewer items — never a stripped object.
- */
-exports.getProjectFragments = async (req, res) => {
-  try {
-    const access = resolveAccess(req);
-
-    const project = await projects.getById(access, req.params.id);
-    if (!project) {
-      return res.status(404).json({ error: 'Project not found' });
-    }
-
-    const { items } = await fragments.listForProject(access, req.params.id);
-    return res.json(items);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

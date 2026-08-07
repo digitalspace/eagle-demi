@@ -77,7 +77,7 @@ test('access gate coverage', async (t) => {
   await t.test('there are repositories to check', () => {
     // Guards the whole file: a bad path would make every assertion below vacuous, and a suite that
     // passes because it examined nothing is the failure this repo keeps writing down.
-    assert.ok(all.length >= 8, `expected the repository directory, found ${all.length} files`);
+    assert.ok(all.length >= 7, `expected the repository directory, found ${all.length} files`);
   });
 
   await t.test('every allowlisted name still exists', () => {

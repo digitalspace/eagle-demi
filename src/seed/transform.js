@@ -18,7 +18,7 @@ const SECURE_ROLES = ['sysadmin', 'staff', 'demi-admin'];
 /**
  * ACL for a seeded item.
  *
- * Upstream `read[]` is preserved VERBATIM when present — Eagle and NRPTI both carry role types
+ * Upstream `read[]` is preserved VERBATIM when present — Eagle carries role types
  * already (`project-team`, `admin:nrced`, `public`), and rewriting them would either widen an
  * upstream restriction or silently drop a role. Privileged DEMI callers do not need to appear in
  * the list: `readClause` short-circuits them to `true`.
@@ -131,90 +131,6 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
 }
 
 /**
- * An NRPTI record -> the DEMI `records` model.
- *
- * Returns null when `_epicProjectId` does not resolve. That is the entire replacement for the
- * fuzzy name-matching apparatus: no `normalizeProjectName`, no hardcoded "conuma coal" /
- * "chetwynd" cases, no `$regex` name match, and above all **no auto-created project**. The old
- * seeder invented one project per unmatched location string and produced 3,382 junk rows.
- */
-function transformRecord(record, projectIndex, opts = {}) {
-  if (!record || !record._id) {
-    throw new TypeError('[seed] an NRPTI record with _id is required');
-  }
-
-  const projectId = projectIndex.resolve(record._epicProjectId);
-  if (!projectId) return null;
-
-  const read = seedAcl(record.read);
-
-  return {
-    id: String(record._id),
-    projectId: String(projectId),
-    sourceSystem: 'nrpti',
-    nrptiId: String(record._id),
-
-    dataset: record._schemaName || '',
-    recordName: record.recordName || '',
-    recordType: record.recordType || '',
-    projectName: record.projectName || '',
-    issuingAgency: record.issuingAgency || '',
-    issuedTo: record.issuedTo || null,
-    dateIssued: toIsoOrNull(record.dateIssued),
-    sourceSystemRef: record.sourceSystemRef || '',
-
-    read,
-    isPublished: read.includes('public'),
-    updatedAt: opts.now || new Date().toISOString()
-  };
-}
-
-/**
- * Bounded compliance aggregate for a project's records.
- *
- * The old code embedded full record objects into each project **twice**
- * (`sync-nrpti.js:356,364`), each carrying its raw upstream payload — a ~250-record ceiling
- * against the 2 MB item limit that the Mongo API's 16 MB limit had been masking. Only these
- * counters go on the project side; the records themselves live in their own container.
- */
-function emptySummary() {
-  return {
-    recordCount: 0,
-    orderCount: 0,
-    inspectionCount: 0,
-    ticketCount: 0,
-    lastRecordDate: null
-  };
-}
-
-/**
- * Fold one record into a summary, in place.
- *
- * Incremental so the seeder can stream: records are written per project in batches and never all
- * held in memory, but the aggregate still needs every record. Five counters per project is
- * nothing; 100,000 record objects is not.
- */
-function accumulateRecord(summary, record) {
-  summary.recordCount++;
-  const dataset = (record.dataset || '').toLowerCase();
-  if (dataset === 'order') summary.orderCount++;
-  else if (dataset === 'inspection') summary.inspectionCount++;
-  else if (dataset === 'ticket') summary.ticketCount++;
-
-  if (record.dateIssued &&
-      (!summary.lastRecordDate || record.dateIssued > summary.lastRecordDate)) {
-    summary.lastRecordDate = record.dateIssued;
-  }
-  return summary;
-}
-
-function summarizeRecords(records) {
-  const summary = emptySummary();
-  for (const r of records || []) accumulateRecord(summary, r);
-  return summary;
-}
-
-/**
  * A static boundary export -> the DEMI `boundaries` model.
  *
  * **Simplified geometry only.** Full-resolution GeoJSON is already a build artifact under
@@ -256,9 +172,5 @@ module.exports = {
   toIsoOrNull,
   resolveListLabel,
   transformDocument,
-  transformRecord,
-  emptySummary,
-  accumulateRecord,
-  summarizeRecords,
   transformBoundary
 };

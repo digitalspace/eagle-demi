@@ -19,12 +19,12 @@ def package_api(repo_root, zip_path):
     # different directory name.
     # ‼️ `scripts` here is the ROOT one — deploy tooling (this file, deploy-azure.sh, the geojson
     # exporters). It is NOT `src/scripts`, which IS runtime: `src/controllers/db.js` requires
-    # `../scripts/sync-nrpti` and `src/controllers/wildfire.js` requires `../scripts/sync-wildfires`,
-    # both resolving under `src/`. Two directories, near-identical names, opposite fates.
+    # `src/controllers/wildfire.js` requires `../scripts/sync-wildfires`, resolving under `src/`.
+    # Two directories, near-identical names, opposite fates.
     #
     # The `rel_root == "."` guard below is what keeps them apart. Remove that guard and `src/scripts`
-    # disappears too, breaking `POST /admin/sync/nrpti` and `POST /admin/sync/wildfires` at runtime
-    # with an ENOENT no unit test would catch. `test/scripts/package-api.test.js` pins both halves.
+    # disappears too, breaking `POST /admin/sync/wildfires` at runtime
+    # with an ENOENT no unit test would catch. `test/scripts/package-api.test.js` pins it.
     #
     # `test`, `azure`, `.github` and `.vscode` are not runtime either — nothing reachable from
     # index.js -> api/index.js -> src/** loads them. They were shipped only because nothing excluded

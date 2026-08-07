@@ -78,8 +78,8 @@ async function getById(access, id) {
 }
 
 /**
- * Look up by an alternate identity. Used by the seeders and the NRPTI linker, which hold an
- * Eagle ObjectId (`_epicProjectId`) rather than a Track id.
+ * Look up by an alternate identity. Used by the seeders, which hold an Eagle ObjectId rather
+ * than a Track id.
  *
  * Cross-partition by necessity — eagleId is not the partition key — but it returns at most
  * one item, so the cost is a few RU, not a scan.
@@ -93,16 +93,6 @@ async function getByEagleId(access, eagleId) {
 
   const { items } = await cosmos.query(CONTAINER, spec, { maxItemCount: 1 });
   return items[0] || null;
-}
-
-/** Projects that carry Track provenance — used when rebuilding lookups during a sync. */
-async function listBySourceSystem(access, sourceSystem) {
-  const spec = selectWhere({
-    access,
-    partitionField: PARTITION_FIELD,
-    criteria: [eq('sourceSystem', sourceSystem, '@sourceSystem')]
-  });
-  return cosmos.query(CONTAINER, spec);
 }
 
 /**
@@ -138,22 +128,12 @@ async function listWithCentroid(access) {
 }
 
 /**
- * Whole-item write. Safe here only because NRPTI records are no longer folded into the
- * project — with the old embedded arrays a replace from the Track sync would have silently
- * discarded them. Use the patch helpers below for partial updates.
+ * Whole-item write. Safe only because nothing is folded into the project as an embedded array
+ * any more — a replace from the Track sync would silently discard it. Use the patch helpers
+ * below for partial updates.
  */
 async function upsert(project) {
   return cosmos.upsert(CONTAINER, project);
-}
-
-/**
- * Replace the NRPTI aggregate. A patch, not a read-modify-write: atomic, and it cannot erase
- * fields written by the Track or wildfire syncs.
- */
-async function patchNrptiStats(id, stats) {
-  return cosmos.patch(CONTAINER, String(id), String(id), [
-    { op: 'set', path: '/sources/nrpti', value: stats }
-  ]);
 }
 
 async function patchWildfireStats(id, stats) {
@@ -183,10 +163,8 @@ module.exports = {
   getById,
   getByEagleId,
   listByIds,
-  listBySourceSystem,
   listWithCentroid,
   upsert,
-  patchNrptiStats,
   patchWildfireStats,
   patchBoundaries,
   deleteById

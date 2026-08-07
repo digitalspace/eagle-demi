@@ -10,7 +10,6 @@
  *
  *   Track       src/data/track_projects_enriched.json (checked in)     382 projects
  *   Eagle       eagle-api /api/public/search                           359 projects, 60,661 docs, 213 List items
- *   NRPTI       nrpti-api /api/public/search                           67,287 Inspections alone
  *   Boundaries  frontend/public/assets/geojson/*.geojson (checked in)   281 features
  */
 
@@ -19,17 +18,12 @@ const path = require('path');
 
 const EAGLE_API_BASE = process.env.EAGLE_API_BASE ||
   'https://eagle-dev.apps.silver.devops.gov.bc.ca/api/public';
-const NRPTI_API_BASE = process.env.NRPTI_API_BASE ||
-  'https://nrpti-api-f00029-prod.apps.silver.devops.gov.bc.ca/api/public';
 
 /**
  * The API caps pageSize at 100 regardless of what is requested — asking for 1000 silently
  * returns 100, which makes a naive loop appear to work while reading a tenth of the data.
  */
 const PAGE_SIZE = 100;
-
-/** Datasets worth ingesting from NRPTI. Anything not listed is not fetched at all. */
-const NRPTI_DATASETS = ['Order', 'Inspection', 'Ticket', 'AdministrativePenalty', 'Certificate'];
 
 const FETCH_TIMEOUT_MS = parseInt(process.env.SEED_FETCH_TIMEOUT_MS || '120000', 10);
 const FETCH_RETRIES = 3;
@@ -156,28 +150,6 @@ async function fetchListLookup() {
 }
 
 /**
- * Stream NRPTI records across the datasets worth ingesting.
- *
- * `onPage` receives (items, fetchedInDataset, datasetTotal, dataset). Progress is reported PER
- * PAGE, not per dataset: Inspection alone is 67,287 records over 673 pages, and a per-dataset
- * callback emits nothing for the ~20 minutes that takes — which is indistinguishable from hung.
- *
- * Nothing is accumulated. The dataset is already on each record as `_schemaName`, and the caller
- * filters by resolvable `_epicProjectId` rather than by dataset.
- */
-async function streamNrptiRecords(onPage) {
-  const perDataset = {};
-  for (const dataset of NRPTI_DATASETS) {
-    const { count } = await fetchAllPages(NRPTI_API_BASE, dataset, {
-      accumulate: false,
-      onPage: onPage ? (items, fetched, total) => onPage(items, fetched, total, dataset) : undefined
-    });
-    perDataset[dataset] = count;
-  }
-  return perDataset;
-}
-
-/**
  * The checked-in boundary exports.
  *
  * Read from the frontend asset directory because that is where the export script already writes
@@ -201,15 +173,12 @@ function loadBoundaries() {
 
 module.exports = {
   EAGLE_API_BASE,
-  NRPTI_API_BASE,
   PAGE_SIZE,
-  NRPTI_DATASETS,
   unwrapSearchResponse,
   fetchAllPages,
   loadTrackProjects,
   fetchEagleProjects,
   streamEagleDocuments,
   fetchListLookup,
-  streamNrptiRecords,
   loadBoundaries
 };

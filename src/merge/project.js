@@ -304,12 +304,11 @@ function buildRegistry(trackProjects, eagleProjects, opts = {}) {
 }
 
 /**
- * Index for resolving an NRPTI record's `_epicProjectId` (an Eagle id) to a canonical project.
+ * Index for resolving an upstream identity (an Eagle id or a Track id) to a canonical project.
  *
- * This replaces the entire fuzzy-name-matching apparatus — `normalizeProjectName` with its
- * hardcoded "conuma coal"/"chetwynd" cases, the multi-segment split and the token-inclusion
- * pass. `_epicProjectId` was populated on 200/200 sampled NRPTI records, so the deterministic
- * join is enough. Records that do not resolve are DROPPED rather than given an invented parent.
+ * The seeder's documents stage uses it to resolve partition keys, so it must survive any change
+ * to what else is being ingested. A deterministic id join only — nothing that resolves by name.
+ * Rows that do not resolve are DROPPED rather than given an invented parent.
  */
 function buildProjectIndex(projects) {
   const byEagleId = new Map();

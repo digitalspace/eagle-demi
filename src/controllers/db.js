@@ -1,11 +1,9 @@
 'use strict';
 
 const { systemAccess } = require('../helpers/access-sql');
-const { logger } = require('../utils/logger');
 const projectsRepo = require('../repositories/projects');
 const documentsRepo = require('../repositories/documents');
 const boundariesRepo = require('../repositories/boundaries');
-const recordsRepo = require('../repositories/records');
 const aiSearch = require('../search/ai-search');
 
 /**
@@ -87,10 +85,9 @@ async function getDbStats(req, res) {
   try {
     const access = systemAccess();
 
-    const [projects, documents, records, boundaries] = await Promise.all([
+    const [projects, documents, boundaries] = await Promise.all([
       projectsRepo.countVisible(access),
       documentsRepo.countVisible(access),
-      recordsRepo.countVisible(access),
       // No access argument — the boundaries container carries no read[] at all.
       boundariesRepo.count()
     ]);
@@ -102,7 +99,7 @@ async function getDbStats(req, res) {
       database: 'demi',
       connectionState: 'connected',
       driver: 'azure-cosmos-nosql',
-      stats: { projects, documents, boundaries, records },
+      stats: { projects, documents, boundaries },
       ...(indexProgress ? { indexProgress } : {})
     });
   } catch (err) {
@@ -116,42 +113,7 @@ async function getDbStats(req, res) {
 // over the App Service SSH tunnel — a 60k-document seed outlives any HTTP request, so it never
 // belonged behind a route. See README.md for the recipe.
 
-/**
- * Trigger NRPTI sync process manually via HTTP API
- */
-async function runNrptiSyncHandler(req, res) {
-  try {
-    const { syncNrptiData } = require('../scripts/sync-nrpti');
-    const isAsync = req.query.async === 'true';
-
-    if (isAsync) {
-      // The async response cannot carry the summary, and the sync reports to stdout only — so the
-      // skip count and the unresolvable names an unmatched record leaves behind would exist
-      // nowhere durable. This is the only trace of what the run dropped.
-      syncNrptiData()
-        .then((results) => logger.info('Background NRPTI sync complete', results))
-        .catch((err) => logger.error('Background NRPTI sync error:', { error: err.message, stack: err.stack }));
-      return res.json({
-        success: true,
-        message: 'NRPTI sync process triggered in background.'
-      });
-    }
-
-    logger.info(' Starting manual NRPTI sync...');
-    const results = await syncNrptiData();
-    res.json({
-      success: true,
-      message: 'NRPTI sync completed successfully.',
-      results
-    });
-  } catch (err) {
-    logger.error('NRPTI sync error:', { error: err.message, stack: err.stack });
-    res.status(500).json({ success: false, error: err.message });
-  }
-}
-
 module.exports = {
   getDbStats,
-  getIndexProgressHandler,
-  runNrptiSyncHandler
+  getIndexProgressHandler
 };

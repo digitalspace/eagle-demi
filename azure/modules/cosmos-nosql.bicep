@@ -182,41 +182,6 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
   }
 }
 
-// Independently ACL'd slices of a project (e.g. NRPTI aggregates). Making the fragment its
-// own item means the existing readClause applies unchanged — a caller who may not see the
-// fragment never fetches it, rather than fetching then stripping.
-resource projectFragmentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
-  parent: database
-  name: 'project_fragments'
-  properties: {
-    resource: {
-      id: 'project_fragments'
-      partitionKey: {
-        paths: [
-          '/projectId'
-        ]
-        kind: 'Hash'
-      }
-      indexingPolicy: {
-        indexingMode: 'consistent'
-        automatic: true
-        includedPaths: [
-          {
-            path: '/projectId/?'
-          }
-          {
-            path: '/fragmentType/?'
-          }
-          {
-            path: '/read/[]/?'
-          }
-        ]
-        excludedPaths: noIndex
-      }
-    }
-  }
-}
-
 // ~60k from Eagle. GET /documents?project=X is the dominant list, so /projectId makes it a
 // single-partition query. By-id reads become a cross-partition point lookup: +2-3 RU, not a scan.
 resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
@@ -258,54 +223,6 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
           }
           {
             path: '/updatedAt/?'
-          }
-        ]
-        excludedPaths: noIndex
-      }
-    }
-  }
-}
-
-// NRPTI compliance records. 0 of 4,045 are unlinked, so /projectId is safe (no hot
-// empty-string partition). Referencing these instead of folding them into projects is what
-// removes the ~250-record 2 MB ceiling. /sourceData is deliberately unindexed.
-resource recordsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
-  parent: database
-  name: 'records'
-  properties: {
-    resource: {
-      id: 'records'
-      partitionKey: {
-        paths: [
-          '/projectId'
-        ]
-        kind: 'Hash'
-      }
-      indexingPolicy: {
-        indexingMode: 'consistent'
-        automatic: true
-        includedPaths: [
-          {
-            path: '/projectId/?'
-          }
-          {
-            path: '/read/[]/?'
-          }
-          {
-            // `dataset` is the DEMI field (seed/transform.js writes it from NRPTI's
-            // `_schemaName`). `nrptiSchemaName` is only the TYPESENSE index field name — indexing
-            // it here would index a property no item has, while the field the repository actually
-            // filters on stayed unindexed and scanned.
-            path: '/dataset/?'
-          }
-          {
-            path: '/issuingAgency/?'
-          }
-          {
-            path: '/dateIssued/?'
-          }
-          {
-            path: '/recordName/?'
           }
         ]
         excludedPaths: noIndex

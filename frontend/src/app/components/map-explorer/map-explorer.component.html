@@ -567,31 +567,6 @@
                 </div>
               </div>
 
-              <!-- NRPTI Compliance Origin -->
-              <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 0.5rem; border-left: 4px solid #16a34a;">
-                <div style="display:flex; justify-content:space-between; margin-bottom: 0.25rem;">
-                  <span style="font-weight: 700; color: #14532d;"><i class="fa-solid fa-gavel"></i> NRPTI Compliance Records</span>
-                  <span style="background: #16a34a; color: white; font-size:0.6rem; padding: 0.1rem 0.3rem; border-radius:4px; font-weight:700;">NRPTI</span>
-                </div>
-                <div style="color: #14532d; font-size: 0.75rem;">
-                  <p style="margin: 0.15rem 0;"><strong>Inspections & Orders:</strong> {{ (service.selectedProjectRecords()?.length) || service.selectedProject()?.sources?.nrpti?.recordCount || service.selectedProject()?.sources?.nrpti?.count || (service.selectedProject()?.rawMetadata?.nrptiRecords ? service.selectedProject()?.rawMetadata?.nrptiRecords.length : 0) }} records found</p>
-                  <p style="margin: 0.15rem 0;"><strong>Compliance Status:</strong> Active Monitoring</p>
-                  @if (service.selectedProjectRecords() && service.selectedProjectRecords()!.length > 0) {
-                    <div style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem; max-height: 200px; overflow-y: auto;">
-                      @for (rec of service.selectedProjectRecords(); track rec._id || rec.id) {
-                        <div style="background: rgba(255,255,255,0.85); border: 1px solid #bbf7d0; padding: 0.35rem 0.5rem; border-radius: 4px; font-size: 0.7rem;">
-                          <div style="font-weight: 600; color: #0f5132;">{{ rec.recordType || rec.nrptiSchemaName || 'Inspection' }}: {{ rec.recordName || rec.title || 'Regulatory Compliance Record' }}</div>
-                          <div style="color: #14532d; font-size: 0.65rem; margin-top: 0.15rem; display: flex; justify-content: space-between;">
-                            <span><strong>Date:</strong> {{ rec.dateIssued ? (rec.dateIssued | date:'mediumDate') : 'N/A' }}</span>
-                            <span><strong>Agency:</strong> {{ rec.issuingAgency || 'EAO' }}</span>
-                          </div>
-                        </div>
-                      }
-                    </div>
-                  }
-                </div>
-              </div>
-
               <!-- DataBC Active Wildfire Origin -->
               <div style="background: #fff5f5; border: 1px solid #fed7d7; border-radius: 6px; padding: 0.5rem; border-left: 4px solid #e53e3e;">
                 <div style="display:flex; justify-content:space-between; margin-bottom: 0.25rem;">

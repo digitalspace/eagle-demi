@@ -14,13 +14,11 @@
  *   2. Eagle documents                       -> documents      60,578
  *   3. Static boundary exports               -> boundaries     281
  *
- * `records` (NRPTI) is a valid stage but NOT in the default set — see DEFAULT_STAGES.
- *
  * **DRY RUN BY DEFAULT.** `--live` is required to write anything. Verification gates run in both
  * modes, so a dry run is a genuine pre-flight check and not just a preview.
  *
  * Usage:
- *   node src/scripts/seed-nosql.js [--live] [--only projects,documents,records,boundaries]
+ *   node src/scripts/seed-nosql.js [--live] [--only projects,documents,boundaries]
  *                                 [--limit-documents N]
  *
  * Without --only, runs DEFAULT_STAGES: projects, documents, boundaries.
@@ -35,40 +33,19 @@ const { buildRegistry, buildProjectIndex } = require('../merge/project');
 
 const projectsRepo = require('../repositories/projects');
 const documentsRepo = require('../repositories/documents');
-const recordsRepo = require('../repositories/records');
 const boundariesRepo = require('../repositories/boundaries');
-const fragmentsRepo = require('../repositories/fragments');
 
 /** Every stage `--only` accepts. */
-const ALL_STAGES = ['projects', 'documents', 'records', 'boundaries'];
+const ALL_STAGES = ['projects', 'documents', 'boundaries'];
 
-/**
- * What runs when `--only` is not given.
- *
- * **`records` is deliberately excluded.** DEMI's remit right now is projects and documents, and
- * NRPTI records are neither — they are compliance and enforcement *events* (67,287 Inspections,
- * 29,555 Tickets, 1,086 Orders, 891 AdministrativePenalties, 611 Certificates).
- *
- * They do carry `documents: [...]` references, which would make them worth having, except those
- * ids are not reachable: NRPTI's public API returns nothing for `dataset=Document`, an empty set
- * for `RecordDocument`, and 404 for `/api/public/document/<id>`. Dead ends.
- *
- * And only **2,238 of 99,430 (2.25%)** resolve to a project in the registry at all, because NRPTI
- * covers all BC natural-resource compliance rather than only EA'd projects.
- *
- * So the stage costs ~40 minutes of upstream fetching per seed for data outside the current remit.
- * The code stays and is tested — run `--only records` when compliance data matters.
- */
+/** What runs when `--only` is not given — every stage there is. */
 const DEFAULT_STAGES = ['projects', 'documents', 'boundaries'];
-
-/** Who may see a project's NRPTI compliance aggregate. Its own item, so its own ACL. */
-const NRPTI_FRAGMENT_ROLES = ['sysadmin', 'staff', 'demi-admin', 'compliance'];
 
 /**
  * Buffered items per project before a bulk write is issued.
  *
- * Documents and records are STREAMED, not accumulated: a dry run holding all 60,661 raw payloads
- * plus their transformed forms peaked at ~250 MB by document 45,000, and the API runs on a
+ * Documents are STREAMED, not accumulated: a dry run holding all 60,661 raw payloads plus
+ * their transformed forms peaked at ~250 MB by document 45,000, and the API runs on a
  * Consumption plan with 1.5 GB. Buffering per project keeps peak flat.
  *
  * Matches the Cosmos bulk limit so a full buffer is exactly one request.
@@ -95,7 +72,7 @@ function parseArgs(argv) {
 /**
  * Assertions that must hold for the seed to be correct.
  *
- * These are the two symptoms of the old NRPTI auto-seeder — synthetic ids and mass duplicate
+ * These are the two symptoms of the removed compliance auto-seeder — synthetic ids and mass duplicate
  * names — plus the ACL invariant that licenses deleting the legacy no-read[] tier. Checked
  * against the built data BEFORE writing, so a dry run catches a regression.
  *
@@ -107,7 +84,7 @@ function verifyProjects(projects) {
   const synthetic = projects.filter(p => Number(p.trackProjectId) >= 8000000);
   if (synthetic.length) {
     failures.push(`${synthetic.length} projects have a synthetic trackProjectId >= 8,000,000 ` +
-      '(the old NRPTI hash-id seeder)');
+      '(the removed hash-id auto-seeder)');
   }
 
   const byName = new Map();
@@ -166,9 +143,7 @@ async function seed(argv = [], deps = {}) {
   const repos = deps.repos || {
     projects: projectsRepo,
     documents: documentsRepo,
-    records: recordsRepo,
-    boundaries: boundariesRepo,
-    fragments: fragmentsRepo
+    boundaries: boundariesRepo
   };
 
   const summary = { mode: args.live ? 'live' : 'dry-run', stages: {}, failures: [] };
@@ -331,116 +306,6 @@ async function seed(argv = [], deps = {}) {
     log(`  documents ${args.live ? 'written' : 'would write'}: ${stats.built}\n`);
   }
 
-  // ── 3. Records + 4. NRPTI aggregate fragment ───────────────────────────────
-  if (args.only.includes('records')) {
-    log('Streaming NRPTI records...');
-
-    const buffers = new Map();     // projectId -> pending transformed records
-    const summaries = new Map();   // projectId -> running aggregate (5 counters, not records)
-    const perDataset = {};
-    // `dropped` is split by REASON, because the two mean opposite things:
-    //   noEpicProject  — the record has no _epicProjectId at all. Correct exclusion: NRPTI covers
-    //                    all BC natural-resource compliance, most of which was never an EA project.
-    //   unresolvable   — it HAS one, pointing at a project absent from the registry. That would
-    //                    mean the registry is incomplete, and is worth investigating.
-    // Reporting a single total hides which of those is happening at a 97% drop rate.
-    const stats = {
-      fetched: 0, built: 0, written: 0, fragments: 0,
-      droppedNoEpicProject: 0, droppedUnresolvable: 0
-    };
-    const unresolvableRefs = new Set();
-    let gateFailures = [];
-
-    const flush = async (projectId, recs) => {
-      gateFailures.push(...verifyItems(recs, 'records', 'projectId'));
-      if (args.live) {
-        await repos.records.bulkUpsertForProject(projectId, recs);
-        stats.written += recs.length;
-      }
-    };
-
-    await src.streamNrptiRecords(async (page, fetched, total, dataset) => {
-      perDataset[dataset] = fetched;
-      stats.fetched += page.length;
-
-      for (const record of page) {
-        const transformed = transform.transformRecord(record, projectIndex, { now });
-        if (!transformed) {
-          // No project seeding from NRPTI, ever. The old seeder turned each unmatched location
-          // string into a project and produced 3,382 junk rows named after cities and
-          // watercourses, with a hash id that collides in the low hundreds.
-          if (!record._epicProjectId) {
-            stats.droppedNoEpicProject++;
-          } else {
-            stats.droppedUnresolvable++;
-            if (unresolvableRefs.size < 50) unresolvableRefs.add(String(record._epicProjectId));
-          }
-          continue;
-        }
-        stats.built++;
-
-        const projectId = transformed.projectId;
-        if (!summaries.has(projectId)) summaries.set(projectId, transform.emptySummary());
-        // Accumulated incrementally so the records themselves need not be retained.
-        transform.accumulateRecord(summaries.get(projectId), transformed);
-
-        if (!buffers.has(projectId)) buffers.set(projectId, []);
-        buffers.get(projectId).push(transformed);
-      }
-
-      for (const [projectId, recs] of buffers) {
-        if (recs.length >= FLUSH_THRESHOLD) {
-          await flush(projectId, recs);
-          buffers.delete(projectId);
-        }
-      }
-
-      // Per PAGE, not per dataset: Inspection alone is 673 pages, and a per-dataset callback
-      // emits nothing for the ~20 minutes that takes — indistinguishable from hung.
-      if (fetched % 5000 === 0) log(`  ${dataset}: ${fetched}/${total ?? '?'}`);
-    });
-
-    for (const [projectId, recs] of buffers) {
-      if (recs.length) await flush(projectId, recs);
-    }
-    buffers.clear();
-
-    log(`  fetched ${stats.fetched}: ${JSON.stringify(perDataset)}`);
-    log(`  ${stats.built} resolvable across ${summaries.size} projects`);
-    log(`  dropped ${stats.droppedNoEpicProject} with NO _epicProjectId ` +
-      '(expected — NRPTI covers all BC resource compliance, not only EA projects)');
-    log(`  dropped ${stats.droppedUnresolvable} with an UNRESOLVABLE _epicProjectId` +
-      (stats.droppedUnresolvable
-        ? ` — registry may be incomplete: ${[...unresolvableRefs].slice(0, 3).join(', ')}`
-        : ''));
-
-    if (args.live) {
-      for (const [projectId, aggregate] of summaries) {
-        // Its OWN item in project_fragments, not a field on the project. Both the 2 MB fix (the
-        // old code embedded full record payloads into the project twice) and the fragment-ACL
-        // mechanism: a caller without the fragment role never fetches it at all.
-        await repos.fragments.put(projectId, 'nrpti', aggregate, NRPTI_FRAGMENT_ROLES);
-        stats.fragments++;
-      }
-    }
-
-    summary.stages.records = {
-      fetched: stats.fetched,
-      perDataset,
-      built: stats.built,
-      droppedNoEpicProject: stats.droppedNoEpicProject,
-      droppedUnresolvable: stats.droppedUnresolvable,
-      projects: summaries.size,
-      written: stats.written,
-      fragmentsWritten: stats.fragments
-    };
-    summary.failures.push(...new Set(gateFailures.map(f => f.replace(/^\d+ /, 'some '))));
-    gateFailures = [];
-
-    log(`  records ${args.live ? 'written' : 'would write'}: ${stats.built} ` +
-      `(+ ${summaries.size} nrpti fragments)\n`);
-  }
-
   // ── 5. Boundaries ──────────────────────────────────────────────────────────
   if (args.only.includes('boundaries')) {
     log('Loading static boundary exports...');
@@ -481,7 +346,6 @@ async function seed(argv = [], deps = {}) {
 module.exports = {
   ALL_STAGES,
   DEFAULT_STAGES,
-  NRPTI_FRAGMENT_ROLES,
   FLUSH_THRESHOLD,
   parseArgs,
   verifyProjects,

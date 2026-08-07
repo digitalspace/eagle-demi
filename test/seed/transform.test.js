@@ -7,7 +7,7 @@ const assert = require('node:assert');
 
 const {
   seedAcl, toNumber, toIsoOrNull, resolveListLabel,
-  transformDocument, transformRecord, summarizeRecords, transformBoundary,
+  transformDocument, transformBoundary,
   SECURE_ROLES
 } = require('../../src/seed/transform');
 
@@ -44,10 +44,10 @@ const LIST = new Map([
 
 test('seedAcl — every seeded item gets an explicit read[]', async (t) => {
   await t.test('preserves an upstream ACL verbatim', () => {
-    // Rewriting it would either widen an upstream restriction or drop a role. Both Eagle and
-    // NRPTI already carry role types, just from different vocabularies.
-    const nrpti = ['sysadmin', 'admin:nrced', 'admin:lng', 'admin:bcmi', 'public'];
-    assert.deepStrictEqual(seedAcl(nrpti), nrpti);
+    // Rewriting it would either widen an upstream restriction or drop a role. Upstream systems
+    // already carry role types, just from different vocabularies.
+    const upstream = ['sysadmin', 'admin:nrced', 'admin:lng', 'admin:bcmi', 'public'];
+    assert.deepStrictEqual(seedAcl(upstream), upstream);
   });
 
   await t.test('fails closed with no upstream ACL', () => {
@@ -151,97 +151,6 @@ test('transformDocument', async (t) => {
     assert.throws(() => transformDocument(EAGLE_DOC, null, LIST, OPTS), /resolved projectId/);
     assert.throws(() => transformDocument(EAGLE_DOC, '', LIST, OPTS), /resolved projectId/);
     assert.throws(() => transformDocument({ project: 'x' }, '207', LIST, OPTS), /_id is required/);
-  });
-});
-
-test('transformRecord — unresolvable means dropped, never invented', async (t) => {
-  const index = {
-    resolve: (ref) => (ref === '588511d0aaecd9001b826192' ? '207' : null)
-  };
-
-  const NRPTI_RECORD = {
-    _id: '5ebaecdb0c09f47591a9bdcb',
-    _schemaName: 'Inspection',
-    _epicProjectId: '588511d0aaecd9001b826192',
-    recordName: 'Inspection Report',
-    recordType: 'Inspection',
-    projectName: 'LNG Canada',
-    issuingAgency: 'AGENCY_EAO',
-    dateIssued: '2015-11-02T08:00:00.000Z',
-    sourceSystemRef: 'lng-csv',
-    read: ['sysadmin', 'admin:nrced', 'admin:lng', 'admin:bcmi', 'public']
-  };
-
-  await t.test('a resolvable record maps onto the canonical project', () => {
-    const r = transformRecord(NRPTI_RECORD, index, OPTS);
-    assert.strictEqual(r.projectId, '207');
-    assert.strictEqual(r.id, NRPTI_RECORD._id);
-    assert.strictEqual(r.dataset, 'Inspection');
-    assert.strictEqual(r.sourceSystem, 'nrpti');
-    assert.strictEqual(r.isPublished, true);
-    assert.deepStrictEqual(r.read, NRPTI_RECORD.read, 'NRPTI role vocabulary preserved');
-  });
-
-  await t.test('an unresolvable _epicProjectId returns null', () => {
-    // This one function replaces normalizeProjectName, its hardcoded "conuma coal"/"chetwynd"
-    // cases, the multi-segment split, the token-inclusion pass and the $regex name match. The
-    // old path invented a project per unmatched location string: 3,382 junk rows.
-    assert.strictEqual(transformRecord({ ...NRPTI_RECORD, _epicProjectId: 'nope' }, index, OPTS), null);
-    assert.strictEqual(transformRecord({ ...NRPTI_RECORD, _epicProjectId: null }, index, OPTS), null);
-    assert.strictEqual(transformRecord({ ...NRPTI_RECORD, _epicProjectId: '' }, index, OPTS), null);
-  });
-
-  await t.test('a record with no _id throws — it cannot be keyed', () => {
-    assert.throws(() => transformRecord({ _epicProjectId: 'x' }, index, OPTS), /_id is required/);
-  });
-});
-
-test('summarizeRecords — bounded aggregate, not embedded records', async (t) => {
-  const recs = [
-    { dataset: 'Order', dateIssued: '2020-01-01T00:00:00.000Z' },
-    { dataset: 'Inspection', dateIssued: '2022-06-01T00:00:00.000Z' },
-    { dataset: 'Inspection', dateIssued: '2021-01-01T00:00:00.000Z' },
-    { dataset: 'Ticket', dateIssued: null },
-    { dataset: 'Certificate', dateIssued: '2019-01-01T00:00:00.000Z' }
-  ];
-
-  await t.test('counts by dataset and tracks the latest date', () => {
-    const s = summarizeRecords(recs);
-    assert.strictEqual(s.recordCount, 5);
-    assert.strictEqual(s.orderCount, 1);
-    assert.strictEqual(s.inspectionCount, 2);
-    assert.strictEqual(s.ticketCount, 1);
-    assert.strictEqual(s.lastRecordDate, '2022-06-01T00:00:00.000Z');
-  });
-
-  await t.test('the output size is fixed regardless of input size', () => {
-    // The old code embedded full record objects into each project TWICE, each carrying its raw
-    // upstream payload — a ~250-record ceiling against the 2 MB item limit.
-    const many = Array.from({ length: 5000 }, () => ({ dataset: 'Inspection', dateIssued: null }));
-    const s = summarizeRecords(many);
-    assert.strictEqual(s.recordCount, 5000);
-    assert.ok(JSON.stringify(s).length < 200, 'the aggregate must not grow with the record count');
-  });
-
-  await t.test('handles empty and missing input', () => {
-    assert.strictEqual(summarizeRecords([]).recordCount, 0);
-    assert.strictEqual(summarizeRecords(null).lastRecordDate, null);
-  });
-
-  await t.test('accumulating one at a time matches summarizing the whole list', () => {
-    // The seeder streams: it folds each record in as it arrives and never retains the records.
-    // If these two diverged, the aggregate would silently differ from the data.
-    const { emptySummary, accumulateRecord } = require('../../src/seed/transform');
-    const incremental = recs.reduce((s, r) => accumulateRecord(s, r), emptySummary());
-    assert.deepStrictEqual(incremental, summarizeRecords(recs));
-  });
-
-  await t.test('an out-of-order date does not move lastRecordDate backwards', () => {
-    const { emptySummary, accumulateRecord } = require('../../src/seed/transform');
-    const s = emptySummary();
-    accumulateRecord(s, { dataset: 'Order', dateIssued: '2022-01-01T00:00:00.000Z' });
-    accumulateRecord(s, { dataset: 'Order', dateIssued: '2019-01-01T00:00:00.000Z' });
-    assert.strictEqual(s.lastRecordDate, '2022-01-01T00:00:00.000Z');
   });
 });
 

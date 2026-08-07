@@ -25,9 +25,9 @@ Nothing here is a separate list to maintain — it says which gate each open ent
 | Gate | Open entries waiting on it |
 |---|---|
 | **Nothing — do it** | Rotate the MinIO key and OpenShift token at source (the repo side is already deleted) |
-| **A dev run + `az login`** | Minting the first real service key; widening the unlinked-name sample to see how much of the dropped 97% is real |
+| **A dev run + `az login`** | Minting the first real service key |
 | **RG-scope rights nobody holds yet** | Observability / `APPLICATIONINSIGHTS_CONNECTION_STRING`; the first `main.bicep` deploy; removing role assignment `29745ac3`; Phase 3b blob storage |
-| **A human in a browser, staff login** | The `/summary` render; boundary rendering at three fidelities; server-side highlighting; scoped and fragment access tiers |
+| **A human in a browser, staff login** | The `/summary` render; boundary rendering at three fidelities; server-side highlighting; the scoped access tier |
 | **A decision, not work** | Test/prod deploy path and the release model; app registration `acb4198f` |
 | **Deliberately not doing it** | `pageNumber` citations; result paging; the client-side highlighter; the intake-cleaner backfill; the OnPush conversion; natural-language labels; the tiled/OCR strata; the 402 monthly rollover; `content: retrievable` |
 
@@ -126,100 +126,70 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       placeholders and their separator-furniture rows; only new ingest is clean. Nothing here is
       worth a re-extraction on its own — fold it into whatever re-extraction happens next.
 
-## NRPTI ingest
+## NRPTI ingest — REMOVED 2026-08-07, to be redesigned
 
-The auto-seed is gone, the phantoms it left are purged from dev, and the re-sync has run clean. What
-is left is a question rather than a task: the ladder links 3% of NRPTI records, and nobody has
-checked how much of the other 97% is real.
+**The whole feature is gone**, not disabled: `sync-nrpti.js`, `purge-nrpti-seeded.js`, the `records`
+container and its repository, `GET /records`, `POST /admin/sync/nrpti`, the seeder's records stage,
+the compliance card in the frontend, and the `project_fragments` container that existed only to hold
+the NRPTI aggregate. Restore any of it from `28737bf`.
 
-- [x] **NRPTI no longer invents projects — Priority 4 deleted 2026-08-06.**
-      `src/scripts/sync-nrpti.js` used to fall through its five linking strategies and **create** a
-      project from `item.projectName || item.location`: synthetic id `8000000 + hash(name) % 1000000`,
-      `projectState: 'Compliance Record Ingest'`, a centroid hardcoded to Victoria, and
-      `read: ['public', …]` so it listed publicly beside real Track projects. Many of those strings
-      are facilities, locations or record titles. Track owns the registry; a sync does not add to it.
-      The ladder is now `resolveProjectLink()` — pure, exported, and unit-tested one case per
-      priority. **An unmatched record is dropped, not written.** There is no `projectId: ''` bucket:
-      the run logs the skip count and the top 20 unresolvable names, and that log is the only record
-      of them. `simpleHash` went with Priority 4.
-      Correcting the reason this entry used to give: the empty-string partition was *not* invisible.
-      `scopeClause` restricts on the partition key for `TIER.SCOPED` only, so `GET /records` with no
-      `project` param returned unlinked records to an anonymous caller. They were unreachable by
-      scoped reads and by `/records?project=X`, not by everyone.
-- [x] **`records.buildCriteria` treated `projectId: ''` as "no filter".** Found while writing the
-      purge. A falsy `if (projectId)` meant asking for the unlinked partition returned the WHOLE
-      container — so the sweep below would have deleted every compliance record. Both the criterion
-      and the `partitionKey` are presence tests now, with a repository test asserting the SQL.
-- [x] **The purge ran live on dev 2026-08-07. The gap was NOT unpublished Track projects — it was
-      1,855 phantoms.** This entry used to guess that the 1,866-row gap between `/db/stats`'s 2,248
-      projects and the 382 public rows was mostly unpublished Track projects, with phantoms a
-      possibility. Counted under `systemAccess()` instead of guessed, that was wrong in one
-      direction and almost entirely: **1,855 of 2,248 carried `sourceSystem: 'nrpti'`, and all 1,855
-      also carried `metadata.seededFromNrpti`.** 393 projects are real. Sample ids — `8008525`,
-      `8118595`, `8643194` — all sit above the `8000000 + hash(name) % 1000000` boundary, which is
-      the auto-seed's own signature.
-      Removed: **1,855 projects, 44,120 records, 2,438 unlinked records, 1,855 AI Search index
-      entries.** `notSeeded: []` and `failures: []` — nothing was skipped and nothing owned a
-      document. A second dry run reports 0, which is what retired the `sort()` in `sync-nrpti.js`.
-      **The `--live` gate fired on the first attempt and was right to.** The script was run directly
-      rather than through the env-loading wrapper, so it never read `/proc/1/environ`;
-      `COSMOS_ENDPOINT` was unset, AI Search read as unconfigured, and it refused **before touching
-      Cosmos**. That is precisely the case the gate was written for: `deleteFromIndex` returns `0`
-      for a failed delete and for an unconfigured service alike, so without it an unconfigured
-      environment empties Cosmos and only then reports 1,855 failures, none retryable, because
-      `listBySourceSystem` cannot return a project Cosmos no longer holds. Nothing was deleted on
-      that run. **A tunnel-run script must load app settings from PID 1 — see README.md.**
-      Operational notes for the next time something like this runs: 48,413 deletions took ~25
-      minutes and **starved the container's SSH daemon** for most of it, while the app stayed
-      responsive on HTTP throughout — so poll the API, not the shell, to tell a hung run from a busy
-      one. Run it detached; a dropped connection mid-run leaves a partial purge, which is re-runnable
-      but reports a non-zero exit.
-      Deleting the records was required rather than tidy: `projectId` is the partition key, so a
-      re-sync re-ingesting the same NRPTI `_id` under a different `projectId` writes a NEW item and
-      orphans the old one.
-      An index delete that fails is a `stage: 'index'` failure and exits 1, for the same
-      no-retry reason. Delete that id from `demi-projects` by hand if it appears.
-      Record counts are deletions, not attempts: `cosmos.remove` answers `false` on a 404 and the
-      summary only counts a `true`.
-- [x] **Re-synced 2026-08-07, and every check passed.** A `since`-less run, in-container through a
-      wrapper so the summary came back directly rather than via a log line nothing retains.
-      `totalIngested: 3556`, `totalLinkedExisting: 3556` — every written record linked to a real
-      Track project — across **191** projects. Afterwards: **393 projects (unchanged, so nothing was
-      invented), `sourceSystem: 'nrpti'` = 0, unlinked (`''`) records = 0**, and `records` holds
-      exactly 3,556. That `nrpti = 0` is the check this entry existed for: Priority 4 did not
-      come back.
-- [ ] **97% of NRPTI records do not link, and nobody has looked at why.** The same run reports
-      `totalUnlinked: 104468` against 3,556 ingested — 108,024 records offered, **96.7% dropped** —
-      across `unlinkedDistinctNames: 10636`.
-      **Dropping them is right, and the names prove it.** The largest unlinked value is
-      `British Columbia` with **49,459** records, then `(no project name)` 2,815, then
-      `North Okanagan`, `East Kootenay`, `West Kootenay`, `Columbia-Kootenay`, `North Peace`,
-      `North Coast`, `North Island`, `South Peace`, `Central Island`, `Sunshine Coast`,
-      `Township of Langley`. Those are regions and municipalities. Under the old auto-seed
-      `British Columbia` alone became one phantom project holding 49,459 compliance records — this
-      list *is* the mechanism that produced the 1,855 phantoms, seen from the other side.
-      **The open question is the remainder.** Of 10,636 distinct unlinked names, how many are real
-      project names `resolveProjectLink()` simply fails to match? Nobody has counted, and 97% is a
-      large enough share that the answer matters before this runs anywhere but dev. The cheap first
-      cut is to sort the unlinked names by count, drop the obvious geography, and see what is left —
-      the run already reports the top 20, so this needs a wider sample rather than new code.
-      Do NOT answer it by loosening the ladder speculatively: a looser match links a record to the
-      WRONG project, which is worse than dropping it and is invisible once written.
-- [ ] **A dropped record is never revisited by a delta sync.** `since` is caller-supplied, so once
-      `resolveProjectLink()` returns null for a record it stays out of Cosmos even after Track adds
-      the project its name would now match. Only a full `since`-less `POST /admin/sync/nrpti`
-      re-ingests it. Run one after any batch of new Track projects, or the compliance history for
-      those projects starts at the sync date rather than at the record dates.
-- [x] **`documents.buildCriteria` treated `projectId: ''` as "no filter" — aligned in #73.** Same
-      shape as the records bug fixed above. It was never live — no caller passes `''` and nothing
-      sweeps a documents `''` partition — so this was aligning the shape before something does,
-      which is the only cheap moment to do it. Both the criterion and the `partitionKey` are
-      presence tests now (`!== undefined && !== null`), with a repository test asserting the emitted
-      SQL carries `c.projectId = @projectId` and that `options.partitionKey === ''`.
-      `records.getById`'s falsy `projectId` is still fine by contrast — it degrades to an ACL-gated
-      cross-partition query, not a wider result set.
+It was removed rather than narrowed because the scope rule had never been written down, so each pass
+re-derived intent from the code. **The rule: only projects EAO and NRPTI actually share matter, and
+the link between them is the eagle project id** (`_epicProjectId` on an NRPTI record, matched against
+`eagleId` on ours). The five-strategy linking ladder went far beyond that — exact name, normalized
+name, last-segment split, token inclusion — and its fuzzy tail is what turned region names into
+projects. `British Columbia` alone became one phantom project holding 49,459 compliance records;
+1,855 phantoms had to be purged on 2026-08-07.
+
+### What was measured before deleting — start the redesign here, not from scratch
+
+Live census against `nrpti-api-f00029-prod`, 2026-08-07, against dev's 382 projects (354 carrying an
+eagle id). "Shared" means `_epicProjectId` resolves to one of ours:
+
+| Dataset | Upstream | On shared projects |
+|---|---|---|
+| Inspection | 67,298 | 1,466 |
+| Order | 1,086 | 157 |
+| AdministrativePenalty | 897 | 4 |
+| AdministrativeSanction | 4,582 | **0** |
+| CourtConviction | 1,018 | **0** |
+| RestorativeJustice | 9 | **0** |
+
+- **The fuzzy ladder bought almost nothing.** Records matching only by exact name, with no valid
+  `_epicProjectId`: **1** in Order, **14** in Inspection. It was risking wrong-project writes — which
+  are invisible once written — to gain fifteen rows.
+- **Three datasets never link at all.** Any redesign should fetch by dataset rather than sweeping all
+  fourteen; Ticket (29,555) and AdministrativeSanction (4,582) cost most of the sync's runtime and
+  produced nothing.
+- **`?populate=true` works, and the old code did not know it.** The deleted seeder asserted NRPTI's
+  document ids were unreachable — "nothing for `dataset=Document`, 404 for `/api/public/document/<id>`".
+  True as written, and beside the point: adding `&populate=true` to the ordinary search call returns
+  full document objects inline (`{_id, fileName, url, key, read[]}`) instead of bare ObjectIds.
+- **The documents are mostly already here.** Document URLs on shared projects are overwhelmingly
+  `projects.eao.gov.bc.ca/api/document/<eagle-doc-id>/fetch`, and DEMI's `documents` container is
+  keyed by that same eagle doc id. Sampling 25 of them against dev: **22 already in DEMI, already
+  extracted and chunked; 3 missing.** A future import is therefore mostly a LINKING problem — parse
+  the id, point at what we hold — not a download pipeline. Note this is the picture for EAO-issued
+  records; across the whole corpus most document URLs sit on `nrs.objectstore.gov.bc.ca` instead,
+  and those belong to records that do not link to us anyway.
+
+### Live data outlives this change
+
+ARM does not drop a container when the template stops declaring it, so dev still holds ~3,556 rows in
+`records` and the `project_fragments` aggregates. Drop them by hand when convenient — PITR is
+`Continuous7Days`, so it stays reversible for a week. ~191 projects also still carry a stale
+`sources.nrpti` block written by the deleted `patchNrptiStats`; harmless, since nothing reads it.
+
 
 ## Infrastructure
+
+- [x] **`documents.buildCriteria` treated `projectId: ''` as "no filter" — aligned in #73.** A falsy
+      `if (projectId)` meant asking for the empty partition returned the WHOLE container. It was
+      never live — no caller passes `''` and nothing sweeps a documents `''` partition — so this was
+      aligning the shape before something does, which is the only cheap moment to do it. Both the
+      criterion and the `partitionKey` are presence tests now (`!== undefined && !== null`), with a
+      repository test asserting the emitted SQL carries `c.projectId = @projectId` and that
+      `options.partitionKey === ''`.
 
 - [x] **CodeQL is at 0 open alerts, 2026-08-07 — and the entry that closed it was wrong about why.**
       38 after #59–#65; the 7 that were decisions rather than defects were dismissed with their
@@ -583,7 +553,7 @@ checked how much of the other 97% is real.
       `X-Api-Key`). The `/summary` page is in the deployed frontend bundle, but every route into it
       needs a staff Keycloak login, so the rendering — answer card, sources list, `est. $…` line —
       has not been seen. Log in on `demi-frontend-dev.azurewebsites.net/summary` and look.
-- [ ] **Verify scoped and fragment access tiers end to end.** The reason this was never observed is
+- [ ] **Verify the scoped access tier end to end.** The reason this was never observed is
       now known and fixed: `helpers/auth.js` rejected any non-privileged Keycloak token inside
       *authentication*, so `passiveAuth` dropped it and `req.user` stayed unset — TIER.SCOPED was
       unreachable in production regardless of the role. Fixed in PR #15 (`b7d61ae`) and

@@ -20,7 +20,6 @@ const { requireWrite } = require('../middleware/require-roles');
 const projectController = require('../controllers/nosql/project');
 const documentController = require('../controllers/nosql/document');
 const boundaryController = require('../controllers/nosql/boundary');
-const recordController = require('../controllers/nosql/record');
 const apiKeyController = require('../controllers/nosql/api-key');
 
 const wildfireController = require('../controllers/wildfire');
@@ -47,17 +46,12 @@ router.get('/db/stats', authMiddleware, dbController.getDbStats);
 // Issues no container query at all, so it still answers when the counts behind /db/stats are
 // timing out. Ranked queries are only meaningful at progress 100, so this gates any bulk load.
 router.get('/admin/index-progress', authMiddleware, dbController.getIndexProgressHandler);
-router.post('/admin/sync/nrpti', authMiddleware, requireWrite, dbController.runNrptiSyncHandler);
 
 // Search Route
 router.get('/search', passiveAuthMiddleware, searchController.search);
 // authMiddleware, NOT passiveAuth — the summary is privileged-only in v1 while cost, abuse and the
 // wider disclosure surface of a synthesised paraphrase are measured. See wiki ADR-006.
 router.get('/search/summary', authMiddleware, searchController.summarize);
-
-// Compliance Records Routes
-router.get('/records', passiveAuthMiddleware, recordController.getRecords);
-router.get('/records/:id', passiveAuthMiddleware, recordController.getRecord);
 
 // Wildfire Routes
 // GET /wildfires removed — no consumer. The frontend reads the DataBC WFS directly, and the
