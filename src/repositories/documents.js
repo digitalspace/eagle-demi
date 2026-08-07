@@ -17,7 +17,12 @@ const PARTITION_FIELD = 'projectId';
 
 function buildCriteria({ projectId, extracted, sourceSystem }) {
   const criteria = [];
-  if (projectId) criteria.push(eq('projectId', String(projectId), '@projectId'));
+  // Presence, not truthiness — the same shape fixed in records.js. `''` is a REAL partition, and a
+  // falsy test silently turns "the unlinked partition" into "every document in the container".
+  // Nothing passes `''` today; aligning now is what keeps that true when something does.
+  if (projectId !== undefined && projectId !== null) {
+    criteria.push(eq('projectId', String(projectId), '@projectId'));
+  }
   if (sourceSystem) criteria.push(eq('sourceSystem', sourceSystem, '@sourceSystem'));
 
   // Defaults are written on every document, so this is a plain equality. The Mongo original
@@ -42,7 +47,11 @@ async function listVisible(access, opts = {}) {
 
   const options = pageOptions({
     ...opts,
-    partitionKey: opts.projectId ? String(opts.projectId) : undefined
+    // Same presence test as buildCriteria. Naming `''` as the partition key is what makes a read of
+    // the unlinked partition a single-partition query rather than a cross-partition scan.
+    partitionKey: opts.projectId !== undefined && opts.projectId !== null
+      ? String(opts.projectId)
+      : undefined
   });
 
   return cosmos.query(CONTAINER, spec, options);
