@@ -1,13 +1,13 @@
-import { Component, OnInit, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { Component, OnInit, inject, ChangeDetectionStrategy } from '@angular/core';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Project } from '../../models/registry.models';
 
 @Component({
   selector: 'app-document-intake',
   standalone: true,
-  imports: [CommonModule],
+  imports: [],
   templateUrl: './document-intake.component.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
 })
 export class DocumentIntakeComponent implements OnInit {

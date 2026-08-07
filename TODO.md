@@ -159,6 +159,44 @@ first gated sync against dev.
         from `multer({ dest: config.uploadDir })`, which generates its own random filename and never
         derives it from `originalname`. Dismiss as "used in tests"/"false positive" with that note so
         they stop reappearing; do not "fix" them.
+- [x] **Angular 19 → 22 and TypeScript 5.7 → 6.0, done 2026-08-06.** 19.2.25 was end-of-life and
+      carried 7 runtime advisories with `first_patched_version: null` — XSS via i18n event-handler
+      attributes, hydration DOM clobbering and response-cache poisoning, `HttpTransferCache`
+      cache-key ambiguity, a DoS via OOM in date formatting — plus 26 development-scope alerts that
+      could not move while `@angular-devkit/*` was pinned to 19. Landed as three hops (19→20→21→22)
+      on one branch, one commit each, because `ng update` only crosses one major at a time.
+      The dependabot `ignore:` block is gone; the `angular` group that replaces it still lists every
+      scope, which is the lesson PR #42 taught.
+      What it actually cost, against the estimate of "two majors of real work":
+      - **`ng update`'s temp-CLI bootstrap is broken under Yarn 4** and fails with no error at all —
+        it installs the temporary CLI into a PnP dir and then cannot require it. Work around it by
+        bumping the packages with `yarn up` first and running migrations with
+        `NG_DISABLE_VERSION_CHECK=1 yarn ng update <pkg> --migrate-only --from=<a> --to=<b>`.
+      - **TypeScript 6 cost nothing.** It was the budgeted risk; `registry-state.service.ts` needed
+        no change. The real work was all in v22's behavioural defaults.
+      - **The v22 safe-navigation migration was reverted deliberately.** It wrapped 8 template
+        expressions in `$safeNavigationMigration(...)` to keep `a?.b` yielding `null` rather than
+        `undefined`. Every call site behind those bindings already declares
+        `string | undefined | null` and branches on both, so the shim preserved nothing and read as
+        noise. The `extendedDiagnostics` suppressions that came with it went too — the build is
+        clean without them.
+      - **`provideHttpClient(withXhr())` was kept.** v22 defaults `HttpClient` to the fetch backend,
+        and this app monkey-patches `window.fetch` in `RegistryStateService` to attach bearer
+        tokens. `ConfigService` is the only `HttpClient` caller and runs before Keycloak
+        initialises; XHR keeps it out of that interceptor, which is what it did on 19.
+      - **Karma stayed.** v22 offers a vitest migration; the two spec files did not need it. The
+        builder is now `@angular/build:karma`, and `karma.conf.js` no longer names the deleted
+        `@angular-devkit/build-angular` framework/plugin.
+      - Bundle went 436.65 kB → 457.07 kB raw (114.13 → 119.33 kB transfer) across three majors.
+        37/37 tests pass; the app boots and renders on `ng-version="22.1.0"`.
+- [ ] **Every component now declares `ChangeDetectionStrategy.Eager`, and the lint rule that says so
+      is switched off.** v22 makes OnPush the default and its migration wrote the explicit opt-out on
+      all five components to preserve v19 behaviour; `@angular-eslint/prefer-on-push-component-
+      change-detection` then failed the build, so it is disabled in `frontend/eslint.config.js` with
+      the reason. Only map-explorer and summarizer hold local signals — the rest read service signals
+      and mutate plain fields from async callbacks, which OnPush would stop rendering, and the two
+      spec files would not catch it. Converting them is a change-detection rewrite with its own
+      verification; re-enable the rule when it happens.
 - [x] **The API served a dead copy of the frontend, and two of its routes hung. Deleted
       2026-08-06.** `src/app.js` mounted `express.static('../public')` on `/`, `/admin` and `/demo`
       plus a `res.sendFile` SPA fallback for `/map`, `/search` and `/intake`. `public/` is
@@ -177,34 +215,6 @@ first gated sync against dev.
       `scripts/package-api.py` did not exclude `public/`, so a deploy from a working tree holding a
       stale build would have shipped it into `wwwroot`, where zipdeploy's merge makes it permanent.
       Both now pinned by tests (`test/app.boot.test.js`, `test/scripts/package-api.test.js`).
-- [ ] **Angular 19 is end-of-life and carries 7 unfixable advisories.** `frontend/package.json`
-      resolves `@angular/*` to **19.2.25**, the newest 19.x, and every one of the 7 open Dependabot
-      alerts on `@angular/core`, `@angular/common` and `@angular/compiler` has
-      `first_patched_version: null` with a vulnerable range of `<= 19.2.25`. There is nothing to
-      upgrade to inside 19 — angular.dev lists v22 active, v21 LTS, v20 LTS to Nov 2026, and "v2 to
-      v19 are no longer supported". `first_patched_version: null` means "no fix in the affected
-      major", not "no fix anywhere": Dependabot's first run proposed 20.3.x as ordinary **version**
-      updates (PRs #33/#34/#40, all closed) and every one failed `Test & Build Frontend`, which is
-      the evidence that this is a migration and not a bump. `.github/dependabot.yml` now freezes the
-      whole toolchain — `@angular/*`, `@angular-devkit/*`, `@angular-eslint/*`, `angular-eslint` and
-      `zone.js` — because those are version-locked to each other: PR #42 bumped only
-      `@angular-devkit/build-angular`, to 21.2.19, and the build died on "`@angular/build` supports
-      Angular versions ^21.0.0, but detected Angular version 19.2.25 instead". **Deleting that
-      `ignore:` block is step one of the upgrade.** Framework and toolchain have to move in one
-      commit; a half-upgraded pair does not build at all.
-      **The Angular freeze is now what holds the remaining alerts open.** As of 2026-08-06 there are
-      33, all in `frontend/yarn.lock`: 7 runtime (the Angular set below, unfixable) and 26
-      development-scope in the build toolchain, which cannot move while `@angular-devkit/*` is
-      pinned to 19. None of them ship — only `frontend/dist` is deployed, never `node_modules` — so
-      this is a CI supply-chain exposure, not a production one. The upgrade clears both groups at
-      once.
-      They are not theoretical: XSS via i18n event-handler attributes, hydration DOM clobbering and
-      response-cache poisoning, `HttpTransferCache` cache-key ambiguity, and a DoS via OOM in date
-      formatting — all in code the bundler compiles into what `demi-frontend-dev` serves.
-      **Target 21** (LTS to ~Nov 2027) rather than 22; `eagle-public` in this workspace already runs
-      Angular 21, so there is a migration to copy rather than invent. Two majors, so it is real work
-      and not a dependency bump. Until it happens the open-alert floor is 7 — a count below that
-      means somebody dismissed an alert instead of fixing it.
 - [ ] **Test and prod have no deploy path at all — the workflows were deleted 2026-08-05.** Nothing
       is deployed in either subscription and neither has a resource group, so the files were dead
       weight naming prod resources in a public repo. Rebuilding them needs, per environment: a

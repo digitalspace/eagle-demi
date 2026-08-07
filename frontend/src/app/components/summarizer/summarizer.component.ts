@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Document, SummaryCitation } from '../../models/registry.models';
@@ -14,6 +14,7 @@ import { Document, SummaryCitation } from '../../models/registry.models';
   standalone: true,
   imports: [CommonModule],
   templateUrl: './summarizer.component.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
 })
 export class SummarizerComponent implements OnInit {

@@ -66,10 +66,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # 24 to match pr.yaml, so the build that deploys runs on the runtime the build
+      # that gated it ran on. Angular 22 floors Node at ^22.22.3 || ^24.15.0, which
+      # `'22'` also satisfies today — but only because setup-node resolves the newest
+      # 22.x, which is not a guarantee worth depending on.
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
 
       # Dependencies only. The build belongs to the deploy script, which runs
       # `yarn --cwd frontend build` itself — `angular.json` sets
