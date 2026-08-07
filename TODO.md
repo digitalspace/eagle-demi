@@ -107,8 +107,13 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
         `/api/search` fans out to Azure AI Search on debounced keystrokes, and Basic tier allows 2
         concurrent semantic requests per search unit.
       - **`js/insecure-helmet-configuration`** at `src/app.js:41` — helmet is mounted with
-        `contentSecurityPolicy: false`. Decide whether the frontend can live under a CSP; if it can,
-        turn it on, and if it cannot, dismiss the alert with that reason rather than leaving it open.
+        `contentSecurityPolicy: false`. **Decided 2026-08-06: dismiss, do not implement.** The
+        question was "can the frontend live under a CSP", and the answer is that the API does not
+        serve the frontend at all — the `express.static` mounts and SPA routes that suggested it did
+        are deleted (see below). What is left is exactly one HTML page, swagger-ui at `/api-docs`,
+        whose inline initializer script and inline styles a default CSP blocks. A policy that
+        exempts the only page it covers protects nothing, so this is dismissed with that reason
+        rather than implemented — see "Needs a human".
       - **`js/incomplete-multi-character-sanitization`** at
         `frontend/src/app/services/registry-state.service.ts:1707`. Read it before judging — a
         partial sanitizer is worse than none because it looks handled.
@@ -117,6 +122,24 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
         from `multer({ dest: config.uploadDir })`, which generates its own random filename and never
         derives it from `originalname`. Dismiss as "used in tests"/"false positive" with that note so
         they stop reappearing; do not "fix" them.
+- [x] **The API served a dead copy of the frontend, and two of its routes hung. Deleted
+      2026-08-06.** `src/app.js` mounted `express.static('../public')` on `/`, `/admin` and `/demo`
+      plus a `res.sendFile` SPA fallback for `/map`, `/search` and `/intake`. `public/` is
+      **untracked**, so no clone has it and nothing was ever there in Azure: the static mounts fell
+      through to the 404 and were dead weight. The sendFile routes did worse — measured on dev,
+      `GET /map` returned **no response at all for 90 s**, and App Service holds such a request for
+      its full 240 s timeout. Three unauthenticated routes that each pin a request that long matter
+      on a single-worker B1.
+      **The rule this leaves behind: never `res.sendFile`, or any streaming response, under the
+      Functions adapter.** `api/index.js` fabricates `res` as a bare EventEmitter and resolves its
+      promise inside `res.end`; `send` streams instead and, on the missing-file path, never calls
+      it. Under a real `http.Server` the same request fails fast with a 500 carrying the ENOENT —
+      which is why this was invisible locally and had to be found by asking the deployed API.
+      Two things fell out of it: `/search` was never an SPA route at all, because
+      `app.use('/', apiRoutes)` already mounted the search endpoint at the root and shadowed it; and
+      `scripts/package-api.py` did not exclude `public/`, so a deploy from a working tree holding a
+      stale build would have shipped it into `wwwroot`, where zipdeploy's merge makes it permanent.
+      Both now pinned by tests (`test/app.boot.test.js`, `test/scripts/package-api.test.js`).
 - [ ] **Angular 19 is end-of-life and carries 7 unfixable advisories.** `frontend/package.json`
       resolves `@angular/*` to **19.2.25**, the newest 19.x, and every one of the 7 open Dependabot
       alerts on `@angular/core`, `@angular/common` and `@angular/compiler` has
@@ -292,6 +315,10 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
 - [ ] **Look at server-side highlighting on dev.** Shipped and unit-tested, but the visible result
       has not been eyeballed. Azure returns windowed fragments for a long field, so a long project
       description now renders as fragments joined by an ellipsis rather than in full.
+- [ ] **Dismiss `js/insecure-helmet-configuration` in the GitHub UI**, with the reason recorded
+      under Infrastructure above: the API serves exactly one HTML page, swagger-ui at `/api-docs`,
+      which needs inline script and style, so a CSP would have to exempt the only page it covers.
+      Decided rather than deferred — leaving it open reads as work nobody got to.
 - [ ] **Delete the 12 merged branches on `origin`.** From PRs #1–#10, #12 and #13.
       `git push --delete` is barred by settings deny, so this needs a human or the GitHub UI.
 

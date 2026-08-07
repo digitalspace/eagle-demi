@@ -52,3 +52,25 @@ test('the 404 fallback still runs', async () => {
     assert.deepStrictEqual(await res.json(), { error: 'Endpoint not found.' });
   });
 });
+
+test('the old SPA paths 404 rather than hanging', async () => {
+  // `/map`, `/search` and `/intake` used to `res.sendFile('../public/index.html')`. That file is
+  // untracked, so in Azure it was never there — and under the Functions adapter, whose fake `res`
+  // resolves only inside `res.end`, the missing-file path in `send` never reaches it. Measured on
+  // dev 2026-08-06: GET /map returned no response for 90 s, and the platform holds it for 240.
+  //
+  // The timeout is the assertion. A plain status check would pass against the old code on any
+  // machine that happens to have a stale local build in `public/`, which is precisely how this
+  // survived unnoticed.
+  //
+  // `/search` is deliberately not in this list: `app.use('/', apiRoutes)` mounts the API at the
+  // root as well, so the search endpoint always shadowed the SPA route of the same name. The
+  // deleted route array claimed a path the API already owned.
+  await withServer(async (base) => {
+    for (const p of ['/map', '/intake']) {
+      const res = await fetch(`${base}${p}`, { signal: AbortSignal.timeout(5000) });
+      assert.strictEqual(res.status, 404, `${p} should 404`);
+      assert.deepStrictEqual(await res.json(), { error: 'Endpoint not found.' });
+    }
+  });
+});
