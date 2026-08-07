@@ -76,6 +76,15 @@ jobs:
       - name: Lint Frontend
         run: yarn --cwd frontend lint
 
+      # This job ran lint and build and no tests until 2026-08-07, which is how PR #70 bumped
+      # jasmine-core across a MAJOR (5.6 → 6.3) and merged green with its 44 specs never executed.
+      # They were run by hand afterwards and passed — luck, not a gate.
+      # `--no-watch` because `ng test` otherwise waits for file changes and never exits. No
+      # `--browsers` flag: karma.conf.js already defaults to the sandbox-less ChromeNoSandbox
+      # launcher, which is what a runner needs.
+      - name: Test Frontend
+        run: yarn --cwd frontend test --no-watch
+
       - name: Build Frontend
         run: yarn --cwd frontend build
 

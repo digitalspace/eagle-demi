@@ -6,12 +6,45 @@ background, that background belongs there and this entry links to it.
 
 Dev only, and dev deploys itself: a merge to `main` runs `azure-deploy-dev-api` and
 `azure-deploy-dev-frontend`, so what is on `main` is what is on dev within a few minutes. There is
-no date to keep current here — read the workflow runs. At the time of writing that is `16ac528`
-(API) and `0d0dde0` (frontend), 2026-08-07.
+no date or commit to keep current here — read the workflow runs. This paragraph used to name the
+deployed SHAs anyway, and they were stale within a day; a pointer that has to be maintained by hand
+is the drift the sentence before it warns about.
 
 The corollary is the trap: **merging is deploying.** An entry below is live the moment it lands,
 including one whose infrastructure does not exist yet — see service credentials under
 Infrastructure.
+
+---
+
+## What is actually open
+
+The sections below are grouped by topic, which makes a blocked item read like an actionable one.
+Nothing here is a separate list to maintain — it says which gate each open entry is waiting on, so
+"what can I do right now" does not require reading all of it.
+
+| Gate | Open entries waiting on it |
+|---|---|
+| **Nothing — do it** | Rotate the MinIO key and OpenShift token at source (the repo side is already deleted) |
+| **A dev run + `az login`** | `purge-nrpti-seeded.js` dry run, then `--live`; then the re-sync, then deleting the dead `sort()` in `sync-nrpti.js:133`; minting the first real service key |
+| **RG-scope rights nobody holds yet** | Observability / `APPLICATIONINSIGHTS_CONNECTION_STRING`; the first `main.bicep` deploy; removing role assignment `29745ac3`; Phase 3b blob storage; backup mode |
+| **A human in a browser, staff login** | The `/summary` render; boundary rendering at three fidelities; server-side highlighting; scoped and fragment access tiers |
+| **A decision, not work** | Test/prod deploy path and the release model; app registration `acb4198f` |
+| **Deliberately not doing it** | `pageNumber` citations; result paging; the client-side highlighter; the intake-cleaner backfill; the OnPush conversion; natural-language labels; the tiled/OCR strata; the 402 monthly rollover; `content: retrievable` |
+
+**Before hardening, read this one first:** nothing DEMI logs is retained anywhere, so every "the
+reason is logged" claim in this file means the App Service log stream — visible only to someone
+already watching, and gone after. That is the observability entry under Infrastructure, and it
+outranks the rest of a hardening pass for the obvious reason: you cannot harden what you cannot
+observe. It is also the entry with the least code in it and the most permission.
+
+Two things the rate-limiter fix leaves for that pass, neither urgent:
+- **The limiter has never been measured under load.** The discriminating probe is 301 requests in
+  one window from one caller — the 301st must be 429. The pre-#73 build could not produce that
+  answer (320/320 returned 200), which is what makes it a probe rather than a formality.
+- **The access invariants are a spec with no test asserting them as a set.** The sharp edge is
+  recorded in `CLAUDE.md`: OData has no `false` literal, so a null or empty filter is UNRESTRICTED.
+  A search route that forgets the `empty` flag fails **open**, and there is no retained log to
+  notice it.
 
 ---
 
@@ -135,29 +168,48 @@ first gated sync against dev.
       the project its name would now match. Only a full `since`-less `POST /admin/sync/nrpti`
       re-ingests it. Run one after any batch of new Track projects, or the compliance history for
       those projects starts at the sync date rather than at the record dates.
-- [ ] **`documents.buildCriteria` still treats `projectId: ''` as "no filter"** (`documents.js:20`,
-      and the `partitionKey` at `:45`) — the same shape as the records bug fixed above. Not live:
-      no caller passes `''` and nothing sweeps a documents `''` partition. Worth aligning before
-      something does. `records.getById`'s falsy `projectId` is fine by contrast — it degrades to an
-      ACL-gated cross-partition query, not a wider result set.
+- [x] **`documents.buildCriteria` treated `projectId: ''` as "no filter" — aligned in #73.** Same
+      shape as the records bug fixed above. It was never live — no caller passes `''` and nothing
+      sweeps a documents `''` partition — so this was aligning the shape before something does,
+      which is the only cheap moment to do it. Both the criterion and the `partitionKey` are
+      presence tests now (`!== undefined && !== null`), with a repository test asserting the emitted
+      SQL carries `c.projectId = @projectId` and that `options.partitionKey === ''`.
+      `records.getById`'s falsy `projectId` is still fine by contrast — it degrades to an ACL-gated
+      cross-partition query, not a wider result set.
 
 ## Infrastructure
 
-- [ ] **31 CodeQL alerts open on `main`, and they are now ONE problem.** After #59–#65 there were
-      38; the 7 that were decisions rather than defects were dismissed with their reasons on
-      2026-08-07, so what is left is a single cluster. That is the point of the number: it used to
-      be a pile to triage and is now a backlog item with one fix.
+- [x] **CodeQL is at 0 open alerts, 2026-08-07 — and the entry that closed it was wrong about why.**
+      38 after #59–#65; the 7 that were decisions rather than defects were dismissed with their
+      reasons; the last 31 were `js/missing-rate-limiting` and closed with #73.
       The 3 medium `actions/missing-workflow-permissions` from the first scan are fixed — `pr.yaml`
       declares `permissions: contents: read` — and `js/incomplete-multi-character-sanitization` is
       closed by the fix recorded below. The dismissed 7 are kept written down here because a
       dismissal is invisible until someone re-derives the reasoning:
-      - **31 x `js/missing-rate-limiting`** across `src/routes/api.js` and `src/app.js:126` — the
-        only open cluster, up from ~30 because #60 added the `/admin/api-keys` routes, and it will
-        keep tracking the route count until this is fixed. One root cause, one fix: there is no
-        rate limiter mounted on the Express app at all. An `express-rate-limit` on the router closes
-        the whole cluster. Worth
-        doing on its own merits — `/api/search` fans out to Azure AI Search on debounced keystrokes,
-        and Basic tier allows 2 concurrent semantic requests per search unit.
+      - **31 x `js/missing-rate-limiting`** across `src/routes/api.js` and `src/app.js:126`.
+        **This entry used to say "there is no rate limiter mounted on the Express app at all". That
+        was false**, and worth keeping visible rather than quietly rewriting:
+        `git show 32fd4a6:src/app.js` requires `./middleware/rate-limiter` at line 30 and mounts it
+        at line 37, both long predating the claim.
+        What was really there was **two independent problems that happened to share one fix**:
+        1. **CodeQL could not recognise it.** The limiter was a hand-rolled `Map` in
+           `src/middleware/rate-limiter.js`, which the query does not know as a rate limiter, so the
+           cluster tracked the route count and grew with #60's `/admin/api-keys` routes. Moving to
+           `express-rate-limit` closed all 31.
+        2. **It did not limit anything.** It keyed on the whole `X-Forwarded-For`, and App Service
+           **appends** `<client-ip>:<port>` to that header. The port changes with the TCP
+           connection, so nearly every request minted a new key and the 300/minute ceiling was
+           unreachable. Measured against dev 2026-08-07: **320 requests inside one window, all
+           200.** Reproduced in `test/middleware/rate-limiter.test.js`.
+        Only the first was visible to the scanner. A cosmetic swap would have closed all 31 alerts
+        and left the limiter just as inert — the defect was found by measuring, not by triaging.
+        The key is now `callerIp()`: LAST comma-separated entry (everything before it is
+        caller-supplied), port stripped, IPv6 normalised to a /64 by the library's `ipKeyGenerator`.
+        `src/middleware/http-logger.js` shares the same resolver, so the audit log and the limit
+        cannot disagree about who a caller is — it used to log the raw header, i.e. an
+        attacker-chosen string.
+        **Behaviour change worth knowing:** the limit is real now, so callers behind one NAT share
+        a 300/minute bucket. Nobody has measured it under load — see the hardening note below.
       - **`js/insecure-helmet-configuration`** at `src/app.js:41` — helmet is mounted with
         `contentSecurityPolicy: false`. **Decided 2026-08-06: dismiss, do not implement.** The
         question was "can the frontend live under a CSP", and the answer is that the API does not
@@ -286,6 +338,18 @@ first gated sync against dev.
       before and after, differing only in Yarn's internal `#~builtin` → `#optional!builtin` patch
       notation. `cacheKey` moved `10` → `10c0`, which is what the old locks having been written by
       an older Yarn looked like.
+- [x] **CI never ran the frontend tests — fixed 2026-08-07.** `pr.yaml`'s `test-frontend` job ran
+      `lint` and `build` and no `test`, while `test-api` beside it ran both. The gap was invisible
+      because the job is *named* "Test & Build Frontend" and went green on every PR.
+      What it let through: #70 bumped **jasmine-core across a major** (5.6 → 6.3) and merged with a
+      passing check having executed none of the 44 specs. They were run by hand afterwards and
+      passed — which is luck, and luck is not a gate. Same PR batch also moved zone.js 0.15 → 0.16
+      under Angular 22, where a spec failure is exactly the expected symptom.
+      Now one step: `yarn --cwd frontend test --no-watch`. `--no-watch` because `ng test` otherwise
+      waits for file changes and never exits; no `--browsers` flag because `karma.conf.js` already
+      defaults to the sandbox-less `ChromeNoSandbox` launcher a runner needs.
+      The general lesson is the one this file keeps relearning: **a check that cannot fail proves
+      nothing**, and a job name is not evidence of what the job runs.
 - [x] **The five API majors are done — taken individually, each against a probe, 2026-08-05.**
       They arrived as one green group PR (#35, closed) whose greenness meant nothing. Split up and
       landed one at a time, each with a BEFORE reading so the check could actually fail:
@@ -308,14 +372,21 @@ first gated sync against dev.
       `scripts/validate-deploy.sh` 25/25 after each. **Root `yarn.lock` now has zero Dependabot
       alerts.** The probes were one-off, not committed — the minio and auth ones are worth keeping
       if these are ever upgraded again.
-- [ ] **`MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `TYPESENSE_API_KEY`, `OPENSHIFT_TOKEN` and
-      `OPENSHIFT_URL` are now unreferenced repo secrets.** The two `MINIO_*` were read only by the
-      deleted test/prod workflows, as Bicep parameters; `TYPESENSE_API_KEY` outlived Typesense
-      (deleted 2026-07-31) and `OPENSHIFT_*` predate the move off OpenShift entirely. Nothing in
-      `.github/workflows/` references any of them — confirmed by grep, not assumed. They are live
-      credentials sitting in a **public** repo's settings, reachable by any workflow that asks, so
-      the decision is delete-and-rotate rather than leave-and-forget. MinIO itself is still in use at
-      runtime; those values come from Azure app settings, not from here.
+- [ ] **The unreferenced repo secrets are DELETED; rotating them at source is the open half.**
+      `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `TYPESENSE_API_KEY`, `OPENSHIFT_TOKEN` and
+      `OPENSHIFT_URL` were live credentials in a **public** repo's settings, reachable by any
+      workflow that asked. The two `MINIO_*` were read only by the deleted test/prod workflows, as
+      Bicep parameters; `TYPESENSE_API_KEY` outlived Typesense (deleted 2026-07-31) and
+      `OPENSHIFT_*` predate the move off OpenShift entirely.
+      Deletion verified 2026-08-07, not assumed: `/actions/secrets`, `/actions/variables` and
+      `/dependabot/secrets` each report `total_count: 0`.
+      **That ends the exposure going forward, not the exposure that already happened**, which is why
+      this entry stays open rather than closing on the delete. A credential that sat in a public
+      repo's settings should be treated as one that may have been read, and nothing checkable from
+      here can show it was not. What is left needs whoever owns those systems: rotate the MinIO key
+      at `nrs.objectstore.gov.bc.ca` and retire the OpenShift token at its issuer.
+      `TYPESENSE_API_KEY` needs nothing — the service is gone.
+      MinIO itself is still in use at runtime; those values come from Azure app settings, not here.
 - [ ] **`demi-identity-dev` briefly held Website Contributor on `demi-api-dev`** (assignment
       `29745ac3`, 2026-08-05, removed same day). Worth knowing that
       `Microsoft.Authorization/roleAssignments/delete` is denied at this RG even though *create*
@@ -475,18 +546,31 @@ first gated sync against dev.
       rate-limiting cluster: `js/insecure-helmet-configuration` as "won't fix", the 4
       `js/path-injection`, `js/clear-text-logging` and `js/insufficient-password-hash` as false
       positives. The reasons are on the alerts AND in the Infrastructure entry above, because a
-      dismissal comment is invisible to anyone reading the repo. Open count 38 → 31, and the number
-      now means one thing: the rate-limiter cluster.
-- [ ] **`delete_branch_on_merge` is still false — flip it.** The 21 stale branches it produced are
-      gone (deleted 2026-08-07; `origin` now holds `main`, the open Dependabot branches and nothing
-      else), but the setting that made them accumulate is unchanged, so the pile rebuilds one merge
-      at a time. One checkbox in repository settings, or
-      `gh api -X PATCH repos/digitalspace/eagle-demi -f delete_branch_on_merge=true`.
-      When it does need counting again: `gh pr list --state merged` intersected against
+      dismissal comment is invisible to anyone reading the repo. Open count 38 → 31 that day, then
+      **31 → 0** when #73 closed the rate-limiting cluster the next.
+      The number is worth nothing on its own from here — 0 is the floor, so what matters for a
+      hardening gate is the delta: no new alert survives a PR.
+- [x] **`delete_branch_on_merge` is on, and the stale worktrees are gone — 2026-08-07.** The setting
+      is what made 21 branches accumulate; flipping it after they were deleted means the pile starts
+      from zero rather than rebuilding. `origin` now holds `main` and nothing else.
+      When branches do need counting again: `gh pr list --state merged` intersected against
       `git ls-remote --heads`, never `git branch --merged` — these are squash merges, so a merged
-      branch's tip is not an ancestor of `main` and `--merged` reports 1.
-      Local worktrees under `.claude/worktrees/` still point at several of the deleted branches.
-      Harmless, but `git worktree prune` and a look at the locked one is overdue.
+      branch's tip is not an ancestor of `main` and `--merged` reports 1. That is also why the seven
+      worktrees under `.claude/worktrees/` could not be cleared by `git worktree prune`, which only
+      removes entries whose directory is already gone: each needed `git worktree remove`, and each
+      was checked for unmerged content first rather than trusted to the branch name.
+      Two were not in the merged-PR list and had to be settled by content:
+      `fix/nrpti-purge-followups` diffs **empty** against `main` for its own files, and
+      `worktree-todo-review-corrections` held only an uncommitted `TODO.md` draft superseded by #71.
+      That draft's one substantive idea — reuse `seed-nosql.js`'s `trackProjectId >= 8000000` test
+      as the purge's definition of "synthetic" — was already **rejected on better grounds** in the
+      shipped code: `purge-nrpti-seeded.js:50-60` requires `sourceSystem: 'nrpti'` **and**
+      `metadata.seededFromNrpti`, because provenance alone is a field a future importer could
+      legitimately set, and the pair is what makes a hand-created NRPTI project get reported instead
+      of deleted.
+      The 22 local branches are left alone deliberately — 18 are merged and all of them are
+      invisible clutter that costs nothing, which is not the same problem as a worktree holding a
+      stale checkout.
 
 ## Cost
 
