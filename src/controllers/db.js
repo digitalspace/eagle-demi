@@ -125,7 +125,12 @@ async function runNrptiSyncHandler(req, res) {
     const isAsync = req.query.async === 'true';
 
     if (isAsync) {
-      syncNrptiData().catch((err) => logger.error('Background NRPTI sync error:', { error: err.message, stack: err.stack }));
+      // The async response cannot carry the summary, and the sync reports to stdout only — so the
+      // skip count and the unresolvable names an unmatched record leaves behind would exist
+      // nowhere durable. This is the only trace of what the run dropped.
+      syncNrptiData()
+        .then((results) => logger.info('Background NRPTI sync complete', results))
+        .catch((err) => logger.error('Background NRPTI sync error:', { error: err.message, stack: err.stack }));
       return res.json({
         success: true,
         message: 'NRPTI sync process triggered in background.'
