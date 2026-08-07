@@ -127,15 +127,10 @@ async function syncNrptiData(options = {}) {
   // systemAccess() — a sync reconciles the whole registry, and it takes no arguments so it
   // cannot be derived from a request. This script is never on the request path.
   const { items: existingProjects } = await projectsRepo.listVisible(systemAccess());
-  // Order previously auto-seeded projects last so a real Track project wins the name maps. Nothing
-  // creates these any more — the auto-seed is deleted — so this only matters until
-  // `purge-nrpti-seeded.js` has run live and reported 0.
-  // ponytail: delete this sort once that purge reports 0 on dev; it is dead the moment it does.
-  existingProjects.sort((a, b) => {
-    const aIsAuto = a.metadata?.sourceSystem === 'nrpti' ? 1 : 0;
-    const bIsAuto = b.metadata?.sourceSystem === 'nrpti' ? 1 : 0;
-    return aIsAuto - bIsAuto;
-  });
+  // No seeded-projects-last sort here any more. It existed so a real Track project would win the
+  // name maps against a phantom with the same name; `purge-nrpti-seeded.js --live` ran on dev
+  // 2026-08-07 and removed all 1,855, and a second dry run reports 0. Nothing creates them — the
+  // auto-seed went with Priority 4 — so there is no longer a class of project for it to order.
 
   const eagleIdToProjMap = new Map();
   const exactNameToProjMap = new Map();

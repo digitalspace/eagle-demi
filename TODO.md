@@ -25,8 +25,8 @@ Nothing here is a separate list to maintain — it says which gate each open ent
 | Gate | Open entries waiting on it |
 |---|---|
 | **Nothing — do it** | Rotate the MinIO key and OpenShift token at source (the repo side is already deleted) |
-| **A dev run + `az login`** | `purge-nrpti-seeded.js` dry run, then `--live`; then the re-sync, then deleting the dead `sort()` in `sync-nrpti.js:133`; minting the first real service key |
-| **RG-scope rights nobody holds yet** | Observability / `APPLICATIONINSIGHTS_CONNECTION_STRING`; the first `main.bicep` deploy; removing role assignment `29745ac3`; Phase 3b blob storage; backup mode |
+| **A dev run + `az login`** | The NRPTI re-sync — **compliance history is absent until it runs**; minting the first real service key |
+| **RG-scope rights nobody holds yet** | Observability / `APPLICATIONINSIGHTS_CONNECTION_STRING`; the first `main.bicep` deploy; removing role assignment `29745ac3`; Phase 3b blob storage |
 | **A human in a browser, staff login** | The `/summary` render; boundary rendering at three fidelities; server-side highlighting; scoped and fragment access tiers |
 | **A decision, not work** | Test/prod deploy path and the release model; app registration `acb4198f` |
 | **Deliberately not doing it** | `pageNumber` citations; result paging; the client-side highlighter; the intake-cleaner backfill; the OnPush conversion; natural-language labels; the tiled/OCR strata; the 402 monthly rollover; `content: retrievable` |
@@ -128,8 +128,8 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
 
 ## NRPTI ingest
 
-The auto-seed is gone from the code. What is left is operational: nobody has run the purge or the
-first gated sync against dev.
+The auto-seed is gone from the code and the phantoms it left are purged from dev. What is left is
+one operational step: the re-sync that puts compliance records back against real projects.
 
 - [x] **NRPTI no longer invents projects — Priority 4 deleted 2026-08-06.**
       `src/scripts/sync-nrpti.js` used to fall through its five linking strategies and **create** a
@@ -149,41 +149,48 @@ first gated sync against dev.
       purge. A falsy `if (projectId)` meant asking for the unlinked partition returned the WHOLE
       container — so the sweep below would have deleted every compliance record. Both the criterion
       and the `partitionKey` are presence tests now, with a repository test asserting the SQL.
-- [ ] **Run `purge-nrpti-seeded.js` on dev, then re-sync.** The script exists and is tested; nothing
-      has been executed. Dry run by default, `--live` to delete, and it must run INSIDE the app
-      container over the SSH tunnel because Cosmos is private-endpoint-only and keyless. Per seeded
-      project it deletes the records first, then the project, then calls
-      `aiSearch.deleteFromIndex(indexes().projects, id)` — that last call is the point, because
-      indexers work off a `_ts` high-water mark and never see deletes, so skipping it leaves phantom
-      projects searchable forever even once Cosmos is clean. It refuses any project that owns
-      documents, and leaves alone anything carrying `sourceSystem: 'nrpti'` without
-      `metadata.seededFromNrpti`. It also sweeps the `''` partition.
-      Deleting the records is required rather than tidy: `projectId` is the partition key, so a
-      re-sync that re-ingests the same NRPTI `_id` under a different `projectId` writes a NEW item
-      and orphans the old one.
-      Measured 2026-08-05, and the measurement is thin: `/api/projects` returns 382 rows, all
-      `sourceSystem: 'track'`, and the first 250 rows of the `demi-projects` index carry no synthetic
-      id. That read cannot see past ACLs and the list endpoint ignores `pageNum`, so it is not proof.
-      **And it is now known to be far off.** `GET /db/stats` counts under `systemAccess()` and
-      reports **2,248 projects** (2026-08-07) against those 382 public rows. That gap is not by
-      itself evidence of seeded phantoms — unpublished Track projects live in it too — but it is
-      1,866 rows nobody has looked at, and the purge cannot be called a no-op until something has.
-      **Count with `systemAccess()` first** — `projectsRepo.listBySourceSystem(systemAccess(), 'nrpti')`
-      — and that count is also what decides the `ponytail:` note in `sync-nrpti.js`: the
-      seeded-projects-last `sort()` is dead the moment the purge reports 0, and should be deleted then.
-      After the purge, `POST /admin/sync/nrpti?async=true` and read `totalUnlinked` from the
-      `Background NRPTI sync complete` log line — the async response cannot carry it. A seeded
-      project appearing after that means Priority 4 came back.
-      **A `--live` run refuses to start at all if AI Search is not configured**, before deleting
-      anything: `deleteFromIndex` returns `0` for a failed delete and for an unconfigured service
-      alike, so without that gate an unconfigured environment would empty Cosmos and only then
-      report one failure per project — and none of them retryable, because `listBySourceSystem`
-      cannot return a project Cosmos no longer holds. A dry run is still allowed without it, since
-      it writes nothing.
+- [x] **The purge ran live on dev 2026-08-07. The gap was NOT unpublished Track projects — it was
+      1,855 phantoms.** This entry used to guess that the 1,866-row gap between `/db/stats`'s 2,248
+      projects and the 382 public rows was mostly unpublished Track projects, with phantoms a
+      possibility. Counted under `systemAccess()` instead of guessed, that was wrong in one
+      direction and almost entirely: **1,855 of 2,248 carried `sourceSystem: 'nrpti'`, and all 1,855
+      also carried `metadata.seededFromNrpti`.** 393 projects are real. Sample ids — `8008525`,
+      `8118595`, `8643194` — all sit above the `8000000 + hash(name) % 1000000` boundary, which is
+      the auto-seed's own signature.
+      Removed: **1,855 projects, 44,120 records, 2,438 unlinked records, 1,855 AI Search index
+      entries.** `notSeeded: []` and `failures: []` — nothing was skipped and nothing owned a
+      document. A second dry run reports 0, which is what retired the `sort()` in `sync-nrpti.js`.
+      **The `--live` gate fired on the first attempt and was right to.** The script was run directly
+      rather than through the env-loading wrapper, so it never read `/proc/1/environ`;
+      `COSMOS_ENDPOINT` was unset, AI Search read as unconfigured, and it refused **before touching
+      Cosmos**. That is precisely the case the gate was written for: `deleteFromIndex` returns `0`
+      for a failed delete and for an unconfigured service alike, so without it an unconfigured
+      environment empties Cosmos and only then reports 1,855 failures, none retryable, because
+      `listBySourceSystem` cannot return a project Cosmos no longer holds. Nothing was deleted on
+      that run. **A tunnel-run script must load app settings from PID 1 — see README.md.**
+      Operational notes for the next time something like this runs: 48,413 deletions took ~25
+      minutes and **starved the container's SSH daemon** for most of it, while the app stayed
+      responsive on HTTP throughout — so poll the API, not the shell, to tell a hung run from a busy
+      one. Run it detached; a dropped connection mid-run leaves a partial purge, which is re-runnable
+      but reports a non-zero exit.
+      Deleting the records was required rather than tidy: `projectId` is the partition key, so a
+      re-sync re-ingesting the same NRPTI `_id` under a different `projectId` writes a NEW item and
+      orphans the old one.
       An index delete that fails is a `stage: 'index'` failure and exits 1, for the same
       no-retry reason. Delete that id from `demi-projects` by hand if it appears.
       Record counts are deletions, not attempts: `cosmos.remove` answers `false` on a 404 and the
       summary only counts a `true`.
+- [ ] **Re-sync NRPTI — compliance history is absent until it runs.** The purge removed the 44,120
+      records that pointed at phantoms, which is correct and leaves a gap: nothing has re-ingested
+      them against real Track projects. Run a **`since`-less** sync so records dropped while the
+      phantoms existed are revisited; `since` is caller-supplied and a delta run will not go back
+      for them.
+      Either `POST /admin/sync/nrpti?async=true` — reading `totalUnlinked` from the
+      `Background NRPTI sync complete` log line, because the async response cannot carry it — or run
+      `syncNrptiData()` in-container through a wrapper, which returns the summary directly and does
+      not depend on catching a log line that nothing retains.
+      **The check that matters afterwards: `sourceSystem: 'nrpti'` projects must still count 0.**
+      Anything else means Priority 4 came back.
 - [ ] **A dropped record is never revisited by a delta sync.** `since` is caller-supplied, so once
       `resolveProjectLink()` returns null for a record it stays out of Cosmos even after Track adds
       the project its name would now match. Only a full `since`-less `POST /admin/sync/nrpti`
@@ -638,7 +645,7 @@ the deployment's model or SKU changes — the constants do not follow the bicep 
 
 | # | Question | Default | Cost of reversing |
 |---|---|---|---|
-| 1 | Backup mode `Continuous7Days` on dev | Not done | One-way. Gain 8h/support-ticket → 7-day self-service, free tier; lose Geo backup redundancy permanently |
+| 1 | ~~Backup mode `Continuous7Days` on dev~~ | **Closed 2026-08-07: already enabled** | `az cosmosdb show -g c4b0a8-dev-rg -n demi-cosmos-dev --query backupPolicy` returns `type: Continuous`, `tier: Continuous7Days`. This row said "Not done" and was stale — checked while sizing the blast radius of the NRPTI purge, where 7-day self-service restore was the difference between a reversible and an irreversible 48,413-row delete. The trade it describes is already taken: Geo backup redundancy is gone, PITR is live |
 | 2 | ~~Semantic ranker left enabled~~ | **Closed 2026-08-05: in use** | It is now the shipped ranking on `demi-chunks` — see above. Every Deep Search is a billable semantic query against an unpublished monthly free allowance; exhausting it returns HTTP 402, which the code catches once, latches, and degrades to BM25 for the rest of the process — it stops asking rather than paying a 402 plus a retry on every later search. Watch for that warning before assuming ranking is live |
 
 Settled, and kept here only because reversing them is expensive: **index tier** (Basic — Basic→S1
