@@ -396,3 +396,72 @@ test('Search Controller Tests', async (t) => {
     assert.ok(jsonResponse.error.includes('Invalid or unsupported dataset'));
   });
 });
+
+// The fail-open shape, dataset by dataset. `DocumentChunk` has been covered since the flag was
+// added; Project and Document had not, and they are the two that fall through to Cosmos rather
+// than short-circuiting — so "no AI Search request" is only half the assertion, the answer has to
+// be empty too.
+test('every dataset is fail-closed for a caller scoped to nothing', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const scopedToNothing = () => ({
+    user: { realm_access: { roles: ['public'] }, projectScope: [] },
+    header: () => null
+  });
+
+  await t.test('Project issues no AI Search request and lists nothing', async () => {
+    let searched = false;
+    t.mock.method(aiSearch, 'searchProjects', async () => { searched = true; return { items: [] }; });
+    // The Cosmos fallback must be ACL-gated too — scoped-to-nothing is SQL `false` there.
+    let seenAccess;
+    t.mock.method(projectsRepo, 'listVisible', async (access) => {
+      seenAccess = access;
+      return { items: [], continuationToken: undefined };
+    });
+
+    let body;
+    const res = { json: (d) => { body = d; return res; }, status: () => res };
+    await searchController.search(
+      { ...scopedToNothing(), query: { dataset: 'Project', keywords: 'river' } }, res);
+
+    assert.strictEqual(searched, false, 'a null filter is UNRESTRICTED — issue no request');
+    assert.deepStrictEqual(body[0].searchResults, []);
+    if (seenAccess) assert.deepStrictEqual(seenAccess.projectScope, []);
+  });
+
+  await t.test('Document issues no AI Search request and lists nothing', async () => {
+    let searched = false;
+    t.mock.method(aiSearch, 'searchDocuments', async () => { searched = true; return { items: [] }; });
+    t.mock.method(documentsRepo, 'listVisible', async () => ({ items: [], continuationToken: undefined }));
+
+    let body;
+    const res = { json: (d) => { body = d; return res; }, status: () => res };
+    await searchController.search(
+      { ...scopedToNothing(), query: { dataset: 'Document', keywords: 'river' } }, res);
+
+    assert.strictEqual(searched, false, 'a null filter is UNRESTRICTED — issue no request');
+    assert.deepStrictEqual(body[0].searchResults, []);
+  });
+});
+
+// A privileged credential carrying a project scope used to search the WHOLE index: filterFor
+// short-circuited on privilege before it read the scope. The filter it sends is the evidence.
+test('a scoped privileged caller searches only its own projects', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('the chunk filter carries the scope and drops the role clause', async () => {
+    let sent;
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => { sent = opts; return { items: [], count: 0 }; });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search({
+      query: { dataset: 'DocumentChunk', keywords: 'river' },
+      user: { realm_access: { roles: ['staff'] }, projectScope: ['207'] },
+      header: () => null
+    }, res);
+
+    assert.ok(sent, 'the request must still be issued — this caller can see something');
+    assert.match(sent.filter, /search\.in\(projectId, '207'/, 'the scope survives privilege');
+    assert.ok(!/read\/any/.test(sent.filter), 'privilege lifts the ROLE clause, not the scope');
+  });
+});

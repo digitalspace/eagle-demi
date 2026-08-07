@@ -276,6 +276,73 @@ actually serving rather than silently falling back to Cosmos.
 - [ ] **The ACL array is returned to anonymous callers**, so the role taxonomy is public. Disclosure,
       not bypass; it disappears with the projection above.
 
+### Azure AI Search — audited 2026-08-07
+
+Same four lenses as the API audit above. **The read path is sound**, and the honest caveat is
+bigger than any finding: see "the probe that cannot fail".
+
+**Verified correct:**
+
+- **All four `filterFor` call sites honour the `empty` flag** — the fail-open shape. `DocumentChunk`
+  short-circuits and issues no request; `Project` and `Document` fall through to Cosmos instead,
+  which is safe by a *different* mechanism: SQL has a `false` literal, so scoped-to-nothing is
+  expressible there. `/search/summary` short-circuits too.
+- **The document fan-out's second leg re-applies the caller's filter** —
+  `(${opts.filter}) and search.in(projectId, …)`. Visibility of a project never widens access to its
+  documents, it only decides which ids are worth asking about. When the project filter is `empty`,
+  leg two is skipped entirely rather than run unfiltered.
+- **No OData injection reachable from a caller.** Keywords go through `tokenize`, which strips
+  Lucene operator characters; role values come from a verified token and are quote-escaped by
+  doubling. Probed live with `') or read/any(r: r eq 'sysadmin`, `' or true or '`, `*` and an
+  `isPublished eq false` payload — every one returned 0 or public-only hits.
+- **A caller cannot name its own roles or scope.** `?roles=sysadmin`, `?access=privileged` and the
+  `x-roles` / `x-user-roles` / forged `authorization` headers all changed nothing.
+- **Chunk text never leaves the API.** `content` is absent from every hit; the response carries a
+  `snippet` built escape-first, mark-second.
+- **Service posture, verified live**: Basic, 1 replica / 1 partition, `disableLocalAuth: true`
+  (keyless, managed identity), `publicNetworkAccess: Disabled`.
+
+#### The probe that cannot fail
+
+**An anonymous caller sees 60,578 documents over 61 pages — the entire seeded corpus.** Every
+document in dev is public. So the search ACL currently withholds **nothing**, and *no live probe
+against this corpus can fail*: the earlier "zero non-public rows across every dataset" result proves
+the filter does not BREAK anything, not that it PROTECTS anything. This is the trap this repo keeps
+writing down, and it applies to the search audit as much as the API one.
+
+The only discriminating evidence is synthetic: the unit tests added alongside this entry, which
+assert a scoped-to-nothing caller issues no request on all three datasets, and that a scoped
+*privileged* caller's filter still carries `search.in(projectId, '207')` with the role clause
+lifted. Those fail if the gate regresses. A live probe would not.
+
+#### Findings
+
+- [ ] **Restricting a document takes effect in search up to 5 minutes late.** The indexers are the
+      only writers to the index — `docs/index` is used exclusively for `delete` actions, there is no
+      merge/upload path — so an ACL change in Cosmos reaches `demi-chunks` and `demi-documents` only
+      on the next `PT5M` high-water-mark pass. The API restricts instantly; Deep Search does not.
+      Pushing the change directly is not obviously right: a document unpublish means updating every
+      chunk of that document, which for a large PDF is thousands of index rows and a race against
+      the indexer. Stated as a known ceiling rather than fixed.
+- [ ] **`content` is `retrievable: true` on `demi-chunks`.** The only thing keeping whole chunk text
+      out of API responses is the explicit `select` list in `searchChunks` (pinned by a test).
+      Nothing reads `content` from the index — the summariser reads it from Cosmos, which is the
+      N+1 at `controllers/search.js`. `retrievable: false` would make the guarantee structural
+      rather than conventional. Not changed here because highlighting also reads that field and the
+      interaction cannot be tested from outside the VNet.
+- [ ] **Deletes are permanently the application's job.** `dataDeletionDetectionPolicy` is `null` on
+      all three datasources, so a removed row stays searchable until `deleteFromIndex` /
+      `deleteChunksForDocument` is called. Already wired into `deleteProject`/`deleteDocument`; the
+      obligation never goes away, and it is invisible in the indexer config.
+- [ ] **No index-level paging.** `$skip` is never sent and `top` is clamped to 250, so a result set
+      past the first page is unreachable rather than slow.
+- [ ] **The semantic 402 latch never resets.** `semanticExhausted` is process-wide with no month
+      rollover, so a single 402 degrades every later search in that worker to BM25 until it recycles.
+- [ ] **Boundaries have no search surface at all** — no index, no datasource, no indexer. The ACL
+      added to that container therefore has nothing to keep in sync, which is worth knowing before
+      anyone adds one: an indexed boundary would need `read[]` in the index and the same filter
+      treatment as documents, or the restriction would hold in the API and not in search.
+
 ---
 
 ## Infrastructure
