@@ -173,12 +173,26 @@ eagle id). "Shared" means `_epicProjectId` resolves to one of ours:
   records; across the whole corpus most document URLs sit on `nrs.objectstore.gov.bc.ca` instead,
   and those belong to records that do not link to us anyway.
 
-### Live data outlives this change
+### The live containers are dropped too, 2026-08-07
 
-ARM does not drop a container when the template stops declaring it, so dev still holds ~3,556 rows in
-`records` and the `project_fragments` aggregates. Drop them by hand when convenient — PITR is
-`Continuous7Days`, so it stays reversible for a week. ~191 projects also still carry a stale
-`sources.nrpti` block written by the deleted `patchNrptiStats`; harmless, since nothing reads it.
+ARM does not drop a container when the template stops declaring it, so the merge left `records`
+(~3,556 rows) and `project_fragments` (empty) standing on dev. Both were deleted by hand the same
+day with `az cosmosdb sql container delete`, and **`az cosmosdb sql container list` now returns the
+same eight names the Bicep declares** — no drift in either direction, so no reconciling deploy is
+needed. PITR is `Continuous7Days`, which makes both restorable until roughly **2026-08-14**.
+
+Two notes for whoever runs the next container deletion here:
+
+- **The Azure MCP cannot do it, and cannot even read this account.** Its `cosmos` commands are all
+  reads and they route to the DATA plane (`demi-cosmos-dev.documents.azure.com`), which is
+  private-endpoint-only — so they answer `403 ... blocked by your Cosmos DB account firewall` from
+  outside the VNet. Its `arm` commands have no DELETE at all, and deployments are restricted to
+  `mode: Incremental`, which never removes a resource. Only `az` reaches the control plane.
+- **Still carried, deliberately:** ~191 projects hold a stale `sources.nrpti` block written by the
+  deleted `patchNrptiStats`. Nothing reads it — the API never projected it and the frontend model no
+  longer declares it — and clearing it needs an SSH tunnel plus a bespoke patch script, since the
+  script that could have done it is what was deleted. Not worth writing code against a live database
+  for a few hundred bytes of dead JSON.
 
 
 ## Infrastructure
