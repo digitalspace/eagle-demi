@@ -141,9 +141,19 @@ first gated sync against dev.
         whose inline initializer script and inline styles a default CSP blocks. A policy that
         exempts the only page it covers protects nothing, so this is dismissed with that reason
         rather than implemented — see "Needs a human".
-      - **`js/incomplete-multi-character-sanitization`** at
-        `frontend/src/app/services/registry-state.service.ts:1707`. Read it before judging — a
-        partial sanitizer is worse than none because it looks handled.
+      - **`js/incomplete-multi-character-sanitization`** in
+        `frontend/src/app/services/registry-state.service.ts` — **fixed 2026-08-06, and the alert
+        named the smaller half of it.** `sanitizeHighlight` stripped tags with a single-pass
+        `replace(/<[^>]*>/g, '')` (what CodeQL flagged) and then ran the result through a
+        hand-written table of ~30 HTML entities, which turned `&lt;img …&gt;` back into a live
+        `<img …>` as the LAST step before returning markup bound with `[innerHTML]`. Measured
+        against the old code: the strip itself held (`[^>]*` swallows a nested `<`, so
+        `<scr<script>ipt>` did not re-form), and the decode was the actual hole. Angular's
+        `DomSanitizer` is what kept it from being an XSS — there is no `bypassSecurityTrustHtml`
+        anywhere in the app — so this was one bypass call away from live, on a path that carries
+        text extracted from uploaded PDFs (`map-explorer.component.html`, document snippets).
+        Both halves are now one `DOMParser().parseFromString(part, 'text/html').body.textContent`
+        followed by the file's existing `escapeHtml`, and the entity table is deleted.
       - **4 x `js/path-injection`** in `src/controllers/nosql/document.js` (171, 177, 189, 220) are
         **false positives** — every one is `fs.promises.unlink(file.path)`, and `file.path` comes
         from `multer({ dest: config.uploadDir })`, which generates its own random filename and never
@@ -280,7 +290,10 @@ first gated sync against dev.
       guarantee now lives in `searchChunks`'s explicit `select` list, which excludes `content` —
       adding it there is not a display tweak, it starts returning full chunk text to every caller.
       Verified on the live index that L2 still reads the field with `select` excluding it, so
-      nothing else had to change. Watch that `select`.
+      nothing else had to change. **The watch is a test, not a habit** —
+      `test/search/ai-search.test.js:226` asserts `!body.select.includes('content')`, so adding it
+      back fails CI rather than quietly shipping chunk text. Left open only because the index
+      setting itself is still the permissive one.
 - [x] **Ranking degradation is now readable — `GET /admin/index-progress`, 2026-08-06.** Basic tier
       allows 2 concurrent semantic requests per search unit against a frontend that searches on
       debounced keystrokes, so `semanticErrorHandling: 'partial'` returning BM25 order is an expected

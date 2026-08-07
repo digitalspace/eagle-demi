@@ -1735,6 +1735,24 @@ export class RegistryStateService {
     return escaped.replace(pattern, '<mark>$1</mark>');
   }
 
+  /**
+   * Keep the `<mark>` tags in a highlighted string, and neutralise everything else in it.
+   *
+   * The result goes straight to an `[innerHTML]` binding, so this obeys the same rule as
+   * `highlightText`'s other branch: escape, then mark \u2014 never the other way round.
+   *
+   * It used to do the reverse. Each non-mark part was stripped with `replace(/<[^>]*>/g, '')` \u2014
+   * the single pass CodeQL flags as `js/incomplete-multi-character-sanitization` \u2014 and then run
+   * through a hand-written table of ~30 entities that turned `&lt;img \u2026&gt;` BACK into a live
+   * `<img \u2026>` on the way to the DOM. Measured: the strip alone held up (`[^>]*` swallows a nested
+   * `<`, so `<scr<script>ipt>` did not re-form), but the decode after it was the real hole, and it
+   * is the step this function performed LAST before returning markup. Angular's own DomSanitizer
+   * is what kept that from being an XSS; nothing in this file did.
+   *
+   * `DOMParser` replaces both halves. `textContent` drops markup without a regex to reason about,
+   * and it decodes every HTML entity rather than the thirty someone remembered to list. Whatever
+   * comes out is text, and text is escaped before it is concatenated back into markup.
+   */
   sanitizeHighlight(html: string): string {
     if (!html) return '';
     const parts = html.split(/(<\/?mark>)/gi);
@@ -1745,31 +1763,11 @@ export class RegistryStateService {
       } else if (/^<\/mark>$/i.test(part)) {
         result += '</mark>';
       } else {
-        const stripped = part.replace(/<[^>]*>/g, '');
-        result += this.decodeHtmlEntities(stripped);
+        const text = new DOMParser().parseFromString(part, 'text/html').body.textContent ?? '';
+        result += this.escapeHtml(text);
       }
     }
     return result;
-  }
-
-  private decodeHtmlEntities(text: string): string {
-    const named: Record<string, string> = {
-      amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00A0',
-      ndash: '\u2013', mdash: '\u2014',
-      rsquo: '\u2019', lsquo: '\u2018', rdquo: '\u201D', ldquo: '\u201C',
-      hellip: '\u2026', bull: '\u2022', middot: '\u00B7',
-      copy: '\u00A9', reg: '\u00AE', trade: '\u2122',
-      eacute: '\u00E9', Eacute: '\u00C9', aacute: '\u00E1', Aacute: '\u00C1',
-      iacute: '\u00ED', Iacute: '\u00CD', oacute: '\u00F3', Oacute: '\u00D3',
-      uacute: '\u00FA', Uacute: '\u00DA', agrave: '\u00E0', egrave: '\u00E8',
-      ntilde: '\u00F1', Ntilde: '\u00D1', ouml: '\u00F6', Ouml: '\u00D6',
-      auml: '\u00E4', Auml: '\u00C4', uuml: '\u00FC', Uuml: '\u00DC',
-      ccedil: '\u00E7', Ccedil: '\u00C7', szlig: '\u00DF',
-    };
-    return text
-      .replace(/&([a-zA-Z]+);/g, (_, n) => named[n] ?? named[n.toLowerCase()] ?? `&${n};`)
-      .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
-      .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)));
   }
 
   private escapeRegex(s: string): string {
