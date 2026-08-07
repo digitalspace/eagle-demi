@@ -67,34 +67,61 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
 
 ## NRPTI ingest
 
-- [ ] **NRPTI auto-seeds projects that are not projects, and nothing ever removes them.**
-      `src/scripts/sync-nrpti.js` tries five ways to link a compliance record to an existing project
-      (`_epicProjectId`, exact name, normalized name, name segments, token inclusion) and then, at
-      Priority 4, **invents one** from `item.projectName || item.location` — a synthetic id
-      `8000000 + hash(name) % 1000000`, `projectState: 'Compliance Record Ingest'`, a centroid
-      hardcoded to Victoria, and `read: ['public', …]` so it is publicly listed like a real project.
-      Many of those names are facilities, locations or record titles, not EPIC projects, so the
-      registry gains rows that no project ever existed for.
-      The fix is to delete Priority 4: link only when Track or Eagle already has the project, and
-      leave the record unlinked otherwise. Two things must be decided at the same time, because both
-      are load-bearing:
-      - **What an unlinked record becomes.** Today the no-name path writes `projectId: ''`, which is
-        the empty-string partition — reachable by no scoped read, so the record is ingested and then
-        invisible. Either that is accepted deliberately (an unmatched-records bucket someone can
-        query) or unmatched records should not be written at all. Do not leave it as an accident.
-      - **The link is not free to change later.** `projectId` is the records container's PARTITION
-        KEY, so re-pointing a record at the right project is a delete plus an insert, not an update.
-      - [ ] **Purge the seeded stragglers**, which is a separate job from the gate: a script over
-            `metadata.seededFromNrpti === true` / `sourceSystem === 'nrpti'` that deletes the project
-            AND calls `aiSearch.deleteFromIndex` for it. Indexers never see deletes — drop that
-            second half and the phantom projects stay searchable forever even once Cosmos is clean.
-            Then re-point or drop the records that referenced them.
+The auto-seed is gone from the code. What is left is operational: nobody has run the purge or the
+first gated sync against dev.
+
+- [x] **NRPTI no longer invents projects — Priority 4 deleted 2026-08-06.**
+      `src/scripts/sync-nrpti.js` used to fall through its five linking strategies and **create** a
+      project from `item.projectName || item.location`: synthetic id `8000000 + hash(name) % 1000000`,
+      `projectState: 'Compliance Record Ingest'`, a centroid hardcoded to Victoria, and
+      `read: ['public', …]` so it listed publicly beside real Track projects. Many of those strings
+      are facilities, locations or record titles. Track owns the registry; a sync does not add to it.
+      The ladder is now `resolveProjectLink()` — pure, exported, and unit-tested one case per
+      priority. **An unmatched record is dropped, not written.** There is no `projectId: ''` bucket:
+      the run logs the skip count and the top 20 unresolvable names, and that log is the only record
+      of them. `simpleHash` went with Priority 4.
+      Correcting the reason this entry used to give: the empty-string partition was *not* invisible.
+      `scopeClause` restricts on the partition key for `TIER.SCOPED` only, so `GET /records` with no
+      `project` param returned unlinked records to an anonymous caller. They were unreachable by
+      scoped reads and by `/records?project=X`, not by everyone.
+- [x] **`records.buildCriteria` treated `projectId: ''` as "no filter".** Found while writing the
+      purge. A falsy `if (projectId)` meant asking for the unlinked partition returned the WHOLE
+      container — so the sweep below would have deleted every compliance record. Both the criterion
+      and the `partitionKey` are presence tests now, with a repository test asserting the SQL.
+- [ ] **Run `purge-nrpti-seeded.js` on dev, then re-sync.** The script exists and is tested; nothing
+      has been executed. Dry run by default, `--live` to delete, and it must run INSIDE the app
+      container over the SSH tunnel because Cosmos is private-endpoint-only and keyless. Per seeded
+      project it deletes the records first, then the project, then calls
+      `aiSearch.deleteFromIndex(indexes().projects, id)` — that last call is the point, because
+      indexers work off a `_ts` high-water mark and never see deletes, so skipping it leaves phantom
+      projects searchable forever even once Cosmos is clean. It refuses any project that owns
+      documents, and leaves alone anything carrying `sourceSystem: 'nrpti'` without
+      `metadata.seededFromNrpti`. It also sweeps the `''` partition.
+      Deleting the records is required rather than tidy: `projectId` is the partition key, so a
+      re-sync that re-ingests the same NRPTI `_id` under a different `projectId` writes a NEW item
+      and orphans the old one.
       Measured 2026-08-05, and the measurement is thin: `/api/projects` returns 382 rows, all
       `sourceSystem: 'track'`, and the first 250 rows of the `demi-projects` index carry no synthetic
-      id — so under PUBLIC access, on dev, there is nothing to purge right now and the gate is what
-      actually matters before the next `POST /admin/sync/nrpti`. That read cannot see past ACLs and
-      the list endpoint ignores `pageNum`, so it is not proof the containers are clean. Count with
-      `systemAccess()` before concluding the purge is a no-op.
+      id. That read cannot see past ACLs and the list endpoint ignores `pageNum`, so it is not proof.
+      **Count with `systemAccess()` first** — `projectsRepo.listBySourceSystem(systemAccess(), 'nrpti')`
+      — and that count is also what decides the `ponytail:` note in `sync-nrpti.js`: the
+      seeded-projects-last `sort()` is dead the moment the purge reports 0, and should be deleted then.
+      After the purge, `POST /admin/sync/nrpti?async=true` and read `totalUnlinked` from the
+      `Background NRPTI sync complete` log line — the async response cannot carry it. A seeded
+      project appearing after that means Priority 4 came back.
+      An index delete that fails is now a `stage: 'index'` failure and exits 1: nothing can retry
+      it, because the Cosmos row is already gone and `listBySourceSystem` will not return it again.
+      Delete that id from `demi-projects` by hand if it appears.
+- [ ] **A dropped record is never revisited by a delta sync.** `since` is caller-supplied, so once
+      `resolveProjectLink()` returns null for a record it stays out of Cosmos even after Track adds
+      the project its name would now match. Only a full `since`-less `POST /admin/sync/nrpti`
+      re-ingests it. Run one after any batch of new Track projects, or the compliance history for
+      those projects starts at the sync date rather than at the record dates.
+- [ ] **`documents.buildCriteria` still treats `projectId: ''` as "no filter"** (`documents.js:20`,
+      and the `partitionKey` at `:45`) — the same shape as the records bug fixed above. Not live:
+      no caller passes `''` and nothing sweeps a documents `''` partition. Worth aligning before
+      something does. `records.getById`'s falsy `projectId` is fine by contrast — it degrades to an
+      ACL-gated cross-partition query, not a wider result set.
 
 ## Infrastructure
 
@@ -107,44 +134,87 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
         `/api/search` fans out to Azure AI Search on debounced keystrokes, and Basic tier allows 2
         concurrent semantic requests per search unit.
       - **`js/insecure-helmet-configuration`** at `src/app.js:41` — helmet is mounted with
-        `contentSecurityPolicy: false`. Decide whether the frontend can live under a CSP; if it can,
-        turn it on, and if it cannot, dismiss the alert with that reason rather than leaving it open.
-      - **`js/incomplete-multi-character-sanitization`** at
-        `frontend/src/app/services/registry-state.service.ts:1707`. Read it before judging — a
-        partial sanitizer is worse than none because it looks handled.
+        `contentSecurityPolicy: false`. **Decided 2026-08-06: dismiss, do not implement.** The
+        question was "can the frontend live under a CSP", and the answer is that the API does not
+        serve the frontend at all — the `express.static` mounts and SPA routes that suggested it did
+        are deleted (see below). What is left is exactly one HTML page, swagger-ui at `/api-docs`,
+        whose inline initializer script and inline styles a default CSP blocks. A policy that
+        exempts the only page it covers protects nothing, so this is dismissed with that reason
+        rather than implemented — see "Needs a human".
+      - **`js/incomplete-multi-character-sanitization`** in
+        `frontend/src/app/services/registry-state.service.ts` — **fixed 2026-08-06, and the alert
+        named the smaller half of it.** `sanitizeHighlight` stripped tags with a single-pass
+        `replace(/<[^>]*>/g, '')` (what CodeQL flagged) and then ran the result through a
+        hand-written table of ~30 HTML entities, which turned `&lt;img …&gt;` back into a live
+        `<img …>` as the LAST step before returning markup bound with `[innerHTML]`. Measured
+        against the old code: the strip itself held (`[^>]*` swallows a nested `<`, so
+        `<scr<script>ipt>` did not re-form), and the decode was the actual hole. Angular's
+        `DomSanitizer` is what kept it from being an XSS — there is no `bypassSecurityTrustHtml`
+        anywhere in the app — so this was one bypass call away from live, on a path that carries
+        text extracted from uploaded PDFs (`map-explorer.component.html`, document snippets).
+        Both halves are now one `DOMParser().parseFromString(part, 'text/html').body.textContent`
+        followed by the file's existing `escapeHtml`, and the entity table is deleted.
       - **4 x `js/path-injection`** in `src/controllers/nosql/document.js` (171, 177, 189, 220) are
         **false positives** — every one is `fs.promises.unlink(file.path)`, and `file.path` comes
         from `multer({ dest: config.uploadDir })`, which generates its own random filename and never
         derives it from `originalname`. Dismiss as "used in tests"/"false positive" with that note so
         they stop reappearing; do not "fix" them.
-- [ ] **Angular 19 is end-of-life and carries 7 unfixable advisories.** `frontend/package.json`
-      resolves `@angular/*` to **19.2.25**, the newest 19.x, and every one of the 7 open Dependabot
-      alerts on `@angular/core`, `@angular/common` and `@angular/compiler` has
-      `first_patched_version: null` with a vulnerable range of `<= 19.2.25`. There is nothing to
-      upgrade to inside 19 — angular.dev lists v22 active, v21 LTS, v20 LTS to Nov 2026, and "v2 to
-      v19 are no longer supported". `first_patched_version: null` means "no fix in the affected
-      major", not "no fix anywhere": Dependabot's first run proposed 20.3.x as ordinary **version**
-      updates (PRs #33/#34/#40, all closed) and every one failed `Test & Build Frontend`, which is
-      the evidence that this is a migration and not a bump. `.github/dependabot.yml` now freezes the
-      whole toolchain — `@angular/*`, `@angular-devkit/*`, `@angular-eslint/*`, `angular-eslint` and
-      `zone.js` — because those are version-locked to each other: PR #42 bumped only
-      `@angular-devkit/build-angular`, to 21.2.19, and the build died on "`@angular/build` supports
-      Angular versions ^21.0.0, but detected Angular version 19.2.25 instead". **Deleting that
-      `ignore:` block is step one of the upgrade.** Framework and toolchain have to move in one
-      commit; a half-upgraded pair does not build at all.
-      **The Angular freeze is now what holds the remaining alerts open.** As of 2026-08-06 there are
-      33, all in `frontend/yarn.lock`: 7 runtime (the Angular set below, unfixable) and 26
-      development-scope in the build toolchain, which cannot move while `@angular-devkit/*` is
-      pinned to 19. None of them ship — only `frontend/dist` is deployed, never `node_modules` — so
-      this is a CI supply-chain exposure, not a production one. The upgrade clears both groups at
-      once.
-      They are not theoretical: XSS via i18n event-handler attributes, hydration DOM clobbering and
-      response-cache poisoning, `HttpTransferCache` cache-key ambiguity, and a DoS via OOM in date
-      formatting — all in code the bundler compiles into what `demi-frontend-dev` serves.
-      **Target 21** (LTS to ~Nov 2027) rather than 22; `eagle-public` in this workspace already runs
-      Angular 21, so there is a migration to copy rather than invent. Two majors, so it is real work
-      and not a dependency bump. Until it happens the open-alert floor is 7 — a count below that
-      means somebody dismissed an alert instead of fixing it.
+- [x] **Angular 19 → 22 and TypeScript 5.7 → 6.0, done 2026-08-06.** 19.2.25 was end-of-life and
+      carried 7 runtime advisories with `first_patched_version: null` — XSS via i18n event-handler
+      attributes, hydration DOM clobbering and response-cache poisoning, `HttpTransferCache`
+      cache-key ambiguity, a DoS via OOM in date formatting — plus 26 development-scope alerts that
+      could not move while `@angular-devkit/*` was pinned to 19. Landed as three hops (19→20→21→22)
+      on one branch, one commit each, because `ng update` only crosses one major at a time.
+      The dependabot `ignore:` block is gone; the `angular` group that replaces it still lists every
+      scope, which is the lesson PR #42 taught.
+      What it actually cost, against the estimate of "two majors of real work":
+      - **`ng update`'s temp-CLI bootstrap is broken under Yarn 4** and fails with no error at all —
+        it installs the temporary CLI into a PnP dir and then cannot require it. Work around it by
+        bumping the packages with `yarn up` first and running migrations with
+        `NG_DISABLE_VERSION_CHECK=1 yarn ng update <pkg> --migrate-only --from=<a> --to=<b>`.
+      - **TypeScript 6 cost nothing.** It was the budgeted risk; `registry-state.service.ts` needed
+        no change. The real work was all in v22's behavioural defaults.
+      - **The v22 safe-navigation migration was reverted deliberately.** It wrapped 8 template
+        expressions in `$safeNavigationMigration(...)` to keep `a?.b` yielding `null` rather than
+        `undefined`. Every call site behind those bindings already declares
+        `string | undefined | null` and branches on both, so the shim preserved nothing and read as
+        noise. The `extendedDiagnostics` suppressions that came with it went too — the build is
+        clean without them.
+      - **`provideHttpClient(withXhr())` was kept.** v22 defaults `HttpClient` to the fetch backend,
+        and this app monkey-patches `window.fetch` in `RegistryStateService` to attach bearer
+        tokens. `ConfigService` is the only `HttpClient` caller and runs before Keycloak
+        initialises; XHR keeps it out of that interceptor, which is what it did on 19.
+      - **Karma stayed.** v22 offers a vitest migration; the two spec files did not need it. The
+        builder is now `@angular/build:karma`, and `karma.conf.js` no longer names the deleted
+        `@angular-devkit/build-angular` framework/plugin.
+      - Bundle went 436.65 kB → 457.07 kB raw (114.13 → 119.33 kB transfer) across three majors.
+        37/37 tests pass; the app boots and renders on `ng-version="22.1.0"`.
+- [ ] **Every component now declares `ChangeDetectionStrategy.Eager`, and the lint rule that says so
+      is switched off.** v22 makes OnPush the default and its migration wrote the explicit opt-out on
+      all five components to preserve v19 behaviour; `@angular-eslint/prefer-on-push-component-
+      change-detection` then failed the build, so it is disabled in `frontend/eslint.config.js` with
+      the reason. Only map-explorer and summarizer hold local signals — the rest read service signals
+      and mutate plain fields from async callbacks, which OnPush would stop rendering, and the two
+      spec files would not catch it. Converting them is a change-detection rewrite with its own
+      verification; re-enable the rule when it happens.
+- [x] **The API served a dead copy of the frontend, and two of its routes hung. Deleted
+      2026-08-06.** `src/app.js` mounted `express.static('../public')` on `/`, `/admin` and `/demo`
+      plus a `res.sendFile` SPA fallback for `/map`, `/search` and `/intake`. `public/` is
+      **untracked**, so no clone has it and nothing was ever there in Azure: the static mounts fell
+      through to the 404 and were dead weight. The sendFile routes did worse — measured on dev,
+      `GET /map` returned **no response at all for 90 s**, and App Service holds such a request for
+      its full 240 s timeout. Three unauthenticated routes that each pin a request that long matter
+      on a single-worker B1.
+      **The rule this leaves behind: never `res.sendFile`, or any streaming response, under the
+      Functions adapter.** `api/index.js` fabricates `res` as a bare EventEmitter and resolves its
+      promise inside `res.end`; `send` streams instead and, on the missing-file path, never calls
+      it. Under a real `http.Server` the same request fails fast with a 500 carrying the ENOENT —
+      which is why this was invisible locally and had to be found by asking the deployed API.
+      Two things fell out of it: `/search` was never an SPA route at all, because
+      `app.use('/', apiRoutes)` already mounted the search endpoint at the root and shadowed it; and
+      `scripts/package-api.py` did not exclude `public/`, so a deploy from a working tree holding a
+      stale build would have shipped it into `wwwroot`, where zipdeploy's merge makes it permanent.
+      Both now pinned by tests (`test/app.boot.test.js`, `test/scripts/package-api.test.js`).
 - [ ] **Test and prod have no deploy path at all — the workflows were deleted 2026-08-05.** Nothing
       is deployed in either subscription and neither has a resource group, so the files were dead
       weight naming prod resources in a public repo. Rebuilding them needs, per environment: a
@@ -230,13 +300,36 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       guarantee now lives in `searchChunks`'s explicit `select` list, which excludes `content` —
       adding it there is not a display tweak, it starts returning full chunk text to every caller.
       Verified on the live index that L2 still reads the field with `select` excluding it, so
-      nothing else had to change. Watch that `select`.
-- [ ] **Ranking can degrade silently and nothing alerts.** Basic tier allows 2 concurrent semantic
-      requests per search unit against a frontend that searches on debounced keystrokes, so
-      `semanticErrorHandling: 'partial'` returning BM25 order is an expected path, not an edge. The
-      reason is logged (`[ai-search] semantic reranking did not run: …`) and `rerankerScore` is
-      absent on the hits, but nothing watches either. Under load the product may be serving the
-      unranked order most of the time while the scorecard measures the ranked one.
+      nothing else had to change. **The watch is a test, not a habit** —
+      `test/search/ai-search.test.js:226` asserts `!body.select.includes('content')`, so adding it
+      back fails CI rather than quietly shipping chunk text. Left open only because the index
+      setting itself is still the permissive one.
+- [x] **Ranking degradation is now readable — `GET /admin/index-progress`, 2026-08-06.** Basic tier
+      allows 2 concurrent semantic requests per search unit against a frontend that searches on
+      debounced keystrokes, so `semanticErrorHandling: 'partial'` returning BM25 order is an expected
+      path, not an edge, and it answers 200 in the same response shape. `search.semantic` on that
+      endpoint reports `requested`, `partial`, derived `ranked`, `lastPartialReason`, `lastPartialAt`,
+      `exhausted` and `exhaustedAt`. A 402 counts as `partial`, because the search that provoked it
+      served the stripped retry's BM25 order. **If `partial` tracks `requested` one-for-one under
+      ordinary single-user load, that is the finding this was built for** — it means the scorecard is
+      measuring an order no user gets.
+      Per-process, and back to zero on every recycle: it answers "since this process started, was
+      ranking running?" and nothing longer. That is the honest resolution on a single-worker B1, and
+      it is not a time series — see the entry below for why a time series is not available.
+- [ ] **Nothing DEMI logs is retained anywhere. `useAzureMonitor` has never started.** Measured
+      2026-08-06: `api/index.js` starts the Azure Monitor OpenTelemetry distro only
+      `if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING)`, and `demi-api-dev` has no such app
+      setting. Nor could it have a working one — `az group resource list` on `c4b0a8-dev-rg` shows
+      neither `demi-logs-dev` nor `demi-insights-dev`, only the portal-created orphan
+      `workspace-c4b0a8devrgYb8e` that `azure/modules/observability.bicep` was written to replace.
+      That module has never been deployed, because `main.bicep` has never been deployed.
+      So every "the reason is logged" claim in this file means "written to the App Service log
+      stream", which is visible only to somebody already watching, and gone after. That is the exact
+      failure `observability.bicep`'s own header describes, and it is why the ranking entry above had
+      to become counters on an endpoint rather than an alert rule on a log line.
+      Fixing it is not code: deploy the observability module, then set
+      `APPLICATIONINSIGHTS_CONNECTION_STRING` on both app services. Blocked behind the standing
+      decision on first deploying `main.bicep`, and on RG-scope rights `demi-cicd-dev` does not hold.
 - [ ] **The 402 latch does not un-latch when the month rolls over.** A single 402 turns semantic off
       for the life of the process, which is what stops every later search paying a wasted 402 plus a
       retry. But the allowance resets monthly and the latch does not, so a process that spans the
@@ -246,12 +339,28 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
 
 ## Search UI
 
-- [ ] **Facets are NOT blocked — the reason recorded here was wrong.** `sector`, `region` and
-      `status` on `demi-projects` are already `facetable: true`, as is every field in both metadata
-      indexes; see `azure/search/indexes/`. This entry previously said they needed a reindex because
-      `facetable` is not a mutable field property. True in general, moot here: the fields were
-      created facetable. What remains is a `facets` parameter on the query and UI to render the
-      counts — the sector chips are still a hardcoded list of four with no count per value.
+- [x] **The sector chips were not missing counts, they were matching the wrong projects. Fixed
+      2026-08-06.** This entry used to describe the work as a `facets` parameter plus UI. Measured
+      against dev first: `/api/search?dataset=Project&pageSize=500` returns **382 projects across 33
+      distinct sector values**, and the four hardcoded chips matched by substring, so
+      **`Transportation` matched 0 of 382** (nothing in the corpus contains that word — the values
+      are `Transmission Pipelines`, `Public Highways`, `Railways`, `Airports`, `Marine Port
+      Facilities`), `Energy` missed `Power Plants` (87, the largest sector) and caught only `Energy
+      Storage Facilities` (22), and the `startsWith('mine')` special case missed `Coal Mines` (32)
+      while catching `Mineral Mines`. Chips are now built from the data with a count each, matched
+      exactly on the trimmed value; the live render is 31 chips led by `All Sectors (382)`.
+      Values are TRIMMED before grouping because the data carries whitespace twins —
+      `Groundwater Extraction` ×9 beside `Groundwater Extraction ` ×9, same for `Shoreline
+      Modification` and `Water Diversion` — which is why 33 raw values render as 30 chips.
+      **No `facets` parameter, deliberately.** 382 < the `pageSize=500` the loader already asks for,
+      so the browser holds the whole corpus and the counts come from the SAME predicate the chip
+      then applies (`matchesProjectFilters`, called once with `skipSector`) — which is the only way
+      a count is guaranteed to equal what clicking it returns. A server facet could not promise that
+      next to the region filter, which is geometric (`isPointInPolygon`), not a field equality Azure
+      can count. Ceiling recorded in the code: past `pageSize` these become counts of a page, and
+      the answer then is paging or a server facet, not a bigger number in the URL.
+      The fields are all still `facetable: true` in `azure/search/indexes/`, so a server facet
+      remains available the day the corpus outgrows one page.
 - [ ] **There is no result paging.** `searchChunks` sends only `top` (default 20, hard cap 250) and
       never sends `$skip`; the controller has no offset and the frontend has no load-more. Left alone
       deliberately — nobody uses DEMI yet, and this is a decision for whoever owns the search UI. If
@@ -292,6 +401,10 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
 - [ ] **Look at server-side highlighting on dev.** Shipped and unit-tested, but the visible result
       has not been eyeballed. Azure returns windowed fragments for a long field, so a long project
       description now renders as fragments joined by an ellipsis rather than in full.
+- [ ] **Dismiss `js/insecure-helmet-configuration` in the GitHub UI**, with the reason recorded
+      under Infrastructure above: the API serves exactly one HTML page, swagger-ui at `/api-docs`,
+      which needs inline script and style, so a CSP would have to exempt the only page it covers.
+      Decided rather than deferred — leaving it open reads as work nobody got to.
 - [ ] **Delete the 12 merged branches on `origin`.** From PRs #1–#10, #12 and #13.
       `git push --delete` is barred by settings deny, so this needs a human or the GitHub UI.
 

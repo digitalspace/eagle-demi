@@ -178,6 +178,32 @@ test('records repository', async (t) => {
     const listWhere = calls[0].spec.query.split(' WHERE ')[1].split(' ORDER BY ')[0];
     assert.strictEqual(calls[1].spec.query.split(' WHERE ')[1], listWhere);
   });
+
+  await t.test("projectId '' selects the unlinked partition, not every record", async () => {
+    // `''` is a REAL partition — where unmatched NRPTI records landed before the sync stopped
+    // writing them — so the criterion is a presence test, never truthiness. Under a falsy check
+    // the clause vanishes and `purge-nrpti-seeded.js`'s sweep of the unlinked partition becomes a
+    // read of the whole container, which it then deletes.
+    const calls = captureQuery(t);
+    await records.listVisible(ADMIN, { projectId: '' });
+
+    assert.match(calls[0].spec.query, /c\.projectId = @projectId/);
+    assert.deepStrictEqual(
+      calls[0].spec.parameters.filter(p => p.name === '@projectId'),
+      [{ name: '@projectId', value: '' }]
+    );
+    // Named as the partition key too, or the sweep fans out across every partition.
+    assert.strictEqual(calls[0].options.partitionKey, '');
+  });
+
+  await t.test('an absent projectId still means every partition', async () => {
+    // The other half of the distinction: undefined is "no filter", '' is "the empty partition".
+    const calls = captureQuery(t);
+    await records.listVisible(ADMIN, {});
+
+    assert.ok(!calls[0].spec.query.includes('c.projectId = @projectId'));
+    assert.strictEqual(calls[0].options.partitionKey, undefined);
+  });
 });
 
 test('fragments repository', async (t) => {

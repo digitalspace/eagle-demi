@@ -29,9 +29,14 @@ def package_api(repo_root, zip_path):
     # `test`, `azure`, `.github` and `.vscode` are not runtime either — nothing reachable from
     # index.js -> api/index.js -> src/** loads them. They were shipped only because nothing excluded
     # them, which is how wwwroot ended up holding a copy of the repository.
+    # `public` is a local build output, untracked by git, and nothing serves it any more — the
+    # express.static mounts and the SPA sendFile routes that read it were deleted from src/app.js
+    # (they answered 404 or hung; see the comment there). It is excluded rather than merely unused
+    # because zipdeploy MERGES into wwwroot: packaging a stale bundle once leaves it on the box for
+    # good, and this packager runs from whatever working tree the operator happens to have.
     root_exclude_dirs = {".git", ".claude", "frontend", "extraction-host", ".angular", "dist",
                          "coverage", ".deploy_archives", "tmp", "__pycache__",
-                         "test", "azure", ".github", ".vscode", "scripts"}
+                         "test", "azure", ".github", ".vscode", "scripts", "public"}
 
     # Root-level files with no runtime role. `Dockerfile` describes a container Azure does not build,
     # `eslint.config.js` is lint config, `.gitignore` is meaningless once unpacked. Root-scoped for

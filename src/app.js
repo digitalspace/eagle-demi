@@ -117,15 +117,25 @@ try {
 app.use('/api', apiRoutes);
 app.use('/', apiRoutes);
 
-// Serve standalone demo page on /, /admin, and /demo (after API routes)
-app.use('/', express.static(path.join(__dirname, '../public')));
-app.use('/admin', express.static(path.join(__dirname, '../public')));
-app.use('/demo', express.static(path.join(__dirname, '../public')));
-
-// Fallback to Angular SPA index.html for deep links
-app.get(['/map', '/search', '/intake'], (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
-});
+// A standalone copy of the frontend used to be served here: express.static on `/`, `/admin` and
+// `/demo`, plus a res.sendFile SPA fallback for `/map`, `/search` and `/intake`. All of it is gone,
+// and the sendFile half is the reason this comment is long enough to read before adding it back.
+//
+// It served from `../public`, which is UNTRACKED — no clone has it, so nothing was ever there in
+// Azure. The three static mounts therefore fell through to the 404 below and were dead weight. The
+// sendFile routes did worse: measured on dev 2026-08-06, `GET /map` returned NO RESPONSE AT ALL for
+// 90 s, and the platform holds such a request for its full 240 s timeout. Three unauthenticated
+// routes that each pin a request that long is a real cost on a single-worker B1.
+//
+// **Never use res.sendFile (or any streaming response) under the Functions adapter.** `api/index.js`
+// fabricates `res` as a bare EventEmitter and resolves its promise INSIDE `res.end`. res.json and
+// res.send reach it; `send`, which sendFile delegates to, streams instead and — on the missing-file
+// error path — never calls it, so nothing resolves and the request hangs rather than failing.
+// Under a real http.Server the same request fails fast with a 500 carrying the ENOENT, which is why
+// this could only be found by asking the deployed API rather than by running it locally.
+//
+// The frontend is its own App Service (`demi-frontend-dev`), which is where these paths already
+// live. There is nothing for the API to serve.
 
 // Catch 404
 app.use((req, res) => {
