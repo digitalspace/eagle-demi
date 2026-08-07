@@ -74,6 +74,20 @@ async function purgeSeeded(argv = [], opts = {}) {
   // scoped or public context would silently purge only what it can SEE and report a clean run.
   const access = systemAccess();
 
+  // Refuse a live run that cannot finish the job, BEFORE anything is deleted.
+  //
+  // `deleteFromIndex` returns 0 for a failed delete and for an unconfigured search service alike,
+  // so without this check an unconfigured environment deletes every project from Cosmos and only
+  // then reports one failure per project — and none of them is retryable, because
+  // `listBySourceSystem` no longer returns a project that is no longer in Cosmos. The index delete
+  // is not the tidy half; it is the half that cannot be redone.
+  if (args.live && !index.config().configured) {
+    throw new Error(
+      '[purge-nrpti] AI Search is not configured, so the phantom projects would stay searchable ' +
+      'after Cosmos was cleaned and no re-run could fix it. Set the search app settings first.'
+    );
+  }
+
   const summary = {
     mode: args.live ? 'live' : 'dry-run',
     scanned: 0,
@@ -144,8 +158,9 @@ async function purgeSeeded(argv = [], opts = {}) {
     let removedHere = 0;
     for (const recordId of recordIds) {
       try {
-        await recordsRepo.deleteById(recordId, project.id);
-        removedHere++;
+        // `deleteById` returns false on a 404 rather than throwing, and a 404 is not a deletion.
+        // Counting it as one reports a sweep that removed rows nobody removed.
+        if (await recordsRepo.deleteById(recordId, project.id)) removedHere++;
       } catch (err) {
         recordFailure = err;
         break;

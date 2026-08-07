@@ -49,7 +49,8 @@ function fakeRecords(byProject, opts = {}) {
     async deleteById(id, projectId) {
       if (opts.failFor === id) throw new Error('record delete boom');
       state.deleted.push([id, projectId]);
-      return true;
+      // The real one returns false on a 404 instead of throwing — see cosmos.remove.
+      return opts.missingFor !== id;
     }
   };
 }
@@ -74,6 +75,9 @@ function fakeIndex(opts = {}) {
   const state = { deleted: [] };
   return {
     state,
+    config() {
+      return { configured: opts.configured !== false };
+    },
     indexes() {
       return { chunks: 'demi-chunks', projects: 'demi-projects', documents: 'demi-documents' };
     },
@@ -116,6 +120,48 @@ test('a dry run counts projects and records but deletes nothing', async () => {
   assert.deepStrictEqual(projects.state.deleted, []);
   assert.deepStrictEqual(records.state.deleted, []);
   assert.deepStrictEqual(index.state.deleted, []);
+});
+
+test('a record that was already gone is not counted as removed', async () => {
+  // cosmos.remove answers false on a 404 rather than throwing. Counting that as a deletion makes
+  // the summary claim rows this run did not remove — and the summary is the only record of it.
+  const summary = await purgeSeeded(['--live'], {
+    projects: fakeProjects([seeded('8000123', 'Sooke River Rest Area')]),
+    records: fakeRecords({ '8000123': ['r1', 'r2'] }, { missingFor: 'r2' }),
+    documents: fakeDocuments(),
+    index: fakeIndex()
+  });
+
+  assert.strictEqual(summary.recordsRemoved, 1, 'r2 was already gone');
+  assert.strictEqual(summary.projectsRemoved, 1, 'and the project still goes');
+});
+
+test('a live run refuses to start when AI Search is not configured', async () => {
+  // `deleteFromIndex` returns 0 for a failed delete AND for an unconfigured service, so without
+  // this gate the run empties Cosmos and only then reports one failure per project — none of them
+  // retryable, because listBySourceSystem no longer returns a project that Cosmos no longer holds.
+  const projects = fakeProjects(TWO_SEEDED);
+  const records = fakeRecords(RECORDS);
+
+  await assert.rejects(
+    () => purgeSeeded(['--live'], {
+      projects, records, documents: fakeDocuments(), index: fakeIndex({ configured: false })
+    }),
+    /AI Search is not configured/
+  );
+
+  assert.deepStrictEqual(projects.state.deleted, [], 'nothing deleted');
+  assert.deepStrictEqual(records.state.deleted, [], 'not even the records');
+});
+
+test('a dry run is allowed without AI Search, because it deletes nothing', async () => {
+  const summary = await purgeSeeded([], {
+    projects: fakeProjects(TWO_SEEDED),
+    records: fakeRecords(RECORDS),
+    documents: fakeDocuments(),
+    index: fakeIndex({ configured: false })
+  });
+  assert.strictEqual(summary.projectsRemoved, 2);
 });
 
 test('a live run deletes records first, then the project, then the index row', async () => {
