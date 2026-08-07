@@ -89,8 +89,7 @@ exports.search = async (req, res) => {
                   description: (doc.highlighted || {}).description || ''
                 },
                 isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true,
-                sources: doc.sources || {},
-                nrptiRecords: []
+                sources: doc.sources || {}
               }));
 
               return res.json([{ searchResults, count }]);
@@ -115,7 +114,7 @@ exports.search = async (req, res) => {
 
       // Cosmos DB Fallback & Direct Search
       try {
-        const allowNonTrack = req.query.includeNrpti === 'true' || req.query.includeSeeded === 'true';
+        const allowNonTrack = req.query.includeSeeded === 'true';
 
         // Provenance filter — orthogonal to visibility, and never a substitute for it.
         // `sourceSystem = 'track'`, not the old `sources.track EXISTS AND != null`: an indexed
@@ -150,8 +149,7 @@ exports.search = async (req, res) => {
           isPublished: Array.isArray(p.read) && p.read.length > 0
             ? p.read.includes('public')
             : p.isPublished === true,
-          sources: p.sources || {},
-          nrptiRecords: p.nrptiRecords || []
+          sources: p.sources || {}
         }));
 
         return res.json([{ searchResults: mapped }]);

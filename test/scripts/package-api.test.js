@@ -45,9 +45,7 @@ try {
 
 test('API deploy package', async (t) => {
   await t.test('ships src/scripts — these are RUNTIME, required by controllers', () => {
-    // src/controllers/db.js -> require('../scripts/sync-nrpti')
     // src/controllers/wildfire.js -> require('../scripts/sync-wildfires')
-    assert.ok(entries.has('src/scripts/sync-nrpti.js'), 'src/scripts/sync-nrpti.js must be packaged');
     assert.ok(
       entries.has('src/scripts/sync-wildfires.js'),
       'src/scripts/sync-wildfires.js must be packaged'

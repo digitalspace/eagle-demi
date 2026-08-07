@@ -48,7 +48,7 @@ for d in .claude .git test azure .github .vscode scripts; do
 done
 
 echo "=== 3. Runtime files present, by CONTENT not mtime ==="
-for f in index.js api/index.js host.json src/ai/summarize.js src/scripts/sync-nrpti.js; do
+for f in index.js api/index.js host.json src/ai/summarize.js src/scripts/sync-wildfires.js; do
   C=$(kcode "$SCM/api/vfs/site/wwwroot/$f")
   [ "$C" = "200" ] && ok "$f present" || no "$f MISSING (HTTP $C)"
 done

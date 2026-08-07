@@ -8,8 +8,6 @@ const assert = require('node:assert');
 const cosmos = require('../../src/db/cosmos-nosql');
 const projects = require('../../src/repositories/projects');
 const documents = require('../../src/repositories/documents');
-const records = require('../../src/repositories/records');
-const fragments = require('../../src/repositories/fragments');
 const chunks = require('../../src/repositories/chunks');
 const { TIER } = require('../../src/helpers/access-sql');
 
@@ -143,7 +141,7 @@ test('documents repository', async (t) => {
   });
 
   await t.test("projectId '' selects the unlinked partition here too", async () => {
-    // Same distinction the records repository already makes. Nothing passes `''` to documents
+    // Nothing passes `''` to documents
     // today; this test is what keeps a falsy check from creeping back before something does, at
     // which point "the unlinked partition" would silently mean "every document".
     const calls = captureQuery(t);
@@ -171,74 +169,6 @@ test('documents repository', async (t) => {
     await documents.getById(PUBLIC, 'doc1');
     assert.match(calls[0].spec.query, /EXISTS/,
       'an unreadable document must never reach this process');
-  });
-});
-
-test('records repository', async (t) => {
-  t.afterEach(() => t.mock.restoreAll());
-
-  await t.test('project name search uses CONTAINS, not a regex', async () => {
-    const calls = captureQuery(t);
-    await records.listVisible(PUBLIC, { projectName: 'Site C' });
-    assert.match(calls[0].spec.query, /CONTAINS\(c\.projectName, @projectName, true\)/);
-    assert.ok(!calls[0].spec.query.includes('RegexMatch'),
-      'caller input must not become a pattern — no ReDoS surface');
-  });
-
-  await t.test('count matches the list predicate', async () => {
-    const calls = captureQuery(t);
-    await records.listVisible(PUBLIC, { projectId: '207', dataset: 'Inspection' });
-    await records.countVisible(PUBLIC, { projectId: '207', dataset: 'Inspection' });
-
-    const listWhere = calls[0].spec.query.split(' WHERE ')[1].split(' ORDER BY ')[0];
-    assert.strictEqual(calls[1].spec.query.split(' WHERE ')[1], listWhere);
-  });
-
-  await t.test("projectId '' selects the unlinked partition, not every record", async () => {
-    // `''` is a REAL partition — where unmatched NRPTI records landed before the sync stopped
-    // writing them — so the criterion is a presence test, never truthiness. Under a falsy check
-    // the clause vanishes and `purge-nrpti-seeded.js`'s sweep of the unlinked partition becomes a
-    // read of the whole container, which it then deletes.
-    const calls = captureQuery(t);
-    await records.listVisible(ADMIN, { projectId: '' });
-
-    assert.match(calls[0].spec.query, /c\.projectId = @projectId/);
-    assert.deepStrictEqual(
-      calls[0].spec.parameters.filter(p => p.name === '@projectId'),
-      [{ name: '@projectId', value: '' }]
-    );
-    // Named as the partition key too, or the sweep fans out across every partition.
-    assert.strictEqual(calls[0].options.partitionKey, '');
-  });
-
-  await t.test('an absent projectId still means every partition', async () => {
-    // The other half of the distinction: undefined is "no filter", '' is "the empty partition".
-    const calls = captureQuery(t);
-    await records.listVisible(ADMIN, {});
-
-    assert.ok(!calls[0].spec.query.includes('c.projectId = @projectId'));
-    assert.strictEqual(calls[0].options.partitionKey, undefined);
-  });
-});
-
-test('fragments repository', async (t) => {
-  t.afterEach(() => t.mock.restoreAll());
-
-  await t.test('ids are deterministic so a re-seed updates rather than duplicates', () => {
-    assert.strictEqual(fragments.fragmentId('207', 'nrpti'), '207:nrpti');
-  });
-
-  await t.test('put refuses an empty ACL — fragments must fail closed', async () => {
-    await assert.rejects(() => fragments.put('207', 'nrpti', {}, []), /non-empty read/);
-    await assert.rejects(() => fragments.put('207', 'nrpti', {}, undefined), /non-empty read/);
-  });
-
-  await t.test('a caller without the fragment role gets nothing, not a stripped item', async () => {
-    t.mock.method(cosmos, 'readItem', async () => ({
-      id: '207:nrpti', projectId: '207', fragmentType: 'nrpti', read: ['sysadmin'], data: { x: 1 }
-    }));
-    assert.strictEqual(await fragments.get(PUBLIC, '207', 'nrpti'), null);
-    assert.ok(await fragments.get(ADMIN, '207', 'nrpti'));
   });
 });
 

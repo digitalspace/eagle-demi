@@ -270,9 +270,9 @@ Track wins and Eagle fills gaps, via an explicit field map rather than an object
 overwrites with `undefined` and silently erases data. `src/merge/project.js` holds the rules and is
 pure, because merge bugs are silent.
 
-**Projects are never created from NRPTI.** Compliance records whose `_epicProjectId` does not resolve
-to a project already in the registry are dropped and counted, never given an invented parent.
-Auto-seeding them is what produced 3,382 synthetic project rows in the old database.
+**Projects are never created from an ingest.** A row whose upstream id does not resolve to a project
+already in the registry is dropped and counted, never given an invented parent. Auto-seeding them is
+what produced 3,382 synthetic project rows in the old database.
 
 ---
 

@@ -15,7 +15,7 @@ function routeTable() {
 
 test('DB Management Routes Security Tests', async (t) => {
   await t.test('admin DB routes exist and are behind authMiddleware', () => {
-    const protectedPaths = ['/db/stats', '/admin/index-progress', '/admin/sync/nrpti'];
+    const protectedPaths = ['/db/stats', '/admin/index-progress'];
     const routes = routeTable();
 
     for (const path of protectedPaths) {
@@ -36,10 +36,14 @@ test('DB Management Routes Security Tests', async (t) => {
     // drove. seed-nosql.js replaces them and runs inside the network — a 60k-document seed
     // outlives the request, so reintroducing the route would only produce timeouts.
     // /admin/logs and /wildfires went with the Cosmos log transport and the unused read path.
+    // /records, /records/:id and /admin/sync/nrpti went with the whole NRPTI feature: the link to
+    // a project was never redesigned, so the ingest was removed rather than narrowed. Listed here
+    // so a reintroduction is a deliberate act rather than an accident.
     const removed = [
       '/db/query', '/db/import', '/db/seed-boundaries',
       '/db/seed', '/sync', '/admin/sync', '/admin/seed-track',
-      '/admin/logs', '/wildfires'
+      '/admin/logs', '/wildfires',
+      '/records', '/records/:id', '/admin/sync/nrpti'
     ];
     const paths = routeTable().map(r => r.path);
 

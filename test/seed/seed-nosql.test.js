@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  parseArgs, verifyProjects, verifyItems, seed, ALL_STAGES, DEFAULT_STAGES, NRPTI_FRAGMENT_ROLES
+  parseArgs, verifyProjects, verifyItems, seed, ALL_STAGES, DEFAULT_STAGES
 } = require('../../src/scripts/seed-nosql');
 const { unwrapSearchResponse, fetchAllPages, PAGE_SIZE } = require('../../src/seed/sources');
 const trackProjects = require('../../src/data/track_projects_enriched.json');
@@ -19,20 +19,6 @@ test('parseArgs — writes require an explicit flag', async (t) => {
       'a 60k-document seed must not start by accident');
   });
 
-  await t.test('records is NOT in the default stages', () => {
-    // NRPTI records are compliance EVENTS, not projects or documents. Their document references
-    // are unreachable through NRPTI's public API, and only 2.25% resolve to a project in the
-    // registry — so the stage costs ~40 minutes of fetching for data outside the current remit.
-    assert.deepStrictEqual(parseArgs([]).only, ['projects', 'documents', 'boundaries']);
-    assert.deepStrictEqual(DEFAULT_STAGES, ['projects', 'documents', 'boundaries']);
-    assert.ok(!DEFAULT_STAGES.includes('records'));
-  });
-
-  await t.test('records is still a VALID stage — the code is kept, not deleted', () => {
-    assert.ok(ALL_STAGES.includes('records'));
-    assert.deepStrictEqual(parseArgs(['--only', 'records']).only, ['records']);
-  });
-
   await t.test('--only selects stages', () => {
     assert.deepStrictEqual(parseArgs(['--only', 'projects,boundaries']).only,
       ['projects', 'boundaries']);
@@ -40,6 +26,14 @@ test('parseArgs — writes require an explicit flag', async (t) => {
 
   await t.test('an unknown stage throws rather than silently seeding nothing', () => {
     assert.throws(() => parseArgs(['--only', 'projcts']), /unknown stage\(s\): projcts/);
+  });
+
+  await t.test('records is not a stage any more, and asking for it throws', () => {
+    // The NRPTI ingest was removed rather than narrowed — see TODO.md. Every stage now runs by
+    // default, so a divergence between the two lists means a stage was added and forgotten.
+    assert.deepStrictEqual(ALL_STAGES, ['projects', 'documents', 'boundaries']);
+    assert.deepStrictEqual(DEFAULT_STAGES, ALL_STAGES);
+    assert.throws(() => parseArgs(['--only', 'records']), /unknown stage\(s\): records/);
   });
 });
 
@@ -180,7 +174,7 @@ test('verification gates', async (t) => {
     assert.deepStrictEqual(verifyProjects([ok(), ok({ id: '208', trackProjectId: 208, name: 'B' })]), []);
   });
 
-  await t.test('catches the old NRPTI hash ids', () => {
+  await t.test('catches the removed auto-seeder hash ids', () => {
     // 8000000 + hash % 1e6 produced 3,382 junk rows with colliding ids.
     const f = verifyProjects([ok({ trackProjectId: 8123456 })]);
     assert.match(f.join(' '), /synthetic trackProjectId >= 8,000,000/);
@@ -246,12 +240,6 @@ test('seed() end to end with stubbed sources', async (t) => {
     read: ['public', 'project-team'], contentExtracted: true
   });
 
-  const nrptiRecord = (id, epicProjectId, dataset) => ({
-    _id: id, _schemaName: dataset, _epicProjectId: epicProjectId,
-    recordName: `${dataset} ${id}`, read: ['sysadmin', 'public'],
-    dateIssued: '2020-01-01T00:00:00.000Z'
-  });
-
   const stubSources = {
     loadTrackProjects: () => track,
     fetchEagleProjects: async () => [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)')],
@@ -263,14 +251,6 @@ test('seed() end to end with stubbed sources', async (t) => {
       return { count: 3, total: 3 };
     },
     fetchListLookup: async () => new Map([['t1', 'Letter']]),
-    streamNrptiRecords: async (onPage) => {
-      await onPage([
-        nrptiRecord('r1', matchedGuid, 'Inspection'),
-        nrptiRecord('r3', 'unmatched-location-string', 'Inspection')  // must be DROPPED
-      ], 2, 2, 'Inspection');
-      await onPage([nrptiRecord('r2', matchedGuid, 'Order')], 1, 1, 'Order');
-      return { Inspection: 2, Order: 1 };
-    },
     loadBoundaries: () => [
       {
         _id: 'b1', type: 'Regional District', name: 'RD One', code: 1,
@@ -281,7 +261,7 @@ test('seed() end to end with stubbed sources', async (t) => {
   };
 
   const makeRepos = () => {
-    const written = { projects: [], documents: [], records: [], boundaries: [], fragments: [] };
+    const written = { projects: [], documents: [], boundaries: [] };
     return {
       written,
       repos: {
@@ -293,28 +273,19 @@ test('seed() end to end with stubbed sources', async (t) => {
             return { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } };
           }
         },
-        records: {
-          bulkUpsertForProject: async (pid, recs) => {
-            written.records.push([pid, recs]);
-            return { succeeded: recs.length, failed: 0, statusCounts: { 201: recs.length } };
-          }
-        },
         boundaries: {
           bulkUpsertForType: async (type, items) => {
             written.boundaries.push([type, items]);
             return { succeeded: items.length, failed: 0, statusCounts: { 201: items.length } };
           }
         },
-        fragments: {
-          put: async (pid, type, data, read) => { written.fragments.push({ pid, type, data, read }); }
-        }
       }
     };
   };
 
   await t.test('a dry run writes NOTHING but still verifies', async () => {
     const { written, repos } = makeRepos();
-    const summary = await seed(['--only', 'projects,documents,records,boundaries'],
+    const summary = await seed(['--only', 'projects,documents,boundaries'],
       { sources: stubSources, repos, now: NOW });
 
     assert.strictEqual(summary.mode, 'dry-run');
@@ -330,8 +301,7 @@ test('seed() end to end with stubbed sources', async (t) => {
 
   await t.test('a live run writes every stage', async () => {
     const { written, repos } = makeRepos();
-    // Explicit --only: records is not in the default set, and this asserts every stage works.
-    const summary = await seed(['--live', '--only', 'projects,documents,records,boundaries'],
+    const summary = await seed(['--live', '--only', 'projects,documents,boundaries'],
       { sources: stubSources, repos, now: NOW });
 
     assert.strictEqual(summary.mode, 'live');
@@ -339,7 +309,6 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(written.projects.length, 2);
     assert.strictEqual(summary.stages.projects.written, 2);
     assert.strictEqual(summary.stages.documents.written, 2);
-    assert.strictEqual(summary.stages.records.written, 2);
     assert.strictEqual(summary.stages.boundaries.written, 1);
   });
 
@@ -364,45 +333,12 @@ test('seed() end to end with stubbed sources', async (t) => {
       'a silent drop would look like the corpus was complete');
   });
 
-  await t.test('NO project is created from NRPTI, and unresolvable records are dropped', async () => {
-    const { written, repos } = makeRepos();
-    const summary = await seed(['--live', '--only', 'projects,records'],
-      { sources: stubSources, repos, now: NOW });
-
-    assert.strictEqual(summary.stages.records.fetched, 3);
-    assert.strictEqual(summary.stages.records.built, 2);
-    assert.strictEqual(summary.stages.records.droppedNoEpicProject, 0);
-    assert.strictEqual(summary.stages.records.droppedUnresolvable, 1,
-      'a populated-but-unresolvable ref means the registry is incomplete — counted separately');
-    // The whole point: the registry is exactly the merged Track+Eagle set, unchanged by NRPTI.
-    assert.strictEqual(written.projects.length, 2);
-    assert.ok(!written.projects.some(p => p.trackProjectId >= 8000000));
-  });
-
-  await t.test('the NRPTI aggregate is its own ACL-gated fragment, not a project field', async () => {
-    const { written, repos } = makeRepos();
-    await seed(['--live', '--only', 'records'], { sources: stubSources, repos, now: NOW });
-
-    assert.strictEqual(written.fragments.length, 1);
-    const frag = written.fragments[0];
-    assert.strictEqual(frag.pid, '207');
-    assert.strictEqual(frag.type, 'nrpti');
-    assert.deepStrictEqual(frag.read, NRPTI_FRAGMENT_ROLES);
-    assert.ok(!frag.read.includes('public'), 'compliance data is not public by default');
-    assert.strictEqual(frag.data.recordCount, 2);
-    assert.strictEqual(frag.data.inspectionCount, 1);
-    assert.strictEqual(frag.data.orderCount, 1);
-
-    // The project item must not carry the records themselves — that is the 2 MB fix.
-    assert.ok(!JSON.stringify(written.projects).includes('Inspection r1'));
-  });
-
   await t.test('--only still builds the project index, or partition keys would be stale', async () => {
     const { written, repos } = makeRepos();
-    await seed(['--live', '--only', 'records'], { sources: stubSources, repos, now: NOW });
+    await seed(['--live', '--only', 'documents'], { sources: stubSources, repos, now: NOW });
 
     assert.strictEqual(written.projects.length, 0, 'projects not written when not selected');
-    assert.strictEqual(written.records.length, 1, 'but records still resolved their project');
+    assert.ok(written.documents.length > 0, 'but documents still resolved their project');
   });
 
   await t.test('a verification failure is reported and forces a non-zero exit', async () => {
@@ -420,31 +356,6 @@ test('seed() end to end with stubbed sources', async (t) => {
     // this asserts the gate PASSES on a fail-closed registry rather than crying wolf.
     assert.deepStrictEqual(summary.failures, []);
     assert.ok(summary.stages.projects.built > 0);
-  });
-
-  await t.test('drops are split by reason — the two mean opposite things', async () => {
-    // 97,192 of 99,430 real records drop. "no _epicProjectId at all" is correct exclusion (NRPTI
-    // covers all BC resource compliance); "has one but it does not resolve" would mean the
-    // registry is incomplete. A single total cannot tell you which is happening.
-    const mixed = {
-      ...stubSources,
-      streamNrptiRecords: async (onPage) => {
-        await onPage([
-          nrptiRecord('ok', matchedGuid, 'Inspection'),
-          { _id: 'nofield', _schemaName: 'Inspection', read: ['public'] },
-          { _id: 'nofield2', _schemaName: 'Order', _epicProjectId: null, read: ['public'] },
-          nrptiRecord('bad', 'points-nowhere', 'Inspection')
-        ], 4, 4, 'Inspection');
-        return { Inspection: 4 };
-      }
-    };
-    const { repos } = makeRepos();
-    const summary = await seed(['--only', 'records'], { sources: mixed, repos, now: NOW });
-
-    assert.strictEqual(summary.stages.records.built, 1);
-    assert.strictEqual(summary.stages.records.droppedNoEpicProject, 2,
-      'a null and a missing _epicProjectId both count as absent');
-    assert.strictEqual(summary.stages.records.droppedUnresolvable, 1);
   });
 
   await t.test('a project split across flush batches has every item written', async () => {
@@ -476,31 +387,6 @@ test('seed() end to end with stubbed sources', async (t) => {
     }
     const ids = written.documents.flatMap(([, docs]) => docs.map(d => d.id));
     assert.strictEqual(new Set(ids).size, 250, 'no document written twice or dropped');
-  });
-
-  await t.test('the NRPTI aggregate is correct even when records are flushed in batches', async () => {
-    // The aggregate needs every record, but the records themselves are not retained — it is
-    // accumulated incrementally. A batch flush must not reset or lose counts.
-    const many = Array.from({ length: 250 }, (_, i) =>
-      nrptiRecord(`agg${i}`, matchedGuid, i % 2 ? 'Inspection' : 'Order'));
-    const paged = {
-      ...stubSources,
-      streamNrptiRecords: async (onPage) => {
-        for (let i = 0; i < many.length; i += 100) {
-          await onPage(many.slice(i, i + 100), Math.min(i + 100, many.length), many.length, 'Inspection');
-        }
-        return { Inspection: many.length };
-      }
-    };
-
-    const { written, repos } = makeRepos();
-    await seed(['--live', '--only', 'records'], { sources: paged, repos, now: NOW });
-
-    assert.strictEqual(written.fragments.length, 1, 'one fragment per project, written once');
-    const data = written.fragments[0].data;
-    assert.strictEqual(data.recordCount, 250);
-    assert.strictEqual(data.inspectionCount, 125);
-    assert.strictEqual(data.orderCount, 125);
   });
 
   await t.test('a partial bulk failure is REPORTED, not counted as written', async () => {

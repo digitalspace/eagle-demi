@@ -41,21 +41,7 @@ test('nosql project controller', async (t) => {
     await projectController.getProjects({ ...ANON }, mockRes());
 
     assert.strictEqual(seenAccess.tier, TIER.PUBLIC);
-    assert.strictEqual(seenOpts.trackOnly, true, 'NRPTI-seeded projects excluded by default');
-  });
-
-  await t.test('includeNrpti widens provenance but never visibility', async () => {
-    let seenAccess, seenOpts;
-    t.mock.method(projects, 'listVisible', async (access, opts) => {
-      seenAccess = access; seenOpts = opts;
-      return { items: [], continuationToken: undefined };
-    });
-
-    await projectController.getProjects({ query: { includeNrpti: 'true' } }, mockRes());
-
-    assert.strictEqual(seenOpts.trackOnly, false);
-    assert.strictEqual(seenAccess.tier, TIER.PUBLIC,
-      'a query param must not change the caller access tier');
+    assert.strictEqual(seenOpts.trackOnly, true, 'non-Track provenance excluded by default');
   });
 
   await t.test('a token promotes the tier; a header cannot', async () => {

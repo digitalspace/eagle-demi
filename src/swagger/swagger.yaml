@@ -243,21 +243,6 @@ paths:
         '401':
           description: Unauthorized.
 
-  /api/records:
-    get:
-      summary: Retrieve C&E compliance records
-      description: Returns NRPTI compliance and enforcement records (orders, inspections, tickets), optionally filtered by project ID.
-      parameters:
-        - name: project
-          in: query
-          required: false
-          description: Filter records by parent project ID.
-          schema:
-            type: string
-      responses:
-        '200':
-          description: List of C&E compliance records.
-
 components:
   securitySchemes:
     ApiKeyAuth:

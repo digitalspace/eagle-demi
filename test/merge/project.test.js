@@ -277,7 +277,7 @@ test('buildRegistry against the real Track dataset', async (t) => {
     assert.strictEqual(both.length, 348);
   });
 
-  await t.test('no synthetic NRPTI id survives — the old auto-seeder symptom', () => {
+  await t.test('no synthetic id survives — the removed auto-seeder symptom', () => {
     // 8000000 + hash % 1e6 produced 3,382 junk rows with colliding ids and duplicated names.
     const synthetic = projects.filter(p => p.trackProjectId >= 8000000);
     assert.deepStrictEqual(synthetic, []);
@@ -301,14 +301,14 @@ test('buildRegistry against the real Track dataset', async (t) => {
   });
 });
 
-test('buildProjectIndex — the deterministic NRPTI join', async (t) => {
+test('buildProjectIndex — the deterministic id join', async (t) => {
   const projects = [
     mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS),
     mergeEagleOnlyProject(eagleFor({ epic_guid: 'orphan-1', name: 'Orphan' }), OPTS)
   ];
   const index = buildProjectIndex(projects);
 
-  await t.test('resolves an NRPTI _epicProjectId (an Eagle id) to the canonical id', () => {
+  await t.test('resolves an upstream Eagle id to the canonical id', () => {
     assert.strictEqual(index.resolve(TRACK_207.epic_guid), '207');
   });
 
