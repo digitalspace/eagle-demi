@@ -519,6 +519,51 @@ resource leasesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
   }
 }
 
+// Registry API keys, one item per consumer. Partitioned on /id, where the id IS the public keyId
+// carried in the key itself — that makes verification a point read in a single partition on the
+// hot path of every X-Api-Key request, instead of a scan comparing every stored hash.
+//
+// /hash is deliberately NOT indexed: nothing queries by it (verification is a point read plus a
+// constant-time compare in helpers/api-key.js), and an index is one more copy of a secret digest.
+// No TTL — expiry is a field checked at verify time, because a key must remain visible in the
+// admin listing after it expires or is revoked, or the audit trail vanishes with it.
+resource apiKeysContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'apikeys'
+  properties: {
+    resource: {
+      id: 'apikeys'
+      partitionKey: {
+        paths: [
+          '/id'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            // The admin listing orders by this; everything else is a point read.
+            path: '/createdAt/?'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/*'
+          }
+          {
+            path: '/hash/?'
+          }
+          {
+            path: '/_etag/?'
+          }
+        ]
+      }
+    }
+  }
+}
+
 // ── Data-plane RBAC ──────────────────────────────────────────────────────────
 // Cosmos NoSQL data-plane role assignments cannot be managed in the Azure portal, so they
 // have to live here. Built-in definitions are used rather than a custom role — a custom

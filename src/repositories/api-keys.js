@@ -67,10 +67,19 @@ async function revoke(keyId, at = new Date().toISOString()) {
   return redact(saved);
 }
 
-/** Best-effort usage stamp. Never let a bookkeeping failure break an authenticated request. */
-async function touchLastUsed(record, at = new Date().toISOString()) {
+/**
+ * Best-effort usage stamp. Never let a bookkeeping failure break an authenticated request.
+ *
+ * `patch`, NEVER `upsert`. An upsert here writes the WHOLE record, and the record it would write
+ * is the one held in the auth cache — which on any instance other than the one that served the
+ * revocation is the PRE-revoke copy. That put `revokedAt: null` back permanently: a revoked key
+ * un-revoked by its own next request. A patch cannot erase a field it does not name.
+ */
+async function touchLastUsed(keyId, at = new Date().toISOString()) {
   try {
-    await cosmos.upsert(CONTAINER, { ...record, lastUsedAt: at });
+    await cosmos.patch(CONTAINER, String(keyId), String(keyId), [
+      { op: 'set', path: '/lastUsedAt', value: at }
+    ]);
   } catch (_err) {
     // Intentionally swallowed — see the caller in helpers/auth.js.
   }

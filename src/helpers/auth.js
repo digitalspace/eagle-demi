@@ -24,15 +24,19 @@ function forgetCachedKey(keyId) {
   keyCache.delete(String(keyId));
 }
 
+/**
+ * @returns {{record: object|null, fresh: boolean}}  `fresh` is true only on a cache MISS, which is
+ * what bounds the usage stamp below to one Cosmos write per key per TTL instead of one per request.
+ */
 async function loadKeyRecord(keyId, now = Date.now()) {
   const cached = keyCache.get(keyId);
   if (cached && now - cached.at < KEY_CACHE_TTL_MS) {
-    return cached.record;
+    return { record: cached.record, fresh: false };
   }
 
   const record = await apiKeys.getById(keyId);
   keyCache.set(keyId, { record, at: now });
-  return record;
+  return { record, fresh: true };
 }
 
 /**
@@ -43,12 +47,15 @@ async function loadKeyRecord(keyId, now = Date.now()) {
  * `projectScope` rides along because `access-sql.projectScopeFor` already honours it.
  */
 async function resolveRegistryKey(parsed) {
-  const record = await loadKeyRecord(parsed.keyId);
+  const { record, fresh } = await loadKeyRecord(parsed.keyId);
 
   if (!verify(record, parsed.secret)) return null;
 
-  // Fire-and-forget: a bookkeeping write must never fail an authenticated request.
-  apiKeys.touchLastUsed(record);
+  // Fire-and-forget: a bookkeeping write must never fail an authenticated request. Only on a cache
+  // miss, so a busy consumer costs one Cosmos write per TTL rather than one per request — this path
+  // runs on public passiveAuth reads too, and lastUsedAt at minute resolution is all anyone wants
+  // from it.
+  if (fresh) apiKeys.touchLastUsed(record.id);
 
   return {
     preferred_username: `key:${record.name}`,
@@ -139,8 +146,24 @@ function authenticate(req, onSuccess, onFailure) {
   // full admin. An outbound secret must never be an inbound one.
   const apiKey = req.header('X-Api-Key');
 
-  // Registry key. Checked before the break-glass key because it is the normal case, and it is the
-  // only path that yields a per-consumer identity with its own roles, expiry and revocation.
+  // Break-glass FIRST: one shared secret, full privileges, no identity. It exists so the first
+  // registry key can be minted and so there is a way in if the registry is unreachable — which is
+  // exactly why it cannot be shadowed. Checked before the registry branch because an ADMIN_API_KEY
+  // that happens to be shaped like `demi_<env>_<id>_<secret>` would otherwise parse as a registry
+  // key, take that branch, miss in Cosmos and 401 — permanently disabling the one credential whose
+  // whole purpose is working when nothing else does. It costs one timingSafeEqual, no Cosmos read.
+  const validKeys = [process.env.ADMIN_API_KEY].filter(Boolean);
+
+  if (apiKey && validKeys.length > 0 && matchesConfiguredKey(apiKey, validKeys)) {
+    logger.info('[demi-api] Authenticated internal-service via break-glass ADMIN_API_KEY');
+    return onSuccess({
+      preferred_username: 'internal-service',
+      realm_access: { roles: ['sysadmin', 'staff', 'demi-admin'] }
+    });
+  }
+
+  // Registry key: the normal case, and the only path that yields a per-consumer identity with its
+  // own roles, expiry and revocation.
   // Async, so it owns the outcome of this call from here — never fall through after this branch.
   const parsed = apiKey ? parseKey(apiKey) : null;
   if (parsed) {
@@ -157,18 +180,6 @@ function authenticate(req, onSuccess, onFailure) {
         return onFailure(401, 'Unauthorized. Invalid, expired or revoked API key.');
       });
     return;
-  }
-
-  // Break-glass only: one shared secret, full privileges, no identity. It exists so the first
-  // registry key can be minted and so there is a way in if the registry is unreachable.
-  const validKeys = [process.env.ADMIN_API_KEY].filter(Boolean);
-
-  if (apiKey && validKeys.length > 0 && matchesConfiguredKey(apiKey, validKeys)) {
-    logger.info('[demi-api] Authenticated internal-service via break-glass ADMIN_API_KEY');
-    return onSuccess({
-      preferred_username: 'internal-service',
-      realm_access: { roles: ['sysadmin', 'staff', 'demi-admin'] }
-    });
   }
 
   // Testing fallback only — guarded, and never reachable outside the test runner.

@@ -113,7 +113,10 @@ router.delete('/boundaries/:id', authMiddleware, requireWrite, boundaryControlle
 // mutation in the service — a read-only consumer must never be able to mint itself a writer.
 // The plaintext key is returned by POST once and is unrecoverable afterwards.
 router.post('/admin/api-keys', authMiddleware, requireWrite, apiKeyController.createApiKey);
-router.get('/admin/api-keys', authMiddleware, apiKeyController.listApiKeys);
+// Write-gated too, though it only reads: the credential registry is not application data. A
+// read-only consumer holding demi-service-read is privileged enough for authMiddleware, and
+// without this it could enumerate every consumer, role set and expiry in the deployment.
+router.get('/admin/api-keys', authMiddleware, requireWrite, apiKeyController.listApiKeys);
 router.delete('/admin/api-keys/:id', authMiddleware, requireWrite, apiKeyController.revokeApiKey);
 
 module.exports = router;
