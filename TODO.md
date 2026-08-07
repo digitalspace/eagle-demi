@@ -254,12 +254,32 @@ is that all three metrics move together with nothing regressing — the bar `FUZ
       adding it there is not a display tweak, it starts returning full chunk text to every caller.
       Verified on the live index that L2 still reads the field with `select` excluding it, so
       nothing else had to change. Watch that `select`.
-- [ ] **Ranking can degrade silently and nothing alerts.** Basic tier allows 2 concurrent semantic
-      requests per search unit against a frontend that searches on debounced keystrokes, so
-      `semanticErrorHandling: 'partial'` returning BM25 order is an expected path, not an edge. The
-      reason is logged (`[ai-search] semantic reranking did not run: …`) and `rerankerScore` is
-      absent on the hits, but nothing watches either. Under load the product may be serving the
-      unranked order most of the time while the scorecard measures the ranked one.
+- [x] **Ranking degradation is now readable — `GET /admin/index-progress`, 2026-08-06.** Basic tier
+      allows 2 concurrent semantic requests per search unit against a frontend that searches on
+      debounced keystrokes, so `semanticErrorHandling: 'partial'` returning BM25 order is an expected
+      path, not an edge, and it answers 200 in the same response shape. `search.semantic` on that
+      endpoint reports `requested`, `partial`, derived `ranked`, `lastPartialReason`, `lastPartialAt`,
+      `exhausted` and `exhaustedAt`. A 402 counts as `partial`, because the search that provoked it
+      served the stripped retry's BM25 order. **If `partial` tracks `requested` one-for-one under
+      ordinary single-user load, that is the finding this was built for** — it means the scorecard is
+      measuring an order no user gets.
+      Per-process, and back to zero on every recycle: it answers "since this process started, was
+      ranking running?" and nothing longer. That is the honest resolution on a single-worker B1, and
+      it is not a time series — see the entry below for why a time series is not available.
+- [ ] **Nothing DEMI logs is retained anywhere. `useAzureMonitor` has never started.** Measured
+      2026-08-06: `api/index.js` starts the Azure Monitor OpenTelemetry distro only
+      `if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING)`, and `demi-api-dev` has no such app
+      setting. Nor could it have a working one — `az group resource list` on `c4b0a8-dev-rg` shows
+      neither `demi-logs-dev` nor `demi-insights-dev`, only the portal-created orphan
+      `workspace-c4b0a8devrgYb8e` that `azure/modules/observability.bicep` was written to replace.
+      That module has never been deployed, because `main.bicep` has never been deployed.
+      So every "the reason is logged" claim in this file means "written to the App Service log
+      stream", which is visible only to somebody already watching, and gone after. That is the exact
+      failure `observability.bicep`'s own header describes, and it is why the ranking entry above had
+      to become counters on an endpoint rather than an alert rule on a log line.
+      Fixing it is not code: deploy the observability module, then set
+      `APPLICATIONINSIGHTS_CONNECTION_STRING` on both app services. Blocked behind the standing
+      decision on first deploying `main.bicep`, and on RG-scope rights `demi-cicd-dev` does not hold.
 - [ ] **The 402 latch does not un-latch when the month rolls over.** A single 402 turns semantic off
       for the life of the process, which is what stops every later search paying a wasted 402 plus a
       retry. But the allowance resets monthly and the latch does not, so a process that spans the

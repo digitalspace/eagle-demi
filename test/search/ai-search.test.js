@@ -705,4 +705,51 @@ test('semantic reranking', async (t) => {
     assert.strictEqual(items.length, 1, 'results still served');
     assert.ok(warnings.some(w => w.includes('capacityOverloaded')), 'the reason is logged');
   });
+
+  await t.test('the counters separate a ranked search from a degraded one', async (tt) => {
+    // The log line above is written to nowhere durable — demi-api-dev has no
+    // APPLICATIONINSIGHTS_CONNECTION_STRING and the workspace does not exist — so these counters
+    // are what /admin/index-progress reports. Two searches with DIFFERENT outcomes, because a
+    // counter that incremented on every search would pass a one-sided check.
+    captureFetch(tt, (i) => (
+      i === 0
+        ? { json: { value: [{ chunkId: 'c1', documentId: 'd1' }] } }
+        : {
+          json: {
+            value: [{ chunkId: 'c2', documentId: 'd2' }],
+            '@search.semanticPartialResponseReason': 'capacityOverloaded'
+          }
+        }
+    ));
+
+    await aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: true });
+    await aiSearch.searchChunks({ filter: null, keywords: 'site c', semantic: true });
+
+    const stats = aiSearch.semanticStats();
+    assert.strictEqual(stats.requested, 2);
+    assert.strictEqual(stats.partial, 1, 'only the second search degraded');
+    assert.strictEqual(stats.ranked, 1);
+    assert.strictEqual(stats.lastPartialReason, 'capacityOverloaded');
+    assert.strictEqual(stats.exhausted, false);
+    assert.strictEqual(stats.exhaustedAt, null);
+  });
+
+  await t.test('a 402 counts as degraded, not as a ranked search', async (tt) => {
+    // The request that provokes the 402 serves the BM25 order from its stripped retry. Counting it
+    // as ranked would report one more ranked search than any user received.
+    captureFetch(tt, (i) => (
+      i === 0
+        ? { ok: false, status: 402, json: { error: 'Free Query Semantic Usage exceeded' } }
+        : { json: { value: [{ chunkId: 'c1', documentId: 'd1' }] } }
+    ));
+
+    await aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: true });
+
+    const stats = aiSearch.semanticStats();
+    assert.strictEqual(stats.requested, 1);
+    assert.strictEqual(stats.partial, 1);
+    assert.strictEqual(stats.ranked, 0);
+    assert.strictEqual(stats.exhausted, true, 'the latch is visible without reading a timestamp');
+    assert.ok(stats.exhaustedAt, 'and stamped');
+  });
 });
