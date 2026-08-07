@@ -4,7 +4,14 @@ Open work only. Facts, measurements and history live in the
 [wiki](https://github.com/digitalspace/eagle-demi/wiki); if something here needs a paragraph of
 background, that background belongs there and this entry links to it.
 
-Dev only. `main` is deployed and current as of 2026-08-04.
+Dev only, and dev deploys itself: a merge to `main` runs `azure-deploy-dev-api` and
+`azure-deploy-dev-frontend`, so what is on `main` is what is on dev within a few minutes. There is
+no date to keep current here — read the workflow runs. At the time of writing that is `16ac528`
+(API) and `0d0dde0` (frontend), 2026-08-07.
+
+The corollary is the trap: **merging is deploying.** An entry below is live the moment it lands,
+including one whose infrastructure does not exist yet — see service credentials under
+Infrastructure.
 
 ---
 
@@ -109,9 +116,16 @@ first gated sync against dev.
       After the purge, `POST /admin/sync/nrpti?async=true` and read `totalUnlinked` from the
       `Background NRPTI sync complete` log line — the async response cannot carry it. A seeded
       project appearing after that means Priority 4 came back.
-      An index delete that fails is now a `stage: 'index'` failure and exits 1: nothing can retry
-      it, because the Cosmos row is already gone and `listBySourceSystem` will not return it again.
-      Delete that id from `demi-projects` by hand if it appears.
+      **A `--live` run refuses to start at all if AI Search is not configured**, before deleting
+      anything: `deleteFromIndex` returns `0` for a failed delete and for an unconfigured service
+      alike, so without that gate an unconfigured environment would empty Cosmos and only then
+      report one failure per project — and none of them retryable, because `listBySourceSystem`
+      cannot return a project Cosmos no longer holds. A dry run is still allowed without it, since
+      it writes nothing.
+      An index delete that fails is a `stage: 'index'` failure and exits 1, for the same
+      no-retry reason. Delete that id from `demi-projects` by hand if it appears.
+      Record counts are deletions, not attempts: `cosmos.remove` answers `false` on a 404 and the
+      summary only counts a `true`.
 - [ ] **A dropped record is never revisited by a delta sync.** `since` is caller-supplied, so once
       `resolveProjectLink()` returns null for a record it stays out of Cosmos even after Track adds
       the project its name would now match. Only a full `since`-less `POST /admin/sync/nrpti`
@@ -125,22 +139,29 @@ first gated sync against dev.
 
 ## Infrastructure
 
-- [ ] **CodeQL's first scan found 39 alerts (36 high, 3 medium). Three clusters, not 39 problems.**
-      The 3 medium were `actions/missing-workflow-permissions` on `pr.yaml` and are already fixed —
-      it now declares `permissions: contents: read`. What is left:
-      - **~30 x `js/missing-rate-limiting`** across `src/routes/api.js` and `src/app.js:126`. One
-        root cause, one fix: there is no rate limiter mounted on the Express app at all. An
-        `express-rate-limit` on the router closes the whole cluster. Worth doing on its own merits —
-        `/api/search` fans out to Azure AI Search on debounced keystrokes, and Basic tier allows 2
-        concurrent semantic requests per search unit.
+- [ ] **31 CodeQL alerts open on `main`, and they are now ONE problem.** After #59–#65 there were
+      38; the 7 that were decisions rather than defects were dismissed with their reasons on
+      2026-08-07, so what is left is a single cluster. That is the point of the number: it used to
+      be a pile to triage and is now a backlog item with one fix.
+      The 3 medium `actions/missing-workflow-permissions` from the first scan are fixed — `pr.yaml`
+      declares `permissions: contents: read` — and `js/incomplete-multi-character-sanitization` is
+      closed by the fix recorded below. The dismissed 7 are kept written down here because a
+      dismissal is invisible until someone re-derives the reasoning:
+      - **31 x `js/missing-rate-limiting`** across `src/routes/api.js` and `src/app.js:126` — the
+        only open cluster, up from ~30 because #60 added the `/admin/api-keys` routes, and it will
+        keep tracking the route count until this is fixed. One root cause, one fix: there is no
+        rate limiter mounted on the Express app at all. An `express-rate-limit` on the router closes
+        the whole cluster. Worth
+        doing on its own merits — `/api/search` fans out to Azure AI Search on debounced keystrokes,
+        and Basic tier allows 2 concurrent semantic requests per search unit.
       - **`js/insecure-helmet-configuration`** at `src/app.js:41` — helmet is mounted with
         `contentSecurityPolicy: false`. **Decided 2026-08-06: dismiss, do not implement.** The
         question was "can the frontend live under a CSP", and the answer is that the API does not
         serve the frontend at all — the `express.static` mounts and SPA routes that suggested it did
         are deleted (see below). What is left is exactly one HTML page, swagger-ui at `/api-docs`,
         whose inline initializer script and inline styles a default CSP blocks. A policy that
-        exempts the only page it covers protects nothing, so this is dismissed with that reason
-        rather than implemented — see "Needs a human".
+        exempts the only page it covers protects nothing. **Dismissed 2026-08-07** as "won't fix"
+        with that reason.
       - **`js/incomplete-multi-character-sanitization`** in
         `frontend/src/app/services/registry-state.service.ts` — **fixed 2026-08-06, and the alert
         named the smaller half of it.** `sanitizeHighlight` stripped tags with a single-pass
@@ -157,8 +178,21 @@ first gated sync against dev.
       - **4 x `js/path-injection`** in `src/controllers/nosql/document.js` (171, 177, 189, 220) are
         **false positives** — every one is `fs.promises.unlink(file.path)`, and `file.path` comes
         from `multer({ dest: config.uploadDir })`, which generates its own random filename and never
-        derives it from `originalname`. Dismiss as "used in tests"/"false positive" with that note so
-        they stop reappearing; do not "fix" them.
+        derives it from `originalname`. **Dismissed 2026-08-07** as false positives with that note;
+        do not "fix" them if they reappear.
+      - **`js/clear-text-logging`** at `src/scripts/copy-blobs-to-azure.js:146` — also a **false
+        positive**, and it was missing from this entry rather than newly appeared. The line is
+        `console.log('Destination:', JSON.stringify(azure.describe()))`, and `describe()`
+        (`src/storage/azureBlob.js:133`) returns `{backend, account, container, keyPrefix: null}` —
+        resource names, no credential. CodeQL flags it because `config.*` reaches a log sink, not
+        because a secret does. **Dismissed 2026-08-07.**
+      - **`js/insufficient-password-hash`** at `src/helpers/api-key.js:31` — **new with #60, and a
+        false positive.** The digest is SHA-256 over 32 bytes of `crypto.randomBytes`, not over a
+        human-chosen password. A KDF exists to make guessing a low-entropy secret expensive; there
+        is nothing to guess here, so bcrypt/argon2 would buy nothing and add latency to every
+        authenticated request. What matters is that the compare is constant-time, which
+        `api-key.js:verify` does with `timingSafeEqual`. The reasoning is already in that file's
+        header. **Dismissed 2026-08-07** with it.
 - [x] **Angular 19 → 22 and TypeScript 5.7 → 6.0, done 2026-08-06.** 19.2.25 was end-of-life and
       carried 7 runtime advisories with `first_patched_version: null` — XSS via i18n event-handler
       attributes, hydration DOM clobbering and response-cache poisoning, `HttpTransferCache`
@@ -188,7 +222,10 @@ first gated sync against dev.
         builder is now `@angular/build:karma`, and `karma.conf.js` no longer names the deleted
         `@angular-devkit/build-angular` framework/plugin.
       - Bundle went 436.65 kB → 457.07 kB raw (114.13 → 119.33 kB transfer) across three majors.
-        37/37 tests pass; the app boots and renders on `ng-version="22.1.0"`.
+        37/37 tests passed on the branch; the app boots and renders on `ng-version="22.1.0"`.
+        Re-verified after #63 and #64 merged on top of it — **44/44 frontend, 633/633 API** — which
+        matters because those two are the only specs exercising `DOMParser` and the signal-derived
+        chip list under v22's defaults.
 - [ ] **Every component now declares `ChangeDetectionStrategy.Eager`, and the lint rule that says so
       is switched off.** v22 makes OnPush the default and its migration wrote the explicit opt-out on
       all five components to preserve v19 behaviour; `@angular-eslint/prefer-on-push-component-
@@ -284,6 +321,28 @@ first gated sync against dev.
       `main.bicep` behind `deployDocumentStorage`, which defaults false. The argument is
       per-environment isolation, not cost. Needs `Storage Blob Delegator` on the identity or every
       download link fails to sign — it is not implied by `Storage Blob Data Contributor`.
+- [ ] **Service credentials are LIVE on dev and cannot work: the `apikeys` container does not
+      exist.** #60 shipped per-consumer registry keys — `X-Api-Key: demi_<env>_<keyId>_<secret>`,
+      minted through `POST /admin/api-keys`, with their own roles, expiry and revocation — plus the
+      `demi-service-read` read-only tier and `requireWrite` on every mutating route. All of that is
+      deployed, because a merge to `main` deploys dev. But `src/repositories/api-keys.js` reads a
+      Cosmos container called `apikeys` that is declared **only** in
+      `azure/modules/cosmos-nosql.bicep`, and that template has never run — see the entry below,
+      which is deliberate and does not change for this. So today `POST /admin/api-keys` throws on
+      the upsert and every registry-format key 401s.
+      **This is not a code fix and it is not a reason to deploy `main.bicep`.** Container creation
+      is a control-plane call: create `apikeys` on `demi-cosmos-dev`, database `demi`, partition key
+      `/id` — the id IS the public keyId, which is what makes verification a single-partition point
+      read on the hot path of every keyed request. The Bicep declaration exists so the template
+      keeps describing dev accurately, not as the delivery mechanism.
+      Nothing is broken while it is missing: `ADMIN_API_KEY` still authenticates, and that
+      break-glass path is exactly how the first registry key is meant to be minted anyway. It is
+      checked BEFORE the registry branch so a key-shaped `ADMIN_API_KEY` cannot shadow it.
+      The documentation is live: `ADR-007-Service-to-Service-Credentials` and
+      `Connecting-an-Application-to-DEMI` were pushed to the wiki on 2026-08-07, which is what the
+      `README.md` links point at. ADR-007 carries the out-of-band container note. The lesson worth
+      keeping: the wiki is a **separate git repository** that no CI touches, so a README link merged
+      to `main` can 404 for as long as nobody pushes it — these two did.
 - [ ] **`main.bicep` has never been deployed and still should not be.** It now describes dev
       accurately — `az deployment group what-if` reports zero creates and zero deletes against the
       live group — but it has never actually run. The dev infra job was reduced to `az bicep build`
@@ -361,6 +420,11 @@ first gated sync against dev.
       the answer then is paging or a server facet, not a bigger number in the URL.
       The fields are all still `facetable: true` in `azure/search/indexes/`, so a server facet
       remains available the day the corpus outgrows one page.
+      One case the counts have to carry: because the list is counted under the OTHER active filters,
+      narrowing the region can empty the sector the user already picked. The selected value is
+      pinned into the list at `count: 0` rather than disappearing — otherwise the chip vanishes
+      while `sectorFilter()` still holds it, leaving an empty map, no chip rendered active, and no
+      control to clear the filter that emptied it.
 - [ ] **There is no result paging.** `searchChunks` sends only `top` (default 20, hard cap 250) and
       never sends `$skip`; the controller has no offset and the frontend has no load-more. Left alone
       deliberately — nobody uses DEMI yet, and this is a decision for whoever owns the search UI. If
@@ -401,12 +465,22 @@ first gated sync against dev.
 - [ ] **Look at server-side highlighting on dev.** Shipped and unit-tested, but the visible result
       has not been eyeballed. Azure returns windowed fragments for a long field, so a long project
       description now renders as fragments joined by an ellipsis rather than in full.
-- [ ] **Dismiss `js/insecure-helmet-configuration` in the GitHub UI**, with the reason recorded
-      under Infrastructure above: the API serves exactly one HTML page, swagger-ui at `/api-docs`,
-      which needs inline script and style, so a CSP would have to exempt the only page it covers.
-      Decided rather than deferred — leaving it open reads as work nobody got to.
-- [ ] **Delete the 12 merged branches on `origin`.** From PRs #1–#10, #12 and #13.
-      `git push --delete` is barred by settings deny, so this needs a human or the GitHub UI.
+- [x] **7 CodeQL alerts dismissed with their reasons, 2026-08-07.** Every open alert except the
+      rate-limiting cluster: `js/insecure-helmet-configuration` as "won't fix", the 4
+      `js/path-injection`, `js/clear-text-logging` and `js/insufficient-password-hash` as false
+      positives. The reasons are on the alerts AND in the Infrastructure entry above, because a
+      dismissal comment is invisible to anyone reading the repo. Open count 38 → 31, and the number
+      now means one thing: the rate-limiter cluster.
+- [ ] **`delete_branch_on_merge` is still false — flip it.** The 21 stale branches it produced are
+      gone (deleted 2026-08-07; `origin` now holds `main`, the open Dependabot branches and nothing
+      else), but the setting that made them accumulate is unchanged, so the pile rebuilds one merge
+      at a time. One checkbox in repository settings, or
+      `gh api -X PATCH repos/digitalspace/eagle-demi -f delete_branch_on_merge=true`.
+      When it does need counting again: `gh pr list --state merged` intersected against
+      `git ls-remote --heads`, never `git branch --merged` — these are squash merges, so a merged
+      branch's tip is not an ancestor of `main` and `--merged` reports 1.
+      Local worktrees under `.claude/worktrees/` still point at several of the deleted branches.
+      Harmless, but `git worktree prune` and a look at the locked one is overdue.
 
 ## Cost
 
