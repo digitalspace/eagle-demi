@@ -64,9 +64,9 @@ function inList(field, values, prefix, alias = 'c') {
  * @param {string}   [opts.orderBy]        e.g. 'c.name ASC' (the path must be indexed)
  * @returns {{query: string, parameters: Array}}
  */
-function selectWhere({ access, partitionField, criteria = [], select = '*', orderBy }) {
+function selectWhere({ access, partitionField, criteria = [], select = '*', orderBy, visibility = {} }) {
   const predicate = andClauses(
-    visibilityFor(access, partitionField),
+    visibilityFor(access, partitionField, visibility),
     ...criteria.filter(Boolean)
   );
 
@@ -81,8 +81,8 @@ function selectWhere({ access, partitionField, criteria = [], select = '*', orde
  * A count built from a different filter leaks the true size of a collection the caller
  * cannot see, which is why this shares selectWhere rather than rebuilding the predicate.
  */
-function countWhere({ access, partitionField, criteria = [] }) {
-  const spec = selectWhere({ access, partitionField, criteria, select: 'VALUE COUNT(1)' });
+function countWhere({ access, partitionField, criteria = [], visibility = {} }) {
+  const spec = selectWhere({ access, partitionField, criteria, select: 'VALUE COUNT(1)', visibility });
   return spec;
 }
 

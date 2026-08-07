@@ -208,13 +208,25 @@ function readClause(roles, opts = {}) {
   // on the security path turns every gated read into a full scan. This form is one clause
   // regardless of how many roles the caller has, and uses the /read/[]/? range index.
   //
-  // The second branch is the isPublished mirror for rows with no explicit ACL. There is no
-  // third "no read[] AND no isPublished" tier: the old Mongo filter had one for pre-ACL rows,
-  // and it is deleted rather than translated because every seeder writes read[] explicitly.
+  // The second branch is the isPublished mirror for rows with no explicit ACL.
+  //
+  // `unsetIsPublic` drops the isPublished half of that branch, so a row carrying NEITHER `read[]`
+  // nor `isPublished` is visible. Exactly one container needs it: `boundaries`, whose 281 seeded
+  // rows predate having an ACL at all and carry neither field. Without it every one of them
+  // evaluates FALSE for an anonymous caller — `c.isPublished = true` against an undefined field is
+  // not true — and the map goes blank on deploy, silently and everywhere.
+  //
+  // It does not weaken the gate: a RESTRICTED boundary carries an explicit `read[]`, so the first
+  // branch governs it and this one cannot match. The rule it encodes is "reference geography with
+  // no ACL is public", which is a statement about that container, not a general fallback.
+  const unsetArm = opts.unsetIsPublic
+    ? `(NOT IS_DEFINED(${alias}.read) OR ARRAY_LENGTH(${alias}.read) = 0)`
+    : `((NOT IS_DEFINED(${alias}.read) OR ARRAY_LENGTH(${alias}.read) = 0)` +
+      ` AND ${alias}.isPublished = true)`;
+
   const clause =
     `(EXISTS(SELECT VALUE r FROM r IN ${alias}.read WHERE r IN (${names.join(', ')}))` +
-    ` OR ((NOT IS_DEFINED(${alias}.read) OR ARRAY_LENGTH(${alias}.read) = 0)` +
-    ` AND ${alias}.isPublished = true))`;
+    ` OR ${unsetArm})`;
 
   return {
     clause,
@@ -308,7 +320,7 @@ function visibilityFor(access, partitionField = 'projectId', opts = {}) {
  * Required on every point read — `container.item(id, pk).read()` bypasses the query
  * predicate entirely, so without this a by-id fetch would leak what a list would not.
  */
-function canRead(doc, access, partitionField = 'projectId') {
+function canRead(doc, access, partitionField = 'projectId', opts = {}) {
   if (!doc || !access) return false;
 
   // Scope FIRST, and it narrows a privileged caller too — otherwise a scoped staff key would
@@ -328,6 +340,10 @@ function canRead(doc, access, partitionField = 'projectId') {
   if (Array.isArray(doc.read) && doc.read.length > 0) {
     return doc.read.some(r => access.roles.includes(r));
   }
+  // Same allowance as readClause's `unsetIsPublic` arm, for the same rows: a boundary seeded
+  // before the container had an ACL carries neither field, and a point read must not withhold
+  // what the list returns.
+  if (opts.unsetIsPublic) return true;
   return doc.isPublished === true;
 }
 

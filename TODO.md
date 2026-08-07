@@ -24,11 +24,11 @@ Nothing here is a separate list to maintain — it says which gate each open ent
 
 | Gate | Open entries waiting on it |
 |---|---|
-| **Nothing — do it** | Rotate the MinIO key and OpenShift token at source (the repo side is already deleted) |
-| **A dev run + `az login`** | Minting the first real service key |
+| **Nothing — do it** | Rotate the MinIO key and OpenShift token at source (the repo side is already deleted); deploy the Bicep index changes (the boundary ACL needs no backfill — see the audit) |
+| **A dev run + `az login`** | Minting the first real service key — **and it is now the only way to test the ACL against anything**, because every row in dev is public; the NRPTI re-sync design |
 | **RG-scope rights nobody holds yet** | Observability / `APPLICATIONINSIGHTS_CONNECTION_STRING`; the first `main.bicep` deploy; removing role assignment `29745ac3`; Phase 3b blob storage |
 | **A human in a browser, staff login** | The `/summary` render; boundary rendering at three fidelities; server-side highlighting; the scoped access tier |
-| **A decision, not work** | Test/prod deploy path and the release model; app registration `acb4198f` |
+| **A decision, not work** | Test/prod deploy path and the release model; app registration `acb4198f`; whether `GET /projects` may narrow its payload; dropping the dead `logs`/`leases` containers |
 | **Deliberately not doing it** | `pageNumber` citations; result paging; the client-side highlighter; the intake-cleaner backfill; the OnPush conversion; natural-language labels; the tiled/OCR strata; the 402 monthly rollover; `content: retrievable` |
 
 **Before hardening, read this one first:** nothing DEMI logs is retained anywhere, so every "the
@@ -212,6 +212,13 @@ actually serving rather than silently falling back to Cosmos.
       `selectWhere`/`countWhere` and point reads gate on `canRead`, exactly like every other
       repository; `transformBoundary` emits an explicit ACL, public by default, and preserves an
       upstream `read[]` verbatim so a re-seed cannot republish a restricted shapefile.
+      **The near-miss worth keeping:** the 281 seeded rows carry neither `read[]` NOR `isPublished`,
+      so the ordinary unset-ACL arm (`no read[] AND isPublished = true`) is FALSE against every one
+      of them — `c.isPublished = true` on an undefined field is not true — and the first deploy
+      would have blanked the map for every anonymous caller, silently. `VISIBILITY.unsetIsPublic`
+      drops the isPublished half for this container only, so the change is order-independent and
+      needs no backfill before deploy. It cannot weaken the gate: a restricted boundary carries an
+      explicit `read[]`, so the first arm governs it.
       **Project scope deliberately does NOT apply** — boundaries are geography, not project data, so
       `visibilityFor` is called with a NULL partition field. Scoping them on a field the items do not
       carry would match nothing and blank the map for every project-scoped caller.
@@ -342,6 +349,73 @@ lifted. Those fail if the gate regresses. A live probe would not.
       added to that container therefore has nothing to keep in sync, which is worth knowing before
       anyone adds one: an indexed boundary would need `read[]` in the index and the same filter
       treatment as documents, or the restriction would hold in the API and not in search.
+
+## The action list — 2026-08-07
+
+Everything the two audits left open, ordered by what it costs to get wrong rather than by effort.
+Each line says what to do, why it matters, and what would prove it worked. Items already fixed are
+in the audit sections above; this is only what is still outstanding.
+
+### 1. Do next — cheap, and something is wrong until they are done
+
+- [ ] **Deploy the Bicep index changes.** `documents /id`, `boundaries /id`, `chunks /isPublished`
+      and the boundary `read[]`/`isPublished` paths are declared but not live, so those predicates
+      are scanning today. **Proof:** `az cosmosdb sql container show` lists the new paths.
+      Note this is the FIRST `main.bicep` deploy anyone has run — it is gated on RG-scope rights,
+      so it is not as cheap as it reads.
+- [ ] **Mint the first real service key.** It is on the list twice over now: it is the only way to
+      exercise the ACL against anything, because **every row in dev is public**, so no live probe of
+      the read path can fail. **Proof:** a key with `roles:['staff'], projectScope:['<id>']` returns
+      only that project — the case that used to return the whole corpus.
+- [ ] **Rotate the MinIO key and OpenShift token at source.** The repo side is already deleted; the
+      credentials themselves are still live. Oldest open item in this file.
+
+### 2. Decisions, not work — nobody can proceed until someone chooses
+
+- [ ] **May `GET /projects` narrow its payload?** 2.32 MB for 382 projects, 65.8% of it raw upstream
+      `sources.*` that no in-repo caller reads. Nothing in this repo calls the endpoint at all, so
+      the question is entirely about external consumers. If there are none, this is a one-line
+      projection.
+- [ ] **Drop the dead `logs` and `leases` containers?** Nothing reads or writes either; `leases` has
+      no indexing policy so Cosmos indexes every path it is given. Removing them from the Bicep does
+      NOT delete them — that is a hand-run `az cosmosdb sql container delete`, and the template
+      change alone would only create drift.
+- [ ] **Is a 5-minute stale-ACL window in search acceptable?** Restricting a document takes effect
+      immediately in the API and up to `PT5M` later in Deep Search, because the indexers are the
+      only writers. The alternative — pushing index updates on ACL change — means rewriting every
+      chunk of that document against a running indexer. Worth a decision rather than a default.
+
+### 3. Hardening — real, none urgent
+
+- [ ] **`content: retrievable: false` on `demi-chunks`.** Today the only thing keeping whole chunk
+      text out of responses is an explicit `select` list. Nothing reads `content` from the index.
+      **Blocked on:** confirming highlighting still works, which cannot be tested from outside the
+      VNet. Do it with the first in-VNet session.
+- [ ] **Reset the semantic 402 latch at month rollover.** One 402 currently degrades every later
+      search in that worker to BM25 until it recycles.
+- [ ] **Return a continuation token on the Cosmos-fallback search paths**, or state the truncation.
+      A page silently stops at 1000 with no way to ask for more. Only reachable when AI Search
+      faults, which is why it is here and not above.
+- [ ] **Strip the index paths that serve no query**: the `wildfires` spatial index on `/location/*`
+      (proximity is computed in JavaScript, never `ST_DISTANCE`), the unused `projects` composite,
+      and `/trackProjectId`, `/updatedAt`, `/fileExt`, `/displayName`, `/code`. Pure write
+      amplification. Bundle with any other Bicep deploy rather than doing it for its own sake.
+
+### 4. Known ceilings — written down so they are not rediscovered
+
+- **Every row in dev is public.** 60,578 of 60,578 documents are visible anonymously, so the ACL
+  withholds nothing and no live probe can fail. Only synthetic tests discriminate. This is the
+  single most important caveat on both audits.
+- **Search fan-out**: up to 7 AI Search calls + 3 cross-partition Cosmos queries per debounced
+  keystroke; `/search/summary` is 12 round trips. Bounded and measured, on a single-worker B1.
+- **AI Search deletes are permanently the application's job** — `dataDeletionDetectionPolicy` is
+  null on all three datasources.
+- **Swagger documents 6 of 28 routes** and advertises an `ApiKeyAuth` scheme that is not enforced,
+  on an unauthenticated `/api-docs`. Misleading rather than dangerous; writing 22 stubs is not worth
+  it until something consumes the spec.
+- **Observability is still the ranked blocker.** Nothing DEMI logs is retained, so every "the reason
+  is logged" claim in this file means the App Service log stream — visible only to someone already
+  watching, and gone after.
 
 ---
 

@@ -106,6 +106,40 @@ test('boundaries are ACL-gated', async (t) => {
     assert.strictEqual((await boundaries.getById(staff, 'b9', 'Regional District')).id, 'b9');
   });
 
+
+  await t.test('the 281 pre-ACL rows stay visible — they carry NEITHER field', async () => {
+    // The regression this nearly shipped. Seeded boundaries have no read[] and no isPublished, so
+    // the ordinary fallback arm (`no read[] AND isPublished = true`) is FALSE against them and the
+    // map would go blank for every anonymous caller on deploy.
+    let spec;
+    t.mock.method(cosmos, 'query', async (c, s) => { spec = s; return { items: [] }; });
+
+    await boundaries.listByType(ANON, {});
+
+    assert.ok(
+      !/isPublished/.test(spec.query),
+      'this container drops the isPublished half of the unset-ACL arm'
+    );
+    assert.match(spec.query, /NOT IS_DEFINED\(c\.read\) OR ARRAY_LENGTH\(c\.read\) = 0/);
+  });
+
+  await t.test('a legacy row passes the point-read gate too', async () => {
+    const legacy = { id: 'b1', type: 'Regional District', name: 'Bulkley-Nechako' };
+    t.mock.method(cosmos, 'readItem', async () => legacy);
+
+    assert.strictEqual(
+      (await boundaries.getById(ANON, 'b1', 'Regional District')).id, 'b1',
+      'a list that returns it and a point read that withholds it would be worse than either'
+    );
+  });
+
+  await t.test('but a restricted row is still withheld — the allowance is not a bypass', async () => {
+    const restricted = { id: 'b9', type: 'Regional District', read: ['sysadmin'], isPublished: false };
+    t.mock.method(cosmos, 'readItem', async () => restricted);
+
+    assert.strictEqual(await boundaries.getById(ANON, 'b9', 'Regional District'), null);
+  });
+
   await t.test('counts share the read predicate', async () => {
     let spec;
     t.mock.method(cosmos, 'queryValue', async (c, s) => { spec = s; return 0; });

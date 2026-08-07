@@ -18,9 +18,12 @@
  *     called with a NULL partition field — role ACL applies, project scope does not. Scoping them
  *     on a field the items do not carry would match nothing and blank the map for every
  *     project-scoped caller. See `scopeClause`.
- *  2. **Absent `read[]` still means public.** The seeded corpus predates this change, so the
- *     fallback arm of `readClause` (`no read[] AND isPublished`) is what keeps existing rows
- *     visible. New rows get an explicit ACL from `transformBoundary`.
+ *  2. **Absent `read[]` means public HERE.** The 281 seeded rows predate the ACL and carry neither
+ *     `read[]` nor `isPublished`, so the ordinary fallback arm (`no read[] AND isPublished = true`)
+ *     evaluates FALSE against them — `c.isPublished = true` on an undefined field is not true — and
+ *     every anonymous caller would get an empty map on deploy. `VISIBILITY.unsetIsPublic` drops the
+ *     isPublished half for this container only. It cannot weaken the gate: a restricted boundary
+ *     carries an explicit `read[]`, so the first arm governs it and this one cannot match.
  *
  * Items store SIMPLIFIED geometry only. Full-resolution GeoJSON is a build artifact already
  * emitted to frontend/public/assets/geojson/ and already preferred by the frontend; keeping
@@ -42,6 +45,12 @@ const PARTITION_FIELD = 'type';
 const SCOPE_FIELD = null;
 
 /**
+ * Visibility options for this container. See the header — reference geography with no ACL at all
+ * is public, which is a statement about `boundaries`, not a general fallback.
+ */
+const VISIBILITY = { unsetIsPublic: true };
+
+/**
  * Boundaries by type. Single-partition when a type is given.
  *
  * @param {object}  access              from resolveAccess()
@@ -60,7 +69,8 @@ async function listByType(access, { type, withGeometry = true, pageSize, continu
     partitionField: SCOPE_FIELD,
     criteria: type ? [eq('type', String(type), '@type')] : [],
     select,
-    orderBy: 'c.name ASC'
+    orderBy: 'c.name ASC',
+    visibility: VISIBILITY
   });
 
   const options = pageOptions({ pageSize, continuationToken });
@@ -76,13 +86,14 @@ async function listByType(access, { type, withGeometry = true, pageSize, continu
 async function getById(access, id, type) {
   if (type) {
     const doc = await cosmos.readItem(CONTAINER, String(id), String(type));
-    return canRead(doc, access, SCOPE_FIELD) ? doc : null;
+    return canRead(doc, access, SCOPE_FIELD, VISIBILITY) ? doc : null;
   }
 
   const spec = selectWhere({
     access,
     partitionField: SCOPE_FIELD,
-    criteria: [eq('id', String(id), '@id')]
+    criteria: [eq('id', String(id), '@id')],
+    visibility: VISIBILITY
   });
   const { items } = await cosmos.query(CONTAINER, spec, { maxItemCount: 1 });
   return items[0] || null;
@@ -103,7 +114,7 @@ async function getByName(access, name, type) {
   if (scoped) criteria.push(eq('type', String(type), '@type'));
   criteria.push(eq('name', String(name), '@name'));
 
-  const spec = selectWhere({ access, partitionField: SCOPE_FIELD, criteria });
+  const spec = selectWhere({ access, partitionField: SCOPE_FIELD, criteria, visibility: VISIBILITY });
 
   const options = { maxItemCount: 1 };
   if (scoped) options.partitionKey = String(type);
@@ -120,7 +131,8 @@ async function countVisible(access, { type } = {}) {
   const spec = countWhere({
     access,
     partitionField: SCOPE_FIELD,
-    criteria: type ? [eq('type', String(type), '@type')] : []
+    criteria: type ? [eq('type', String(type), '@type')] : [],
+    visibility: VISIBILITY
   });
   const value = await cosmos.queryValue(CONTAINER, spec);
   return value || 0;
