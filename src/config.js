@@ -142,6 +142,13 @@ const config = {
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',
   keycloakClientId:      process.env.KEYCLOAK_CLIENT_ID || 'eagle-admin-console',
   keycloakEnabled:       process.env.KEYCLOAK_ENABLED !== 'false',
+  // Tag baked into minted API keys so a dev key is visibly not a prod key. Cosmetic only —
+  // nothing authorises on it.
+  environmentName:       process.env.ENVIRONMENT_NAME || 'dev',
+  // Keycloak clients (azp) permitted to act privileged. EMPTY = permissive, on purpose: the DEMI
+  // frontend and eagle-admin staff users share this realm, so defaulting to ON would lock out real
+  // users. Set it once every service account is registered. See helpers/auth.applyClientAllowlist.
+  allowedClients:        (process.env.DEMI_ALLOWED_CLIENTS || '').split(',').map(s => s.trim()).filter(Boolean),
   ssoJwksUri:            process.env.SSO_JWKSURI || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}/protocol/openid-connect/certs`,
   ssoIssuer:             process.env.SSO_ISSUER || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}`,
 };

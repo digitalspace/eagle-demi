@@ -184,10 +184,21 @@ with `RS256` pinned and the issuer checked (`src/helpers/auth.js`). `KEYCLOAK_UR
 `SSO_ISSUER` and `SSO_JWKSURI` must be set per environment — they are, in
 `azure/modules/api-web-app.bicep`. Without them the API falls back to *dev* realm defaults.
 
-Service-to-service calls use `X-Api-Key`, compared with `crypto.timingSafeEqual`, against
-`ADMIN_API_KEY`. **Never hardcode a key literal** — this repository is public, so a literal there is
-a world-readable `sysadmin` credential. (`DOCLING_API_KEY` was exactly that until it was split out;
-it is now outbound-only and 401s inbound.)
+**Service-to-service.** Applications authenticate with a **Keycloak service account** —
+`client_credentials` against realm `eao-epic`, then a normal `Authorization: Bearer`. Callers that
+cannot hold a Keycloak client use a **registry API key** (`X-Api-Key: demi_<env>_<keyId>_<secret>`),
+issued through `POST /admin/api-keys` with its own roles, expiry and revocation. `ADMIN_API_KEY` is
+now **break-glass only**: one shared secret with no identity, kept so the first registry key can be
+minted and as a way in if the registry is unreachable.
+
+Ask for the least privilege that works. `demi-service-read` reads everything the ACL allows and
+cannot write — mutating routes are gated separately by `requireWrite`. See
+[ADR-007](https://github.com/digitalspace/eagle-demi/wiki/ADR-007-Service-to-Service-Credentials)
+and [Connecting an Application to DEMI](https://github.com/digitalspace/eagle-demi/wiki/Connecting-an-Application-to-DEMI).
+
+**Never hardcode a key literal** — this repository is public, so a literal there is a world-readable
+credential. (`DOCLING_API_KEY` was exactly that until it was split out; it is now outbound-only and
+401s inbound.)
 
 **Authorization — the `read[]` ACL.** Records carry a `read[]` array of role *types*. A record is
 visible when `read[]` intersects the caller's roles. `read[]` is authoritative; `isPublished` is a

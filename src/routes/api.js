@@ -5,6 +5,9 @@ const router = express.Router();
 
 const authMiddleware = require('../middleware/auth');
 const passiveAuthMiddleware = require('../middleware/passiveAuth');
+// Layered on top of authMiddleware for anything that mutates, so a read-only credential
+// (demi-service-read) can be issued without also granting the ability to delete.
+const { requireWrite } = require('../middleware/require-roles');
 
 // One data layer. The `USE_COSMOS_NOSQL` switch and the MongoDB-API controllers behind it are
 // gone — the flag was the rollback path during the Cosmos cutover, and the account it fell back
@@ -18,6 +21,7 @@ const projectController = require('../controllers/nosql/project');
 const documentController = require('../controllers/nosql/document');
 const boundaryController = require('../controllers/nosql/boundary');
 const recordController = require('../controllers/nosql/record');
+const apiKeyController = require('../controllers/nosql/api-key');
 
 const wildfireController = require('../controllers/wildfire');
 const searchController = require('../controllers/search');
@@ -43,7 +47,7 @@ router.get('/db/stats', authMiddleware, dbController.getDbStats);
 // Issues no container query at all, so it still answers when the counts behind /db/stats are
 // timing out. Ranked queries are only meaningful at progress 100, so this gates any bulk load.
 router.get('/admin/index-progress', authMiddleware, dbController.getIndexProgressHandler);
-router.post('/admin/sync/nrpti', authMiddleware, dbController.runNrptiSyncHandler);
+router.post('/admin/sync/nrpti', authMiddleware, requireWrite, dbController.runNrptiSyncHandler);
 
 // Search Route
 router.get('/search', passiveAuthMiddleware, searchController.search);
@@ -58,14 +62,14 @@ router.get('/records/:id', passiveAuthMiddleware, recordController.getRecord);
 // Wildfire Routes
 // GET /wildfires removed — no consumer. The frontend reads the DataBC WFS directly, and the
 // project-level aggregate this sync writes is served with the project.
-router.post('/admin/sync/wildfires', authMiddleware, wildfireController.syncWildfiresAdmin);
+router.post('/admin/sync/wildfires', authMiddleware, requireWrite, wildfireController.syncWildfiresAdmin);
 
 // Projects Routes
 router.get('/projects', passiveAuthMiddleware, projectController.getProjects);
 router.get('/projects/:id', passiveAuthMiddleware, projectController.getProject);
-router.post('/projects', authMiddleware, projectController.createProject);
-router.put('/projects/:id', authMiddleware, projectController.updateProject);
-router.delete('/projects/:id', authMiddleware, projectController.deleteProject);
+router.post('/projects', authMiddleware, requireWrite, projectController.createProject);
+router.put('/projects/:id', authMiddleware, requireWrite, projectController.updateProject);
+router.delete('/projects/:id', authMiddleware, requireWrite, projectController.deleteProject);
 
 // Documents Routes
 const multer = require('multer');
@@ -76,13 +80,13 @@ router.get('/documents', passiveAuthMiddleware, documentController.getDocuments)
 router.get('/documents/:id', passiveAuthMiddleware, documentController.getDocument);
 // Presigned download link — ACL-gated inside the controller, same as the metadata read.
 router.get('/documents/:id/download', passiveAuthMiddleware, documentController.downloadDocument);
-router.post('/documents', authMiddleware, documentController.createDocument);
-router.post('/documents/extract', authMiddleware, upload.single('upfile'), documentController.extractDocument);
-router.put('/documents/:id', authMiddleware, documentController.updateDocument);
+router.post('/documents', authMiddleware, requireWrite, documentController.createDocument);
+router.post('/documents/extract', authMiddleware, requireWrite, upload.single('upfile'), documentController.extractDocument);
+router.put('/documents/:id', authMiddleware, requireWrite, documentController.updateDocument);
 // Publish / unpublish — the mechanism for hiding a document from public and proponents.
 // Deletion is for genuine removal, not for hiding. Unconditional now: the guard existed only
 // because the Mongo controller had no equivalent handler to mount.
-router.put('/documents/:id/published', authMiddleware, documentController.setDocumentPublished);
+router.put('/documents/:id/published', authMiddleware, requireWrite, documentController.setDocumentPublished);
 // Extracted-text ingest. The body is markdown for a whole document.
 //
 // No route-level body parser: app.js already applies express.json({limit:'10mb'}) globally and
@@ -92,8 +96,8 @@ router.put('/documents/:id/published', authMiddleware, documentController.setDoc
 //
 // The caller supplies text only — never an ACL: read[] is copied from the live document inside
 // the controller, so an extraction host cannot widen a document's visibility.
-router.post('/documents/:id/chunks', authMiddleware, documentController.ingestChunks);
-router.delete('/documents/:id', authMiddleware, documentController.deleteDocument);
+router.post('/documents/:id/chunks', authMiddleware, requireWrite, documentController.ingestChunks);
+router.delete('/documents/:id', authMiddleware, requireWrite, documentController.deleteDocument);
 
 // Regions routes removed — the collection is empty (0 items) and nothing consumed it.
 // Administrative geography is served by /boundaries.
@@ -101,8 +105,18 @@ router.delete('/documents/:id', authMiddleware, documentController.deleteDocumen
 // Boundaries (Borders) Routes
 router.get('/boundaries', passiveAuthMiddleware, boundaryController.getBoundaries);
 router.get('/boundaries/:id', passiveAuthMiddleware, boundaryController.getBoundary);
-router.post('/boundaries', authMiddleware, boundaryController.createBoundary);
-router.put('/boundaries/:id', authMiddleware, boundaryController.updateBoundary);
-router.delete('/boundaries/:id', authMiddleware, boundaryController.deleteBoundary);
+router.post('/boundaries', authMiddleware, requireWrite, boundaryController.createBoundary);
+router.put('/boundaries/:id', authMiddleware, requireWrite, boundaryController.updateBoundary);
+router.delete('/boundaries/:id', authMiddleware, requireWrite, boundaryController.deleteBoundary);
+
+// API key administration. Write-gated because issuing a credential is the most consequential
+// mutation in the service — a read-only consumer must never be able to mint itself a writer.
+// The plaintext key is returned by POST once and is unrecoverable afterwards.
+router.post('/admin/api-keys', authMiddleware, requireWrite, apiKeyController.createApiKey);
+// Write-gated too, though it only reads: the credential registry is not application data. A
+// read-only consumer holding demi-service-read is privileged enough for authMiddleware, and
+// without this it could enumerate every consumer, role set and expiry in the deployment.
+router.get('/admin/api-keys', authMiddleware, requireWrite, apiKeyController.listApiKeys);
+router.delete('/admin/api-keys/:id', authMiddleware, requireWrite, apiKeyController.revokeApiKey);
 
 module.exports = router;

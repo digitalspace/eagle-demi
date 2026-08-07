@@ -5,6 +5,91 @@ const { logger } = require('../utils/logger');
 const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
 const config = require('../config');
+const apiKeys = require('../repositories/api-keys');
+const { parseKey, verify } = require('./api-key');
+const { SECURE_ROLES } = require('./access-sql');
+
+/**
+ * Verified registry lookups, cached to keep a Cosmos point read off the hot path.
+ *
+ * The full record is cached, INCLUDING its digest, so `verify` still runs on every request — a
+ * cached entry never means a presented secret goes unchecked. Revocation on this instance is
+ * immediate via `forgetCachedKey`; on any other instance it takes up to TTL. That bound is the
+ * price of the cache and is written into the runbook rather than left to be discovered.
+ */
+const KEY_CACHE_TTL_MS = 60_000;
+const keyCache = new Map();
+
+function forgetCachedKey(keyId) {
+  keyCache.delete(String(keyId));
+}
+
+/**
+ * @returns {{record: object|null, fresh: boolean}}  `fresh` is true only on a cache MISS, which is
+ * what bounds the usage stamp below to one Cosmos write per key per TTL instead of one per request.
+ */
+async function loadKeyRecord(keyId, now = Date.now()) {
+  const cached = keyCache.get(keyId);
+  if (cached && now - cached.at < KEY_CACHE_TTL_MS) {
+    return { record: cached.record, fresh: false };
+  }
+
+  const record = await apiKeys.getById(keyId);
+  keyCache.set(keyId, { record, at: now });
+  return { record, fresh: true };
+}
+
+/**
+ * Resolve a registry key to an identity, or null.
+ *
+ * Returns the same shape the Keycloak path produces, so everything downstream — rolesFor,
+ * resolveAccess, the SQL and OData predicates — is untouched by the existence of API keys.
+ * `projectScope` rides along because `access-sql.projectScopeFor` already honours it.
+ */
+async function resolveRegistryKey(parsed) {
+  const { record, fresh } = await loadKeyRecord(parsed.keyId);
+
+  if (!verify(record, parsed.secret)) return null;
+
+  // Fire-and-forget: a bookkeeping write must never fail an authenticated request. Only on a cache
+  // miss, so a busy consumer costs one Cosmos write per TTL rather than one per request — this path
+  // runs on public passiveAuth reads too, and lastUsedAt at minute resolution is all anyone wants
+  // from it.
+  if (fresh) apiKeys.touchLastUsed(record.id);
+
+  return {
+    preferred_username: `key:${record.name}`,
+    keyId: record.id,
+    realm_access: { roles: Array.isArray(record.roles) ? record.roles : [] },
+    projectScope: Array.isArray(record.projectScope) ? record.projectScope : undefined
+  };
+}
+
+/**
+ * Client allowlist for verified Keycloak tokens.
+ *
+ * Empty (the default) means permissive, and that is deliberate: DEMI's own frontend and
+ * eagle-admin's staff users authenticate against the same realm, so an allowlist defaulting to ON
+ * would lock out real users the moment this shipped. When it IS set, an unlisted client is demoted
+ * to the public tier rather than rejected — a stray token should lose its privileges, not break a
+ * page that only needed public reads.
+ */
+function applyClientAllowlist(decoded) {
+  const allowed = config.allowedClients;
+  if (!Array.isArray(allowed) || allowed.length === 0) return decoded;
+
+  const azp = decoded && (decoded.azp || decoded.client_id);
+  if (azp && allowed.includes(azp)) return decoded;
+
+  const roles = (decoded && decoded.realm_access && decoded.realm_access.roles) || [];
+  const demoted = roles.filter(r => !SECURE_ROLES.includes(r));
+
+  if (demoted.length !== roles.length) {
+    logger.warn(`[demi-api] Client '${azp || 'unknown'}' is not in DEMI_ALLOWED_CLIENTS; privileges stripped.`);
+  }
+
+  return { ...decoded, realm_access: { ...(decoded.realm_access || {}), roles: demoted } };
+}
 
 /**
  * Constant-time comparison of a presented API key against the configured keys.
@@ -60,13 +145,41 @@ function authenticate(req, onSuccess, onFailure) {
   // granting sysadmin. A logged request header or a compromised extraction host was therefore
   // full admin. An outbound secret must never be an inbound one.
   const apiKey = req.header('X-Api-Key');
+
+  // Break-glass FIRST: one shared secret, full privileges, no identity. It exists so the first
+  // registry key can be minted and so there is a way in if the registry is unreachable — which is
+  // exactly why it cannot be shadowed. Checked before the registry branch because an ADMIN_API_KEY
+  // that happens to be shaped like `demi_<env>_<id>_<secret>` would otherwise parse as a registry
+  // key, take that branch, miss in Cosmos and 401 — permanently disabling the one credential whose
+  // whole purpose is working when nothing else does. It costs one timingSafeEqual, no Cosmos read.
   const validKeys = [process.env.ADMIN_API_KEY].filter(Boolean);
 
   if (apiKey && validKeys.length > 0 && matchesConfiguredKey(apiKey, validKeys)) {
+    logger.info('[demi-api] Authenticated internal-service via break-glass ADMIN_API_KEY');
     return onSuccess({
       preferred_username: 'internal-service',
       realm_access: { roles: ['sysadmin', 'staff', 'demi-admin'] }
     });
+  }
+
+  // Registry key: the normal case, and the only path that yields a per-consumer identity with its
+  // own roles, expiry and revocation.
+  // Async, so it owns the outcome of this call from here — never fall through after this branch.
+  const parsed = apiKey ? parseKey(apiKey) : null;
+  if (parsed) {
+    resolveRegistryKey(parsed)
+      .then((user) => {
+        if (!user) {
+          return onFailure(401, 'Unauthorized. Invalid, expired or revoked API key.');
+        }
+        logger.info(`[demi-api] Authenticated ${user.preferred_username} (key ${user.keyId})`);
+        return onSuccess(user);
+      })
+      .catch((err) => {
+        logger.error(`[demi-api] API key lookup failed: ${err.message}`);
+        return onFailure(401, 'Unauthorized. Invalid, expired or revoked API key.');
+      });
+    return;
   }
 
   // Testing fallback only — guarded, and never reachable outside the test runner.
@@ -129,7 +242,9 @@ function authenticate(req, onSuccess, onFailure) {
       // carrying `project:207` or any other role type was indistinguishable from a logged-out
       // visitor, `resolveAccess()` never returned TIER.SCOPED, and `projectScopeFor()` could never
       // fire — it reads roles off a `req.user` the 403 had already prevented from existing.
-      return onSuccess(decoded);
+      const user = applyClientAllowlist(decoded);
+      logger.info(`[demi-api] Authenticated ${user.preferred_username || 'token'} (client ${user.azp || 'unknown'})`);
+      return onSuccess(user);
     });
     return;
   }
@@ -138,5 +253,8 @@ function authenticate(req, onSuccess, onFailure) {
 }
 
 module.exports = {
-  authenticate
+  authenticate,
+  applyClientAllowlist,
+  forgetCachedKey,
+  KEY_CACHE_TTL_MS
 };

@@ -20,7 +20,27 @@
  */
 
 const PUBLIC_ROLES = ['public'];
-const SECURE_ROLES = ['sysadmin', 'staff', 'demi-admin'];
+
+/**
+ * Roles that grant PRIVILEGED visibility — i.e. read everything, ACL predicate collapses to `true`.
+ *
+ * `demi-service-read` is the least-privilege tier for machine consumers. It reads like staff and
+ * writes nothing: it is deliberately absent from WRITE_ROLES below. Adding it here rather than
+ * inventing a parallel mechanism means no row's `read[]` array has to change — existing documents
+ * carry ['public','sysadmin','staff','demi-admin'] and a service reader sees them because
+ * readClause short-circuits for any privileged caller.
+ */
+const SECURE_ROLES = ['sysadmin', 'staff', 'demi-admin', 'demi-service-read'];
+
+/**
+ * Roles permitted to MUTATE. Exactly the pre-existing SECURE_ROLES set, so no caller that could
+ * write yesterday loses the ability today — the only thing this adds is a tier that cannot.
+ *
+ * Read privilege and write privilege were the same check until now (`authMiddleware` guarded
+ * `GET /db/stats` and `DELETE /projects/:id` identically), which made "read-only consumer"
+ * inexpressible. See middleware/require-roles.js.
+ */
+const WRITE_ROLES = ['sysadmin', 'staff', 'demi-admin'];
 
 /**
  * Access tiers. 'scoped' is built now although no project-scoped role exists yet — the point
@@ -62,6 +82,11 @@ function rolesFor(req) {
 
 function isPrivileged(roles) {
   return roles.some(r => SECURE_ROLES.includes(r));
+}
+
+/** Privileged for READS does not imply permitted to WRITE — see WRITE_ROLES. */
+function canWrite(roles) {
+  return roles.some(r => WRITE_ROLES.includes(r));
 }
 
 /**
@@ -292,11 +317,13 @@ function canRead(doc, access, partitionField = 'projectId') {
 module.exports = {
   PUBLIC_ROLES,
   SECURE_ROLES,
+  WRITE_ROLES,
   TIER,
   PARTITION_FANOUT_LIMIT,
   PROJECT_ROLE_PREFIX,
   rolesFor,
   isPrivileged,
+  canWrite,
   resolveAccess,
   systemAccess,
   projectScopeFor,
