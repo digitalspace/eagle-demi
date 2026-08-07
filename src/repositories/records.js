@@ -21,7 +21,12 @@ const PARTITION_FIELD = 'projectId';
 
 function buildCriteria({ projectId, dataset, agency, projectName }) {
   const criteria = [];
-  if (projectId) criteria.push(eq('projectId', String(projectId), '@projectId'));
+  // Presence, not truthiness. `''` is a REAL partition — where unmatched records landed before the
+  // sync stopped writing them — and a falsy test would silently turn "the unlinked partition" into
+  // "every record in the container". That is the difference between a sweep and a wipe.
+  if (projectId !== undefined && projectId !== null) {
+    criteria.push(eq('projectId', String(projectId), '@projectId'));
+  }
   // `dataset` is the DEMI field name (seed/transform.js writes it from NRPTI's `_schemaName`).
   // `nrptiSchemaName` is only the TYPESENSE index field name — filtering on it here matched
   // nothing, because no Cosmos item has that property.
@@ -46,7 +51,11 @@ async function listVisible(access, opts = {}) {
 
   const options = pageOptions({
     ...opts,
-    partitionKey: opts.projectId ? String(opts.projectId) : undefined
+    // Same presence test as buildCriteria. Naming `''` as the partition key is what makes the
+    // unlinked sweep a single-partition read instead of a cross-partition scan.
+    partitionKey: opts.projectId !== undefined && opts.projectId !== null
+      ? String(opts.projectId)
+      : undefined
   });
 
   return cosmos.query(CONTAINER, spec, options);
@@ -82,6 +91,15 @@ async function upsert(record) {
   return cosmos.upsert(CONTAINER, record);
 }
 
+/**
+ * Delete one record. `projectId` is required because it is the partition key — Cosmos cannot
+ * find the item without it, and guessing wrong is a silent no-op rather than an error.
+ * Returns false on a 404 rather than throwing.
+ */
+async function deleteById(id, projectId) {
+  return cosmos.remove(CONTAINER, String(id), String(projectId));
+}
+
 /** Bulk write for the seeder. All operations must share one partition key value. */
 async function bulkUpsertForProject(projectId, records) {
   const operations = records.map(resourceBody => ({
@@ -100,5 +118,6 @@ module.exports = {
   countVisible,
   getById,
   upsert,
+  deleteById,
   bulkUpsertForProject
 };
