@@ -97,7 +97,10 @@ app.get('/api/health/db', async (req, res) => {
     }
     return res.json({ ok: true, driver: 'cosmos-db-nosql' });
   } catch (err) {
-    return res.status(503).json({ ok: false, error: err.message });
+    // Unauthenticated route: a Cosmos SDK failure message carries the account endpoint and the
+    // database and container names. The detail goes to the log, not to the caller.
+    logger.error('Health check failed', { error: err.message, stack: err.stack });
+    return res.status(503).json({ ok: false, error: 'Database unavailable.' });
   }
 });
 
@@ -146,7 +149,7 @@ app.use((req, res) => {
 app.use((err, req, res, _next) => {
   logger.error('Central API Error:', { error: err.message, stack: err.stack });
   res.status(err.status || 500).json({
-    error: err.message || 'Internal Server Error'
+    error: 'Internal Server Error'
   });
 });
 

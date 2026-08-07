@@ -19,6 +19,7 @@ const projects = require('../../repositories/projects');
 const chunks = require('../../repositories/chunks');
 const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
 const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { logger } = require('../../utils/logger');
 
@@ -56,14 +57,16 @@ exports.getDocuments = async (req, res) => {
     const { items, continuationToken } = await documents.listVisible(access, {
       projectId: req.query.project,
       extracted,
-      pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 5000),
+      // 1000 is the real ceiling — pageOptions clamps to it, so a larger number here
+      // only looked like it did something.
+      pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 1000),
       continuationToken: req.query.continuationToken
     });
 
     if (continuationToken) res.setHeader('x-continuation-token', continuationToken);
     return res.json(items);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'document controller failed');
   }
 };
 
@@ -77,7 +80,7 @@ exports.getDocument = async (req, res) => {
     }
     return res.json(doc);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'document controller failed');
   }
 };
 
@@ -154,7 +157,7 @@ exports.createDocument = async (req, res) => {
 
     return res.status(201).json(saved);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'document controller failed');
   }
 };
 
@@ -218,7 +221,7 @@ exports.extractDocument = async (req, res) => {
     });
   } catch (err) {
     if (req.file && req.file.path) fs.promises.unlink(req.file.path).catch(() => {});
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'document controller failed');
   }
 };
 
@@ -231,19 +234,30 @@ exports.updateDocument = async (req, res) => {
     }
 
     // projectId is the partition key — reassigning it would be a delete-and-reinsert.
-    const { id: _ignoredId, projectId: _ignoredPk, ...changes } = req.body;
+    //
+    // `read` and `isPublished` are stripped too, and that is the security half: spreading the body
+    // straight into the upsert let a writer set an arbitrary ACL, bypassing resolveDocumentAcl and
+    // the 409 on PUT /documents/:id/published that stops a document being published under a
+    // private project. Visibility changes go through that route, which enforces the parent.
+    const {
+      id: _ignoredId, projectId: _ignoredPk,
+      read: _ignoredRead, isPublished: _ignoredPublished,
+      ...changes
+    } = req.body;
 
     const saved = await documents.upsert({
       ...existing,
       ...changes,
       id: existing.id,
       projectId: existing.projectId,
+      read: existing.read,
+      isPublished: existing.isPublished,
       updatedAt: new Date().toISOString()
     });
 
     return res.json(saved);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'document controller failed');
   }
 };
 
@@ -275,7 +289,7 @@ exports.setDocumentPublished = async (req, res) => {
     );
     return res.json(updated);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'document controller failed');
   }
 };
 
@@ -337,7 +351,7 @@ exports.deleteDocument = async (req, res) => {
       storedFileRetained: Boolean(existing.s3Key)
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'document controller failed');
   }
 };
 
@@ -650,7 +664,7 @@ exports.ingestChunks = async (req, res) => {
     return res.json({ id: doc.id, chunks: items.length, extraction: provenance || null });
   } catch (err) {
     logger.error(`[Document Controller] Chunk ingest failed: ${err.message}`);
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'document controller failed');
   }
 };
 

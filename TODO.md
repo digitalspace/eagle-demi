@@ -195,6 +195,89 @@ Two notes for whoever runs the next container deletion here:
   for a few hundred bytes of dead JSON.
 
 
+## API audit — 2026-08-07
+
+Cleanliness, search efficiency, scalability and security, plus a live anonymous probe of every read
+endpoint on dev. **The access model held.** 382 projects and 1,000 documents fetched with no
+credential returned **zero** rows failing the `read[]`-contains-`public` / `isPublished` test; all
+three search datasets likewise; every privileged endpoint and all 15 write routes answered 401. A
+nonsense keyword returned 0 hits on all three datasets, which is the discriminator that AI Search is
+actually serving rather than silently falling back to Cosmos.
+
+### Fixed
+
+- [x] **Boundaries can be restricted now.** This was the one container where a restriction was
+      *inexpressible*: no `read[]` on the items, no `access` argument on any repository function. A
+      staff-only shapefile would have been world-readable the moment it was inserted. Reads compose
+      `selectWhere`/`countWhere` and point reads gate on `canRead`, exactly like every other
+      repository; `transformBoundary` emits an explicit ACL, public by default, and preserves an
+      upstream `read[]` verbatim so a re-seed cannot republish a restricted shapefile.
+      **Project scope deliberately does NOT apply** — boundaries are geography, not project data, so
+      `visibilityFor` is called with a NULL partition field. Scoping them on a field the items do not
+      carry would match nothing and blank the map for every project-scoped caller.
+      `boundaries.js` is no longer in the coverage suite's allowlist.
+- [x] **`projectScope` was silently void on any privileged credential.** `resolveAccess` returned
+      `{tier: PRIVILEGED, projectScope: null}` *before* it ever read the scope, so a key minted as
+      `roles: ['staff'], projectScope: ['207']` read the **entire corpus** — the restriction its
+      issuer asked for did nothing and said nothing. Scope is resolved first now. Roles and scope are
+      orthogonal: privilege lifts the ROLE predicate, the project narrowing survives. Mirrored in
+      `access-odata.js`, which had the same short-circuit. `systemAccess()` is unaffected and there
+      is a test saying so, because it is constructed rather than derived from a request.
+      The test that pinned the old behaviour asserted *"privileged roles ignore scope entirely"* —
+      it was pinning the bug.
+- [x] **Unauthenticated 500s no longer echo the driver message.** A Cosmos SDK error carries the
+      account endpoint, database and container names; `GET /projects`, `/documents`, `/boundaries`
+      and the unauthenticated `/api/health/db` all returned it verbatim. `serverError()` logs the
+      detail and returns a fixed string.
+- [x] **`read[]` and `isPublished` are no longer settable from a PUT body.** Both handlers spread
+      `req.body` into the upsert, so a writer could hand-craft an ACL past `resolveDocumentAcl` and
+      past the 409 that stops a document being published under a private project. Documents keep the
+      ACL they had; projects derive it from `isPublished` so read[] and isPublished cannot disagree.
+- [x] **`documents.countVisible` fanned out across every partition** even when it held a
+      `projectId`, while the matching read did not. It takes the partition key now.
+- [x] **Missing index paths added**: `documents /id` and `boundaries /id` (the cross-partition
+      by-id fallback, which is the live path), `chunks /isPublished` (the ACL fallback arm, so every
+      non-privileged chunk read carried an unindexed term), plus `read[]`/`isPublished` on
+      boundaries.
+- [x] **The coverage allowlist asserts the router instead of citing it.** Its reasons cited
+      `routes/api.js:106` and `:115`; the NRPTI removal shifted every line and the suite kept passing
+      while the evidence silently stopped matching — exactly the rot its own `ponytail:` comment
+      predicted. `requireWritePrefixes` now parses the router and checks the middleware chain, and
+      asserts `GET /wildfires` still does not exist.
+- [x] Dead code deleted: `_sql.contains()`, `PARTITION_FANOUT_LIMIT`, `wildfires.count()`, and the
+      `pageSize` clamps to 5000 that `pageOptions` immediately re-clamped to 1000.
+
+### Not done, deliberately
+
+- [ ] **`GET /projects` ships 2.32 MB for 382 projects** — measured. `sources.*` is **65.8%** of it
+      (1.5 MB of raw upstream Track/Eagle payloads), against a frontend that reads only
+      `sources.wildfire`. The obvious fix is a projection, and it is NOT applied because **nothing in
+      this repo calls `GET /projects`** — the frontend goes through `/api/search?dataset=Project`.
+      That makes it a public API contract with no in-repo consumer to validate a narrowing against,
+      so the change belongs with a named consumer, not with an audit.
+      Near-miss worth recording: the same instinct applied to `GET /boundaries` nearly shipped a
+      regression. Defaulting geometry to opt-IN looks obviously right and is wrong — the frontend
+      sends `geometry=simplified` and the bbox path sends nothing at all, so both would have lost
+      their polygons silently. Geometry stays opt-OUT.
+- [ ] **Cosmos-fallback search pages truncate at 1000 with no continuation token**, so a client
+      cannot ask for more (`controllers/search.js`). Only reachable when AI Search faults.
+- [ ] **`logs` and `leases` containers are entirely dead** — the log transport and `GET /admin/logs`
+      were removed, and nothing reads leases. `leases` has no indexing policy at all, so Cosmos
+      indexes every path. Dropping them is a live-data decision, and removing them from the Bicep
+      would NOT drop them (ARM does not delete on template removal) — it would only create drift.
+- [ ] **`wildfires` indexing is pure write amplification**: a spatial index on `/location/*` and
+      three included paths serving no query at all — proximity is computed in JavaScript, never via
+      `ST_DISTANCE`. Same for the unused `projects` composite index and the `/trackProjectId`,
+      `/updatedAt`, `/fileExt`, `/displayName`, `/code` paths.
+- [ ] **Search fan-out is 7 AI Search calls + 3 cross-partition Cosmos queries per debounced
+      keystroke** (three datasets in parallel), on a single-worker B1. `/search/summary` is 12 round
+      trips worst case. Bounded and measured, not a bug — but it is the first thing to look at if
+      search latency becomes a complaint.
+- [ ] **The ACL array is returned to anonymous callers**, so the role taxonomy is public. Disclosure,
+      not bypass; it disappears with the projection above.
+
+---
+
 ## Infrastructure
 
 - [x] **`documents.buildCriteria` treated `projectId: ''` as "no filter" — aligned in #73.** A falsy

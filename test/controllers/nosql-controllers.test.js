@@ -645,3 +645,60 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     assert.strictEqual(patched.extraction.path, 'unknown', 'an unknown path is recorded, not trusted');
   });
 });
+
+// A writer could hand-craft an ACL by putting it in the PUT body: `req.body` was spread straight
+// into the upsert, so `read` and `isPublished` went in unexamined — past resolveDocumentAcl and
+// past the 409 that stops a document being published under a private project.
+test('PUT bodies cannot hand-craft an ACL', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('a document keeps the ACL it had', async () => {
+    const existing = {
+      id: 'd1', projectId: 'p1', displayName: 'Old',
+      read: ['sysadmin', 'staff', 'demi-admin'], isPublished: false
+    };
+    let saved;
+    t.mock.method(documents, 'getById', async () => existing);
+    t.mock.method(documents, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await documentController.updateDocument({
+      params: { id: 'd1' }, query: {}, user: ADMIN_USER,
+      body: { displayName: 'New', read: ['public'], isPublished: true }
+    }, mockRes());
+
+    assert.strictEqual(saved.displayName, 'New', 'ordinary fields still update');
+    assert.deepStrictEqual(saved.read, existing.read, 'the ACL is not taken from the body');
+    assert.strictEqual(saved.isPublished, false);
+  });
+
+  await t.test('a project ACL is derived from isPublished, never taken verbatim', async () => {
+    const existing = { id: 'p1', trackProjectId: 1, name: 'Old', read: ['sysadmin'], isPublished: false };
+    let saved;
+    t.mock.method(projects, 'getById', async () => existing);
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER,
+      body: { name: 'New', read: ['some-invented-role'], isPublished: true }
+    }, mockRes());
+
+    assert.strictEqual(saved.name, 'New');
+    assert.ok(!saved.read.includes('some-invented-role'), 'no unvetted role reaches read[]');
+    assert.ok(saved.read.includes('public'), 'publishing derives the public ACL');
+    assert.strictEqual(saved.isPublished, true, 'read[] and isPublished cannot disagree');
+  });
+
+  await t.test('omitting isPublished leaves visibility untouched', async () => {
+    const existing = { id: 'p1', trackProjectId: 1, name: 'Old', read: ['sysadmin'], isPublished: false };
+    let saved;
+    t.mock.method(projects, 'getById', async () => existing);
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { name: 'New' }
+    }, mockRes());
+
+    assert.deepStrictEqual(saved.read, ['sysadmin']);
+    assert.strictEqual(saved.isPublished, false);
+  });
+});

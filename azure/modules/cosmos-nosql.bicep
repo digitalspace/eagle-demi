@@ -212,6 +212,11 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
           {
             path: '/contentExtracted/?'
           }
+          // documents.getById falls back to a cross-partition query on id when no ?project is
+          // supplied — which is what the frontend does on every document open.
+          {
+            path: '/id/?'
+          }
           {
             path: '/fileExt/?'
           }
@@ -258,6 +263,11 @@ resource chunksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
           {
             path: '/read/[]/?'
           }
+          // The fallback arm of readClause filters on isPublished, so every non-privileged chunk
+          // read carried an unindexed term without this.
+          {
+            path: '/isPublished/?'
+          }
         ]
         excludedPaths: noIndex
       }
@@ -292,6 +302,19 @@ resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases
           }
           {
             path: '/code/?'
+          }
+          // The read predicate. Boundaries are ACL-gated like every other container now, and an
+          // unindexed ACL term would scan on every anonymous map load.
+          {
+            path: '/read/[]/?'
+          }
+          {
+            path: '/isPublished/?'
+          }
+          // getById falls back to a cross-partition query when no ?type is supplied, which is the
+          // live path — the frontend calls /boundaries/<name> with no type.
+          {
+            path: '/id/?'
           }
         ]
         excludedPaths: [
