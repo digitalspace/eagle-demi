@@ -170,6 +170,22 @@ describe('RegistryStateService', () => {
     expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p1']);
   });
 
+  it('should keep the selected sector as a zero chip when the other filters empty it', () => {
+    // Otherwise the chip vanishes while sectorFilter() still holds it: an empty map, nothing
+    // rendered active, and no control left to clear the filter that emptied it.
+    const mockProjects: any[] = [
+      { id: 'p1', name: 'Coal A', sector: 'Coal Mines', gatingState: 'admitted', region: 'Peace' },
+      { id: 'p2', name: 'Plant A', sector: 'Power Plants', gatingState: 'admitted', region: 'Skeena' }
+    ];
+    service.projects.set(mockProjects);
+    service.sectorFilter.set('Coal Mines');
+    service.regionFilter.set('Skeena');
+
+    const coal = service.sectorOptions().find(o => o.value === 'Coal Mines');
+    expect(coal).toEqual({ value: 'Coal Mines', label: 'Coal Mines', count: 0 });
+    expect(service.filteredProjectsNoQuery()).toEqual([]);
+  });
+
   it('should bypass project-matching check for filteredDocuments when on the search page', () => {
     const mockProjects: any[] = [
       { id: 'p1', name: 'Mine A', sector: 'Mining', gatingState: 'admitted', region: 'Thompson-Okanagan' }

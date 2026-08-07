@@ -379,6 +379,14 @@ export class RegistryStateService {
       counts.set(value, (counts.get(value) || 0) + 1);
     }
 
+    // The selected sector always has a chip, even at zero. The list is counted under the OTHER
+    // active filters, so narrowing the region can empty the sector the user picked — and without
+    // this its chip would simply vanish, leaving a map with no projects, no chip rendered active,
+    // and nothing to click to get back. A `(0)` chip says "this is still your filter, and it now
+    // matches nothing", which is the true statement.
+    const selected = this.sectorFilter();
+    if (selected !== 'all' && !counts.has(selected)) counts.set(selected, 0);
+
     // `all` leads the list so the whole chip row is one loop and the sentinel cannot drift from the
     // options beside it. Its count is every matching project, including those with no sector at
     // all — which is why it is counted separately rather than summed from the map.
