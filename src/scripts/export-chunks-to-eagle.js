@@ -23,15 +23,21 @@
  * MUST RUN INSIDE THE APP CONTAINER, over the App Service SSH tunnel — not Kudu's /api/command,
  * whose SCM container has no managed-identity endpoint. See README.md for the recipe.
  *
+ * A full run is hours, so run it DETACHED — `nohup ... > /tmp/export.log 2>&1 &`. The App Service
+ * SSH tunnel dies on its own schedule and would otherwise take the run with it.
+ *
  * Usage:
  *   node src/scripts/export-chunks-to-eagle.js --target <url> --key <ingest-key> [--live]
  *                                              [--limit N] [--batch 1000] [--resume <token>]
+ *   node src/scripts/export-chunks-to-eagle.js --count
  *
  *   --target   eagle-search base URL, e.g. https://eagle-search-api-dev.azurewebsites.net
  *              Phase 7 points this at test or prod; nothing else changes.
  *   --live     actually push. WITHOUT THIS NOTHING IS SENT.
  *   --limit    stop after N chunks, for a costed trial run
  *   --resume   continuation token from a previous run's checkpoint line
+ *   --count    print the total chunk count and exit — the parity target for the backfill gate,
+ *              read over the same connection the export uses rather than a separate hand-run query
  */
 
 const cosmos = require('../db/cosmos-nosql');
@@ -40,10 +46,11 @@ const CONTAINER = 'chunks';
 const DEFAULT_BATCH = 1000;
 
 function parseArgs(argv) {
-  const args = { live: false, limit: Infinity, batch: DEFAULT_BATCH, target: '', key: '', resume: undefined };
+  const args = { live: false, count: false, limit: Infinity, batch: DEFAULT_BATCH, target: '', key: '', resume: undefined };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
+    else if (a === '--count') args.count = true;
     else if (a === '--target') args.target = argv[++i].replace(/\/$/, '');
     else if (a === '--key') args.key = argv[++i];
     else if (a === '--limit') args.limit = parseInt(argv[++i], 10);
@@ -91,8 +98,18 @@ async function pushBatch(args, chunks) {
   return res.json();
 }
 
+/** How often to print a resumable checkpoint. Every page would drown the log; every 10 costs at most 10 pages of replay. */
+const CHECKPOINT_EVERY = 10;
+
 (async () => {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.count) {
+    const r = await cosmos.query(CONTAINER, { query: 'SELECT VALUE COUNT(1) FROM c', parameters: [] }, {});
+    console.log(`chunks: ${r.items[0]}   (~${Math.round(r.requestCharge || 0)} RU)`);
+    return;
+  }
+
   if (!args.target || !args.key) {
     console.error('--target and --key are required');
     process.exit(1);
@@ -106,9 +123,24 @@ async function pushBatch(args, chunks) {
   let orphans = 0;
   let failed = 0;
   let ru = 0;
+  let pages = 0;
   const started = Date.now();
 
+  // The push for the page BEFORE the one being fetched. Reading Cosmos and pushing to eagle-search
+  // are independent, and doing them strictly in turn is what made the first measured run ~5,000
+  // chunks/min. One in flight is the whole win; a pool would add failure modes for no more speed.
+  let inflight = null;
+  const settle = async () => {
+    if (!inflight) return;
+    const r = await inflight;
+    inflight = null;
+    written += r.written ?? 0;
+    orphans += r.orphans ?? 0;
+    failed += r.failed ?? 0;
+  };
+
   do {
+    const resumedFrom = token;
     const page = await cosmos.query(
       CONTAINER,
       // `parameters: []` is not optional — assertQuerySpec rejects a spec without it, which is
@@ -118,31 +150,42 @@ async function pushBatch(args, chunks) {
     );
     token = page.continuationToken;
     ru += page.requestCharge || 0;
+    pages++;
     if (page.items.length === 0) break;
 
     const slice = page.items.slice(0, Math.max(0, args.limit - read));
     read += slice.length;
 
+    // Settle the previous push before starting this one, so at most one batch is ever unaccounted.
+    await settle();
     if (args.live && slice.length) {
-      const r = await pushBatch(args, slice);
-      written += r.written ?? 0;
-      orphans += r.orphans ?? 0;
-      failed += r.failed ?? 0;
+      inflight = pushBatch(args, slice);
+      // A floating promise that rejects before the next `settle()` would be an unhandled rejection,
+      // which Node turns into a process exit that skips the catch below. Attaching a no-op handler
+      // marks it handled; `await inflight` in settle() still rejects and still reaches that catch.
+      inflight.catch(() => {});
     }
 
-    // The checkpoint is printed, not stored: a run is resumed with --resume <token>, and printing
-    // means the token survives in the terminal scrollback even if the process is killed.
-    process.stdout.write(
-      `  read ${read}  written ${written}  orphans ${orphans}  failed ${failed}  RU ${Math.round(ru)}` +
-        (token ? `  --resume ${String(token).slice(0, 40)}…` : '') +
-        '\r'
-    );
+    // The checkpoint is printed IN FULL and on its own line. It is the only copy of the token, a
+    // truncated one resumes nothing, and a detached run has no scrollback to read it back from.
+    // `resumedFrom` — not `token` — is the token that fetched the page now in flight, so resuming
+    // replays that page rather than skipping it. Writes are mergeOrUpload on a deterministic id,
+    // so a replay is idempotent; a skip would be a silent hole.
+    if (pages % CHECKPOINT_EVERY === 0) {
+      console.log(
+        `checkpoint  read ${read}  written ${written}  orphans ${orphans}  failed ${failed}  RU ${Math.round(ru)}` +
+          (resumedFrom ? `  --resume ${resumedFrom}` : '  (from the start)')
+      );
+    }
     if (read >= args.limit) break;
   } while (token);
 
-  const mins = ((Date.now() - started) / 60000).toFixed(1);
+  await settle();
+
+  const mins = (Date.now() - started) / 60000;
   console.log(
-    `\ndone in ${mins} min — read ${read}, written ${written}, orphans ${orphans}, failed ${failed}, ~${Math.round(ru)} RU`
+    `done in ${mins.toFixed(1)} min — read ${read}, written ${written}, orphans ${orphans}, ` +
+      `failed ${failed}, ~${Math.round(ru)} RU, ${Math.round(read / Math.max(mins, 0.01))} chunks/min`
   );
   // Orphans are chunks whose parent document is not in eagle-documents; eagle-search drops them
   // rather than writing text nobody has been granted access to. A large number means the document
