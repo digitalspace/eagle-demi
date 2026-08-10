@@ -45,6 +45,14 @@ param minioAccessKey string
 @secure()
 param minioSecretKey string
 
+// Bucket and prefix were previously set out of band, so every template deploy silently reset them
+// to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
+@description('Object-store bucket name (dev: asnpnn, test: zdspnb).')
+param minioBucketName string = 'eagle-demi'
+
+@description('Key prefix namespacing this environment inside the bucket.')
+param minioKeyPrefix string = ''
+
 @description('Monthly Budget Limit in CAD — the subscription\'s billing currency. See cost-budget.bicep.')
 param budgetAmount int = 100
 
@@ -189,6 +197,8 @@ module apiWebApp './modules/api-web-app.bicep' = {
     minioHost: minioHost
     minioAccessKey: minioAccessKey
     minioSecretKey: minioSecretKey
+    minioBucketName: minioBucketName
+    minioKeyPrefix: minioKeyPrefix
     apiSubnetId: appServiceSubnetId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId

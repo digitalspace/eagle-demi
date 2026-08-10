@@ -278,16 +278,21 @@ what produced 3,382 synthetic project rows in the old database.
 
 ## Deployment
 
+**The environment model: Azure dev is a sandbox, test is staging, prod is prod** (decided
+2026-08-10). Staging lives in `c4b0a8-test-rg` (subscription `c4b0a8-test`) as `demi-api-test` and
+`demi-frontend-test`, deployed from `azure/main.test.bicepparam`. Dev keeps its resources but is no
+longer wired to CI — deploy there by hand when experimenting.
+
 ```bash
-./scripts/deploy-azure.sh all       c4b0a8-dev-rg    # API + frontend
-./scripts/deploy-azure.sh api       c4b0a8-dev-rg
-./scripts/deploy-azure.sh frontend  c4b0a8-dev-rg
+API_APP_NAME=demi-api-test      ./scripts/deploy-azure.sh api       c4b0a8-test-rg
+FRONTEND_APP_NAME=demi-frontend-test ./scripts/deploy-azure.sh frontend  c4b0a8-test-rg
+./scripts/deploy-azure.sh all c4b0a8-dev-rg    # dev sandbox: defaults target demi-*-dev
 ```
 
 Build the package from a checkout that already has `node_modules` installed — `ENABLE_ORYX_BUILD` is
 `false`, so nothing installs dependencies on the Azure side.
 
-**CI deploys dev on every push to `main`**, working since 2026-08-05. It runs the same script — the
+**CI deploys staging on every push to `main`.** It runs the same script — the
 workflow installs dependencies, logs in, and calls `./scripts/deploy-azure.sh`, so CI and a manual
 deploy cannot drift.
 
@@ -296,8 +301,8 @@ not redeploy the other:
 
 | Workflow | Deploys | Fires on a push to `main` touching |
 |---|---|---|
-| `azure-deploy-dev-frontend.yaml` | `demi-frontend-dev` | `frontend/**` |
-| `azure-deploy-dev-api.yaml` | `demi-api-dev` | `src/**`, `api/**`, `public/**`, `index.js`, `host.json`, `package.json`, `yarn.lock`, `frontend/public/assets/geojson/**` |
+| `azure-deploy-staging-frontend.yaml` | `demi-frontend-test` | `frontend/**` |
+| `azure-deploy-staging-api.yaml` | `demi-api-test` | `src/**`, `api/**`, `public/**`, `index.js`, `host.json`, `package.json`, `yarn.lock`, `frontend/public/assets/geojson/**` |
 
 Both also accept `workflow_dispatch`. The API's paths mirror `scripts/package-api.py`, which decides
 what actually ships — root `public/` is not excluded there, and `frontend/public/assets/geojson/**`
@@ -305,29 +310,24 @@ is explicitly re-included because the boundary seeder reads it at runtime, so th
 both workflows. Adding a directory to the package without adding it here gives you a deploy that
 silently never runs.
 
-GitHub Actions authenticates as the user-assigned managed identity **`demi-cicd-dev`** through a
+GitHub Actions authenticates as the user-assigned managed identity **`demi-cicd-test`** through a
 federated credential, with no client secret anywhere:
 
 | | |
 |---|---|
-| Identity | `demi-cicd-dev`, client `37ff78d5-23b0-49bc-b324-02ff63755da1` |
-| Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:digitalspace/eagle-demi:ref:refs/heads/main`, audience `api://AzureADTokenExchange` |
-| RBAC | Website Contributor on `demi-api-dev` and `demi-frontend-dev` **individually** — nothing at resource-group scope |
-| Config | All four values live on the **`dev` GitHub environment**, nothing at repo scope and nothing hardcoded: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`; variables `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` |
+| Identity | `demi-cicd-test`, in `c4b0a8-test-rg` |
+| Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:digitalspace/eagle-demi:environment:test`, audience `api://AzureADTokenExchange` |
+| RBAC | Website Contributor on `demi-api-test` and `demi-frontend-test` **individually** — nothing at resource-group scope |
+| Config | All four values live on the **`test` GitHub environment**, nothing at repo scope and nothing hardcoded: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`; variables `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` |
 
-**Declaring `environment: dev` changes the OIDC subject claim, and that is the trap.** With an
-environment the claim becomes `repo:digitalspace/eagle-demi:environment:dev` rather than
-`repo:digitalspace/eagle-demi:ref:refs/heads/main`, so `demi-cicd-dev` carries **two** federated
-credentials:
-
-| Name | Subject | Used by |
-|---|---|---|
-| `gh-main` | `repo:digitalspace/eagle-demi:ref:refs/heads/main` | nothing today — kept as the fallback if a job ever drops its environment |
-| `gh-env-dev` | `repo:digitalspace/eagle-demi:environment:dev` | both dev deploy workflows |
-
-Rename the environment, or delete `gh-env-dev`, and Azure Login fails with `AADSTS700213: No matching
-federated identity record found for presented assertion subject`. The subject is the whole contract;
-it is not derived from anything the workflow can set.
+**Declaring `environment: test` changes the OIDC subject claim, and that is the trap.** With an
+environment the claim becomes `repo:digitalspace/eagle-demi:environment:test` rather than
+`repo:digitalspace/eagle-demi:ref:refs/heads/main`. The subject is the whole contract; it is not
+derived from anything the workflow can set. Rename the environment, or delete the `gh-env-test`
+federated credential, and Azure Login fails with `AADSTS700213: No matching federated identity
+record found for presented assertion subject` — so always create the credential for the new subject
+before renaming, prove a deploy green, and only then remove the old one. (The dev-era `demi-cicd-dev`
+identity and its `gh-main`/`gh-env-staging` credentials go away with the dev teardown.)
 
 **A managed identity, deliberately, not an app registration.** A UAMI carries federated credentials
 just as an Entra application does, but creating and configuring one is pure ARM. The app-registration
@@ -336,7 +336,7 @@ access blocks Graph here — browser sign-in has no browser on a server, and dev
 tenant-wide. The landing zone points the same way: managed identity first, app registration only for
 human sign-in, multi-tenant or M365 integration, and by request rather than self-service.
 
-`demi-cicd-dev` is separate from the runtime identity `demi-identity-dev` on purpose. The runtime
+`demi-cicd-test` is separate from the runtime identity `demi-identity-test` on purpose. The runtime
 identity holds Cosmos Data Contributor, Search Index Data Contributor and OpenAI User; a federated
 credential on it would let any workflow on `main`, in a **public** repo, mint a token with full
 database access.
@@ -346,12 +346,10 @@ whatever principal the CLI session holds, a human locally and the managed identi
 `preflight_identity` prints that principal and refuses to run under `GITHUB_ACTIONS` as anything but
 a service principal, so a deploy authenticated as a person fails instead of proceeding.
 
-**There are no test or prod deploy workflows.** They were deleted on 2026-08-05. Both subscriptions
-exist (`c4b0a8-test`, `c4b0a8-prod`) but neither holds a resource group, there is nothing deployed in
-either, and `demi-cicd-dev` has no role outside dev — so the two workflows could only ever
-authenticate and then fail on authorization. Keeping dead deploy paths in a **public** repo is
-liability without benefit: they named prod resources, referenced `MINIO_*` secrets, and carried
-`azure/arm-deploy` steps against a Bicep template that has never run.
+**There is no prod deploy workflow yet.** The prod-era workflow was deleted on 2026-08-05 while
+`c4b0a8-prod` holds nothing; it gets rebuilt from the staging pair when prod becomes real, deploying
+a tag verified on staging rather than a branch. Keeping dead deploy paths in a **public** repo is
+liability without benefit.
 
 Recreating them is not a copy job. Each environment needs its own managed identity, its own federated
 credential — subject `repo:digitalspace/eagle-demi:environment:test` or `:environment:prod`, matching
