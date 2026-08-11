@@ -274,7 +274,10 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         // summary endpoint returns `{summary: null}` and the results columns are untouched.
         {
           name: 'SUMMARY_ENABLED'
-          value: string(summaryEnabled)
+          // NOT string(summaryEnabled): ARM stringifies booleans as 'True'/'False', and
+          // src/config.js compares === 'true'. Greenfield test shipped 'True' and the
+          // summariser silently reported "switched off".
+          value: summaryEnabled ? 'true' : 'false'
         }
         {
           name: 'FOUNDRY_ENDPOINT'

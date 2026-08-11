@@ -24,6 +24,18 @@ const apiRoutes = require('./routes/api');
 // Initialize Express
 const app = express();
 
+// The Azure Functions HTTP adapter cannot construct a 304 response — undici's Response
+// constructor rejects null-body status codes — so any conditional GET the browser revalidates
+// (Express JSON ETags, swagger-ui static assets) became a 500 in Azure. Stripping the
+// conditional headers means Express never short-circuits to 304; disabling etag stops inviting
+// revalidation in the first place. Measured live on demi-api-test 2026-08-11.
+app.set('etag', false);
+app.use((req, _res, next) => {
+  delete req.headers['if-none-match'];
+  delete req.headers['if-modified-since'];
+  next();
+});
+
 // Request ID Tracing, Rate Limiting & HTTP Request Metrics Middlewares (Applied first)
 const requestIdMiddleware = require('./middleware/request-id');
 const httpLoggerMiddleware = require('./middleware/http-logger');
