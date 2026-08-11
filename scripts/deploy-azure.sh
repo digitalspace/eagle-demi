@@ -193,6 +193,21 @@ deploy_frontend() {
   echo -e "\n${BLUE}[1/3] Building Angular frontend production bundle...${NC}"
   yarn --cwd "$REPO_ROOT/frontend" build
 
+  # env.js ships in the bundle with dev URLs baked in, and the app bootstraps its /api/config
+  # fetch FROM env.js — so a test deploy that skips this rewrite silently talks to the DEV API
+  # (found live 2026-08-11). sed exits 0 on no match, hence the grep guards on both sides.
+  if [[ "$FRONTEND_APP_NAME" == "demi-frontend-test" ]]; then
+    ENV_JS="$REPO_ROOT/frontend/dist/env.js"
+    grep -qF "https://demi-api-dev.azurewebsites.net" "$ENV_JS" || { echo "env.js rewrite guard: dev API URL not found"; exit 1; }
+    sed -i \
+      -e "s|https://demi-api-dev.azurewebsites.net|https://demi-api-test.azurewebsites.net|g" \
+      -e "s|https://dev.loginproxy.gov.bc.ca|https://test.loginproxy.gov.bc.ca|g" \
+      -e "s|window.__env.ENVIRONMENT = 'dev'|window.__env.ENVIRONMENT = 'test'|" \
+      "$ENV_JS"
+    grep -qF "https://demi-api-test.azurewebsites.net" "$ENV_JS" || { echo "env.js rewrite failed"; exit 1; }
+    echo -e "${GREEN}✓ env.js repointed at demi-api-test / test loginproxy${NC}"
+  fi
+
   echo -e "\n${BLUE}[2/3] Deploying static bundle to ${YELLOW}${FRONTEND_APP_NAME}${NC}..."
   FRONTEND_ZIP="/tmp/frontend-deploy.zip"
   rm -f "$FRONTEND_ZIP"
