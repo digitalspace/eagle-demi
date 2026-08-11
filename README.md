@@ -10,7 +10,10 @@ This repository houses:
 2. **demi-frontend** — the Angular document intake and search frontend, deployed to an Azure Web
    App.
 
-> **Status: dev only.** No test or prod environment exists yet.
+> **Status: staging** (`c4b0a8-test`, resources `demi-*-test`) is the live environment — CI
+> deploys it on every push to `main`. Dev is an empty sandbox shell (redeploy from Bicep on
+> demand; the dev estate was torn down 2026-08-11). Prod comes later, from a tag verified on
+> staging.
 >
 > This file covers what you need at the keyboard. Architecture, measured facts, Azure environment
 > detail and the traps live in the [wiki](https://github.com/digitalspace/eagle-demi/wiki) — start at
@@ -38,7 +41,7 @@ The app container is the only place with both network access and a managed ident
 the App Service SSH tunnel:
 
 ```bash
-az webapp create-remote-connection -g c4b0a8-dev-rg -n demi-api-dev --port 50123 &
+az webapp create-remote-connection -g c4b0a8-test-rg -n demi-api-test --port 50123 &
 sshpass -p 'Docker!' ssh -c aes256-cbc -m hmac-sha1 -p 50123 root@127.0.0.1
 ```
 
@@ -95,9 +98,9 @@ implementation:
 
 | | |
 |---|---|
-| API | `demi-api-dev` — `kind: functionapp,linux` on the **B1 Basic** plan `demi-plan-dev` (1 vCPU / 1.75 GB, single worker). Manage with `az webapp` |
-| Database | **Azure Cosmos DB for NoSQL** (`@azure/cosmos`), account `demi-cosmos-dev` |
-| Search | **Azure AI Search** `demi-search-dev` — Basic, keyless, private endpoint only. `demi-chunks`, `demi-projects`, `demi-documents` |
+| API | `demi-api-test` — `kind: functionapp,linux` on the **B1 Basic** plan `demi-plan-test` (1 vCPU / 1.75 GB, single worker). Manage with `az webapp` |
+| Database | **Azure Cosmos DB for NoSQL** (`@azure/cosmos`), account `demi-cosmos-test` |
+| Search | **Azure AI Search** `demi-search-test` — Basic, keyless, private endpoint only. `demi-chunks`, `demi-projects`, `demi-documents` |
 | Object store | `nrs.objectstore.gov.bc.ca`, bucket `asnpnn` (S3-compatible, `minio` client) |
 | Frontend | Angular, built to `frontend/dist`, served by `pm2 serve --spa` |
 | IaC | Bicep — `azure/main.bicep`, `azure/modules/` |
@@ -408,7 +411,7 @@ unlike push protection, those sit behind paid Secret Protection.
 **Reading the Dependabot count.** The raw number overstates the exposure. Only `frontend/dist` is
 deployed, never `frontend/node_modules`, so advisories on the Angular build toolchain are a CI
 supply-chain concern and not a production one. The API is the opposite — its package includes
-`node_modules`, so a root-lockfile advisory does reach `demi-api-dev`. Group by
+`node_modules`, so a root-lockfile advisory does reach `demi-api-test`. Group by
 `dependency.manifest_path` and `dependency.scope` before deciding anything:
 
 ```bash
