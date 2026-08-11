@@ -11,11 +11,14 @@ using './main.bicep'
 param environmentName = 'test'
 param location = 'canadacentral'
 
-// Direct-to-NRS object store, matching what dev actually runs (the OpenShift minio route in the
-// dev bicepparam was stale drift). zdspnb is the test bucket; asnpnn is dev's.
+// Direct-to-NRS object store. asnpnn/ozwdez, NOT the "test bucket" zdspnb: the corpus (92,472
+// objects, 257 GB) exists ONLY under asnpnn/ozwdez/, zdspnb holds zero objects under any DEMI
+// prefix, and eagle-api on OpenShift TEST reads asnpnn too (its eagle-api-minio-keys secret).
+// Measured 2026-08-11 before the dev teardown; the store is NRS-owned and outlives any Azure
+// environment. Credentials come from the 6cdc9e-test secret `eagle-api-minio-keys`.
 param minioHost = 'nrs.objectstore.gov.bc.ca'
-param minioBucketName = 'zdspnb'
-param minioKeyPrefix = 'demi-test'
+param minioBucketName = 'asnpnn'
+param minioKeyPrefix = 'ozwdez'
 param minioAccessKey = readEnvironmentVariable('MINIO_ACCESS_KEY', '')
 param minioSecretKey = readEnvironmentVariable('MINIO_SECRET_KEY', '')
 

@@ -355,9 +355,15 @@ Two notes for whoever runs the next container deletion here:
 - [ ] **Prod deploy path still to build** when prod becomes real: copy the staging pair, subject
       `repo:digitalspace/eagle-demi:environment:prod`, required-reviewers decision, and the release
       model — prod deploys a tag verified on staging.
-- [ ] **Dev estate teardown pending verification gates** (retrieval scorecard ≥ dev baseline on the
-      test corpus, counts by id, ACL probe). Until then dev runs in parallel. `demi-cosmos-dev` is
-      no longer the only copy of the corpus once the chunks copy completes and is verified.
+- [x] **Dev estate torn down 2026-08-11** after all gates passed (scorecard ≥ dev baseline,
+      counts exact, end-to-end document download against `asnpnn/ozwdez`). `c4b0a8-dev-rg` is now
+      an empty shell holding only the platform action group — the sandbox: redeploy with
+      `azure/main.bicepparam` when needed. `demi-cosmos-test` (plus its Azure periodic backups)
+      is the ONLY copy of the extracted corpus. Also removed: the `6cdc9e-dev` eagle-search
+      worker/BuildConfig/ImageStream/ingest-secret, GitHub envs `staging`×2 and `azure-staging`,
+      and dev's rproxy search route (falls back to eagle-api). Pre-teardown audit caught the
+      staging storage config pointing at empty `zdspnb` — corrected to `asnpnn/ozwdez` before
+      anything was deleted.
 - [ ] **App registration `acb4198f-64db-4485-9638-a894e2d2c99b` — KEPT deliberately, not for CI.**
       Left from the app-registration route before `demi-cicd-dev` superseded it. Not deleted: app
       registrations are hard to provision in this tenant, and human federated sign-in is precisely
