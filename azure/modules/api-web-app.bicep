@@ -140,6 +140,16 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
       linuxFxVersion: 'NODE|22'
       vnetRouteAllEnabled: !empty(apiSubnetId)
       appSettings: [
+        // src/controllers/config.js falls back to DEV values for both of these, which was
+        // invisible while dev was the only environment — pin them per environment.
+        {
+          name: 'ENVIRONMENT'
+          value: environmentName
+        }
+        {
+          name: 'API_LOCATION'
+          value: 'https://demi-api-${environmentName}.azurewebsites.net'
+        }
         {
           name: 'AzureWebJobsStorage'
           value: 'DefaultEndpointsProtocol=https;AccountName=${apiStorage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${apiStorage.listKeys().keys[0].value}'
@@ -324,9 +334,15 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'WEBSITE_VNET_ROUTE_ALL'
           value: '1'
         }
+        // THE LANDING ZONE'S resolver, not Azure's platform default 168.63.129.16. The
+        // privatelink zones live in a central subscription reachable only through the hub
+        // resolver; with the platform default the app resolves Cosmos/Search to their PUBLIC
+        // addresses and every call is rejected at the firewall as "originated from public
+        // internet". Live dev always ran 10.53.244.4 out-of-band; the template said
+        // 168.63.129.16 and greenfield test proved the template wrong on first contact.
         {
           name: 'WEBSITE_DNS_SERVER'
-          value: '168.63.129.16'
+          value: '10.53.244.4'
         }
         {
           name: 'AzureWebJobsFeatureFlags'

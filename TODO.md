@@ -334,14 +334,30 @@ Two notes for whoever runs the next container deletion here:
       `scripts/package-api.py` did not exclude `public/`, so a deploy from a working tree holding a
       stale build would have shipped it into `wwwroot`, where zipdeploy's merge makes it permanent.
       Both now pinned by tests (`test/app.boot.test.js`, `test/scripts/package-api.test.js`).
-- [ ] **Test and prod have no deploy path at all — the workflows were deleted 2026-08-05.** Nothing
-      is deployed in either subscription and neither has a resource group, so the files were dead
-      weight naming prod resources in a public repo. Rebuilding them needs, per environment: a
-      managed identity, a federated credential on subject
-      `repo:digitalspace/eagle-demi:environment:{test,prod}` matching a GitHub environment of that
-      name, role assignments in that subscription, and for prod a decision on required reviewers.
-      Copy the dev pair as the shape. Also settle the release model first — prod is supposed to
-      deploy a tag verified on test, which neither deleted workflow actually enforced.
+- [x] **Staging now lives in the test subscription (2026-08-10 environment model: dev = sandbox,
+      test = staging, prod = prod).** `c4b0a8-test-rg` holds the full DEMI estate as `demi-*-test`
+      (deployed from `azure/main.test.bicepparam`), plus the eagle-search stack. CI deploys it via
+      GitHub environment `test` → UAMI `demi-cicd-test` (fed cred `gh-env-test`, Website
+      Contributor on the two apps only). Corpus copied from `demi-cosmos-dev` with
+      `src/scripts/copy-to-env.js`. Greenfield traps found on the way, all now fixed in the
+      template or recorded here:
+      - `WEBSITE_DNS_SERVER` must be `10.53.244.4` (hub resolver) — the template said
+        `168.63.129.16` and the app resolved Cosmos/Search to public IPs (fixed in
+        `api-web-app.bicep`).
+      - The Foundry module cannot greenfield-converge: every account PUT re-enters `Accepted` and
+        the PE child fails `AccountProvisioningStateInvalid`. Recipe: let the account settle, create
+        the PE by hand with connection name `plsc-demi-foundry-<env>`, template no-ops after.
+      - Search definitions restore needs the datasource `identity` block
+        (`DataUserAssignedIdentity`, api-version 2024-05-01-preview) plus **Cosmos DB Account
+        Reader Role** for the UAMI on the Cosmos account — neither is in Bicep.
+      - `/api/config` fell back to dev values for `ENVIRONMENT`/`API_LOCATION` (now pinned in
+        Bicep).
+- [ ] **Prod deploy path still to build** when prod becomes real: copy the staging pair, subject
+      `repo:digitalspace/eagle-demi:environment:prod`, required-reviewers decision, and the release
+      model — prod deploys a tag verified on staging.
+- [ ] **Dev estate teardown pending verification gates** (retrieval scorecard ≥ dev baseline on the
+      test corpus, counts by id, ACL probe). Until then dev runs in parallel. `demi-cosmos-dev` is
+      no longer the only copy of the corpus once the chunks copy completes and is verified.
 - [ ] **App registration `acb4198f-64db-4485-9638-a894e2d2c99b` — KEPT deliberately, not for CI.**
       Left from the app-registration route before `demi-cicd-dev` superseded it. Not deleted: app
       registrations are hard to provision in this tenant, and human federated sign-in is precisely
