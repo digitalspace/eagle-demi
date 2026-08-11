@@ -10,10 +10,10 @@ if (!globalThis.crypto || !globalThis.crypto.getRandomValues) {
 }
 
 const path = require('path');
+const fs = require('fs');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const express = require('express');
-const compression = require('compression');
 const cors = require('cors');
 const helmet = require('helmet');
 const cosmos = require('./db/cosmos-nosql');
@@ -23,6 +23,18 @@ const apiRoutes = require('./routes/api');
 
 // Initialize Express
 const app = express();
+
+// The Azure Functions HTTP adapter cannot construct a 304 response — undici's Response
+// constructor rejects null-body status codes — so any conditional GET the browser revalidates
+// (Express JSON ETags, swagger-ui static assets) became a 500 in Azure. Stripping the
+// conditional headers means Express never short-circuits to 304; disabling etag stops inviting
+// revalidation in the first place. Measured live on demi-api-test 2026-08-11.
+app.set('etag', false);
+app.use((req, _res, next) => {
+  delete req.headers['if-none-match'];
+  delete req.headers['if-modified-since'];
+  next();
+});
 
 // Request ID Tracing, Rate Limiting & HTTP Request Metrics Middlewares (Applied first)
 const requestIdMiddleware = require('./middleware/request-id');
@@ -37,7 +49,13 @@ app.use(httpLoggerMiddleware);
 app.use(rateLimiterMiddleware);
 
 // Security & Body Parsing Middleware
-app.use(compression());
+//
+// NO compression(). Its zlib stream emits multi-chunk writes, and the Azure Functions HTTP
+// adapter cannot reassemble them — any compressed response past a few chunks (swagger-ui.css
+// at 179 KB, large search pages) hangs or 500s. Measured 2026-08-11: identical request with
+// Accept-Encoding: identity answered 200 in 0.8 s; with gzip it timed out. Small JSON slipped
+// under the 1 KB threshold, which is why the API looked healthy from curl. Both dev and test
+// exhibited it — this was latent since the Azure move, not a migration regression.
 app.use(helmet({ contentSecurityPolicy: false }));
 // CORS_ORIGIN is a comma-separated allowlist. It was unset in every deployed environment,
 // which silently meant "reflect ANY origin". Fall back to the known DEMI frontends rather
@@ -105,9 +123,22 @@ app.get('/api/health/db', async (req, res) => {
 // NoSQL client builds its container handles lazily on first use, so a middleware that only
 // primed the connection would cost every request a branch and buy nothing.
 
-// Mount Swagger Documentation UI
+// Mount Swagger Documentation UI.
+//
+// NOT `swaggerUi.serve`: that is express.static, which STREAMS file responses, and streamed
+// responses hang forever under the Azure Functions HTTP adapter (measured on both dev and test
+// 2026-08-11 — the UI HTML loaded but every css/js asset timed out, so the page never rendered).
+// Buffered res.send() is the one response shape the adapter handles, so the dist assets are
+// read whole and sent whole. They total ~1.5 MB and are served a handful of times a day.
 try {
   const swaggerDocument = YAML.load(path.join(__dirname, 'swagger/swagger.yaml'));
+  const swaggerDistPath = require('swagger-ui-dist').getAbsoluteFSPath();
+  app.use('/api-docs', (req, res, next) => {
+    const file = path.basename(req.path); // basename: no traversal
+    const full = path.join(swaggerDistPath, file);
+    if (file === '' || !fs.existsSync(full) || !fs.statSync(full).isFile()) return next();
+    res.type(path.extname(file)).send(fs.readFileSync(full));
+  });
   app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 } catch (err) {
   logger.error('Failed to load Swagger specification:', { error: err.message, stack: err.stack });

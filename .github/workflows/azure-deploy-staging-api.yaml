@@ -1,23 +1,21 @@
 # =============================================================================
-# Build and Deploy the DEMI API to Azure Dev
+# Build and Deploy the DEMI API to Azure staging
 # =============================================================================
-# Deploys the Node.js Express API to the Azure Function App `demi-api-dev`.
+# Deploys the Node.js Express API to the Azure Function App `demi-api-test`.
 #
-# API only. The frontend has its own file, `azure-deploy-dev-frontend.yaml`, and its
+# API only. The frontend has its own file, `azure-deploy-staging-frontend.yaml`, and its
 # own trigger. They were one workflow until 2026-08-05, which meant an Angular-only
 # change redeployed the API and a controller change rebuilt the frontend. The two
 # target different App Services and share no build output, so they now run
 # independently — including their concurrency groups.
 #
 # This workflow deploys the application only. It must NEVER deploy infrastructure.
-# `azure/main.bicep` does not describe dev: it never instantiates cosmos-nosql,
-# ai-search, identity, document-storage or frontend-web-app, and there is no VNet in
-# the resource group. An ARM deployment from here would not converge dev, it would
-# damage it. Infrastructure changes go through `az` by hand until the template is
-# rewritten to match reality. See TODO.md.
+# Infrastructure changes go through `az deployment group create` by hand with
+# `azure/main.test.bicepparam` — CI holds no credential that could run an ARM
+# deployment, and that is deliberate.
 #
-# The credential is scoped to match: `demi-cicd-dev` holds Website Contributor on
-# demi-api-dev and demi-frontend-dev individually, nothing at resource-group scope,
+# The credential is scoped to match: `demi-cicd-test` holds Website Contributor on
+# demi-api-test and demi-frontend-test individually, nothing at resource-group scope,
 # so it cannot run an ARM deployment even if a job were added. Keep it that way — do
 # not add an infra job, and do not widen the role assignment.
 #
@@ -25,7 +23,7 @@
 # pull-request problem; it has no bearing on whether a zipdeploy should run.
 # =============================================================================
 
-name: Deploy DEMI API to Azure Dev
+name: Deploy DEMI API to Azure staging
 
 on:
   push:
@@ -47,11 +45,11 @@ on:
       - 'package.json'
       - 'yarn.lock'
       - 'frontend/public/assets/geojson/**'
-      - '.github/workflows/azure-deploy-dev-api.yaml'
+      - '.github/workflows/azure-deploy-staging-api.yaml'
   workflow_dispatch:
 
 concurrency:
-  group: deploy-azure-dev-api
+  group: deploy-azure-staging-api
   cancel-in-progress: false
 
 permissions:
@@ -63,15 +61,19 @@ jobs:
     name: Build & Deploy API (Azure Function App)
     runs-on: ubuntu-latest
     # Subscription, resource group and the two Azure ids all come from this
-    # environment — nothing about dev is hardcoded here any more.
+    # environment — only the app names below are pinned in the file.
+    #
+    # STAGING IS SPELLED `-test` IN AZURE: `demi-api-test` and `demi-frontend-test`
+    # in `c4b0a8-test-rg`, subscription `c4b0a8-test`. The environment model is
+    # dev = sandbox (redeployable, not wired to CI), test = staging, prod = prod.
     #
     # Declaring an environment CHANGES THE OIDC SUBJECT CLAIM. It becomes
-    # `repo:digitalspace/eagle-demi:environment:dev` instead of
-    # `...:ref:refs/heads/main`, so the `gh-main` federated credential on
-    # demi-cicd-dev no longer matches on its own. A second credential, `gh-env-dev`,
-    # carries the environment subject. Remove the environment and Azure Login fails
-    # with AADSTS700213; rename it and it fails the same way.
-    environment: dev
+    # `repo:digitalspace/eagle-demi:environment:test` instead of
+    # `...:ref:refs/heads/main`, so only the `gh-env-test` federated credential on
+    # demi-cicd-test matches. Remove the environment and Azure Login fails with
+    # AADSTS700213; rename it and it fails the same way — create the credential for
+    # the new subject BEFORE renaming anything here.
+    environment: test
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -107,6 +109,8 @@ jobs:
       # terminal state (4 = success, 3 = failed), and then probes /api/search/summary for a 401 to
       # prove the NEW build is the one answering. A plain `run:` step for the reason above.
       - name: Deploy API
+        env:
+          API_APP_NAME: demi-api-test
         run: ./scripts/deploy-azure.sh api ${{ vars.AZURE_RESOURCE_GROUP }}
 
       - name: Report API Failure to Job Summary
