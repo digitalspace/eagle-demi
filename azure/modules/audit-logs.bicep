@@ -47,12 +47,16 @@ var auditTableName = 'DemiAudit_CL'
 var eventsTableName = 'DemiEvents_CL'
 var summaryTableName = 'DemiEventsHourly_CL'
 
-// Retention. 2555 days is seven years, the horizon audit records are kept against; the first 730
+// Retention. 2556 days is seven years, the horizon audit records are kept against; the first 730
 // (the platform maximum for interactive retention) stay queryable, the rest sit in long-term
 // retention and come back through a search job. 400 days on events is thirteen months — enough to
 // compare a month against the same month last year, and no longer.
+//
+// 2556 and NOT 2555, which is what 7 x 365 gives and what the API rejects: past two years, total
+// retention must be a whole number of years drawn from a fixed list — 1095, 1460, 1826, 2191, 2556,
+// 2922, 3288, 3653, 4018, 4383. Anything else fails the deployment with InvalidParameter.
 var auditInteractiveDays = 730
-var auditTotalDays = 2555
+var auditTotalDays = 2556
 var eventsTotalDays = 400
 
 // Column sets are declared once and used twice: once as the table schema, once as the DCR stream
