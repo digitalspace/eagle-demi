@@ -31,8 +31,12 @@ module.exports = (req, res, next) => {
       ? ` key=${req.user.keyId}`
       : (req.user && req.user.azp ? ` client=${req.user.azp}` : '');
 
-    const message = `${method} ${originalUrl} ${statusCode} - ${contentLength} B - ${timeMs}ms ` +
-      `(IP: ${ip}, as: ${principal}${credential})`;
+    // `%` is escaped to `%25` because winston scans the message for printf tokens (/%[scdjifoO%]/)
+    // and, when it finds one, treats the meta object below as splat arguments instead of merging it
+    // into the record — so `GET /api/search?q=50%off` would silently log with NO structured fields.
+    // The URL is caller-supplied, which makes that an audit hole a caller can trigger on purpose.
+    const message = (`${method} ${originalUrl} ${statusCode} - ${contentLength} B - ${timeMs}ms ` +
+      `(IP: ${ip}, as: ${principal}${credential})`).replace(/%/g, '%25');
 
     // Structured fields alongside the human-readable line. The winston OpenTelemetry
     // instrumentation copies everything except `message` and `level` into log attributes, which
