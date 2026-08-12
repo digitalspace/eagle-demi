@@ -53,8 +53,11 @@ param minioBucketName string = 'eagle-demi'
 @description('Key prefix namespacing this environment inside the bucket.')
 param minioKeyPrefix string = ''
 
-@description('Monthly Budget Limit in CAD — the subscription\'s billing currency. See cost-budget.bicep.')
-param budgetAmount int = 100
+@description('Monthly anomaly guard in CAD — the subscription\'s billing currency. Roughly 3x the measured run rate (18.71 CAD over 12 days of August 2026). The absolute annual ceiling is a separate parameter; see cost-budget.bicep for why one number cannot be both.')
+param budgetAmount int = 150
+
+@description('Absolute annual ceiling in CAD. Not a target — see cost-budget.bicep.')
+param annualCeiling int = 50000
 
 @description('Notification Email Addresses for Cost Alerts')
 param contactEmails array = [
@@ -251,6 +254,7 @@ module costBudget './modules/cost-budget.bicep' = {
   params: {
     environmentName: environmentName
     budgetAmount: budgetAmount
+    annualCeiling: annualCeiling
     contactEmails: contactEmails
   }
 }
