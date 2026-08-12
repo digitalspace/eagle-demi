@@ -39,7 +39,7 @@ exports.getProjects = async (req, res) => {
     // Continuation token is returned in a header so the body stays a plain array — the
     // frontend consumes it as one today and paging is opt-in.
     if (continuationToken) res.setHeader('x-continuation-token', continuationToken);
-    return res.json(items);
+    return res.json(items.map(projects.publicView));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -55,7 +55,7 @@ exports.getProject = async (req, res) => {
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    return res.json(project);
+    return res.json(projects.publicView(project));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -87,12 +87,11 @@ exports.createProject = async (req, res) => {
       centroid,
       read,
       isPublished: published,
-      sources: { track: {}, eagle: null },
       createdAt: now,
       updatedAt: now
     });
 
-    return res.status(201).json(saved);
+    return res.status(201).json(projects.publicView(saved));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -174,7 +173,9 @@ exports.updateProject = async (req, res) => {
       }
     }
 
-    return res.json(saved);
+    // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
+    // narrowed.
+    return res.json(projects.publicView(saved));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -196,7 +197,11 @@ exports.deleteProject = async (req, res) => {
     const removedFromSearch =
       await aiSearch.deleteFromIndex(aiSearch.indexes().projects, existing.id);
 
-    return res.json({ message: 'Project deleted successfully', deleted: existing, removedFromSearch });
+    return res.json({
+      message: 'Project deleted successfully',
+      deleted: projects.publicView(existing),
+      removedFromSearch
+    });
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }

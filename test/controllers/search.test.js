@@ -26,7 +26,14 @@ test('Search Controller Tests', async (t) => {
         status: 'Completed',
         centroid: { type: 'Point', coordinates: [-120.37, 50.62] },
         read: ['public'],
-        isPublished: true
+        isPublished: true,
+        // The stored shape. Only `wildfire` — DEMI's own aggregate, which the map explorer
+        // renders — may reach a caller; the raw upstream payloads are traceability.
+        sources: {
+          track: { proponent_name: 'KGHM' },
+          eagle: { projectLeadEmail: 'lead@gov.bc.ca' },
+          wildfire: { count: 2, activeNearby: true }
+        }
       }
     ];
 
@@ -61,6 +68,11 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(jsonResponse[0].searchResults[0].name, 'Ajax Mine');
     assert.strictEqual(jsonResponse[0].searchResults[0].sector, 'Mining');
     assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
+
+    const { sources } = jsonResponse[0].searchResults[0];
+    assert.strictEqual(sources.track, undefined, 'raw Track payload withheld');
+    assert.strictEqual(sources.eagle, undefined, 'raw Eagle payload withheld');
+    assert.strictEqual(sources.wildfire.count, 2, 'wildfire aggregate survives for the map');
   });
 
   await t.test('search projects queries AI Search when keywords are provided', async () => {
