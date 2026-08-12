@@ -506,7 +506,30 @@ test('restricted document text does not leak through Deep Search', async (t) => 
       !JSON.stringify(body).includes('SECRET-CANARY'),
       'the withheld chunk\'s extracted text must not reach the caller in any field'
     );
-    assert.strictEqual(body[0].count, 1, 'the count reports what was returned, not the index total');
+    assert.strictEqual(body[0].count, 1, 'the count is reported net of what was withheld');
+  });
+
+  await t.test('the count is the index total MINUS what was withheld, not the page size', async () => {
+    // The distinguishing case: a large corpus, one withheld hit on this page. Reporting the page
+    // length here would tell the frontend the whole corpus holds 1 match and collapse its paging.
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      items: [
+        { chunkId: 'a::p0::c0', documentId: 'visible-doc', projectId: 'p1', snippet: 'text', read: ['public'] },
+        { chunkId: 'b::p0::c0', documentId: 'restricted-doc', projectId: 'p1', snippet: 'nope', read: ['public'] }
+      ],
+      count: 500
+    }));
+    t.mock.method(documentsRepo, 'listByIds', async () => [{ id: 'visible-doc', displayName: 'Doc' }]);
+    t.mock.method(projectsRepo, 'listByIds', async () => [{ id: 'p1', name: 'P' }]);
+
+    let body;
+    const res = { json: (d) => { body = d; return res; }, status: () => res };
+    await searchController.search({
+      query: { dataset: 'DocumentChunk', keywords: 'x' }, header: () => null
+    }, res);
+
+    assert.strictEqual(body[0].searchResults.length, 1);
+    assert.strictEqual(body[0].count, 499);
   });
 
   await t.test('nothing is dropped when every parent is visible', async () => {

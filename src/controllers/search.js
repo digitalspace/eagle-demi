@@ -347,13 +347,15 @@ exports.search = async (req, res) => {
         // success path — the empty returns above omit it, because absent means "not measured"
         // while a 0 would be a claim about the index.
         //
-        // Reported post-filter when anything was withheld. The index-wide figure would tell an
-        // anonymous caller that more matches exist than they were shown, which is a small
-        // disclosure about content they may not see.
+        // Reported net of what this page withheld. The index-wide figure would tell an anonymous
+        // caller that more matches exist than they were shown, which is a small disclosure about
+        // content they may not see — but reporting the PAGE length as the total is worse: `count`
+        // is the whole-corpus figure the frontend shows as "N results" and pages against, so a
+        // single withheld chunk would collapse it to at most `resultPageSize`.
         const withheld = items.length - visible.length;
         return res.json([{
           searchResults: mappedChunks,
-          count: withheld > 0 ? mappedChunks.length : count
+          count: withheld > 0 ? Math.max(count - withheld, mappedChunks.length) : count
         }]);
       } catch (err) {
         // A bounded failure still has to be legible: an empty result caused by a fault is NOT the
