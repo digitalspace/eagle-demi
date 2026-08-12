@@ -31,15 +31,42 @@ module.exports = (req, res, next) => {
       ? ` key=${req.user.keyId}`
       : (req.user && req.user.azp ? ` client=${req.user.azp}` : '');
 
-    const message = `${method} ${originalUrl} ${statusCode} - ${contentLength} B - ${timeMs}ms ` +
-      `(IP: ${ip}, as: ${principal}${credential})`;
+    // `%` is escaped to `%25` because winston scans the message for printf tokens (/%[scdjifoO%]/)
+    // and, when it finds one, treats the meta object below as splat arguments instead of merging it
+    // into the record — so `GET /api/search?q=50%off` would silently log with NO structured fields.
+    // The URL is caller-supplied, which makes that an audit hole a caller can trigger on purpose.
+    const message = (`${method} ${originalUrl} ${statusCode} - ${contentLength} B - ${timeMs}ms ` +
+      `(IP: ${ip}, as: ${principal}${credential})`).replace(/%/g, '%25');
 
+    // Structured fields alongside the human-readable line. The winston OpenTelemetry
+    // instrumentation copies everything except `message` and `level` into log attributes, which
+    // surface as `AppTraces.Properties` — so these become queryable columns in KQL rather than
+    // something a dashboard has to parse back out of a formatted string.
+    //
+    // `path` is deliberately the URL WITHOUT its query string: grouping on the full URL scatters
+    // every search across as many buckets as there were search terms, which makes the one query
+    // anybody actually wants — requests per route — impossible to write.
+    const meta = {
+      evt: 'request',
+      method,
+      path: String(originalUrl).split('?')[0],
+      status: statusCode,
+      durationMs: Number(timeMs),
+      bytes: Number(contentLength),
+      ip,
+      principal
+    };
+    if (req.user && req.user.keyId) meta.keyId = req.user.keyId;
+    if (req.user && req.user.azp) meta.client = req.user.azp;
+
+    // `evt` is set on every branch, so failed requests land in the same panel as successful ones.
+    // A usage report that silently dropped failures would overstate how well the API is working.
     if (statusCode >= 500) {
-      logger.error(message);
+      logger.error(message, meta);
     } else if (statusCode >= 400) {
-      logger.warn(message);
+      logger.warn(message, meta);
     } else {
-      logger.info(message);
+      logger.info(message, meta);
     }
   });
 
