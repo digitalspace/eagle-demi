@@ -11,7 +11,8 @@
     "applicationInsights": {
       "samplingSettings": {
         "isEnabled": true,
-        "excludedTypes": "Request"
+        "_comment": "Exception and Trace are excluded because that is where the evidence lives: every winston error, every stack trace, and the '[Audit] dropped' line that is the only record of audit rows that failed to reach Azure Monitor. Adaptive sampling engages only above its threshold, so leaving them in looks harmless right up to the moment load makes them matter. Requests and dependencies remain sampleable - losing one of thousands of identical 200s costs nothing.",
+        "excludedTypes": "Request;Exception;Trace"
       }
     }
   },

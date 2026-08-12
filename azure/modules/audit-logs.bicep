@@ -36,10 +36,8 @@ param apiPrincipalId string
 @description('Resource ID of the APPLICATION logs workspace (observability.bicep). The audit writer reports its own failures to the app logger, so the alert below queries that workspace, not this one.')
 param appLogsWorkspaceId string = ''
 
-@description('Who to tell when the audit pipeline starts dropping rows.')
-param contactEmails array = [
-  'Daniel.T.Truong@gov.bc.ca'
-]
+@description('Action group to notify when the audit pipeline drops rows. Owned by observability.bicep, which main.bicep deploys first — one group for both alerts, and the only dependency direction that does not create a module cycle. Empty skips the alert.')
+param alertActionGroupId string = ''
 
 var workspaceName = 'demi-audit-${environmentName}'
 var dcrName = 'demi-audit-dcr-${environmentName}'
@@ -287,23 +285,7 @@ resource eventsRollup 'Microsoft.OperationalInsights/workspaces/summaryLogs@2025
 // KNOWN CEILING: the fallback lands in the capped workspace, so a sustained outage can dump enough
 // payload to hit `dailyQuotaGb` and lose the tail of the very rows it was preserving. Bounded
 // recovery beats none, and the alert is what makes the window short.
-resource alertGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
-  name: 'demi-audit-alerts-${environmentName}'
-  location: 'global'
-  tags: tags
-  properties: {
-    // Max 12 characters, and it is what shows up as the SMS/email sender label.
-    groupShortName: 'demiaudit'
-    enabled: true
-    emailReceivers: [for (email, i) in contactEmails: {
-      name: 'email${i}'
-      emailAddress: email
-      useCommonAlertSchema: true
-    }]
-  }
-}
-
-resource auditDropAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(appLogsWorkspaceId)) {
+resource auditDropAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(appLogsWorkspaceId) && !empty(alertActionGroupId)) {
   name: 'demi-audit-drop-${environmentName}'
   location: location
   tags: tags
@@ -335,7 +317,7 @@ resource auditDropAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if
     }
     autoMitigate: true
     actions: {
-      actionGroups: [ alertGroup.id ]
+      actionGroups: [ alertActionGroupId ]
     }
   }
 }

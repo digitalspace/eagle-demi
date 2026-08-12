@@ -165,6 +165,8 @@ module observability './modules/observability.bicep' = {
     location: location
     environmentName: environmentName
     tags: defaultTags
+    // Same list the budget alerts use — one place to change who gets told.
+    contactEmails: contactEmails
   }
 }
 
@@ -181,7 +183,8 @@ module auditLogs './modules/audit-logs.bicep' = {
     // The audit writer reports its own failures to the APPLICATION logger, so the alert that
     // catches a dropped batch has to query that workspace rather than the audit one.
     appLogsWorkspaceId: observability.outputs.workspaceId
-    contactEmails: contactEmails
+    // One action group for both alerts, owned by observability because it deploys first.
+    alertActionGroupId: observability.outputs.actionGroupId
   }
 }
 

@@ -149,6 +149,27 @@ async function handleExpress(request, context) {
   });
 }
 
+// Drain buffered audit events before the worker goes away.
+//
+// src/utils/audit.js buffers events and flushes on a 1-second timer, which is correct for the
+// long-lived Express process it was written against (`yarn start`) and wrong here: the Functions
+// host owns this worker's lifecycle and recycles it on deploy, config change, scale and idle. Work
+// deferred past a response is not guaranteed to run, and the flush timer is unref()'d, so it does
+// not hold the process open either. Measured on the first staging deploy: events buffered at
+// 21:50 were lost to the restart at 21:52.
+//
+// appTerminate covers graceful shutdown — deploys, restarts, scale-in, which is every recycle we
+// have actually observed. Microsoft is explicit that it does not run on a forced kill and that
+// handlers get a limited grace period, so this shortens the loss window rather than closing it.
+// The remaining exposure is one flush interval, which is the ceiling already documented in audit.js.
+//
+// Registered here rather than in audit.js because this file is the only Azure-specific entry point:
+// `yarn start` and the test suite import audit.js too, and neither has a Functions host to hook.
+app.hook.appTerminate(async () => {
+  const { flush } = require('../src/utils/audit');
+  await flush();
+});
+
 app.http('expressApi', {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'],
   authLevel: 'anonymous',
