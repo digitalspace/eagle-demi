@@ -88,8 +88,7 @@ async function getDbStats(req, res) {
     const [projects, documents, boundaries] = await Promise.all([
       projectsRepo.countVisible(access),
       documentsRepo.countVisible(access),
-      // No access argument — the boundaries container carries no read[] at all.
-      boundariesRepo.count()
+      boundariesRepo.countVisible(access)
     ]);
 
     const indexProgress = await getIndexProgress();

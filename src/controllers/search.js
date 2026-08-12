@@ -301,7 +301,23 @@ exports.search = async (req, res) => {
         const docById = new Map(parentDocs.map(d => [String(d.id), d]));
         const projById = new Map(parentProjects.map(p => [String(p.id), p]));
 
-        const mappedChunks = items.map(chunk => {
+        // THE GATE, not a label lookup. A chunk is a fragment of its document: a caller who cannot
+        // see the document cannot see its text. `listByIds` above is ACL-enforcing and unbounded
+        // (`fetchAll`, no maxItemCount), so a miss means DENIED, not truncated.
+        //
+        // This is a backstop as well as a fix. The chunk's own `read[]` is a snapshot taken at
+        // ingest, so it can lag its document; deriving visibility from the parent means a stale
+        // chunk ACL cannot leak text on its own. Before this, a chunk whose parent was withheld was
+        // still returned — with its `snippet`, which is the real extracted text — and labelled
+        // 'Untitled Document'.
+        const visible = items.filter(chunk => docById.has(String(chunk.documentId)));
+        if (visible.length !== items.length) {
+          logger.warn('[search] withheld chunks whose parent document is not visible', {
+            withheld: items.length - visible.length, returned: visible.length
+          });
+        }
+
+        const mappedChunks = visible.map(chunk => {
           const parent = docById.get(String(chunk.documentId));
           const project = projById.get(String(chunk.projectId));
           return {
@@ -330,7 +346,17 @@ exports.search = async (req, res) => {
         // about whether the PT5M indexer has pulled anything. Added deliberately only to the
         // success path — the empty returns above omit it, because absent means "not measured"
         // while a 0 would be a claim about the index.
-        return res.json([{ searchResults: mappedChunks, count }]);
+        //
+        // Reported net of what this page withheld. The index-wide figure would tell an anonymous
+        // caller that more matches exist than they were shown, which is a small disclosure about
+        // content they may not see — but reporting the PAGE length as the total is worse: `count`
+        // is the whole-corpus figure the frontend shows as "N results" and pages against, so a
+        // single withheld chunk would collapse it to at most `resultPageSize`.
+        const withheld = items.length - visible.length;
+        return res.json([{
+          searchResults: mappedChunks,
+          count: withheld > 0 ? Math.max(count - withheld, mappedChunks.length) : count
+        }]);
       } catch (err) {
         // A bounded failure still has to be legible: an empty result caused by a fault is NOT the
         // same fact as "nothing matched". 200 rather than 5xx because the frontend retries 5xx

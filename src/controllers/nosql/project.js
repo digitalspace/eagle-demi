@@ -11,8 +11,11 @@
  */
 
 const projects = require('../../repositories/projects');
-const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+const documents = require('../../repositories/documents');
+const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
+const { logger } = require('../../utils/logger');
 
 exports.getProjects = async (req, res) => {
   try {
@@ -27,7 +30,9 @@ exports.getProjects = async (req, res) => {
       regionalDistrict,
       municipality,
       electoralDistrict,
-      pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 5000),
+      // 1000 is the real ceiling — pageOptions clamps to it, so a larger number here
+      // only looked like it did something.
+      pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 1000),
       continuationToken: req.query.continuationToken
     });
 
@@ -36,7 +41,7 @@ exports.getProjects = async (req, res) => {
     if (continuationToken) res.setHeader('x-continuation-token', continuationToken);
     return res.json(items);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'project controller failed');
   }
 };
 
@@ -52,7 +57,7 @@ exports.getProject = async (req, res) => {
     }
     return res.json(project);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'project controller failed');
   }
 };
 
@@ -89,7 +94,7 @@ exports.createProject = async (req, res) => {
 
     return res.status(201).json(saved);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'project controller failed');
   }
 };
 
@@ -103,19 +108,75 @@ exports.updateProject = async (req, res) => {
 
     // The partition key is the id, so it must not be reassigned by a request body — in Cosmos
     // that is a delete-and-reinsert, not an update.
-    const { id: _ignoredId, trackProjectId: _ignoredTrackId, ...changes } = req.body;
+    //
+    // `read` is derived from `isPublished` rather than taken verbatim, so the two cannot disagree:
+    // read[] is authoritative and isPublished mirrors it. Spreading the body straight in let a
+    // writer hand-craft an ACL that no gate had ever seen.
+    const {
+      id: _ignoredId, trackProjectId: _ignoredTrackId,
+      read: _ignoredRead, isPublished,
+      ...changes
+    } = req.body;
+
+    const acl = isPublished === undefined
+      ? { read: existing.read, isPublished: existing.isPublished }
+      : {
+        isPublished: isPublished === true,
+        read: isPublished === true ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]
+      };
 
     const saved = await projects.upsert({
       ...existing,
       ...changes,
+      ...acl,
       id: existing.id,
       trackProjectId: existing.trackProjectId,
       updatedAt: new Date().toISOString()
     });
 
+    // A document must never out-rank its project. The 409 on PUT /documents/:id/published enforces
+    // that upwards; this is the same invariant downwards, which nothing enforced — unpublishing a
+    // project left every document under it carrying `public`, and `listVisible` gates on the
+    // document's own ACL, so they stayed listable and searchable under a project nobody could see.
+    //
+    // Only on the TRANSITION to private, and only downwards: publishing a project must not publish
+    // its documents, whose own state is independent and legitimately narrower.
+    //
+    // systemAccess() deliberately — a document already private must be patched too, and the caller
+    // cannot read it. AFTER the project write, matching setDocumentPublished: a failure here leaves
+    // the project private and its documents over-permissive, which is the direction the reader
+    // gates cover.
+    //
+    // ponytail: documents only, not their chunks. A chunk is gated on its PARENT DOCUMENT's
+    // visibility in the chunk-search join, so a stale chunk ACL cannot leak text on its own, and
+    // fanning out one bulk call per document turns this into an unbounded request handler. If
+    // chunk ACLs ever have to stand alone, move the whole cascade to a job and patch chunks there.
+    if (acl.isPublished === false && existing.isPublished !== false) {
+      try {
+        const cascade = await documents.setAclForProject(systemAccess(), existing.id, acl.read);
+        if (cascade.failed > 0) {
+          logger.error('[Project Controller] document ACL cascade partially failed', {
+            projectId: existing.id, ...cascade, ids: undefined
+          });
+          return res.status(500).json({
+            success: false,
+            error: 'Project was unpublished, but its documents were not fully restricted.'
+          });
+        }
+      } catch (cascadeErr) {
+        logger.error('[Project Controller] document ACL cascade failed', {
+          projectId: existing.id, error: cascadeErr.message
+        });
+        return res.status(500).json({
+          success: false,
+          error: 'Project was unpublished, but its documents were not restricted.'
+        });
+      }
+    }
+
     return res.json(saved);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'project controller failed');
   }
 };
 
@@ -137,6 +198,6 @@ exports.deleteProject = async (req, res) => {
 
     return res.json({ message: 'Project deleted successfully', deleted: existing, removedFromSearch });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'project controller failed');
   }
 };

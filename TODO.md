@@ -24,11 +24,11 @@ Nothing here is a separate list to maintain — it says which gate each open ent
 
 | Gate | Open entries waiting on it |
 |---|---|
-| **Nothing — do it** | Rotate the MinIO key and OpenShift token at source (the repo side is already deleted) |
-| **A dev run + `az login`** | Minting the first real service key |
+| **Nothing — do it** | Rotate the MinIO key and OpenShift token at source (the repo side is already deleted); deploy the Bicep index changes (the boundary ACL needs no backfill — see the audit) |
+| **A dev run + `az login`** | Minting the first real service key — **and it is now the only way to test the ACL against anything**, because every row in dev is public; the NRPTI re-sync design |
 | **RG-scope rights nobody holds yet** | Observability / `APPLICATIONINSIGHTS_CONNECTION_STRING`; the first `main.bicep` deploy; removing role assignment `29745ac3`; Phase 3b blob storage |
 | **A human in a browser, staff login** | The `/summary` render; boundary rendering at three fidelities; server-side highlighting; the scoped access tier |
-| **A decision, not work** | Test/prod deploy path and the release model; app registration `acb4198f` |
+| **A decision, not work** | Test/prod deploy path and the release model; app registration `acb4198f`; whether `GET /projects` may narrow its payload; dropping the dead `logs`/`leases` containers |
 | **Deliberately not doing it** | `pageNumber` citations; result paging; the client-side highlighter; the intake-cleaner backfill; the OnPush conversion; natural-language labels; the tiled/OCR strata; the 402 monthly rollover; `content: retrievable` |
 
 **Before hardening, read this one first:** nothing DEMI logs is retained anywhere, so every "the
@@ -194,6 +194,261 @@ Two notes for whoever runs the next container deletion here:
   script that could have done it is what was deleted. Not worth writing code against a live database
   for a few hundred bytes of dead JSON.
 
+
+## API audit — 2026-08-07
+
+Cleanliness, search efficiency, scalability and security, plus a live anonymous probe of every read
+endpoint on dev. **The access model held.** 382 projects and 1,000 documents fetched with no
+credential returned **zero** rows failing the `read[]`-contains-`public` / `isPublished` test; all
+three search datasets likewise; every privileged endpoint and all 15 write routes answered 401. A
+nonsense keyword returned 0 hits on all three datasets, which is the discriminator that AI Search is
+actually serving rather than silently falling back to Cosmos.
+
+### Fixed
+
+- [x] **Boundaries can be restricted now.** This was the one container where a restriction was
+      *inexpressible*: no `read[]` on the items, no `access` argument on any repository function. A
+      staff-only shapefile would have been world-readable the moment it was inserted. Reads compose
+      `selectWhere`/`countWhere` and point reads gate on `canRead`, exactly like every other
+      repository; `transformBoundary` emits an explicit ACL, public by default, and preserves an
+      upstream `read[]` verbatim so a re-seed cannot republish a restricted shapefile.
+      **The near-miss worth keeping:** the 281 seeded rows carry neither `read[]` NOR `isPublished`,
+      so the ordinary unset-ACL arm (`no read[] AND isPublished = true`) is FALSE against every one
+      of them — `c.isPublished = true` on an undefined field is not true — and the first deploy
+      would have blanked the map for every anonymous caller, silently. `VISIBILITY.unsetIsPublic`
+      drops the isPublished half for this container only, so the change is order-independent and
+      needs no backfill before deploy. It cannot weaken the gate: a restricted boundary carries an
+      explicit `read[]`, so the first arm governs it.
+      **Project scope deliberately does NOT apply** — boundaries are geography, not project data, so
+      `visibilityFor` is called with a NULL partition field. Scoping them on a field the items do not
+      carry would match nothing and blank the map for every project-scoped caller.
+      `boundaries.js` is no longer in the coverage suite's allowlist.
+- [x] **`projectScope` was silently void on any privileged credential.** `resolveAccess` returned
+      `{tier: PRIVILEGED, projectScope: null}` *before* it ever read the scope, so a key minted as
+      `roles: ['staff'], projectScope: ['207']` read the **entire corpus** — the restriction its
+      issuer asked for did nothing and said nothing. Scope is resolved first now. Roles and scope are
+      orthogonal: privilege lifts the ROLE predicate, the project narrowing survives. Mirrored in
+      `access-odata.js`, which had the same short-circuit. `systemAccess()` is unaffected and there
+      is a test saying so, because it is constructed rather than derived from a request.
+      The test that pinned the old behaviour asserted *"privileged roles ignore scope entirely"* —
+      it was pinning the bug.
+- [x] **Unauthenticated 500s no longer echo the driver message.** A Cosmos SDK error carries the
+      account endpoint, database and container names; `GET /projects`, `/documents`, `/boundaries`
+      and the unauthenticated `/api/health/db` all returned it verbatim. `serverError()` logs the
+      detail and returns a fixed string.
+- [x] **`read[]` and `isPublished` are no longer settable from a PUT body.** Both handlers spread
+      `req.body` into the upsert, so a writer could hand-craft an ACL past `resolveDocumentAcl` and
+      past the 409 that stops a document being published under a private project. Documents keep the
+      ACL they had; projects derive it from `isPublished` so read[] and isPublished cannot disagree.
+- [x] **`documents.countVisible` fanned out across every partition** even when it held a
+      `projectId`, while the matching read did not. It takes the partition key now.
+- [x] **Missing index paths added**: `documents /id` and `boundaries /id` (the cross-partition
+      by-id fallback, which is the live path), `chunks /isPublished` (the ACL fallback arm, so every
+      non-privileged chunk read carried an unindexed term), plus `read[]`/`isPublished` on
+      boundaries.
+- [x] **The coverage allowlist asserts the router instead of citing it.** Its reasons cited
+      `routes/api.js:106` and `:115`; the NRPTI removal shifted every line and the suite kept passing
+      while the evidence silently stopped matching — exactly the rot its own `ponytail:` comment
+      predicted. `requireWritePrefixes` now parses the router and checks the middleware chain, and
+      asserts `GET /wildfires` still does not exist.
+- [x] Dead code deleted: `_sql.contains()`, `PARTITION_FANOUT_LIMIT`, `wildfires.count()`, and the
+      `pageSize` clamps to 5000 that `pageOptions` immediately re-clamped to 1000.
+
+### Not done, deliberately
+
+- [ ] **`GET /projects` ships 2.32 MB for 382 projects** — measured. `sources.*` is **65.8%** of it
+      (1.5 MB of raw upstream Track/Eagle payloads), against a frontend that reads only
+      `sources.wildfire`. The obvious fix is a projection, and it is NOT applied because **nothing in
+      this repo calls `GET /projects`** — the frontend goes through `/api/search?dataset=Project`.
+      That makes it a public API contract with no in-repo consumer to validate a narrowing against,
+      so the change belongs with a named consumer, not with an audit.
+      Near-miss worth recording: the same instinct applied to `GET /boundaries` nearly shipped a
+      regression. Defaulting geometry to opt-IN looks obviously right and is wrong — the frontend
+      sends `geometry=simplified` and the bbox path sends nothing at all, so both would have lost
+      their polygons silently. Geometry stays opt-OUT.
+- [ ] **Cosmos-fallback search pages truncate at 1000 with no continuation token**, so a client
+      cannot ask for more (`controllers/search.js`). Only reachable when AI Search faults.
+- [ ] **`logs` and `leases` containers are entirely dead** — the log transport and `GET /admin/logs`
+      were removed, and nothing reads leases. `leases` has no indexing policy at all, so Cosmos
+      indexes every path. Dropping them is a live-data decision, and removing them from the Bicep
+      would NOT drop them (ARM does not delete on template removal) — it would only create drift.
+- [ ] **`wildfires` indexing is pure write amplification**: a spatial index on `/location/*` and
+      three included paths serving no query at all — proximity is computed in JavaScript, never via
+      `ST_DISTANCE`. Same for the unused `projects` composite index and the `/trackProjectId`,
+      `/updatedAt`, `/fileExt`, `/displayName`, `/code` paths.
+- [ ] **Search fan-out is 7 AI Search calls + 3 cross-partition Cosmos queries per debounced
+      keystroke** (three datasets in parallel), on a single-worker B1. `/search/summary` is 12 round
+      trips worst case. Bounded and measured, not a bug — but it is the first thing to look at if
+      search latency becomes a complaint.
+- [ ] **The ACL array is returned to anonymous callers**, so the role taxonomy is public. Disclosure,
+      not bypass; it disappears with the projection above.
+
+### Azure AI Search — audited 2026-08-07
+
+Same four lenses as the API audit above. **The read path is sound**, and the honest caveat is
+bigger than any finding: see "the probe that cannot fail".
+
+**Verified correct:**
+
+- **All four `filterFor` call sites honour the `empty` flag** — the fail-open shape. `DocumentChunk`
+  short-circuits and issues no request; `Project` and `Document` fall through to Cosmos instead,
+  which is safe by a *different* mechanism: SQL has a `false` literal, so scoped-to-nothing is
+  expressible there. `/search/summary` short-circuits too.
+- **The document fan-out's second leg re-applies the caller's filter** —
+  `(${opts.filter}) and search.in(projectId, …)`. Visibility of a project never widens access to its
+  documents, it only decides which ids are worth asking about. When the project filter is `empty`,
+  leg two is skipped entirely rather than run unfiltered.
+- **No OData injection reachable from a caller.** Keywords go through `tokenize`, which strips
+  Lucene operator characters; role values come from a verified token and are quote-escaped by
+  doubling. Probed live with `') or read/any(r: r eq 'sysadmin`, `' or true or '`, `*` and an
+  `isPublished eq false` payload — every one returned 0 or public-only hits.
+- **A caller cannot name its own roles or scope.** `?roles=sysadmin`, `?access=privileged` and the
+  `x-roles` / `x-user-roles` / forged `authorization` headers all changed nothing.
+- **Chunk text never leaves the API.** `content` is absent from every hit; the response carries a
+  `snippet` built escape-first, mark-second.
+- **Service posture, verified live**: Basic, 1 replica / 1 partition, `disableLocalAuth: true`
+  (keyless, managed identity), `publicNetworkAccess: Disabled`.
+
+#### The probe that cannot fail
+
+**An anonymous caller sees 60,578 documents over 61 pages — the entire seeded corpus.** Every
+document in dev is public. So the search ACL currently withholds **nothing**, and *no live probe
+against this corpus can fail*: the earlier "zero non-public rows across every dataset" result proves
+the filter does not BREAK anything, not that it PROTECTS anything. This is the trap this repo keeps
+writing down, and it applies to the search audit as much as the API one.
+
+The only discriminating evidence is synthetic: the unit tests added alongside this entry, which
+assert a scoped-to-nothing caller issues no request on all three datasets, and that a scoped
+*privileged* caller's filter still carries `search.in(projectId, '207')` with the role clause
+lifted. Those fail if the gate regresses. A live probe would not.
+
+#### Findings
+
+- [x] **CORRECTION — this entry said the search lag was `PT5M`. For `demi-chunks` it was
+      UNBOUNDED, and it was a live access-control bug. Fixed 2026-08-07.** The `PT5M` figure holds
+      only for `demi-documents`, whose rows *are* rewritten by `documents.setPublished`. A chunk's
+      `read[]` is a snapshot copied from its document at ingest, and **nothing refreshed it** — the
+      only writes to the `chunks` container were ingest and delete. So unpublishing never advanced
+      those rows' `_ts`, the high-water-mark indexer never re-read them, and the index kept
+      `read: ['public']` for a restricted document **indefinitely**.
+      Two independent defects, either of which leaked on its own:
+      **(A)** no propagation — now `chunks.setAclForDocument` bulk-Patches every chunk of the
+      document on `PUT /documents/:id/published`, which advances `_ts` so the indexer picks it up and
+      the lag becomes the ordinary `PT5M`. Average document is ~19 chunks, so one request.
+      **(B)** the search controller hydrated parent documents under the caller's ACL and then used
+      the result **only as a label**, so a chunk whose parent was withheld came back anyway carrying
+      its `snippet` — the real extracted text, rendered by the frontend through `[innerHTML]` — and
+      labelled `'Untitled Document'`. It is now the gate: a chunk whose parent is not visible is
+      dropped, and the returned `count` is post-filter.
+      Latent rather than exploited only because every document in dev is public. Both fixes are
+      covered by tests **shown to fail when the fix is reverted**, which is the only discriminating
+      evidence available against an all-public corpus.
+- [ ] **`content` is `retrievable: true` on `demi-chunks`.** The only thing keeping whole chunk text
+      out of API responses is the explicit `select` list in `searchChunks` (pinned by a test).
+      Nothing reads `content` from the index — the summariser reads it from Cosmos, which is the
+      N+1 at `controllers/search.js`. `retrievable: false` would make the guarantee structural
+      rather than conventional. Not changed here because highlighting also reads that field and the
+      interaction cannot be tested from outside the VNet.
+- [ ] **Deletes are permanently the application's job.** `dataDeletionDetectionPolicy` is `null` on
+      all three datasources, so a removed row stays searchable until `deleteFromIndex` /
+      `deleteChunksForDocument` is called. Already wired into `deleteProject`/`deleteDocument`; the
+      obligation never goes away, and it is invisible in the indexer config.
+- [ ] **No index-level paging.** `$skip` is never sent and `top` is clamped to 250, so a result set
+      past the first page is unreachable rather than slow.
+- [ ] **The semantic 402 latch never resets.** `semanticExhausted` is process-wide with no month
+      rollover, so a single 402 degrades every later search in that worker to BM25 until it recycles.
+- [ ] **Boundaries have no search surface at all** — no index, no datasource, no indexer. The ACL
+      added to that container therefore has nothing to keep in sync, which is worth knowing before
+      anyone adds one: an indexed boundary would need `read[]` in the index and the same filter
+      treatment as documents, or the restriction would hold in the API and not in search.
+
+## The action list — 2026-08-07
+
+Everything the two audits left open, ordered by what it costs to get wrong rather than by effort.
+Each line says what to do, why it matters, and what would prove it worked. Items already fixed are
+in the audit sections above; this is only what is still outstanding.
+
+### 1. Do next — cheap, and something is wrong until they are done
+
+- [ ] **Deploy the Bicep index changes.** `documents /id`, `boundaries /id`, `chunks /isPublished`
+      and the boundary `read[]`/`isPublished` paths are declared but not live, so those predicates
+      are scanning today. **Proof:** `az cosmosdb sql container show` lists the new paths.
+      Note this is the FIRST `main.bicep` deploy anyone has run — it is gated on RG-scope rights,
+      so it is not as cheap as it reads.
+- [ ] **Mint the first real service key.** It is on the list twice over now: it is the only way to
+      exercise the ACL against anything, because **every row in dev is public**, so no live probe of
+      the read path can fail. **Proof:** a key with `roles:['staff'], projectScope:['<id>']` returns
+      only that project — the case that used to return the whole corpus.
+- [ ] **Rotate the MinIO key and OpenShift token at source.** The repo side is already deleted; the
+      credentials themselves are still live. Oldest open item in this file.
+
+### 1b. The project ceiling — next change, designed and decided
+
+- [ ] **Unpublishing a project cascades to nothing.** `resolveDocumentAcl` checks the parent when a
+      document is WRITTEN (`published = requested && parentIsPublic`) and nothing re-evaluates it, so
+      a project unpublished afterwards leaves its documents carrying `read: ['public']` — still
+      listable, still downloadable. No chunks needed to leak.
+      **Documents within a project carry independent visibility**, so a blanket cascade is wrong in
+      the other direction: it would make re-publishing a project blanket-publish every document
+      someone had deliberately restricted, unrecoverably.
+      **Decided approach — denormalise `projectIsPublished` onto documents**, the pattern the
+      workspace already uses on Typesense `document_chunks`. The project becomes a real ceiling and
+      no document's own `read[]` is ever touched: `visible = read[] matches AND (projectIsPublished
+      OR privileged)`. On a project publish change, bulk-Patch that ONE field across its documents —
+      single-partition on `/projectId`, ~80 requests for the largest project. Chunks need nothing,
+      because the search gate now derives them from the parent document.
+      Needs: the predicate option (alongside `unsetIsPublic`), `/projectIsPublished/?` in the Cosmos
+      index, the field on `demi-documents` + its datasource + `access-odata.js`, and a backfill of
+      ~60,578 rows.
+      **Ordering trap:** `c.projectIsPublished = true` against an undefined field is NOT true, so
+      shipping the predicate before the backfill makes every document vanish — the same shape that
+      nearly blanked the map with the boundary ACL. Backfill first, or ship
+      `(NOT IS_DEFINED(c.projectIsPublished) OR c.projectIsPublished = true)` and tighten after.
+
+### 2. Decisions, not work — nobody can proceed until someone chooses
+
+- [ ] **May `GET /projects` narrow its payload?** 2.32 MB for 382 projects, 65.8% of it raw upstream
+      `sources.*` that no in-repo caller reads. Nothing in this repo calls the endpoint at all, so
+      the question is entirely about external consumers. If there are none, this is a one-line
+      projection.
+- [ ] **Drop the dead `logs` and `leases` containers?** Nothing reads or writes either; `leases` has
+      no indexing policy so Cosmos indexes every path it is given. Removing them from the Bicep does
+      NOT delete them — that is a hand-run `az cosmosdb sql container delete`, and the template
+      change alone would only create drift.
+
+### 3. Hardening — real, none urgent
+
+- [ ] **`content: retrievable: false` on `demi-chunks`.** Today the only thing keeping whole chunk
+      text out of responses is an explicit `select` list. Nothing reads `content` from the index.
+      **Blocked on:** confirming highlighting still works, which cannot be tested from outside the
+      VNet. Do it with the first in-VNet session.
+- [ ] **Reset the semantic 402 latch at month rollover.** One 402 currently degrades every later
+      search in that worker to BM25 until it recycles.
+- [ ] **Return a continuation token on the Cosmos-fallback search paths**, or state the truncation.
+      A page silently stops at 1000 with no way to ask for more. Only reachable when AI Search
+      faults, which is why it is here and not above.
+- [ ] **Strip the index paths that serve no query**: the `wildfires` spatial index on `/location/*`
+      (proximity is computed in JavaScript, never `ST_DISTANCE`), the unused `projects` composite,
+      and `/trackProjectId`, `/updatedAt`, `/fileExt`, `/displayName`, `/code`. Pure write
+      amplification. Bundle with any other Bicep deploy rather than doing it for its own sake.
+
+### 4. Known ceilings — written down so they are not rediscovered
+
+- **Every row in dev is public.** 60,578 of 60,578 documents are visible anonymously, so the ACL
+  withholds nothing and no live probe can fail. Only synthetic tests discriminate. This is the
+  single most important caveat on both audits.
+- **Search fan-out**: up to 7 AI Search calls + 3 cross-partition Cosmos queries per debounced
+  keystroke; `/search/summary` is 12 round trips. Bounded and measured, on a single-worker B1.
+- **AI Search deletes are permanently the application's job** — `dataDeletionDetectionPolicy` is
+  null on all three datasources.
+- **Swagger documents 6 of 28 routes** and advertises an `ApiKeyAuth` scheme that is not enforced,
+  on an unauthenticated `/api-docs`. Misleading rather than dangerous; writing 22 stubs is not worth
+  it until something consumes the spec.
+- **Observability is still the ranked blocker.** Nothing DEMI logs is retained, so every "the reason
+  is logged" claim in this file means the App Service log stream — visible only to someone already
+  watching, and gone after.
+
+---
 
 ## Infrastructure
 

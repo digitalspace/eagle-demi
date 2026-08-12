@@ -396,3 +396,157 @@ test('Search Controller Tests', async (t) => {
     assert.ok(jsonResponse.error.includes('Invalid or unsupported dataset'));
   });
 });
+
+// The fail-open shape, dataset by dataset. `DocumentChunk` has been covered since the flag was
+// added; Project and Document had not, and they are the two that fall through to Cosmos rather
+// than short-circuiting — so "no AI Search request" is only half the assertion, the answer has to
+// be empty too.
+test('every dataset is fail-closed for a caller scoped to nothing', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const scopedToNothing = () => ({
+    user: { realm_access: { roles: ['public'] }, projectScope: [] },
+    header: () => null
+  });
+
+  await t.test('Project issues no AI Search request and lists nothing', async () => {
+    let searched = false;
+    t.mock.method(aiSearch, 'searchProjects', async () => { searched = true; return { items: [] }; });
+    // The Cosmos fallback must be ACL-gated too — scoped-to-nothing is SQL `false` there.
+    let seenAccess;
+    t.mock.method(projectsRepo, 'listVisible', async (access) => {
+      seenAccess = access;
+      return { items: [], continuationToken: undefined };
+    });
+
+    let body;
+    const res = { json: (d) => { body = d; return res; }, status: () => res };
+    await searchController.search(
+      { ...scopedToNothing(), query: { dataset: 'Project', keywords: 'river' } }, res);
+
+    assert.strictEqual(searched, false, 'a null filter is UNRESTRICTED — issue no request');
+    assert.deepStrictEqual(body[0].searchResults, []);
+    if (seenAccess) assert.deepStrictEqual(seenAccess.projectScope, []);
+  });
+
+  await t.test('Document issues no AI Search request and lists nothing', async () => {
+    let searched = false;
+    t.mock.method(aiSearch, 'searchDocuments', async () => { searched = true; return { items: [] }; });
+    t.mock.method(documentsRepo, 'listVisible', async () => ({ items: [], continuationToken: undefined }));
+
+    let body;
+    const res = { json: (d) => { body = d; return res; }, status: () => res };
+    await searchController.search(
+      { ...scopedToNothing(), query: { dataset: 'Document', keywords: 'river' } }, res);
+
+    assert.strictEqual(searched, false, 'a null filter is UNRESTRICTED — issue no request');
+    assert.deepStrictEqual(body[0].searchResults, []);
+  });
+});
+
+// A privileged credential carrying a project scope used to search the WHOLE index: filterFor
+// short-circuited on privilege before it read the scope. The filter it sends is the evidence.
+test('a scoped privileged caller searches only its own projects', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('the chunk filter carries the scope and drops the role clause', async () => {
+    let sent;
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => { sent = opts; return { items: [], count: 0 }; });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search({
+      query: { dataset: 'DocumentChunk', keywords: 'river' },
+      user: { realm_access: { roles: ['staff'] }, projectScope: ['207'] },
+      header: () => null
+    }, res);
+
+    assert.ok(sent, 'the request must still be issued — this caller can see something');
+    assert.match(sent.filter, /search\.in\(projectId, '207'/, 'the scope survives privilege');
+    assert.ok(!/read\/any/.test(sent.filter), 'privilege lifts the ROLE clause, not the scope');
+  });
+});
+
+// A chunk carries a SNAPSHOT of its document's ACL, taken at ingest. Two independent defects made
+// that snapshot leak extracted text: nothing refreshed it when the document was restricted, and the
+// search controller returned a chunk whose parent it had just been denied.
+test('restricted document text does not leak through Deep Search', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('a chunk whose parent is not visible is withheld, snippet and all', async () => {
+    // Two hits. The caller may see one parent; the other document has been restricted, but its
+    // chunks still carry the stale `read: ['public']` they were ingested with.
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      items: [
+        { chunkId: 'ok::p0::c0', documentId: 'visible-doc', projectId: 'p1', pageNumber: 0,
+          snippet: 'public text', read: ['public'] },
+        { chunkId: 'leak::p3::c1', documentId: 'restricted-doc', projectId: 'p1', pageNumber: 3,
+          snippet: 'SECRET-CANARY from a restricted document', read: ['public'] }
+      ],
+      count: 2
+    }));
+    // Only the visible document comes back — listByIds applies the ACL.
+    t.mock.method(documentsRepo, 'listByIds', async () => [
+      { id: 'visible-doc', displayName: 'Public Doc', type: 'PDF' }
+    ]);
+    t.mock.method(projectsRepo, 'listByIds', async () => [{ id: 'p1', name: 'Project One' }]);
+
+    let body;
+    const res = { json: (d) => { body = d; return res; }, status: () => res };
+    await searchController.search({
+      query: { dataset: 'DocumentChunk', keywords: 'canary' },
+      header: () => null
+    }, res);
+
+    const results = body[0].searchResults;
+    assert.strictEqual(results.length, 1, 'the chunk of an invisible document must be dropped');
+    assert.strictEqual(results[0].documentId, 'visible-doc');
+
+    // The real assertion: the text must not appear ANYWHERE in the payload.
+    assert.ok(
+      !JSON.stringify(body).includes('SECRET-CANARY'),
+      'the withheld chunk\'s extracted text must not reach the caller in any field'
+    );
+    assert.strictEqual(body[0].count, 1, 'the count is reported net of what was withheld');
+  });
+
+  await t.test('the count is the index total MINUS what was withheld, not the page size', async () => {
+    // The distinguishing case: a large corpus, one withheld hit on this page. Reporting the page
+    // length here would tell the frontend the whole corpus holds 1 match and collapse its paging.
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      items: [
+        { chunkId: 'a::p0::c0', documentId: 'visible-doc', projectId: 'p1', snippet: 'text', read: ['public'] },
+        { chunkId: 'b::p0::c0', documentId: 'restricted-doc', projectId: 'p1', snippet: 'nope', read: ['public'] }
+      ],
+      count: 500
+    }));
+    t.mock.method(documentsRepo, 'listByIds', async () => [{ id: 'visible-doc', displayName: 'Doc' }]);
+    t.mock.method(projectsRepo, 'listByIds', async () => [{ id: 'p1', name: 'P' }]);
+
+    let body;
+    const res = { json: (d) => { body = d; return res; }, status: () => res };
+    await searchController.search({
+      query: { dataset: 'DocumentChunk', keywords: 'x' }, header: () => null
+    }, res);
+
+    assert.strictEqual(body[0].searchResults.length, 1);
+    assert.strictEqual(body[0].count, 499);
+  });
+
+  await t.test('nothing is dropped when every parent is visible', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      items: [{ chunkId: 'a::p0::c0', documentId: 'd1', projectId: 'p1', snippet: 'text', read: ['public'] }],
+      count: 42
+    }));
+    t.mock.method(documentsRepo, 'listByIds', async () => [{ id: 'd1', displayName: 'Doc' }]);
+    t.mock.method(projectsRepo, 'listByIds', async () => [{ id: 'p1', name: 'P' }]);
+
+    let body;
+    const res = { json: (d) => { body = d; return res; }, status: () => res };
+    await searchController.search({
+      query: { dataset: 'DocumentChunk', keywords: 'x' }, header: () => null
+    }, res);
+
+    assert.strictEqual(body[0].searchResults.length, 1);
+    assert.strictEqual(body[0].count, 42, 'the index-wide total survives when nothing is withheld');
+  });
+});

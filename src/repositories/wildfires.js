@@ -24,18 +24,8 @@ async function upsert(wildfire) {
   return cosmos.upsert(CONTAINER, wildfire);
 }
 
-/** Fires currently loaded. Cheap — the feed holds hundreds of rows, not thousands. */
-async function count() {
-  const value = await cosmos.queryValue(CONTAINER, {
-    query: 'SELECT VALUE COUNT(1) FROM c',
-    parameters: []
-  });
-  return value || 0;
-}
-
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
-  upsert,
-  count
+  upsert
 };

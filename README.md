@@ -88,7 +88,9 @@ implementation:
 - `sysadmin` sees everything, including unpublished
 - a scoped caller sees items in its projects only, and a project outside scope is unreachable by id
   as well as by list
-- a fragment's parent project is visible while the fragment itself is absent and never fetched
+- a scoped caller that is ALSO privileged is narrowed by its scope — privilege lifts the role
+  predicate, never the project one
+- a staff-only boundary is withheld from anonymous and returned to staff
 - counts use the identical `WHERE` fragment as the read
 - zero rows come back without a `read[]`
 
@@ -222,6 +224,17 @@ A hidden record returns **404, not 403** — a 403 would confirm the id exists.
 Project scope is a second, orthogonal dimension: it arrives as Keycloak roles prefixed `project:`
 (`project:207`) and rides the partition key. `rolesFor()` strips `project:*` from the role list so a
 project id can never enter the `read[]` clause.
+
+Orthogonal means **both** apply. A privileged credential carrying a scope is privileged *within
+those projects*: `readClause` collapses to `true` for the role set while `scopeClause` still
+narrows. `resolveAccess` therefore resolves scope BEFORE the privilege check — reversing that order
+silently discarded the scope, so a key minted as `roles:['staff'], projectScope:['207']` read the
+whole corpus.
+
+A container with no project axis passes a **null** partition field, which makes `scopeClause`
+return `true`: boundaries are administrative geography, so the role ACL applies and the project
+narrowing does not. Scoping them on a `projectId` the items do not carry would match nothing and
+blank the map for every scoped caller.
 
 `systemAccess()` is the only context that reads past ACLs (chunk ingest, maintenance scripts). It
 takes no arguments, so it cannot be derived from a request, and it resolves *through* the same
