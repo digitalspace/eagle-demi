@@ -29,6 +29,7 @@ module.exports = [
       'node_modules/**',
       'dist/**',
       'frontend/**',
+      'azure/email/theme/**',
       'tmp/**',
       'public/**'
     ]
