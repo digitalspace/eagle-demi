@@ -137,6 +137,22 @@ const config = {
   summaryCostPerMTokIn:  parseFloat(process.env.SUMMARY_COST_PER_MTOK_IN  || '0.70'),
   summaryCostPerMTokOut: parseFloat(process.env.SUMMARY_COST_PER_MTOK_OUT || '2.70'),
 
+  // Audit and usage analytics — Azure Monitor Logs ingestion (see azure/modules/audit-logs.bicep).
+  //
+  // Keyless: the app publishes with its user-assigned identity, which holds Monitoring Metrics
+  // Publisher on the DCR and nothing else. There is no key here and none is wanted.
+  //
+  // Both empty is the local-development and test case, and the writer treats it as OFF rather than
+  // as an error — an audit call must never be the reason a request fails. Same shape as
+  // SEARCH_ENDPOINT: absent endpoint disables the feature instead of breaking the caller.
+  auditDcrEndpoint:    process.env.AUDIT_DCR_ENDPOINT || '',
+  auditDcrImmutableId: process.env.AUDIT_DCR_IMMUTABLE_ID || '',
+  // Flush triggers. Whichever fires first wins. 800 KB leaves headroom under the 1 MB per-call
+  // ingestion limit for the JSON envelope.
+  auditFlushMs:        parseInt(process.env.AUDIT_FLUSH_MS || '1000', 10),
+  auditMaxBatch:       parseInt(process.env.AUDIT_MAX_BATCH || '100', 10),
+  auditMaxBatchBytes:  parseInt(process.env.AUDIT_MAX_BATCH_BYTES || '800000', 10),
+
   // Keycloak & Token Authentication
   keycloakUrl:           process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',
@@ -144,7 +160,14 @@ const config = {
   keycloakEnabled:       process.env.KEYCLOAK_ENABLED !== 'false',
   // Tag baked into minted API keys so a dev key is visibly not a prod key. Cosmetic only —
   // nothing authorises on it.
-  environmentName:       process.env.ENVIRONMENT_NAME || 'dev',
+  // ENVIRONMENT, and only ENVIRONMENT: it is what api-web-app.bicep sets. This used to read
+  // ENVIRONMENT_NAME, which is set nowhere, so it silently resolved to 'dev' in every environment.
+  // Caught when the first staging analytics rollup came back stamped Env: dev. Not cosmetic — this
+  // value labels every audit row with the environment its action happened in, and tags minted API
+  // keys, whose stated purpose is making a dev key visibly not a prod key. Both were lying on test.
+  // ENVIRONMENT_NAME is gone rather than kept as a fallback: a dead name at the head of the chain
+  // reads as the primary and invites the same mistake again.
+  environmentName:       process.env.ENVIRONMENT || 'dev',
   // Keycloak clients (azp) permitted to act privileged. EMPTY = permissive, on purpose: the DEMI
   // frontend and eagle-admin staff users share this realm, so defaulting to ON would lock out real
   // users. Set it once every service account is registered. See helpers/auth.applyClientAllowlist.

@@ -16,6 +16,7 @@ const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/acc
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { logger } = require('../../utils/logger');
+const { auditEvent } = require('../../utils/audit');
 
 exports.getProjects = async (req, res) => {
   try {
@@ -95,6 +96,14 @@ exports.createProject = async (req, res) => {
       updatedAt: now
     });
 
+    auditEvent(req, {
+      action: 'project.create',
+      targetType: 'project',
+      targetId: saved.id,
+      projectId: saved.id,
+      detail: { name: saved.name, isPublished: saved.isPublished }
+    });
+
     return res.status(201).json(projects.publicView(saved));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
@@ -135,6 +144,26 @@ exports.updateProject = async (req, res) => {
       id: existing.id,
       trackProjectId: existing.trackProjectId,
       updatedAt: new Date().toISOString()
+    });
+
+    // Field NAMES, not values: an audit row records who changed what and when, and a full
+    // before/after of arbitrary request bodies would put project content into a table kept for
+    // seven years. `isPublished` is the exception — a visibility flip is the change most likely
+    // to be asked about later, so both sides of it are recorded.
+    //
+    // Before the cascade below, not after: the project write has already happened by here, and the
+    // cascade can return 500. A visibility flip that left documents over-permissive is the row
+    // someone will come looking for, so it must not be the one path that records nothing.
+    auditEvent(req, {
+      action: 'project.update',
+      targetType: 'project',
+      targetId: existing.id,
+      projectId: existing.id,
+      detail: {
+        fields: Object.keys(changes),
+        isPublishedFrom: existing.isPublished,
+        isPublishedTo: saved.isPublished
+      }
     });
 
     // A document must never out-rank its project. The 409 on PUT /documents/:id/published enforces
@@ -200,6 +229,14 @@ exports.deleteProject = async (req, res) => {
     // caller has already succeeded, so a failure here is reported, not thrown.
     const removedFromSearch =
       await aiSearch.deleteFromIndex(aiSearch.indexes().projects, existing.id);
+
+    auditEvent(req, {
+      action: 'project.delete',
+      targetType: 'project',
+      targetId: existing.id,
+      projectId: existing.id,
+      detail: { name: existing.name, removedFromSearch }
+    });
 
     return res.json({
       message: 'Project deleted successfully',

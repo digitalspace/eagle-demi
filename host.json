@@ -11,6 +11,7 @@
     "applicationInsights": {
       "samplingSettings": {
         "isEnabled": true,
+        "_comment": "DO NOT add Exception or Trace here to protect application logs - it does not do that. This section configures the ApplicationInsights provider inside the Functions HOST process. The app's winston output never takes that path: api/index.js starts the Azure Monitor OpenTelemetry distro inside the Node WORKER, which exports log records through its own exporter at samplingRatio 1.0, i.e. already unsampled. The worker-side knob is useAzureMonitor({ samplingRatio }), not this. Excluding Trace here only stops the host's own per-request lines being sampled, which removes the one backpressure valve on the telemetry class that scales with traffic - and hitting dailyQuotaGb stops collection entirely, which is strictly worse than sampling it.",
         "excludedTypes": "Request"
       }
     }

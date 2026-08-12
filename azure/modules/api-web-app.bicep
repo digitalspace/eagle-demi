@@ -78,6 +78,12 @@ param keycloakRealm string = 'eao-epic'
 @description('Application Insights connection string. Empty disables telemetry, which is the local-development case.')
 param appInsightsConnectionString string = ''
 
+@description('Logs Ingestion endpoint of the audit DCR. Empty disables audit and analytics emission — the local-development and test-suite case.')
+param auditDcrEndpoint string = ''
+
+@description('Immutable ID of the audit DCR. Both this and the endpoint are required before anything is sent.')
+param auditDcrImmutableId string = ''
+
 var apiAppName = 'demi-api-${environmentName}'
 var appServicePlanName = 'demi-plan-${environmentName}'
 var storageAccountName = take('demistg${environmentName}${uniqueString(resourceGroup().id)}', 24)
@@ -286,6 +292,19 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'FOUNDRY_DEPLOYMENT'
           value: foundryDeployment
+        }
+        // Audit and usage analytics. No key: the app publishes to the DCR with the same
+        // user-assigned identity, holding Monitoring Metrics Publisher and nothing else. Absent
+        // endpoint means events are dropped after a single warning rather than throwing — the
+        // same "empty disables" shape as SEARCH_ENDPOINT above, and what makes local development
+        // and the test suite work with no Azure at all.
+        {
+          name: 'AUDIT_DCR_ENDPOINT'
+          value: auditDcrEndpoint
+        }
+        {
+          name: 'AUDIT_DCR_IMMUTABLE_ID'
+          value: auditDcrImmutableId
         }
         // Keycloak / SSO — MUST be pinned per environment. Without these the API falls
         // back to src/config.js defaults, which point at the DEV realm, so a dev-realm

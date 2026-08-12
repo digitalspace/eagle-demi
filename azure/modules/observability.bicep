@@ -19,13 +19,19 @@ param environmentName string
 @description('Default resource tags')
 param tags object
 
+@description('Who to tell when ingestion approaches the daily cap. Also reused by audit-logs.bicep, which cannot own the action group itself: main.bicep deploys this module first, so a shared group has to live on this side of the dependency.')
+param contactEmails array = [
+  'Daniel.T.Truong@gov.bc.ca'
+]
+
 var isProd = environmentName == 'prod'
 var workspaceName = 'demi-logs-${environmentName}'
 var appInsightsName = 'demi-insights-${environmentName}'
 
 // Ingestion and retention are what Azure Monitor actually bills for, not query volume, so both
 // are capped rather than left at their defaults. `dailyQuotaGb` stops collection for the rest of
-// the UTC day once the cap is hit — a blunt backstop against a runaway log loop, not a tuning knob.
+// the day once the cap is hit — a blunt backstop against a runaway log loop, not a tuning knob.
+// The reset hour is the workspace's own, set when it was created, NOT midnight UTC.
 //
 // The numbers are sized against the consumption budget in cost-budget.bicep, which is scope-wide
 // and so already counts this workspace's spend: at roughly $2.76/GB, a sustained 1 GB/day would be
@@ -72,8 +78,77 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
+// The cap is a backstop with a nasty second effect: when `dailyQuotaGb` is reached, collection
+// stops for the rest of the day — and that silences the audit-drop alert in audit-logs.bicep
+// too, because that alert queries AppTraces in this workspace. A cap that disables the alarm is
+// worse than no cap, so the approach to it has to be visible BEFORE it lands.
+//
+// This matters more now that the adapter emits 'finish' and every request produces an access-log
+// line: log volume went from startup-and-errors to one line per request.
+var dailyQuotaMb = isProd ? 2048 : 512
+// 80%. Integer arithmetic on purpose — Bicep has no float literals, and a percentage does not
+// need one.
+var warnAtMb = dailyQuotaMb * 8 / 10
+
+resource alertGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
+  name: 'demi-alerts-${environmentName}'
+  location: 'global'
+  tags: tags
+  properties: {
+    // Max 12 characters; it is the sender label on the notification.
+    groupShortName: 'demialerts'
+    enabled: true
+    emailReceivers: [for (email, i) in contactEmails: {
+      name: 'email${i}'
+      emailAddress: email
+      useCommonAlertSchema: true
+    }]
+  }
+}
+
+resource quotaAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'demi-logs-quota-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI log ingestion approaching the daily cap'
+    description: 'Billable ingestion over the last 24h passed 80% of dailyQuotaGb. At 100% the workspace stops collecting until its next daily reset, which also takes the audit-drop alert down.'
+    severity: 2
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT1H'
+    // A rolling 24 hours, not the workspace's own quota day. The rule's window is the only
+    // time filter that applies — adding `startofday()` to the query would INTERSECT with the window
+    // rather than widen it, and a one-hour window would then measure one hour of ingest against a
+    // daily quota. Rolling is the honest approximation; it warns early rather than late.
+    windowSize: 'P1D'
+    criteria: {
+      allOf: [
+        {
+          query: 'Usage | where IsBillable | summarize IngestedMb = sum(Quantity) | where IngestedMb > ${warnAtMb}'
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
 @description('Connection string the apps use to reach Application Insights')
 output connectionString string = appInsights.properties.ConnectionString
+
+@description('Action group shared with audit-logs.bicep, which deploys after this module')
+output actionGroupId string = alertGroup.id
 
 @description('Resource ID of the Log Analytics workspace backing Application Insights')
 output workspaceId string = workspace.id

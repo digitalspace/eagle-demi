@@ -11,6 +11,7 @@ const documentsRepo = require('../repositories/documents');
 const projectsRepo = require('../repositories/projects');
 const chunksRepo = require('../repositories/chunks');
 const summarizer = require('../ai/summarize');
+const { analyticsEvent } = require('../utils/audit');
 const config = require('../config');
 
 /**
@@ -43,6 +44,30 @@ exports.search = async (req, res) => {
     const access = resolveAccess(req);
 
     const resultPageSize = Math.min(pageSize, 250);
+
+    // Usage analytics, recorded once by wrapping the response rather than at each exit — this
+    // handler has a dozen `return res.json(...)` points and a call at every one of them is a call
+    // that quietly stops happening the next time a branch is added. Only shapes that look like a
+    // search answer are counted, so an error payload is not recorded as a zero-result search:
+    // zero-result searches are the most useful thing in this table and must stay believable.
+    const sendJson = res.json.bind(res);
+    res.json = (payload) => {
+      const first = Array.isArray(payload) ? payload[0] : null;
+      // KNOWN LIMIT: this shape guard relocates the very problem the wrapper solves. A future
+      // branch that answers with something other than `[{ searchResults }]` stops being counted
+      // silently, exactly as a missed call site would. It is the lesser evil — an error payload
+      // counted as a zero-result search would corrupt the one number this table is for — but if
+      // the response shape ever varies, count on the way IN instead of on the way out.
+      if (first && Array.isArray(first.searchResults)) {
+        analyticsEvent(req, {
+          eventName: 'search',
+          searchTerm: keywords,
+          resultCount: Number.isFinite(first.count) ? first.count : first.searchResults.length,
+          detail: { dataset, fuzzy, pageSize }
+        });
+      }
+      return sendJson(payload);
+    };
 
     if (dataset === 'Project') {
       // Keywords go to AI Search; a bare list still comes from Cosmos below, because listing every

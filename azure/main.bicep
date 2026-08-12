@@ -53,8 +53,11 @@ param minioBucketName string = 'eagle-demi'
 @description('Key prefix namespacing this environment inside the bucket.')
 param minioKeyPrefix string = ''
 
-@description('Monthly Budget Limit in CAD — the subscription\'s billing currency. See cost-budget.bicep.')
-param budgetAmount int = 100
+@description('Monthly anomaly guard in CAD — the subscription\'s billing currency. Roughly 3x the measured run rate (18.71 CAD over 12 days of August 2026). The absolute annual ceiling is a separate parameter; see cost-budget.bicep for why one number cannot be both.')
+param budgetAmount int = 150
+
+@description('Absolute annual ceiling in CAD. Not a target — see cost-budget.bicep.')
+param annualCeiling int = 50000
 
 @description('Notification Email Addresses for Cost Alerts')
 param contactEmails array = [
@@ -165,6 +168,26 @@ module observability './modules/observability.bicep' = {
     location: location
     environmentName: environmentName
     tags: defaultTags
+    // Same list the budget alerts use — one place to change who gets told.
+    contactEmails: contactEmails
+  }
+}
+
+// 5b. Audit and usage-analytics store. A SECOND Log Analytics workspace, deliberately: the one
+// above is capped with `dailyQuotaGb` and stops collecting once the cap is hit, which is correct
+// for application logs and unacceptable for a compliance record. See modules/audit-logs.bicep.
+module auditLogs './modules/audit-logs.bicep' = {
+  name: 'deploy-audit-logs'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    apiPrincipalId: identity.outputs.principalId
+    // The audit writer reports its own failures to the APPLICATION logger, so the alert that
+    // catches a dropped batch has to query that workspace rather than the audit one.
+    appLogsWorkspaceId: observability.outputs.workspaceId
+    // One action group for both alerts, owned by observability because it deploys first.
+    alertActionGroupId: observability.outputs.actionGroupId
   }
 }
 
@@ -208,6 +231,8 @@ module apiWebApp './modules/api-web-app.bicep' = {
     summaryEnabled: summaryEnabled
     foundryEndpoint: foundry.outputs.foundryEndpoint
     foundryDeployment: foundry.outputs.deploymentName
+    auditDcrEndpoint: auditLogs.outputs.dcrEndpoint
+    auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
   }
 }
 
@@ -229,6 +254,7 @@ module costBudget './modules/cost-budget.bicep' = {
   params: {
     environmentName: environmentName
     budgetAmount: budgetAmount
+    annualCeiling: annualCeiling
     contactEmails: contactEmails
   }
 }
@@ -240,3 +266,7 @@ output searchEndpoint string = search.outputs.searchEndpoint
 output cosmosEndpoint string = cosmos.outputs.cosmosEndpoint
 output identityClientId string = identity.outputs.clientId
 output logAnalyticsWorkspaceName string = observability.outputs.workspaceName
+output auditWorkspaceName string = auditLogs.outputs.workspaceName
+// The query API addresses a workspace by this GUID, not by name or resource ID — so the future
+// audit read endpoint needs it, and it is otherwise a portal lookup.
+output auditWorkspaceCustomerId string = auditLogs.outputs.workspaceCustomerId
