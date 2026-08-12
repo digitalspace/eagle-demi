@@ -261,6 +261,16 @@ async function sendWithRetry(stream, batch) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await sendBatch(stream, batch);
+      // Success used to be silent, which made "delivered fine" and "this code never ran"
+      // indistinguishable from the outside — the exact ambiguity that cost an afternoon on the
+      // first staging deploy.
+      //
+      // DEBUG, not info, and the distinction is a cost one. This fires per batch per stream per
+      // flush: with a 1s interval that is a ≥2 lines/sec floor under sustained load, measured at up
+      // to ~50 MB/day, around 10% of the non-prod dailyQuotaGb — spent entirely on a message
+      // saying nothing went wrong. Failures still log at `error`, which is the line worth paying
+      // for. Raise LOG_LEVEL to debug when you need to prove delivery.
+      logger.debug(`[Audit] flushed ${batch.length} row(s) to ${stream}`);
       return;
     } catch (err) {
       if (attempt === 2) {

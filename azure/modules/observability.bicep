@@ -30,7 +30,8 @@ var appInsightsName = 'demi-insights-${environmentName}'
 
 // Ingestion and retention are what Azure Monitor actually bills for, not query volume, so both
 // are capped rather than left at their defaults. `dailyQuotaGb` stops collection for the rest of
-// the UTC day once the cap is hit — a blunt backstop against a runaway log loop, not a tuning knob.
+// the day once the cap is hit — a blunt backstop against a runaway log loop, not a tuning knob.
+// The reset hour is the workspace's own, set when it was created, NOT midnight UTC.
 //
 // The numbers are sized against the consumption budget in cost-budget.bicep, which is scope-wide
 // and so already counts this workspace's spend: at roughly $2.76/GB, a sustained 1 GB/day would be
@@ -78,7 +79,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 }
 
 // The cap is a backstop with a nasty second effect: when `dailyQuotaGb` is reached, collection
-// stops for the rest of the UTC day — and that silences the audit-drop alert in audit-logs.bicep
+// stops for the rest of the day — and that silences the audit-drop alert in audit-logs.bicep
 // too, because that alert queries AppTraces in this workspace. A cap that disables the alarm is
 // worse than no cap, so the approach to it has to be visible BEFORE it lands.
 //
@@ -112,12 +113,12 @@ resource quotaAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI log ingestion approaching the daily cap'
-    description: 'Billable ingestion over the last 24h passed 80% of dailyQuotaGb. At 100% the workspace stops collecting until the next UTC day, which also takes the audit-drop alert down.'
+    description: 'Billable ingestion over the last 24h passed 80% of dailyQuotaGb. At 100% the workspace stops collecting until its next daily reset, which also takes the audit-drop alert down.'
     severity: 2
     enabled: true
     scopes: [ workspace.id ]
     evaluationFrequency: 'PT1H'
-    // A rolling 24 hours, not the UTC day the cap actually resets on. The rule's window is the only
+    // A rolling 24 hours, not the workspace's own quota day. The rule's window is the only
     // time filter that applies — adding `startofday()` to the query would INTERSECT with the window
     // rather than widen it, and a one-hour window would then measure one hour of ingest against a
     // daily quota. Rolling is the honest approximation; it warns early rather than late.
