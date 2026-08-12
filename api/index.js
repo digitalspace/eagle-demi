@@ -120,10 +120,36 @@ async function handleExpress(request, context) {
         return true;
       };
 
+      // A real ServerResponse emits 'finish' when the response is fully written, and ignores a
+      // second end(). This object did neither: it resolved the host's promise and stopped. Anything
+      // waiting on 'finish' — middleware/http-logger.js does all of its work there — simply never
+      // ran in Azure, while working perfectly under `yarn start` on a genuine ServerResponse. The
+      // per-request access log, the only record of a caller's identity, IP and latency, has never
+      // existed in this environment.
+      //
+      // The emit happens BEFORE resolve so its listeners run while the worker is unambiguously
+      // alive: once the promise resolves, the Functions host is free to recycle, and work deferred
+      // past that point is not guaranteed to run.
+      let finished = false;
       res.end = (chunk) => {
         if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         res.headersSent = true;
         const responseBuffer = Buffer.concat(chunks);
+
+        // Guarded, because a double end() would double-count every request and quietly inflate
+        // every number built on these rows.
+        if (!finished) {
+          finished = true;
+          // A logging failure must never turn a served response into an error.
+          try {
+            res.emit('finish');
+          } catch (err) {
+            if (context && context.error) {
+              context.error('[expressApi] finish listener failed:', err);
+            }
+          }
+        }
+
         resolve({
           status: res.statusCode,
           headers: res.headers,
@@ -148,6 +174,11 @@ async function handleExpress(request, context) {
     })().catch(reject);
   });
 }
+
+// Exported for test/functions-adapter.test.js, which drives this the way the host does. The
+// adapter is the one piece of this app that only ever runs in Azure, so it is also the one piece
+// nothing else can exercise — hence a test that calls it directly.
+module.exports = { handleExpress };
 
 app.http('expressApi', {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'],
