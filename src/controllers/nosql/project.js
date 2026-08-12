@@ -11,9 +11,11 @@
  */
 
 const projects = require('../../repositories/projects');
-const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+const documents = require('../../repositories/documents');
+const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
+const { logger } = require('../../utils/logger');
 
 exports.getProjects = async (req, res) => {
   try {
@@ -131,6 +133,46 @@ exports.updateProject = async (req, res) => {
       trackProjectId: existing.trackProjectId,
       updatedAt: new Date().toISOString()
     });
+
+    // A document must never out-rank its project. The 409 on PUT /documents/:id/published enforces
+    // that upwards; this is the same invariant downwards, which nothing enforced — unpublishing a
+    // project left every document under it carrying `public`, and `listVisible` gates on the
+    // document's own ACL, so they stayed listable and searchable under a project nobody could see.
+    //
+    // Only on the TRANSITION to private, and only downwards: publishing a project must not publish
+    // its documents, whose own state is independent and legitimately narrower.
+    //
+    // systemAccess() deliberately — a document already private must be patched too, and the caller
+    // cannot read it. AFTER the project write, matching setDocumentPublished: a failure here leaves
+    // the project private and its documents over-permissive, which is the direction the reader
+    // gates cover.
+    //
+    // ponytail: documents only, not their chunks. A chunk is gated on its PARENT DOCUMENT's
+    // visibility in the chunk-search join, so a stale chunk ACL cannot leak text on its own, and
+    // fanning out one bulk call per document turns this into an unbounded request handler. If
+    // chunk ACLs ever have to stand alone, move the whole cascade to a job and patch chunks there.
+    if (acl.isPublished === false && existing.isPublished !== false) {
+      try {
+        const cascade = await documents.setAclForProject(systemAccess(), existing.id, acl.read);
+        if (cascade.failed > 0) {
+          logger.error('[Project Controller] document ACL cascade partially failed', {
+            projectId: existing.id, ...cascade, ids: undefined
+          });
+          return res.status(500).json({
+            success: false,
+            error: 'Project was unpublished, but its documents were not fully restricted.'
+          });
+        }
+      } catch (cascadeErr) {
+        logger.error('[Project Controller] document ACL cascade failed', {
+          projectId: existing.id, error: cascadeErr.message
+        });
+        return res.status(500).json({
+          success: false,
+          error: 'Project was unpublished, but its documents were not restricted.'
+        });
+      }
+    }
 
     return res.json(saved);
   } catch (err) {

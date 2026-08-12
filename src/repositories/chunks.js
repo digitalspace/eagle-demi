@@ -153,7 +153,16 @@ async function setAclForDocument(access, documentId, read) {
     operationType: 'Patch',
     partitionKey: pk,
     id: String(id),
-    resourceBody: { operations: [{ op: 'set', path: '/read', value: read }] }
+    resourceBody: {
+      operations: [
+        { op: 'set', path: '/read', value: read },
+        // `read[]` is authoritative and `isPublished` mirrors it, here as everywhere else. Nothing
+        // reads a chunk's isPublished while its read[] is non-empty — assertAcl guarantees that —
+        // but leaving the mirror stale is how the two come to disagree, and `/isPublished` is an
+        // indexed path on this container.
+        { op: 'set', path: '/isPublished', value: read.includes('public') }
+      ]
+    }
   })));
 
   return { ...result, chunks: ids.length };

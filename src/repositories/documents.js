@@ -126,6 +126,60 @@ async function listByIds(access, ids, projectIds) {
   return items;
 }
 
+/** Ids of every document in one project. Single-partition. */
+async function idsForProject(access, projectId) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [eq('projectId', String(projectId), '@projectId')],
+    select: 'VALUE c.id'
+  });
+  const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
+  return items;
+}
+
+/**
+ * Rewrite the ACL on every document of one project.
+ *
+ * A document must never out-rank its project. `PUT /documents/:id/published` enforces that on the
+ * way up — a 409 stops a document publishing under a private project — but nothing enforced it on
+ * the way down: unpublishing a project left every document under it carrying `public`, and
+ * `listVisible` filters on the document's own ACL, so they stayed listable and searchable.
+ *
+ * A bulk PATCH, not an upsert: an upsert would have to read every document back first. All of a
+ * project's documents share one partition, so this is normally a single request.
+ *
+ * @param {string[]} read  the project's new ACL
+ * @returns {Promise<object>} the bulk result, plus the `ids` it touched
+ */
+async function setAclForProject(access, projectId, read) {
+  if (!Array.isArray(read) || read.length === 0) {
+    throw new TypeError('[documents] setAclForProject requires a non-empty read[] ACL');
+  }
+
+  const ids = await idsForProject(access, projectId);
+  if (ids.length === 0) {
+    return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0, ids: [] };
+  }
+
+  const pk = String(projectId);
+  const updatedAt = new Date().toISOString();
+  const result = await cosmos.bulkVerified(CONTAINER, ids.map(id => ({
+    operationType: 'Patch',
+    partitionKey: pk,
+    id: String(id),
+    resourceBody: {
+      operations: [
+        { op: 'set', path: '/read', value: read },
+        { op: 'set', path: '/isPublished', value: read.includes('public') },
+        { op: 'set', path: '/updatedAt', value: updatedAt }
+      ]
+    }
+  })));
+
+  return { ...result, ids };
+}
+
 async function upsert(document) {
   return cosmos.upsert(CONTAINER, document);
 }
@@ -197,6 +251,8 @@ module.exports = {
   countVisible,
   getById,
   listByIds,
+  idsForProject,
+  setAclForProject,
   upsert,
   bulkUpsertForProject,
   patchExtraction,
