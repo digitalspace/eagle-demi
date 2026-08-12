@@ -146,7 +146,7 @@ test('access gate coverage', async (t) => {
       path.join(__dirname, '..', '..', 'src', 'routes', 'api.js'), 'utf8'
     );
 
-    const routes = [...router.matchAll(/router\.(get|post|put|delete)\(\s*'([^']+)'\s*,([^;]*?)\);/g)]
+    const routes = [...router.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']+)'\s*,([^;]*?)\);/g)]
       .map(m => ({ method: m[1], path: m[2], chain: m[3] }));
 
     assert.ok(routes.length >= 20, `expected the router, parsed ${routes.length} routes`);
