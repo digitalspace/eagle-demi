@@ -67,7 +67,11 @@ var auditColumns = [
   { name: 'EventId', type: 'string' }
   { name: 'Action', type: 'string' }
   { name: 'Outcome', type: 'string' }
+  // Both identifiers, deliberately. `sub` is stable across a rename and is what joins to Keycloak;
+  // ActorName is what a human reads without going and asking Keycloak who a UUID is. An audit trail
+  // that needs a second system online to answer "who did this" is worse than one that does not.
   { name: 'ActorId', type: 'string' }
+  { name: 'ActorName', type: 'string' }
   { name: 'ActorType', type: 'string' }
   { name: 'ActorRoles', type: 'string' }
   { name: 'SourceIp', type: 'string' }
@@ -79,12 +83,21 @@ var auditColumns = [
   { name: 'Detail', type: 'dynamic' }
 ]
 
-// No ActorId and no IP. `AnonId` is a salted hash the app computes with a salt that rotates every
-// 24 hours, so identity expires by construction rather than by anyone remembering to delete rows —
-// which matters because Auxiliary tables have no cheap targeted delete.
+// Anonymous ONLY for anonymous callers. No IP ever reaches this table, and for public traffic the
+// rotating `AnonId` hash is the only identifier there is — so that traffic stops being linkable
+// after 24 hours by construction, which is what lets a table with no cheap targeted delete keep
+// rows for 400 days.
+//
+// A SIGNED-IN caller is a different question and gets a different answer: staff activity is
+// attributable, because "which of our people searched for this" is precisely what an investigator
+// will ask, and a table that cannot answer it is not worth keeping. Those rows carry the Keycloak
+// identity in ActorId/ActorName; public rows leave them empty.
 var eventsColumns = [
   { name: 'TimeGenerated', type: 'datetime' }
   { name: 'EventName', type: 'string' }
+  { name: 'ActorId', type: 'string' }
+  { name: 'ActorName', type: 'string' }
+  { name: 'ActorType', type: 'string' }
   { name: 'AnonId', type: 'string' }
   { name: 'SessionId', type: 'string' }
   { name: 'ProjectId', type: 'string' }

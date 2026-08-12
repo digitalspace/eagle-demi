@@ -85,8 +85,7 @@ test('audit writer', async (t) => {
     assert.strictEqual(row.EventName, 'search');
     assert.strictEqual(row.ResultCount, 12);
     assert.ok(row.AnonId && row.AnonId.length === 32);
-    // The two fields that would make this table an identity store.
-    assert.strictEqual(row.ActorId, undefined);
+    // Never, for anyone: an IP here would survive the salt rotation that makes this table safe.
     assert.strictEqual(row.SourceIp, undefined);
     // Same caller, same day, same hash — otherwise distinct-user counts are meaningless.
     const first = row.AnonId;
@@ -100,6 +99,43 @@ test('audit writer', async (t) => {
       { eventName: 'search' });
     await audit.flush();
     assert.notStrictEqual(sent[0].rows[0].AnonId, first);
+  });
+
+  await t.test('anonymous callers stay anonymous, signed-in callers are traceable', async () => {
+    // The distinction the whole table design turns on. Public traffic must not be re-identifiable
+    // after the salt rotates; staff activity must be attributable, because "which of our people
+    // searched for this" is the question this data exists to answer.
+    audit.analyticsEvent({ headers: { 'user-agent': 'Mozilla/5.0' }, socket: {} }, { eventName: 'search' });
+    await audit.flush();
+    const anon = sent[0].rows[0];
+    assert.strictEqual(anon.ActorId, '', 'a public caller carries no identity');
+    assert.strictEqual(anon.ActorType, 'anonymous');
+    assert.ok(anon.AnonId, 'but is still countable');
+
+    sent = [];
+    audit.analyticsEvent(fakeReq(), { eventName: 'search' });
+    await audit.flush();
+    const known = sent[0].rows[0];
+    assert.strictEqual(known.ActorId, 'kc-sub-1', 'a signed-in caller is traceable to Keycloak');
+    assert.strictEqual(known.ActorName, 'someone@idir');
+    assert.strictEqual(known.ActorType, 'user');
+  });
+
+  await t.test('a shared credential is never recorded as a person', async () => {
+    // ADMIN_API_KEY carries no sub and no keyId. It used to fall through to 'user', so break-glass
+    // actions were attributed to a human who did not exist. A Keycloak human carries `azp`, so the
+    // old check misfiled them as a service too - wrong in both directions.
+    audit.auditEvent({ headers: {}, socket: {}, user: { preferred_username: 'internal-service', realm_access: { roles: ['sysadmin'] } } },
+      { action: 'project.delete', targetId: 'p1' });
+    await audit.flush();
+    assert.strictEqual(sent[0].rows[0].ActorType, 'break-glass');
+
+    sent = [];
+    audit.auditEvent({ headers: {}, socket: {}, user: { keyId: 'demi_test_abc', preferred_username: 'track-sync', realm_access: { roles: ['staff'] } } },
+      { action: 'project.create', targetId: 'p2' });
+    await audit.flush();
+    assert.strictEqual(sent[0].rows[0].ActorType, 'api-key');
+    assert.strictEqual(sent[0].rows[0].ActorId, 'demi_test_abc');
   });
 
   await t.test('flushes early once the count ceiling is reached', async () => {

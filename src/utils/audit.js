@@ -73,6 +73,38 @@ function currentSalt() {
   return salt;
 }
 
+/**
+ * Who did this, from the verified token only — never a header or a query param.
+ *
+ * Four caller shapes reach this, and telling them apart is the whole job (see helpers/auth.js):
+ *
+ *   Keycloak bearer  -> `sub` (stable UUID) + preferred_username. A person.
+ *   Registry API key -> `keyId` + preferred_username. A named machine consumer.
+ *   ADMIN_API_KEY    -> preferred_username 'internal-service', nothing else. Break-glass, a
+ *                       SHARED credential, so the action is attributable to a credential and not
+ *                       to a human. Recorded as what it is rather than dressed up.
+ *   none             -> anonymous.
+ *
+ * This used to be `keyId || azp ? 'service' : 'user'`, which was wrong in both directions: the
+ * break-glass key has neither and was logged as a person, while a real human signing in through
+ * eagle-admin-console DOES carry `azp` and was logged as a service. Both were visible in the first
+ * staging audit rows.
+ *
+ * `id` is the stable identifier and `name` is the human-readable one. Both are recorded, because
+ * `sub` alone means every trace needs a Keycloak lookup to answer "who is this", and
+ * preferred_username alone is not stable across a rename.
+ */
+function actorFor(req) {
+  const user = (req && req.user) || null;
+  if (!user) return { id: '', name: '', type: 'anonymous' };
+
+  const name = user.preferred_username || '';
+  if (user.keyId) return { id: user.keyId, name, type: 'api-key' };
+  if (name === 'internal-service') return { id: name, name, type: 'break-glass' };
+  if (user.sub) return { id: user.sub, name, type: 'user' };
+  return { id: name, name, type: 'user' };
+}
+
 function hashWithDailySalt(value) {
   return crypto.createHmac('sha256', currentSalt()).update(value).digest('hex').slice(0, 32);
 }
@@ -129,7 +161,7 @@ function auditEvent(req, event) {
   // precise failure this module's header says is unacceptable. Recording the action must never be
   // the reason the action reports failure.
   try {
-  const user = (req && req.user) || null;
+  const actor = actorFor(req);
 
   enqueue(AUDIT_STREAM, {
     TimeGenerated: new Date().toISOString(),
@@ -139,10 +171,12 @@ function auditEvent(req, event) {
     EventId: crypto.randomUUID(),
     Action: event.action,
     Outcome: event.outcome || 'success',
-    // `sub` is the stable Keycloak identifier; preferred_username is what a human recognises. An
-    // API key authenticates as its own principal and carries neither, so keyId stands in.
-    ActorId: (user && (user.sub || user.preferred_username || user.keyId)) || 'anonymous',
-    ActorType: user ? (user.keyId || user.azp ? 'service' : 'user') : 'anonymous',
+    // `sub` is the stable Keycloak identifier and survives a rename; ActorName is what a human
+    // reads without a Keycloak lookup. Both, because either alone makes a trace worse - see
+    // actorFor().
+    ActorId: actor.id || 'anonymous',
+    ActorName: actor.name,
+    ActorType: actor.type,
     // rolesFor() drops `project:*` roles, which is right here: this column records the PRIVILEGE
     // the caller acted with, and the project dimension is already in ProjectId.
     ActorRoles: req ? rolesFor(req).join(',') : '',
@@ -171,10 +205,21 @@ function analyticsEvent(req, event) {
   // Same guard, same reason — see auditEvent.
   try {
   const headers = (req && req.headers) || {};
+  const actor = actorFor(req);
 
   enqueue(EVENTS_STREAM, {
     TimeGenerated: new Date().toISOString(),
     EventName: event.eventName,
+    // Anonymous ONLY while the caller is anonymous. A signed-in user's activity is attributable -
+    // staff searching the corpus is exactly the thing an investigator needs to be able to trace,
+    // and pretending otherwise would make this table useless for the question it will be asked.
+    // Public traffic still carries nothing but the rotating hash below.
+    ActorId: actor.id,
+    ActorName: actor.name,
+    ActorType: actor.type,
+    // Kept for everyone, signed-in included: it is the join key for counting distinct callers, and
+    // for anonymous traffic it is the ONLY identifier - salted daily so it stops being linkable on
+    // its own.
     AnonId: anonId(req),
     // Hashed under the SAME rotating salt as AnonId, and that is load-bearing. Stored raw, this is
     // caller-supplied and stable for as long as the client chooses to reuse it — so joining on it
