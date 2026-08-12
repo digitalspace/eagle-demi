@@ -68,6 +68,64 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(res.statusCode, 404);
   });
 
+  /**
+   * The read ACL gates rows, not fields, so a caller entitled to the row was getting the raw
+   * upstream Track and Eagle payloads with it — unbounded, and anonymous on both these routes.
+   * `sources.wildfire` is DEMI's own aggregate and the map explorer renders it, so the rule is an
+   * allowlist rather than "drop sources".
+   */
+  const STORED = {
+    id: '207',
+    name: 'Nicomen Wind Energy',
+    sources: {
+      track: { track_project_id: 207, proponent_name: 'Premier Renewable Energy' },
+      eagle: { _id: 'abc', projectLeadEmail: 'lead@gov.bc.ca', read: ['public'] },
+      nrpti: { records: 3 },
+      wildfire: { count: 2, activeNearby: true }
+    }
+  };
+
+  await t.test('the raw upstream payloads do not leave over HTTP', async () => {
+    t.mock.method(projects, 'listVisible', async () => ({
+      items: [structuredClone(STORED)], continuationToken: undefined
+    }));
+    t.mock.method(projects, 'getById', async () => structuredClone(STORED));
+
+    const list = mockRes();
+    await projectController.getProjects({ ...ANON }, list);
+    const one = mockRes();
+    await projectController.getProject({ params: { id: '207' }, query: {} }, one);
+
+    for (const [label, body] of [['list', list.body[0]], ['point read', one.body]]) {
+      assert.strictEqual(body.sources.track, undefined, `${label}: Track payload withheld`);
+      assert.strictEqual(body.sources.eagle, undefined, `${label}: Eagle payload withheld`);
+      // Allowlisted, so the dead nrpti block goes without needing its own rule.
+      assert.strictEqual(body.sources.nrpti, undefined, `${label}: nrpti withheld`);
+      assert.strictEqual(body.sources.wildfire.count, 2, `${label}: wildfire aggregate survives`);
+      assert.strictEqual(body.name, 'Nicomen Wind Energy', `${label}: the record itself survives`);
+    }
+  });
+
+  /**
+   * The reason the strip lives at res.json and not in the data layer. updateProject reads, spreads
+   * and upserts, so a stripped read would erase `sources` from the stored document on the next
+   * edit — including the wildfire aggregate nothing else can rebuild.
+   */
+  await t.test('narrowing the response does not narrow what is stored', async () => {
+    t.mock.method(projects, 'getById', async () => structuredClone(STORED));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, body: { name: 'Renamed' }
+    }, res);
+
+    assert.strictEqual(saved.sources.track.track_project_id, 207, 'stored payload intact');
+    assert.strictEqual(saved.sources.eagle._id, 'abc', 'stored payload intact');
+    assert.strictEqual(res.body.sources.track, undefined, 'response still narrowed');
+  });
+
   await t.test('update cannot reassign the partition key', async () => {
     t.mock.method(projects, 'getById', async () => ({
       id: '207', trackProjectId: 207, name: 'Original'
@@ -97,6 +155,9 @@ test('nosql project controller', async (t) => {
 
     assert.strictEqual(saved.isPublished, false);
     assert.ok(!saved.read.includes('public'), 'unpublished projects must not be public');
+    // patchWildfireStats sets `/sources/wildfire`, and Cosmos will not create the parent path
+    // for it. A created project without `sources` fails the next wildfire sync outright.
+    assert.deepStrictEqual(saved.sources, {}, 'the wildfire patch needs /sources to exist');
   });
 });
 

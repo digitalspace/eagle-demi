@@ -88,8 +88,10 @@ exports.search = async (req, res) => {
                   name: (doc.highlighted || {}).name || (doc.highlighted || {}).displayName || '',
                   description: (doc.highlighted || {}).description || ''
                 },
-                isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true,
-                sources: doc.sources || {}
+                isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true
+                // No `sources` here. The `demi-projects` index has no such field
+                // (azure/search/indexes/demi-projects.json), so the line that used to sit here
+                // emitted `{}` on every hit and read as though the index carried the payload.
               }));
 
               return res.json([{ searchResults, count }]);
@@ -149,7 +151,10 @@ exports.search = async (req, res) => {
           isPublished: Array.isArray(p.read) && p.read.length > 0
             ? p.read.includes('public')
             : p.isPublished === true,
-          sources: p.sources || {}
+          // Only DEMI's own wildfire aggregate — the map explorer reads it. The raw Track and
+          // Eagle payloads that share this field are traceability, not API surface; see
+          // projectsRepo.publicView, which is the same rule stated once.
+          sources: projectsRepo.publicView(p).sources || {}
         }));
 
         return res.json([{ searchResults: mapped }]);
