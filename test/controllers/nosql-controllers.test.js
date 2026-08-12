@@ -155,6 +155,9 @@ test('nosql project controller', async (t) => {
 
     assert.strictEqual(saved.isPublished, false);
     assert.ok(!saved.read.includes('public'), 'unpublished projects must not be public');
+    // patchWildfireStats sets `/sources/wildfire`, and Cosmos will not create the parent path
+    // for it. A created project without `sources` fails the next wildfire sync outright.
+    assert.deepStrictEqual(saved.sources, {}, 'the wildfire patch needs /sources to exist');
   });
 });
 

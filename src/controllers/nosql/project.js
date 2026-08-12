@@ -87,6 +87,10 @@ exports.createProject = async (req, res) => {
       centroid,
       read,
       isPublished: published,
+      // Empty, but present: the wildfire sync patches `/sources/wildfire`, and a Cosmos patch
+      // cannot create a path recursively — without `/sources` on the document it fails the whole
+      // sync run, not just this project (sync-wildfires.js loops unguarded).
+      sources: {},
       createdAt: now,
       updatedAt: now
     });
