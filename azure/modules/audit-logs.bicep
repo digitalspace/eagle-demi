@@ -272,6 +272,11 @@ resource eventsRollup 'Microsoft.OperationalInsights/workspaces/summaryLogs@2025
   }
   dependsOn: [
     eventsTable
+    // Load-bearing, not tidiness. Without it the rule and its destination table deploy in
+    // parallel, and a rule that reaches its first run before the table exists CREATES the
+    // destination itself — at the workspace default of 30 days, which is the retention defect this
+    // module already had once. That bug would come back on any fresh deploy, and only there.
+    eventsHourlyTable
   ]
 }
 
@@ -304,7 +309,13 @@ resource auditDropAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if
         {
           // `AppTraces` is the workspace-based Application Insights table the winston lines land
           // in — not `traces`, which is the classic schema and does not exist here.
-          query: 'AppTraces | where Message has "[Audit] dropped"'
+          //
+          // `contains`, not `has`: `has` matches whole terms, and the tokeniser treats brackets as
+          // separators, so the exact behaviour of `has "[Audit] dropped"` depends on how the term
+          // sequence is split. At this volume the indexed-lookup advantage of `has` is worth
+          // nothing, and an alert that silently never matches is worse than no alert — this one is
+          // the entire reason fire-and-forget is defensible.
+          query: 'AppTraces | where Message contains "[Audit] dropped"'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0

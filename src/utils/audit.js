@@ -73,10 +73,14 @@ function currentSalt() {
   return salt;
 }
 
+function hashWithDailySalt(value) {
+  return crypto.createHmac('sha256', currentSalt()).update(value).digest('hex').slice(0, 32);
+}
+
 function anonId(req) {
   const agent = (req && req.headers && req.headers['user-agent']) || '';
   const ip = req ? callerIp(req) : '';
-  return crypto.createHmac('sha256', currentSalt()).update(`${ip}|${agent}`).digest('hex').slice(0, 32);
+  return hashWithDailySalt(`${ip}|${agent}`);
 }
 
 /**
@@ -94,13 +98,19 @@ function enqueue(stream, row) {
   const buffer = buffers.get(stream);
   buffer.push(row);
 
+  // `.catch` on both call sites, not decoration: batches() calls JSON.stringify outside
+  // sendWithRetry's try, so a row whose Detail cannot be stringified rejects flush() with nothing
+  // attached — an unhandled rejection, which terminates the process under Node's default. This
+  // module's contract is that it never takes a request down with it; that has to hold here too.
   if (buffer.length >= config.auditMaxBatch) {
-    void flush();
+    flush().catch((err) => logger.error(`[Audit] flush failed: ${err.message}`));
     return;
   }
 
   if (!flushTimer) {
-    flushTimer = setTimeout(() => { void flush(); }, config.auditFlushMs);
+    flushTimer = setTimeout(() => {
+      flush().catch((err) => logger.error(`[Audit] flush failed: ${err.message}`));
+    }, config.auditFlushMs);
     // Do not hold the process open for a pending audit flush. A shutdown path that wants the
     // buffer drained calls flush() itself.
     if (flushTimer.unref) flushTimer.unref();
@@ -114,6 +124,11 @@ function enqueue(stream, row) {
  * @param {object} event  { action, outcome, targetType, targetId, projectId, detail }
  */
 function auditEvent(req, event) {
+  // Wrapped because rolesFor() and callerIp() run synchronously inside each controller's own try:
+  // a throw here would surface as a 500 AFTER the mutation had already been applied, which is the
+  // precise failure this module's header says is unacceptable. Recording the action must never be
+  // the reason the action reports failure.
+  try {
   const user = (req && req.user) || null;
 
   enqueue(AUDIT_STREAM, {
@@ -141,6 +156,9 @@ function auditEvent(req, event) {
     Env: config.environmentName,
     Detail: event.detail || {}
   });
+  } catch (err) {
+    logger.error(`[Audit] could not record ${event && event.action}: ${err.message}`);
+  }
 }
 
 /**
@@ -150,13 +168,20 @@ function auditEvent(req, event) {
  * @param {object} event  { eventName, projectId, documentId, searchTerm, resultCount, detail }
  */
 function analyticsEvent(req, event) {
+  // Same guard, same reason — see auditEvent.
+  try {
   const headers = (req && req.headers) || {};
 
   enqueue(EVENTS_STREAM, {
     TimeGenerated: new Date().toISOString(),
     EventName: event.eventName,
     AnonId: anonId(req),
-    SessionId: headers['x-session-id'] || '',
+    // Hashed under the SAME rotating salt as AnonId, and that is load-bearing. Stored raw, this is
+    // caller-supplied and stable for as long as the client chooses to reuse it — so joining on it
+    // would re-link one person's searches straight across the salt rotation, which is exactly the
+    // linkage the rotation exists to break. Hashing keeps within-day session stitching and drops
+    // the cross-day trail, which is the whole reason this table needs no deletion path.
+    SessionId: headers['x-session-id'] ? hashWithDailySalt(headers['x-session-id']) : '',
     ProjectId: event.projectId ? String(event.projectId) : '',
     DocumentId: event.documentId ? String(event.documentId) : '',
     // Free text a caller typed. The single field here with real disclosure risk, and the single
@@ -170,6 +195,9 @@ function analyticsEvent(req, event) {
     Env: config.environmentName,
     Detail: event.detail || {}
   });
+  } catch (err) {
+    logger.error(`[Audit] could not record ${event && event.eventName}: ${err.message}`);
+  }
 }
 
 /**
@@ -196,6 +224,31 @@ function batches(rows, maxCount, maxBytes) {
 
   if (current.length > 0) out.push(current);
   return out;
+}
+
+/**
+ * What a dropped row may say in the application log.
+ *
+ * The DCR transform is the masking boundary for the happy path and is deliberately impossible to
+ * bypass from the app. This is the one path that goes around it, so it re-applies the same idea by
+ * hand rather than trusting the destination.
+ *
+ * Audit: keep the record — who did what to which thing is the entire point, and losing it is the
+ * failure this fallback exists to prevent. Drop SourceIp, which the transform would have masked.
+ * Analytics: keep nothing identifying. A usage row is only meaningful in aggregate, so an
+ * individual one is not worth recovering, and SearchTerm is caller-typed free text.
+ */
+function redactForLog(stream, row) {
+  if (stream === AUDIT_STREAM) {
+    const { SourceIp: _dropped, ...rest } = row;
+    return rest;
+  }
+  return {
+    TimeGenerated: row.TimeGenerated,
+    EventName: row.EventName,
+    ProjectId: row.ProjectId,
+    Env: row.Env
+  };
 }
 
 async function fetchIngestionToken() {
@@ -274,9 +327,20 @@ async function sendWithRetry(stream, batch) {
       return;
     } catch (err) {
       if (attempt === 2) {
-        // Last resort, and the reason this is `error` and carries the whole payload: the rows are
-        // about to be lost, and the application log is the only place left to recover them from.
-        logger.error(`[Audit] dropped ${batch.length} row(s) for ${stream} after 3 attempts: ${err.message} :: ${JSON.stringify(batch)}`);
+        // Last resort: the rows are about to be lost and the application log is the only place
+        // left to recover them from. But the fallback lands in `demi-logs-<env>`, which sets
+        // enableLogAccessUsingOnlyResourcePermissions — deliberately the WIDER read grant — and
+        // nothing masks it on the way in. Dumping the raw batch would route unmasked SourceIp and
+        // raw SearchTerm around the DCR transform that exists to be unbypassable, and it would do
+        // so precisely when the pipeline is under stress.
+        //
+        // So the two streams are treated differently, by what is worth recovering:
+        // audit rows are reconstructable and keep everything but the IP; analytics rows are
+        // aggregate by nature, so only their shape survives.
+        logger.error(
+          `[Audit] dropped ${batch.length} row(s) for ${stream} after 3 attempts: ${err.message} :: ` +
+          JSON.stringify(batch.map((row) => redactForLog(stream, row)))
+        );
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));

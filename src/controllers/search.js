@@ -53,6 +53,11 @@ exports.search = async (req, res) => {
     const sendJson = res.json.bind(res);
     res.json = (payload) => {
       const first = Array.isArray(payload) ? payload[0] : null;
+      // KNOWN LIMIT: this shape guard relocates the very problem the wrapper solves. A future
+      // branch that answers with something other than `[{ searchResults }]` stops being counted
+      // silently, exactly as a missed call site would. It is the lesser evil — an error payload
+      // counted as a zero-result search would corrupt the one number this table is for — but if
+      // the response shape ever varies, count on the way IN instead of on the way out.
       if (first && Array.isArray(first.searchResults)) {
         analyticsEvent(req, {
           eventName: 'search',

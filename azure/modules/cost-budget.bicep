@@ -28,6 +28,15 @@ param contactEmails array = [
   'Daniel.T.Truong@gov.bc.ca'
 ]
 
+// utcNow() is only legal as a parameter default in Bicep, which is exactly the shape wanted here:
+// evaluated once at deployment, never drifting on a redeploy of an unchanged template.
+//
+// The old hardcoded 2026-08-01 pinned the ANNUAL budget's year to August-August forever, and gave
+// any environment created later a period that had already partly elapsed - so a new environment
+// would start life with months of its ceiling notionally spent.
+@description('First day of the budget period. Defaults to the first of the current month; override only to reproduce a historical period.')
+param startDate string = utcNow('yyyy-MM-01')
+
 var budgetName = 'demi-budget-${environmentName}'
 
 resource costBudget 'Microsoft.Consumption/budgets@2021-10-01' = {
@@ -37,7 +46,7 @@ resource costBudget 'Microsoft.Consumption/budgets@2021-10-01' = {
     amount: budgetAmount
     timeGrain: 'Monthly'
     timePeriod: {
-      startDate: '2026-08-01T00:00:00Z'
+      startDate: '${startDate}T00:00:00Z'
     }
     notifications: {
       Actual_80_Percent: {
@@ -81,7 +90,7 @@ resource annualBudget 'Microsoft.Consumption/budgets@2021-10-01' = {
     amount: annualCeiling
     timeGrain: 'Annually'
     timePeriod: {
-      startDate: '2026-08-01T00:00:00Z'
+      startDate: '${startDate}T00:00:00Z'
     }
     // Starting at 50%: at the measured run rate the year lands near 1% of this, so anything that
     // reaches half the ceiling has changed by two orders of magnitude and is worth knowing about

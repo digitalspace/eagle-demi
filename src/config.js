@@ -160,12 +160,14 @@ const config = {
   keycloakEnabled:       process.env.KEYCLOAK_ENABLED !== 'false',
   // Tag baked into minted API keys so a dev key is visibly not a prod key. Cosmetic only —
   // nothing authorises on it.
-  // ENVIRONMENT is what api-web-app.bicep actually sets; ENVIRONMENT_NAME was never deployed, so
-  // this silently read 'dev' in every environment. Caught when the first staging analytics rollup
-  // came back stamped Env: dev. That is not cosmetic — this value labels every audit row with the
-  // environment the action happened in, and tags minted API keys, whose stated purpose is making a
-  // dev key visibly not a prod key. Both were lying on test.
-  environmentName:       process.env.ENVIRONMENT_NAME || process.env.ENVIRONMENT || 'dev',
+  // ENVIRONMENT, and only ENVIRONMENT: it is what api-web-app.bicep sets. This used to read
+  // ENVIRONMENT_NAME, which is set nowhere, so it silently resolved to 'dev' in every environment.
+  // Caught when the first staging analytics rollup came back stamped Env: dev. Not cosmetic — this
+  // value labels every audit row with the environment its action happened in, and tags minted API
+  // keys, whose stated purpose is making a dev key visibly not a prod key. Both were lying on test.
+  // ENVIRONMENT_NAME is gone rather than kept as a fallback: a dead name at the head of the chain
+  // reads as the primary and invites the same mistake again.
+  environmentName:       process.env.ENVIRONMENT || 'dev',
   // Keycloak clients (azp) permitted to act privileged. EMPTY = permissive, on purpose: the DEMI
   // frontend and eagle-admin staff users share this realm, so defaulting to ON would lock out real
   // users. Set it once every service account is registered. See helpers/auth.applyClientAllowlist.

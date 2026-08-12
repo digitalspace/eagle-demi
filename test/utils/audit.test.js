@@ -9,6 +9,7 @@ process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
 const test = require('node:test');
 const assert = require('node:assert');
 const config = require('../../src/config');
+const { logger } = require('../../src/utils/logger');
 const audit = require('../../src/utils/audit');
 
 function fakeReq(overrides = {}) {
@@ -118,6 +119,28 @@ test('audit writer', async (t) => {
     for (const part of parts) {
       assert.ok(Buffer.byteLength(JSON.stringify(part)) <= 800000);
     }
+  });
+
+  await t.test('the drop path does not leak past the DCR mask', async () => {
+    // The transform in audit-logs.bicep is the masking boundary and is deliberately impossible to
+    // bypass from the app — except here, the one path that goes around it. The fallback lands in
+    // the application workspace, which grants read more widely, so what it may say is a security
+    // property and not a formatting choice.
+    const logged = [];
+    t.mock.method(logger, 'error', (message) => { logged.push(message); });
+    audit._setTransport(async () => { throw new Error('503 upstream'); });
+
+    audit.auditEvent(fakeReq(), { action: 'document.delete', targetType: 'document', targetId: 'd1' });
+    audit.analyticsEvent(fakeReq(), { eventName: 'search', searchTerm: 'something private' });
+    await audit.flush();
+
+    const dropped = logged.filter(m => m.includes('[Audit] dropped')).join('\n');
+    assert.ok(dropped, 'a drop is still reported');
+    assert.ok(!dropped.includes('142.34.7.9'), 'the raw IP the DCR would have masked never appears');
+    assert.ok(!dropped.includes('something private'), 'caller-typed search text is not recoverable here');
+    // What must survive: the audit record itself, or the fallback is pointless.
+    assert.ok(dropped.includes('document.delete'), 'the audit action is still recoverable');
+    assert.ok(dropped.includes('kc-sub-1'), 'the actor is still recoverable');
   });
 
   await t.test('a failing transport loses the rows to the error log, never to the caller', async () => {
