@@ -53,14 +53,6 @@ const TIER = {
 };
 
 /**
- * Above this many projects, a single cross-partition query with `projectId IN (...)` beats
- * issuing one single-partition query per project. Both branches are correct; the crossover is
- * a measurement, not a law.
- * ponytail: arbitrary until measured — tune from RU metrics, don't guess again.
- */
-const PARTITION_FANOUT_LIMIT = 10;
-
-/**
  * Roles for this request. Always includes 'public'.
  *
  * Read ONLY from req.user, which is populated exclusively by verified auth (helpers/auth.js).
@@ -98,14 +90,23 @@ function canWrite(roles) {
  */
 function resolveAccess(req) {
   const roles = rolesFor(req);
+  const projectScope = projectScopeFor(req);
+
+  // Scope is resolved BEFORE the privilege check, and the order is the whole point. The reverse
+  // returned PRIVILEGED with `projectScope: null` and threw the scope away, so a key minted as
+  // `roles: ['staff'], projectScope: ['207']` read the entire corpus — the restriction its issuer
+  // asked for did nothing at all, silently.
+  //
+  // The two dimensions are orthogonal: roles say WHICH ROWS, scope says WHICH PROJECTS. A
+  // privileged credential carrying a scope is privileged WITHIN those projects. `readClause` and
+  // `canRead` both key privilege off the ROLES, never off the tier, so a SCOPED tier still lifts
+  // the role predicate for a privileged role set.
+  if (Array.isArray(projectScope)) {
+    return { tier: TIER.SCOPED, roles, projectScope };
+  }
 
   if (isPrivileged(roles)) {
     return { tier: TIER.PRIVILEGED, roles, projectScope: null };
-  }
-
-  const projectScope = projectScopeFor(req);
-  if (Array.isArray(projectScope)) {
-    return { tier: TIER.SCOPED, roles, projectScope };
   }
 
   return { tier: TIER.PUBLIC, roles, projectScope: null };
@@ -207,13 +208,25 @@ function readClause(roles, opts = {}) {
   // on the security path turns every gated read into a full scan. This form is one clause
   // regardless of how many roles the caller has, and uses the /read/[]/? range index.
   //
-  // The second branch is the isPublished mirror for rows with no explicit ACL. There is no
-  // third "no read[] AND no isPublished" tier: the old Mongo filter had one for pre-ACL rows,
-  // and it is deleted rather than translated because every seeder writes read[] explicitly.
+  // The second branch is the isPublished mirror for rows with no explicit ACL.
+  //
+  // `unsetIsPublic` drops the isPublished half of that branch, so a row carrying NEITHER `read[]`
+  // nor `isPublished` is visible. Exactly one container needs it: `boundaries`, whose 281 seeded
+  // rows predate having an ACL at all and carry neither field. Without it every one of them
+  // evaluates FALSE for an anonymous caller — `c.isPublished = true` against an undefined field is
+  // not true — and the map goes blank on deploy, silently and everywhere.
+  //
+  // It does not weaken the gate: a RESTRICTED boundary carries an explicit `read[]`, so the first
+  // branch governs it and this one cannot match. The rule it encodes is "reference geography with
+  // no ACL is public", which is a statement about that container, not a general fallback.
+  const unsetArm = opts.unsetIsPublic
+    ? `(NOT IS_DEFINED(${alias}.read) OR ARRAY_LENGTH(${alias}.read) = 0)`
+    : `((NOT IS_DEFINED(${alias}.read) OR ARRAY_LENGTH(${alias}.read) = 0)` +
+      ` AND ${alias}.isPublished = true)`;
+
   const clause =
     `(EXISTS(SELECT VALUE r FROM r IN ${alias}.read WHERE r IN (${names.join(', ')}))` +
-    ` OR ((NOT IS_DEFINED(${alias}.read) OR ARRAY_LENGTH(${alias}.read) = 0)` +
-    ` AND ${alias}.isPublished = true))`;
+    ` OR ${unsetArm})`;
 
   return {
     clause,
@@ -231,6 +244,14 @@ function readClause(roles, opts = {}) {
 function scopeClause(access, field, opts = {}) {
   const alias = opts.alias || 'c';
   const prefix = opts.prefix || '@scope';
+
+  // No partition field means the container has no project axis at all — boundaries are
+  // administrative geography, not project data. Scoping them on a field the items do not carry
+  // would match nothing, so a project-scoped caller would lose every public boundary and the map
+  // would silently go blank. Role ACL still applies; only the project narrowing is skipped.
+  if (!field) {
+    return { clause: 'true', params: [] };
+  }
 
   if (!access || access.tier !== TIER.SCOPED || !Array.isArray(access.projectScope)) {
     return { clause: 'true', params: [] };
@@ -299,18 +320,30 @@ function visibilityFor(access, partitionField = 'projectId', opts = {}) {
  * Required on every point read — `container.item(id, pk).read()` bypasses the query
  * predicate entirely, so without this a by-id fetch would leak what a list would not.
  */
-function canRead(doc, access, partitionField = 'projectId') {
+function canRead(doc, access, partitionField = 'projectId', opts = {}) {
   if (!doc || !access) return false;
-  if (access.tier === TIER.PRIVILEGED) return true;
 
-  if (access.tier === TIER.SCOPED) {
+  // Scope FIRST, and it narrows a privileged caller too — otherwise a scoped staff key would
+  // point-read its way out of its own scope, which is the leak `resolveAccess` was just fixed to
+  // prevent on the query path. A falsy partitionField means the container has no project axis
+  // (boundaries); see scopeClause.
+  if (access.tier === TIER.SCOPED && partitionField) {
     const scope = access.projectScope || [];
     if (!scope.includes(String(doc[partitionField]))) return false;
   }
 
+  // Privilege is a property of the ROLES, not of the tier — this mirrors readClause(), which
+  // collapses to `true` for a privileged role set whatever the tier happens to be. Keying it off
+  // the tier would deny a scoped-but-privileged caller its own in-scope private rows.
+  if (isPrivileged(access.roles || [])) return true;
+
   if (Array.isArray(doc.read) && doc.read.length > 0) {
     return doc.read.some(r => access.roles.includes(r));
   }
+  // Same allowance as readClause's `unsetIsPublic` arm, for the same rows: a boundary seeded
+  // before the container had an ACL carries neither field, and a point read must not withhold
+  // what the list returns.
+  if (opts.unsetIsPublic) return true;
   return doc.isPublished === true;
 }
 
@@ -319,7 +352,6 @@ module.exports = {
   SECURE_ROLES,
   WRITE_ROLES,
   TIER,
-  PARTITION_FANOUT_LIMIT,
   PROJECT_ROLE_PREFIX,
   rolesFor,
   isPrivileged,

@@ -64,16 +64,17 @@ function filterFor(access, partitionField = 'projectId') {
   // No access context at all is not a privileged caller — it is a bug upstream. Fail closed.
   if (!access) return { filter: null, empty: true };
 
-  // Privileged short-circuits to no filter, the same shape `readClause` uses when it returns
-  // `true`. One code path returning a wider filter, never a bypass branch that could drift.
-  if (isPrivileged(access.roles || [])) return { filter: null, empty: false };
-
   const clauses = [];
 
-  const roles = Array.from(new Set([...(access.roles || []), ...PUBLIC_ROLES]));
-  // `read/any(r: ...)` is the collection form. Without `any`, the filter compares the collection
-  // itself and matches nothing — silently, which on this path would read as an empty corpus.
-  clauses.push(`read/any(r: ${inClause('r', roles)})`);
+  // Privileged lifts the ROLE predicate only, never the project scope — the twin of `readClause`
+  // returning `true` while `scopeClause` still narrows. Short-circuiting the whole function here
+  // discarded the scope, so a scoped privileged key searched the entire corpus.
+  if (!isPrivileged(access.roles || [])) {
+    const roles = Array.from(new Set([...(access.roles || []), ...PUBLIC_ROLES]));
+    // `read/any(r: ...)` is the collection form. Without `any`, the filter compares the collection
+    // itself and matches nothing — silently, which on this path would read as an empty corpus.
+    clauses.push(`read/any(r: ${inClause('r', roles)})`);
+  }
 
   if (access.tier === TIER.SCOPED) {
     const scope = access.projectScope;
@@ -82,6 +83,10 @@ function filterFor(access, partitionField = 'projectId') {
     if (!Array.isArray(scope) || scope.length === 0) return { filter: null, empty: true };
     clauses.push(inClause(partitionField, scope));
   }
+
+  // No clauses means an unscoped privileged caller: unrestricted, and `null` says so explicitly
+  // rather than emitting an empty string that a caller might send as a filter.
+  if (clauses.length === 0) return { filter: null, empty: false };
 
   return { filter: clauses.join(' and '), empty: false };
 }

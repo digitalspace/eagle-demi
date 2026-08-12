@@ -128,6 +128,33 @@ async function listWithCentroid(access) {
 }
 
 /**
+ * A stored project as it may leave over HTTP.
+ *
+ * `sources` retains the raw Track and Eagle payloads so a re-merge never has to re-fetch upstream
+ * (merge/project.js). That is traceability, not API surface: passing it through puts every field a
+ * future upstream adds onto an anonymous response with nobody having looked at it, and the read
+ * ACL cannot help — it gates which rows are returned, not which fields.
+ *
+ * `sources.wildfire` is the exception and stays: it is DEMI's own aggregate, written by
+ * patchWildfireStats below, and the map explorer renders it.
+ *
+ * An allowlist rather than a denylist for the same reason, which also retires the dead
+ * `sources.nrpti` block without a second rule.
+ *
+ * Applied at res.json and nowhere else. Stripping in the data layer instead would be silently
+ * destructive: updateProject reads, spreads and upserts, so a stripped read would erase `sources`
+ * from the stored document on the next edit.
+ */
+function publicView(project) {
+  if (!project) return project;
+
+  const { sources, ...rest } = project;
+  const wildfire = sources && sources.wildfire;
+
+  return wildfire ? { ...rest, sources: { wildfire } } : rest;
+}
+
+/**
  * Whole-item write. Safe only because nothing is folded into the project as an embedded array
  * any more — a replace from the Track sync would silently discard it. Use the patch helpers
  * below for partial updates.
@@ -164,6 +191,7 @@ module.exports = {
   getByEagleId,
   listByIds,
   listWithCentroid,
+  publicView,
   upsert,
   patchWildfireStats,
   patchBoundaries,

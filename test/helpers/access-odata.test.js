@@ -19,6 +19,17 @@ test('access-odata filter', async (t) => {
     assert.strictEqual(empty, false);
   });
 
+  await t.test('a privileged caller carrying a scope is still narrowed by it', () => {
+    // The twin of the SQL fix: privilege lifts the ROLE predicate, never the project scope. This
+    // function used to short-circuit on privilege before it ever looked at projectScope, so a
+    // scoped service key searched the whole index.
+    const scopedAdmin = { tier: TIER.SCOPED, roles: ['public', 'staff'], projectScope: ['207'] };
+    const { filter, empty } = filterFor(scopedAdmin);
+    assert.strictEqual(empty, false);
+    assert.strictEqual(filter, "search.in(projectId, '207', ',')",
+      'the role clause is lifted, the scope clause is not');
+  });
+
   await t.test('anonymous callers are restricted to the roles they hold', () => {
     const { filter, empty } = filterFor(PUBLIC);
     assert.strictEqual(empty, false);

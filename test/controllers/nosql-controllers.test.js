@@ -68,6 +68,64 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(res.statusCode, 404);
   });
 
+  /**
+   * The read ACL gates rows, not fields, so a caller entitled to the row was getting the raw
+   * upstream Track and Eagle payloads with it — unbounded, and anonymous on both these routes.
+   * `sources.wildfire` is DEMI's own aggregate and the map explorer renders it, so the rule is an
+   * allowlist rather than "drop sources".
+   */
+  const STORED = {
+    id: '207',
+    name: 'Nicomen Wind Energy',
+    sources: {
+      track: { track_project_id: 207, proponent_name: 'Premier Renewable Energy' },
+      eagle: { _id: 'abc', projectLeadEmail: 'lead@gov.bc.ca', read: ['public'] },
+      nrpti: { records: 3 },
+      wildfire: { count: 2, activeNearby: true }
+    }
+  };
+
+  await t.test('the raw upstream payloads do not leave over HTTP', async () => {
+    t.mock.method(projects, 'listVisible', async () => ({
+      items: [structuredClone(STORED)], continuationToken: undefined
+    }));
+    t.mock.method(projects, 'getById', async () => structuredClone(STORED));
+
+    const list = mockRes();
+    await projectController.getProjects({ ...ANON }, list);
+    const one = mockRes();
+    await projectController.getProject({ params: { id: '207' }, query: {} }, one);
+
+    for (const [label, body] of [['list', list.body[0]], ['point read', one.body]]) {
+      assert.strictEqual(body.sources.track, undefined, `${label}: Track payload withheld`);
+      assert.strictEqual(body.sources.eagle, undefined, `${label}: Eagle payload withheld`);
+      // Allowlisted, so the dead nrpti block goes without needing its own rule.
+      assert.strictEqual(body.sources.nrpti, undefined, `${label}: nrpti withheld`);
+      assert.strictEqual(body.sources.wildfire.count, 2, `${label}: wildfire aggregate survives`);
+      assert.strictEqual(body.name, 'Nicomen Wind Energy', `${label}: the record itself survives`);
+    }
+  });
+
+  /**
+   * The reason the strip lives at res.json and not in the data layer. updateProject reads, spreads
+   * and upserts, so a stripped read would erase `sources` from the stored document on the next
+   * edit — including the wildfire aggregate nothing else can rebuild.
+   */
+  await t.test('narrowing the response does not narrow what is stored', async () => {
+    t.mock.method(projects, 'getById', async () => structuredClone(STORED));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, body: { name: 'Renamed' }
+    }, res);
+
+    assert.strictEqual(saved.sources.track.track_project_id, 207, 'stored payload intact');
+    assert.strictEqual(saved.sources.eagle._id, 'abc', 'stored payload intact');
+    assert.strictEqual(res.body.sources.track, undefined, 'response still narrowed');
+  });
+
   await t.test('update cannot reassign the partition key', async () => {
     t.mock.method(projects, 'getById', async () => ({
       id: '207', trackProjectId: 207, name: 'Original'
@@ -97,6 +155,9 @@ test('nosql project controller', async (t) => {
 
     assert.strictEqual(saved.isPublished, false);
     assert.ok(!saved.read.includes('public'), 'unpublished projects must not be public');
+    // patchWildfireStats sets `/sources/wildfire`, and Cosmos will not create the parent path
+    // for it. A created project without `sources` fails the next wildfire sync outright.
+    assert.deepStrictEqual(saved.sources, {}, 'the wildfire patch needs /sources to exist');
   });
 });
 
@@ -643,5 +704,191 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     assert.strictEqual(patched.contentExtracted, true);
     assert.strictEqual(patched.contentExtractionError, null);
     assert.strictEqual(patched.extraction.path, 'unknown', 'an unknown path is recorded, not trusted');
+  });
+});
+
+// A writer could hand-craft an ACL by putting it in the PUT body: `req.body` was spread straight
+// into the upsert, so `read` and `isPublished` went in unexamined — past resolveDocumentAcl and
+// past the 409 that stops a document being published under a private project.
+test('PUT bodies cannot hand-craft an ACL', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('a document keeps the ACL it had', async () => {
+    const existing = {
+      id: 'd1', projectId: 'p1', displayName: 'Old',
+      read: ['sysadmin', 'staff', 'demi-admin'], isPublished: false
+    };
+    let saved;
+    t.mock.method(documents, 'getById', async () => existing);
+    t.mock.method(documents, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await documentController.updateDocument({
+      params: { id: 'd1' }, query: {}, user: ADMIN_USER,
+      body: { displayName: 'New', read: ['public'], isPublished: true }
+    }, mockRes());
+
+    assert.strictEqual(saved.displayName, 'New', 'ordinary fields still update');
+    assert.deepStrictEqual(saved.read, existing.read, 'the ACL is not taken from the body');
+    assert.strictEqual(saved.isPublished, false);
+  });
+
+  await t.test('a project ACL is derived from isPublished, never taken verbatim', async () => {
+    const existing = { id: 'p1', trackProjectId: 1, name: 'Old', read: ['sysadmin'], isPublished: false };
+    let saved;
+    t.mock.method(projects, 'getById', async () => existing);
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER,
+      body: { name: 'New', read: ['some-invented-role'], isPublished: true }
+    }, mockRes());
+
+    assert.strictEqual(saved.name, 'New');
+    assert.ok(!saved.read.includes('some-invented-role'), 'no unvetted role reaches read[]');
+    assert.ok(saved.read.includes('public'), 'publishing derives the public ACL');
+    assert.strictEqual(saved.isPublished, true, 'read[] and isPublished cannot disagree');
+  });
+
+  await t.test('omitting isPublished leaves visibility untouched', async () => {
+    const existing = { id: 'p1', trackProjectId: 1, name: 'Old', read: ['sysadmin'], isPublished: false };
+    let saved;
+    t.mock.method(projects, 'getById', async () => existing);
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { name: 'New' }
+    }, mockRes());
+
+    assert.deepStrictEqual(saved.read, ['sysadmin']);
+    assert.strictEqual(saved.isPublished, false);
+  });
+});
+
+// The same invariant one level up: a document must never out-rank its project. `PUT
+// /documents/:id/published` enforces it upwards with a 409; nothing enforced it downwards, so
+// unpublishing a project left every document under it carrying `public` — and `listVisible` gates
+// on the document's own ACL, so they stayed listable and searchable.
+test('unpublishing a project restricts its documents too', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const published = { id: 'p1', trackProjectId: 1, name: 'P', read: ['public', 'sysadmin'], isPublished: true };
+
+  await t.test('the documents are patched with the SAME read[] the project got', async () => {
+    let saved, cascadedTo, cascadedAcl, cascadeAccess;
+    t.mock.method(projects, 'getById', async () => published);
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+    t.mock.method(documents, 'setAclForProject', async (access, projectId, read) => {
+      cascadeAccess = access; cascadedTo = projectId; cascadedAcl = read;
+      return { succeeded: 3, failed: 0, ids: ['d1', 'd2', 'd3'] };
+    });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: false }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.ok(!saved.read.includes('public'), 'the project itself is restricted');
+    assert.strictEqual(cascadedTo, 'p1');
+    assert.deepStrictEqual(cascadedAcl, saved.read, 'a document must not out-rank its project');
+    assert.strictEqual(cascadeAccess.tier, TIER.PRIVILEGED,
+      'a document already private has to be patched too, and the caller cannot read it');
+  });
+
+  await t.test('publishing a project does NOT publish its documents', async () => {
+    const priv = { ...published, read: ['sysadmin'], isPublished: false };
+    let cascaded = false;
+    t.mock.method(projects, 'getById', async () => priv);
+    t.mock.method(projects, 'upsert', async (doc) => doc);
+    t.mock.method(documents, 'setAclForProject', async () => { cascaded = true; return { failed: 0 }; });
+
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: true }
+    }, mockRes());
+
+    assert.strictEqual(cascaded, false, 'a document\'s own visibility is independent and narrower');
+  });
+
+  await t.test('an edit that does not touch visibility cascades nothing', async () => {
+    let cascaded = false;
+    t.mock.method(projects, 'getById', async () => published);
+    t.mock.method(projects, 'upsert', async (doc) => doc);
+    t.mock.method(documents, 'setAclForProject', async () => { cascaded = true; return { failed: 0 }; });
+
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { name: 'Renamed' }
+    }, mockRes());
+
+    assert.strictEqual(cascaded, false);
+  });
+
+  await t.test('a partial cascade is surfaced, never swallowed', async () => {
+    t.mock.method(projects, 'getById', async () => published);
+    t.mock.method(projects, 'upsert', async (doc) => doc);
+    t.mock.method(documents, 'setAclForProject', async () => ({ succeeded: 1, failed: 2, ids: ['a', 'b', 'c'] }));
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: false }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 500, 'a half-restricted project must not report success');
+  });
+});
+
+// Defect A: a chunk's read[] is a snapshot copied at ingest, and nothing used to refresh it. An
+// unpublished document kept chunks carrying `public` — in Cosmos, and in the AI Search index
+// indefinitely, because unpublishing never advanced their `_ts` and the indexer is a high-water
+// mark.
+test('unpublishing a document restricts its chunks too', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const existingDoc = { id: 'd1', projectId: 'p1', read: ['public', 'sysadmin'], isPublished: true };
+
+  await t.test('the chunk ACL is patched with the SAME read[] the document got', async () => {
+    const patched = { ...existingDoc, isPublished: false, read: ['sysadmin', 'staff', 'demi-admin'] };
+    let seen;
+    t.mock.method(documents, 'getById', async () => existingDoc);
+    t.mock.method(projects, 'getById', async () => ({ id: 'p1', read: ['public'] }));
+    t.mock.method(documents, 'setPublished', async () => patched);
+    t.mock.method(chunksRepo, 'setAclForDocument', async (access, documentId, read) => {
+      seen = { documentId, read };
+      return { succeeded: 3, failed: 0, chunks: 3 };
+    });
+
+    await documentController.setDocumentPublished(
+      { params: { id: 'd1' }, query: {}, body: { isPublished: false }, user: ADMIN_USER }, mockRes());
+
+    assert.ok(seen, 'the chunks must be patched — otherwise the text stays readable');
+    assert.strictEqual(seen.documentId, 'd1');
+    assert.deepStrictEqual(seen.read, patched.read,
+      'a chunk must never out-rank its document, so the ACLs must be identical');
+  });
+
+  await t.test('a failed chunk patch is surfaced, not swallowed', async () => {
+    t.mock.method(documents, 'getById', async () => existingDoc);
+    t.mock.method(projects, 'getById', async () => ({ id: 'p1', read: ['public'] }));
+    t.mock.method(documents, 'setPublished', async () => ({ ...existingDoc, read: ['sysadmin'] }));
+    t.mock.method(chunksRepo, 'setAclForDocument', async () => { throw new Error('bulk failed'); });
+
+    const res = mockRes();
+    await documentController.setDocumentPublished(
+      { params: { id: 'd1' }, query: {}, body: { isPublished: false }, user: ADMIN_USER }, res);
+
+    assert.strictEqual(res.statusCode, 500,
+      'an operator who is told the document is restricted must not be told that falsely');
+  });
+
+  await t.test('a document that was never extracted patches nothing and still succeeds', async () => {
+    t.mock.method(documents, 'getById', async () => existingDoc);
+    t.mock.method(projects, 'getById', async () => ({ id: 'p1', read: ['public'] }));
+    t.mock.method(documents, 'setPublished', async () => ({ ...existingDoc, read: ['sysadmin'] }));
+    t.mock.method(chunksRepo, 'setAclForDocument', async () => ({ succeeded: 0, failed: 0, chunks: 0 }));
+
+    const res = mockRes();
+    await documentController.setDocumentPublished(
+      { params: { id: 'd1' }, query: {}, body: { isPublished: false }, user: ADMIN_USER }, res);
+
+    assert.strictEqual(res.statusCode, 200);
   });
 });

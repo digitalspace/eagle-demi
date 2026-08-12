@@ -29,18 +29,6 @@ function isDefinedAndNotNull(field, alias = 'c') {
 }
 
 /**
- * Case-insensitive substring match. Uses CONTAINS with the case-insensitive flag rather than
- * RegexMatch: user input never becomes a pattern, so there is no regex-injection or ReDoS
- * surface, and the intent is clearer.
- */
-function contains(field, value, paramName, alias = 'c') {
-  return {
-    clause: `CONTAINS(${alias}.${field}, ${paramName}, true)`,
-    params: [{ name: paramName, value }]
-  };
-}
-
-/**
  * Membership test against a bounded list of values.
  *
  * An EMPTY list renders as `false`, never as an omitted clause: `IN ()` is not valid SQL, and the
@@ -69,15 +57,16 @@ function inList(field, values, prefix, alias = 'c') {
  *
  * @param {object}   opts
  * @param {object}   opts.access           from resolveAccess()
- * @param {string}   opts.partitionField   'id' on projects, 'projectId' elsewhere
+ * @param {string|null} opts.partitionField 'id' on projects, 'projectId' elsewhere, NULL for a
+ *                                        container with no project axis (boundaries)
  * @param {Array}    [opts.criteria]       extra fragments
  * @param {string}   [opts.select='*']     projection — use to omit fields a caller may not see
  * @param {string}   [opts.orderBy]        e.g. 'c.name ASC' (the path must be indexed)
  * @returns {{query: string, parameters: Array}}
  */
-function selectWhere({ access, partitionField, criteria = [], select = '*', orderBy }) {
+function selectWhere({ access, partitionField, criteria = [], select = '*', orderBy, visibility = {} }) {
   const predicate = andClauses(
-    visibilityFor(access, partitionField),
+    visibilityFor(access, partitionField, visibility),
     ...criteria.filter(Boolean)
   );
 
@@ -92,8 +81,8 @@ function selectWhere({ access, partitionField, criteria = [], select = '*', orde
  * A count built from a different filter leaks the true size of a collection the caller
  * cannot see, which is why this shares selectWhere rather than rebuilding the predicate.
  */
-function countWhere({ access, partitionField, criteria = [] }) {
-  const spec = selectWhere({ access, partitionField, criteria, select: 'VALUE COUNT(1)' });
+function countWhere({ access, partitionField, criteria = [], visibility = {} }) {
+  const spec = selectWhere({ access, partitionField, criteria, select: 'VALUE COUNT(1)', visibility });
   return spec;
 }
 
@@ -111,7 +100,6 @@ function pageOptions({ pageSize, continuationToken, partitionKey } = {}) {
 
 module.exports = {
   eq,
-  contains,
   inList,
   isDefinedAndNotNull,
   selectWhere,

@@ -197,7 +197,12 @@ function mergeTrackProject(track, eagle, opts = {}) {
   if (centroid) merged.centroid = centroid;
 
   // Raw payloads retained unindexed, so a re-merge never needs to re-fetch upstream and any
-  // field can be traced to its source. Never read directly by the API.
+  // field can be traced to its source.
+  //
+  // Storage only. This used to claim the API never read it, which was not true: the project
+  // controller and the search fallback both returned it verbatim on anonymous routes. What keeps
+  // it off the wire is `publicView` in repositories/projects.js, applied at res.json — not this
+  // comment, and not the read ACL, which gates rows rather than fields.
   merged.sources = {
     track,
     eagle: eagle || null

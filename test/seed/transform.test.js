@@ -179,10 +179,21 @@ test('transformBoundary — simplified geometry only', async (t) => {
     assert.strictEqual(b.id, RAW._id);
   });
 
-  await t.test('no read[] — public reference data, deliberately', () => {
-    // The boundaries repository applies no ACL predicate. An empty read[] here would make the
-    // standard visibility clause match nothing and blank the map.
-    assert.ok(!('read' in transformBoundary(RAW, OPTS)));
+  await t.test('public by default, but with an explicit ACL', () => {
+    // This used to assert the OPPOSITE — that boundaries carry no read[] at all — which is what
+    // made a staff-only shapefile inexpressible. Reference geography is still public by default;
+    // the difference is that "public" is now written down rather than assumed.
+    const b = transformBoundary(RAW, OPTS);
+    assert.ok(b.read.includes('public'));
+    assert.strictEqual(b.isPublished, true);
+  });
+
+  await t.test('an upstream restriction survives a re-seed', () => {
+    // The case that matters: re-seeding must not republish a shapefile someone restricted.
+    const restricted = { ...RAW, read: ['sysadmin', 'staff'] };
+    const b = transformBoundary(restricted, OPTS);
+    assert.deepStrictEqual(b.read, ['sysadmin', 'staff']);
+    assert.strictEqual(b.isPublished, false, 'isPublished mirrors read[], never the reverse');
   });
 
   await t.test('a boundary missing its partition key or geometry throws', () => {
