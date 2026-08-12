@@ -35,22 +35,24 @@ exports.getBoundaries = async (req, res) => {
   try {
     const access = resolveAccess(req);
 
-    // Reference data changes rarely and the frontend fetches it on every map load. `private`
-    // rather than `public`: the response now varies by caller, so a shared cache must not hand
-    // one caller's boundaries to another.
+    // Reference data changes rarely and the frontend fetches it on every map load. The response
+    // varies by caller now, so `Vary: Authorization` rather than `private` — the anonymous
+    // response is byte-identical for every anonymous caller, which is very nearly all of them, and
+    // `private` would give up the shared cache for the one case that benefits from it most.
     if (typeof res.setHeader === 'function') {
-      res.setHeader('Cache-Control', 'private, max-age=86400');
+      res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+      res.setHeader('Vary', 'Authorization');
     }
 
-    const { type, geometry, pageSize, continuationToken } = req.query;
+    // No paging: 281 items across 3 partitions is one response. Accepting `pageSize` without
+    // returning the continuation token would hand a caller a truncated map and no way to page it.
+    const { type, geometry } = req.query;
     const { items } = await boundaries.listByType(access, {
       // Geometry is opt-OUT, not opt-in. The frontend sends `geometry=simplified` for the default
       // fidelity and nothing at all on the bbox call, so requiring `geometry=true` would strip the
       // polygons from both and blank the map without erroring.
       type,
-      withGeometry: geometry !== 'false',
-      pageSize,
-      continuationToken
+      withGeometry: geometry !== 'false'
     });
 
     return res.json(items);
