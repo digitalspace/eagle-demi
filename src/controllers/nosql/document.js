@@ -21,6 +21,7 @@ const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
 const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const aiSearch = require('../../search/ai-search');
 const { logger } = require('../../utils/logger');
+const { auditEvent, analyticsEvent } = require('../../utils/audit');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -106,6 +107,25 @@ exports.downloadDocument = async (req, res) => {
       fileName
     });
 
+    analyticsEvent(req, {
+      eventName: 'document.download',
+      projectId: doc.projectId,
+      documentId: doc.id
+    });
+
+    // A download of a document the public cannot see is an access to restricted material, which
+    // is an audit question and not a usage statistic. Public downloads stay in the analytics
+    // table only — recording every one of those for seven years is neither useful nor cheap.
+    if (!doc.isPublished) {
+      auditEvent(req, {
+        action: 'document.download',
+        targetType: 'document',
+        targetId: doc.id,
+        projectId: doc.projectId,
+        detail: { displayName: doc.displayName || null }
+      });
+    }
+
     return res.json({
       url,
       expiresIn: DOWNLOAD_URL_TTL_SECONDS,
@@ -150,6 +170,14 @@ exports.createDocument = async (req, res) => {
       contentExtracted: false,
       createdAt: now,
       updatedAt: now
+    });
+
+    auditEvent(req, {
+      action: 'document.create',
+      targetType: 'document',
+      targetId: saved.id,
+      projectId: saved.projectId,
+      detail: { displayName: saved.displayName, s3Key: saved.s3Key, isPublished: saved.isPublished }
     });
 
     return res.status(201).json(saved);
@@ -241,6 +269,19 @@ exports.updateDocument = async (req, res) => {
       updatedAt: new Date().toISOString()
     });
 
+    // Field names only — see the same call in project.js for why the values do not go in.
+    auditEvent(req, {
+      action: 'document.update',
+      targetType: 'document',
+      targetId: existing.id,
+      projectId: existing.projectId,
+      detail: {
+        fields: Object.keys(changes),
+        isPublishedFrom: existing.isPublished,
+        isPublishedTo: saved.isPublished
+      }
+    });
+
     return res.json(saved);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -273,6 +314,16 @@ exports.setDocumentPublished = async (req, res) => {
     const updated = await documents.setPublished(
       existing.id, existing.projectId, published, SECURE_ROLES
     );
+
+    // The highest-value row in the table: this is the call that changes who can see a document.
+    auditEvent(req, {
+      action: published ? 'document.publish' : 'document.unpublish',
+      targetType: 'document',
+      targetId: existing.id,
+      projectId: existing.projectId,
+      detail: { displayName: existing.displayName, isPublishedFrom: existing.isPublished }
+    });
+
     return res.json(updated);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -326,6 +377,23 @@ exports.deleteDocument = async (req, res) => {
     // instead. `deleteChunksForDocument` swallows and logs its own errors, which is why this is a
     // bare await rather than a try/catch.
     const removedChunksFromSearch = await aiSearch.deleteChunksForDocument(existing.id);
+
+    // Recorded after the cleanup calls so the row carries what actually happened to the search
+    // index and the chunks, not what was intended. The stored file survives the record, and the
+    // audit row says so — that asymmetry is the thing someone will ask about later.
+    auditEvent(req, {
+      action: 'document.delete',
+      targetType: 'document',
+      targetId: existing.id,
+      projectId: existing.projectId,
+      detail: {
+        displayName: existing.displayName,
+        removedChunks,
+        removedFromSearch,
+        removedChunksFromSearch,
+        storedFileRetained: Boolean(existing.s3Key)
+      }
+    });
 
     return res.json({
       message: 'Document deleted successfully',

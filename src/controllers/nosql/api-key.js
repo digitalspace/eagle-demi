@@ -16,6 +16,7 @@ const { generateKey, defaultExpiry } = require('../../helpers/api-key');
 const { SECURE_ROLES, WRITE_ROLES } = require('../../helpers/access-sql');
 const { forgetCachedKey } = require('../../helpers/auth');
 const { logger } = require('../../utils/logger');
+const { auditEvent } = require('../../utils/audit');
 const config = require('../../config');
 
 /** Roles a key may be granted. A key can never be given a role DEMI does not recognise. */
@@ -64,6 +65,22 @@ exports.createApiKey = async (req, res) => {
     await apiKeys.upsert(record);
     logger.info(`[demi-api] API key ${keyId} issued to '${name}' by ${record.createdBy}`);
 
+    // keyId is the PUBLIC half and is safe to record; `plaintext` and `hash` are not in this
+    // object and must never be added to it — an audit table is exactly the wrong place to put a
+    // credential that is kept for seven years.
+    auditEvent(req, {
+      action: 'apikey.create',
+      targetType: 'apikey',
+      targetId: keyId,
+      detail: {
+        name,
+        roles,
+        grantsWrite,
+        projectScope: record.projectScope,
+        expiresAt: record.expiresAt
+      }
+    });
+
     // The plaintext is returned HERE and nowhere else, ever. It is not stored and cannot be
     // recovered — a lost key is reissued, not looked up.
     return res.status(201).json({ ...apiKeys.redact(record), key: plaintext });
@@ -91,6 +108,13 @@ exports.revokeApiKey = async (req, res) => {
     // Immediate on this instance; other instances honour it within the lookup cache TTL.
     forgetCachedKey(req.params.id);
     logger.info(`[demi-api] API key ${req.params.id} revoked by ${(req.user && req.user.preferred_username) || 'unknown'}`);
+
+    auditEvent(req, {
+      action: 'apikey.revoke',
+      targetType: 'apikey',
+      targetId: req.params.id,
+      detail: { name: revoked.name, roles: revoked.roles }
+    });
 
     return res.json({ message: 'API key revoked', key: revoked });
   } catch (err) {

@@ -13,6 +13,7 @@
 const projects = require('../../repositories/projects');
 const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const aiSearch = require('../../search/ai-search');
+const { auditEvent } = require('../../utils/audit');
 
 exports.getProjects = async (req, res) => {
   try {
@@ -87,6 +88,14 @@ exports.createProject = async (req, res) => {
       updatedAt: now
     });
 
+    auditEvent(req, {
+      action: 'project.create',
+      targetType: 'project',
+      targetId: saved.id,
+      projectId: saved.id,
+      detail: { name: saved.name, isPublished: saved.isPublished }
+    });
+
     return res.status(201).json(saved);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -113,6 +122,22 @@ exports.updateProject = async (req, res) => {
       updatedAt: new Date().toISOString()
     });
 
+    // Field NAMES, not values: an audit row records who changed what and when, and a full
+    // before/after of arbitrary request bodies would put project content into a table kept for
+    // seven years. `isPublished` is the exception — a visibility flip is the change most likely
+    // to be asked about later, so both sides of it are recorded.
+    auditEvent(req, {
+      action: 'project.update',
+      targetType: 'project',
+      targetId: existing.id,
+      projectId: existing.id,
+      detail: {
+        fields: Object.keys(changes),
+        isPublishedFrom: existing.isPublished,
+        isPublishedTo: saved.isPublished
+      }
+    });
+
     return res.json(saved);
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -134,6 +159,14 @@ exports.deleteProject = async (req, res) => {
     // caller has already succeeded, so a failure here is reported, not thrown.
     const removedFromSearch =
       await aiSearch.deleteFromIndex(aiSearch.indexes().projects, existing.id);
+
+    auditEvent(req, {
+      action: 'project.delete',
+      targetType: 'project',
+      targetId: existing.id,
+      projectId: existing.id,
+      detail: { name: existing.name, removedFromSearch }
+    });
 
     return res.json({ message: 'Project deleted successfully', deleted: existing, removedFromSearch });
   } catch (err) {

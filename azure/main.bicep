@@ -168,6 +168,23 @@ module observability './modules/observability.bicep' = {
   }
 }
 
+// 5b. Audit and usage-analytics store. A SECOND Log Analytics workspace, deliberately: the one
+// above is capped with `dailyQuotaGb` and stops collecting once the cap is hit, which is correct
+// for application logs and unacceptable for a compliance record. See modules/audit-logs.bicep.
+module auditLogs './modules/audit-logs.bicep' = {
+  name: 'deploy-audit-logs'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    apiPrincipalId: identity.outputs.principalId
+    // The audit writer reports its own failures to the APPLICATION logger, so the alert that
+    // catches a dropped batch has to query that workspace rather than the audit one.
+    appLogsWorkspaceId: observability.outputs.workspaceId
+    contactEmails: contactEmails
+  }
+}
+
 // 6. Microsoft Foundry — the summariser behind `GET /api/search/summary`, and the only resource
 // here that touches a model. Retrieval stays lexical BM25 in `demi-search-dev`.
 module foundry './modules/foundry.bicep' = {
@@ -208,6 +225,8 @@ module apiWebApp './modules/api-web-app.bicep' = {
     summaryEnabled: summaryEnabled
     foundryEndpoint: foundry.outputs.foundryEndpoint
     foundryDeployment: foundry.outputs.deploymentName
+    auditDcrEndpoint: auditLogs.outputs.dcrEndpoint
+    auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
   }
 }
 
@@ -240,3 +259,7 @@ output searchEndpoint string = search.outputs.searchEndpoint
 output cosmosEndpoint string = cosmos.outputs.cosmosEndpoint
 output identityClientId string = identity.outputs.clientId
 output logAnalyticsWorkspaceName string = observability.outputs.workspaceName
+output auditWorkspaceName string = auditLogs.outputs.workspaceName
+// The query API addresses a workspace by this GUID, not by name or resource ID — so the future
+// audit read endpoint needs it, and it is otherwise a portal lookup.
+output auditWorkspaceCustomerId string = auditLogs.outputs.workspaceCustomerId

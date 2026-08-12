@@ -1,0 +1,323 @@
+// Audit and usage-analytics store.
+//
+// WHY A SECOND WORKSPACE. `observability.bicep` already builds `demi-logs-<env>`, and audit rows
+// could physically live there. They must not, for one reason: that workspace carries
+// `workspaceCapping.dailyQuotaGb` (0.5 in test, 2 in prod), which STOPS COLLECTION for the rest of
+// the UTC day once hit. That cap is the right backstop for a runaway log loop and the wrong
+// behaviour for an audit trail — a chatty error path would silently take the compliance record
+// down with it. Removing the cap to make room trades one safety for the other; a second,
+// uncapped workspace keeps both. It also separates read access: querying the audit record is a
+// different grant from reading application logs.
+//
+// WHY TWO TABLES, NOT ONE. Audit is small, identity-bearing, and must never be deleted (7 years).
+// Analytics is large, must be identity-MINIMIZED, and must be expirable on request (13 months).
+// Those two requirements collide in the same rows, so they get separate tables — and separate
+// table plans, which is also where the cost difference lives.
+//
+//   DemiAudit_CL        Analytics plan  — interactive queries cost nothing, so the UI can hammer it
+//   DemiEvents_CL       Auxiliary plan  — ~$0.15/GB ingest, queries billed on GB scanned
+//   DemiEventsHourly_CL Analytics plan  — created BY the summary rule below, not declared here
+//
+// The summary rule is what makes the cheap tier usable: dashboards read the small hourly rollup
+// for free instead of scanning raw events.
+
+@description('Location for the workspace and data collection rule. Both must share a region.')
+param location string = resourceGroup().location
+
+@description('Environment name (e.g. dev, test, prod)')
+param environmentName string
+
+@description('Default resource tags')
+param tags object
+
+@description('Principal ID of the identity the API runs as. Granted publish-only rights on the DCR.')
+param apiPrincipalId string
+
+@description('Resource ID of the APPLICATION logs workspace (observability.bicep). The audit writer reports its own failures to the app logger, so the alert below queries that workspace, not this one.')
+param appLogsWorkspaceId string = ''
+
+@description('Who to tell when the audit pipeline starts dropping rows.')
+param contactEmails array = [
+  'Daniel.T.Truong@gov.bc.ca'
+]
+
+var workspaceName = 'demi-audit-${environmentName}'
+var dcrName = 'demi-audit-dcr-${environmentName}'
+var auditTableName = 'DemiAudit_CL'
+var eventsTableName = 'DemiEvents_CL'
+var summaryTableName = 'DemiEventsHourly_CL'
+
+// Retention. 2555 days is seven years, the horizon audit records are kept against; the first 730
+// (the platform maximum for interactive retention) stay queryable, the rest sit in long-term
+// retention and come back through a search job. 400 days on events is thirteen months — enough to
+// compare a month against the same month last year, and no longer.
+var auditInteractiveDays = 730
+var auditTotalDays = 2555
+var eventsTotalDays = 400
+
+// Column sets are declared once and used twice: once as the table schema, once as the DCR stream
+// declaration. They must agree, and a single source is the only way to keep them agreeing.
+//
+// Fixed columns exist for anything ever filtered or grouped on. Everything else goes in `Detail`,
+// which is dynamic — so a new event type is a new value, not a schema change.
+var auditColumns = [
+  { name: 'TimeGenerated', type: 'datetime' }
+  { name: 'EventId', type: 'string' }
+  { name: 'Action', type: 'string' }
+  { name: 'Outcome', type: 'string' }
+  { name: 'ActorId', type: 'string' }
+  { name: 'ActorType', type: 'string' }
+  { name: 'ActorRoles', type: 'string' }
+  { name: 'SourceIp', type: 'string' }
+  { name: 'TargetType', type: 'string' }
+  { name: 'TargetId', type: 'string' }
+  { name: 'ProjectId', type: 'string' }
+  { name: 'CorrelationId', type: 'string' }
+  { name: 'Env', type: 'string' }
+  { name: 'Detail', type: 'dynamic' }
+]
+
+// No ActorId and no IP. `AnonId` is a salted hash the app computes with a salt that rotates every
+// 24 hours, so identity expires by construction rather than by anyone remembering to delete rows —
+// which matters because Auxiliary tables have no cheap targeted delete.
+var eventsColumns = [
+  { name: 'TimeGenerated', type: 'datetime' }
+  { name: 'EventName', type: 'string' }
+  { name: 'AnonId', type: 'string' }
+  { name: 'SessionId', type: 'string' }
+  { name: 'ProjectId', type: 'string' }
+  { name: 'DocumentId', type: 'string' }
+  { name: 'SearchTerm', type: 'string' }
+  { name: 'ResultCount', type: 'int' }
+  { name: 'DeviceType', type: 'string' }
+  { name: 'Country', type: 'string' }
+  { name: 'Referrer', type: 'string' }
+  { name: 'Env', type: 'string' }
+  { name: 'Detail', type: 'dynamic' }
+]
+
+resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+  name: workspaceName
+  location: location
+  tags: tags
+  properties: {
+    sku: {
+      name: 'PerGB2018'
+    }
+    // Workspace-level default only. Both tables below set their own retention, and per-table
+    // settings win. Deliberately NO workspaceCapping — see the header.
+    retentionInDays: 30
+    features: {
+      // FALSE here, and true in observability.bicep, on purpose. There the point is that someone
+      // with Reader on the app can read the app's logs. Here the audit record is not an attribute
+      // of any monitored resource, and read access should be a deliberate grant on this workspace.
+      enableLogAccessUsingOnlyResourcePermissions: false
+    }
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
+  }
+}
+
+// API version 2025-07-01 is load-bearing: `plan: 'Auxiliary'` does not exist before it, and
+// 2023-09-01 accepts only 'Analytics' and 'Basic'.
+resource auditTable 'Microsoft.OperationalInsights/workspaces/tables@2025-07-01' = {
+  parent: workspace
+  name: auditTableName
+  properties: {
+    plan: 'Analytics'
+    retentionInDays: auditInteractiveDays
+    totalRetentionInDays: auditTotalDays
+    schema: {
+      name: auditTableName
+      columns: auditColumns
+    }
+  }
+}
+
+resource eventsTable 'Microsoft.OperationalInsights/workspaces/tables@2025-07-01' = {
+  parent: workspace
+  name: eventsTableName
+  properties: {
+    plan: 'Auxiliary'
+    // NO retentionInDays. It is read-only on Auxiliary and Basic tables, and setting it is
+    // rejected rather than ignored.
+    totalRetentionInDays: eventsTotalDays
+    schema: {
+      name: eventsTableName
+      columns: eventsColumns
+    }
+  }
+}
+
+// `kind: 'Direct'` is what lets the app POST straight to the rule's own ingestion endpoint. The
+// alternative is a Data Collection Endpoint resource, which is only needed to put ingestion behind
+// Private Link — and this landing zone's `Deny-PublicPaaSEndpoints` policy applies to PaaS
+// accounts, not to the Microsoft-managed ingestion endpoint a Direct DCR exposes.
+resource dcr 'Microsoft.Insights/dataCollectionRules@2023-03-11' = {
+  name: dcrName
+  location: location
+  tags: tags
+  kind: 'Direct'
+  properties: {
+    streamDeclarations: {
+      'Custom-DemiAudit_CL': {
+        columns: auditColumns
+      }
+      'Custom-DemiEvents_CL': {
+        columns: eventsColumns
+      }
+    }
+    destinations: {
+      logAnalytics: [
+        {
+          workspaceResourceId: workspace.id
+          name: 'demiAuditWorkspace'
+        }
+      ]
+    }
+    dataFlows: [
+      {
+        streams: [ 'Custom-DemiAudit_CL' ]
+        destinations: [ 'demiAuditWorkspace' ]
+        outputStream: 'Custom-${auditTableName}'
+        // The IP mask lives HERE rather than in the app, so it cannot be bypassed by whatever
+        // calls the ingestion endpoint. Keeps the first two octets — enough to tell "inside the
+        // gov network" from "not" — and drops anything that is not dotted-quad (IPv6, 'unknown')
+        // to 'redacted' rather than passing it through unmasked.
+        //
+        // `extract` is called twice instead of stashing a temp column: a transform's output
+        // columns must match the destination table, and a leftover scratch column is one more
+        // thing to strip.
+        transformKql: 'source | extend SourceIp = iff(isempty(extract(@"^(\\d{1,3}\\.\\d{1,3})\\.", 1, SourceIp)), "redacted", strcat(extract(@"^(\\d{1,3}\\.\\d{1,3})\\.", 1, SourceIp), ".0.0"))'
+      }
+      {
+        streams: [ 'Custom-DemiEvents_CL' ]
+        destinations: [ 'demiAuditWorkspace' ]
+        outputStream: 'Custom-${eventsTableName}'
+        // Identity minimisation already happened in the app — there is no IP here to mask.
+        transformKql: 'source'
+      }
+    ]
+  }
+  dependsOn: [
+    auditTable
+    eventsTable
+  ]
+}
+
+// Monitoring Metrics Publisher. Publish-only: it grants the app the right to SEND data to this
+// rule and no right to read anything back. The audit writer is not a reader.
+var monitoringMetricsPublisherRoleId = '3913510d-42f4-4e42-8a64-420c390055eb'
+
+resource publisherAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: dcr
+  name: guid(dcr.id, apiPrincipalId, monitoringMetricsPublisherRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringMetricsPublisherRoleId)
+    principalId: apiPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// The rollup. Azure Monitor CREATES `DemiEventsHourly_CL` from this query's result schema, which
+// is why the table is not declared above — declaring it too would fight the rule over its columns.
+//
+// No time filter and no `bin(TimeGenerated, 1h)` in the query: `binSize` already defines the
+// window, and the destination rows carry `_BinStartTime`. Adding either narrows the bin instead of
+// grouping it.
+resource eventsRollup 'Microsoft.OperationalInsights/workspaces/summaryLogs@2025-07-01' = {
+  parent: workspace
+  name: 'demi-events-hourly'
+  properties: {
+    ruleType: 'User'
+    displayName: 'DEMI usage events, hourly'
+    description: 'Hourly rollup of ${eventsTableName} so dashboards read a small Analytics table instead of scanning raw Auxiliary data.'
+    ruleDefinition: {
+      query: '${eventsTableName} | summarize Events = count(), Users = dcount(AnonId), AvgResults = avg(ResultCount) by EventName, ProjectId, Env'
+      binSize: 60
+      destinationTable: summaryTableName
+      timeSelector: 'TimeGenerated'
+    }
+  }
+  dependsOn: [
+    eventsTable
+  ]
+}
+
+// AU-5, the other half of fire-and-forget. The writer never fails a request when ingestion is
+// down; it drops the rows into the application logger instead. That is only a recovery path if
+// somebody finds out it happened, so the drop is alerted on rather than left in a log nobody reads.
+//
+// The query runs against the APPLICATION workspace, not this one — by the time the writer is
+// logging a drop, this workspace is precisely what it could not reach.
+//
+// KNOWN CEILING: the fallback lands in the capped workspace, so a sustained outage can dump enough
+// payload to hit `dailyQuotaGb` and lose the tail of the very rows it was preserving. Bounded
+// recovery beats none, and the alert is what makes the window short.
+resource alertGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
+  name: 'demi-audit-alerts-${environmentName}'
+  location: 'global'
+  tags: tags
+  properties: {
+    // Max 12 characters, and it is what shows up as the SMS/email sender label.
+    groupShortName: 'demiaudit'
+    enabled: true
+    emailReceivers: [for (email, i) in contactEmails: {
+      name: 'email${i}'
+      emailAddress: email
+      useCommonAlertSchema: true
+    }]
+  }
+}
+
+resource auditDropAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(appLogsWorkspaceId)) {
+  name: 'demi-audit-drop-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI audit rows dropped'
+    description: 'The audit writer gave up on a batch after three attempts. Those rows exist only in the application log, and only for as long as its retention.'
+    // Error, not warning: a gap in the audit trail is not a degraded feature.
+    severity: 1
+    enabled: true
+    scopes: [ appLogsWorkspaceId ]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT15M'
+    criteria: {
+      allOf: [
+        {
+          // `AppTraces` is the workspace-based Application Insights table the winston lines land
+          // in — not `traces`, which is the classic schema and does not exist here.
+          query: 'AppTraces | where Message has "[Audit] dropped"'
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
+@description('Ingestion endpoint the app POSTs to. Empty until the Direct DCR finishes provisioning.')
+output dcrEndpoint string = dcr.properties.endpoints.logsIngestion
+
+@description('Immutable ID of the DCR — the path segment in the ingestion URL, not the resource name.')
+output dcrImmutableId string = dcr.properties.immutableId
+
+@description('Name of the audit workspace, for KQL queries and the future read endpoint')
+output workspaceName string = workspace.name
+
+@description('Resource ID of the audit workspace')
+output workspaceId string = workspace.id
+
+@description('GUID the query API addresses this workspace by — not the resource ID')
+output workspaceCustomerId string = workspace.properties.customerId
