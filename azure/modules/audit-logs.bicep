@@ -223,8 +223,37 @@ resource publisherAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01
   }
 }
 
-// The rollup. Azure Monitor CREATES `DemiEventsHourly_CL` from this query's result schema, which
-// is why the table is not declared above — declaring it too would fight the rule over its columns.
+// The rollup destination is declared rather than left to the summary rule.
+//
+// The rule creates the table on its first run if it is absent, but it creates it with the
+// WORKSPACE default retention — 30 days, measured on the first staging deploy. A rollup that
+// expires in a month cannot answer "this month against the same month last year", which is most of
+// why it exists. Declaring it here fixes the retention; Azure Monitor adds any columns the query
+// introduces to an existing table, so the rule still owns the schema in practice.
+resource eventsHourlyTable 'Microsoft.OperationalInsights/workspaces/tables@2025-07-01' = {
+  parent: workspace
+  name: summaryTableName
+  properties: {
+    plan: 'Analytics'
+    retentionInDays: auditInteractiveDays
+    totalRetentionInDays: auditInteractiveDays
+    schema: {
+      name: summaryTableName
+      columns: [
+        { name: 'TimeGenerated', type: 'datetime' }
+        { name: 'EventName', type: 'string' }
+        { name: 'ProjectId', type: 'string' }
+        { name: 'Env', type: 'string' }
+        // count() and dcount() are long; avg() is real. A type mismatch here breaks the rule's
+        // write rather than the deployment, so they track the query below.
+        { name: 'Events', type: 'long' }
+        { name: 'Users', type: 'long' }
+        { name: 'AvgResults', type: 'real' }
+      ]
+    }
+  }
+}
+
 //
 // No time filter and no `bin(TimeGenerated, 1h)` in the query: `binSize` already defines the
 // window, and the destination rows carry `_BinStartTime`. Adding either narrows the bin instead of
