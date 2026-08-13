@@ -39,6 +39,11 @@ param doclingApiKey = readEnvironmentVariable('DOCLING_API_KEY')
 // dev data with nothing logged.
 param eagleApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api/public'
 
+// pe-demi-foundry-test already exists, connection plsc-demi-foundry-test, state Approved. Leaving
+// this true re-PUTs it, which loses a race against the account PUT and fails the whole deployment
+// — including deploy-api-web-app, which never runs because it consumes foundry's outputs.
+param deployFoundryPrivateEndpoint = false
+
 // Landing-zone subnets in c4b0a8-test-networking. The PE subnet mirrors dev's. App Service VNet
 // integration uses snet-app-service, NOT c4b0a8-test-cond-ext-webapp-subnet — that one is claimed
 // by asp-condition-extractor through a service-association link (allowDelete: false), and a
