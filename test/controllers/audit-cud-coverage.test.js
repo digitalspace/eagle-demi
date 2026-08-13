@@ -147,6 +147,28 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written[0].Detail.chunks, res.body.chunks);
   });
 
+  await t.test('a reported extraction failure writes one row, marked failure', async () => {
+    // Answers 200 and marks the document extracted with zero chunks, so it is a successful
+    // authenticated update however the extraction went — the row is what attributes a document
+    // that looks processed and has no text.
+    t.mock.method(documents, 'getById', async () => ({
+      id: 'd2', projectId: '207', read: ['staff', 'sysadmin'], isPublished: false
+    }));
+    t.mock.method(documents, 'patchExtraction', async () => ({}));
+
+    const res = mockRes();
+    const written = await rowsFrom(() => documentController.ingestChunks({
+      params: { id: 'd2' }, query: {}, body: { error: 'docling timed out' }, user: STAFF
+    }, res));
+
+    assert.strictEqual(res.body.recordedError, true);
+    assert.strictEqual(written.length, 1);
+    assert.strictEqual(written[0].Action, 'document.ingest');
+    assert.strictEqual(written[0].Outcome, 'failure');
+    assert.strictEqual(written[0].Detail.chunks, 0);
+    assert.strictEqual(written[0].Detail.recordedError, true);
+  });
+
   await t.test('boundary create writes one boundary.create', async () => {
     t.mock.method(boundaries, 'upsert', async (item) => item);
 

@@ -738,6 +738,19 @@ exports.ingestChunks = async (req, res) => {
         extractionMethod: 'docling',
         ...(provenance ? { extraction: provenance } : {})
       });
+      // Audited like the two success paths below, because this one succeeds: it answers 200 and
+      // leaves the document marked extracted with zero chunks. `outcome: 'failure'` is about the
+      // extraction the caller reported, not about the request, and it is the state someone later
+      // has to attribute — a document that looks processed and has no text.
+      auditEvent(req, {
+        action: 'document.ingest',
+        outcome: 'failure',
+        targetType: 'document',
+        targetId: doc.id,
+        projectId: doc.projectId,
+        detail: { chunks: 0, recordedError: true, streamed: false }
+      });
+
       return res.json({ id: doc.id, chunks: 0, recordedError: true });
     }
 
