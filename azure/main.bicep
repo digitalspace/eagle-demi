@@ -114,6 +114,21 @@ param deployDocumentStorage bool = false
 @description('Turn the AI summariser on. The Foundry account is deployed regardless; this is the app-side switch.')
 param summaryEnabled bool = true
 
+// The Foundry private endpoint races its own account on every deploy. ARM PUTs the account, the
+// Cognitive Services RP leaves it in state `Accepted` while it reconciles, and the PE — which
+// depends on the account id — is then rejected with AccountProvisioningStateInvalid. It is
+// deterministic, not flaky: three consecutive runs failed identically on 2026-08-13.
+//
+// foundry.bicep's header says to read that failure as "the PE already exists" and move on, which
+// was true when nothing consumed the module's outputs. It no longer is: a Failed module means
+// `foundry.outputs.foundryEndpoint` never resolves, so `deploy-api-web-app` never runs at all.
+//
+// So: false once the PE exists and is Approved, which reuses the module's existing
+// `if (!empty(peSubnetId))` gate to skip re-PUTting a resource that is already correct. Leave it
+// true for a fresh environment, where the PE has to be created and one failed run is the price.
+@description('Create the Foundry private endpoint. Set false when it already exists — re-PUTting it races the account PUT and fails the whole deployment.')
+param deployFoundryPrivateEndpoint bool = true
+
 // Mandatory Cost Management Tags applied across ALL resources
 var defaultTags = {
   Project: 'DEMI'
@@ -228,7 +243,8 @@ module foundry './modules/foundry.bicep' = {
     environmentName: environmentName
     tags: defaultTags
     identityPrincipalId: identity.outputs.principalId
-    peSubnetId: privateEndpointSubnetId
+    // Empty skips the PE via the module's own gate — see deployFoundryPrivateEndpoint above.
+    peSubnetId: deployFoundryPrivateEndpoint ? privateEndpointSubnetId : ''
     peLocation: location
   }
 }
