@@ -87,6 +87,9 @@ param auditDcrImmutableId string = ''
 @description('Resource id of the demi-audit-<env> workspace. Empty skips deploy-access auditing rather than failing the deployment.')
 param auditWorkspaceId string = ''
 
+@description('Upstream eagle-api the seed loader reads. Must match the environment — the code default in src/seed/sources.js is the DEV instance, so a wrong or missing value reads dev data.')
+param eagleApiBase string
+
 var apiAppName = 'demi-api-${environmentName}'
 var appServicePlanName = 'demi-plan-${environmentName}'
 var storageAccountName = take('demistg${environmentName}${uniqueString(resourceGroup().id)}', 24)
@@ -254,9 +257,17 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'STORAGE_BACKEND'
           value: storageBackend
         }
-        // Credentials for the write paths. Empty here on purpose: these are set out of band rather
-        // than committed, and a template that carried real values would put them in deployment
-        // history. ADMIN_API_KEY -- not DOCLING_API_KEY -- is what the admin endpoints check.
+        // Upstream eagle-api the seed loader reads. Declared here because this appSettings array is
+        // a WHOLE-COLLECTION PUT: a setting that exists live and is absent here is deleted, and
+        // src/seed/sources.js:19 then falls back to its hardcoded eagle-DEV URL — so omitting this
+        // silently repoints staging's seed at dev data with no error anywhere.
+        {
+          name: 'EAGLE_API_BASE'
+          value: eagleApiBase
+        }
+        // Credentials for the write paths. Supplied per-environment from the live app settings and
+        // never committed — a template carrying real values would put them in deployment history.
+        // ADMIN_API_KEY -- not DOCLING_API_KEY -- is what the admin endpoints check.
         {
           name: 'ADMIN_API_KEY'
           value: adminApiKey

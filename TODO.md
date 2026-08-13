@@ -370,11 +370,14 @@ in the audit sections above; this is only what is still outstanding.
 
 ### 1. Do next — cheap, and something is wrong until they are done
 
-- [ ] **Deploy the Bicep index changes.** `documents /id`, `boundaries /id`, `chunks /isPublished`
-      and the boundary `read[]`/`isPublished` paths are declared but not live, so those predicates
-      are scanning today. **Proof:** `az cosmosdb sql container show` lists the new paths.
-      Note this is the FIRST `main.bicep` deploy anyone has run — it is gated on RG-scope rights,
-      so it is not as cheap as it reads.
+- [ ] **Deploy the Bicep index changes.** Narrowed on 2026-08-13 by the first `main.bicep` apply:
+      `chunks /isPublished` is already live, and `documents /id` and `boundaries /id` turned out to
+      be undeployable by construction — Cosmos rejects `/id` in an indexing policy because it is a
+      system property that is always indexed, so the by-id fallback those lines were meant to serve
+      was never scanning in the first place. Both were removed from the template.
+      What is genuinely still missing is the boundary `read[]`/`isPublished` pair, which does scan
+      on every anonymous map load. **Proof:** `az cosmosdb sql container show -n boundaries` lists
+      `/read/[]/?` and `/isPublished/?`.
 - [ ] **Mint the first real service key.** It is on the list twice over now: it is the only way to
       exercise the ACL against anything, because **every row in dev is public**, so no live probe of
       the read path can fail. **Proof:** a key with `roles:['staff'], projectScope:['<id>']` returns
@@ -714,7 +717,7 @@ in the audit sections above; this is only what is still outstanding.
       `POST /admin/api-keys`, with their own roles, expiry and revocation), the `demi-service-read`
       read-only tier, and `requireWrite` on every mutating route. It deployed the moment it merged,
       and for a few hours it could not work: `src/repositories/api-keys.js` reads a Cosmos container
-      declared **only** in `azure/modules/cosmos-nosql.bicep`, a template that has never run.
+      declared **only** in `azure/modules/cosmos-nosql.bicep`, which did not run until 2026-08-13.
       Fixed WITHOUT deploying that template, which is the point worth keeping: container creation is
       control-plane, so it is one `az cosmosdb sql container create -g c4b0a8-dev-rg
       -a demi-cosmos-dev -d demi -n apikeys --partition-key-path /id`, with the same indexing policy
@@ -728,14 +731,18 @@ in the audit sections above; this is only what is still outstanding.
       only way in from a laptop.
       **The registry is empty, so `ADMIN_API_KEY` is still the only credential.** Minting the first
       real key is the next step, and that is what break-glass is for.
-- [ ] **`main.bicep` has never been deployed and still should not be.** It now describes dev
-      accurately — `az deployment group what-if` reports zero creates and zero deletes against the
-      live group — but it has never actually run. The dev infra job was reduced to `az bicep build`
-      on 2026-08-04 and moved out of the deploy path entirely on 2026-08-05, into `pr.yaml` as
-      `validate-bicep`. Deploying the template for the first time is its own decision. CI cannot
-      make that decision by accident: `demi-cicd-dev` holds Website Contributor on two App Services
-      and nothing at resource-group scope, so it cannot run an ARM deployment even if a job were
-      added back.
+- [x] **`main.bicep` has been deployed** — first applied to `c4b0a8-test-rg` on 2026-08-13, having
+      never run anywhere before that. It is still not something CI can do by accident: the infra job
+      was reduced to `az bicep build` on 2026-08-04 and moved to `pr.yaml` as `validate-bicep` on
+      2026-08-05, and the CI identity holds Website Contributor on two App Services with nothing at
+      resource-group scope. Infra changes stay a deliberate `az deployment group create` by hand.
+
+      **The first apply failed half-way, and what it found is the part worth keeping.** `what-if`
+      had reported a clean diff for months and was wrong twice over: it does not validate
+      resource-provider rules, so it never noticed that Cosmos rejects `/id/?` in an indexing
+      policy; and it masks `@secure()` values, so it never showed that `main.bicep` failed to pass
+      `adminApiKey`/`doclingApiKey` and would have blanked both credentials on the live app. Treat a
+      clean `what-if` as necessary and nowhere near sufficient — read the secret path by hand.
 
 ## Semantic ranker — two things to watch, now that it is live
 
@@ -770,8 +777,8 @@ in the audit sections above; this is only what is still outstanding.
       at it, so it was never going to become the pipeline. The two `setByPolicy-LogAnalytics`
       settings on Cosmos and AI Search go to the landing zone's own
       `bcgov-managed-lz-live-la` in a different subscription; platform telemetry, not ours, and not
-      queryable as an app log. That module has never been deployed, because `main.bicep` has never
-      been deployed.
+      queryable as an app log. That module deployed for the first time on 2026-08-13, in the same
+      apply that first ran `main.bicep`.
       So every "the reason is logged" claim in this file means "written to the App Service log
       stream", which is visible only to somebody already watching, and gone after. That is the exact
       failure `observability.bicep`'s own header describes, and it is why the ranking entry above had

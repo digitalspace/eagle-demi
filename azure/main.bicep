@@ -45,6 +45,28 @@ param minioAccessKey string
 @secure()
 param minioSecretKey string
 
+// These two reach app settings directly (api-web-app.bicep). Until now main.bicep did not pass them
+// at all, so the module default of '' applied and the first successful deploy would have written
+// ADMIN_API_KEY='' and DOCLING_API_KEY='' over the live values — destroying the break-glass
+// credential and the extraction host's key. `what-if` cannot surface that, because @secure() values
+// are masked in its output, which is why it stayed invisible through several reviews.
+//
+// The live app settings are the source of truth; the deploy round-trips them in. Empty is still
+// permitted so a fresh environment can be stood up before the credentials exist.
+// No `= ''` default on either: an unset value must fail the build, not deploy an empty string over
+// a live credential. The param files source them from the environment with no fallback, so a
+// forgotten export stops the deploy instead of silently destroying the app.
+@description('Break-glass admin credential. Round-tripped from the live app settings at deploy time.')
+@secure()
+param adminApiKey string
+
+@description('Extraction host credential. Same handling as adminApiKey.')
+@secure()
+param doclingApiKey string
+
+@description('Upstream eagle-api the seed loader reads. Environment-specific — the code default is the DEV instance, so this must be set per environment or staging silently reads dev data.')
+param eagleApiBase string
+
 // Bucket and prefix were previously set out of band, so every template deploy silently reset them
 // to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
 @description('Object-store bucket name (dev: asnpnn, test: zdspnb).')
@@ -226,6 +248,9 @@ module apiWebApp './modules/api-web-app.bicep' = {
     minioSecretKey: minioSecretKey
     minioBucketName: minioBucketName
     minioKeyPrefix: minioKeyPrefix
+    adminApiKey: adminApiKey
+    doclingApiKey: doclingApiKey
+    eagleApiBase: eagleApiBase
     apiSubnetId: appServiceSubnetId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId
