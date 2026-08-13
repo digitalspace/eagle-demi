@@ -507,6 +507,31 @@ resource apiKeysContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
   }
 }
 
+// Runtime configuration for the frontend, one item with id 'config'. Partitioned on /id so the
+// read GET /api/config performs is a point read in a single partition — ~1 RU, and serverless
+// bills consumption, so an idle container costs nothing.
+//
+// Its own container rather than a row in an existing one: `leases` is change-feed state the SDK
+// owns, and `apikeys` is a secret store whose indexing policy exists to keep /hash out of the
+// index. Neither is the right neighbour for a document that is served to the public verbatim.
+//
+// No indexing policy: one item, read by id, never queried.
+resource configContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'config'
+  properties: {
+    resource: {
+      id: 'config'
+      partitionKey: {
+        paths: [
+          '/id'
+        ]
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
 // ── Data-plane RBAC ──────────────────────────────────────────────────────────
 // Cosmos NoSQL data-plane role assignments cannot be managed in the Azure portal, so they
 // have to live here. Built-in definitions are used rather than a custom role — a custom

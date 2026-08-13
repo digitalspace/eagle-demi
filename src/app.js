@@ -96,7 +96,9 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Config controller
 const configController = require('./controllers/config');
 
-// Fast non-DB routes (/api/config, /config, /api/health, /health)
+// Mounted ahead of everything that needs the database. /api/health and /health are genuinely
+// non-DB; /api/config reads the `config` container but falls back to its app settings when that
+// read fails, so it answers whether or not Cosmos does.
 app.get('/api/config', configController.getConfig);
 app.get('/config', configController.getConfig);
 // Liveness only — the process is up. Deliberately does NOT claim anything about the
