@@ -15,6 +15,8 @@ param appServiceSubnetId = '/subscriptions/d2f8d048-2af3-44fd-81cc-858c040001f2/
 
 // budgetAmount deliberately unset — main.bicep's default is the single source of truth for the
 // ceiling. Setting it here silently reverted the raise to 100 on the next deployment.
+// Both — see main.test.bicepparam.
 param contactEmails = [
   'daniel@digitalspace.ca'
+  'Daniel.T.Truong@gov.bc.ca'
 ]
