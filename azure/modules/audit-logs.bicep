@@ -253,6 +253,7 @@ resource eventsHourlyTable 'Microsoft.OperationalInsights/workspaces/tables@2025
       columns: [
         { name: 'TimeGenerated', type: 'datetime' }
         { name: 'EventName', type: 'string' }
+        { name: 'ActorType', type: 'string' }
         { name: 'ProjectId', type: 'string' }
         { name: 'Env', type: 'string' }
         // count() and dcount() are long; avg() is real. A type mismatch here breaks the rule's
@@ -277,7 +278,12 @@ resource eventsRollup 'Microsoft.OperationalInsights/workspaces/summaryLogs@2025
     displayName: 'DEMI usage events, hourly'
     description: 'Hourly rollup of ${eventsTableName} so dashboards read a small Analytics table instead of scanning raw Auxiliary data.'
     ruleDefinition: {
-      query: '${eventsTableName} | summarize Events = count(), Users = dcount(AnonId), AvgResults = avg(ResultCount) by EventName, ProjectId, Env'
+      // Grouped by ActorType as well, so the rollup can answer "how much of this is staff and how
+      // much is the public" — the first question anyone asks of usage data, and one the raw table
+      // cannot be asked cheaply because Auxiliary queries bill on data scanned. It is also the only
+      // way to see signed-in attribution at all: a direct query against an Auxiliary table returns
+      // nothing, while the summary rule reads it server-side quite happily.
+      query: '${eventsTableName} | summarize Events = count(), Users = dcount(AnonId), AvgResults = avg(ResultCount) by EventName, ActorType, ProjectId, Env'
       binSize: 60
       destinationTable: summaryTableName
       timeSelector: 'TimeGenerated'
