@@ -15,6 +15,7 @@
 const boundaries = require('../../repositories/boundaries');
 const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
+const { auditEvent } = require('../../utils/audit');
 
 /**
  * The ACL a written boundary carries.
@@ -101,6 +102,15 @@ exports.createBoundary = async (req, res) => {
       updatedAt: new Date().toISOString()
     });
 
+    // No ProjectId: boundaries are reference geography partitioned on `type`, with no parent
+    // project. Left empty rather than borrowing an unrelated id to fill the column.
+    auditEvent(req, {
+      action: 'boundary.create',
+      targetType: 'boundary',
+      targetId: saved.id,
+      detail: { type: saved.type, name: saved.name, isPublished: saved.isPublished }
+    });
+
     return res.status(201).json(saved);
   } catch (err) {
     return serverError(res, err, 'createBoundary failed');
@@ -135,6 +145,21 @@ exports.updateBoundary = async (req, res) => {
       updatedAt: new Date().toISOString()
     });
 
+    // The publish transition is recorded the way project.update records it: a boundary's `read[]`
+    // is derived from isPublished (resolveBoundaryAcl above), so flipping it is a visibility
+    // change, and that is the edit anyone reads this table to find.
+    auditEvent(req, {
+      action: 'boundary.update',
+      targetType: 'boundary',
+      targetId: existing.id,
+      detail: {
+        type: existing.type,
+        changed: Object.keys(changes),
+        isPublishedFrom: existing.isPublished,
+        isPublishedTo: saved.isPublished
+      }
+    });
+
     return res.json(saved);
   } catch (err) {
     return serverError(res, err, 'updateBoundary failed');
@@ -150,6 +175,14 @@ exports.deleteBoundary = async (req, res) => {
     }
 
     await boundaries.deleteById(existing.id, existing.type);
+
+    auditEvent(req, {
+      action: 'boundary.delete',
+      targetType: 'boundary',
+      targetId: existing.id,
+      detail: { type: existing.type, name: existing.name, isPublished: existing.isPublished }
+    });
+
     return res.json({ message: 'Boundary deleted successfully', deleted: existing });
   } catch (err) {
     return serverError(res, err, 'deleteBoundary failed');

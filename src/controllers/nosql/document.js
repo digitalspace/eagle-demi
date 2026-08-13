@@ -243,6 +243,17 @@ exports.extractDocument = async (req, res) => {
       updatedAt: now
     });
 
+    // Same action as createDocument, not a `document.upload` of its own: this is the same thing
+    // happening through a second door, and two action names would make "who created documents"
+    // two queries that a reader has to remember to union. `via` is what separates them.
+    auditEvent(req, {
+      action: 'document.create',
+      targetType: 'document',
+      targetId: saved.id,
+      projectId: saved.projectId,
+      detail: { displayName: saved.displayName, isPublished: saved.isPublished, via: 'upload' }
+    });
+
     return res.status(202).json({
       message: 'File stored. Text extraction runs on the next scheduled extraction pass.',
       docId: String(saved.id)
@@ -677,6 +688,19 @@ async function ingestChunksStreaming(req, res, doc) {
     ...(provenance ? { extraction: provenance } : {})
   });
 
+  // One row per document, never per chunk: a full corpus re-extraction is ~60k documents against
+  // ~1.13M chunks, and the audit question is "who replaced this document's content", not "which
+  // chunk". Duplicated in the JSON path rather than hoisted into ingestChunks — this function and
+  // its fail() both hand the same `res` back to the caller, so the caller cannot tell a completed
+  // stream from a 500.
+  auditEvent(req, {
+    action: 'document.ingest',
+    targetType: 'document',
+    targetId: doc.id,
+    projectId: doc.projectId,
+    detail: { chunks: keepIds.length, streamed: true }
+  });
+
   return res.json({ id: doc.id, chunks: keepIds.length, extraction: provenance || null,
     streamed: true });
 }
@@ -764,6 +788,14 @@ exports.ingestChunks = async (req, res) => {
       contentExtractionError: null,
       extractionMethod: 'docling',
       ...(provenance ? { extraction: provenance } : {})
+    });
+
+    auditEvent(req, {
+      action: 'document.ingest',
+      targetType: 'document',
+      targetId: doc.id,
+      projectId: doc.projectId,
+      detail: { chunks: items.length, streamed: false }
     });
 
     return res.json({ id: doc.id, chunks: items.length, extraction: provenance || null });

@@ -30,5 +30,5 @@ param privateEndpointSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff671
 param appServiceSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-app-service'
 
 param contactEmails = [
-  'Daniel.T.Truong@gov.bc.ca'
+  'daniel@digitalspace.ca'
 ]

@@ -266,6 +266,37 @@ resource eventsHourlyTable 'Microsoft.OperationalInsights/workspaces/tables@2025
   }
 }
 
+// Resource-log tables fed by the diagnostic settings in api-web-app.bicep and cosmos-nosql.bicep.
+//
+// Declared for exactly the reason eventsHourlyTable above is: a table that arrives in this
+// workspace on its own inherits the WORKSPACE default of 30 days, and an audit record that expires
+// in a month is not one. These are Azure tables rather than custom ones, so they carry no `plan`
+// and no `schema` — Azure owns both — and only retention is ours to set.
+//
+// 90/730 rather than the audit table's 730/2556: an investigation into who deployed or who altered
+// a container is measured in weeks, and long-term retention costs a fraction of interactive.
+//
+// If a first deployment fails here because the table does not exist yet, let the diagnostic
+// setting materialise it, run `az monitor log-analytics workspace table update` once, and this
+// becomes idempotent.
+resource appServiceAuditTable 'Microsoft.OperationalInsights/workspaces/tables@2025-07-01' = {
+  parent: workspace
+  name: 'AppServiceAuditLogs'
+  properties: {
+    retentionInDays: 90
+    totalRetentionInDays: 730
+  }
+}
+
+resource cosmosControlPlaneTable 'Microsoft.OperationalInsights/workspaces/tables@2025-07-01' = {
+  parent: workspace
+  name: 'CDBControlPlaneRequests'
+  properties: {
+    retentionInDays: 90
+    totalRetentionInDays: 730
+  }
+}
+
 //
 // No time filter and no `bin(TimeGenerated, 1h)` in the query: `binSize` already defines the
 // window, and the destination rows carry `_BinStartTime`. Adding either narrows the bin instead of
