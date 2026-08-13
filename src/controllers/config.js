@@ -3,6 +3,26 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('../config');
+const configRepository = require('../repositories/config');
+const { logger } = require('../utils/logger');
+
+// The keys the stored document is allowed to supply. Anything else in the container is ignored,
+// so adding a field to the document does not publish it — this list is the only gate on a public,
+// unauthenticated payload.
+//
+// Absent on purpose:
+//   API_LOCATION / API_PATH  the frontend bootstraps from these, so a stored value would fight
+//                            the one baked into env.js at deploy time.
+//   BUILD_ID                 must keep coming from the deploy package; see below.
+const OVERRIDABLE_KEYS = [
+  'ENVIRONMENT',
+  'KEYCLOAK_CLIENT_ID',
+  'KEYCLOAK_URL',
+  'KEYCLOAK_REALM',
+  'KEYCLOAK_ENABLED',
+  'BANNER_COLOUR',
+  'USE_MOCK_DATA'
+];
 
 // Which build is actually answering, read ONCE at load from a file stamped into the deploy package
 // by scripts/package-api.py.
@@ -23,14 +43,11 @@ const BUILD_ID = (() => {
 })();
 
 /**
- * Returns dynamic runtime configuration to the frontend.
- *
- * This endpoint is UNAUTHENTICATED — everything returned here is public. Never add
- * secrets, API keys, or connection strings. The frontend reaches the search backend only
- * through GET /api/search, so no search endpoint or key belongs in this payload.
+ * What the app settings say, on their own. This is the whole payload when the `config` container
+ * is empty or unreachable, and it is exactly what this endpoint returned before it read Cosmos.
  */
-exports.getConfig = (req, res) => {
-  res.json({
+function fromEnvironment() {
+  return {
     // A short git sha plus a deploy timestamp. Public information; this endpoint is
     // unauthenticated and must stay free of anything that is not.
     BUILD_ID,
@@ -44,5 +61,46 @@ exports.getConfig = (req, res) => {
     BANNER_COLOUR: process.env.BANNER_COLOUR || 'blue',
     USE_MOCK_DATA: process.env.USE_MOCK_DATA === 'true',
     configEndpoint: true
-  });
+  };
+}
+
+/**
+ * Returns dynamic runtime configuration to the frontend.
+ *
+ * This endpoint is UNAUTHENTICATED — everything returned here is public. Never add
+ * secrets, API keys, or connection strings. The frontend reaches the search backend only
+ * through GET /api/search, so no search endpoint or key belongs in this payload.
+ *
+ * Values come from the `config` container, overlaid on the app settings. Two consequences worth
+ * knowing:
+ *
+ *   - This used to be a fast non-DB route (see the routing comment in src/app.js) and no longer
+ *     is. A Cosmos failure must NOT take the frontend down, so a failed read logs and serves the
+ *     app-settings payload — the same answer this endpoint gave before the container existed.
+ *
+ *   - Stored values are real JSON, so `KEYCLOAK_ENABLED: false` arrives as a boolean rather than
+ *     through a string comparison. That closes the `string(bool)` trap where Bicep emits 'True'
+ *     and the comparison is against 'true' — the bug that had the summariser silently switched
+ *     off. Only accept a boolean from the document; anything else falls through to the env var.
+ */
+exports.getConfig = async (req, res) => {
+  const payload = fromEnvironment();
+
+  let stored = null;
+  try {
+    stored = await configRepository.get();
+  } catch (err) {
+    logger.error(`[config] Cosmos read failed, serving app settings: ${err.message}`);
+  }
+
+  if (stored) {
+    for (const key of OVERRIDABLE_KEYS) {
+      const value = stored[key];
+      if (value === undefined || value === null) continue;
+      if (typeof payload[key] === 'boolean' && typeof value !== 'boolean') continue;
+      payload[key] = value;
+    }
+  }
+
+  res.json(payload);
 };

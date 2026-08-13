@@ -55,7 +55,12 @@ const UNGATED = {
     'the DataBC WFS directly — leaving only the admin sync.',
   '_sql.js':
     'Not a repository. This is the shared query builder where visibilityFor is composed, so it is ' +
-    'the thing the others are asserted to route through.'
+    'the thing the others are asserted to route through.',
+  'config.js':
+    'One document, served verbatim to anonymous callers by GET /api/config, so there is no tier ' +
+    'that may read only part of it and nothing to filter. What bounds the payload is the ' +
+    "controller's explicit OVERRIDABLE_KEYS allowlist, not a permission field — a key added to " +
+    'the document is not published until it is added there too.'
 };
 
 /**
