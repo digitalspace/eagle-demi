@@ -110,7 +110,15 @@ echo -e "${BLUE}====================================================${NC}"
 preflight_identity
 
 deploy_api() {
-  echo -e "\n${BLUE}[1/4] Packaging API source code...${NC}"
+  # Unique per DEPLOY, not per commit, and set BEFORE packaging so package-api.py can stamp it in.
+  #
+  # `--dirty` matters: a local deploy of an uncommitted tree and CI's deploy of the same sha would
+  # otherwise be indistinguishable — which is exactly the pair that collided on 2026-08-12. The
+  # timestamp then separates two deploys of the identical tree, so a redeploy can never satisfy the
+  # check with the value the previous one left behind.
+  export BUILD_ID="$(git -C "$REPO_ROOT" describe --always --dirty 2>/dev/null || echo nogit)-$(date -u +%H%M%S)"
+
+  echo -e "\n${BLUE}[1/4] Packaging API source code (BUILD_ID=${BUILD_ID})...${NC}"
   API_ZIP="/tmp/api-deploy.zip"
   rm -f "$API_ZIP"
   python3 "$REPO_ROOT/scripts/package-api.py" "$REPO_ROOT" "$API_ZIP"
@@ -134,20 +142,40 @@ deploy_api() {
   wait_for_deployment "$API_APP_NAME" || return 1
 
   echo -e "\n${BLUE}[4/4] Verifying the NEW build is the one answering...${NC}"
-  # A discriminator, not a health check. 404 = the old build is still serving (route absent);
-  # 401 = the new build, with /api/search/summary behind authMiddleware. A plain 200 on /api/config
-  # would pass against either build and prove nothing.
-  local url="https://${API_APP_NAME}.azurewebsites.net/api/search/summary"
-  local http=""
-  for _ in $(seq 1 20); do   # first request after a recycle is a ~50-75s cold start
-    http=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 "$url" || true)
-    [ "$http" = "401" ] && break
+  #
+  # THE OLD CHECK HERE COULD NOT FAIL. It expected 401 from /api/search/summary, a route that
+  # answers 401 on every build that has ever existed, so it passed while the previous code kept
+  # serving and two deploys were reported as effective when they were not.
+  #
+  # The thing it missed is a BLUE/GREEN SWAP, not a bad package. `wait_for_deployment` returns
+  # within seconds of the upload, but App Service keeps the OLD container serving 100% of traffic
+  # for roughly another 2m15s until "Site started". Measured 2026-08-12: deployment record status 4
+  # at 23:41, new code answering at 23:50.
+  #
+  # So the discriminator is BUILD_ID, stamped INTO the package by package-api.py and echoed by
+  # /api/config. It has to be inside the package: an app setting would be read correctly by the old
+  # container the moment it restarts, proving a restart rather than proving which code is running.
+  #
+  # And do NOT add a restart or a stop here. A stop issued while State is Starting cancels the
+  # incoming container and hands traffic back to the previous one — that is what happened on
+  # 2026-08-12, and it cost six minutes of believing a good deploy had failed.
+  local url="https://${API_APP_NAME}.azurewebsites.net/api/config"
+  local seen="" deadline=$((SECONDS + 600))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    # python3, not sed: `{"BUILD_ID": "x"}` with a space defeats a regex silently and would report
+    # a good deploy as failed. Same parser as wait_for_deployment.
+    seen=$(curl -s --max-time 30 "$url" \
+      | python3 -c "import sys,json;print(json.load(sys.stdin).get('BUILD_ID',''))" 2>/dev/null || true)
+    [ "$seen" = "$BUILD_ID" ] && break
     sleep 10
   done
-  if [ "$http" = "401" ]; then
-    echo -e "${GREEN}✓ /api/search/summary -> 401: new build is serving, and the route is gated${NC}"
+  if [ "$seen" = "$BUILD_ID" ]; then
+    echo -e "${GREEN}✓ /api/config reports BUILD_ID=${seen}: this build is the one answering${NC}"
   else
-    echo -e "${RED}✗ /api/search/summary -> ${http} (expected 401; 404 means the OLD build answers)${NC}"
+    echo -e "${RED}✗ /api/config reports BUILD_ID='${seen}', expected '${BUILD_ID}'${NC}"
+    echo -e "${RED}  The package uploaded but the swap never completed within 10 minutes.${NC}"
+    echo -e "${RED}  Check for a competing deploy: two landing close together means the second${NC}"
+    echo -e "${RED}  container is never created. Do NOT trust anything measured against this app.${NC}"
     return 1
   fi
   echo -e "${GREEN}✓ API deployed: https://${API_APP_NAME}.azurewebsites.net${NC}"

@@ -136,6 +136,31 @@ test('audit writer', async (t) => {
     await audit.flush();
     assert.strictEqual(sent[0].rows[0].ActorType, 'api-key');
     assert.strictEqual(sent[0].rows[0].ActorId, 'demi_test_abc');
+
+    // A Keycloak service account carries a `sub` like any other token, so checking `sub` first
+    // would record a shared client secret as a person - for seven years. This is the path Track
+    // and ENGAGE-style callers use, and it is the one the first version of this code missed.
+    sent = [];
+    audit.auditEvent({ headers: {}, socket: {}, user: { sub: 'kc-sa-9', preferred_username: 'service-account-track-sync', realm_access: { roles: ['staff'] } } },
+      { action: 'project.update', targetId: 'p3' });
+    await audit.flush();
+    assert.strictEqual(sent[0].rows[0].ActorType, 'service', 'a service account is not a person');
+
+    // ...and the same via the clientId claim, for tokens without the username mapper.
+    sent = [];
+    audit.auditEvent({ headers: {}, socket: {}, user: { sub: 'kc-sa-10', clientId: 'engage-api', realm_access: { roles: ['staff'] } } },
+      { action: 'project.update', targetId: 'p4' });
+    await audit.flush();
+    assert.strictEqual(sent[0].rows[0].ActorType, 'service');
+
+    // A real person named 'internal-service' keeps their identity rather than being laundered
+    // into the shared-credential bucket.
+    sent = [];
+    audit.auditEvent({ headers: {}, socket: {}, user: { sub: 'kc-human-1', preferred_username: 'internal-service', realm_access: { roles: ['staff'] } } },
+      { action: 'project.update', targetId: 'p5' });
+    await audit.flush();
+    assert.strictEqual(sent[0].rows[0].ActorType, 'user');
+    assert.strictEqual(sent[0].rows[0].ActorId, 'kc-human-1');
   });
 
   await t.test('flushes early once the count ceiling is reached', async () => {

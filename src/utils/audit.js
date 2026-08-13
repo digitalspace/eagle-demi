@@ -99,10 +99,34 @@ function actorFor(req) {
   if (!user) return { id: '', name: '', type: 'anonymous' };
 
   const name = user.preferred_username || '';
+
+  // A registry key: its own principal, with its own roles, expiry and revocation.
   if (user.keyId) return { id: user.keyId, name, type: 'api-key' };
-  if (name === 'internal-service') return { id: name, name, type: 'break-glass' };
+
+  // A Keycloak SERVICE ACCOUNT — client_credentials, the service-to-service path Track and
+  // ENGAGE-style callers use. These carry a `sub` like any token, so checking `sub` first would
+  // file a shared client secret as a person and keep it that way for seven years. Keycloak names
+  // the backing user after the client (`service-account-<clientId>`) and adds a `clientId` claim,
+  // so either is enough to tell them apart. Checked BEFORE the human branch for that reason.
+  if (user.clientId || name.startsWith('service-account-')) {
+    return {
+      id: user.sub || user.clientId || name,
+      name: name || `service-account-${user.clientId}`,
+      type: 'service'
+    };
+  }
+
+  // Break-glass ADMIN_API_KEY: a shared credential, attributable to a credential and not a person.
+  // Requires the ABSENCE of `sub`, so a real Keycloak principal that happens to be named
+  // 'internal-service' cannot be laundered into this bucket and have its identity discarded.
+  if (!user.sub && name === 'internal-service') return { id: name, name, type: 'break-glass' };
+
+  // A person.
   if (user.sub) return { id: user.sub, name, type: 'user' };
-  return { id: name, name, type: 'user' };
+
+  // Authenticated but unclassifiable. Says so, rather than borrowing the 'user' label or the
+  // 'anonymous' id and producing a row that claims a signed-in caller while naming nobody.
+  return { id: name, name, type: name ? 'user' : 'unknown' };
 }
 
 function hashWithDailySalt(value) {

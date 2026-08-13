@@ -91,6 +91,14 @@ def package_api(repo_root, zip_path):
             if extra == 0:
                 raise SystemExit(f"ERROR: required data directory is empty: {sub}")
 
+        # Stamp the deploy id INTO the package. /api/config reports this back and
+        # deploy-azure.sh compares it, which is the only way to tell from outside which CODE is
+        # answering. An app setting cannot do this job: App Service serves the old container for
+        # roughly two minutes after a deploy, and that old container reads the new setting when it
+        # restarts and reports the new value quite happily. Only a file inside the package can
+        # distinguish new code from an old worker with fresh configuration.
+        z.writestr("build-id.txt", os.environ.get("BUILD_ID", "unknown"))
+
     print(f"Packaged {count} files into {zip_path} ({extra} from re-included data dirs)")
 
 if __name__ == "__main__":
