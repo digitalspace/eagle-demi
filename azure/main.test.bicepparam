@@ -26,11 +26,16 @@ param minioKeyPrefix = 'ozwdez'
 param minioAccessKey = readEnvironmentVariable('MINIO_ACCESS_KEY')
 param minioSecretKey = readEnvironmentVariable('MINIO_SECRET_KEY')
 
-// Same rule. Round-trip these from the live app settings before deploying:
-//   ADMIN_API_KEY=$(az webapp config appsettings list -n demi-api-test -g c4b0a8-test-rg \
-//     --query "[?name=='ADMIN_API_KEY'].value" -o tsv)
-// ADMIN_API_KEY is the break-glass sysadmin credential; DOCLING_API_KEY is outbound to
-// docling-serve. Blanking either fails closed.
+// Same rule, and use ./scripts/deploy-infra.sh rather than exporting these by hand — it sources
+// all four from OpenShift, which is the source of truth for every credential here.
+//
+// NOT from the live app settings. Reading the app you are about to deploy feeds a corrupted value
+// straight back into itself, and there is no rollback: ARM does not retain @secure() parameters.
+// That is not hypothetical — on 2026-08-13 both keys below were destroyed exactly that way, and
+// only MinIO survived, because OpenShift held an authoritative copy of it.
+//
+// ADMIN_API_KEY is the break-glass sysadmin credential the extraction host presents;
+// DOCLING_API_KEY is outbound to docling-serve. Blanking either fails closed.
 param adminApiKey = readEnvironmentVariable('ADMIN_API_KEY')
 param doclingApiKey = readEnvironmentVariable('DOCLING_API_KEY')
 

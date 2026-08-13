@@ -59,11 +59,11 @@ param minioBucketName string = 'eagle-demi'
 @description('Key prefix within that bucket')
 param minioKeyPrefix string = ''
 
-@description('Admin credential for the ingest and maintenance endpoints')
+@description('Break-glass sysadmin credential, INBOUND. This is what the extraction host presents as X-Api-Key when posting chunks, and the only credential the admin endpoints accept while the key registry is empty.')
 @secure()
 param adminApiKey string = ''
 
-@description('Credential the extraction host presents when posting chunks')
+@description('OUTBOUND credential DEMI presents to docling-serve as X-Api-Key. Nothing inbound validates it. Not the extraction host\'s credential — that is adminApiKey.')
 @secure()
 param doclingApiKey string = ''
 

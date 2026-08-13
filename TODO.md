@@ -368,6 +368,38 @@ Everything the two audits left open, ordered by what it costs to get wrong rathe
 Each line says what to do, why it matters, and what would prove it worked. Items already fixed are
 in the audit sections above; this is only what is still outstanding.
 
+### 0. Incident, 2026-08-13 — two credentials destroyed, and what actually protected us
+
+`ADMIN_API_KEY` and `DOCLING_API_KEY` were overwritten on `demi-api-test` by a deployment run with
+throwaway test values. The chain: `siteConfig.appSettings` is a whole-collection PUT, an
+`ADMIN_API_KEY=" "` abort-path test was let through by a `[ -z ]` check that treats a space as
+non-empty, and the deploy did exactly what it is built to do.
+
+**Neither value was recoverable from Azure.** ARM does not retain `@secure()` parameters — the prior
+successful deployment returns `{"type":"SecureString"}` and nothing else. MinIO survived the same
+event only because OpenShift held an authoritative copy, and `ADMIN_API_KEY` was recovered only
+because the GPU extraction host had its own copy in `gpu-extractor.env`.
+
+What changed as a result:
+
+- `demi-app-secrets` in `6cdc9e-test` now holds both keys. **OpenShift is the source of truth for
+  every credential the template deploys**, and `scripts/deploy-infra.sh` reads from there.
+- The script no longer round-trips secrets out of the live app settings. Reading the app you are
+  about to deploy feeds a corrupted value back into itself — that loop is what turned a one-
+  character mistake into a permanent loss.
+- Its guard trims whitespace and rejects anything under 8 characters, not merely empty.
+
+`ADMIN_API_KEY` is now the GPU host's 48-char key rather than the previous 64-char value, which no
+surviving system held. `DOCLING_API_KEY` was regenerated freely: it is outbound-only to
+docling-serve, `src/extract.js` has no production caller, and `DOCLING_URL` is set by no template,
+so **nothing consumes it today** — its value is arbitrary until extraction-in-Azure is revived, at
+which point docling-serve's side is set from the same value.
+
+- [ ] **Rotate `ADMIN_API_KEY` deliberately, at a time of your choosing.** It is working and
+      consistent across DEMI and the GPU host, but its value passed through an incident. Rotation
+      means: new value into `demi-app-secrets`, `gpu-extractor.env` on the GPU box, and the App
+      Service — then restart `gpu-extractor` and `gpu-ingest`.
+
 ### 1. Do next — cheap, and something is wrong until they are done
 
 - [ ] **Deploy the Bicep index changes.** Narrowed on 2026-08-13 by the first `main.bicep` apply:
