@@ -19,8 +19,25 @@ param location = 'canadacentral'
 param minioHost = 'nrs.objectstore.gov.bc.ca'
 param minioBucketName = 'asnpnn'
 param minioKeyPrefix = 'ozwdez'
-param minioAccessKey = readEnvironmentVariable('MINIO_ACCESS_KEY', '')
-param minioSecretKey = readEnvironmentVariable('MINIO_SECRET_KEY', '')
+// No second argument to readEnvironmentVariable, deliberately. With a `''` fallback a forgotten
+// export resolves to empty and the deploy writes that over the live credential — silently, because
+// the app settings collection is a whole-collection PUT and what-if masks @secure() values as
+// "*******" in BOTH before and after. Without the fallback bicep fails the build instead.
+param minioAccessKey = readEnvironmentVariable('MINIO_ACCESS_KEY')
+param minioSecretKey = readEnvironmentVariable('MINIO_SECRET_KEY')
+
+// Same rule. Round-trip these from the live app settings before deploying:
+//   ADMIN_API_KEY=$(az webapp config appsettings list -n demi-api-test -g c4b0a8-test-rg \
+//     --query "[?name=='ADMIN_API_KEY'].value" -o tsv)
+// ADMIN_API_KEY is the break-glass sysadmin credential; DOCLING_API_KEY is outbound to
+// docling-serve. Blanking either fails closed.
+param adminApiKey = readEnvironmentVariable('ADMIN_API_KEY')
+param doclingApiKey = readEnvironmentVariable('DOCLING_API_KEY')
+
+// TEST, not dev. src/seed/sources.js defaults to the eagle-DEV instance when this is unset, so
+// leaving it out of the template does not merely lose a setting — it repoints staging's seed at
+// dev data with nothing logged.
+param eagleApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api/public'
 
 // Landing-zone subnets in c4b0a8-test-networking. The PE subnet mirrors dev's. App Service VNet
 // integration uses snet-app-service, NOT c4b0a8-test-cond-ext-webapp-subnet — that one is claimed

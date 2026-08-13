@@ -53,13 +53,19 @@ param minioSecretKey string
 //
 // The live app settings are the source of truth; the deploy round-trips them in. Empty is still
 // permitted so a fresh environment can be stood up before the credentials exist.
-@description('Break-glass admin credential. Round-tripped from the live app settings at deploy time — deploying empty BLANKS it on the running app.')
+// No `= ''` default on either: an unset value must fail the build, not deploy an empty string over
+// a live credential. The param files source them from the environment with no fallback, so a
+// forgotten export stops the deploy instead of silently destroying the app.
+@description('Break-glass admin credential. Round-tripped from the live app settings at deploy time.')
 @secure()
-param adminApiKey string = ''
+param adminApiKey string
 
-@description('Extraction host credential. Same hazard as adminApiKey — see above.')
+@description('Extraction host credential. Same handling as adminApiKey.')
 @secure()
-param doclingApiKey string = ''
+param doclingApiKey string
+
+@description('Upstream eagle-api the seed loader reads. Environment-specific — the code default is the DEV instance, so this must be set per environment or staging silently reads dev data.')
+param eagleApiBase string
 
 // Bucket and prefix were previously set out of band, so every template deploy silently reset them
 // to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
@@ -244,6 +250,7 @@ module apiWebApp './modules/api-web-app.bicep' = {
     minioKeyPrefix: minioKeyPrefix
     adminApiKey: adminApiKey
     doclingApiKey: doclingApiKey
+    eagleApiBase: eagleApiBase
     apiSubnetId: appServiceSubnetId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId

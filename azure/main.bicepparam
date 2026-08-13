@@ -6,6 +6,13 @@ param minioHost = 'minio-6cdc9e-dev.apps.silver.devops.gov.bc.ca'
 param minioAccessKey = 'minio'
 param minioSecretKey = 'minio123'
 
+// Placeholders, matching the MinIO pair above: dev is an empty sandbox with nothing to overwrite.
+// The test file sources all three from the live environment instead — see main.test.bicepparam for
+// why an empty value there is destructive rather than merely wrong.
+param adminApiKey = 'dev-admin-key'
+param doclingApiKey = 'dev-docling-key'
+param eagleApiBase = 'https://eagle-dev.apps.silver.devops.gov.bc.ca/api/public'
+
 // The landing zone's VNet, in c4b0a8-dev-networking — another resource group, not managed here.
 // Both subnets already exist and are already in use: the Cosmos and Search private endpoints sit
 // in the first, demi-api-dev's VNet integration in the second. Public network access is denied by
