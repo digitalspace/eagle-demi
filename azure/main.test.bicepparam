@@ -29,6 +29,10 @@ param minioSecretKey = readEnvironmentVariable('MINIO_SECRET_KEY', '')
 param privateEndpointSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/c4b0a8-test-cond-ext-pe-subnet'
 param appServiceSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-app-service'
 
+// Both, deliberately. These carry the audit-drop and ingestion-quota alerts, and a gap in the
+// audit trail reaching exactly one mailbox is a single point of failure. Replace with a team
+// destination when there is one.
 param contactEmails = [
+  'daniel@digitalspace.ca'
   'Daniel.T.Truong@gov.bc.ca'
 ]

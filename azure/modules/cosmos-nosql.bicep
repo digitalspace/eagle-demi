@@ -26,6 +26,9 @@ param apiPrincipalId string
 @description('Optional Entra group/user object ID granted read-only data access, so humans can use Data Explorer once local auth is disabled')
 param readerPrincipalId string = ''
 
+@description('Resource id of the demi-audit-<env> workspace. Empty skips control-plane auditing rather than failing the deployment.')
+param auditWorkspaceId string = ''
+
 var accountName = 'demi-cosmos-${environmentName}'
 var databaseName = 'demi'
 var privateEndpointName = 'pe-cosmos-nosql-${environmentName}'
@@ -552,6 +555,32 @@ resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = if (!
             'Sql'
           ]
         }
+      }
+    ]
+  }
+}
+
+// Who changed the database itself — containers, throughput, firewall, RBAC. The app's audit trail
+// covers authenticated writes to the DATA; this covers authenticated changes to the store holding
+// it, which the app cannot see and the landing-zone policy ships only to a central workspace we
+// cannot read.
+resource cosmosAuditDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(auditWorkspaceId)) {
+  scope: cosmosAccount
+  // Distinct from the landing zone's `setByPolicy-LogAnalytics` on this same account — a shared
+  // name would make the two fight on every deploy.
+  name: 'demi-audit'
+  properties: {
+    workspaceId: auditWorkspaceId
+    // Without Dedicated these land in the shared AzureDiagnostics column soup and
+    // CDBControlPlaneRequests never appears as a table at all.
+    logAnalyticsDestinationType: 'Dedicated'
+    // ControlPlaneRequests ONLY. DataPlaneRequests is one row per Cosmos operation — a single
+    // corpus re-extraction is ~1.13M chunk writes — and it duplicates what the app already logs.
+    // Turn that on for the length of an incident, never as a standing setting.
+    logs: [
+      {
+        category: 'ControlPlaneRequests'
+        enabled: true
       }
     ]
   }

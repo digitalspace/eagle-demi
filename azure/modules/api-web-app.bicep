@@ -84,6 +84,9 @@ param auditDcrEndpoint string = ''
 @description('Immutable ID of the audit DCR. Both this and the endpoint are required before anything is sent.')
 param auditDcrImmutableId string = ''
 
+@description('Resource id of the demi-audit-<env> workspace. Empty skips deploy-access auditing rather than failing the deployment.')
+param auditWorkspaceId string = ''
+
 var apiAppName = 'demi-api-${environmentName}'
 var appServicePlanName = 'demi-plan-${environmentName}'
 var storageAccountName = take('demistg${environmentName}${uniqueString(resourceGroup().id)}', 24)
@@ -379,6 +382,31 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         ]
       }
     }
+  }
+}
+
+// Who authenticated to Kudu/SCM and deployed. Nothing captured this before: the app's own audit
+// trail covers authenticated writes through the API, and a deploy is the one authenticated change
+// that never passes through it.
+//
+// Into the AUDIT workspace, not demi-logs: demi-logs stops collecting at its dailyQuotaGb, and a
+// record that a busy day can drop is not an audit record.
+resource apiAuditDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(auditWorkspaceId)) {
+  scope: apiWebApp
+  // Distinctly named: the landing zone sets its own `setByPolicy-*` settings on resources here,
+  // and a colliding name would have the two overwrite each other on every deploy.
+  name: 'demi-audit'
+  properties: {
+    workspaceId: auditWorkspaceId
+    // AppServiceAuditLogs ONLY. AppServiceHTTPLogs is deliberately absent — middleware/http-logger.js
+    // already ships method, path, status, duration, IP and `principal` per request to App Insights,
+    // and the platform version carries no principal, so it would cost more and say less.
+    logs: [
+      {
+        category: 'AppServiceAuditLogs'
+        enabled: true
+      }
+    ]
   }
 }
 

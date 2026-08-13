@@ -128,6 +128,10 @@ module cosmos './modules/cosmos-nosql.bicep' = {
     peSubnetId: privateEndpointSubnetId
     apiPrincipalId: identity.outputs.principalId
     readerPrincipalId: readerPrincipalId
+    // Control-plane auditing. This reverses the usual reading order — cosmos is module 2 and
+    // auditLogs is module 6 — but Bicep orders on output references, not declaration, and
+    // auditLogs depends only on identity and observability, so there is no cycle.
+    auditWorkspaceId: auditLogs.outputs.workspaceId
   }
 }
 
@@ -233,6 +237,8 @@ module apiWebApp './modules/api-web-app.bicep' = {
     foundryDeployment: foundry.outputs.deploymentName
     auditDcrEndpoint: auditLogs.outputs.dcrEndpoint
     auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
+    // Deploy-access auditing: who signed in to Kudu/SCM and published.
+    auditWorkspaceId: auditLogs.outputs.workspaceId
   }
 }
 
