@@ -19,8 +19,35 @@ param location = 'canadacentral'
 param minioHost = 'nrs.objectstore.gov.bc.ca'
 param minioBucketName = 'asnpnn'
 param minioKeyPrefix = 'ozwdez'
-param minioAccessKey = readEnvironmentVariable('MINIO_ACCESS_KEY', '')
-param minioSecretKey = readEnvironmentVariable('MINIO_SECRET_KEY', '')
+// No second argument to readEnvironmentVariable, deliberately. With a `''` fallback a forgotten
+// export resolves to empty and the deploy writes that over the live credential — silently, because
+// the app settings collection is a whole-collection PUT and what-if masks @secure() values as
+// "*******" in BOTH before and after. Without the fallback bicep fails the build instead.
+param minioAccessKey = readEnvironmentVariable('MINIO_ACCESS_KEY')
+param minioSecretKey = readEnvironmentVariable('MINIO_SECRET_KEY')
+
+// Same rule, and use ./scripts/deploy-infra.sh rather than exporting these by hand — it sources
+// all four from OpenShift, which is the source of truth for every credential here.
+//
+// NOT from the live app settings. Reading the app you are about to deploy feeds a corrupted value
+// straight back into itself, and there is no rollback: ARM does not retain @secure() parameters.
+// That is not hypothetical — on 2026-08-13 both keys below were destroyed exactly that way, and
+// only MinIO survived, because OpenShift held an authoritative copy of it.
+//
+// ADMIN_API_KEY is the break-glass sysadmin credential the extraction host presents;
+// DOCLING_API_KEY is outbound to docling-serve. Blanking either fails closed.
+param adminApiKey = readEnvironmentVariable('ADMIN_API_KEY')
+param doclingApiKey = readEnvironmentVariable('DOCLING_API_KEY')
+
+// TEST, not dev. src/seed/sources.js defaults to the eagle-DEV instance when this is unset, so
+// leaving it out of the template does not merely lose a setting — it repoints staging's seed at
+// dev data with nothing logged.
+param eagleApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api/public'
+
+// pe-demi-foundry-test already exists, connection plsc-demi-foundry-test, state Approved. Leaving
+// this true re-PUTs it, which loses a race against the account PUT and fails the whole deployment
+// — including deploy-api-web-app, which never runs because it consumes foundry's outputs.
+param deployFoundryPrivateEndpoint = false
 
 // Landing-zone subnets in c4b0a8-test-networking. The PE subnet mirrors dev's. App Service VNet
 // integration uses snet-app-service, NOT c4b0a8-test-cond-ext-webapp-subnet — that one is claimed

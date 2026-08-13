@@ -31,6 +31,11 @@ copies `read[]` from the live document, so this host cannot widen any document's
 Secrets, run state and extracted output are **not** here, and `.gitignore` enforces that rather than
 relying on care at commit time. In particular `gpu-extractor.env` holds a live `DEMI_ADMIN_KEY`.
 
+That file is also **a second authoritative copy of DEMI's `ADMIN_API_KEY`**, and on 2026-08-13 it
+was the only reason that credential was recoverable after the Azure copy was destroyed. Treat it as
+a backup, not just as this host's config: if you rotate the key, change it here *and* in the
+`demi-app-secrets` OpenShift secret in `6cdc9e-test`, not only on the App Service.
+
 ## The one thing you can run from a laptop
 
 ```bash

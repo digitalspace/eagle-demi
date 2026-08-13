@@ -45,6 +45,28 @@ param minioAccessKey string
 @secure()
 param minioSecretKey string
 
+// These two reach app settings directly (api-web-app.bicep). Until now main.bicep did not pass them
+// at all, so the module default of '' applied and the first successful deploy would have written
+// ADMIN_API_KEY='' and DOCLING_API_KEY='' over the live values — destroying the break-glass
+// credential and the extraction host's key. `what-if` cannot surface that, because @secure() values
+// are masked in its output, which is why it stayed invisible through several reviews.
+//
+// The live app settings are the source of truth; the deploy round-trips them in. Empty is still
+// permitted so a fresh environment can be stood up before the credentials exist.
+// No `= ''` default on either: an unset value must fail the build, not deploy an empty string over
+// a live credential. The param files source them from the environment with no fallback, so a
+// forgotten export stops the deploy instead of silently destroying the app.
+@description('Break-glass admin credential. Round-tripped from the live app settings at deploy time.')
+@secure()
+param adminApiKey string
+
+@description('Extraction host credential. Same handling as adminApiKey.')
+@secure()
+param doclingApiKey string
+
+@description('Upstream eagle-api the seed loader reads. Environment-specific — the code default is the DEV instance, so this must be set per environment or staging silently reads dev data.')
+param eagleApiBase string
+
 // Bucket and prefix were previously set out of band, so every template deploy silently reset them
 // to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
 @description('Object-store bucket name (dev: asnpnn, test: zdspnb).')
@@ -91,6 +113,21 @@ param deployDocumentStorage bool = false
 // 'disabled'}` — retrieval is untouched either way.
 @description('Turn the AI summariser on. The Foundry account is deployed regardless; this is the app-side switch.')
 param summaryEnabled bool = true
+
+// The Foundry private endpoint races its own account on every deploy. ARM PUTs the account, the
+// Cognitive Services RP leaves it in state `Accepted` while it reconciles, and the PE — which
+// depends on the account id — is then rejected with AccountProvisioningStateInvalid. It is
+// deterministic, not flaky: three consecutive runs failed identically on 2026-08-13.
+//
+// foundry.bicep's header says to read that failure as "the PE already exists" and move on, which
+// was true when nothing consumed the module's outputs. It no longer is: a Failed module means
+// `foundry.outputs.foundryEndpoint` never resolves, so `deploy-api-web-app` never runs at all.
+//
+// So: false once the PE exists and is Approved, which reuses the module's existing
+// `if (!empty(peSubnetId))` gate to skip re-PUTting a resource that is already correct. Leave it
+// true for a fresh environment, where the PE has to be created and one failed run is the price.
+@description('Create the Foundry private endpoint. Set false when it already exists — re-PUTting it races the account PUT and fails the whole deployment.')
+param deployFoundryPrivateEndpoint bool = true
 
 // Mandatory Cost Management Tags applied across ALL resources
 var defaultTags = {
@@ -206,7 +243,8 @@ module foundry './modules/foundry.bicep' = {
     environmentName: environmentName
     tags: defaultTags
     identityPrincipalId: identity.outputs.principalId
-    peSubnetId: privateEndpointSubnetId
+    // Empty skips the PE via the module's own gate — see deployFoundryPrivateEndpoint above.
+    peSubnetId: deployFoundryPrivateEndpoint ? privateEndpointSubnetId : ''
     peLocation: location
   }
 }
@@ -226,6 +264,9 @@ module apiWebApp './modules/api-web-app.bicep' = {
     minioSecretKey: minioSecretKey
     minioBucketName: minioBucketName
     minioKeyPrefix: minioKeyPrefix
+    adminApiKey: adminApiKey
+    doclingApiKey: doclingApiKey
+    eagleApiBase: eagleApiBase
     apiSubnetId: appServiceSubnetId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId
