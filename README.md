@@ -372,9 +372,24 @@ credential — subject `repo:digitalspace/eagle-demi:environment:test` or `:envi
 its GitHub environment — its own role assignments, and for prod a decision about required reviewers
 on the environment. Build them from the dev pair when that work actually starts.
 
-**`azure/main.bicep` does not describe the running environment.** It never instantiates
-`cosmos-nosql.bicep`, `ai-search.bicep`, `identity.bicep`, `document-storage.bicep` or
-`frontend-web-app.bicep`, and there is no VNet in the resource group. Rewriting it is open work.
+**`azure/main.bicep` now describes and manages staging**, and was first applied to `c4b0a8-test-rg`
+on 2026-08-13. It instantiates every module except `vnet.bicep`, `key-vault.bicep` and
+`static-web-app.bicep` — the landing zone owns the VNet, and secrets are app settings rather than
+Key Vault references.
+
+That first apply found two defects the template had carried for months, both invisible to
+`what-if`:
+
+- `documents` and `boundaries` declared `/id/?` in their Cosmos `indexingPolicy`. Cosmos rejects the
+  whole policy — `id` is a system property, always indexed, and cannot be named in a policy — so the
+  module could never deploy. `what-if` does not validate indexing rules.
+- `main.bicep` did not pass `adminApiKey` or `doclingApiKey` to `api-web-app.bicep`, so the module's
+  `''` defaults would have overwritten `ADMIN_API_KEY` and `DOCLING_API_KEY` in live app settings.
+  `what-if` masks `@secure()` values, so it showed nothing.
+
+The second one is the general lesson: **a clean `what-if` is not evidence that an apply is safe.**
+It cannot see secure parameters and it does not validate resource-provider rules. Read the diff for
+secrets by hand before applying, and round-trip the live values in.
 
 It is not a loaded gun, though, and now for two independent reasons. **No dev workflow contains an
 infra job at all** — the `deploy-infra` job became a loginless `validate-infra` on 2026-08-04, and

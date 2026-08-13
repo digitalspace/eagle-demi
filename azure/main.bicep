@@ -45,6 +45,22 @@ param minioAccessKey string
 @secure()
 param minioSecretKey string
 
+// These two reach app settings directly (api-web-app.bicep). Until now main.bicep did not pass them
+// at all, so the module default of '' applied and the first successful deploy would have written
+// ADMIN_API_KEY='' and DOCLING_API_KEY='' over the live values — destroying the break-glass
+// credential and the extraction host's key. `what-if` cannot surface that, because @secure() values
+// are masked in its output, which is why it stayed invisible through several reviews.
+//
+// The live app settings are the source of truth; the deploy round-trips them in. Empty is still
+// permitted so a fresh environment can be stood up before the credentials exist.
+@description('Break-glass admin credential. Round-tripped from the live app settings at deploy time — deploying empty BLANKS it on the running app.')
+@secure()
+param adminApiKey string = ''
+
+@description('Extraction host credential. Same hazard as adminApiKey — see above.')
+@secure()
+param doclingApiKey string = ''
+
 // Bucket and prefix were previously set out of band, so every template deploy silently reset them
 // to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
 @description('Object-store bucket name (dev: asnpnn, test: zdspnb).')
@@ -226,6 +242,8 @@ module apiWebApp './modules/api-web-app.bicep' = {
     minioSecretKey: minioSecretKey
     minioBucketName: minioBucketName
     minioKeyPrefix: minioKeyPrefix
+    adminApiKey: adminApiKey
+    doclingApiKey: doclingApiKey
     apiSubnetId: appServiceSubnetId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId

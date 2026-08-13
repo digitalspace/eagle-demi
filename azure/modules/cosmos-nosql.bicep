@@ -215,11 +215,11 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
           {
             path: '/contentExtracted/?'
           }
-          // documents.getById falls back to a cross-partition query on id when no ?project is
-          // supplied — which is what the frontend does on every document open.
-          {
-            path: '/id/?'
-          }
+          // No '/id/?' here, and it cannot go here: Cosmos rejects the whole policy with "the
+          // specified path '/id/?' could not be accepted because it overrides system property
+          // 'id'". `id` is always indexed and cannot be included or excluded, so the by-id
+          // cross-partition fallback documents.getById uses when no ?project is supplied — the
+          // frontend's path on every document open — is already served.
           {
             path: '/fileExt/?'
           }
@@ -314,11 +314,8 @@ resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases
           {
             path: '/isPublished/?'
           }
-          // getById falls back to a cross-partition query when no ?type is supplied, which is the
-          // live path — the frontend calls /boundaries/<name> with no type.
-          {
-            path: '/id/?'
-          }
+          // No '/id/?' — see the documents container above. The by-id cross-partition fallback
+          // getById uses when no ?type is supplied is already served by the system index.
         ]
         excludedPaths: [
           {
