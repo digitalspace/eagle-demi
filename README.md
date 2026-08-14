@@ -335,7 +335,7 @@ az appservice plan delete -g c4b0a8-test-rg -n demi-frontend-plan-test
 Until the plan is gone this cutover is a pure cost **increase**: the shared AFD profile is new spend
 on top of a plan still being paid for.
 
-### Two manual steps the templates cannot do
+### Three manual steps the templates cannot do
 
 Do these once per environment, in this order, or the frontend is a set of blobs nobody can reach.
 
@@ -371,6 +371,31 @@ without revisiting that grant. `scripts/validate-deploy.sh` checks the result wh
    `http://localhost:4200`, so the frontend's first XHR fails CORS — deliberately the loud failure
    rather than the silent "reflect any origin" one.
 
+3. **Register the AFD hostname with Keycloak, before decommissioning the old App Service.**
+   This is the one step with no code anywhere in these repos, and nothing fails loudly enough to
+   point at it. `registry-state.service.ts` derives both `redirectUri` and
+   `silentCheckSsoRedirectUri` from `window.location.origin`, so moving the frontend to a new
+   hostname changes both. The client's registered URIs are **exact-host patterns**: probing the
+   realm's authorize endpoint accepts `https://demi-frontend-test.azurewebsites.net/…` and answers
+   `400 Invalid parameter: redirect_uri` for any `*.z01.azurefd.net` host. So on the day of the
+   cutover CORS and CSP can all be correct and staff still cannot log in.
+
+   Ask the CSS team (this client's URI list is maintained outside these repos — see
+   `eagle-dev-guides.wiki/Keycloak-Configuration.md`) to add, on client `eagle-admin-console` in
+   realm `eao-epic`, in the realm matching the environment's `KEYCLOAK_URL`:
+
+   - Valid Redirect URIs: `https://<afd-endpoint>/*` — covers both `/` and `/silent-check-sso.html`
+   - Web Origins: `https://<afd-endpoint>` — the token and userinfo XHRs are checked against this
+
+   **Keep the existing `demi-frontend-<env>.azurewebsites.net` entries until the cutover is
+   verified**, so a rollback to the App Service still logs in.
+
+   Failure signature if this is skipped: clicking Log In lands on Keycloak's
+   `Invalid parameter: redirect_uri` error page. Worse, once a user has `isLoggedIn` set on the new
+   origin the same rejection happens inside the hidden silent-SSO iframe, where it is invisible —
+   the `Promise.race` times out after 5s and the app settles into public mode showing no staff-only
+   data, with nothing in the console but a blocked navigation.
+
 ### Two accepted ceilings
 
 - **The `$web` endpoint stays publicly reachable, so Front Door can be bypassed.** Anyone who
@@ -382,8 +407,9 @@ without revisiting that grant. `scripts/validate-deploy.sh` checks the result wh
   browser.
 - **Nothing in front of the frontend authenticates.** `$web` is anonymous by definition, and an AFD
   rule-set rule can only rewrite and set headers — no action challenges a request for credentials.
-  DEMI's own Keycloak login is unaffected, it is in the app, but the shell is open to anyone with
-  the hostname. The upgrade that keeps this SKU is a **WAF custom rule** on the endpoint (match +
+  DEMI's own Keycloak login still gates staff data, since it is in the app, but the shell is open to
+  anyone with the hostname. Note that login is not automatically carried over: the new origin has to
+  be registered on the Keycloak client first — step 3 above. The upgrade that keeps this SKU is a **WAF custom rule** on the endpoint (match +
   Block, e.g. an IP CIDR); Standard supports custom rules, and only *managed* rule sets are
   Premium-only.
 

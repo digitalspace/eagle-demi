@@ -3,7 +3,9 @@
 # =============================================================================
 # Publishes the Angular bundle to the `$web` container of the static-website storage
 # account, which is the origin for the Front Door profile that lives in eagle-search.
-# It replaces the App Service `demi-frontend-test`, deleted in the same change.
+# It replaces the App Service `demi-frontend-test`, which this change stops deploying to.
+# That App Service and its plan are NOT deleted by the change — ARM deploys incrementally, so
+# they keep running and billing until the decommission commands in the README are run by hand.
 #
 # Frontend only. The API has its own file, `azure-deploy-staging-api.yaml`, and its own
 # trigger. They were one workflow until 2026-08-05, which meant an Angular-only
