@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Post-deploy validation for DEMI dev. Read-only — probes only, changes nothing.
 #
-# Usage: ./scripts/validate-deploy.sh
+# Usage: FRONTEND_URL=https://<afd-endpoint> ./scripts/validate-deploy.sh
+#        (optionally FRONTEND_STORAGE_ACCOUNT=<account>, API_APP_NAME=<app>)
 #
 # Every check names what a HEALTHY result is and what a FAULTED one looks like, and each is chosen
 # so the two answers DIFFER. A probe whose healthy and faulted outcomes look the same proves
@@ -16,10 +17,17 @@
 set -uo pipefail
 
 API_APP="${API_APP_NAME:-demi-api-dev}"
-FE_APP="${FRONTEND_APP_NAME:-demi-frontend-dev}"
 API="https://${API_APP}.azurewebsites.net"
-FE="https://${FE_APP}.azurewebsites.net"
 SCM="https://${API_APP}.scm.azurewebsites.net"
+
+# The frontend has no hostname this script can compose any more. It is a Storage static website
+# behind Front Door, and an AFD endpoint is `<name>-<hash>.z01.azurefd.net` with the hash assigned
+# at deploy time — so pass the URL users actually hit. It must be the FRONT DOOR one: the security
+# headers checked below are added by the AFD rule set and the $web endpoint cannot set them, which
+# is exactly the difference this is here to catch.
+FE="${FRONTEND_URL:-}"
+# Optional. The storage account behind it, only used to prove static website hosting is switched on.
+FE_STORAGE="${FRONTEND_STORAGE_ACCOUNT:-}"
 
 TOK=$(az account get-access-token --resource https://management.core.windows.net/ --query accessToken -o tsv 2>/dev/null)
 [ -z "$TOK" ] && { echo "ERROR: could not get an Azure token — run 'az login'"; exit 2; }
@@ -67,24 +75,66 @@ for ds in Project Document DocumentChunk; do
   [ "$C" = "200" ] && ok "search dataset=$ds 200" || no "search dataset=$ds $C"
 done
 
-echo "=== 5. Frontend: new build, and no superseded bundles ==="
-IDX=$(curl -s --max-time 60 "$FE/index.html")
-REF=$(echo "$IDX" | grep -oE '(main|polyfills|styles|scripts)-[A-Z0-9]+\.(js|css)' | sort -u)
-[ -n "$REF" ] && ok "index.html references $(echo "$REF" | wc -l) hashed asset(s)" || no "index.html references none"
-BUNDLE=$(echo "$REF" | grep '^main-' | head -1)
-if [ -n "$BUNDLE" ]; then
-  J=$(curl -s --max-time 60 "$FE/$BUNDLE")
-  echo "$J" | grep -q "AI Summary"      && ok "bundle has the AI Summary nav"    || no "bundle missing 'AI Summary'"
-  echo "$J" | grep -q "Staff Login"     && ok "bundle has Staff Login"           || no "bundle missing 'Staff Login'"
-  echo "$J" | grep -q "EPIC Staff View" && no "bundle still has the removed role switcher" \
-                                        || ok "removed role switcher is gone"
+echo "=== 5. Frontend: static website on, Front Door headers applied, new build served ==="
+#
+# Superseded bundles are NOT checked any more. Blob upload does not merge into a previous deploy
+# the way zipdeploy did, so an orphaned main-<hash>.js is inert rather than a symptom, and
+# deploy-azure.sh deliberately leaves it (see the ponytail note there).
+
+# ARM has no property for static website hosting, so `deploy-azure.sh frontend` switches it on as
+# its first step instead — and the way a skipped one shows up is every blob present and the site
+# 404ing. Still checked here: this reads the account, the deploy reads the script.
+if [ -n "$FE_STORAGE" ]; then
+  SW=$(az storage blob service-properties show --account-name "$FE_STORAGE" --auth-mode login \
+    --query staticWebsite.enabled -o tsv 2>/dev/null || true)
+  [ "$SW" = "true" ] && ok "static website enabled on $FE_STORAGE" \
+    || no "static website NOT enabled on $FE_STORAGE (got '${SW:-unreadable}') — re-run ./scripts/deploy-azure.sh frontend; 'unreadable' usually means this identity lacks blobServices/read"
 fi
-ALL=$(curl -s --max-time 60 -H "Authorization: Bearer $TOK" \
-  "https://${FE_APP}.scm.azurewebsites.net/api/vfs/site/wwwroot/" \
-  | python3 -c "import sys,json;[print(x['name']) for x in json.load(sys.stdin)]" 2>/dev/null \
-  | grep -E '^(main|polyfills|styles|scripts)-' | sort -u)
-STALE=$(comm -23 <(echo "$ALL") <(echo "$REF") | grep -c . || true)
-[ "$STALE" = "0" ] && ok "no superseded bundles in wwwroot" || no "$STALE superseded bundle(s) still in wwwroot"
+
+if [ -z "$FE" ]; then
+  no "FRONTEND_URL unset — set it to the Front Door endpoint, e.g. https://demi-frontend-<hash>.z01.azurefd.net"
+else
+  # One output file per probe. A curl that times out does NOT rewrite its -o file, so a shared one
+  # silently re-reads the previous probe's answer — a mistake already made twice in this repo.
+  IHDR=/tmp/validate-fe-index.headers; IBODY=/tmp/validate-fe-index.html
+  rm -f "$IHDR" "$IBODY"
+  curl -s -D "$IHDR" -o "$IBODY" --max-time 60 "$FE/index.html" || true
+  C=$(awk 'NR==1{print $2}' "$IHDR" 2>/dev/null)
+  [ "$C" = "200" ] && ok "index.html 200" \
+    || no "index.html ${C:-no response} — static website hosting may never have been enabled"
+
+  # A cached index.html pins every returning visitor to a bundle that no longer exists.
+  grep -qi '^cache-control:.*no-store' "$IHDR" && ok "index.html is no-store" \
+    || no "index.html Cache-Control: '$(grep -i '^cache-control:' "$IHDR" | tr -d '\r')' — expected no-store"
+
+  # $web cannot set a response header at all, so each of these proves the AFD rule set is attached
+  # to this route. Missing means the request either bypassed Front Door or the rule set did not
+  # bind — both look perfectly healthy from the browser until something goes wrong.
+  for h in strict-transport-security x-content-type-options x-frame-options referrer-policy permissions-policy; do
+    grep -qi "^${h}:" "$IHDR" && ok "header $h" || no "header $h missing — Front Door rule set not applied"
+  done
+  # DEMI ships no CSP today, so it goes out in report-only first; either name counts here.
+  grep -qiE '^content-security-policy(-report-only)?:' "$IHDR" && ok "header content-security-policy" \
+    || no "no CSP header, in either enforcing or report-only form"
+
+  BUNDLE=$(grep -oE 'main-[A-Z0-9]+\.js' "$IBODY" | head -1)
+  if [ -z "$BUNDLE" ]; then
+    no "index.html references no hashed main bundle — that is not a production Angular build"
+  else
+    ok "index.html references $BUNDLE"
+    BHDR=/tmp/validate-fe-bundle.headers; BBODY=/tmp/validate-fe-bundle.js
+    rm -f "$BHDR" "$BBODY"
+    curl -s -D "$BHDR" -o "$BBODY" --max-time 60 "$FE/$BUNDLE" || true
+    # Hashed name, so the bytes can never change: anything short of immutable re-downloads the
+    # bundle on every visit and is a Cache-Control pass in deploy-azure.sh that did not land.
+    grep -qi '^cache-control:.*immutable' "$BHDR" && ok "$BUNDLE is immutable" \
+      || no "$BUNDLE Cache-Control: '$(grep -i '^cache-control:' "$BHDR" | tr -d '\r')' — expected immutable"
+    grep -q "AI Summary"      "$BBODY" && ok "bundle has the AI Summary nav" || no "bundle missing 'AI Summary'"
+    grep -q "Staff Login"     "$BBODY" && ok "bundle has Staff Login"        || no "bundle missing 'Staff Login'"
+    grep -q "EPIC Staff View" "$BBODY" && no "bundle still has the removed role switcher" \
+                                       || ok "removed role switcher is gone"
+  fi
+fi
 
 echo "=== 6. Stability — intermittent 5xx would fail here ==="
 BAD=0

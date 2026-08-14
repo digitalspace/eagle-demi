@@ -44,6 +44,22 @@ param doclingApiKey = readEnvironmentVariable('DOCLING_API_KEY')
 // dev data with nothing logged.
 param eagleApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api/public'
 
+// ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
+//
+// The Front Door endpoint hostname, from the eagle-search deployment's output. It is
+// `<name>-<hash>.z01.azurefd.net` with the hash assigned at creation, so it can only be observed.
+// Until it is set, the API's CORS allowlist holds no browser origin at all and the frontend cannot
+// call it — deliberately the failure that is visible in one request rather than the one that
+// silently allows every origin.
+// param frontendHostName = 'demi-frontend-xxxxxxxx.z01.azurefd.net'
+//
+// Object id (not app id) of the demi-cicd-test user-assigned identity. Without it the identity gets
+// no role on the new storage account: `az storage blob upload-batch` 403s, and the static-website
+// enable fails before that. Website Contributor covered the App Service publish and covers nothing
+// here. Read from `az identity show -g c4b0a8-test-rg -n demi-cicd-test --query principalId`;
+// clientId is f24611b4-9592-4547-93d8-0b15dfd4f2c2, which is NOT this value.
+param frontendUploaderPrincipalId = '39682a03-8b4c-4b05-84c6-b8e06c0a21a4'
+
 // pe-demi-foundry-test already exists, connection plsc-demi-foundry-test, state Approved. Leaving
 // this true re-PUTs it, which loses a race against the account PUT and fails the whole deployment
 // — including deploy-api-web-app, which never runs because it consumes foundry's outputs.

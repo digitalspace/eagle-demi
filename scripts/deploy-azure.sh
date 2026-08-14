@@ -36,7 +36,9 @@ set -euo pipefail
 TARGET="${1:-all}"
 RESOURCE_GROUP="${2:-c4b0a8-dev-rg}"
 API_APP_NAME="${API_APP_NAME:-demi-api-dev}"
-FRONTEND_APP_NAME="${FRONTEND_APP_NAME:-demi-frontend-dev}"
+# No default. The static-website storage account name carries a uniqueString suffix, so there is
+# nothing to guess; `main.bicep` outputs it and CI passes it in as a repository variable.
+FRONTEND_STORAGE_ACCOUNT="${FRONTEND_STORAGE_ACCOUNT:-}"
 export REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 GREEN='\033[0;32m'
@@ -181,84 +183,119 @@ deploy_api() {
   echo -e "${GREEN}✓ API deployed: https://${API_APP_NAME}.azurewebsites.net${NC}"
 }
 
-# Delete hashed build assets that the live index.html does not reference.
+# One upload-batch pass into $web.  blob_upload <cache-control> [glob]
 #
-# zipdeploy MERGES into wwwroot, so every deploy adds a new main-<hash>.js and leaves the old one.
-# By 2026-08-05 that was 19 hashed assets, 5.6 MB, of which exactly 3 were referenced. Pruning here
-# rather than clean-deploying keeps the site up throughout and avoids OneDeploy entirely.
-prune_frontend() {
-  echo -e "\n${BLUE}Pruning superseded bundles from ${YELLOW}${FRONTEND_APP_NAME}${NC}..."
-  local referenced
-  referenced=$(curl -sS --max-time 60 "https://${FRONTEND_APP_NAME}.azurewebsites.net/index.html" \
-    | grep -oE '(main|polyfills|styles|scripts)-[A-Z0-9]+\.(js|css)' | sort -u || true)
-
-  # If index.html could not be read or references nothing, EVERY asset looks superseded. Abort —
-  # a prune that cannot see what is in use would delete the running site.
-  if [ -z "$referenced" ]; then
-    echo -e "${RED}✗ index.html referenced no hashed assets; refusing to prune${NC}"
-    return 1
-  fi
-  echo -e "  in use: $(echo "$referenced" | tr '\n' ' ')"
-
-  local listing
-  listing=$(kudu "$FRONTEND_APP_NAME" GET /api/vfs/site/wwwroot/ \
-    | python3 -c "import sys,json;[print(x['name']) for x in json.load(sys.stdin)]")
-
-  local pruned=0
-  while read -r name; do
-    [ -z "$name" ] && continue
-    case "$name" in main-*|polyfills-*|styles-*|scripts-*) ;; *) continue ;; esac
-    if ! echo "$referenced" | grep -qx "$name"; then
-      kudu "$FRONTEND_APP_NAME" DELETE "/api/vfs/site/wwwroot/${name}" -H "If-Match: *" -o /dev/null
-      echo -e "  ${YELLOW}removed${NC} $name"
-      pruned=$((pruned + 1))
-    fi
-  done <<< "$listing"
-  echo -e "${GREEN}✓ pruned ${pruned} superseded asset(s)${NC}"
+# No glob means EVERY file. `$web` is single-quoted: it is a container name, not a variable.
+blob_upload() {
+  local cache="$1" pattern="${2:-}"
+  # shellcheck disable=SC2016  # '$web' is the container's literal name, not an expansion
+  local args=(
+    --auth-mode login --output none --overwrite
+    --account-name "$FRONTEND_STORAGE_ACCOUNT"
+    --destination '$web'
+    --source "$REPO_ROOT/frontend/dist"
+    --content-cache "$cache"
+  )
+  [ -n "$pattern" ] && args+=(--pattern "$pattern")
+  az storage blob upload-batch "${args[@]}"
 }
 
+# Publish the built bundle to the static website container.
+#
+# No App Service any more, so no zip, no Kudu, no blue/green swap to wait out: a blob PUT is live
+# when it returns. What is gone with it is the ability to set a response header, which is why the
+# security headers moved to the Front Door rule set — and why Cache-Control has to be stamped on
+# each blob at upload time. The policy below is the one the old Node server applied per request
+# (eagle-public/azure/server.js:125-131).
 deploy_frontend() {
-  echo -e "\n${BLUE}[1/3] Building Angular frontend production bundle...${NC}"
+  : "${FRONTEND_STORAGE_ACCOUNT:?set FRONTEND_STORAGE_ACCOUNT — main.bicep output frontendStorageAccountName}"
+  local nostore='no-cache, no-store, must-revalidate'
+  local immutable='public, max-age=31536000, immutable'
+
+  echo -e "\n${BLUE}[1/4] Enabling static website hosting on ${YELLOW}${FRONTEND_STORAGE_ACCOUNT}${BLUE}...${NC}"
+  # NOTHING ELSE TURNS THIS ON. `staticWebsite` is a data-plane setting on the Blob service and the
+  # ARM type has no property for it — bicep rejects it with BCP037 — so `azure/modules/static-site.
+  # bicep` creates the account and stops there. On an account where this has never run there is no
+  # `$web` container at all: the upload below fails, or (if a human made the container by hand) the
+  # site endpoint 404s every request with nothing anywhere saying a data-plane step was skipped.
+  #
+  # Idempotent, so it runs on every deploy rather than being a one-time command someone has to
+  # remember: re-applying the same three values is a no-op. It goes FIRST, before the build, so a
+  # missing permission fails in seconds instead of after a two-minute Angular build.
+  #
+  # Both documents are index.html because this is an SPA with client-side routing — a deep link has
+  # to come back with the app shell, not an error page.
+  #
+  # THIS IS A SERVICE-PROPERTIES WRITE, NOT A BLOB WRITE. Storage Blob Data Contributor — the role
+  # static-site.bicep assigns for the upload — does not cover it; it carries no
+  # `Microsoft.Storage/storageAccounts/blobServices/write`. The CI identity (demi-cicd-<env>) needs
+  # Storage Account Contributor scoped to THIS ACCOUNT as well, or a custom role holding that single
+  # action. Still nothing at resource-group scope.
+  az storage blob service-properties update \
+    --account-name "$FRONTEND_STORAGE_ACCOUNT" --auth-mode login --output none \
+    --static-website --index-document index.html --404-document index.html \
+    || { echo -e "${RED}✗ could not enable static website hosting on ${FRONTEND_STORAGE_ACCOUNT}${NC}" >&2
+         echo -e "${RED}  403 here means the identity holds only Storage Blob Data Contributor.${NC}" >&2
+         echo -e "${RED}  This call needs Microsoft.Storage/storageAccounts/blobServices/write —${NC}" >&2
+         echo -e "${RED}  grant Storage Account Contributor on this account and re-run.${NC}" >&2
+         return 1; }
+
+  echo -e "\n${BLUE}[2/4] Building Angular frontend production bundle...${NC}"
+  # env.js is rewritten in the SOURCE, before this build, by the workflow — see
+  # .github/workflows/azure-deploy-staging-frontend.yaml for the incident that verification
+  # records. It used to be patched here afterwards, on frontend/dist, gated on the app name.
   yarn --cwd "$REPO_ROOT/frontend" build
 
-  # env.js ships in the bundle with dev URLs baked in, and the app bootstraps its /api/config
-  # fetch FROM env.js — so a test deploy that skips this rewrite silently talks to the DEV API
-  # (found live 2026-08-11). sed exits 0 on no match, hence the grep guards on both sides.
-  if [[ "$FRONTEND_APP_NAME" == "demi-frontend-test" ]]; then
-    ENV_JS="$REPO_ROOT/frontend/dist/env.js"
-    grep -qF "https://demi-api-dev.azurewebsites.net" "$ENV_JS" || { echo "env.js rewrite guard: dev API URL not found"; exit 1; }
-    sed -i \
-      -e "s|https://demi-api-dev.azurewebsites.net|https://demi-api-test.azurewebsites.net|g" \
-      -e "s|https://dev.loginproxy.gov.bc.ca|https://test.loginproxy.gov.bc.ca|g" \
-      -e "s|window.__env.ENVIRONMENT = 'dev'|window.__env.ENVIRONMENT = 'test'|" \
-      "$ENV_JS"
-    grep -qF "https://demi-api-test.azurewebsites.net" "$ENV_JS" || { echo "env.js rewrite failed"; exit 1; }
-    echo -e "${GREEN}✓ env.js repointed at demi-api-test / test loginproxy${NC}"
+  # ...which means a deploy run BY HAND does no rewriting at all, and frontend/public/env.js is
+  # committed pointing at dev. That is exactly the 2026-08-11 incident (staging serving a bundle
+  # that called the DEV API and the DEV realm) with the guard moved out of reach. The script cannot
+  # infer the environment from the storage account — the name is a uniqueString — but the resource
+  # group argument carries it, so assert rather than rewrite: CI has already done the rewrite and
+  # passes, a hand deploy stops here instead of shipping dev config to staging.
+  local env="${RESOURCE_GROUP#*-}"; env="${env%-rg}"
+  if ! grep -qF "https://demi-api-${env}.azurewebsites.net" "$REPO_ROOT/frontend/dist/env.js"; then
+    echo -e "${RED}✗ dist/env.js does not point at demi-api-${env} — this bundle would call the wrong API${NC}" >&2
+    echo -e "${RED}  Apply the rewrites from the 'Point env.js at the test environment' step in${NC}" >&2
+    echo -e "${RED}  .github/workflows/azure-deploy-staging-frontend.yaml to frontend/public/env.js, then re-run.${NC}" >&2
+    return 1
   fi
+  echo -e "${GREEN}✓ env.js points at demi-api-${env}${NC}"
 
-  echo -e "\n${BLUE}[2/3] Deploying static bundle to ${YELLOW}${FRONTEND_APP_NAME}${NC}..."
-  FRONTEND_ZIP="/tmp/frontend-deploy.zip"
-  rm -f "$FRONTEND_ZIP"
-  python3 -c "
-import zipfile, os
-dist_dir = '$REPO_ROOT/frontend/dist'
-with zipfile.ZipFile('$FRONTEND_ZIP', 'w', zipfile.ZIP_DEFLATED) as z:
-    for root, dirs, files in os.walk(dist_dir):
-        for file in files:
-            full = os.path.join(root, file)
-            z.write(full, os.path.relpath(full, dist_dir))
-"
-  echo -e "${GREEN}✓ Frontend package created ($(du -h "$FRONTEND_ZIP" | cut -f1))${NC}"
+  echo -e "\n${BLUE}[3/4] Uploading to ${YELLOW}${FRONTEND_STORAGE_ACCOUNT}${BLUE}/\$web...${NC}"
+  # PASS 1 IS UNFILTERED, DELIBERATELY. `--pattern` takes one fnmatch glob and there is no way to
+  # spell "everything else", so a scheme built only from patterns ships whatever it forgot — the
+  # .geojson boundary files and 3rdpartylicenses.txt in this bundle today — with NO Cache-Control
+  # at all, and a browser left to guess is a browser that caches index.html. Uploading everything
+  # conservatively first and re-uploading the hashed assets after costs one extra PUT per hashed
+  # file and cannot miss a file.
+  blob_upload "$nostore"
 
-  az webapp deployment source config-zip \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$FRONTEND_APP_NAME" \
-    --src "$FRONTEND_ZIP"
+  # PASS 2: content-hashed filenames, where the bytes behind a URL can never change. Angular's
+  # outputHashing is "all", so everything it emits carries a hash. One file caught by these
+  # extensions does not — env.js, which matters; see pass 3.
+  #
+  # `ico` is deliberately NOT in this list. Nothing hashes favicon.ico: it is copied verbatim out of
+  # `frontend/public`, so an immutable year would pin a stale icon in every reviewer's browser with
+  # no way to bust it. Pass 1 already gave it no-store, which is where an unhashed file belongs.
+  local ext
+  for ext in js css png jpg jpeg gif svg woff woff2 ttf eot; do
+    blob_upload "$immutable" "*.${ext}"
+  done
 
-  echo -e "\n${BLUE}[3/3] Post-deploy prune${NC}"
-  prune_frontend
+  # PASS 3: env.js is the one .js in the bundle with no hash, so pass 2 just gave it a year of
+  # immutable caching. Put it back. It carries the API base URL and the Keycloak realm, and a
+  # stale copy points the browser at the wrong ENVIRONMENT with nothing logged anywhere.
+  blob_upload "$nostore" 'env.js'
 
-  echo -e "${GREEN}✓ Frontend deployed: https://${FRONTEND_APP_NAME}.azurewebsites.net${NC}"
+  # ponytail: no prune. Every deploy leaves the previous main-<hash>.js and styles-<hash>.css in
+  # $web — 19 files / 5.6 MB accumulated on the old App Service before anyone noticed, which is
+  # fractions of a cent per month of LRS and is linked from nothing. Upgrade path when that stops
+  # being true: `az storage blob delete-batch -s '$web' --pattern '*-*.js'` filtered on
+  # --if-unmodified-since, or delete the container and re-upload.
+  echo -e "\n${BLUE}[4/4] Done${NC}"
+  echo -e "${GREEN}✓ Frontend published to \$web on ${FRONTEND_STORAGE_ACCOUNT}${NC}"
+  echo -e "${YELLOW}  Front Door caches in front of this. index.html is uploaded no-store so the${NC}"
+  echo -e "${YELLOW}  edge re-reads it; hashed assets get new names, so neither needs a purge.${NC}"
 }
 
 case "$TARGET" in

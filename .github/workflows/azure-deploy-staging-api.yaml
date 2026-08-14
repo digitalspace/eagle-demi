@@ -15,7 +15,8 @@
 # deployment, and that is deliberate.
 #
 # The credential is scoped to match: `demi-cicd-test` holds Website Contributor on
-# demi-api-test and demi-frontend-test individually, nothing at resource-group scope,
+# demi-api-test alone (the frontend is published to blob storage now, under a
+# data-plane role), nothing at resource-group scope,
 # so it cannot run an ARM deployment even if a job were added. Keep it that way — do
 # not add an infra job, and do not widen the role assignment.
 #
@@ -63,8 +64,8 @@ jobs:
     # Subscription, resource group and the two Azure ids all come from this
     # environment — only the app names below are pinned in the file.
     #
-    # STAGING IS SPELLED `-test` IN AZURE: `demi-api-test` and `demi-frontend-test`
-    # in `c4b0a8-test-rg`, subscription `c4b0a8-test`. The environment model is
+    # STAGING IS SPELLED `-test` IN AZURE: `demi-api-test` in `c4b0a8-test-rg`,
+    # subscription `c4b0a8-test`. The environment model is
     # dev = sandbox (redeployable, not wired to CI), test = staging, prod = prod.
     #
     # Declaring an environment CHANGES THE OIDC SUBJECT CLAIM. It becomes

@@ -7,8 +7,9 @@ This repository houses:
 1. **demi-api** — the authoritative REST API and geospatial search service for projects, documents,
    chunks and administrative boundaries, running on Azure App Service (`@azure/functions` v4 on
    Node.js 22).
-2. **demi-frontend** — the Angular document intake and search frontend, deployed to an Azure Web
-   App.
+2. **demi-frontend** — the Angular document intake and search frontend, published to the `$web`
+   container of a Storage static website and served through the Front Door profile that lives in
+   `eagle-search`.
 
 > **Status: staging** (`c4b0a8-test`, resources `demi-*-test`) is the live environment — CI
 > deploys it on every push to `main`. Dev is an empty sandbox shell (redeploy from Bicep on
@@ -104,7 +105,8 @@ implementation:
 | Database | **Azure Cosmos DB for NoSQL** (`@azure/cosmos`), account `demi-cosmos-test` |
 | Search | **Azure AI Search** `demi-search-test` — Basic, keyless, private endpoint only. `demi-chunks`, `demi-projects`, `demi-documents` |
 | Object store | `nrs.objectstore.gov.bc.ca`, bucket `asnpnn` (S3-compatible, `minio` client) |
-| Frontend | Angular, built to `frontend/dist`, served by `pm2 serve --spa` |
+| Frontend | Angular, built to `frontend/dist`, published to the `$web` container of the `demiweb…` storage account (`azure/modules/static-site.bicep`) and served through the Front Door profile in `eagle-search` |
+| Edge | Azure Front Door Standard, profile `eagle-edge-<env>` — **owned by `eagle-search`**, not by this repo. It supplies TLS, the security headers and the SPA fallback rewrite that `$web` cannot |
 | IaC | Bicep — `azure/main.bicep`, `azure/modules/` |
 
 **The database is keyless.** The account sets `disableLocalAuth`, so there is no connection key: auth
@@ -295,18 +297,95 @@ what produced 3,382 synthetic project rows in the old database.
 ## Deployment
 
 **The environment model: Azure dev is a sandbox, test is staging, prod is prod** (decided
-2026-08-10). Staging lives in `c4b0a8-test-rg` (subscription `c4b0a8-test`) as `demi-api-test` and
-`demi-frontend-test`, deployed from `azure/main.test.bicepparam`. Dev keeps its resources but is no
-longer wired to CI — deploy there by hand when experimenting.
+2026-08-10). Staging lives in `c4b0a8-test-rg` (subscription `c4b0a8-test`) as `demi-api-test` plus
+the `demiwebtest…` static-website storage account, deployed from `azure/main.test.bicepparam`. Dev
+keeps its resources but is no longer wired to CI — deploy there by hand when experimenting.
+
+`FRONTEND_STORAGE_ACCOUNT` has **no default and cannot be guessed** — the account name carries a
+`uniqueString` suffix. Take it from the `frontendStorageAccountName` output of `main.bicep`; the
+script aborts rather than inventing one, and `all` therefore needs it too.
 
 ```bash
-API_APP_NAME=demi-api-test      ./scripts/deploy-azure.sh api       c4b0a8-test-rg
-FRONTEND_APP_NAME=demi-frontend-test ./scripts/deploy-azure.sh frontend  c4b0a8-test-rg
-./scripts/deploy-azure.sh all c4b0a8-dev-rg    # dev sandbox: defaults target demi-*-dev
+API_APP_NAME=demi-api-test ./scripts/deploy-azure.sh api c4b0a8-test-rg
+FRONTEND_STORAGE_ACCOUNT=$(az deployment group show -g c4b0a8-test-rg -n main \
+  --query properties.outputs.frontendStorageAccountName.value -o tsv) \
+  ./scripts/deploy-azure.sh frontend c4b0a8-test-rg
 ```
 
 Build the package from a checkout that already has `node_modules` installed — `ENABLE_ORYX_BUILD` is
 `false`, so nothing installs dependencies on the Azure side.
+
+### Decommissioning `demi-frontend-test` — a separate, manual step
+
+Deleting `modules/frontend-web-app.bicep` stopped the template *managing* the App Service. It did not
+delete it. ARM deploys incrementally, so `what-if` reports `demi-frontend-test` and
+`demi-frontend-plan-test` as `Ignore`: still running, still serving a stale bundle, still billing.
+Complete-mode deployment would remove them and is **not** an option — it deletes every resource in
+`c4b0a8-test-rg` absent from the template, Cosmos and AI Search included.
+
+Once the Front Door endpoint is verified serving the right bundle:
+
+```bash
+az webapp delete -g c4b0a8-test-rg -n demi-frontend-test
+# The B1 plan also carried eagle-public-preview-test. Check it is empty before deleting.
+az appservice plan show -g c4b0a8-test-rg -n demi-frontend-plan-test --query numberOfSites
+az appservice plan delete -g c4b0a8-test-rg -n demi-frontend-plan-test
+```
+
+Until the plan is gone this cutover is a pure cost **increase**: the shared AFD profile is new spend
+on top of a plan still being paid for.
+
+### Two manual steps the templates cannot do
+
+Do these once per environment, in this order, or the frontend is a set of blobs nobody can reach.
+
+Two things that used to be on this list are now automatic, and are recorded here only so nobody
+re-adds them. `frontendUploaderPrincipalId` is **set** in `azure/main.test.bicepparam`
+(`39682a03-…`, the object id of `demi-cicd-test` — not its client id), so `static-site.bicep`
+assigns the CI identity both roles it needs. And **static website hosting is enabled by
+`scripts/deploy-azure.sh frontend` on every deploy**, idempotently:
+
+```bash
+az storage blob service-properties update --account-name <frontendStorageAccountName> \
+  --auth-mode login --static-website --index-document index.html --404-document index.html
+```
+
+Both documents are `index.html` because this is an SPA; skip it and every blob uploads fine while
+the site 404s. That is a *service-properties* write, so it needs **Storage Account Contributor**,
+which Blob Data Contributor does not imply — `static-site.bicep` now assigns it alongside the data
+role. Handing CI a role carrying `listKeys` is only acceptable because the account sets
+`allowSharedKeyAccess: false`, which makes those keys unusable; do not re-enable shared keys
+without revisiting that grant. `scripts/validate-deploy.sh` checks the result when given
+`FRONTEND_STORAGE_ACCOUNT`.
+
+1. **Give eagle-search the origin hostname.** `main.bicep` outputs `frontendStaticSiteHostName`
+   (`demiweb….z13.web.core.windows.net`); it goes into eagle-search's `demiFrontendWebHostName`
+   parameter, which is what adds DEMI's route to the shared Front Door profile.
+
+2. **Come back and fill in the AFD hostname.** An AFD endpoint is
+   `<name>-<hash>.z01.azurefd.net` and **the hash is assigned at deploy time**, so it cannot be
+   composed, guessed or written ahead of the deployment. Take it from eagle-search's
+   `edgeEndpointHostNames` output, set `frontendHostName` in `azure/main.test.bicepparam` (it is
+   committed as a commented-out line for exactly this reason) and redeploy this template. That is
+   what sets `CORS_ORIGIN` on `demi-api-test`. Until it is done the API's allowlist holds only
+   `http://localhost:4200`, so the frontend's first XHR fails CORS — deliberately the loud failure
+   rather than the silent "reflect any origin" one.
+
+### Two accepted ceilings
+
+- **The `$web` endpoint stays publicly reachable, so Front Door can be bypassed.** Anyone who
+  learns `demiweb….z13.web.core.windows.net` gets the same files without the security headers.
+  There is no fix on this SKU: AFD Standard cannot reach an origin over Private Link (Premium
+  only), storage `networkAcls` has no resource-instance rule for `Microsoft.Cdn/profiles`, and
+  storage cannot inspect the `X-Azure-FDID` header the way an App Service can. Accepted because the
+  bytes are a public Angular bundle; the header loss is real but affects only a bypasser's own
+  browser.
+- **Nothing in front of the frontend authenticates.** `$web` is anonymous by definition, and an AFD
+  rule-set rule can only rewrite and set headers — no action challenges a request for credentials.
+  DEMI's own Keycloak login is unaffected, it is in the app, but the shell is open to anyone with
+  the hostname. The upgrade that keeps this SKU is a **WAF custom rule** on the endpoint (match +
+  Block, e.g. an IP CIDR); Standard supports custom rules, and only *managed* rule sets are
+  Premium-only.
 
 **CI deploys staging on every push to `main`.** It runs the same script — the
 workflow installs dependencies, logs in, and calls `./scripts/deploy-azure.sh`, so CI and a manual
@@ -317,7 +396,7 @@ not redeploy the other:
 
 | Workflow | Deploys | Fires on a push to `main` touching |
 |---|---|---|
-| `azure-deploy-staging-frontend.yaml` | `demi-frontend-test` | `frontend/**` |
+| `azure-deploy-staging-frontend.yaml` | `$web` on the static-website storage account (repo variable `AZURE_FRONTEND_STORAGE_ACCOUNT`) | `frontend/**` |
 | `azure-deploy-staging-api.yaml` | `demi-api-test` | `src/**`, `api/**`, `public/**`, `index.js`, `host.json`, `package.json`, `yarn.lock`, `frontend/public/assets/geojson/**` |
 
 Both also accept `workflow_dispatch`. The API's paths mirror `scripts/package-api.py`, which decides
@@ -333,7 +412,7 @@ federated credential, with no client secret anywhere:
 |---|---|
 | Identity | `demi-cicd-test`, in `c4b0a8-test-rg` |
 | Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:digitalspace/eagle-demi:environment:test`, audience `api://AzureADTokenExchange` |
-| RBAC | Website Contributor on `demi-api-test` and `demi-frontend-test` **individually** — nothing at resource-group scope |
+| RBAC | Website Contributor on `demi-api-test` **individually**, plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
 | Config | All four values live on the **`test` GitHub environment**, nothing at repo scope and nothing hardcoded: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`; variables `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` |
 
 **Declaring `environment: test` changes the OIDC subject claim, and that is the trap.** With an
@@ -373,9 +452,10 @@ its GitHub environment — its own role assignments, and for prod a decision abo
 on the environment. Build them from the dev pair when that work actually starts.
 
 **`azure/main.bicep` now describes and manages staging**, and was first applied to `c4b0a8-test-rg`
-on 2026-08-13. It instantiates every module except `vnet.bicep`, `key-vault.bicep` and
-`static-web-app.bicep` — the landing zone owns the VNet, and secrets are app settings rather than
-Key Vault references.
+on 2026-08-13. It instantiates every module except `vnet.bicep` and `key-vault.bicep` — the landing
+zone owns the VNet, and secrets are app settings rather than Key Vault references. (`static-web-app.bicep`
+and `frontend-web-app.bicep` used to be named here as well; both were deleted when the frontend moved
+to `static-site.bicep`.)
 
 That first apply found two defects the template had carried for months, both invisible to
 `what-if`:
@@ -395,9 +475,9 @@ It is not a loaded gun, though, and now for two independent reasons. **No dev wo
 infra job at all** — the `deploy-infra` job became a loginless `validate-infra` on 2026-08-04, and
 that in turn moved to `pr.yaml` as `validate-bicep` on 2026-08-05 when the deploy workflows were
 split. A template that will not compile is a pull-request problem; it has no bearing on whether a
-zipdeploy should run, so it no longer blocks one. And the CI identity is scoped to two App Services,
-so it could not run an ARM deployment even if a job came back. Infrastructure changes go through
-`az` by hand meanwhile.
+zipdeploy should run, so it no longer blocks one. And the CI identity is scoped to one App Service
+plus a data-plane role on one storage account, so it could not run an ARM deployment even if a job
+came back. Infrastructure changes go through `az` by hand meanwhile.
 
 Things that will cost you time if you rediscover them:
 

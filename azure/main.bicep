@@ -17,8 +17,8 @@
 //
 // WHAT IS DELIBERATELY ABSENT.
 //   - Key Vault. Never deployed; secrets are app settings. `modules/key-vault.bicep` is unreferenced.
-//   - Static Web App. The frontend is an App Service (`demi-frontend-dev`), not a SWA.
-//     `modules/static-web-app.bicep` is unreferenced and superseded by `frontend-web-app.bicep`.
+//   - Static Web App. The frontend is a Storage static website (module 8) fronted by the Front
+//     Door profile that lives in eagle-search.
 //   - Cosmos DB for MongoDB. Cut loose at Phase 8; nothing speaks Mongo.
 //   - Document storage. Phase 3b, written but never deployed — see `deployDocumentStorage`.
 //
@@ -98,6 +98,18 @@ param appServiceSubnetId string = ''
 
 @description('Object ID of a human principal granted read access to data planes. Empty grants none.')
 param readerPrincipalId string = ''
+
+// AN AFD ENDPOINT HOSTNAME IS NOT PREDICTABLE. It is `<name>-<hash>.z01.azurefd.net`, and the hash
+// is assigned when the endpoint is created — so this cannot be derived, only observed. Fill it in
+// from the eagle-search Front Door deployment's output, then redeploy this template.
+//
+// Empty is the pre-Front-Door state and fails CLOSED rather than open: `CORS_ORIGIN` is then unset
+// on the API, and src/app.js falls back to an allowlist holding only http://localhost:4200.
+@description('Front Door endpoint hostname serving the DEMI frontend (no scheme). Filled in after the AFD deployment in eagle-search — the hostname carries a deploy-time hash and cannot be guessed.')
+param frontendHostName string = ''
+
+@description('Principal id of the CI identity (demi-cicd-<env>) that publishes the frontend bundle into $web. Empty skips the role assignment, and the publish step then gets a 403.')
+param frontendUploaderPrincipalId string = ''
 
 // Phase 3b. The module is written and the argument for it is per-environment isolation rather than
 // cost, but nothing is deployed and nothing is copied — and turning it on needs `Storage Blob
@@ -280,17 +292,22 @@ module apiWebApp './modules/api-web-app.bicep' = {
     auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
     // Deploy-access auditing: who signed in to Kudu/SCM and published.
     auditWorkspaceId: auditLogs.outputs.workspaceId
+    // The only browser origin that calls this API. See the parameter for why it is not derivable.
+    frontendHostName: frontendHostName
   }
 }
 
-// 8. Angular frontend — a second Linux App Service on its own B1 plan.
-module frontendWebApp './modules/frontend-web-app.bicep' = {
-  name: 'deploy-frontend-web-app'
+// 8. Angular frontend — a Storage static website, no App Service and no plan. TLS, the hostname,
+// the security headers and the routing rules are supplied by the Front Door profile in
+// eagle-search; this template owns only the origin. See modules/static-site.bicep for the one
+// data-plane command ARM cannot express.
+module staticSite './modules/static-site.bicep' = {
+  name: 'deploy-static-site'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
-    appInsightsConnectionString: observability.outputs.connectionString
+    uploaderPrincipalId: frontendUploaderPrincipalId
   }
 }
 
@@ -308,7 +325,12 @@ module costBudget './modules/cost-budget.bicep' = {
 
 // Outputs
 output apiWebAppHostName string = apiWebApp.outputs.apiWebAppHostName
-output frontendWebAppHostName string = frontendWebApp.outputs.frontendWebAppHostName
+// COPY THIS INTO eagle-search's Front Door parameters. The profile owns the DEMI route but not the
+// origin, so it needs this hostname to add one; it is stable for the life of the storage account.
+output frontendStaticSiteHostName string = staticSite.outputs.staticSiteHostName
+// The publish target for `scripts/deploy-azure.sh frontend` — carries a uniqueString suffix, so it
+// goes into the repository variable AZURE_FRONTEND_STORAGE_ACCOUNT rather than a literal in CI.
+output frontendStorageAccountName string = staticSite.outputs.storageAccountName
 output searchEndpoint string = search.outputs.searchEndpoint
 output cosmosEndpoint string = cosmos.outputs.cosmosEndpoint
 output identityClientId string = identity.outputs.clientId

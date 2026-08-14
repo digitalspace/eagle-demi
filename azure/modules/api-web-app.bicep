@@ -87,6 +87,9 @@ param auditDcrImmutableId string = ''
 @description('Resource id of the demi-audit-<env> workspace. Empty skips deploy-access auditing rather than failing the deployment.')
 param auditWorkspaceId string = ''
 
+@description('Front Door endpoint hostname serving the frontend (no scheme), the one browser origin that calls this API. Empty until the AFD profile in eagle-search is deployed — its hostname carries a deploy-time hash, so it is filled in afterwards and cannot be composed here.')
+param frontendHostName string = ''
+
 @description('Upstream eagle-api the seed loader reads. Must match the environment — the code default in src/seed/sources.js is the DEV instance, so a wrong or missing value reads dev data.')
 param eagleApiBase string
 
@@ -344,9 +347,14 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           value: '${keycloakUrl}/realms/${keycloakRealm}/protocol/openid-connect/certs'
         }
         // Browser CORS allowlist — unset previously meant "reflect any origin".
+        //
+        // The frontend is no longer at a hostname this template can compose: it is a Storage
+        // static website behind Front Door, and the AFD endpoint carries a deploy-time hash. Empty
+        // leaves CORS_ORIGIN unset, and src/app.js then falls back to localhost only — no browser
+        // origin, rather than any browser origin.
         {
           name: 'CORS_ORIGIN'
-          value: 'https://demi-frontend-${environmentName}.azurewebsites.net'
+          value: empty(frontendHostName) ? '' : 'https://${frontendHostName}'
         }
         // Build & Deployment Configuration
         {
@@ -385,12 +393,15 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           value: 'EnableWorkerIndexing'
         }
       ]
+      // Platform-level CORS, in front of the app's own. portal.azure.com is what makes the
+      // built-in test console work; the frontend origin is added only once it is known. The
+      // `demi-frontend-swa-*.azurestaticapps.net` entry that used to sit here is gone with the
+      // Static Web App idea — Microsoft.Web/staticSites cannot deploy in any region this landing
+      // zone's Resource-Locations policy allows.
       cors: {
-        allowedOrigins: [
-          'https://portal.azure.com'
-          'https://demi-frontend-${environmentName}.azurewebsites.net'
-          'https://demi-frontend-swa-${environmentName}.azurestaticapps.net'
-        ]
+        allowedOrigins: empty(frontendHostName)
+          ? [ 'https://portal.azure.com' ]
+          : [ 'https://portal.azure.com', 'https://${frontendHostName}' ]
       }
     }
   }
