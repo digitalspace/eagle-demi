@@ -1,12 +1,16 @@
 # =============================================================================
 # Build and Deploy the DEMI Frontend to Azure staging
 # =============================================================================
-# Deploys the Angular frontend to the Azure Web App `demi-frontend-test`.
+# Publishes the Angular bundle to the `$web` container of the static-website storage
+# account, which is the origin for the Front Door profile that lives in eagle-search.
+# It replaces the App Service `demi-frontend-test`, which this change stops deploying to.
+# That App Service and its plan are NOT deleted by the change — ARM deploys incrementally, so
+# they keep running and billing until the decommission commands in the README are run by hand.
 #
 # Frontend only. The API has its own file, `azure-deploy-staging-api.yaml`, and its own
 # trigger. They were one workflow until 2026-08-05, which meant an Angular-only
 # change redeployed the API and a controller change rebuilt the frontend. The two
-# target different App Services and share no build output, so they now run
+# target different resources and share no build output, so they now run
 # independently — including their concurrency groups.
 #
 # This workflow deploys the application only. It must NEVER deploy infrastructure.
@@ -15,9 +19,22 @@
 # deployment, and that is deliberate.
 #
 # The credential is scoped to match: `demi-cicd-test` holds Website Contributor on
-# demi-api-test and demi-frontend-test individually, nothing at resource-group scope,
-# so it cannot run an ARM deployment even if a job were added. Keep it that way — do
-# not add an infra job, and do not widen the role assignment.
+# demi-api-test, plus Storage Blob Data Contributor on the static-website account
+# (assigned by `azure/modules/static-site.bicep` from `frontendUploaderPrincipalId`),
+# plus Storage Account Contributor on that SAME account and nothing wider — see below.
+# Nothing at resource-group scope, so it cannot run an ARM deployment even if a job
+# were added. Keep it that way: do not add an infra job, and do not widen further.
+# Note that a data-plane role is what publishing needs now; Website Contributor grants
+# nothing on a storage account.
+#
+# Storage Account Contributor is there for exactly one call. The deploy script's first
+# step turns static website hosting on (`az storage blob service-properties update
+# --static-website`), which bicep cannot do because ARM has no property for it. That is
+# a service-properties write needing
+# `Microsoft.Storage/storageAccounts/blobServices/write`, and Storage Blob Data
+# Contributor does not carry it — without the second assignment every deploy stops on a
+# 403 before it builds. Narrow it to a custom role with that single action if the
+# account-scoped grant ever reads as too broad.
 #
 # Bicep still gets validated, in `pr.yaml`. A template that will not compile is a
 # pull-request problem; it has no bearing on whether a zipdeploy should run.
@@ -53,9 +70,9 @@ jobs:
     # Subscription, resource group and the two Azure ids all come from this
     # environment — only the app names below are pinned in the file.
     #
-    # STAGING IS SPELLED `-test` IN AZURE: `demi-api-test` and `demi-frontend-test`
-    # in `c4b0a8-test-rg`, subscription `c4b0a8-test`. The environment model is
-    # dev = sandbox (redeployable, not wired to CI), test = staging, prod = prod.
+    # STAGING IS SPELLED `-test` IN AZURE: `demi-api-test` and the `demiwebtest…`
+    # storage account in `c4b0a8-test-rg`, subscription `c4b0a8-test`. The environment
+    # model is dev = sandbox (redeployable, not wired to CI), test = staging, prod = prod.
     #
     # Declaring an environment CHANGES THE OIDC SUBJECT CLAIM. It becomes
     # `repo:digitalspace/eagle-demi:environment:test` instead of
@@ -67,6 +84,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      # env.js ships inside the bundle with DEV URLs baked in, and the app bootstraps its
+      # /api/config fetch FROM env.js — so a staging deploy that skips this rewrite talks to
+      # the DEV API and authenticates against the DEV realm while looking entirely healthy.
+      # That is not hypothetical; it was found running live on 2026-08-11.
+      #
+      # Rewritten in the SOURCE, before the build, so `yarn build` copies the corrected file.
+      # It used to be patched afterwards in `scripts/deploy-azure.sh`, on `frontend/dist`,
+      # gated on the app name — one more place the guard could be missed.
+      #
+      # `sed` exits 0 when it matches NOTHING, so every rewrite is followed by a grep that
+      # fails the job. A silent no-op is the exact failure being guarded against, and the
+      # only way to see one is to assert the result.
+      - name: Point env.js at the test environment
+        run: |
+          ENV_JS=frontend/public/env.js
+          sed -i 's|https://demi-api-dev.azurewebsites.net|https://demi-api-test.azurewebsites.net|g' "$ENV_JS"
+          grep -qF 'https://demi-api-test.azurewebsites.net' "$ENV_JS" \
+            || { echo "::error file=$ENV_JS::API URL rewrite did not take — the bundle would call the DEV API"; exit 1; }
+          sed -i 's|https://dev.loginproxy.gov.bc.ca|https://test.loginproxy.gov.bc.ca|g' "$ENV_JS"
+          grep -qF 'https://test.loginproxy.gov.bc.ca' "$ENV_JS" \
+            || { echo "::error file=$ENV_JS::Keycloak URL rewrite did not take — the bundle would use the DEV realm"; exit 1; }
+          sed -i "s|window.__env.ENVIRONMENT = 'dev'|window.__env.ENVIRONMENT = 'test'|" "$ENV_JS"
+          grep -qF "window.__env.ENVIRONMENT = 'test'" "$ENV_JS" \
+            || { echo "::error file=$ENV_JS::ENVIRONMENT rewrite did not take — the banner would read 'dev'"; exit 1; }
 
       # 24 to match pr.yaml, so the build that deploys runs on the runtime the build
       # that gated it ran on. Angular 22 floors Node at ^22.22.3 || ^24.15.0, which
@@ -92,20 +134,23 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # `scripts/deploy-azure.sh`, not `az webapp deploy`. Beyond deploying, it PRUNES the
-      # superseded hashed bundles that zipdeploy's merge leaves behind — by 2026-08-05 that was
-      # 19 assets, 5.6 MB, of which 3 were referenced. The old workflow never pruned at all.
+      # `scripts/deploy-azure.sh`, not a bare `az storage blob upload-batch`: the script builds
+      # the bundle and then stamps Cache-Control per blob, which $web cannot supply as a
+      # response header and Front Door will happily cache the wrong way round without.
+      #
+      # The account name is a repository VARIABLE, not a literal: `main.bicep` names the
+      # account with a uniqueString suffix (output `frontendStorageAccountName`), so it differs
+      # per environment and cannot be written down here.
       #
       # A plain `run:` step, not `azure/cli`: that action runs in a container, and the script
-      # needs THIS host's `az` login for `az account get-access-token`. `ubuntu-latest` already
-      # ships az, python3, curl and zip.
+      # needs THIS host's `az` login. `ubuntu-latest` already ships az, python3 and curl.
       - name: Deploy Frontend
         env:
-          FRONTEND_APP_NAME: demi-frontend-test
+          FRONTEND_STORAGE_ACCOUNT: ${{ vars.AZURE_FRONTEND_STORAGE_ACCOUNT }}
         run: ./scripts/deploy-azure.sh frontend ${{ vars.AZURE_RESOURCE_GROUP }}
 
       - name: Report Frontend Failure to Job Summary
         if: failure()
         run: |
           echo "### ❌ Frontend Deployment Failed" >> $GITHUB_STEP_SUMMARY
-          echo "Check step logs above for details on build or Azure Web App deployment errors." >> $GITHUB_STEP_SUMMARY
+          echo "Check step logs above for env.js rewrite, build, or \$web upload errors." >> $GITHUB_STEP_SUMMARY

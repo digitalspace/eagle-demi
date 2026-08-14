@@ -74,3 +74,24 @@ test('the old SPA paths 404 rather than hanging', async () => {
     }
   });
 });
+
+test('an unset CORS_ORIGIN allows no deployed origin', async () => {
+  // The default allowlist used to name the three demi-frontend App Services. Those are gone: the
+  // frontend is a Storage static website behind Front Door, and an AFD endpoint hostname carries a
+  // hash assigned at deploy time, so it can only arrive via CORS_ORIGIN. That makes the fallback
+  // fail CLOSED, and this pins it — the failure mode being guarded against is a future edit
+  // "restoring" a wildcard or a guessed hostname, which no other test would notice.
+  //
+  // CORS_ORIGIN is unset in this process (src/app.js does not load dotenv; only src/server.js
+  // does), so the app under test is running exactly that fallback.
+  assert.strictEqual(process.env.CORS_ORIGIN, undefined, 'this test is only meaningful unset');
+  await withServer(async (base) => {
+    const denied = await fetch(`${base}/api/config`, { headers: { Origin: 'https://evil.example' } });
+    assert.strictEqual(denied.headers.get('access-control-allow-origin'), null,
+      'an unknown origin must not be reflected back');
+
+    const allowed = await fetch(`${base}/api/config`, { headers: { Origin: 'http://localhost:4200' } });
+    assert.strictEqual(allowed.headers.get('access-control-allow-origin'), 'http://localhost:4200',
+      'the local dev server is the one origin the fallback keeps');
+  });
+});

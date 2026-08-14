@@ -58,14 +58,16 @@ app.use(rateLimiterMiddleware);
 // exhibited it — this was latent since the Azure move, not a migration regression.
 app.use(helmet({ contentSecurityPolicy: false }));
 // CORS_ORIGIN is a comma-separated allowlist. It was unset in every deployed environment,
-// which silently meant "reflect ANY origin". Fall back to the known DEMI frontends rather
-// than to '*', so a missing env var narrows access instead of removing it entirely.
-const DEFAULT_ALLOWED_ORIGINS = [
-  'https://demi-frontend-dev.azurewebsites.net',
-  'https://demi-frontend-test.azurewebsites.net',
-  'https://demi-frontend-prod.azurewebsites.net',
-  'http://localhost:4200'
-];
+// which silently meant "reflect ANY origin". Fall back to something narrow rather than to
+// '*', so a missing env var removes access instead of removing the check.
+//
+// The deployed frontends used to be listed here. They cannot be any more: since the move to
+// a Storage static website behind Front Door, the browser origin is an AFD endpoint whose
+// hostname carries a hash assigned at deploy time — unknowable to this file, and supplied by
+// CORS_ORIGIN (api-web-app.bicep sets it from the frontendHostName parameter). What is left
+// is the local dev server, so an unset CORS_ORIGIN allows no deployed origin at all: the
+// frontend breaks visibly in one request, which is the failure you want over the silent one.
+const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:4200'];
 
 const corsOriginEnv = (process.env.CORS_ORIGIN || '').trim();
 const allowAnyOrigin = corsOriginEnv === '*';
@@ -170,7 +172,7 @@ app.use('/', apiRoutes);
 // Under a real http.Server the same request fails fast with a 500 carrying the ENOENT, which is why
 // this could only be found by asking the deployed API rather than by running it locally.
 //
-// The frontend is its own App Service (`demi-frontend-dev`), which is where these paths already
+// The frontend is a Storage static website behind Front Door, which is where these paths already
 // live. There is nothing for the API to serve.
 
 // Catch 404
