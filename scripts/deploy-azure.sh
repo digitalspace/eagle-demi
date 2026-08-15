@@ -277,8 +277,12 @@ deploy_frontend() {
   # `ico` is deliberately NOT in this list. Nothing hashes favicon.ico: it is copied verbatim out of
   # `frontend/public`, so an immutable year would pin a stale icon in every reviewer's browser with
   # no way to bust it. Pass 1 already gave it no-store, which is where an unhashed file belongs.
+  #
+  # Images and fonts are out for the same reason: `outputHashing: all` hashes only what Angular
+  # EMITS, which is the .js and .css. Assets are copied through under their source names, so an
+  # immutable year on them means a changed logo or font never reaches a browser that saw the old one.
   local ext
-  for ext in js css png jpg jpeg gif svg woff woff2 ttf eot; do
+  for ext in js css; do
     blob_upload "$immutable" "*.${ext}"
   done
 
