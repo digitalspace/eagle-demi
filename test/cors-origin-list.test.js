@@ -46,27 +46,27 @@ async function allowOriginFor(base, origin) {
 }
 
 const FRONT_DOOR = 'https://demi-frontend-test-eaa9cyfydsb0ejet.a02.azurefd.net';
-// The rollback target, still serving during the cutover. WHEN THAT APP SERVICE IS DELETED this
-// constant goes with it — the origin comes out of `frontendHostNames` in azure/main.test.bicepparam
-// at the same time, and a test still asserting two origins would fail on a correct config. The
-// cases below are about list parsing, not about these two hosts specifically; any two will do.
-const OLD_APP_SERVICE = 'https://demi-frontend-test.azurewebsites.net';
+// A second origin, because the code under test is a LIST parser and one entry exercises none of it.
+// This used to be the old App Service kept as the cutover's rollback target; that app was deleted at
+// step 10, so it is the local dev origin now. The cases below are about parsing, not about these two
+// hosts specifically — any two real origins will do.
+const LOCAL_DEV = 'http://localhost:4200';
 
 test('every origin in a comma-separated CORS_ORIGIN is allowed', async () => {
-  // Two entries is the deployed shape today: the Front Door endpoint plus the App Service kept as
-  // the rollback target. A parser that took only the first would leave the rollback dead.
-  await withServer(`${FRONT_DOOR},${OLD_APP_SERVICE}`, async (base) => {
+  // A parser that took only the first entry would silently drop every origin after it, which is
+  // exactly how a second frontend ends up CORS-blocked with nothing in the deploy to show for it.
+  await withServer(`${FRONT_DOOR},${LOCAL_DEV}`, async (base) => {
     assert.strictEqual(await allowOriginFor(base, FRONT_DOOR), FRONT_DOOR);
-    assert.strictEqual(await allowOriginFor(base, OLD_APP_SERVICE), OLD_APP_SERVICE);
+    assert.strictEqual(await allowOriginFor(base, LOCAL_DEV), LOCAL_DEV);
   });
 });
 
 test('whitespace around the separator is tolerated', async () => {
   // App settings get edited by hand in the portal, where a space after the comma is the natural way
   // to type a list. Without the .trim() the second entry becomes ' https://…' and matches nothing.
-  await withServer(`${FRONT_DOOR} ,  ${OLD_APP_SERVICE} `, async (base) => {
+  await withServer(`${FRONT_DOOR} ,  ${LOCAL_DEV} `, async (base) => {
     assert.strictEqual(await allowOriginFor(base, FRONT_DOOR), FRONT_DOOR);
-    assert.strictEqual(await allowOriginFor(base, OLD_APP_SERVICE), OLD_APP_SERVICE);
+    assert.strictEqual(await allowOriginFor(base, LOCAL_DEV), LOCAL_DEV);
   });
 });
 
