@@ -10,14 +10,15 @@
  * a read path that failed silently and that no caller would have noticed.
  */
 
-const { syncWildfiresData } = require('../scripts/sync-wildfires');
+const syncWildfires = require('../scripts/sync-wildfires');
 const { serverError } = require('../helpers/response');
 const { auditEvent } = require('../utils/audit');
 
 exports.syncWildfiresAdmin = async (req, res) => {
   try {
     // syncWildfiresData() takes no arguments — it uses the shared repositories directly.
-    const result = await syncWildfiresData();
+    // Called off the module object, not destructured, so a test can stand in for the network leg.
+    const result = await syncWildfires.syncWildfiresData();
 
     // ONE row for a job that patches every project (sync-wildfires.js) and upserts every fire.
     // Per-project rows would write the corpus size into a seven-year table to answer a question

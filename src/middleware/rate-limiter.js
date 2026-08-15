@@ -46,7 +46,7 @@ const limiter = rateLimit({
   limit: MAX_REQUESTS,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  // In-memory on purpose. demi-api-dev is a single-worker B1, so there is one process and nothing
+  // In-memory on purpose. The API runs a single worker on B1, so there is one process and nothing
   // to share; a Redis store would be a second service to run for no gain.
   keyGenerator: (req) => ipKeyGenerator(callerIp(req)),
   // Several suites make more than 300 requests against a mounted app.

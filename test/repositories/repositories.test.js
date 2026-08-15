@@ -164,6 +164,25 @@ test('documents repository', async (t) => {
     assert.ok(!calls[0].spec.query.includes('!='));
   });
 
+  await t.test('a junk, zero or negative pageSize still caps maxItemCount', async () => {
+    // Without maxItemCount cosmos.query takes the fetchAll() branch and drains the whole
+    // container cross-partition — reachable anonymously via /api/search?pageSize=0.
+    for (const pageSize of [NaN, 0, -5, 'abc', 99999]) {
+      const calls = captureQuery(t);
+      await documents.listVisible(PUBLIC, { pageSize });
+      const { maxItemCount } = calls[0].options;
+      assert.ok(maxItemCount >= 1 && maxItemCount <= 1000,
+        `pageSize ${String(pageSize)} gave maxItemCount ${String(maxItemCount)}`);
+      t.mock.restoreAll();
+    }
+  });
+
+  await t.test('no pageSize at all still means fetchAll, as countVisible relies on', async () => {
+    const calls = captureQuery(t);
+    await documents.listVisible(PUBLIC, {});
+    assert.strictEqual(calls[0].options.maxItemCount, undefined);
+  });
+
   await t.test('getById without a project id filters in the query, not after', async () => {
     const calls = captureQuery(t);
     await documents.getById(PUBLIC, 'doc1');

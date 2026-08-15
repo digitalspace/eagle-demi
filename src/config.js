@@ -78,12 +78,8 @@ const config = {
   batchSize: parseInt(process.env.BATCH_SIZE || '50', 10),
 
   uploadDir:             process.env.UPLOAD_DIRECTORY || '/tmp',
-  enableVirusScanning:   process.env.ENABLE_VIRUS_SCANNING === 'true',
 
-  // Logging Configuration
   logLevel:              process.env.LOG_LEVEL || 'info',
-  logCappedSizeBytes:    parseInt(process.env.LOG_CAPPED_SIZE_BYTES || '52428800', 10), // 50MB
-  logCappedMaxDocuments: parseInt(process.env.LOG_CAPPED_MAX_DOCUMENTS || '100000', 10),
 
   // AI summarizer (see wiki ADR-006). Step 5 of the search pipeline and the only one that touches
   // a model — retrieval is untouched lexical BM25.

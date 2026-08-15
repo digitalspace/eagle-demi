@@ -16,6 +16,7 @@ const { generateKey, defaultExpiry } = require('../../helpers/api-key');
 const { SECURE_ROLES, WRITE_ROLES } = require('../../helpers/access-sql');
 const { forgetCachedKey } = require('../../helpers/auth');
 const { logger } = require('../../utils/logger');
+const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
 const config = require('../../config');
 
@@ -36,6 +37,12 @@ exports.createApiKey = async (req, res) => {
     const unknown = roles.filter(r => !GRANTABLE_ROLES.includes(r));
     if (unknown.length > 0) {
       return res.status(400).json({ error: `Unknown role(s): ${unknown.join(', ')}` });
+    }
+
+    // A typo here used to mint a key with a junk expiry; verify() now fails closed on one, so
+    // without this the caller would get a 201 for a key that never authenticates.
+    if (expiresAt && !(new Date(expiresAt).getTime() > Date.now())) {
+      return res.status(400).json({ error: 'expiresAt must be a future date' });
     }
 
     // Least privilege is the default posture, so granting write is possible but never accidental.
@@ -85,8 +92,7 @@ exports.createApiKey = async (req, res) => {
     // recovered — a lost key is reissued, not looked up.
     return res.status(201).json({ ...apiKeys.redact(record), key: plaintext });
   } catch (err) {
-    logger.error(`[demi-api] Failed to issue API key: ${err.message}`);
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'api key issue failed');
   }
 };
 
@@ -94,7 +100,7 @@ exports.listApiKeys = async (_req, res) => {
   try {
     return res.json(await apiKeys.listRedacted());
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'api key list failed');
   }
 };
 
@@ -118,6 +124,6 @@ exports.revokeApiKey = async (req, res) => {
 
     return res.json({ message: 'API key revoked', key: revoked });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return serverError(res, err, 'api key revoke failed');
   }
 };

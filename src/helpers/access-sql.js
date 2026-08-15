@@ -3,9 +3,6 @@
 /**
  * Visibility for the Cosmos NoSQL API. The single place a read predicate is built.
  *
- * Replaces helpers/access.js (MongoDB filter objects) during the NoSQL migration. Both exist
- * until the cutover; this one has no Mongo dependency.
- *
  * Two ORTHOGONAL dimensions — this is the scaling decision, see the wiki's Architecture page:
  *
  *   1. WHAT KIND of access  -> `read[]` holds role TYPES only ('public', 'sysadmin',

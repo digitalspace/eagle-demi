@@ -89,7 +89,8 @@ function verify(record, secret, now = Date.now()) {
   if (!crypto.timingSafeEqual(presentedBuf, storedBuf)) return false;
 
   if (record.revokedAt) return false;
-  if (record.expiresAt && new Date(record.expiresAt).getTime() <= now) return false;
+  // An unparseable date must not read as "never expires" — NaN loses every comparison.
+  if (record.expiresAt && !(new Date(record.expiresAt).getTime() > now)) return false;
 
   return true;
 }

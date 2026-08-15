@@ -7,7 +7,7 @@
  * partition, so replacing a document's chunks is a single-partition operation and one bulk call.
  *
  * THE PARTITION KEY IS NOT THE PROJECT. This is the only container where those differ —
- * `documents`, `records` and `project_fragments` all partition by `/projectId`. That matters
+ * `documents` is the only other container partitioned by `/projectId`. That matters
  * because `visibilityFor(access, field)` uses its argument for BOTH the partition key and the
  * project-scope field. Passing 'documentId' would emit `c.documentId IN (@scope0)` filled with
  * PROJECT ids, so a scoped caller would silently match nothing — and no test would catch it today

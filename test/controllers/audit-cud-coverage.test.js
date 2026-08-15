@@ -30,8 +30,14 @@ const documents = require('../../src/repositories/documents');
 const projects = require('../../src/repositories/projects');
 const boundaries = require('../../src/repositories/boundaries');
 const chunksRepo = require('../../src/repositories/chunks');
+const apiKeys = require('../../src/repositories/api-keys');
+const aiSearch = require('../../src/search/ai-search');
+const syncWildfires = require('../../src/scripts/sync-wildfires');
 const documentController = require('../../src/controllers/nosql/document');
 const boundaryController = require('../../src/controllers/nosql/boundary');
+const projectController = require('../../src/controllers/nosql/project');
+const apiKeyController = require('../../src/controllers/nosql/api-key');
+const wildfireController = require('../../src/controllers/wildfire');
 
 function mockRes() {
   return {
@@ -223,6 +229,58 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written[0].Action, 'boundary.delete');
     assert.strictEqual(written[0].TargetId, 'region_Skeena');
     assert.strictEqual(written[0].Detail.name, 'Skeena');
+  });
+
+  await t.test('project delete writes one project.delete', async () => {
+    t.mock.method(projects, 'getById', async () => ({ id: '207', name: 'Skeena LNG' }));
+    t.mock.method(projects, 'deleteById', async () => ({}));
+    t.mock.method(aiSearch, 'deleteFromIndex', async () => true);
+
+    const written = await rowsFrom(() => projectController.deleteProject({
+      params: { id: '207' }, query: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(written.length, 1);
+    assert.strictEqual(written[0].Action, 'project.delete');
+    assert.strictEqual(written[0].TargetId, '207');
+    assert.strictEqual(written[0].Detail.removedFromSearch, true);
+  });
+
+  await t.test('api key create and revoke write one row each, carrying no secret', async () => {
+    t.mock.method(apiKeys, 'upsert', async (record) => record);
+
+    const res = mockRes();
+    const created = await rowsFrom(() => apiKeyController.createApiKey({
+      body: { name: 'seeder', roles: ['public'] }, query: {}, params: {}, user: STAFF
+    }, res));
+
+    assert.strictEqual(res.statusCode, 201);
+    assert.strictEqual(created.length, 1);
+    assert.strictEqual(created[0].Action, 'apikey.create');
+    assert.strictEqual(created[0].TargetId, res.body.id);
+    // An audit table kept for seven years is the wrong place for a credential.
+    assert.ok(!('key' in created[0].Detail) && !('hash' in created[0].Detail));
+
+    t.mock.method(apiKeys, 'revoke', async () => ({ name: 'seeder', roles: ['public'] }));
+    const revoked = await rowsFrom(() => apiKeyController.revokeApiKey({
+      params: { id: res.body.id }, query: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(revoked.length, 1);
+    assert.strictEqual(revoked[0].Action, 'apikey.revoke');
+    assert.strictEqual(revoked[0].TargetId, res.body.id);
+  });
+
+  await t.test('the wildfire sync writes one row, not one per project', async () => {
+    t.mock.method(syncWildfires, 'syncWildfiresData', async () => ({ fires: 812, projects: 357 }));
+
+    const written = await rowsFrom(() => wildfireController.syncWildfiresAdmin({
+      query: {}, params: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(written.length, 1, 'one row for a job that patches every project');
+    assert.strictEqual(written[0].Action, 'wildfire.sync');
+    assert.strictEqual(written[0].Detail.projects, 357);
   });
 
   await t.test('a failed mutation writes no row at all', async () => {

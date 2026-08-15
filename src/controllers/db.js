@@ -5,6 +5,7 @@ const projectsRepo = require('../repositories/projects');
 const documentsRepo = require('../repositories/documents');
 const boundariesRepo = require('../repositories/boundaries');
 const aiSearch = require('../search/ai-search');
+const { serverError } = require('../helpers/response');
 
 /**
  * Containers whose index-build state is worth reporting. A bulk load leaves the index lagging the
@@ -24,16 +25,15 @@ async function getIndexProgress() {
   // wrong answer in the only remaining direction: with one data layer, an unset flag would make
   // this report "inactive" for a database that is very much serving traffic.
   const cosmosNoSql = require('../db/cosmos-nosql');
-  const progress = {};
-  for (const name of INDEXED_CONTAINERS) {
+  const entries = await Promise.all(INDEXED_CONTAINERS.map(async (name) => {
     try {
-      progress[name] = await cosmosNoSql.indexProgress(name);
+      return [name, await cosmosNoSql.indexProgress(name)];
     } catch (err) {
       // One missing or unreadable container must not deny the whole reading.
-      progress[name] = `error: ${err.message}`;
+      return [name, `error: ${err.message}`];
     }
-  }
-  return progress;
+  }));
+  return Object.fromEntries(entries);
 }
 
 /**
@@ -65,7 +65,7 @@ async function getIndexProgressHandler(req, res) {
       search: { container: chunks.CONTAINER, semantic: aiSearch.semanticStats() }
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    return serverError(res, err, 'index progress failed');
   }
 }
 
@@ -102,7 +102,7 @@ async function getDbStats(req, res) {
       ...(indexProgress ? { indexProgress } : {})
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    return serverError(res, err, 'db stats failed');
   }
 }
 

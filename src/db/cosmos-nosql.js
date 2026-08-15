@@ -3,8 +3,6 @@
 /**
  * Cosmos DB for NoSQL data access. Thin, parameterised, and fail-closed.
  *
- * Replaces src/db/cosmos.js (MongoDB driver) during the migration; both exist until cutover.
- *
  * DESIGN: callers pass a query SPEC — { query: string, parameters: [] } — not a filter object.
  *
  * There is deliberately no Mongo→SQL translator. One that handles 90% of operators fails
@@ -26,11 +24,10 @@ let databaseInstance = null;
 /**
  * The NoSQL database name, from a DEDICATED variable.
  *
- * It must NOT be `COSMOS_DATABASE`: the legacy Mongo-API client reads that same variable
- * (src/db/cosmos.js) and needs a DIFFERENT value — `epic` there, `demi` here. Both layers run
- * side by side until cutover, so one variable cannot serve both. Setting `COSMOS_DATABASE=demi`
- * for this client silently repointed the LIVE legacy app at the new, empty database: every
- * endpoint returned `[]` with HTTP 200, because queryContainer swallows the error.
+ * It must NOT be `COSMOS_DATABASE`: that variable still holds `epic` on the deployed app and the
+ * now-deleted Mongo-API client read it. Setting `COSMOS_DATABASE=demi` for this client once
+ * silently repointed the LIVE legacy app at the new, empty database: every endpoint returned `[]`
+ * with HTTP 200, because queryContainer swallows the error.
  *
  * Same lesson as USE_COSMOS_NOSQL — never let one layer's config decide another layer's
  * behaviour. The default is correct for every environment, so it normally needs no setting.

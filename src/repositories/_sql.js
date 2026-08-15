@@ -92,7 +92,9 @@ function countWhere({ access, partitionField, criteria = [], visibility = {} }) 
  */
 function pageOptions({ pageSize, continuationToken, partitionKey } = {}) {
   const options = {};
-  if (pageSize) options.maxItemCount = Math.min(Number(pageSize) || 0, 1000);
+  // A junk, zero or negative pageSize must NOT drop maxItemCount: cosmos.query then takes the
+  // fetchAll() branch and drains the whole container cross-partition on an anonymous request.
+  if (pageSize !== undefined) options.maxItemCount = Math.min(Math.max(Number(pageSize) || 1000, 1), 1000);
   if (continuationToken) options.continuationToken = continuationToken;
   if (partitionKey !== undefined) options.partitionKey = partitionKey;
   return options;

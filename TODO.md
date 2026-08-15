@@ -4,15 +4,13 @@ Open work only. Facts, measurements and history live in the
 [wiki](https://github.com/digitalspace/eagle-demi/wiki); if something here needs a paragraph of
 background, that background belongs there and this entry links to it.
 
-Dev only, and dev deploys itself: a merge to `main` runs `azure-deploy-dev-api` and
-`azure-deploy-dev-frontend`, so what is on `main` is what is on dev within a few minutes. There is
-no date or commit to keep current here — read the workflow runs. This paragraph used to name the
-deployed SHAs anyway, and they were stale within a day; a pointer that has to be maintained by hand
-is the drift the sentence before it warns about.
+Staging only, and staging deploys itself: a merge to `main` runs `azure-deploy-staging-api` and
+`azure-deploy-staging-frontend` against `demi-*-test`, so what is on `main` is what is on staging
+within a few minutes. There is no date or commit to keep current here — read the workflow runs.
+This paragraph used to name the deployed SHAs anyway, and they were stale within a day; a pointer
+that has to be maintained by hand is the drift the sentence before it warns about.
 
-The corollary is the trap: **merging is deploying.** An entry below is live the moment it lands,
-including one whose infrastructure does not exist yet — see service credentials under
-Infrastructure.
+The corollary is the trap: **merging is deploying.** An entry below is live the moment it lands.
 
 ---
 
@@ -37,35 +35,10 @@ already watching, and gone after. That is the observability entry under Infrastr
 outranks the rest of a hardening pass for the obvious reason: you cannot harden what you cannot
 observe. It is also the entry with the least code in it and the most permission.
 
-Both of the things the rate-limiter fix left for that pass are now done, and the first is worth
-reading before anyone plans a load test here:
-- **The limiter is verified on dev, and it cost four requests — not 301.** This entry used to name
-  a 301-request probe (the 301st must be 429). That works, but a cheaper probe discriminates just as
-  hard: `express-rate-limit` emits `draft-7` headers, so `GET /api/config` reports the counter
-  directly. Four separate connections, one window, 2026-08-07:
-  `remaining=297 → 296 → 295 → 294`, `ratelimit-policy: 300;w=60`.
-  **That is the whole bug, inverted.** The pre-#73 build minted a new key per TCP connection, so it
-  would have answered `299` every time no matter how many requests arrived — a monotonic decrement
-  is something only a stable key can produce.
-  The honest limit: this verifies the KEY, not the 429 at the boundary. Once the key is stable,
-  reaching zero is arithmetic inside `express-rate-limit` rather than anything this repo wrote.
-  Do not spend a 300-request run against a single-worker B1 to re-learn this.
-- **The access invariants now have a suite asserting them as a set** —
-  `test/helpers/access-coverage.test.js`. The helper tests could already show that `visibilityFor`
-  emits the right predicate; nothing could show that a read path *uses* one. It asserts every
-  repository routes through `_sql.js`'s `selectWhere`/`countWhere` (which is also how "counts use
-  the same predicate as reads" holds by construction), and that every `cosmos.readItem` is followed
-  by `canRead`, since a point read bypasses the query predicate entirely.
-  `api-keys`, `boundaries` and `wildfires` are allowlisted with the reason each needs no gate, so a
-  NEW repository fails the suite until somebody classifies it. Verified it can fail: stripping the
-  `canRead` from `projects.js:77` turns it red with that exact diagnostic.
-  It scans source text rather than parsing an AST, which is a deliberate ceiling — it cannot stop
-  someone determined to route the call through a variable, and it does stop someone who forgot.
-  Forgetting is the failure that actually happens here.
-  **Still uncovered, and the reason a behavioural suite may earn its place later:** OData has no
-  `false` literal, so a null or empty filter is UNRESTRICTED. A search route that forgets the
-  `empty` flag fails **open**, and a structural scan cannot see that — it would see `filterFor`
-  being called and be satisfied.
+**Still uncovered by `test/helpers/access-coverage.test.js`, and the reason a behavioural suite
+may earn its place later:** OData has no `false` literal, so a null or empty filter is
+UNRESTRICTED. A search route that forgets the `empty` flag fails **open**, and a structural scan
+cannot see that — it would see `filterFor` being called and be satisfied.
 
 ---
 
@@ -194,7 +167,6 @@ Two notes for whoever runs the next container deletion here:
   script that could have done it is what was deleted. Not worth writing code against a live database
   for a few hundred bytes of dead JSON.
 
-
 ## API audit — 2026-08-07
 
 Cleanliness, search efficiency, scalability and security, plus a live anonymous probe of every read
@@ -203,56 +175,6 @@ credential returned **zero** rows failing the `read[]`-contains-`public` / `isPu
 three search datasets likewise; every privileged endpoint and all 15 write routes answered 401. A
 nonsense keyword returned 0 hits on all three datasets, which is the discriminator that AI Search is
 actually serving rather than silently falling back to Cosmos.
-
-### Fixed
-
-- [x] **Boundaries can be restricted now.** This was the one container where a restriction was
-      *inexpressible*: no `read[]` on the items, no `access` argument on any repository function. A
-      staff-only shapefile would have been world-readable the moment it was inserted. Reads compose
-      `selectWhere`/`countWhere` and point reads gate on `canRead`, exactly like every other
-      repository; `transformBoundary` emits an explicit ACL, public by default, and preserves an
-      upstream `read[]` verbatim so a re-seed cannot republish a restricted shapefile.
-      **The near-miss worth keeping:** the 281 seeded rows carry neither `read[]` NOR `isPublished`,
-      so the ordinary unset-ACL arm (`no read[] AND isPublished = true`) is FALSE against every one
-      of them — `c.isPublished = true` on an undefined field is not true — and the first deploy
-      would have blanked the map for every anonymous caller, silently. `VISIBILITY.unsetIsPublic`
-      drops the isPublished half for this container only, so the change is order-independent and
-      needs no backfill before deploy. It cannot weaken the gate: a restricted boundary carries an
-      explicit `read[]`, so the first arm governs it.
-      **Project scope deliberately does NOT apply** — boundaries are geography, not project data, so
-      `visibilityFor` is called with a NULL partition field. Scoping them on a field the items do not
-      carry would match nothing and blank the map for every project-scoped caller.
-      `boundaries.js` is no longer in the coverage suite's allowlist.
-- [x] **`projectScope` was silently void on any privileged credential.** `resolveAccess` returned
-      `{tier: PRIVILEGED, projectScope: null}` *before* it ever read the scope, so a key minted as
-      `roles: ['staff'], projectScope: ['207']` read the **entire corpus** — the restriction its
-      issuer asked for did nothing and said nothing. Scope is resolved first now. Roles and scope are
-      orthogonal: privilege lifts the ROLE predicate, the project narrowing survives. Mirrored in
-      `access-odata.js`, which had the same short-circuit. `systemAccess()` is unaffected and there
-      is a test saying so, because it is constructed rather than derived from a request.
-      The test that pinned the old behaviour asserted *"privileged roles ignore scope entirely"* —
-      it was pinning the bug.
-- [x] **Unauthenticated 500s no longer echo the driver message.** A Cosmos SDK error carries the
-      account endpoint, database and container names; `GET /projects`, `/documents`, `/boundaries`
-      and the unauthenticated `/api/health/db` all returned it verbatim. `serverError()` logs the
-      detail and returns a fixed string.
-- [x] **`read[]` and `isPublished` are no longer settable from a PUT body.** Both handlers spread
-      `req.body` into the upsert, so a writer could hand-craft an ACL past `resolveDocumentAcl` and
-      past the 409 that stops a document being published under a private project. Documents keep the
-      ACL they had; projects derive it from `isPublished` so read[] and isPublished cannot disagree.
-- [x] **`documents.countVisible` fanned out across every partition** even when it held a
-      `projectId`, while the matching read did not. It takes the partition key now.
-- [x] **Missing index paths added**: `documents /id` and `boundaries /id` (the cross-partition
-      by-id fallback, which is the live path), `chunks /isPublished` (the ACL fallback arm, so every
-      non-privileged chunk read carried an unindexed term), plus `read[]`/`isPublished` on
-      boundaries.
-- [x] **The coverage allowlist asserts the router instead of citing it.** Its reasons cited
-      `routes/api.js:106` and `:115`; the NRPTI removal shifted every line and the suite kept passing
-      while the evidence silently stopped matching — exactly the rot its own `ponytail:` comment
-      predicted. `requireWritePrefixes` now parses the router and checks the middleware chain, and
-      asserts `GET /wildfires` still does not exist.
-- [x] Dead code deleted: `_sql.contains()`, `PARTITION_FANOUT_LIMIT`, `wildfires.count()`, and the
-      `pageSize` clamps to 5000 that `pageOptions` immediately re-clamped to 1000.
 
 ### Not done, deliberately
 
@@ -324,25 +246,6 @@ lifted. Those fail if the gate regresses. A live probe would not.
 
 #### Findings
 
-- [x] **CORRECTION — this entry said the search lag was `PT5M`. For `demi-chunks` it was
-      UNBOUNDED, and it was a live access-control bug. Fixed 2026-08-07.** The `PT5M` figure holds
-      only for `demi-documents`, whose rows *are* rewritten by `documents.setPublished`. A chunk's
-      `read[]` is a snapshot copied from its document at ingest, and **nothing refreshed it** — the
-      only writes to the `chunks` container were ingest and delete. So unpublishing never advanced
-      those rows' `_ts`, the high-water-mark indexer never re-read them, and the index kept
-      `read: ['public']` for a restricted document **indefinitely**.
-      Two independent defects, either of which leaked on its own:
-      **(A)** no propagation — now `chunks.setAclForDocument` bulk-Patches every chunk of the
-      document on `PUT /documents/:id/published`, which advances `_ts` so the indexer picks it up and
-      the lag becomes the ordinary `PT5M`. Average document is ~19 chunks, so one request.
-      **(B)** the search controller hydrated parent documents under the caller's ACL and then used
-      the result **only as a label**, so a chunk whose parent was withheld came back anyway carrying
-      its `snippet` — the real extracted text, rendered by the frontend through `[innerHTML]` — and
-      labelled `'Untitled Document'`. It is now the gate: a chunk whose parent is not visible is
-      dropped, and the returned `count` is post-filter.
-      Latent rather than exploited only because every document in dev is public. Both fixes are
-      covered by tests **shown to fail when the fix is reverted**, which is the only discriminating
-      evidence available against an all-public corpus.
 - [ ] **`content` is `retrievable: true` on `demi-chunks`.** The only thing keeping whole chunk text
       out of API responses is the explicit `select` list in `searchChunks` (pinned by a test).
       Nothing reads `content` from the index — the summariser reads it from Cosmos, which is the
@@ -487,117 +390,6 @@ which point docling-serve's side is set from the same value.
 
 ## Infrastructure
 
-- [x] **`documents.buildCriteria` treated `projectId: ''` as "no filter" — aligned in #73.** A falsy
-      `if (projectId)` meant asking for the empty partition returned the WHOLE container. It was
-      never live — no caller passes `''` and nothing sweeps a documents `''` partition — so this was
-      aligning the shape before something does, which is the only cheap moment to do it. Both the
-      criterion and the `partitionKey` are presence tests now (`!== undefined && !== null`), with a
-      repository test asserting the emitted SQL carries `c.projectId = @projectId` and that
-      `options.partitionKey === ''`.
-
-- [x] **CodeQL is at 0 open alerts, 2026-08-07 — and the entry that closed it was wrong about why.**
-      38 after #59–#65; the 7 that were decisions rather than defects were dismissed with their
-      reasons; the last 31 were `js/missing-rate-limiting` and closed with #73.
-      The 3 medium `actions/missing-workflow-permissions` from the first scan are fixed — `pr.yaml`
-      declares `permissions: contents: read` — and `js/incomplete-multi-character-sanitization` is
-      closed by the fix recorded below. The dismissed 7 are kept written down here because a
-      dismissal is invisible until someone re-derives the reasoning:
-      - **31 x `js/missing-rate-limiting`** across `src/routes/api.js` and `src/app.js:126`.
-        **This entry used to say "there is no rate limiter mounted on the Express app at all". That
-        was false**, and worth keeping visible rather than quietly rewriting:
-        `git show 32fd4a6:src/app.js` requires `./middleware/rate-limiter` at line 30 and mounts it
-        at line 37, both long predating the claim.
-        What was really there was **two independent problems that happened to share one fix**:
-        1. **CodeQL could not recognise it.** The limiter was a hand-rolled `Map` in
-           `src/middleware/rate-limiter.js`, which the query does not know as a rate limiter, so the
-           cluster tracked the route count and grew with #60's `/admin/api-keys` routes. Moving to
-           `express-rate-limit` closed all 31.
-        2. **It did not limit anything.** It keyed on the whole `X-Forwarded-For`, and App Service
-           **appends** `<client-ip>:<port>` to that header. The port changes with the TCP
-           connection, so nearly every request minted a new key and the 300/minute ceiling was
-           unreachable. Measured against dev 2026-08-07: **320 requests inside one window, all
-           200.** Reproduced in `test/middleware/rate-limiter.test.js`.
-        Only the first was visible to the scanner. A cosmetic swap would have closed all 31 alerts
-        and left the limiter just as inert — the defect was found by measuring, not by triaging.
-        The key is now `callerIp()`: LAST comma-separated entry (everything before it is
-        caller-supplied), port stripped, IPv6 normalised to a /64 by the library's `ipKeyGenerator`.
-        `src/middleware/http-logger.js` shares the same resolver, so the audit log and the limit
-        cannot disagree about who a caller is — it used to log the raw header, i.e. an
-        attacker-chosen string.
-        **Behaviour change worth knowing:** the limit is real now, so callers behind one NAT share
-        a 300/minute bucket. Nobody has measured it under load — see the hardening note below.
-      - **`js/insecure-helmet-configuration`** at `src/app.js:41` — helmet is mounted with
-        `contentSecurityPolicy: false`. **Decided 2026-08-06: dismiss, do not implement.** The
-        question was "can the frontend live under a CSP", and the answer is that the API does not
-        serve the frontend at all — the `express.static` mounts and SPA routes that suggested it did
-        are deleted (see below). What is left is exactly one HTML page, swagger-ui at `/api-docs`,
-        whose inline initializer script and inline styles a default CSP blocks. A policy that
-        exempts the only page it covers protects nothing. **Dismissed 2026-08-07** as "won't fix"
-        with that reason.
-      - **`js/incomplete-multi-character-sanitization`** in
-        `frontend/src/app/services/registry-state.service.ts` — **fixed 2026-08-06, and the alert
-        named the smaller half of it.** `sanitizeHighlight` stripped tags with a single-pass
-        `replace(/<[^>]*>/g, '')` (what CodeQL flagged) and then ran the result through a
-        hand-written table of ~30 HTML entities, which turned `&lt;img …&gt;` back into a live
-        `<img …>` as the LAST step before returning markup bound with `[innerHTML]`. Measured
-        against the old code: the strip itself held (`[^>]*` swallows a nested `<`, so
-        `<scr<script>ipt>` did not re-form), and the decode was the actual hole. Angular's
-        `DomSanitizer` is what kept it from being an XSS — there is no `bypassSecurityTrustHtml`
-        anywhere in the app — so this was one bypass call away from live, on a path that carries
-        text extracted from uploaded PDFs (`map-explorer.component.html`, document snippets).
-        Both halves are now one `DOMParser().parseFromString(part, 'text/html').body.textContent`
-        followed by the file's existing `escapeHtml`, and the entity table is deleted.
-      - **4 x `js/path-injection`** in `src/controllers/nosql/document.js` (171, 177, 189, 220) are
-        **false positives** — every one is `fs.promises.unlink(file.path)`, and `file.path` comes
-        from `multer({ dest: config.uploadDir })`, which generates its own random filename and never
-        derives it from `originalname`. **Dismissed 2026-08-07** as false positives with that note;
-        do not "fix" them if they reappear.
-      - **`js/clear-text-logging`** at `src/scripts/copy-blobs-to-azure.js:146` — also a **false
-        positive**, and it was missing from this entry rather than newly appeared. The line is
-        `console.log('Destination:', JSON.stringify(azure.describe()))`, and `describe()`
-        (`src/storage/azureBlob.js:133`) returns `{backend, account, container, keyPrefix: null}` —
-        resource names, no credential. CodeQL flags it because `config.*` reaches a log sink, not
-        because a secret does. **Dismissed 2026-08-07.**
-      - **`js/insufficient-password-hash`** at `src/helpers/api-key.js:31` — **new with #60, and a
-        false positive.** The digest is SHA-256 over 32 bytes of `crypto.randomBytes`, not over a
-        human-chosen password. A KDF exists to make guessing a low-entropy secret expensive; there
-        is nothing to guess here, so bcrypt/argon2 would buy nothing and add latency to every
-        authenticated request. What matters is that the compare is constant-time, which
-        `api-key.js:verify` does with `timingSafeEqual`. The reasoning is already in that file's
-        header. **Dismissed 2026-08-07** with it.
-- [x] **Angular 19 → 22 and TypeScript 5.7 → 6.0, done 2026-08-06.** 19.2.25 was end-of-life and
-      carried 7 runtime advisories with `first_patched_version: null` — XSS via i18n event-handler
-      attributes, hydration DOM clobbering and response-cache poisoning, `HttpTransferCache`
-      cache-key ambiguity, a DoS via OOM in date formatting — plus 26 development-scope alerts that
-      could not move while `@angular-devkit/*` was pinned to 19. Landed as three hops (19→20→21→22)
-      on one branch, one commit each, because `ng update` only crosses one major at a time.
-      The dependabot `ignore:` block is gone; the `angular` group that replaces it still lists every
-      scope, which is the lesson PR #42 taught.
-      What it actually cost, against the estimate of "two majors of real work":
-      - **`ng update`'s temp-CLI bootstrap is broken under Yarn 4** and fails with no error at all —
-        it installs the temporary CLI into a PnP dir and then cannot require it. Work around it by
-        bumping the packages with `yarn up` first and running migrations with
-        `NG_DISABLE_VERSION_CHECK=1 yarn ng update <pkg> --migrate-only --from=<a> --to=<b>`.
-      - **TypeScript 6 cost nothing.** It was the budgeted risk; `registry-state.service.ts` needed
-        no change. The real work was all in v22's behavioural defaults.
-      - **The v22 safe-navigation migration was reverted deliberately.** It wrapped 8 template
-        expressions in `$safeNavigationMigration(...)` to keep `a?.b` yielding `null` rather than
-        `undefined`. Every call site behind those bindings already declares
-        `string | undefined | null` and branches on both, so the shim preserved nothing and read as
-        noise. The `extendedDiagnostics` suppressions that came with it went too — the build is
-        clean without them.
-      - **`provideHttpClient(withXhr())` was kept.** v22 defaults `HttpClient` to the fetch backend,
-        and this app monkey-patches `window.fetch` in `RegistryStateService` to attach bearer
-        tokens. `ConfigService` is the only `HttpClient` caller and runs before Keycloak
-        initialises; XHR keeps it out of that interceptor, which is what it did on 19.
-      - **Karma stayed.** v22 offers a vitest migration; the two spec files did not need it. The
-        builder is now `@angular/build:karma`, and `karma.conf.js` no longer names the deleted
-        `@angular-devkit/build-angular` framework/plugin.
-      - Bundle went 436.65 kB → 457.07 kB raw (114.13 → 119.33 kB transfer) across three majors.
-        37/37 tests passed on the branch; the app boots and renders on `ng-version="22.1.0"`.
-        Re-verified after #63 and #64 merged on top of it — **44/44 frontend, 633/633 API** — which
-        matters because those two are the only specs exercising `DOMParser` and the signal-derived
-        chip list under v22's defaults.
 - [ ] **Every component now declares `ChangeDetectionStrategy.Eager`, and the lint rule that says so
       is switched off.** v22 makes OnPush the default and its migration wrote the explicit opt-out on
       all five components to preserve v19 behaviour; `@angular-eslint/prefer-on-push-component-
@@ -606,54 +398,9 @@ which point docling-serve's side is set from the same value.
       and mutate plain fields from async callbacks, which OnPush would stop rendering, and the two
       spec files would not catch it. Converting them is a change-detection rewrite with its own
       verification; re-enable the rule when it happens.
-- [x] **The API served a dead copy of the frontend, and two of its routes hung. Deleted
-      2026-08-06.** `src/app.js` mounted `express.static('../public')` on `/`, `/admin` and `/demo`
-      plus a `res.sendFile` SPA fallback for `/map`, `/search` and `/intake`. `public/` is
-      **untracked**, so no clone has it and nothing was ever there in Azure: the static mounts fell
-      through to the 404 and were dead weight. The sendFile routes did worse — measured on dev,
-      `GET /map` returned **no response at all for 90 s**, and App Service holds such a request for
-      its full 240 s timeout. Three unauthenticated routes that each pin a request that long matter
-      on a single-worker B1.
-      **The rule this leaves behind: never `res.sendFile`, or any streaming response, under the
-      Functions adapter.** `api/index.js` fabricates `res` as a bare EventEmitter and resolves its
-      promise inside `res.end`; `send` streams instead and, on the missing-file path, never calls
-      it. Under a real `http.Server` the same request fails fast with a 500 carrying the ENOENT —
-      which is why this was invisible locally and had to be found by asking the deployed API.
-      Two things fell out of it: `/search` was never an SPA route at all, because
-      `app.use('/', apiRoutes)` already mounted the search endpoint at the root and shadowed it; and
-      `scripts/package-api.py` did not exclude `public/`, so a deploy from a working tree holding a
-      stale build would have shipped it into `wwwroot`, where zipdeploy's merge makes it permanent.
-      Both now pinned by tests (`test/app.boot.test.js`, `test/scripts/package-api.test.js`).
-- [x] **Staging now lives in the test subscription (2026-08-10 environment model: dev = sandbox,
-      test = staging, prod = prod).** `c4b0a8-test-rg` holds the full DEMI estate as `demi-*-test`
-      (deployed from `azure/main.test.bicepparam`), plus the eagle-search stack. CI deploys it via
-      GitHub environment `test` → UAMI `demi-cicd-test` (fed cred `gh-env-test`, Website
-      Contributor on the two apps only). Corpus copied from `demi-cosmos-dev` with
-      `src/scripts/copy-to-env.js`. Greenfield traps found on the way, all now fixed in the
-      template or recorded here:
-      - `WEBSITE_DNS_SERVER` must be `10.53.244.4` (hub resolver) — the template said
-        `168.63.129.16` and the app resolved Cosmos/Search to public IPs (fixed in
-        `api-web-app.bicep`).
-      - The Foundry module cannot greenfield-converge: every account PUT re-enters `Accepted` and
-        the PE child fails `AccountProvisioningStateInvalid`. Recipe: let the account settle, create
-        the PE by hand with connection name `plsc-demi-foundry-<env>`, template no-ops after.
-      - Search definitions restore needs the datasource `identity` block
-        (`DataUserAssignedIdentity`, api-version 2024-05-01-preview) plus **Cosmos DB Account
-        Reader Role** for the UAMI on the Cosmos account — neither is in Bicep.
-      - `/api/config` fell back to dev values for `ENVIRONMENT`/`API_LOCATION` (now pinned in
-        Bicep).
 - [ ] **Prod deploy path still to build** when prod becomes real: copy the staging pair, subject
       `repo:digitalspace/eagle-demi:environment:prod`, required-reviewers decision, and the release
       model — prod deploys a tag verified on staging.
-- [x] **Dev estate torn down 2026-08-11** after all gates passed (scorecard ≥ dev baseline,
-      counts exact, end-to-end document download against `asnpnn/ozwdez`). `c4b0a8-dev-rg` is now
-      an empty shell holding only the platform action group — the sandbox: redeploy with
-      `azure/main.bicepparam` when needed. `demi-cosmos-test` (plus its Azure periodic backups)
-      is the ONLY copy of the extracted corpus. Also removed: the `6cdc9e-dev` eagle-search
-      worker/BuildConfig/ImageStream/ingest-secret, GitHub envs `staging`×2 and `azure-staging`,
-      and dev's rproxy search route (falls back to eagle-api). Pre-teardown audit caught the
-      staging storage config pointing at empty `zdspnb` — corrected to `asnpnn/ozwdez` before
-      anything was deleted.
 - [ ] **App registration `acb4198f-64db-4485-9638-a894e2d2c99b` — KEPT deliberately, not for CI.**
       Left from the app-registration route before `demi-cicd-dev` superseded it. Not deleted: app
       registrations are hard to provision in this tenant, and human federated sign-in is precisely
@@ -662,64 +409,6 @@ which point docling-serve's side is set from the same value.
       (subject `repo:digitalspace/eagle-demi:ref:refs/heads/main`) — dormant while the app has no
       permissions, live the moment it gets any, from a PUBLIC repo. Settle that before wiring this
       app to sign-in.
-- [x] **CI was running Yarn 1 against a Yarn 4 repo — fixed 2026-08-05.** Neither `package.json`
-      declared `packageManager`, so `corepack enable` on `ubuntu-latest` fell back to the
-      preinstalled **1.22.22** (visible in any build log as `yarn run v1.22.22`). Yarn 1 does not
-      recognise `--immutable` and ignores it, so every `yarn install --immutable` in `pr.yaml` and
-      the deploy workflows guaranteed **nothing** — CI resolved dependencies fresh from the registry
-      on every run and the lockfiles were decorative. That is a reproducibility hole and a supply
-      chain one: a fresh resolve installs whatever is in range, which is the exact thing a lockfile
-      prevents. It stopped being theoretical when PR #48's build died on `Couldn't find any versions
-      for "@jsonjoy.com/fs-node-utils" that matches "4.68.0"` while the lockfile pinned **4.64.0**.
-      Both manifests now pin `yarn@4.12.0`, and both lockfiles were regenerated under it —
-      normalisation only, **zero package version changes**: 423 root and 1106 frontend resolutions
-      before and after, differing only in Yarn's internal `#~builtin` → `#optional!builtin` patch
-      notation. `cacheKey` moved `10` → `10c0`, which is what the old locks having been written by
-      an older Yarn looked like.
-- [x] **CI never ran the frontend tests — fixed 2026-08-07.** `pr.yaml`'s `test-frontend` job ran
-      `lint` and `build` and no `test`, while `test-api` beside it ran both. The gap was invisible
-      because the job is *named* "Test & Build Frontend" and went green on every PR.
-      What it let through: #70 bumped **jasmine-core across a major** (5.6 → 6.3) and merged with a
-      passing check having executed none of the 44 specs. They were run by hand afterwards and
-      passed — which is luck, and luck is not a gate. Same PR batch also moved zone.js 0.15 → 0.16
-      under Angular 22, where a spec failure is exactly the expected symptom.
-      Now one step: `yarn --cwd frontend test --no-watch`. `--no-watch` because `ng test` otherwise
-      waits for file changes and never exits; no `--browsers` flag because `karma.conf.js` already
-      defaults to the sandbox-less `ChromeNoSandbox` launcher a runner needs.
-      The general lesson is the one this file keeps relearning: **a check that cannot fail proves
-      nothing**, and a job name is not evidence of what the job runs.
-- [x] **The five API majors are done — taken individually, each against a probe, 2026-08-05.**
-      They arrived as one green group PR (#35, closed) whose greenness meant nothing. Split up and
-      landed one at a time, each with a BEFORE reading so the check could actually fail:
-      - **express 4.22.2 → 5.2.1** (#48). `src/` has no `req.param()`, no `app.del` and no wildcard
-        or optional route patterns, so path-to-regexp v8 had nothing to reject — but that came from
-        reading the source, not from CI, because no test mounted the app. `test/app.boot.test.js`
-        was written first and is the evidence: it mounts `src/app.js`, serves `/api/config` and
-        checks the 404 fallback, and passed under 5.2.1 in CI before the merge.
-      - **minio 7.1.3 → 8.0.7** (#49). `src/storage/minio.js` is the live path to
-        `nrs.objectstore.gov.bc.ca` behind every download, and nothing tests it. Probed end to end
-        against a real document, before and after: `/api/documents/:id/download` → 200 with an
-        AWS4-signed URL, and that URL → 206 with actual bytes. Identical both sides.
-      - **jwks-rsa 3.2.2 → 4.1.0** (#50). Breaking changes are jose v6 and Node ≥ 20.19; this runs
-        Node 22, and `jwksRequestsPerMinute` survived. Probe was a token with an unknown `kid`,
-        forcing a real JWKS lookup: 401 before and after. A broken client answers 500, not 401.
-      - **helmet 7.2.0 → 8.3.0** (#54). Only `contentSecurityPolicy: false` is set. Compared the
-        full security-header set before and after — byte-identical, nothing regressed.
-      - **serverless-http 3 → 4** (#51) — not upgraded. Nothing in the repo required it, so the
-        dependency was deleted instead.
-      `scripts/validate-deploy.sh` 25/25 after each. **Root `yarn.lock` now has zero Dependabot
-      alerts.** The probes were one-off, not committed — the minio and auth ones are worth keeping
-      if these are ever upgraded again.
-- [x] **The one Dependabot alert is build-toolchain only — dismissed 2026-08-07.** Medium,
-      `@hono/node-server`, path traversal in `serve-static`. Traced rather than assumed:
-      `@hono/node-server` ← `@modelcontextprotocol/sdk` ← `@angular/cli@22.1.3`, which is the
-      Angular CLI's own MCP server for editor assistants. It is absent from the browser bundle and
-      from the API entirely — `yarn why` in `frontend/` is the whole chain, and nothing in
-      `frontend/src` imports either package. Reaching the vulnerability means running the CLI's MCP
-      server and exposing its static handler, which no workflow and no runtime here does.
-      Dismissed as "not affected" with that chain on the alert. Written down here for the same
-      reason the CodeQL dismissals are: a dismissal is invisible to anyone reading the repo, and the
-      next reader would otherwise re-derive it or "fix" it by pinning a transitive dev dependency.
 - [ ] **The unreferenced repo secrets are DELETED; rotating them at source is the open half.**
       `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `TYPESENSE_API_KEY`, `OPENSHIFT_TOKEN` and
       `OPENSHIFT_URL` were live credentials in a **public** repo's settings, reachable by any
@@ -744,37 +433,6 @@ which point docling-serve's side is set from the same value.
       `main.bicep` behind `deployDocumentStorage`, which defaults false. The argument is
       per-environment isolation, not cost. Needs `Storage Blob Delegator` on the identity or every
       download link fails to sign — it is not implied by `Storage Blob Data Contributor`.
-- [x] **Service credentials work — the `apikeys` container was created 2026-08-07.** #60 shipped
-      per-consumer registry keys (`X-Api-Key: demi_<env>_<keyId>_<secret>`, minted through
-      `POST /admin/api-keys`, with their own roles, expiry and revocation), the `demi-service-read`
-      read-only tier, and `requireWrite` on every mutating route. It deployed the moment it merged,
-      and for a few hours it could not work: `src/repositories/api-keys.js` reads a Cosmos container
-      declared **only** in `azure/modules/cosmos-nosql.bicep`, which did not run until 2026-08-13.
-      Fixed WITHOUT deploying that template, which is the point worth keeping: container creation is
-      control-plane, so it is one `az cosmosdb sql container create -g c4b0a8-dev-rg
-      -a demi-cosmos-dev -d demi -n apikeys --partition-key-path /id`, with the same indexing policy
-      the Bicep declares (`/createdAt` indexed; `/*`, `/hash` and `/_etag` excluded — nothing
-      queries by the digest, and an index is one more copy of it). The Bicep declaration exists so
-      the template keeps describing dev, not as the delivery mechanism.
-      Verified end to end: `GET /api/admin/api-keys` with the break-glass key answers **200 `[]`**,
-      which is the discriminator — it proves the container exists AND that the app reaches it over
-      the private endpoint. The Azure MCP cannot do this check: its Cosmos tools are data-plane and
-      the account firewall answers 403 to anything off the VNet, so the control plane (ARM) is the
-      only way in from a laptop.
-      **The registry is empty, so `ADMIN_API_KEY` is still the only credential.** Minting the first
-      real key is the next step, and that is what break-glass is for.
-- [x] **`main.bicep` has been deployed** — first applied to `c4b0a8-test-rg` on 2026-08-13, having
-      never run anywhere before that. It is still not something CI can do by accident: the infra job
-      was reduced to `az bicep build` on 2026-08-04 and moved to `pr.yaml` as `validate-bicep` on
-      2026-08-05, and the CI identity holds Website Contributor on two App Services with nothing at
-      resource-group scope. Infra changes stay a deliberate `az deployment group create` by hand.
-
-      **The first apply failed half-way, and what it found is the part worth keeping.** `what-if`
-      had reported a clean diff for months and was wrong twice over: it does not validate
-      resource-provider rules, so it never noticed that Cosmos rejects `/id/?` in an indexing
-      policy; and it masks `@secure()` values, so it never showed that `main.bicep` failed to pass
-      `adminApiKey`/`doclingApiKey` and would have blanked both credentials on the live app. Treat a
-      clean `what-if` as necessary and nowhere near sufficient — read the secret path by hand.
 
 ## Semantic ranker — two things to watch, now that it is live
 
@@ -787,18 +445,6 @@ which point docling-serve's side is set from the same value.
       `test/search/ai-search.test.js:226` asserts `!body.select.includes('content')`, so adding it
       back fails CI rather than quietly shipping chunk text. Left open only because the index
       setting itself is still the permissive one.
-- [x] **Ranking degradation is now readable — `GET /admin/index-progress`, 2026-08-06.** Basic tier
-      allows 2 concurrent semantic requests per search unit against a frontend that searches on
-      debounced keystrokes, so `semanticErrorHandling: 'partial'` returning BM25 order is an expected
-      path, not an edge, and it answers 200 in the same response shape. `search.semantic` on that
-      endpoint reports `requested`, `partial`, derived `ranked`, `lastPartialReason`, `lastPartialAt`,
-      `exhausted` and `exhaustedAt`. A 402 counts as `partial`, because the search that provoked it
-      served the stripped retry's BM25 order. **If `partial` tracks `requested` one-for-one under
-      ordinary single-user load, that is the finding this was built for** — it means the scorecard is
-      measuring an order no user gets.
-      Per-process, and back to zero on every recycle: it answers "since this process started, was
-      ranking running?" and nothing longer. That is the honest resolution on a single-worker B1, and
-      it is not a time series — see the entry below for why a time series is not available.
 - [ ] **Nothing DEMI logs is retained anywhere. `useAzureMonitor` has never started.** Measured
       2026-08-06: `api/index.js` starts the Azure Monitor OpenTelemetry distro only
       `if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING)`, and `demi-api-dev` has no such app
@@ -827,33 +473,6 @@ which point docling-serve's side is set from the same value.
 
 ## Search UI
 
-- [x] **The sector chips were not missing counts, they were matching the wrong projects. Fixed
-      2026-08-06.** This entry used to describe the work as a `facets` parameter plus UI. Measured
-      against dev first: `/api/search?dataset=Project&pageSize=500` returns **382 projects across 33
-      distinct sector values**, and the four hardcoded chips matched by substring, so
-      **`Transportation` matched 0 of 382** (nothing in the corpus contains that word — the values
-      are `Transmission Pipelines`, `Public Highways`, `Railways`, `Airports`, `Marine Port
-      Facilities`), `Energy` missed `Power Plants` (87, the largest sector) and caught only `Energy
-      Storage Facilities` (22), and the `startsWith('mine')` special case missed `Coal Mines` (32)
-      while catching `Mineral Mines`. Chips are now built from the data with a count each, matched
-      exactly on the trimmed value; the live render is 31 chips led by `All Sectors (382)`.
-      Values are TRIMMED before grouping because the data carries whitespace twins —
-      `Groundwater Extraction` ×9 beside `Groundwater Extraction ` ×9, same for `Shoreline
-      Modification` and `Water Diversion` — which is why 33 raw values render as 30 chips.
-      **No `facets` parameter, deliberately.** 382 < the `pageSize=500` the loader already asks for,
-      so the browser holds the whole corpus and the counts come from the SAME predicate the chip
-      then applies (`matchesProjectFilters`, called once with `skipSector`) — which is the only way
-      a count is guaranteed to equal what clicking it returns. A server facet could not promise that
-      next to the region filter, which is geometric (`isPointInPolygon`), not a field equality Azure
-      can count. Ceiling recorded in the code: past `pageSize` these become counts of a page, and
-      the answer then is paging or a server facet, not a bigger number in the URL.
-      The fields are all still `facetable: true` in `azure/search/indexes/`, so a server facet
-      remains available the day the corpus outgrows one page.
-      One case the counts have to carry: because the list is counted under the OTHER active filters,
-      narrowing the region can empty the sector the user already picked. The selected value is
-      pinned into the list at `count: 0` rather than disappearing — otherwise the chip vanishes
-      while `sectorFilter()` still holds it, leaving an empty map, no chip rendered active, and no
-      control to clear the filter that emptied it.
 - [ ] **There is no result paging.** `searchChunks` sends only `top` (default 20, hard cap 250) and
       never sends `$skip`; the controller has no offset and the frontend has no load-more. Left alone
       deliberately — nobody uses DEMI yet, and this is a decision for whoever owns the search UI. If
@@ -870,14 +489,6 @@ which point docling-serve's side is set from the same value.
 
 ## Needs a human, not code
 
-- [x] **AI Services Hub registration — retracted, it never gated anything.** This entry claimed the
-      Hub governs provisioning a `Microsoft.CognitiveServices` account and that the summariser was
-      blocked on filing a request. Checked instead of inferred: <https://bcgov.github.io/ai-hub-tracking/>
-      documents OIDC trust setup and GitHub workflows, with no project inventory and no approval
-      queue, and three Azure OpenAI accounts already exist across the EPIC subscriptions —
-      `ai-epic-poc-east` (test), `c4b0a8-dev-cond-ext-oai` (dev), `ai-condition-extractor-prod`
-      (prod) — each created directly by a named individual. `demi-search-dev` was created the same
-      way. The claim was propagated into ADR-006 and `foundry.bicep`; both are corrected.
 - [ ] **See the summariser in a browser.** `demi-foundry-dev` is deployed and `GET /api/search/summary`
       returns grounded summaries with citations, usage and cost (verified 2026-08-05 with an
       `X-Api-Key`). The `/summary` page is in the deployed frontend bundle, but every route into it
@@ -895,35 +506,6 @@ which point docling-serve's side is set from the same value.
 - [ ] **Look at server-side highlighting on dev.** Shipped and unit-tested, but the visible result
       has not been eyeballed. Azure returns windowed fragments for a long field, so a long project
       description now renders as fragments joined by an ellipsis rather than in full.
-- [x] **7 CodeQL alerts dismissed with their reasons, 2026-08-07.** Every open alert except the
-      rate-limiting cluster: `js/insecure-helmet-configuration` as "won't fix", the 4
-      `js/path-injection`, `js/clear-text-logging` and `js/insufficient-password-hash` as false
-      positives. The reasons are on the alerts AND in the Infrastructure entry above, because a
-      dismissal comment is invisible to anyone reading the repo. Open count 38 → 31 that day, then
-      **31 → 0** when #73 closed the rate-limiting cluster the next.
-      The number is worth nothing on its own from here — 0 is the floor, so what matters for a
-      hardening gate is the delta: no new alert survives a PR.
-- [x] **`delete_branch_on_merge` is on, and the stale worktrees are gone — 2026-08-07.** The setting
-      is what made 21 branches accumulate; flipping it after they were deleted means the pile starts
-      from zero rather than rebuilding. `origin` now holds `main` and nothing else.
-      When branches do need counting again: `gh pr list --state merged` intersected against
-      `git ls-remote --heads`, never `git branch --merged` — these are squash merges, so a merged
-      branch's tip is not an ancestor of `main` and `--merged` reports 1. That is also why the seven
-      worktrees under `.claude/worktrees/` could not be cleared by `git worktree prune`, which only
-      removes entries whose directory is already gone: each needed `git worktree remove`, and each
-      was checked for unmerged content first rather than trusted to the branch name.
-      Two were not in the merged-PR list and had to be settled by content:
-      `fix/nrpti-purge-followups` diffs **empty** against `main` for its own files, and
-      `worktree-todo-review-corrections` held only an uncommitted `TODO.md` draft superseded by #71.
-      That draft's one substantive idea — reuse `seed-nosql.js`'s `trackProjectId >= 8000000` test
-      as the purge's definition of "synthetic" — was already **rejected on better grounds** in the
-      shipped code: `purge-nrpti-seeded.js:50-60` requires `sourceSystem: 'nrpti'` **and**
-      `metadata.seededFromNrpti`, because provenance alone is a field a future importer could
-      legitimately set, and the pair is what makes a hand-created NRPTI project get reported instead
-      of deleted.
-      The 22 local branches are left alone deliberately — 18 are merged and all of them are
-      invisible clutter that costs nothing, which is not the same problem as a worktree holding a
-      stale checkout.
 
 ## Cost
 
@@ -955,6 +537,22 @@ It scales with use rather than with time, which is why the endpoint is privilege
 `summarize.js` logs prompt/completion tokens on every call. Watch the logged p95 rather than assuming
 the estimate, and re-check the rates against `prices.azure.com` (with `currencyCode='CAD'`) whenever
 the deployment's model or SKU changes — the constants do not follow the bicep on their own.
+
+## Decided — do not redo
+
+Closed with a reason, kept because a dismissal is invisible until someone re-derives it.
+
+- **4 x `js/path-injection` in `src/controllers/nosql/document.js` — false positives, dismissed
+  2026-08-07 (#73).** Every one is `fs.promises.unlink(file.path)`, and multer generates that name
+  itself. Do not "fix" them if they reappear.
+- **`js/insecure-helmet-configuration` (`contentSecurityPolicy: false`) — won't fix, dismissed
+  2026-08-07 (#73).** The API serves exactly one HTML page, swagger-ui, whose inline initializer a
+  default CSP blocks. A policy that exempts the only page it covers protects nothing.
+- **The rate limit is real now, so callers behind one NAT share a 300/minute bucket (#73).** Nobody
+  has measured that under load.
+- **Do not spend a 300-request run against a single-worker B1 to re-verify the limiter (#73).** The
+  `draft-7` counter decrementing across four separate connections is the discriminating probe — a
+  per-connection key could not produce a monotonic decrement.
 
 ## Open decisions
 

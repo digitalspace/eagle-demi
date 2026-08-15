@@ -132,9 +132,12 @@ app.get('/api/health/db', async (req, res) => {
 
 // Mount Swagger Documentation UI.
 //
-// NOT `swaggerUi.serve`: that is express.static, which STREAMS file responses, and streamed
-// responses hang forever under the Azure Functions HTTP adapter (measured on both dev and test
-// 2026-08-11 — the UI HTML loaded but every css/js asset timed out, so the page never rendered).
+// `swaggerUi.serve` is [init-js generator, express.static]. The static half STREAMS, and streamed
+// responses hang forever under the Azure Functions HTTP adapter (measured 2026-08-11 — the UI HTML
+// loaded but every css/js asset timed out, so the page never rendered). The buffered handler below
+// answers first for every file that exists in swagger-ui-dist, so the static half never runs; what
+// does run is the generator, because swagger-ui-init.js is generated and is not on disk. Do not
+// drop `swaggerUi.serve` — /api-docs 404s on its own init script without it.
 // Buffered res.send() is the one response shape the adapter handles, so the dist assets are
 // read whole and sent whole. They total ~1.5 MB and are served a handful of times a day.
 try {

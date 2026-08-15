@@ -369,16 +369,12 @@ let semanticExhausted = false;
  *
  * Degradation here is invisible from the outside: `semanticErrorHandling: 'partial'` answers 200
  * with the same response shape in BM25 order, so a service reranking nothing looks exactly like one
- * reranking everything. Both paths already log — but nothing retains that log. `api/index.js`
- * starts the Azure Monitor distro only when APPLICATIONINSIGHTS_CONNECTION_STRING is set, and it is
- * not set on demi-api-dev; neither demi-logs-dev nor demi-insights-dev exists, because
- * `azure/modules/observability.bicep` has never been deployed. The warning reaches the App Service
- * log stream and nowhere else, which means it is seen only by someone already watching.
+ * reranking everything.
  *
- * These counters are the reading that works without that pipeline. They are per-process and start
+ * These counters are the reading that works without a telemetry pipeline. They are per-process and start
  * again at zero on every recycle, which answers "since this process started, was ranking running?"
  * and nothing longer. That is the right resolution for a single-worker B1, and it is not a time
- * series — the durable version is an alert on the log line, once the workspace exists.
+ * series — the durable version is an alert on the log line.
  */
 const semanticCounters = {
   requested: 0,

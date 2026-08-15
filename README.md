@@ -258,9 +258,10 @@ predicate rather than bypassing it.
 
 ## Document storage & downloads
 
-Always go through **`src/storage/`** — four operations (`getBuffer`, `getDownloadUrl`, `putFile`,
-`describe`). Never touch a backend client directly; reaching past this module previously produced two
-bugs at once.
+Request paths always go through **`src/storage/`**, which exposes two operations —
+`getDownloadUrl` and `putFile`. Reaching past it from a request path previously produced two bugs at
+once. The backend modules also export `getBuffer` and `describe`, used only by the one-off scripts
+under `src/scripts/`.
 
 Backend is chosen by an explicit `STORAGE_BACKEND` (`minio` | `azure`); an unknown value throws at
 load. It is never inferred from whichever credentials happen to be present. It is set explicitly to
@@ -298,8 +299,7 @@ what produced 3,382 synthetic project rows in the old database.
 
 **The environment model: Azure dev is a sandbox, test is staging, prod is prod** (decided
 2026-08-10). Staging lives in `c4b0a8-test-rg` (subscription `c4b0a8-test`) as `demi-api-test` plus
-the `demiwebtest…` static-website storage account, deployed from `azure/main.test.bicepparam`. Dev
-keeps its resources but is no longer wired to CI — deploy there by hand when experimenting.
+the `demiwebtest…` static-website storage account, deployed from `azure/main.test.bicepparam`.
 
 `FRONTEND_STORAGE_ACCOUNT` has **no default and cannot be guessed** — the account name carries a
 `uniqueString` suffix. Take it from the `frontendStorageAccountName` output of `main.bicep`; the

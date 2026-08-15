@@ -3,9 +3,9 @@
 /**
  * Object storage — the single entry point every caller uses.
  *
- * Four operations, because that is all the application does with stored files: read one into a
- * buffer for extraction, hand out a short-lived download URL, write an upload, and describe
- * itself for logging. Nothing here exposes a bucket, a container, or a client.
+ * Two operations, because that is all the application does with stored files: hand out a
+ * short-lived download URL and write an upload. Nothing here exposes a bucket, a container, or a
+ * client.
  *
  * The backend is chosen by an EXPLICIT `STORAGE_BACKEND` value and an unknown value throws at
  * load. Inferring it from whichever credentials happen to be set is how this repo previously
@@ -31,19 +31,6 @@ if (!BACKENDS[backendName]) {
 }
 
 const backend = BACKENDS[backendName]();
-
-/**
- * Read a stored object into memory.
- *
- * Buffers the whole file, which is what docling needs. Median document is 0.74 MB but the tail
- * is heavy — extraction already batches pages for exactly this reason.
- *
- * @param {string} key  the `s3Key` recorded on the document
- * @returns {Promise<Buffer>}
- */
-function getBuffer(key) {
-  return backend.getBuffer(key);
-}
 
 /**
  * A short-lived, read-only URL for downloading an object directly.
@@ -72,9 +59,4 @@ function putFile(key, filePath, contentType) {
   return backend.putFile(key, filePath, contentType);
 }
 
-/** Non-secret description of the active backend, for logs and `/api/config`. */
-function describe() {
-  return backend.describe();
-}
-
-module.exports = { getBuffer, getDownloadUrl, putFile, describe, backendName };
+module.exports = { getDownloadUrl, putFile };

@@ -471,27 +471,6 @@ exports.deleteDocument = async (req, res) => {
   }
 };
 
-/**
- * Ingest extracted text for a document: POST /documents/:id/chunks  { markdown }
- *
- * The extraction host sends MARKDOWN, not chunks. Splitting stays here so `src/chunker.js` remains
- * the single implementation — an external worker never decides how text is divided, and the
- * payload is the same size either way.
- *
- * It also never supplies an ACL. `read[]` is copied from the LIVE document on every call, so a
- * compromised or buggy extraction host cannot widen a document's visibility, and a chunk cannot
- * out-rank its parent. This is why the route takes a document id rather than chunk objects.
- *
- * Idempotent: chunk ids are deterministic and replaceForDocument reconciles, so re-posting the
- * same markdown is a no-op and a killed backfill can simply be restarted.
- *
- * `extraction` is OPTIONAL provenance describing how the text was produced. It exists because the
- * extraction host routes each document — a `pypdfium2` text-layer probe keeps digital PDFs on a
- * CPU path and only sends text-poor ones to OCR (wiki: Extraction-Pipeline) — and that decision used to be
- * discarded. Without it, a text-layer artefact and an OCR error are indistinguishable after the
- * fact, so "the OCR is bad" cannot be evidenced or disproved. Absent on every row written before
- * this existed, which is itself the honest signal for "unknown path".
- */
 /** Paths the router can take. Anything else is recorded as 'unknown' rather than trusted. */
 const EXTRACTION_PATHS = ['ocr', 'text'];
 
@@ -705,6 +684,27 @@ async function ingestChunksStreaming(req, res, doc) {
     streamed: true });
 }
 
+/**
+ * Ingest extracted text for a document: POST /documents/:id/chunks  { markdown }
+ *
+ * The extraction host sends MARKDOWN, not chunks. Splitting stays here so `src/chunker.js` remains
+ * the single implementation — an external worker never decides how text is divided, and the
+ * payload is the same size either way.
+ *
+ * It also never supplies an ACL. `read[]` is copied from the LIVE document on every call, so a
+ * compromised or buggy extraction host cannot widen a document's visibility, and a chunk cannot
+ * out-rank its parent. This is why the route takes a document id rather than chunk objects.
+ *
+ * Idempotent: chunk ids are deterministic and replaceForDocument reconciles, so re-posting the
+ * same markdown is a no-op and a killed backfill can simply be restarted.
+ *
+ * `extraction` is OPTIONAL provenance describing how the text was produced. It exists because the
+ * extraction host routes each document — a `pypdfium2` text-layer probe keeps digital PDFs on a
+ * CPU path and only sends text-poor ones to OCR (wiki: Extraction-Pipeline) — and that decision used to be
+ * discarded. Without it, a text-layer artefact and an OCR error are indistinguishable after the
+ * fact, so "the OCR is bad" cannot be evidenced or disproved. Absent on every row written before
+ * this existed, which is itself the honest signal for "unknown path".
+ */
 exports.ingestChunks = async (req, res) => {
   try {
     const access = resolveAccess(req);

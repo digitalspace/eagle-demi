@@ -17,7 +17,7 @@ const PARTITION_FIELD = 'projectId';
 
 function buildCriteria({ projectId, extracted, sourceSystem }) {
   const criteria = [];
-  // Presence, not truthiness — the same shape fixed in records.js. `''` is a REAL partition, and a
+  // Presence, not truthiness — `''` is a REAL partition, and a
   // falsy test silently turns "the unlinked partition" into "every document in the container".
   // Nothing passes `''` today; aligning now is what keeps that true when something does.
   if (projectId !== undefined && projectId !== null) {
@@ -185,10 +185,6 @@ async function upsert(document) {
 }
 
 /**
- * Record the outcome of an extraction run. Partial update: it must not disturb the ACL,
- * publication state or anything the seeders wrote.
- */
-/**
  * Bulk write for the seeder. All documents must belong to the SAME project, since that is the
  * partition key — the seeder groups by project before calling this.
  */
@@ -201,6 +197,10 @@ async function bulkUpsertForProject(projectId, docs) {
   return cosmos.bulkVerified(CONTAINER, operations);
 }
 
+/**
+ * Record the outcome of an extraction run. Partial update: it must not disturb the ACL,
+ * publication state or anything the seeders wrote.
+ */
 async function patchExtraction(id, projectId, fields) {
   const ops = Object.entries(fields).map(([key, value]) => ({
     op: 'set',

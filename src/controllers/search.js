@@ -30,6 +30,18 @@ function geoPoint(centroid) {
   return [lng, lat];
 }
 
+/**
+ * Label document rows with their project's name, under the CALLER's access — never systemAccess(),
+ * a label must not outlive the ACL of the row it describes.
+ */
+async function labelWithProjectNames(access, docs) {
+  const projectIds = docs.map(d => d.project).filter(Boolean);
+  if (projectIds.length === 0) return;
+  const parents = await projectsRepo.listByIds(access, projectIds);
+  const nameById = new Map(parents.map(p => [String(p.id), p.name]));
+  for (const doc of docs) doc.projectName = nameById.get(doc.project) || 'Associated Project';
+}
+
 exports.search = async (req, res) => {
   try {
     const dataset = req.query.dataset;
@@ -224,17 +236,7 @@ exports.search = async (req, res) => {
                 highlighted: doc.highlighted
               }));
 
-              // Hydrate project names under the CALLER's access — never systemAccess(), which
-              // would let a label leak past the ACL governing the row it describes. Same shape the
-              // chunk branch uses.
-              const projectIds = mappedDocs.map(d => d.project).filter(Boolean);
-              if (projectIds.length > 0) {
-                const parents = await projectsRepo.listByIds(access, projectIds);
-                const nameById = new Map(parents.map(p => [String(p.id), p.name]));
-                for (const doc of mappedDocs) {
-                  doc.projectName = nameById.get(doc.project) || 'Associated Project';
-                }
-              }
+              await labelWithProjectNames(access, mappedDocs);
 
               return res.json([{ searchResults: mappedDocs, count }]);
             }
@@ -272,14 +274,7 @@ exports.search = async (req, res) => {
         // Label the results the same way the AI Search branch does, under the CALLER's access.
         // The Mongo path left every row reading 'Associated Project'; that difference is exactly
         // how a silent degradation to the fallback stayed invisible.
-        const projectIds = mappedDocs.map(d => d.project).filter(Boolean);
-        if (projectIds.length > 0) {
-          const parents = await projectsRepo.listByIds(access, projectIds);
-          const nameById = new Map(parents.map(p => [String(p.id), p.name]));
-          for (const doc of mappedDocs) {
-            doc.projectName = nameById.get(doc.project) || 'Associated Project';
-          }
-        }
+        await labelWithProjectNames(access, mappedDocs);
 
         return res.json([{ searchResults: mappedDocs }]);
       } catch (cosmosErr) {

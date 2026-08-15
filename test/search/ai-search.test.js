@@ -707,9 +707,7 @@ test('semantic reranking', async (t) => {
   });
 
   await t.test('the counters separate a ranked search from a degraded one', async (tt) => {
-    // The log line above is written to nowhere durable — demi-api-dev has no
-    // APPLICATIONINSIGHTS_CONNECTION_STRING and the workspace does not exist — so these counters
-    // are what /admin/index-progress reports. Two searches with DIFFERENT outcomes, because a
+    // These counters are what /admin/index-progress reports. Two searches with DIFFERENT outcomes, because a
     // counter that incremented on every search would pass a one-sided check.
     captureFetch(tt, (i) => (
       i === 0

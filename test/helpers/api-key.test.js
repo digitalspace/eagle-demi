@@ -94,6 +94,15 @@ test('verify', async (t) => {
     assert.strictEqual(verify(live, secret, Date.now()), true, 'and be live before that');
   });
 
+  await t.test('an unparseable expiry is not "never expires"', () => {
+    for (const bad of ['banana', {}, '2026-13-45']) {
+      assert.strictEqual(verify({ ...live, expiresAt: bad }, secret), false,
+        `expiresAt ${JSON.stringify(bad)} must not verify`);
+    }
+    assert.strictEqual(verify({ ...live, expiresAt: null }, secret), true,
+      'no expiry at all still means no expiry');
+  });
+
   await t.test('fails closed on a malformed or missing record', () => {
     for (const bad of [null, undefined, {}, { hash: null }, { hash: 123 }, { hash: 'short' }]) {
       assert.strictEqual(verify(bad, secret), false, `${JSON.stringify(bad)} must not verify`);
