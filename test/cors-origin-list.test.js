@@ -46,6 +46,10 @@ async function allowOriginFor(base, origin) {
 }
 
 const FRONT_DOOR = 'https://demi-frontend-test-eaa9cyfydsb0ejet.a02.azurefd.net';
+// The rollback target, still serving during the cutover. WHEN THAT APP SERVICE IS DELETED this
+// constant goes with it — the origin comes out of `frontendHostNames` in azure/main.test.bicepparam
+// at the same time, and a test still asserting two origins would fail on a correct config. The
+// cases below are about list parsing, not about these two hosts specifically; any two will do.
 const OLD_APP_SERVICE = 'https://demi-frontend-test.azurewebsites.net';
 
 test('every origin in a comma-separated CORS_ORIGIN is allowed', async () => {
