@@ -16,7 +16,7 @@
 // landing zone supplied one — but instantiating it would build a second, disconnected network.
 //
 // WHAT IS DELIBERATELY ABSENT.
-//   - Key Vault. Never deployed; secrets are app settings. `modules/key-vault.bicep` is unreferenced.
+//   - Key Vault. Never deployed; secrets are app settings.
 //   - Static Web App. The frontend is a Storage static website (module 8) fronted by the Front
 //     Door profile that lives in eagle-search.
 //   - Cosmos DB for MongoDB. Cut loose at Phase 8; nothing speaks Mongo.

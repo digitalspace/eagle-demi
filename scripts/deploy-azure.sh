@@ -211,6 +211,11 @@ deploy_frontend() {
   : "${FRONTEND_STORAGE_ACCOUNT:?set FRONTEND_STORAGE_ACCOUNT — main.bicep output frontendStorageAccountName}"
   local nostore='no-cache, no-store, must-revalidate'
   local immutable='public, max-age=31536000, immutable'
+  # Stored, but revalidated before every use. For unhashed files whose bytes CAN change: a changed
+  # asset is picked up on the next navigation, and an unchanged one costs a 304 rather than the whole
+  # font. `no-store` would be wrong here — it forbids keeping the response at all, so there is
+  # nothing to revalidate against and every image and font is refetched in full, every time.
+  local revalidate='no-cache'
 
   echo -e "\n${BLUE}[1/4] Enabling static website hosting on ${YELLOW}${FRONTEND_STORAGE_ACCOUNT}${BLUE}...${NC}"
   # NOTHING ELSE TURNS THIS ON. `staticWebsite` is a data-plane setting on the Blob service and the
@@ -277,9 +282,24 @@ deploy_frontend() {
   # `ico` is deliberately NOT in this list. Nothing hashes favicon.ico: it is copied verbatim out of
   # `frontend/public`, so an immutable year would pin a stale icon in every reviewer's browser with
   # no way to bust it. Pass 1 already gave it no-store, which is where an unhashed file belongs.
+  #
+  # Images and fonts are out for the same reason: `outputHashing: all` hashes only what Angular
+  # EMITS, which is the .js and .css. Assets are copied through under their source names, so an
+  # immutable year on them means a changed logo or font never reaches a browser that saw the old one.
   local ext
-  for ext in js css png jpg jpeg gif svg woff woff2 ttf eot; do
+  for ext in js css; do
     blob_upload "$immutable" "*.${ext}"
+  done
+
+  # PASS 2b: unhashed assets. They cannot be immutable (the URL outlives the bytes) but leaving them
+  # on pass 1's `no-store` overcorrects — that forbids caching outright, so every font and image is
+  # refetched in full on every navigation with no 304 available. `no-cache` keeps the copy and
+  # revalidates it, which is the behaviour an unhashed-but-cacheable file wants.
+  #
+  # favicon.ico stays on pass 1: it is one small file, requested once, and the comment above is the
+  # standing argument for that. Fonts are not that.
+  for ext in png jpg jpeg gif svg woff woff2 ttf eot; do
+    blob_upload "$revalidate" "*.${ext}"
   done
 
   # PASS 3: env.js is the one .js in the bundle with no hash, so pass 2 just gave it a year of

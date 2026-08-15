@@ -882,7 +882,8 @@ which point docling-serve's side is set from the same value.
       returns grounded summaries with citations, usage and cost (verified 2026-08-05 with an
       `X-Api-Key`). The `/summary` page is in the deployed frontend bundle, but every route into it
       needs a staff Keycloak login, so the rendering — answer card, sources list, `est. $…` line —
-      has not been seen. Log in on `demi-frontend-dev.azurewebsites.net/summary` and look.
+      has not been seen. Log in on
+      https://demi-frontend-test-eaa9cyfydsb0ejet.a02.azurefd.net/summary and look.
 - [ ] **Verify the scoped access tier end to end.** The reason this was never observed is
       now known and fixed: `helpers/auth.js` rejected any non-privileged Keycloak token inside
       *authentication*, so `passiveAuth` dropped it and `req.user` stayed unset — TIER.SCOPED was

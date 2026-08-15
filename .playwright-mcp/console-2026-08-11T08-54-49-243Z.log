@@ -1,5 +1,0 @@
-[    1267ms] [LOG] [ConfigService] Dynamic configuration loaded from https://demi-api-test.azurewebsites.net/api/config: {configEndpoint: true, ENVIRONMENT: test, BANNER_COLOUR: blue, API_LOCATION: https://demi-api-test.azurewebsites.net, API_PATH: /api} @ https://demi-frontend-test.azurewebsites.net/main-GCPURT6T.js:4
-[    1277ms] [LOG] [Keycloak] Public visitor detected; skipping SSO redirect and running in public mode. @ https://demi-frontend-test.azurewebsites.net/main-GCPURT6T.js:4
-[    1277ms] [LOG] [Registry] Loading real-time projects and documents from central dev database... @ https://demi-frontend-test.azurewebsites.net/main-GCPURT6T.js:4
-[    1277ms] [LOG] [Registry loadData] Fetching projects from URL: https://demi-api-test.azurewebsites.net/api/search?dataset=Project&pageSize=500 @ https://demi-frontend-test.azurewebsites.net/main-GCPURT6T.js:4
-[    1279ms] [LOG] [Registry] Lazy loading environmental regions GeoJSON... @ https://demi-frontend-test.azurewebsites.net/main-GCPURT6T.js:4
