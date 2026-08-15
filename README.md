@@ -492,10 +492,11 @@ its GitHub environment — its own role assignments, and for prod a decision abo
 on the environment. Build them from the dev pair when that work actually starts.
 
 **`azure/main.bicep` now describes and manages staging**, and was first applied to `c4b0a8-test-rg`
-on 2026-08-13. It instantiates every module except `vnet.bicep` and `key-vault.bicep` — the landing
-zone owns the VNet, and secrets are app settings rather than Key Vault references. (`static-web-app.bicep`
-and `frontend-web-app.bicep` used to be named here as well; both were deleted when the frontend moved
-to `static-site.bicep`.)
+on 2026-08-13. It instantiates every module except `vnet.bicep` — the landing zone owns the VNet, and
+secrets are app settings rather than Key Vault references. (`static-web-app.bicep` and
+`frontend-web-app.bicep` used to be named here as well; both were deleted when the frontend moved to
+`static-site.bicep`. `key-vault.bicep` is gone too — unreferenced, with no Key Vault in any
+environment.)
 
 That first apply found two defects the template had carried for months, both invisible to
 `what-if`:
