@@ -46,23 +46,25 @@ param eagleApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api/public
 
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //
-// The browser origin allowed to call the API. It is NOT commented out, and it currently names the
-// OLD App Service on purpose.
+// The browser origins allowed to call the API. BOTH are listed, and that is the point.
 //
 // `siteConfig.appSettings` is a whole-collection PUT, so whatever stands here is what CORS_ORIGIN
-// becomes on the running demi-api-test. Leaving it unset during the cutover would blank the
-// allowlist and break the frontend that is still serving staging, before its replacement exists —
-// deploying the new stack must not take the old one down.
+// becomes on the running demi-api-test. Naming only one frontend breaks the other, in whichever
+// direction: dropping the App Service breaks the rollback target that is still serving staging,
+// and naming only the App Service breaks the Front Door frontend that is now the real one.
 //
-// Swap it for the Front Door endpoint once that endpoint is verified serving the bundle. The AFD
-// hostname is `<name>-<hash>.z01.azurefd.net` with the hash assigned at creation, so it can only be
-// read from the eagle-search deployment output, never composed:
+// The second is not hypothetical. On 2026-08-15 the AFD frontend was published while this named
+// only the App Service, and the deployed app loaded fine and then failed every request —
+// /api/config and both /api/search calls blocked with "No 'Access-Control-Allow-Origin' header".
+// Nothing in the deploy reported a problem, because nothing in the deploy was wrong.
 //
-//   param frontendHostName = 'demi-frontend-xxxxxxxx.z01.azurefd.net'
-//
-// Keeping the old value until then is also what makes rollback free — the App Service stays
-// reachable and callable for as long as this line names it.
-param frontendHostName = 'demi-frontend-test.azurewebsites.net'
+// Drop the App Service entry when it is decommissioned, not before. The AFD hostname carries a
+// deploy-time hash AND zone code, so it is read from the eagle-search deployment output, never
+// composed.
+param frontendHostNames = [
+  'demi-frontend-test.azurewebsites.net'
+  'demi-frontend-test-eaa9cyfydsb0ejet.a02.azurefd.net'
+]
 //
 // Object id (not app id) of the demi-cicd-test user-assigned identity. Without it the identity gets
 // no role on the new storage account: `az storage blob upload-batch` 403s, and the static-website
