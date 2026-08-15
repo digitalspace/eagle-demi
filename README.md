@@ -362,14 +362,25 @@ without revisiting that grant. `scripts/validate-deploy.sh` checks the result wh
    (`demiweb….z13.web.core.windows.net`); it goes into eagle-search's `demiFrontendWebHostName`
    parameter, which is what adds DEMI's route to the shared Front Door profile.
 
-2. **Come back and fill in the AFD hostname.** An AFD endpoint is
-   `<name>-<hash>.z01.azurefd.net` and **the hash is assigned at deploy time**, so it cannot be
-   composed, guessed or written ahead of the deployment. Take it from eagle-search's
-   `edgeEndpointHostNames` output, set `frontendHostName` in `azure/main.test.bicepparam` (it is
-   committed as a commented-out line for exactly this reason) and redeploy this template. That is
-   what sets `CORS_ORIGIN` on `demi-api-test`. Until it is done the API's allowlist holds only
-   `http://localhost:4200`, so the frontend's first XHR fails CORS — deliberately the loud failure
-   rather than the silent "reflect any origin" one.
+2. **Add the AFD hostname to `frontendHostNames` BEFORE publishing the frontend to it.** An AFD
+   endpoint is `<name>-<hash>.<zone>.azurefd.net` and **Azure assigns both the hash and the zone
+   code**, so it cannot be composed, guessed or written ahead of the deployment. Take it from
+   eagle-search's `edgeEndpointHostNames` output, append it to `frontendHostNames` in
+   `azure/main.test.bicepparam`, and redeploy this template. That is what sets `CORS_ORIGIN` on
+   `demi-api-test`, and it also sets the App Service's own platform CORS — **both layers, and the
+   platform one answers the preflight first**, so neither alone is enough.
+
+   The parameter is an ARRAY because a cutover has two frontends at once. Getting the order wrong
+   is not theoretical: on 2026-08-15 the AFD frontend was published while this still named only the
+   App Service, and the result was a site that loaded perfectly and then failed every single
+   request — `/api/config` and both `/api/search` calls blocked with *"No
+   'Access-Control-Allow-Origin' header is present"*. Nothing in either deployment reported a
+   problem, because nothing in either deployment was wrong. **List the new origin first, publish
+   second, drop the old origin last.**
+
+   An empty array is the pre-Front-Door state and fails closed: `CORS_ORIGIN` is unset, `src/app.js`
+   falls back to an allowlist holding only `http://localhost:4200`, and the frontend's first XHR
+   fails loudly rather than silently reflecting any origin.
 
 3. **Register the AFD hostname with Keycloak, before decommissioning the old App Service.**
    This is the one step with no code anywhere in these repos, and nothing fails loudly enough to
@@ -377,11 +388,14 @@ without revisiting that grant. `scripts/validate-deploy.sh` checks the result wh
    `silentCheckSsoRedirectUri` from `window.location.origin`, so moving the frontend to a new
    hostname changes both. The client's registered URIs are **exact-host patterns**: probing the
    realm's authorize endpoint accepts `https://demi-frontend-test.azurewebsites.net/…` and answers
-   `400 Invalid parameter: redirect_uri` for any `*.z01.azurefd.net` host. So on the day of the
+   `400 Invalid parameter: redirect_uri` for any `*.azurefd.net` host. So on the day of the
    cutover CORS and CSP can all be correct and staff still cannot log in.
 
-   Ask the CSS team (this client's URI list is maintained outside these repos — see
-   `eagle-dev-guides.wiki/Keycloak-Configuration.md`) to add, on client `eagle-admin-console` in
+   **This does not need another team.** The `demi-keycloak-admin` secret in `6cdc9e-test` holds
+   credentials that can update the client directly, and doing so is a single admin-API call. Read
+   the client, append to `redirectUris` and `webOrigins`, PUT the whole object back — appending to
+   what you just read is the only safe shape, because the API replaces the arrays it is given and a
+   hand-written one silently drops the other dozen entries. Add, on client `eagle-admin-console` in
    realm `eao-epic`, in the realm matching the environment's `KEYCLOAK_URL`:
 
    - Valid Redirect URIs: `https://<afd-endpoint>/*` — covers both `/` and `/silent-check-sso.html`

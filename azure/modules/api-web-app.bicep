@@ -87,8 +87,8 @@ param auditDcrImmutableId string = ''
 @description('Resource id of the demi-audit-<env> workspace. Empty skips deploy-access auditing rather than failing the deployment.')
 param auditWorkspaceId string = ''
 
-@description('Front Door endpoint hostname serving the frontend (no scheme), the one browser origin that calls this API. Empty until the AFD profile in eagle-search is deployed — its hostname carries a deploy-time hash, so it is filled in afterwards and cannot be composed here.')
-param frontendHostName string = ''
+@description('Frontend hostnames (no scheme) allowed to call this API, as browser origins. An ARRAY because a cutover has two: the old App Service and the new Front Door endpoint must both work while the old one is still the rollback target. Empty until the AFD profile in eagle-search is deployed — its hostname carries a deploy-time hash, so it is filled in afterwards and cannot be composed here.')
+param frontendHostNames array = []
 
 @description('Upstream eagle-api the seed loader reads. Must match the environment — the code default in src/seed/sources.js is the DEV instance, so a wrong or missing value reads dev data.')
 param eagleApiBase string
@@ -352,9 +352,12 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         // static website behind Front Door, and the AFD endpoint carries a deploy-time hash. Empty
         // leaves CORS_ORIGIN unset, and src/app.js then falls back to localhost only — no browser
         // origin, rather than any browser origin.
+        //
+        // Comma-separated, which is what src/app.js splits on. An empty array joins to '', which is
+        // the fail-closed state described above — not a wildcard.
         {
           name: 'CORS_ORIGIN'
-          value: empty(frontendHostName) ? '' : 'https://${frontendHostName}'
+          value: join(map(frontendHostNames, h => 'https://${h}'), ',')
         }
         // Build & Deployment Configuration
         {
@@ -398,10 +401,14 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
       // `demi-frontend-swa-*.azurestaticapps.net` entry that used to sit here is gone with the
       // Static Web App idea — Microsoft.Web/staticSites cannot deploy in any region this landing
       // zone's Resource-Locations policy allows.
+      //
+      // BOTH layers have to name an origin for the browser to reach the API. This one runs first
+      // and answers the preflight itself, so adding a host to CORS_ORIGIN alone is not enough.
       cors: {
-        allowedOrigins: empty(frontendHostName)
-          ? [ 'https://portal.azure.com' ]
-          : [ 'https://portal.azure.com', 'https://${frontendHostName}' ]
+        allowedOrigins: concat(
+          [ 'https://portal.azure.com' ],
+          map(frontendHostNames, h => 'https://${h}')
+        )
       }
     }
   }

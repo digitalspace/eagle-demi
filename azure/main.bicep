@@ -99,14 +99,18 @@ param appServiceSubnetId string = ''
 @description('Object ID of a human principal granted read access to data planes. Empty grants none.')
 param readerPrincipalId string = ''
 
-// AN AFD ENDPOINT HOSTNAME IS NOT PREDICTABLE. It is `<name>-<hash>.z01.azurefd.net`, and the hash
-// is assigned when the endpoint is created — so this cannot be derived, only observed. Fill it in
+// AN AFD ENDPOINT HOSTNAME IS NOT PREDICTABLE. It is `<name>-<hash>.<zone>.azurefd.net`, and Azure
+// assigns both the hash and the zone code — so this cannot be derived, only observed. Fill it in
 // from the eagle-search Front Door deployment's output, then redeploy this template.
+//
+// AN ARRAY, because during a cutover there are two. Publishing the new frontend while this named
+// only the old one left every API call from the new origin CORS-blocked — the app loaded, then
+// failed on /api/config and every /api/search. List both until the old one is decommissioned.
 //
 // Empty is the pre-Front-Door state and fails CLOSED rather than open: `CORS_ORIGIN` is then unset
 // on the API, and src/app.js falls back to an allowlist holding only http://localhost:4200.
-@description('Front Door endpoint hostname serving the DEMI frontend (no scheme). Filled in after the AFD deployment in eagle-search — the hostname carries a deploy-time hash and cannot be guessed.')
-param frontendHostName string = ''
+@description('Frontend hostnames (no scheme) allowed as browser origins against the API. Filled in after the AFD deployment in eagle-search — the hostname carries a deploy-time hash and cannot be guessed.')
+param frontendHostNames array = []
 
 @description('Principal id of the CI identity (demi-cicd-<env>) that publishes the frontend bundle into $web. Empty skips the role assignment, and the publish step then gets a 403.')
 param frontendUploaderPrincipalId string = ''
@@ -292,8 +296,8 @@ module apiWebApp './modules/api-web-app.bicep' = {
     auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
     // Deploy-access auditing: who signed in to Kudu/SCM and published.
     auditWorkspaceId: auditLogs.outputs.workspaceId
-    // The only browser origin that calls this API. See the parameter for why it is not derivable.
-    frontendHostName: frontendHostName
+    // The browser origins that call this API. See the parameter for why they are not derivable.
+    frontendHostNames: frontendHostNames
   }
 }
 
