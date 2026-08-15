@@ -1,6 +1,6 @@
 # AI Search definitions
 
-The index, indexer and data-source definitions for `demi-search-dev`, exported from the live
+The index, indexer and data-source definitions for `demi-search-test`, exported from the live
 service on 2026-08-04. Until this export they existed **only** on the service — hand-POSTed from
 inside the VNet, with nothing in git able to rebuild them.
 

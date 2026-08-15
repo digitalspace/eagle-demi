@@ -412,13 +412,9 @@ without revisiting that grant. `scripts/validate-deploy.sh` checks the result wh
 
 ### Two accepted ceilings
 
-- **The `$web` endpoint stays publicly reachable, so Front Door can be bypassed.** Anyone who
-  learns `demiweb….z13.web.core.windows.net` gets the same files without the security headers.
-  There is no fix on this SKU: AFD Standard cannot reach an origin over Private Link (Premium
-  only), storage `networkAcls` has no resource-instance rule for `Microsoft.Cdn/profiles`, and
-  storage cannot inspect the `X-Azure-FDID` header the way an App Service can. Accepted because the
-  bytes are a public Angular bundle; the header loss is real but affects only a bypasser's own
-  browser.
+- **The `$web` endpoint stays publicly reachable, so Front Door can be bypassed.** Accepted; the
+  reasoning lives once in `eagle-search`'s README, which owns the Front Door profile and both
+  storage accounts. The copy that used to be here had already drifted from it.
 - **Nothing in front of the frontend authenticates.** `$web` is anonymous by definition, and an AFD
   rule-set rule can only rewrite and set headers — no action challenges a request for credentials.
   DEMI's own Keycloak login still gates staff data, since it is in the app, but the shell is open to
@@ -452,7 +448,7 @@ federated credential, with no client secret anywhere:
 |---|---|
 | Identity | `demi-cicd-test`, in `c4b0a8-test-rg` |
 | Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:digitalspace/eagle-demi:environment:test`, audience `api://AzureADTokenExchange` |
-| RBAC | Website Contributor on `demi-api-test` **individually**, plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
+| RBAC | Website Contributor on `demi-api-test` **individually** — and, until that app is deleted, on `demi-frontend-test` as well — plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
 | Config | All four values live on the **`test` GitHub environment**, nothing at repo scope and nothing hardcoded: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`; variables `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` |
 
 **Declaring `environment: test` changes the OIDC subject claim, and that is the trap.** With an
