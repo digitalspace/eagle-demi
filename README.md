@@ -315,25 +315,20 @@ FRONTEND_STORAGE_ACCOUNT=$(az deployment group show -g c4b0a8-test-rg -n main \
 Build the package from a checkout that already has `node_modules` installed — `ENABLE_ORYX_BUILD` is
 `false`, so nothing installs dependencies on the Azure side.
 
-### Decommissioning `demi-frontend-test` — a separate, manual step
+### `demi-frontend-test` is gone — decommissioned 2026-08-15
 
-Deleting `modules/frontend-web-app.bicep` stopped the template *managing* the App Service. It did not
-delete it. ARM deploys incrementally, so `what-if` reports `demi-frontend-test` and
-`demi-frontend-plan-test` as `Ignore`: still running, still serving a stale bundle, still billing.
-Complete-mode deployment would remove them and is **not** an option — it deletes every resource in
-`c4b0a8-test-rg` absent from the template, Cosmos and AI Search included.
+The App Service and the B1 plan it shared with eagle-public's preview were deleted once the Front
+Door endpoint was verified in a browser. Two things from that generalise, and one is repo-specific:
 
-Once the Front Door endpoint is verified serving the right bundle:
-
-```bash
-az webapp delete -g c4b0a8-test-rg -n demi-frontend-test
-# The B1 plan also carried eagle-public-preview-test. Check it is empty before deleting.
-az appservice plan show -g c4b0a8-test-rg -n demi-frontend-plan-test --query numberOfSites
-az appservice plan delete -g c4b0a8-test-rg -n demi-frontend-plan-test
-```
-
-Until the plan is gone this cutover is a pure cost **increase**: the shared AFD profile is new spend
-on top of a plan still being paid for.
+- **Deleting a module stops ARM *managing* a resource; it does not delete it.** `what-if` reports
+  the orphan as `Ignore` and it keeps running and billing. Complete-mode would remove it and is
+  **not** an option here — it deletes everything in `c4b0a8-test-rg` absent from the template,
+  Cosmos and AI Search included. Orphans go by hand or not at all.
+- **Take the origin out of `frontendHostNames` before deleting the host.** An `*.azurewebsites.net`
+  name returns to Azure's global pool on deletion, so an entry left in `CORS_ORIGIN` is a
+  cross-origin position against `demi-api-test` that someone else can register.
+- `demi-api-test` was never on that plan — it runs on `demi-plan-test`, which is unaffected. Worth
+  checking before any future plan deletion here, because the two names differ by one token.
 
 ### Three manual steps the templates cannot do
 
@@ -386,10 +381,11 @@ without revisiting that grant. `scripts/validate-deploy.sh` checks the result wh
    This is the one step with no code anywhere in these repos, and nothing fails loudly enough to
    point at it. `registry-state.service.ts` derives both `redirectUri` and
    `silentCheckSsoRedirectUri` from `window.location.origin`, so moving the frontend to a new
-   hostname changes both. The client's registered URIs are **exact-host patterns**: probing the
-   realm's authorize endpoint accepts `https://demi-frontend-test.azurewebsites.net/…` and answers
-   `400 Invalid parameter: redirect_uri` for any `*.azurefd.net` host. So on the day of the
-   cutover CORS and CSP can all be correct and staff still cannot log in.
+   hostname changes both. The client's registered URIs are **exact-host patterns**, so an
+   unregistered host gets `400 Invalid parameter: redirect_uri` from the realm's authorize endpoint —
+   which means CORS and CSP can all be correct on cutover day and staff still cannot log in. Probe it
+   directly before believing otherwise; the test environment's AFD host was registered on 2026-08-14
+   and staff login confirmed working the same day.
 
    **This does not need another team.** The `demi-keycloak-admin` secret in `6cdc9e-test` holds
    credentials that can update the client directly, and doing so is a single admin-API call. Read
