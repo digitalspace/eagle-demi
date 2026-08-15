@@ -46,23 +46,20 @@ param eagleApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api/public
 
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //
-// The browser origins allowed to call the API. BOTH are listed, and that is the point.
+// The browser origins allowed to call the API.
 //
 // `siteConfig.appSettings` is a whole-collection PUT, so whatever stands here is what CORS_ORIGIN
-// becomes on the running demi-api-test. Naming only one frontend breaks the other, in whichever
-// direction: dropping the App Service breaks the rollback target that is still serving staging,
-// and naming only the App Service breaks the Front Door frontend that is now the real one.
-//
-// The second is not hypothetical. On 2026-08-15 the AFD frontend was published while this named
-// only the App Service, and the deployed app loaded fine and then failed every request —
-// /api/config and both /api/search calls blocked with "No 'Access-Control-Allow-Origin' header".
+// becomes on the running demi-api-test. An origin missing from this list is an origin whose every
+// request fails — and it fails in the browser, not in the deploy. On 2026-08-15 the Front Door
+// frontend was published while this named only the old App Service: the app loaded fine and then
+// failed /api/config and both /api/search calls with "No 'Access-Control-Allow-Origin' header".
 // Nothing in the deploy reported a problem, because nothing in the deploy was wrong.
 //
-// Drop the App Service entry when it is decommissioned, not before. The AFD hostname carries a
+// An ARRAY because a cutover has two frontends at once. It held both from step 5 until step 8; the
+// old App Service entry came out when that app was decommissioned. The AFD hostname carries a
 // deploy-time hash AND zone code, so it is read from the eagle-search deployment output, never
 // composed.
 param frontendHostNames = [
-  'demi-frontend-test.azurewebsites.net'
   'demi-frontend-test-eaa9cyfydsb0ejet.a02.azurefd.net'
 ]
 //
