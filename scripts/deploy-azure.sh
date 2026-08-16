@@ -118,7 +118,12 @@ deploy_api() {
   # otherwise be indistinguishable — which is exactly the pair that collided on 2026-08-12. The
   # timestamp then separates two deploys of the identical tree, so a redeploy can never satisfy the
   # check with the value the previous one left behind.
-  export BUILD_ID="$(git -C "$REPO_ROOT" describe --always --dirty 2>/dev/null || echo nogit)-$(date -u +%H%M%S)"
+  #
+  # `--tags` matters for a different reason: publishing a draft GitHub release makes GitHub create a
+  # LIGHTWEIGHT tag, and bare `git describe` only considers ANNOTATED ones — without `--tags` the
+  # released version would stay invisible here forever. Until the first draft is published this
+  # changes nothing, because `--always` keeps returning the bare sha exactly as it does today.
+  export BUILD_ID="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo nogit)-$(date -u +%H%M%S)"
 
   echo -e "\n${BLUE}[1/4] Packaging API source code (BUILD_ID=${BUILD_ID})...${NC}"
   API_ZIP="/tmp/api-deploy.zip"
