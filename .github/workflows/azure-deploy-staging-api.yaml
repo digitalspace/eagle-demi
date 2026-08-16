@@ -77,7 +77,14 @@ jobs:
     environment: test
     steps:
       - name: Checkout repository
+        # Full history, because BUILD_ID comes from `git describe --tags`. At the default
+        # fetch-depth of 1 the tag refs can arrive while HEAD has no ancestry path to them, and
+        # describe fails with "No tags can describe '<sha>'" — leaving the deployed app reporting
+        # a bare sha with no version. `fetch-tags: true` does not fix that; only depth 0 does. At
+        # roughly 67 MB and 296 commits the extra clone cost is noise.
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v7

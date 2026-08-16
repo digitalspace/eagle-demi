@@ -527,6 +527,61 @@ More, including the Kudu and basic-auth situation, in
 
 ---
 
+## Releases
+
+**Versions are computed, never typed.** `scripts/next-version.js` reads the commit messages between
+the last **published** release — the rolling draft below is invisible to that lookup, which is what
+keeps the version from climbing once per push — and the commit being built, then applies
+conventional-commit rules to the whole set: a breaking change bumps major, otherwise any `feat`
+bumps minor, otherwise patch. A breaking change is `!` before the `:`, or a `BREAKING CHANGE:` /
+`BREAKING-CHANGE:` footer line in the body; both spellings are normative and both are honoured.
+**While the major is `0` a breaking change bumps the minor instead** — a stray `refactor!:` must not
+mint `v1.0.0` on a product that has never shipped to prod.
+
+`.github/workflows/draft-release.yaml` runs on every push to `main` and maintains **exactly one
+rolling draft release**, deleting and recreating it each run. That means **any hand-edit to the draft
+body is lost on the next push**; write release prose in the commits instead.
+
+A draft release **creates no git tag**. The version number is reserved and visible, but not spent, so
+the draft is free to be retargeted at a newer SHA as more commits land — which is what lets an
+automatic version coexist with a staging deploy that fires on every push.
+
+**Publishing the draft, by hand in the GitHub UI, is what mints the tag** — a lightweight tag at the
+exact SHA the draft targeted. That click is the "verified on staging" gate, and the tag it produces
+is what the prod workflow described above will deploy once prod becomes real. Nothing publishes
+automatically.
+
+Publish it as a normal release — do **not** tick *Set as a pre-release*. The version base is the
+repository's latest published release, a lookup that skips pre-releases, so a pre-released version
+is recomputed unchanged on the next push and then collides with the tag it just minted. The same
+lookup honours GitHub's *Set as the latest release* flag rather than tag order, so ticking that on
+an older release moves the base backwards with the same result.
+
+Once a first release has been published, `git describe --tags` resolves and the deploy script stamps
+`BUILD_ID` as `v0.1.1-3-gabc1234-121314`, reported at `GET /api/config`. Before that it is a bare
+SHA, exactly as today.
+
+**Before any of this can run, the seed release must exist.** It is created once, by hand, and
+deliberately without `--generate-notes` — with no prior release GitHub has no start boundary for
+note generation and would emit notes for all ~296 commits in the repository:
+
+```bash
+gh release create v0.1.0 --repo digitalspace/eagle-demi \
+  --target main --title "v0.1.0" \
+  --notes "Baseline: the state of staging as of the first tagged release."
+```
+
+Create it **before** this automation lands on `main`, or the first Draft release run fails: the
+script has no first-run path at all, by design. Every later version is computed against a real
+predecessor, which is what removes the untestable "no previous release" branch from the script.
+
+`release-drafter` was the closest off-the-shelf fit and was rejected on a specific point: its
+`version-resolver` reads **pull-request labels** and its notes are assembled from **merged PRs**.
+This repository sometimes pushes straight to `main`, and such a commit carries no PR — it would
+affect neither the notes nor the version bump, silently.
+
+---
+
 ## Repository security
 
 Enabled 2026-08-05. The repo is **public**, so all of this is free — none of it needs an Advanced

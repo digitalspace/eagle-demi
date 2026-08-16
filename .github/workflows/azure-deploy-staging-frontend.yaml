@@ -83,7 +83,16 @@ jobs:
     environment: test
     steps:
       - name: Checkout repository
+        # Kept byte-identical to the API workflow's checkout so the two cannot drift, NOT because
+        # this path needs it: `git describe --tags` lives in deploy_api() in scripts/deploy-azure.sh
+        # and the frontend path stamps no BUILD_ID today. Depth 0 is what the API path requires —
+        # at the default depth of 1 the tag refs can arrive while HEAD has no ancestry path to them
+        # and describe fails with "No tags can describe '<sha>'", which `fetch-tags: true` does not
+        # fix. At roughly 67 MB and 296 commits the extra clone cost is noise, so matching costs
+        # less than remembering which of the two workflows was allowed to differ.
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # env.js ships inside the bundle with DEV URLs baked in, and the app bootstraps its
       # /api/config fetch FROM env.js — so a staging deploy that skips this rewrite talks to
