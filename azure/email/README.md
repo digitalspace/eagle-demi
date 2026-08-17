@@ -3,32 +3,66 @@
 ACS Email (send pipe) + [listmonk](https://listmonk.app) (campaign/template UI for
 non-technical staff) + PostgreSQL Flexible Server behind a private endpoint.
 Standalone stack — deliberately not wired into `azure/main.bicep` (not part of the
-DEMI estate). Dev prove-out lives at `epic-listmonk-dev.azurewebsites.net` in
-`c4b0a8-dev-rg`.
+DEMI estate).
+
+| Env | Subscription | RG | Host |
+|---|---|---|---|
+| dev | `d2f8d048-2af3-44fd-81cc-858c040001f2` | `c4b0a8-dev-rg` | `epic-listmonk-dev.azurewebsites.net` |
+| test | `7897ceb1-9a86-4639-87d7-7f9ff67142b3` | `c4b0a8-test-rg` | `epic-listmonk-test.azurewebsites.net` |
 
 ## Deploy
 
-```bash
-export EPIC_EMAIL_PG_PASSWORD='...'        # Postgres admin
-export EPIC_EMAIL_LISTMONK_PASSWORD='...'  # listmonk epicadmin bootstrap
-export EPIC_EMAIL_SMTP_PRINCIPAL_ID='...'  # Entra SP object id (empty on first pass)
+Always pass `--subscription`. The CLI's active subscription on a dev machine is usually
+`c4b0a8-prod`, and neither command below carries the RG's subscription implicitly.
 
-az deployment group what-if -g c4b0a8-dev-rg -f email.bicep -p email.dev.bicepparam
-az deployment group create  -g c4b0a8-dev-rg -f email.bicep -p email.dev.bicepparam
+One-time per subscription, or the first run fails `MissingSubscriptionRegistration`
+part-way through:
+
+```bash
+az provider register -n Microsoft.Communication --subscription <sub>
 ```
 
-Two passes when starting from nothing: deploy once with `EPIC_EMAIL_SMTP_PRINCIPAL_ID`
-empty, register/reuse an Entra app for SMTP auth, then redeploy with the SP object id —
-the template adds the "Communication and Email Service Owner" role assignment
-(Contributor is blocked by the landing zone's ABAC condition on role delegation).
+```bash
+export EPIC_EMAIL_PG_PASSWORD='...'        # Postgres admin, >= 8 chars
+export EPIC_EMAIL_LISTMONK_PASSWORD='...'  # listmonk epicadmin bootstrap, >= 8 chars
+export EPIC_EMAIL_SMTP_PRINCIPAL_ID='...'  # Entra SP object id (empty only on a first-ever pass)
 
-The container startup command is `sh /home/start.sh`; put this there via Kudu
-(App Service mangles quoted inline commands — exits 2 in <1s with no logs):
+# test
+az deployment group what-if -g c4b0a8-test-rg --subscription 7897ceb1-9a86-4639-87d7-7f9ff67142b3 \
+  -f email.bicep -p email.test.bicepparam
+az deployment group create  -g c4b0a8-test-rg --subscription 7897ceb1-9a86-4639-87d7-7f9ff67142b3 \
+  -f email.bicep -p email.test.bicepparam
 
-```sh
-#!/bin/sh
-cd /listmonk
-./listmonk --install --idempotent --yes && exec ./listmonk
+# dev
+az deployment group create  -g c4b0a8-dev-rg --subscription d2f8d048-2af3-44fd-81cc-858c040001f2 \
+  -f email.bicep -p email.dev.bicepparam
+```
+
+Both passwords carry `@minLength(8)`: an unset env var fails at submit time instead of
+booting a listmonk with no super-admin, whose public hostname then offers the
+account-creation page to the first visitor.
+
+Two passes only when the Entra app does not exist yet: deploy once with
+`EPIC_EMAIL_SMTP_PRINCIPAL_ID` empty, register/reuse an app for SMTP auth, then redeploy
+with the SP object id — the template adds the "Communication and Email Service Owner"
+role assignment (Contributor is blocked by the landing zone's ABAC condition on role
+delegation). The SP is tenant-wide, so any environment after the first is a single pass.
+
+### Seed start.sh (required — the app crash-loops without it)
+
+`appCommandLine` is `sh /home/start.sh` because App Service mangles quoted inline commands
+(exits 2 in <1s with no logs). The template cannot create that file: `/home` is the per-app
+Azure Files share and starts empty, so a fresh site restarts forever while ARM reports
+`Succeeded`. PUT `start.sh` from this directory via Kudu VFS **before first boot**, then
+`az webapp stop` / `start` (not `restart`).
+
+SCM basic auth is allowed on these sites today, but the AAD path is the estate default:
+
+```bash
+TOK=$(az account get-access-token --resource https://management.core.windows.net/ --query accessToken -o tsv)
+curl -X PUT -H "Authorization: Bearer $TOK" -H 'If-Match: *' \
+  --data-binary @start.sh \
+  https://epic-listmonk-<env>.scm.azurewebsites.net/api/vfs/start.sh
 ```
 
 ## Post-deploy settings (live in listmonk's DB, not bicep)
@@ -42,9 +76,16 @@ Settings → in the UI, or `PUT /api/settings`.
   `<ACSResourceName>.<EntraAppId>.<TenantId>`, password = Entra app client secret.
   Azure-managed domain is rate-capped 5/min, 10/hr (no raises; custom domain 30/min
   after CITZ DNS + support ticket).
-- OIDC (staff IDIR login): Keycloak client `epic-listmonk` in realm `eao-epic` on
-  loginproxy, redirect `<root_url>/auth/oidc`. Users must pre-exist in listmonk with
-  their IDIR email (auto-create off).
+- OIDC (staff IDIR login): Keycloak client `epic-listmonk` in realm `eao-epic`, redirect
+  `<root_url>/auth/oidc`. Users must pre-exist in listmonk with their IDIR email
+  (auto-create off). dev/test/prod loginproxy are **three separate Keycloak installations** —
+  a client in one realm does not exist in the others and its secret does not carry over, so
+  each environment needs its own SSO request. Issuer per environment:
+  `https://{dev,test,}loginproxy.gov.bc.ca/auth`. Today the client exists on
+  **dev.loginproxy only**.
+  Remove the dev redirect URI when the dev app is deleted: `azurewebsites.net` names are
+  released globally on delete, so a dangling `epic-listmonk-dev.azurewebsites.net` redirect
+  lets whoever registers that name next receive authorization codes for the realm.
 
 **Trap:** `PUT /api/settings` stores the masked `••` placeholder secrets literally.
 Every settings write — including UI-adjacent API automation — must re-send the real
