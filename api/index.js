@@ -11,6 +11,16 @@
 if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
   const { useAzureMonitor } = require('@azure/monitor-opentelemetry');
   useAzureMonitor({
+    // Performance counters off: they were 46.97 MB of a 84.68 MB/30d workspace ingest — the single
+    // largest table — and every one of them (CPU, memory, request rate) is already collected free
+    // as App Service platform metrics, which never enter the workspace and so are not subject to
+    // its dailyQuotaGb cap either. Paying per-GB to duplicate a free metric is the whole of the loss.
+    //
+    // Standard metrics stay ON deliberately. They are the next-largest table (AppMetrics, 30.67 MB)
+    // and killing them would save roughly a dollar a month, but they are what the Performance and
+    // Failures blades read — request duration, dependency duration, failure rate. Platform metrics
+    // do NOT cover those. Cutting them buys pennies and blinds the tool.
+    enablePerformanceCounters: false,
     instrumentationOptions: {
       winston: { enabled: true }
     }
