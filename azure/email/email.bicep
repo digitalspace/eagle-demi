@@ -24,8 +24,10 @@ targetScope = 'resourceGroup'
 @description('Target Azure region for regional resources (ACS itself is global + dataLocation).')
 param location string = 'canadacentral'
 
+// No default: every resource name interpolates this, so a deploy that forgets its params file
+// must fail at submit time rather than quietly building a second dev estate in someone else's RG.
 @description('Environment name (dev, test, prod)')
-param environmentName string = 'dev'
+param environmentName string
 
 @description('Existing landing-zone subnet for the Postgres private endpoint.')
 param privateEndpointSubnetId string
@@ -37,10 +39,15 @@ param appServiceSubnetId string
 param pgAdminLogin string = 'listmonk'
 
 @secure()
+@minLength(8)
 @description('Postgres admin password')
 param pgAdminPassword string
 
+// listmonk's installer treats an empty password as "skip the super admin" and boots anyway — the
+// first visitor to the public hostname is then offered the account-creation page. An unset env var
+// must fail the deployment, not ship an unclaimed admin.
 @secure()
+@minLength(8)
 @description('listmonk super-admin password (bootstrap; user: value of listmonkAdminUser)')
 param listmonkAdminPassword string
 
@@ -49,6 +56,14 @@ param listmonkAdminUser string = 'epicadmin'
 
 @description('Object ID of the Entra service principal used for SMTP auth. Empty skips the role assignment (first pass, before the app registration exists).')
 param smtpPrincipalId string = ''
+
+// Pinned deliberately. `latest` re-pulls on every instance create (plan restart, scale, platform
+// move), so an upstream release would swap the binary under a running staging environment at a time
+// nobody chose. v6.2.0 is what the dev prove-out ran, and theme/admin-custom.js keys off that Vue
+// bundle's internals. Bumping is a reviewed commit — and read listmonk's upgrade notes first, since
+// start.sh runs --install --idempotent, not --upgrade.
+@description('listmonk container image, tag pinned.')
+param listmonkImage string = 'listmonk/listmonk:v6.2.0'
 
 var tags = {
   Project: 'EPIC'
@@ -208,17 +223,16 @@ resource listmonk 'Microsoft.Web/sites@2023-12-01' = {
     httpsOnly: true
     virtualNetworkSubnetId: appServiceSubnetId
     siteConfig: {
-      linuxFxVersion: 'DOCKER|listmonk/listmonk:latest'
+      linuxFxVersion: 'DOCKER|${listmonkImage}'
       // Scheduled campaigns fire from listmonk's own in-process scheduler — the app must not be
       // unloaded between requests.
       alwaysOn: true
       vnetRouteAllEnabled: false
       // App Service's startup-command parser mangles quoted `sh -c "..."` strings (container
-      // exits 2 in <1s, before any output), so the install-then-run chain lives in
-      // /home/start.sh — seeded ONCE via Kudu VFS PUT (see azure/email/README note below):
-      //   #!/bin/sh
-      //   cd /listmonk
-      //   ./listmonk --install --idempotent --yes && exec ./listmonk
+      // exits 2 in <1s, before any output), so the install-then-run chain lives in /home/start.sh.
+      // The template cannot create it: /home is the per-app Azure Files share and starts EMPTY, so
+      // a fresh site crash-loops while ARM still reports Succeeded. Canonical copy is
+      // azure/email/start.sh — PUT it via Kudu VFS before first boot (see README "Seed start.sh").
       appCommandLine: 'sh /home/start.sh'
       appSettings: [
         {
