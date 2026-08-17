@@ -8,17 +8,28 @@ param environmentName string
 // overspend run for months without a word, and a budget set at the run rate would be permanently
 // in alert — an alert that always fires is not a control.
 //
-// MEASURED 2026-08-12: 18.71 CAD spent in the first 12 days of August on c4b0a8-test
-// (`az consumption budget list` → currentSpend), i.e. a run rate near 47 CAD/month. That is the
-// number these defaults are sized against, and it supersedes the old comment here claiming Azure
-// AI Search Basic alone was a fixed ~75-81 CAD/month — the whole resource group, AI Search
-// included, is not currently costing that. Re-measure before trusting either figure.
+// RE-MEASURED 2026-08-17, and the previous figure here was wrong by 7x. It read 18.71 CAD over
+// "the first 12 days of August" and inferred ~47 CAD/month — but c4b0a8-test-rg did not exist
+// before 2026-08-10, so that average spread ~2 days of real billing across 12. The 150 default it
+// produced was breached the moment the estate finished deploying.
+//
+// Actual, from Cost Management ActualCost grouped by ResourceId (NOT `currentSpend`, which reports
+// 0.0 on both budgets here and cannot be trusted): daily 10.40-13.25 CAD over Aug 11-15, mean
+// 11.44, i.e. a run rate near 350 CAD/month. It is dominated by standing charges that no amount of
+// tuning removes — 2x Azure AI Search Basic at 188 (deliberately kept as two services until DEMI
+// reaches production), Defender for Cloud at ~82, Front Door base fee 42, four private endpoints
+// 37. Application compute is about 5% of it.
+//
+// Sized at 400: above the ~350 run rate plus the Defender-for-Storage cut still pending a
+// landing-zone ruling, and still low enough to catch a runaway indexer or a left-on resource. Do
+// not lower it back toward the run rate — an alert that fires every month is not a control, which
+// is the same reason the annual ceiling below is a separate number.
 //
 // CAD, not USD: a Consumption Budget is denominated in the subscription's BILLING currency, which
 // this one reports as CAD. The parameter name cannot pick a currency, so mislabelling it here is
 // how a 100 ceiling gets read as ~137.
-@description('Monthly anomaly guard in CAD. Roughly 3x the observed run rate: high enough not to cry wolf on normal variance, low enough to catch a runaway indexer, a log loop or a left-on resource within days rather than at year end.')
-param budgetAmount int = 150
+@description('Monthly anomaly guard in CAD. Set above the measured run rate (~350 CAD/month as of 2026-08-17), not a multiple of it: this estate is mostly standing charges, so the headroom that matters is for a runaway indexer or a left-on resource, not for normal variance.')
+param budgetAmount int = 400
 
 @description('The absolute annual ceiling in CAD. Not a target - spending anywhere near it should be a decision somebody made on purpose, which is why the alerts below start at half.')
 param annualCeiling int = 50000

@@ -75,8 +75,8 @@ param minioBucketName string = 'eagle-demi'
 @description('Key prefix namespacing this environment inside the bucket.')
 param minioKeyPrefix string = ''
 
-@description('Monthly anomaly guard in CAD — the subscription\'s billing currency. Roughly 3x the measured run rate (18.71 CAD over 12 days of August 2026). The absolute annual ceiling is a separate parameter; see cost-budget.bicep for why one number cannot be both.')
-param budgetAmount int = 150
+@description('Monthly anomaly guard in CAD — the subscription\'s billing currency. Sized above the measured run rate of ~350 CAD/month (Cost Management, 2026-08-17); the old 150 came from a 12-day average taken before the resource group had finished billing. The absolute annual ceiling is a separate parameter; see cost-budget.bicep for why one number cannot be both.')
+param budgetAmount int = 400
 
 @description('Absolute annual ceiling in CAD. Not a target — see cost-budget.bicep.')
 param annualCeiling int = 50000
