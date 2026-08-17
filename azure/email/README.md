@@ -110,9 +110,19 @@ Paste into Settings → Appearance:
 
 Assets referenced as `/uploads/...` must exist in listmonk media (Media page):
 `theme/bc-crest-navy.png` plus `BCSans-Regular.woff2` / `BCSans-Bold.woff2`
-(copies live in `eagle-public/src/assets/fonts/BCSans/`). Set
-`upload.filesystem.upload_path` = `/home/uploads` first so uploads survive container
+(copies live in `eagle-public/src/assets/fonts/BCSans/`) and
+`bcgov-header-vert-SM.png` for the favicon (from `eagle-public/src/assets/images/`).
+Set `upload.filesystem.upload_path` = `/home/uploads` first so uploads survive container
 rebuilds, and point Settings → General logo/favicon URLs at the crest.
+
+listmonk does **not** create that directory — the first upload fails
+`500 open /home/uploads/<file>: no such file or directory`. Create it once via Kudu
+(trailing slash makes a directory):
+
+```bash
+curl -X PUT -H "Authorization: Bearer $TOK" \
+  https://epic-listmonk-<env>.scm.azurewebsites.net/api/vfs/uploads/
+```
 
 Admin CSS notes: the app stylesheet loads *after* custom.css, so contested props need
 `!important`; the navbar logo is a data-URI SVG baked into the Vue bundle, swapped via
