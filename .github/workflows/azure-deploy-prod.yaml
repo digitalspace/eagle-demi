@@ -1,0 +1,244 @@
+# =============================================================================
+# Deploy DEMI to Azure production
+# =============================================================================
+# Dispatch-only, from a released tag. `azure-deploy-staging-api.yaml` is the sibling this is
+# modelled on — read it for the packaging and zipdeploy reasoning, which is unchanged here.
+#
+# WHAT IS DIFFERENT FROM STAGING, and why this is a separate file rather than an input on that
+# one: staging deploys on every push to `main`. A prod deploy takes a version, deploys the tag
+# and nothing else, and passes an approval gate first. Merging the two would put a prod deploy
+# one dropdown position away from a test deploy. There is no `push:` trigger here and there must
+# never be one.
+#
+# ONE REAL TARGET TODAY: the extractor Function App. Everything else in the prod cutover is
+# either ARM — which DEMI's posture bars from CI, see the credential note below — or VNet-bound,
+# and a GitHub runner has no route into the VNet. `demi-api-prod` is the second target and wants
+# the identical shape, so it is a second job here rather than a second workflow; it is gated on
+# the app existing and does nothing until `demi.eao.gov.bc.ca` is stood up.
+#
+# ── PREREQUISITES, none of which this workflow creates ───────────────────────────────────────
+# Created by hand, once:
+#   in Azure:
+#     - resource group `rg-demi-prod`
+#     - the extractor, deployed from `azure/modules/extractor.bicep` — see its header for the
+#       standalone `az deployment group create` and the traps around it. THIS WORKFLOW SHIPS
+#       CODE ONLY; it never runs an ARM deployment.
+#     - UAMI `demi-cicd-prod`, holding **Website Contributor on the extractor Function App
+#       ALONE**. Nothing at resource-group scope, nothing on `demi-search-prod`, no Storage
+#       roles. That is what makes "CI cannot run an ARM deployment" a fact rather than a
+#       convention. The role assignment cannot be created until the Function App exists, because
+#       it is scoped to that resource.
+#     - a federated credential `gh-env-prod` on `demi-cicd-prod`. Subject
+#       `repo:digitalspace/eagle-demi:environment:prod` — READ from
+#       `gh api repos/digitalspace/eagle-demi/actions/oidc/customization/sub` (the repository uses
+#       the default subject claim), not composed by hand. Issuer
+#       `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`.
+#       Declaring `environment: prod` below is what produces that subject; rename the environment
+#       and Azure Login fails with AADSTS700213.
+#     - KEEP THIS IDENTITY SEPARATE FROM ANY RUNTIME IDENTITY. eagle-demi is a PUBLIC repository:
+#       a federated credential hung off the runtime UAMI would let any workflow in it mint a token
+#       carrying Cosmos and AI Search data access.
+#   in GitHub, on environment `prod`:
+#     - required reviewer, so a dispatch waits for a human
+#     - a deployment branch/tag policy: custom, one rule of type `tag`, pattern `v*`. That
+#       enforces "deploy from a tag, never a branch" at the platform, before the runner starts.
+#     - secrets AZURE_CLIENT_ID / AZURE_TENANT_ID, vars AZURE_SUBSCRIPTION_ID /
+#       AZURE_RESOURCE_GROUP (`rg-demi-prod`). A missing AZURE_CLIENT_ID fails at Azure Login and
+#       reads as an auth problem rather than a configuration one.
+# =============================================================================
+
+name: Deploy DEMI to Azure production
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Released tag to deploy (e.g. v1.2.3). Publish the draft release first — a draft mints no tag.'
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-azure-prod
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  # Still `eagle-extractor-*`: the code moved repositories, the deployed app did not. See
+  # `azure/modules/extractor.bicep`.
+  EXTRACTOR_APP_NAME: eagle-extractor-prod
+  API_APP_NAME: demi-api-prod
+
+jobs:
+  deploy-extractor:
+    name: Deploy extractor (Azure Function App)
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 25
+    steps:
+      # Format first, because it decides what gets checked out below. The environment's tag policy
+      # already refuses anything that is not `v*`; this says WHICH shape of `v*` is a release.
+      - name: Validate version format
+        # Through the environment, never interpolated into the script body: `${{ inputs.version }}`
+        # is substituted into the text BEFORE bash starts, so the regex below would be validating a
+        # string that has already had its chance to be shell.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="$INPUT_VERSION"
+          if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Version must be in the format v1.2.3, got '$VERSION'"
+            exit 1
+          fi
+
+      # `ref:` is the whole point: without it the checkout is the branch the dispatch was fired
+      # from, and the job would ship `main` while claiming to deploy a tag. It also replaces the
+      # separate "verify the git tag exists" step the other repos run — checkout fails on a ref
+      # that does not exist, which is the same check without a second way to be wrong.
+      #
+      # This is the one place to deliberately NOT copy eao-nginx, whose deploy job checks out the
+      # default branch and ships master's chart with a promoted image.
+      #
+      # fetch-depth: 0 for the same reason as staging — BUILD_ID comes from `git describe --tags`,
+      # and at depth 1 the tag refs can arrive with no ancestry path from HEAD.
+      - name: Checkout the tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.version }}
+          fetch-depth: 0
+
+      - name: Azure Login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # `extractor/` zipped AT THE ROOT: function_app.py, extract.py, ocr.py, requirements.txt,
+      # host.json. Nothing else — `test_extract.py` and `__pycache__` are developer files and the
+      # remote build would carry them into the app.
+      - name: Package the extractor
+        run: |
+          cd extractor
+          zip -r /tmp/extractor.zip function_app.py extract.py ocr.py requirements.txt host.json
+          unzip -l /tmp/extractor.zip
+
+      # `config-zip`, not `scripts/deploy-azure.sh`. That script is demi-api's: it POSTs to Kudu
+      # and then polls `/api/config` for a BUILD_ID that only the Node app serves. None of it
+      # applies here — a Flex Consumption app has no Kudu wwwroot to merge into, it publishes to
+      # the deployment blob container declared in `azure/modules/extractor.bicep`, and the remote
+      # build is what installs pypdfium2 and rapidocr-onnxruntime from `requirements.txt`.
+      - name: Deploy the extractor
+        run: |
+          az functionapp deployment source config-zip \
+            -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+            -n ${{ env.EXTRACTOR_APP_NAME }} \
+            --src /tmp/extractor.zip
+
+      # The deploy reporting success is not the same fact as the function being registered. A
+      # missing `extensionBundle` in host.json loads the app happily and never registers
+      # `queueTrigger`, so the app runs and the queue never drains — which is indistinguishable
+      # from "no documents arrived" unless something asserts the trigger exists.
+      #
+      # Trigger sync is asynchronous after a Flex publish, so poll rather than read once.
+      - name: Verify the queue trigger is registered
+        run: |
+          for i in {1..10}; do
+            if az functionapp function list -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+                 -n ${{ env.EXTRACTOR_APP_NAME }} --query "[].name" -o tsv 2>/dev/null \
+                 | grep -q extract_document; then
+              echo "✓ extract_document is registered"
+              exit 0
+            fi
+            echo "Attempt $i: not registered yet, waiting..."
+            sleep 20
+          done
+          echo "❌ extract_document never appeared. The app is deployed and the queue will not drain."
+          echo "   First thing to check is host.json's extensionBundle — without it the host logs"
+          echo "   \"The binding type(s) 'queueTrigger' are not registered\" and nothing else."
+          exit 1
+
+      - name: Report extractor failure to job summary
+        if: failure()
+        run: |
+          echo "### ❌ Extractor deployment failed" >> $GITHUB_STEP_SUMMARY
+          echo "Check the step logs above for packaging, zipdeploy or trigger-registration errors." >> $GITHUB_STEP_SUMMARY
+
+  deploy-api:
+    name: Build & Deploy API (Azure Function App)
+    runs-on: ubuntu-latest
+    environment: prod
+    timeout-minutes: 30
+    steps:
+      - name: Validate version format
+        # Through the environment, never interpolated into the script body: `${{ inputs.version }}`
+        # is substituted into the text BEFORE bash starts, so the regex below would be validating a
+        # string that has already had its chance to be shell.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="$INPUT_VERSION"
+          if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Version must be in the format v1.2.3, got '$VERSION'"
+            exit 1
+          fi
+
+      - name: Checkout the tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.version }}
+          fetch-depth: 0
+
+      - name: Azure Login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # `demi-api-prod` does not exist yet — it activates with `demi.eao.gov.bc.ca`, an App
+      # Service plan and a Cosmos account, all created by hand. Until then the rest of this job
+      # skips rather than failing the workflow, so a green extractor deploy is not buried under a
+      # red job for an app nobody has stood up.
+      #
+      # The probe cannot tell "does not exist" from "the CI identity holds no role on it", and it
+      # does not need to: today both mean there is nothing here to deploy.
+      - name: Does demi-api-prod exist yet?
+        id: probe
+        run: |
+          if az webapp show -g ${{ vars.AZURE_RESOURCE_GROUP }} -n ${{ env.API_APP_NAME }} \
+               --query name -o tsv >/dev/null 2>&1; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "⏭️  ${{ env.API_APP_NAME }} not present — skipping the API deploy." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Setup Node.js
+        if: steps.probe.outputs.found == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # Dependencies only. Packaging belongs to `scripts/package-api.py`, which the deploy script
+      # calls — same as staging.
+      - name: Install Dependencies
+        if: steps.probe.outputs.found == 'true'
+        run: |
+          corepack enable
+          yarn install --immutable
+
+      # `scripts/deploy-azure.sh`, for the reason its own header gives: the CLI's exit code is not
+      # the same fact as the deployment succeeding, and this script polls the deployment record
+      # and then proves the NEW build is the one answering.
+      - name: Deploy API
+        if: steps.probe.outputs.found == 'true'
+        run: ./scripts/deploy-azure.sh api ${{ vars.AZURE_RESOURCE_GROUP }}
+
+      - name: Report API failure to job summary
+        if: failure()
+        run: |
+          echo "### ❌ API deployment failed" >> $GITHUB_STEP_SUMMARY
+          echo "Check step logs above for details on packaging or Azure Function App deployment errors." >> $GITHUB_STEP_SUMMARY
