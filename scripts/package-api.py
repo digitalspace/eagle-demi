@@ -34,8 +34,8 @@ def package_api(repo_root, zip_path):
     # (they answered 404 or hung; see the comment there). It is excluded rather than merely unused
     # because zipdeploy MERGES into wwwroot: packaging a stale bundle once leaves it on the box for
     # good, and this packager runs from whatever working tree the operator happens to have.
-    root_exclude_dirs = {".git", ".claude", "frontend", "extraction-host", ".angular", "dist",
-                         "coverage", ".deploy_archives", "tmp", "__pycache__",
+    root_exclude_dirs = {".git", ".claude", "frontend", "extraction-host", "extractor", ".angular",
+                         "dist", "coverage", ".deploy_archives", "tmp", "__pycache__",
                          "test", "azure", ".github", ".vscode", "scripts", "public"}
 
     # Root-level files with no runtime role. `Dockerfile` describes a container Azure does not build,

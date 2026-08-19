@@ -262,7 +262,11 @@ deploy_frontend() {
   # infer the environment from the storage account — the name is a uniqueString — but the resource
   # group argument carries it, so assert rather than rewrite: CI has already done the rewrite and
   # passes, a hand deploy stops here instead of shipping dev config to staging.
-  local env="${RESOURCE_GROUP#*-}"; env="${env%-rg}"
+  # Two resource-group shapes in this estate, and the environment is the LAST field in both:
+  # `c4b0a8-test-rg` (subscription prefix, `-rg` suffix) and `rg-demi-prod` (prod, no suffix).
+  # Dropping the FIRST field instead — what this did until 2026-08-19 — yields `demi-prod` on
+  # prod and then asserts against `demi-api-demi-prod`, an app that cannot exist.
+  local env="${RESOURCE_GROUP%-rg}"; env="${env##*-}"
   if ! grep -qF "https://demi-api-${env}.azurewebsites.net" "$REPO_ROOT/frontend/dist/env.js"; then
     echo -e "${RED}✗ dist/env.js does not point at demi-api-${env} — this bundle would call the wrong API${NC}" >&2
     echo -e "${RED}  Apply the rewrites from the 'Point env.js at the test environment' step in${NC}" >&2
