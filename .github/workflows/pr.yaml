@@ -54,6 +54,12 @@ jobs:
       - name: Run API tests
         run: yarn test
 
+      # The extractor is Python in a Node repo, so `yarn test` cannot see it. Its own suite checks
+      # `decide()` against extraction-host/worker.py over 3,000 generated inputs — the parity that
+      # keeps net-new chunks landing on the same boundaries as the migrated corpus.
+      - name: Run extractor tests
+        run: python3 extractor/test_extract.py
+
   test-frontend:
     name: Test & Build Frontend
     runs-on: ubuntu-latest
@@ -101,6 +107,12 @@ jobs:
       # impossible rather than merely unauthenticated.
       - name: Validate Bicep Template
         run: az bicep build --file ./azure/main.bicep
+
+      # extractor.bicep is deliberately NOT wired into main.bicep — it is deployed on its own into
+      # the target resource group — so compiling main.bicep alone would let a broken template reach
+      # a hand-run production deploy unchallenged.
+      - name: Validate Extractor Module
+        run: az bicep build --file ./azure/modules/extractor.bicep
 
       - name: Report Validation Failure to Job Summary
         if: failure()

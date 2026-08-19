@@ -1,0 +1,14 @@
+# pypdfium2 probes, extracts the text layer, and renders pages for OCR. rapidocr-onnxruntime is the
+# OCR engine — ONNX Runtime and pure wheels, ~250 MB installed. docling and torch are deliberately
+# absent: docling's own default OCR engine IS RapidOCR, so the 1 GB of CUDA-capable torch beneath it
+# would buy nothing this pipeline uses.
+#
+# rapidocr-onnxruntime depends on `opencv-python`, which links libGL.so.1. Pinning
+# `opencv-python-headless` here does NOT displace it — pip installs both and the non-headless build
+# wins. That is fine because the Functions Python 3.11 image ships libGL.so.1 (verified against
+# mcr.microsoft.com/azure-functions/python:4-python3.11). If a future base image drops it, `import
+# cv2` fails at worker start and the fix is to vendor site-packages rather than to add a pin.
+azure-functions
+pypdfium2
+rapidocr-onnxruntime
+requests
