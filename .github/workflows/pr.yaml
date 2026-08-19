@@ -57,6 +57,18 @@ jobs:
       # The extractor is Python in a Node repo, so `yarn test` cannot see it. Its own suite checks
       # `decide()` against extraction-host/worker.py over 3,000 generated inputs — the parity that
       # keeps net-new chunks landing on the same boundaries as the migrated corpus.
+      #
+      # Both steps below are load-bearing. ubuntu-latest ships a python3 but which one drifts with
+      # the image, and `extract.py` imports `requests` at module load — without it the selftest dies
+      # on the import, before it has asserted anything.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install extractor test dependencies
+        run: pip install requests
+
       - name: Run extractor tests
         run: python3 extractor/test_extract.py
 
