@@ -30,6 +30,7 @@
  *   node src/scripts/export-chunks-to-eagle.js --target <url> --key <ingest-key> [--live]
  *                                              [--limit N] [--batch 1000] [--resume <token>]
  *   node src/scripts/export-chunks-to-eagle.js --count
+ *   node src/scripts/export-chunks-to-eagle.js --dump /path/corpus.jsonl        # backup, sends nothing
  *
  *   --target   eagle-search base URL, e.g. https://eagle-search-api-dev.azurewebsites.net
  *              Phase 7 points this at test or prod; nothing else changes.
@@ -38,7 +39,20 @@
  *   --resume   continuation token from a previous run's checkpoint line
  *   --count    print the total chunk count and exit — the parity target for the backfill gate,
  *              read over the same connection the export uses rather than a separate hand-run query
+ *   --dump     also append every chunk read to this file as JSONL, one object per line
+ *
+ * WHY --dump EXISTS. The header above is not reassurance, it is a hazard notice: this corpus is the
+ * only extracted copy of the text, and `demi-cosmos-test`'s backup is Periodic on an 8-hour
+ * retention — measured 2026-08-19, not the Continuous7Days that TODO.md claims (that reading was
+ * taken on `demi-cosmos-dev`, which no longer exists). An 8-hour undo on an irreplaceable corpus is
+ * the real exposure, and a readable second copy is the cheap fix.
+ *
+ * `--dump` needs neither `--target` nor `--live`, so a backup run is a pure read: Cosmos in, a file
+ * out, nothing sent anywhere. It composes with `--resume` and `--limit`, and appends rather than
+ * truncates so a resumed run continues the same file.
  */
+
+const fs = require('fs');
 
 const cosmos = require('../db/cosmos-nosql');
 
@@ -46,7 +60,7 @@ const CONTAINER = 'chunks';
 const DEFAULT_BATCH = 1000;
 
 function parseArgs(argv) {
-  const args = { live: false, count: false, limit: Infinity, batch: DEFAULT_BATCH, target: '', key: '', resume: undefined };
+  const args = { live: false, count: false, limit: Infinity, batch: DEFAULT_BATCH, target: '', key: '', resume: undefined, dump: '' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
@@ -56,6 +70,7 @@ function parseArgs(argv) {
     else if (a === '--limit') args.limit = parseInt(argv[++i], 10);
     else if (a === '--batch') args.batch = parseInt(argv[++i], 10);
     else if (a === '--resume') args.resume = argv[++i];
+    else if (a === '--dump') args.dump = argv[++i];
   }
   return args;
 }
@@ -110,10 +125,21 @@ const CHECKPOINT_EVERY = 10;
     return;
   }
 
-  if (!args.target || !args.key) {
-    console.error('--target and --key are required');
+  // A --dump-only run pushes nothing, so it needs no destination. Requiring one would mean quoting
+  // a live ingest key just to take a backup.
+  if (!args.dump && (!args.target || !args.key)) {
+    console.error('--target and --key are required (or use --dump for a backup-only run)');
     process.exit(1);
   }
+  if (args.live && (!args.target || !args.key)) {
+    console.error('--live needs --target and --key');
+    process.exit(1);
+  }
+
+  // Append, never truncate: a resumed run continues the same file, and an accidental re-run cannot
+  // erase the copy it was meant to protect.
+  const dumpStream = args.dump ? fs.createWriteStream(args.dump, { flags: 'a' }) : null;
+  if (dumpStream) console.log(`dumping every chunk read to ${args.dump} (append)`);
   if (!args.live) console.log('DRY RUN — nothing will be sent. Add --live to push.');
   console.log(`target: ${args.target}   batch: ${args.batch}   limit: ${args.limit}`);
 
@@ -156,6 +182,14 @@ const CHECKPOINT_EVERY = 10;
     const slice = page.items.slice(0, Math.max(0, args.limit - read));
     read += slice.length;
 
+    // Written from the page as READ, not from the push payload: this is a copy of the source of
+    // record, so it keeps every selected field regardless of what eagle-search happens to accept.
+    if (dumpStream && slice.length) {
+      const ok = dumpStream.write(slice.map((c) => JSON.stringify(c)).join('\n') + '\n');
+      // 1.13M rows outruns the default 16 KB buffer; without this the process grows until it dies.
+      if (!ok) await new Promise((r) => dumpStream.once('drain', r));
+    }
+
     // Settle the previous push before starting this one, so at most one batch is ever unaccounted.
     await settle();
     if (args.live && slice.length) {
@@ -181,6 +215,11 @@ const CHECKPOINT_EVERY = 10;
   } while (token);
 
   await settle();
+
+  if (dumpStream) {
+    await new Promise((r) => dumpStream.end(r));
+    console.log(`dump written: ${args.dump} (${fs.statSync(args.dump).size} bytes)`);
+  }
 
   const mins = (Date.now() - started) / 60000;
   console.log(
