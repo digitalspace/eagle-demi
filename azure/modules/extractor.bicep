@@ -28,11 +28,21 @@
 //   az deployment group create -g rg-demi-prod -f azure/modules/extractor.bicep \
 //     -p location=canadacentral environmentName=prod \
 //        ingestUrl=https://eagle-search-api-prod.azurewebsites.net \
-// NEVER `ingestKey=<key>` on the command line — that puts a production WRITE credential into argv,
-// /proc and shell history, from a public repo. It is `@secure()`, so pass it through a
-// `.bicepparam` reading `readEnvironmentVariable('INGEST_KEY')`, the same shape
-// eagle-search/azure/main.searchprod.bicepparam uses for exactly this parameter.
 //        eagleApiBase=https://projects.eao.gov.bc.ca appInsightsConnectionString=<conn>
+//
+// NEVER `ingestKey=<key>` on that command line — it puts a production WRITE credential into argv,
+// /proc and shell history, from a public repo. It is `@secure()`, so pass it through a
+// `.bicepparam` reading `readEnvironmentVariable(...)` — the shape
+// eagle-search/azure/main.searchprod.bicepparam uses for the same key, as EAGLE_SEARCH_INGEST_KEY.
+//
+// KNOWN, AND DELIBERATE FOR PHASE 1: `INGEST_KEY` lands in plain app settings below, and Website
+// Contributor — what `azure-deploy-prod.yaml` grants `demi-cicd-prod` on this app — carries
+// `Microsoft.Web/sites/config/list/action`. So CI can READ that key, and the storage account key,
+// from a public repo, gated by the `prod` environment's required reviewer. The workflow header's
+// isolation claim is about ARM reach and is true as far as it goes; it does not mean CI holds no
+// data credential. FOLLOW-UP: a Key Vault reference `@Microsoft.KeyVault(SecretUri=...)` with
+// `Key Vault Secrets User` on this app's own identity removes both that read and the hand-run
+// deployment's need to carry the secret at all.
 //
 // The code then goes up as a zip with `extractor/` AT THE ROOT — function_app.py, extract.py,
 // ocr.py, requirements.txt, host.json. Two of the three traps live in that zip rather than here,
@@ -73,6 +83,13 @@ var planName = 'eagle-extractor-plan-${environmentName}'
 
 // The queue lives in the same account the Function App uses for its own bookkeeping. A second
 // account would double the cost and the naming for one queue.
+// FOLLOW-UP, tracked rather than silent: this module authenticates to storage with ACCOUNT KEYS —
+// `AzureWebJobsStorage` and `DEPLOYMENT_STORAGE_CONNECTION_STRING` below are both connection
+// strings — in a repo whose every other service is keyless, and whose `ai-search.bicep` header
+// argues for Basic over Free precisely because Free "supports neither a managed identity nor a
+// shared private link". Flex Consumption supports identity for both. It came over from eagle-search
+// unchanged and this was not the change to rewrite it in, but it must not become the prod pattern
+// by default.
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
   location: location
@@ -154,7 +171,11 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       // is the only size that gets two of them. OCR is the only thing here that needs one — the
       // text path finishes a document in a second. Measured peak RSS on a 21-page scan is ~620 MB.
       scaleAndConcurrency: {
-        maximumInstanceCount: 40
+        // 8, not 40. The comment above is the reason: at ~3.6 documents/day one instance does
+        // the work, and a ceiling is only a guard if it bounds something. 8 leaves room for a
+        // burst — a publish sweep in eagle-admin enqueues one message per document — and still
+        // bounds the bill. The 60K-document backfill is `extraction-host/`'s job, not this app's.
+        maximumInstanceCount: 8
         instanceMemoryMB: 4096
       }
       runtime: {

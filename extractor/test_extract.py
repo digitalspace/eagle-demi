@@ -170,7 +170,10 @@ if pdfs:
         check("a truncated document says so", capped.get("truncatedAtPage") == 1, str(capped))
         check("and reports its real length", capped.get("pages", 0) > 1, str(capped))
     except ImportError:
-        pass
+        # Same reason as the OCR block above: rapidocr is a deployment dependency, and a developer
+        # without it should get the rest of the suite rather than a red run. Recorded rather than
+        # swallowed, so the summary line says which cases did not run.
+        ocr_note = f"{ocr_note}; truncation cases skipped too"
 
 # ── the outcome record ───────────────────────────────────────────────────────
 # The extractor's own log line is lost on short invocations (measured: two ~1 s runs on a cold Flex
@@ -225,6 +228,48 @@ check("host.json declares an extension bundle", "extensionBundle" in host,
       "without it queueTrigger is not registered and the queue never drains")
 check("queue messages are plain text", host["extensions"]["queues"].get("messageEncoding") == "none",
       "base64 is the bundle default, and a 24-char ObjectId decodes to garbage instead of failing")
+
+# ── a transient download failure must not become a permanent skip ────────────
+# `function_app.py` re-raises only when `route is None`, so a recorded skip CONSUMES the message.
+# Nothing re-enqueues afterwards — eagle-search queues on insert and on the publish transition, and
+# a document that was already published when eagle-api hiccuped gets neither. So the difference
+# between "skip" and "raise" here is the difference between losing an attempt and losing a document.
+class _FakeGet:
+    def __init__(self, exc=None, status=200):
+        self.exc, self.status = exc, status
+
+    def __call__(self, url, **kwargs):
+        if self.exc:
+            raise self.exc
+        raise AssertionError("unreachable in these cases")
+
+
+real_get = extract.requests.get
+try:
+    # 404 — genuinely not public. A permanent fact about the document, recorded and consumed.
+    extract.requests.get = _FakeGet(exc=FileNotFoundError("not available publicly (HTTP 404): d4"))
+    row = extract.extract_one("d4")
+    check("a 404 is recorded as a skip", row.get("route") == "skip", str(row))
+
+    # Oversize — also permanent.
+    extract.requests.get = _FakeGet(exc=ValueError("larger than MAX_FILE_MB=300"))
+    row = extract.extract_one("d5")
+    check("an oversize file is recorded as a skip", row.get("route") == "skip", str(row))
+
+    # A 503, a timeout, a reset. Transient, and must reach the poison queue instead.
+    for exc, label in [
+        (ConnectionError("connection reset"), "a connection reset"),
+        (RuntimeError("503 Server Error: Service Unavailable"), "a 5xx"),
+    ]:
+        extract.requests.get = _FakeGet(exc=exc)
+        try:
+            row = extract.extract_one("d6")
+            check(f"{label} must raise, not skip", False, f"returned {row}")
+        except Exception as e:  # noqa: BLE001
+            check(f"{label} raises", not isinstance(e, AssertionError), repr(e))
+finally:
+    extract.requests.get = real_get
+
 
 if FAILURES:
     print("FAILED:")

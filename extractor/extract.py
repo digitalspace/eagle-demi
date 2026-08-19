@@ -276,7 +276,17 @@ def extract_one(document_id, dry_run=False):
 
     try:
         path, size = download(document_id)
-    except Exception as e:  # noqa: BLE001
+    except (FileNotFoundError, ValueError) as e:
+        # Not public, or larger than MAX_FILE_MB. Both are permanent facts about the document, so
+        # they are recorded and the message is consumed.
+        #
+        # ANYTHING ELSE MUST RAISE. A timeout, a 5xx, a connection reset — `requests` raises those
+        # and `raise_for_status()` raises the rest — is transient, and recording it as `skip` loses
+        # the document rather than the attempt: `function_app.py` only re-raises when `route is
+        # None`, so a recorded skip consumes the message, and nothing ever re-enqueues. eagle-search
+        # queues on insert and on the publish transition; a document that was already published when
+        # eagle-api hiccuped gets neither. An eagle-api restart mid-drain would silently mark the
+        # whole batch skipped.
         row.update(route="skip", reason=str(e))
         return row
 

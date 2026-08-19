@@ -36,6 +36,7 @@ param peSubnetId string = ''
 param apiPrincipalId string
 
 @description('Semantic ranker plan. Defaults to what every existing service already has, so an omitted parameter cannot change one; prod passes \'disabled\'.')
+@allowed(['disabled', 'free', 'standard'])
 param semanticSearch string = 'free'
 
 // Basic, not Free: the Free tier supports neither a managed identity nor a shared private link,
