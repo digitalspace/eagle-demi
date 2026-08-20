@@ -49,18 +49,41 @@ sshpass -p 'Docker!' ssh -c aes256-cbc -m hmac-sha1 -p 50123 root@127.0.0.1
 `-c aes256-cbc` is required — App Service offers only legacy CBC ciphers, which OpenSSH 9+ disables
 by default (`no matching cipher found`).
 
-Four things any script run this way needs:
+Four things to know before running a script this way:
 
 1. **App settings are injected into the app process, not the SSH shell.** Read them from
-   `/proc/1/environ`.
-2. **`globalThis.crypto` must be shimmed.** `src/app.js` does it for the web app, but a standalone
-   script never loads `app.js`, and the Azure SDKs need it on Node 22.
+   `/proc/1/environ` — and that includes `IDENTITY_ENDPOINT` and `IDENTITY_HEADER`, not just the
+   `COSMOS_*` pair. App Service serves managed identity through those two variables, so without them
+   `@azure/identity` falls through to IMDS and fails with five `CredentialUnavailableError` lines
+   about VS Code, the Azure CLI and PowerShell — none of which is the actual problem:
+
+   ```bash
+   export $(tr '\0' '\n' < /proc/1/environ \
+     | grep -E '^(COSMOS_ENDPOINT|COSMOS_NOSQL_DATABASE|AZURE_CLIENT_ID|IDENTITY_ENDPOINT|IDENTITY_HEADER)=')
+   ```
+2. **`globalThis.crypto` no longer needs shimming.** The container is Node 22, which has it natively;
+   `src/app.js` still shims it defensively. Measured 2026-08-20 — earlier advice here said a
+   standalone script must do it itself.
 3. **Run with `--max-old-space-size=224`.** The container has ~1.85 GB with ~330 MB free, and Node's
    default heap gets the process OOM-killed with no error in the log — it simply vanishes.
 4. **`NODE_PATH=/home/site/wwwroot/node_modules`** if you are running from anywhere else in the
-   container.
+   container. `wwwroot` itself is **read-only** (`WEBSITE_RUN_FROM_PACKAGE`), so anything a script
+   writes goes under `/home` — which has 30 GB.
 
-The `_seedwrap.js` / `_purgewrap.js` pattern in this repo handles 1–3.
+**A run longer than ~20 minutes needs `alwaysOn`.** App Service unloads an idle app and recycles the
+container, which kills a detached `nohup` run with it. `demi-api-test` ships with `alwaysOn = false`:
+
+```bash
+az webapp config set -g c4b0a8-test-rg -n demi-api-test --always-on true
+az webapp config set -g c4b0a8-test-rg -n demi-api-test --always-on false  # when the run ends
+```
+
+Turn it back off afterwards. `azure/modules/api-web-app.bicep` sets no `alwaysOn` at all, so leaving
+it on is drift the template will not correct and the next reader cannot see.
+
+The `_seedwrap.js` / `_purgewrap.js` names that used to be cited here are **not in this repo** —
+they were written by hand in the container and are gone with it. The `export $(...)` line above
+is the whole pattern; no wrapper is needed now that the crypto shim is not.
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
@@ -473,10 +496,12 @@ whatever principal the CLI session holds, a human locally and the managed identi
 `preflight_identity` prints that principal and refuses to run under `GITHUB_ACTIONS` as anything but
 a service principal, so a deploy authenticated as a person fails instead of proceeding.
 
-**There is no prod deploy workflow yet.** The prod-era workflow was deleted on 2026-08-05 while
-`c4b0a8-prod` holds nothing; it gets rebuilt from the staging pair when prod becomes real, deploying
-a tag verified on staging rather than a branch. Keeping dead deploy paths in a **public** repo is
-liability without benefit.
+**The prod deploy workflow is back**: `.github/workflows/azure-deploy-prod.yaml`,
+`workflow_dispatch` only, taking a `version` and checking out `refs/tags/<version>` — a tag verified
+on staging, never a branch. Both jobs declare `environment: prod`, which is what produces the OIDC
+subject `repo:digitalspace/eagle-demi:environment:prod`; renaming the environment breaks the
+federated credential. An earlier note here said no prod workflow existed, which was true only
+between 2026-08-05 and the prod estate being built.
 
 Recreating them is not a copy job. Each environment needs its own managed identity, its own federated
 credential — subject `repo:digitalspace/eagle-demi:environment:test` or `:environment:prod`, matching
