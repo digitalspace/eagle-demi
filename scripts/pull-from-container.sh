@@ -10,8 +10,9 @@
 #     export that way produced 568 MB of a 992 MB file and reported success.
 #
 # So: split remotely, pull each part until its md5 matches, assemble, and check the whole file
-# against the remote's md5 of the original. Re-running resumes — a part that already matches is not
-# fetched again.
+# against the remote's md5 of the original. Re-running resumes: the remote split and the verified
+# local parts both survive until the whole file checks out, so a pull that dies at part 700 of 800
+# fetches 100 parts on the retry rather than starting over.
 #
 # Bring the tunnel up first (see README, "Running anything against the database"):
 #
@@ -45,19 +46,35 @@ else
 fi
 
 WORK="/home/.pull-$(basename "$REMOTE")"
-PARTS=$(mktemp -d)
-trap 'rm -rf "$PARTS"' EXIT
+# Both sides survive the run on purpose: a pull that dies at part 700 of 800 is exactly the one
+# worth resuming, and neither side is thrown away until the assembled md5 matches.
+PARTS="$DEST.parts"
+mkdir -p "$PARTS"
 
-echo "remote: splitting $REMOTE into $PART_SIZE parts under $WORK"
-# `-a 3` for suffix headroom: the default of 2 stops at 676 parts with "output file suffixes
-# exhausted", which on a big file arrives as a truncated pull rather than an obvious error.
-"${SSH[@]}" "set -e; rm -rf '$WORK'; mkdir -p '$WORK'; cd '$WORK';
-             split -a 3 -b '$PART_SIZE' '$REMOTE' part-; md5sum part-* > parts.md5;
-             md5sum '$REMOTE' | cut -d' ' -f1 > whole.md5"
+echo "remote: preparing $REMOTE in $PART_SIZE parts under $WORK"
+# Split only when there is nothing usable there already — and re-split when the source has changed
+# underneath a previous run, which is the one way stale parts could assemble into a file that never
+# existed. `-a 3` for suffix headroom: the default of 2 stops at 676 parts with "output file
+# suffixes exhausted", which on a big file arrives as a truncated pull rather than an obvious error.
+"${SSH[@]}" "set -e; mkdir -p '$WORK'; cd '$WORK';
+             now=\$(md5sum '$REMOTE' | cut -d' ' -f1);
+             if [ ! -s parts.md5 ] || [ \"\$(cat whole.md5 2>/dev/null)\" != \"\$now\" ]; then
+               rm -f part-*; split -a 3 -b '$PART_SIZE' '$REMOTE' part-;
+               md5sum part-* > parts.md5; echo \"\$now\" > whole.md5;
+             fi"
 
 "${SSH[@]}" "cat '$WORK/parts.md5'" > "$PARTS/parts.md5"
 WHOLE=$("${SSH[@]}" "cat '$WORK/whole.md5'" | tr -d '[:space:]')
-echo "remote: $(wc -l < "$PARTS/parts.md5") parts, whole md5 $WHOLE"
+NPARTS=$(grep -c . "$PARTS/parts.md5" || true)
+
+# The manifest arrives down the same stream as everything else, so it can be truncated the same way
+# — and a manifest cut to nothing lists no parts, which would otherwise walk into `cat part-*` with
+# no matches and report a glob error instead of the real problem.
+if [ "$NPARTS" -eq 0 ] || [ -z "$WHOLE" ]; then
+  echo "the manifest came back empty — the transport truncated it. Nothing pulled; re-run."
+  exit 1
+fi
+echo "remote: $NPARTS parts, whole md5 $WHOLE"
 
 failed=0
 while read -r sum name; do
@@ -76,17 +93,25 @@ while read -r sum name; do
 done < "$PARTS/parts.md5"
 
 if [ "$failed" != 0 ]; then
-  echo "some parts never matched after 5 tries; nothing assembled, $WORK left in place to retry"
+  echo "some parts never matched after 5 tries; nothing assembled. Re-run to resume — $WORK and"
+  echo "$PARTS are both kept, and the parts that did verify are not fetched again."
   exit 1
 fi
 
+# Assembled beside the destination, never AT it: a mismatch here is the truncated-file failure this
+# script exists to prevent, and leaving a short file at $DEST would hand back exactly what it is
+# supposed to catch. $DEST only ever appears once it is proven whole.
 # `part-*` globs in lexical order, which is the order `split` wrote them in.
-cat "$PARTS"/part-* > "$DEST"
-got=$(md5sum "$DEST" | cut -d' ' -f1)
+cat "$PARTS"/part-* > "$DEST.partial"
+got=$(md5sum "$DEST.partial" | cut -d' ' -f1)
 if [ "$got" != "$WHOLE" ]; then
-  echo "assembled md5 $got does not match the remote's $WHOLE — $WORK left in place"
+  rm -f "$DEST.partial"
+  echo "assembled md5 $got does not match the remote's $WHOLE — nothing written to $DEST."
+  echo "The parts verified individually, so the manifest itself is suspect: rm -rf $PARTS $WORK and re-run."
   exit 1
 fi
 
+mv "$DEST.partial" "$DEST"
+rm -rf "$PARTS"
 "${SSH[@]}" "rm -rf '$WORK'"
 echo "pulled $DEST ($(stat -c %s "$DEST") bytes), md5 $got matches the container's"
