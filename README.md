@@ -52,15 +52,34 @@ by default (`no matching cipher found`).
 Four things any script run this way needs:
 
 1. **App settings are injected into the app process, not the SSH shell.** Read them from
-   `/proc/1/environ`.
-2. **`globalThis.crypto` must be shimmed.** `src/app.js` does it for the web app, but a standalone
-   script never loads `app.js`, and the Azure SDKs need it on Node 22.
+   `/proc/1/environ` — and that includes `IDENTITY_ENDPOINT` and `IDENTITY_HEADER`, not just the
+   `COSMOS_*` pair. App Service serves managed identity through those two variables, so without them
+   `@azure/identity` falls through to IMDS and fails with five `CredentialUnavailableError` lines
+   about VS Code, the Azure CLI and PowerShell — none of which is the actual problem:
+
+   ```bash
+   export $(tr '\0' '\n' < /proc/1/environ \
+     | grep -E '^(COSMOS_ENDPOINT|COSMOS_NOSQL_DATABASE|AZURE_CLIENT_ID|IDENTITY_ENDPOINT|IDENTITY_HEADER)=')
+   ```
+2. **`globalThis.crypto` no longer needs shimming.** The container is Node 22, which has it natively;
+   `src/app.js` still shims it defensively. Measured 2026-08-20 — earlier advice here said a
+   standalone script must do it itself.
 3. **Run with `--max-old-space-size=224`.** The container has ~1.85 GB with ~330 MB free, and Node's
    default heap gets the process OOM-killed with no error in the log — it simply vanishes.
 4. **`NODE_PATH=/home/site/wwwroot/node_modules`** if you are running from anywhere else in the
-   container.
+   container. `wwwroot` itself is **read-only** (`WEBSITE_RUN_FROM_PACKAGE`), so anything a script
+   writes goes under `/home` — which has 30 GB.
 
-The `_seedwrap.js` / `_purgewrap.js` pattern in this repo handles 1–3.
+**A run longer than ~20 minutes needs `alwaysOn`.** App Service unloads an idle app and recycles the
+container, which kills a detached `nohup` run with it. `demi-api-test` ships with `alwaysOn = false`:
+
+```bash
+az webapp config set -g c4b0a8-test-rg -n demi-api-test --always-on true
+```
+
+The `_seedwrap.js` / `_purgewrap.js` names that used to be cited here are **not in this repo** —
+they were written by hand in the container and are gone with it. The `export $(...)` line above
+is the whole pattern; no wrapper is needed now that the crypto shim is not.
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write

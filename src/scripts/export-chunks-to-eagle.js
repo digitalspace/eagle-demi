@@ -21,10 +21,18 @@
  * non-public Eagle documents have no chunks here.
  *
  * MUST RUN INSIDE THE APP CONTAINER, over the App Service SSH tunnel — not Kudu's /api/command,
- * whose SCM container has no managed-identity endpoint. See README.md for the recipe.
+ * whose SCM container has no managed-identity endpoint. See README.md for the recipe, including the
+ * `IDENTITY_ENDPOINT`/`IDENTITY_HEADER` pair: without those two the Cosmos client cannot authenticate
+ * and the failure names VS Code and PowerShell rather than the missing variables.
  *
- * A full run is hours, so run it DETACHED — `nohup ... > /tmp/export.log 2>&1 &`. The App Service
- * SSH tunnel dies on its own schedule and would otherwise take the run with it.
+ * Run it DETACHED — `nohup ... > /home/export.log 2>&1 &`. The SSH tunnel dies on its own schedule
+ * and would otherwise take the run with it. `alwaysOn` must be ON for the duration, or App Service
+ * unloads the idle app and recycles the container out from under the run.
+ *
+ * MEASURED, prod backfill 2026-08-20: the full 1,128,733-chunk run took **60.3 minutes — 18,726
+ * chunks/min** with one push in flight, against the ~5,000/min this header claimed from the first
+ * run. A 5,000-row trial reads 9,593/min; the sustained rate is roughly double that, because the
+ * pipelined push stops being the limiting factor once it is warm.
  *
  * Usage:
  *   node src/scripts/export-chunks-to-eagle.js --target <url> --key <ingest-key> [--live]
