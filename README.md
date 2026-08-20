@@ -81,6 +81,26 @@ az webapp config set -g c4b0a8-test-rg -n demi-api-test --always-on false  # whe
 Turn it back off afterwards. `azure/modules/api-web-app.bicep` sets no `alwaysOn` at all, so leaving
 it on is drift the template will not correct and the next reader cannot see.
 
+**Getting a large file back out needs `scripts/pull-from-container.sh`**, not `scp` or `cat`:
+
+```bash
+scripts/pull-from-container.sh /home/backups/chunks.jsonl.gz ./chunks.jsonl.gz
+```
+
+`scp` fails outright — App Service's SSH has no sftp subsystem. `ssh 'cat big.gz' > local.gz` fails
+worse, because it fails silently: the tunnel drops mid-stream, the redirect keeps whatever arrived,
+and **ssh still exits 0**. Pulling the 2026-08-20 chunk export that way produced 568 MB of a 992 MB
+file and reported success. The script splits the file remotely, refetches any part whose md5 does not
+match, and checks the assembled result against the container's md5 of the original. Nothing is
+written to the destination path until that final md5 matches, so a failed pull leaves no truncated
+file behind pretending to be the real one.
+
+Re-running resumes, which on a file this size is the point: the remote split and the verified local
+parts (`<destination>.parts`) both survive a failure, so a pull that dies at part 700 of 800 fetches
+100 parts on the retry rather than starting over. Both are removed once the whole file checks out.
+Splitting doubles the file's footprint under `/home` — and the parts directory does the same
+locally — for the duration.
+
 The `_seedwrap.js` / `_purgewrap.js` names that used to be cited here are **not in this repo** —
 they were written by hand in the container and are gone with it. The `export $(...)` line above
 is the whole pattern; no wrapper is needed now that the crypto shim is not.
