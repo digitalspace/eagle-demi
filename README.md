@@ -49,7 +49,7 @@ sshpass -p 'Docker!' ssh -c aes256-cbc -m hmac-sha1 -p 50123 root@127.0.0.1
 `-c aes256-cbc` is required — App Service offers only legacy CBC ciphers, which OpenSSH 9+ disables
 by default (`no matching cipher found`).
 
-Four things any script run this way needs:
+Four things to know before running a script this way:
 
 1. **App settings are injected into the app process, not the SSH shell.** Read them from
    `/proc/1/environ` — and that includes `IDENTITY_ENDPOINT` and `IDENTITY_HEADER`, not just the
@@ -75,7 +75,11 @@ container, which kills a detached `nohup` run with it. `demi-api-test` ships wit
 
 ```bash
 az webapp config set -g c4b0a8-test-rg -n demi-api-test --always-on true
+az webapp config set -g c4b0a8-test-rg -n demi-api-test --always-on false  # when the run ends
 ```
+
+Turn it back off afterwards. `azure/modules/api-web-app.bicep` sets no `alwaysOn` at all, so leaving
+it on is drift the template will not correct and the next reader cannot see.
 
 The `_seedwrap.js` / `_purgewrap.js` names that used to be cited here are **not in this repo** —
 they were written by hand in the container and are gone with it. The `export $(...)` line above
