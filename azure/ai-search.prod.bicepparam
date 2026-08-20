@@ -10,7 +10,17 @@ using 'modules/ai-search.bicep'
 
 param location = 'canadacentral'
 param environmentName = 'prod'
-param tags = {}
+// The five mandatory Cost Management tags, matching demi-search-test exactly but for Environment.
+// No policy enforces them in c4b0a8-prod — the subscription carries four assignments, all Defender
+// — so an empty object here does not fail the deployment, it lands the service, its private
+// endpoint and its NIC in production untagged and unattributable on a bill DEMI shares.
+param tags = {
+  Project: 'DEMI'
+  Application: 'eagle-demi'
+  Environment: 'prod'
+  ManagedBy: 'Bicep'
+  CostCenter: 'c4b0a8'
+}
 
 // Both take eagle-search's identity. There is no DEMI identity in c4b0a8-prod, and there does not
 // need to be: `identityId` exists for the Cosmos indexer, and prod runs no indexer — nothing pulls
