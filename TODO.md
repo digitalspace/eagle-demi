@@ -4,9 +4,11 @@ Open work only. Facts, measurements and history live in the
 [wiki](https://github.com/digitalspace/eagle-demi/wiki); if something here needs a paragraph of
 background, that background belongs there and this entry links to it.
 
-Staging only, and staging deploys itself: a merge to `main` runs `azure-deploy-staging-api` and
+Staging deploys itself: a merge to `main` runs `azure-deploy-staging-api` and
 `azure-deploy-staging-frontend` against `demi-*-test`, so what is on `main` is what is on staging
-within a few minutes. There is no date or commit to keep current here — read the workflow runs.
+within a few minutes. Prod is dispatch-only from a published tag
+(`azure-deploy-prod.yaml`), and only the extractor half has a target today. There is no date or
+commit to keep current here — read the workflow runs.
 This paragraph used to name the deployed SHAs anyway, and they were stale within a day; a pointer
 that has to be maintained by hand is the drift the sentence before it warns about.
 
@@ -26,7 +28,7 @@ Nothing here is a separate list to maintain — it says which gate each open ent
 | **A dev run + `az login`** | Minting the first real service key — **and it is now the only way to test the ACL against anything**, because every row in dev is public; the NRPTI re-sync design |
 | **RG-scope rights nobody holds yet** | Observability / `APPLICATIONINSIGHTS_CONNECTION_STRING`; the first `main.bicep` deploy; removing role assignment `29745ac3`; Phase 3b blob storage |
 | **A human in a browser, staff login** | The `/summary` render; boundary rendering at three fidelities; server-side highlighting; the scoped access tier |
-| **A decision, not work** | Test/prod deploy path and the release model; app registration `acb4198f`; whether `GET /projects` may narrow its payload; dropping the dead `logs`/`leases` containers |
+| **A decision, not work** | Required reviewers on the `prod` environment; app registration `acb4198f`; whether `GET /projects` may narrow its payload; dropping the dead `logs`/`leases` containers |
 | **Deliberately not doing it** | `pageNumber` citations; result paging; the client-side highlighter; the intake-cleaner backfill; the OnPush conversion; natural-language labels; the tiled/OCR strata; the 402 monthly rollover; `content: retrievable` |
 
 **Before hardening, read this one first:** nothing DEMI logs is retained anywhere, so every "the
@@ -398,9 +400,11 @@ which point docling-serve's side is set from the same value.
       and mutate plain fields from async callbacks, which OnPush would stop rendering, and the two
       spec files would not catch it. Converting them is a change-detection rewrite with its own
       verification; re-enable the rule when it happens.
-- [ ] **Prod deploy path still to build** when prod becomes real: copy the staging pair, subject
-      `repo:digitalspace/eagle-demi:environment:prod`, required-reviewers decision, and the release
-      model — prod deploys a tag verified on staging.
+- [ ] **Prod deploy path is built, but has nothing to deploy the API to.**
+      `.github/workflows/azure-deploy-prod.yaml` exists — `workflow_dispatch` with a `version`,
+      checking out `refs/tags/<version>`, both jobs on `environment: prod`. What is still open:
+      `demi-api-prod` does not exist (the API job skips on a probe), and the required-reviewers
+      decision on the `prod` environment has not been taken.
 - [ ] **App registration `acb4198f-64db-4485-9638-a894e2d2c99b` — KEPT deliberately, not for CI.**
       Left from the app-registration route before `demi-cicd-dev` superseded it. Not deleted: app
       registrations are hard to provision in this tenant, and human federated sign-in is precisely
@@ -445,7 +449,7 @@ which point docling-serve's side is set from the same value.
       `test/search/ai-search.test.js:226` asserts `!body.select.includes('content')`, so adding it
       back fails CI rather than quietly shipping chunk text. Left open only because the index
       setting itself is still the permissive one.
-- [ ] **Nothing DEMI logs is retained anywhere. `useAzureMonitor` has never started.** Measured
+- [ ] **Prod logs go nowhere. In staging this is fixed; the history below is `demi-api-dev`.** Measured
       2026-08-06: `api/index.js` starts the Azure Monitor OpenTelemetry distro only
       `if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING)`, and `demi-api-dev` has no such app
       setting. Nor could it have a working one — `az group resource list` on `c4b0a8-dev-rg` shows
@@ -461,9 +465,11 @@ which point docling-serve's side is set from the same value.
       stream", which is visible only to somebody already watching, and gone after. That is the exact
       failure `observability.bicep`'s own header describes, and it is why the ranking entry above had
       to become counters on an endpoint rather than an alert rule on a log line.
-      Fixing it is not code: deploy the observability module, then set
-      `APPLICATIONINSIGHTS_CONNECTION_STRING` on both app services. Blocked behind the standing
-      decision on first deploying `main.bicep`, and on RG-scope rights `demi-cicd-dev` does not hold.
+      **STAGING IS FIXED, 2026-08-13.** `observability.bicep` deployed and `demi-api-test` now
+      carries `APPLICATIONINSIGHTS_CONNECTION_STRING` — verified on the live app 2026-08-20 — so the
+      distro does start there and the paragraphs above describe `demi-api-dev`, which no longer
+      exists. What is still open is prod: there is no `demi-api-prod` to set it on, and no
+      observability resources in `c4b0a8-prod`.
 - [ ] **The 402 latch does not un-latch when the month rolls over.** A single 402 turns semantic off
       for the life of the process, which is what stops every later search paying a wasted 402 plus a
       retry. But the allowance resets monthly and the latch does not, so a process that spans the

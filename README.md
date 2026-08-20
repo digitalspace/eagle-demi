@@ -492,10 +492,12 @@ whatever principal the CLI session holds, a human locally and the managed identi
 `preflight_identity` prints that principal and refuses to run under `GITHUB_ACTIONS` as anything but
 a service principal, so a deploy authenticated as a person fails instead of proceeding.
 
-**There is no prod deploy workflow yet.** The prod-era workflow was deleted on 2026-08-05 while
-`c4b0a8-prod` holds nothing; it gets rebuilt from the staging pair when prod becomes real, deploying
-a tag verified on staging rather than a branch. Keeping dead deploy paths in a **public** repo is
-liability without benefit.
+**The prod deploy workflow is back**: `.github/workflows/azure-deploy-prod.yaml`,
+`workflow_dispatch` only, taking a `version` and checking out `refs/tags/<version>` — a tag verified
+on staging, never a branch. Both jobs declare `environment: prod`, which is what produces the OIDC
+subject `repo:digitalspace/eagle-demi:environment:prod`; renaming the environment breaks the
+federated credential. An earlier note here said no prod workflow existed, which was true only
+between 2026-08-05 and the prod estate being built.
 
 Recreating them is not a copy job. Each environment needs its own managed identity, its own federated
 credential — subject `repo:digitalspace/eagle-demi:environment:test` or `:environment:prod`, matching
