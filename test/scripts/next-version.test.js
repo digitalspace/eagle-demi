@@ -165,3 +165,34 @@ esac
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// THE gh-FAILURE PATH. The catch block deliberately does NOT substitute a fallback base: a bad
+// flag, a rate limit or a 5xx all land there alongside a genuine 404, and continuing from a base
+// that is not the highest tag computes a version that already exists — surfacing much later as a
+// `git push origin <tag>` collision in draft-release.yaml rather than here, where it is legible.
+test('a gh failure listing tags is fatal, not silently absorbed into a fallback base', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nv-ghfail-'));
+  fs.writeFileSync(path.join(dir, 'gh'), `#!/bin/sh
+case "$1$2" in
+  *tags*) echo 'gh: HTTP 403: API rate limit exceeded' >&2; exit 1 ;;
+  *) echo '{"total":1,"messages":["fix: x"]}' ;;
+esac
+`, { mode: 0o755 });
+
+  const run = () => execFileSync(process.execPath, [SCRIPT], {
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: 'o/r' },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  // Non-zero exit is the load-bearing assertion: seed a fallback base in the catch and the script
+  // exits 0 with a wrong version, which is exactly what this must not allow.
+  let err;
+  try { run(); } catch (e) { err = e; }
+  assert.ok(err, 'a gh failure must not exit 0');
+  // And the operator has to be told which failure it was, or they follow the seed-release
+  // instruction and try to create a tag that already exists.
+  assert.match(err.stderr, /Could not list tags for o\/r/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
