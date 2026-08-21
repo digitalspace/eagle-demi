@@ -49,18 +49,61 @@ sshpass -p 'Docker!' ssh -c aes256-cbc -m hmac-sha1 -p 50123 root@127.0.0.1
 `-c aes256-cbc` is required — App Service offers only legacy CBC ciphers, which OpenSSH 9+ disables
 by default (`no matching cipher found`).
 
-Four things any script run this way needs:
+Four things to know before running a script this way:
 
 1. **App settings are injected into the app process, not the SSH shell.** Read them from
-   `/proc/1/environ`.
-2. **`globalThis.crypto` must be shimmed.** `src/app.js` does it for the web app, but a standalone
-   script never loads `app.js`, and the Azure SDKs need it on Node 22.
+   `/proc/1/environ` — and that includes `IDENTITY_ENDPOINT` and `IDENTITY_HEADER`, not just the
+   `COSMOS_*` pair. App Service serves managed identity through those two variables, so without them
+   `@azure/identity` falls through to IMDS and fails with five `CredentialUnavailableError` lines
+   about VS Code, the Azure CLI and PowerShell — none of which is the actual problem:
+
+   ```bash
+   export $(tr '\0' '\n' < /proc/1/environ \
+     | grep -E '^(COSMOS_ENDPOINT|COSMOS_NOSQL_DATABASE|AZURE_CLIENT_ID|IDENTITY_ENDPOINT|IDENTITY_HEADER)=')
+   ```
+2. **`globalThis.crypto` no longer needs shimming.** The container is Node 22, which has it natively;
+   `src/app.js` still shims it defensively. Measured 2026-08-20 — earlier advice here said a
+   standalone script must do it itself.
 3. **Run with `--max-old-space-size=224`.** The container has ~1.85 GB with ~330 MB free, and Node's
    default heap gets the process OOM-killed with no error in the log — it simply vanishes.
 4. **`NODE_PATH=/home/site/wwwroot/node_modules`** if you are running from anywhere else in the
-   container.
+   container. `wwwroot` itself is **read-only** (`WEBSITE_RUN_FROM_PACKAGE`), so anything a script
+   writes goes under `/home` — which has 30 GB.
 
-The `_seedwrap.js` / `_purgewrap.js` pattern in this repo handles 1–3.
+**A run longer than ~20 minutes needs `alwaysOn`.** App Service unloads an idle app and recycles the
+container, which kills a detached `nohup` run with it. `demi-api-test` ships with `alwaysOn = false`:
+
+```bash
+az webapp config set -g c4b0a8-test-rg -n demi-api-test --always-on true
+az webapp config set -g c4b0a8-test-rg -n demi-api-test --always-on false  # when the run ends
+```
+
+Turn it back off afterwards. `azure/modules/api-web-app.bicep` sets no `alwaysOn` at all, so leaving
+it on is drift the template will not correct and the next reader cannot see.
+
+**Getting a large file back out needs `scripts/pull-from-container.sh`**, not `scp` or `cat`:
+
+```bash
+scripts/pull-from-container.sh /home/backups/chunks.jsonl.gz ./chunks.jsonl.gz
+```
+
+`scp` fails outright — App Service's SSH has no sftp subsystem. `ssh 'cat big.gz' > local.gz` fails
+worse, because it fails silently: the tunnel drops mid-stream, the redirect keeps whatever arrived,
+and **ssh still exits 0**. Pulling the 2026-08-20 chunk export that way produced 568 MB of a 992 MB
+file and reported success. The script splits the file remotely, refetches any part whose md5 does not
+match, and checks the assembled result against the container's md5 of the original. Nothing is
+written to the destination path until that final md5 matches, so a failed pull leaves no truncated
+file behind pretending to be the real one.
+
+Re-running resumes, which on a file this size is the point: the remote split and the verified local
+parts (`<destination>.parts`) both survive a failure, so a pull that dies at part 700 of 800 fetches
+100 parts on the retry rather than starting over. Both are removed once the whole file checks out.
+Splitting doubles the file's footprint under `/home` — and the parts directory does the same
+locally — for the duration.
+
+The `_seedwrap.js` / `_purgewrap.js` names that used to be cited here are **not in this repo** —
+they were written by hand in the container and are gone with it. The `export $(...)` line above
+is the whole pattern; no wrapper is needed now that the crypto shim is not.
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
@@ -430,8 +473,18 @@ not redeploy the other:
 |---|---|---|
 | `azure-deploy-staging-frontend.yaml` | `$web` on the static-website storage account (repo variable `AZURE_FRONTEND_STORAGE_ACCOUNT`) | `frontend/**` |
 | `azure-deploy-staging-api.yaml` | `demi-api-test` | `src/**`, `api/**`, `public/**`, `index.js`, `host.json`, `package.json`, `yarn.lock`, `frontend/public/assets/geojson/**` |
+| `draft-release.yaml` | nothing — mints the tag and draft release for the same push (see [Releases](#releases)) | *any path* |
 
-Both also accept `workflow_dispatch`. The API's paths mirror `scripts/package-api.py`, which decides
+**The two staging workflows stay separate, and `draft-release.yaml` is a third.** Folding the deploys
+into one "Deploy to Test" was considered and rejected: they have different path filters, different
+concurrency groups, different Node versions, different Azure targets under different RBAC (Website
+Contributor on a Function App vs Storage Blob Data Contributor on `$web`), and only the frontend
+rewrites `env.js`. One workflow would have to re-derive "did the frontend change?" at runtime to keep
+the current behaviour, which is the coupling the 2026-08-05 split removed. Tagging is the one thing
+that must happen once per push regardless of paths, so it lives in the workflow that has no path
+filter.
+
+All three also accept `workflow_dispatch`. The API's paths mirror `scripts/package-api.py`, which decides
 what actually ships — root `public/` is not excluded there, and `frontend/public/assets/geojson/**`
 is explicitly re-included because the boundary seeder reads it at runtime, so that one path fires
 both workflows. Adding a directory to the package without adding it here gives you a deploy that
@@ -473,10 +526,17 @@ whatever principal the CLI session holds, a human locally and the managed identi
 `preflight_identity` prints that principal and refuses to run under `GITHUB_ACTIONS` as anything but
 a service principal, so a deploy authenticated as a person fails instead of proceeding.
 
-**There is no prod deploy workflow yet.** The prod-era workflow was deleted on 2026-08-05 while
-`c4b0a8-prod` holds nothing; it gets rebuilt from the staging pair when prod becomes real, deploying
-a tag verified on staging rather than a branch. Keeping dead deploy paths in a **public** repo is
-liability without benefit.
+**The prod deploy workflow is back**: `.github/workflows/azure-deploy-prod.yaml`,
+`workflow_dispatch` only, taking a `version` and checking out `refs/tags/<version>` — a tag verified
+on staging, never a branch. Both jobs declare `environment: prod`, which is what produces the OIDC
+subject `repo:digitalspace/eagle-demi:environment:prod`; renaming the environment breaks the
+federated credential. An earlier note here said no prod workflow existed, which was true only
+between 2026-08-05 and the prod estate being built.
+
+Its last job, `publish-release`, flips that version's draft release to published and marks it latest.
+It runs only when every deploy job has succeeded, holds `contents: write` and nothing else, and
+declares no `environment:` — it touches no Azure resource, and a second approval gate in front of
+"record that the approved deploy finished" would be theatre. See [Releases](#releases).
 
 Recreating them is not a copy job. Each environment needs its own managed identity, its own federated
 credential — subject `repo:digitalspace/eagle-demi:environment:test` or `:environment:prod`, matching
@@ -529,35 +589,51 @@ More, including the Kudu and basic-auth situation, in
 
 ## Releases
 
+**Two workflows, and the tag is cut at test time.** This is the paradigm the other Azure repos are
+meant to copy, so the shape matters more than the details:
+
+| | Workflow | Does |
+|---|---|---|
+| **test** | `draft-release.yaml` + the two `azure-deploy-staging-*.yaml` | Every push to `main` **mints a git tag**, refreshes the single draft release for it, and deploys that push to staging |
+| **prod** | `azure-deploy-prod.yaml` | Dispatched with a version, deploys `refs/tags/<version>`, and **publishes that release as its last step** |
+
+**The tag exists before anything is deployed.** That is the change: a draft release mints no git ref,
+so under the previous model the build running on staging had no name and "deploy the tag you verified
+on staging" could not be obeyed until a human had already published it. Publishing therefore meant
+"somebody intends to ship this". Now the tag is minted alongside the draft, the prod workflow deploys
+it, and **publishing means the version is in production**. Nothing else publishes — do not click
+Publish in the UI.
+
+The cost is deliberate: **a version is spent on every push to `main`**, and tags accumulate for
+candidates that never reach prod. A tag is a 40-byte ref, and the payoff is that every staging build
+is addressable — including for a rollback, which is just a dispatch naming an older tag.
+
 **Versions are computed, never typed.** `scripts/next-version.js` reads the commit messages between
-the last **published** release — the rolling draft below is invisible to that lookup, which is what
-keeps the version from climbing once per push — and the commit being built, then applies
-conventional-commit rules to the whole set: a breaking change bumps major, otherwise any `feat`
-bumps minor, otherwise patch. A breaking change is `!` before the `:`, or a `BREAKING CHANGE:` /
-`BREAKING-CHANGE:` footer line in the body; both spellings are normative and both are honoured.
-**While the major is `0` a breaking change bumps the minor instead** — a stray `refactor!:` must not
-mint `v1.0.0` on a product that has never shipped to prod.
+the **highest existing tag** and the commit being built, then applies conventional-commit rules to
+the whole set: a breaking change bumps major, otherwise any `feat` bumps minor, otherwise patch. A
+breaking change is `!` before the `:`, or a `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer line in the
+body; both spellings are normative and both are honoured. **While the major is `0` a breaking change
+bumps the minor instead** — a stray `refactor!:` must not mint `v1.0.0` on a product that has never
+shipped to prod.
 
-`.github/workflows/draft-release.yaml` runs on every push to `main` and maintains **exactly one
-rolling draft release**, deleting and recreating it each run. That means **any hand-edit to the draft
-body is lost on the next push**; write release prose in the commits instead.
+The base is the highest **tag**, not the latest published release. With a tag per push, a base that
+only saw published releases would recompute the same number every push and collide with the tag it
+had just created. A side effect worth knowing: ticking *Set as the latest release* on an older
+release no longer moves the version base backwards, which used to be a live trap.
 
-A draft release **creates no git tag**. The version number is reserved and visible, but not spent, so
-the draft is free to be retargeted at a newer SHA as more commits land — which is what lets an
-automatic version coexist with a staging deploy that fires on every push.
+The bump range and the **release-notes** range are therefore different, on purpose.
+`--generate-notes` infers its own start, which is the last *published* release — the last version
+that actually reached production. So the notes on the candidate that ships carry the work of every
+candidate that did not, which is the right answer to "what is new in prod".
 
-**Publishing the draft, by hand in the GitHub UI, is what mints the tag** — a lightweight tag at the
-exact SHA the draft targeted. That click is the "verified on staging" gate, and the tag it produces
-is what the prod workflow described above will deploy once prod becomes real. Nothing publishes
-automatically.
+`draft-release.yaml` maintains **exactly one draft release**, deleting and recreating it each run, so
+**any hand-edit to the draft body is lost on the next push**; write release prose in the commits
+instead. Deleting a draft never deletes its tag — `gh release delete` is run without `--cleanup-tag`,
+and that flag must never be added, since it would destroy the previous candidate's tag on every push.
+A tag whose draft has been superseded is still deployable; if prod deploys one, the publish step
+creates the published release itself.
 
-Publish it as a normal release — do **not** tick *Set as a pre-release*. The version base is the
-repository's latest published release, a lookup that skips pre-releases, so a pre-released version
-is recomputed unchanged on the next push and then collides with the tag it just minted. The same
-lookup honours GitHub's *Set as the latest release* flag rather than tag order, so ticking that on
-an older release moves the base backwards with the same result.
-
-Once a first release has been published, `git describe --tags` resolves and the deploy script stamps
+Once a first release exists, `git describe --tags` resolves and the deploy script stamps
 `BUILD_ID` as `v0.1.1-3-gabc1234-121314`, reported at `GET /api/config`. Before that it is a bare
 SHA, exactly as today.
 
@@ -571,9 +647,10 @@ gh release create v0.1.0 --repo digitalspace/eagle-demi \
   --notes "Baseline: the state of staging as of the first tagged release."
 ```
 
-Create it **before** this automation lands on `main`, or the first Draft release run fails: the
-script has no first-run path at all, by design. Every later version is computed against a real
+Create it **before** this automation lands on `main`, or the first *Tag and draft release* run fails:
+the script has no first-run path at all, by design. Every later version is computed against a real
 predecessor, which is what removes the untestable "no previous release" branch from the script.
+Publishing that seed is what puts the `v0.1.0` tag in place; from there the workflow tags on its own.
 
 `release-drafter` was the closest off-the-shelf fit and was rejected on a specific point: its
 `version-resolver` reads **pull-request labels** and its notes are assembled from **merged PRs**.

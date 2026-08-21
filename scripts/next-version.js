@@ -1,15 +1,24 @@
 'use strict';
 
-// Computes the next semantic version for the rolling draft release from Conventional Commit
-// messages. `.github/workflows/draft-release.yaml` runs this on every push to `main` and feeds the
-// result to `gh release create --draft`.
+// Computes the next semantic version for the release candidate from Conventional Commit messages.
+// `.github/workflows/draft-release.yaml` runs this on every push to `main` and feeds the result to
+// `git tag` and then to `gh release create --draft`.
 //
 // Inputs come from `gh`, never from git history. `git describe` walks HEAD's ancestry only, so a
 // tag sitting on a commit that is not an ancestor of HEAD silently resolves to an OLDER base and
 // yields a lower version than the one already released — a wrong number, produced quietly, which is
-// the worst failure available here. `gh release view` is ancestry-independent, and `A...B` is the
-// same commit set GitHub itself diffs for `--generate-notes`, so the version and the notes in one
-// draft can never describe different sets of commits.
+// the worst failure available here. The tags endpoint below is ancestry-independent.
+//
+// THE BASE IS THE HIGHEST TAG, not the latest published release. Every push to `main` now mints a
+// tag, so a base that only saw published releases would recompute the same number on the next push
+// and collide with the tag it had just created.
+//
+// A consequence worth stating: the range this bump is computed over and the range GitHub generates
+// release NOTES over are deliberately different. The bump runs from the last tag, because the number
+// has to climb once per push. `--generate-notes` is left to infer its own start, which is the last
+// PUBLISHED release — the last version that actually reached production. So a candidate that is
+// never deployed still spends a version, and the notes on the candidate that IS deployed carry its
+// work too. "What is new in prod" is the question a published release answers.
 
 const { execFileSync } = require('node:child_process');
 
@@ -24,6 +33,10 @@ const HEADER = /^(?<type>[a-zA-Z]+)(?:\((?<scope>[^)]*)\))?(?<breaking>!)?:/;
 // declaration: a body reading "this is not a BREAKING CHANGE for callers" says the opposite of what
 // it would then trigger, and at 1.x that mints a whole major on a commit that promised not to.
 const BREAKING_FOOTER = /^BREAKING[ -]CHANGE(?=: | #)/m;
+
+// The only tag shape this project's automation creates. Anything else in the repository — a vendor
+// tag, a `v1.2.3-rc1`, a `release/2026-08` — is not a version base and must not become one.
+const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
 
 const PATCH = 0;
 const MINOR = 1;
@@ -42,6 +55,24 @@ function bumpLevel(message) {
   if (match && match.groups.type === 'feat') return MINOR;
 
   return PATCH;
+}
+
+/**
+ * Picks the version base out of an unordered list of tag names.
+ *
+ * @param {string[]} names  every tag in the repository, in whatever order GitHub returned them
+ * @returns {string} the highest `vX.Y.Z` tag, or `''` if there is none
+ */
+function highestReleaseTag(names) {
+  return (
+    (names || [])
+      .map((name) => String(name).trim())
+      .filter((name) => RELEASE_TAG.test(name))
+      // Numeric collation, not a string sort: `'v0.1.9' > 'v0.1.10'` lexically, and taking that as
+      // the base re-mints a version that already exists as a tag.
+      .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }))
+      .pop() || ''
+  );
 }
 
 /**
@@ -88,7 +119,7 @@ function nextVersion(lastTag, commitMessages) {
   return `v${major}.${minor}.${patch}`;
 }
 
-module.exports = { nextVersion };
+module.exports = { nextVersion, highestReleaseTag };
 
 if (require.main === module) {
   const repository = process.env.GITHUB_REPOSITORY || 'digitalspace/eagle-demi';
@@ -101,25 +132,30 @@ if (require.main === module) {
 
   let lastTag = '';
   try {
-    // `gh release view` with no tag returns the latest PUBLISHED release, skipping drafts. That is
-    // what stops the rolling draft from feeding itself: the draft carrying v0.1.1 is invisible
-    // here, so the next push recomputes from v0.1.0 and lands on v0.1.1 again instead of climbing
-    // one version per push.
+    // Sorted here, not by GitHub: the tags endpoint's order is unspecified — neither semver nor
+    // creation time — so the highest is picked explicitly, with a NUMERIC collation. A plain string
+    // sort puts `v0.1.9` above `v0.1.10` and would hand back a base that has already been used.
     //
-    // "Latest" is GitHub's flag, not tag order. Ticking "Set as the latest release" on an OLDER
-    // published release — the usual reflex when a newer one turns out bad — moves this base
-    // backwards, and the next run then tries to create a draft for a version that already exists as
-    // a published tag. That surfaces as a `gh release create` "already exists" failure whose message
-    // does not mention the flag; untick it and the next push recovers on its own.
+    // Reads tags rather than releases so an unpublished candidate is still seen. Reads the API
+    // rather than `git tag --sort=-v:refname` so it needs neither a full-depth checkout nor fetched
+    // tag refs, and so a local preview reports what the REMOTE has, matching the compare below.
     //
-    // `--repo` is passed explicitly so this and the compare call below cannot resolve to different
-    // repositories: without it `gh` infers from the checkout's origin remote, while the compare uses
-    // GITHUB_REPOSITORY. In a fork or a mirror clone that yields a base tag from one repository and
-    // a commit range from another.
-    lastTag = gh(['release', 'view', '--repo', repository, '--json', 'tagName', '--jq', '.tagName']);
-  } catch {
-    // gh has already printed its own reason on stderr; fall through so nextVersion raises the
-    // actionable "create the seed release" error rather than a bare non-zero exit.
+    // The repository is passed explicitly so this and the compare call below cannot resolve to
+    // different repositories: without it `gh` infers from the checkout's origin remote, while the
+    // compare uses GITHUB_REPOSITORY. In a fork or a mirror clone that yields a base tag from one
+    // repository and a commit range from another.
+    lastTag = highestReleaseTag(gh(['api', `repos/${repository}/tags?per_page=100`, '--paginate', '--jq', '.[].name']).split('\n'));
+  } catch (err) {
+    // gh has already printed its own reason on stderr. Falling through lets nextVersion raise the
+    // actionable "create the seed release" error — but ONLY a 404 actually means the seed is
+    // missing. A bad flag, a rate limit or a 5xx all land here too, and pointing the operator at
+    // `gh release create v0.1.0` for those is a wrong instruction they might follow: the tag they
+    // would be told to create already exists. So say which failure this was.
+    process.stderr.write(
+      `Could not list tags for ${repository}: ${err.message}\n` +
+      'If that is a 404 the seed release is genuinely missing; anything else is a gh or API ' +
+      'failure and the message below about creating a seed release does not apply.\n'
+    );
   }
 
   // `total_commits` is fetched alongside the messages so truncation is detectable — see the guard
@@ -148,17 +184,16 @@ if (require.main === module) {
   // The compare endpoint caps `.commits` at 250 and announces it nowhere except a `total_commits`
   // that disagrees with the array length. The response is ordered base->head, so what gets dropped
   // is the NEWEST work — the one `feat:` that should have bumped the minor is exactly the commit
-  // that falls off the end, and the result would be a version that is quietly too low. Reachable
-  // here: publishing is a manual click, so the gap between two published releases is unbounded.
-  // Failing is the point. Paginating instead would trade a loud stop for a multi-megabyte download
-  // on every push, and a draft that has gone 250 commits without being published needs a human
-  // anyway.
+  // that falls off the end, and the result would be a version that is quietly too low. A tag per
+  // push normally keeps this gap at one commit, but it stays reachable: a long-lived branch merged
+  // in one push, or a run whose tag step failed, both widen it. Failing is the point. Paginating
+  // instead would trade a loud stop for a multi-megabyte download on every push.
   if (compare.total > compare.messages.length) {
     console.error(
       `Cannot compute the next version: GitHub returned ${compare.messages.length} of ` +
         `${compare.total} commits since ${lastTag}. Its compare endpoint caps a response at 250 and ` +
-        'drops the newest ones, so any version computed here would be too low. Publish the current ' +
-        'draft release — the next comparison then starts from it and is short again.'
+        'drops the newest ones, so any version computed here would be too low. Tag an intermediate ' +
+        'commit by hand — the next comparison then starts from it and is short again.'
     );
     process.exit(1);
   }

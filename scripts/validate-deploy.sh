@@ -50,7 +50,7 @@ echo "  status=$ST (4=SUCCESS 3=FAILED 1=running)  active=$AC  id=${ID:0:12}"
 [ "$AC" = "True" ] && ok "record marked active" || no "record NOT active — a recycle may revert wwwroot"
 
 echo "=== 2. No repo debris in the app ==="
-for d in .claude .git test azure .github .vscode scripts; do
+for d in .claude .git test azure .github .vscode scripts extractor; do
   C=$(kcode "$SCM/api/vfs/site/wwwroot/$d")
   [ "$C" = "404" ] && ok "wwwroot/$d absent" || no "wwwroot/$d present (HTTP $C)"
 done

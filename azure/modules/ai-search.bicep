@@ -35,6 +35,10 @@ param peSubnetId string = ''
 @description('Principal ID of the identity the API queries as. Granted Search Index Data Contributor below.')
 param apiPrincipalId string
 
+@description('Semantic ranker plan. Defaults to what every existing service already has, so an omitted parameter cannot change one; prod passes \'disabled\'.')
+@allowed(['disabled', 'free', 'standard'])
+param semanticSearch string = 'free'
+
 // Basic, not Free: the Free tier supports neither a managed identity nor a shared private link,
 // and `demi-cosmos-dev` has publicNetworkAccess disabled with local auth off — so Free cannot
 // reach the data at all, at any size. Basic is the floor, not a choice about capacity.
@@ -61,12 +65,18 @@ resource search 'Microsoft.Search/searchServices@2025-05-01' = {
     partitionCount: 1
     hostingMode: 'Default'
 
-    // 'free' is what the live service has, and it is stated explicitly so a deployment cannot flip
-    // it by omission. It does NOT contradict the header: the free tier costs nothing unless a query
-    // asks for it, and no query here ever does — `searchChunks` sends queryType 'full' (Lucene) and
-    // never 'semantic'. Turning the capability off entirely is a separate decision from writing
-    // down which state dev is in.
-    semanticSearch: 'free'
+    // Always written, never omitted — that is what stops a deployment flipping it by accident, and
+    // it is why the parameter defaults to 'free': every service standing today has 'free', so a
+    // caller that says nothing still gets exactly what is already there. It does NOT contradict the
+    // header: the free tier costs nothing unless a query asks for it, and no query here ever does —
+    // `searchChunks` sends queryType 'full' (Lucene) and never 'semantic'.
+    //
+    // PROD PASSES 'disabled', deliberately. Two reasons, neither of them "content never leaves":
+    // the free tier LATCHES OFF after a 402 and silently drops that worker to BM25, so 'free' is a
+    // state that can change underneath you; and adopting semantic ranking is a change to the
+    // retrievability and `select`-list design — this SKU does not mutate field attributes on its
+    // own — which is not a thing to move during a cutover.
+    semanticSearch: semanticSearch
 
     // Keyless, like every other service here: admin and query keys are disabled outright and all
     // data-plane access is Entra RBAC. `authOptions` MUST be absent when local auth is disabled —

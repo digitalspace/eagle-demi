@@ -57,3 +57,7 @@ scratch/
 .claude/
 
 
+
+# Python bytecode — the extractor is Python inside a Node repo
+__pycache__/
+*.pyc
