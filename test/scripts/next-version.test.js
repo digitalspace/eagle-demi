@@ -12,7 +12,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { nextVersion } = require('../../scripts/next-version');
+const { nextVersion, highestReleaseTag } = require('../../scripts/next-version');
 
 test('patch-only commits bump the patch', () => {
   assert.strictEqual(nextVersion('v0.1.0', ['fix: bound unbounded Cosmos queries', 'chore: bump eslint']), 'v0.1.1');
@@ -95,4 +95,33 @@ test('a missing or unparseable last tag tells the operator to create the seed re
   for (const bad of [null, undefined, '', 'latest', 'v1.2']) {
     assert.throws(() => nextVersion(bad, ['fix: something']), /seed release/, `expected a throw for ${JSON.stringify(bad)}`);
   }
+});
+
+// `highestReleaseTag` is the version BASE. Since every push to `main` mints a tag, picking the wrong
+// one re-mints a version that already exists — the tag push then fails, or worse, succeeds against a
+// number a previous build already shipped under.
+
+test('the base is the highest tag, not the last one GitHub happened to return', () => {
+  assert.strictEqual(highestReleaseTag(['v0.1.0', 'v0.3.1', 'v0.2.7']), 'v0.3.1');
+});
+
+test('the base is ordered numerically, not lexically', () => {
+  // The one that a plain string sort gets backwards: 'v0.1.9' > 'v0.1.10' as text.
+  assert.strictEqual(highestReleaseTag(['v0.1.9', 'v0.1.10']), 'v0.1.10');
+  assert.strictEqual(highestReleaseTag(['v0.9.0', 'v0.10.0']), 'v0.10.0');
+  assert.strictEqual(highestReleaseTag(['v9.0.0', 'v10.0.0']), 'v10.0.0');
+});
+
+test('tags that are not release tags are never the base', () => {
+  assert.strictEqual(highestReleaseTag(['v0.1.0', 'v9.9.9-rc1', 'release/2026-08', 'latest', 'v1.2']), 'v0.1.0');
+});
+
+test('surrounding whitespace and blank lines from the API stream are tolerated', () => {
+  // The caller splits `gh --jq` output on newlines, so a trailing newline yields a final ''.
+  assert.strictEqual(highestReleaseTag([' v0.1.0 ', 'v0.2.0\r', '']), 'v0.2.0');
+});
+
+test('no release tag at all yields an empty base, which nextVersion turns into the seed error', () => {
+  assert.strictEqual(highestReleaseTag([]), '');
+  assert.throws(() => nextVersion(highestReleaseTag(['nightly']), ['fix: x']), /seed release/);
 });

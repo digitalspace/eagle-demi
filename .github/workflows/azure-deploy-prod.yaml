@@ -10,6 +10,12 @@
 # one dropdown position away from a test deploy. There is no `push:` trigger here and there must
 # never be one.
 #
+# PUBLISHING IS THE LAST THING THIS WORKFLOW DOES. The tag already exists before a dispatch —
+# `draft-release.yaml` mints one on every push to `main`, alongside a draft release — so there is
+# nothing to publish in order to deploy. The `publish-release` job at the bottom flips that draft to
+# published only after every deploy job has gone green, which makes a published release mean "this
+# version is in production" rather than "somebody intended to ship it". Nothing else publishes.
+#
 # ONE REAL TARGET TODAY: the extractor Function App. Everything else in the prod cutover is
 # either ARM — which DEMI's posture bars from CI, see the credential note below — or VNet-bound,
 # and a GitHub runner has no route into the VNet. `demi-api-prod` is the second target and wants
@@ -53,7 +59,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Released tag to deploy (e.g. v1.2.3). Publish the draft release first — a draft mints no tag.'
+        description: 'Tag to deploy (e.g. v1.2.3). Every push to main cuts one — pick the one verified on staging. Do NOT publish its draft first; this workflow publishes it after a green deploy.'
         required: true
         type: string
 
@@ -247,3 +253,61 @@ jobs:
         run: |
           echo "### ❌ API deployment failed" >> $GITHUB_STEP_SUMMARY
           echo "Check step logs above for details on packaging or Azure Function App deployment errors." >> $GITHUB_STEP_SUMMARY
+
+  publish-release:
+    name: Publish the release
+    runs-on: ubuntu-latest
+    # LAST, and only on a fully successful deploy. `needs:` is the whole enforcement: a job with
+    # `needs` runs only when every one of them succeeded, so a failed, cancelled or skipped deploy
+    # leaves the draft exactly where it was. Add a new deploy job above and it belongs in this list
+    # too, or a release can be published while part of the deploy is red.
+    needs: [deploy-extractor, deploy-api]
+    timeout-minutes: 5
+    # `contents: write` and nothing else. This job touches no Azure resource, so it needs neither
+    # `id-token` nor `environment: prod` — and declaring the environment would put a second approval
+    # gate in front of a step whose entire job is to record that the already-approved deploy
+    # finished. Job-level permissions replace the workflow-level block rather than adding to it,
+    # which is what keeps `contents: read` for the two deploy jobs.
+    permissions:
+      contents: write
+    steps:
+      # `--latest` moves GitHub's latest-release pointer to whatever was just deployed, INCLUDING
+      # when that is a rollback to an older tag. Correct: the pointer answers "what is in prod", not
+      # "what is the highest number". `scripts/next-version.js` computes from the highest TAG and no
+      # longer reads this flag, so moving it backwards cannot disturb the next version — which was
+      # a real trap while the base was the latest published release.
+      #
+      # The `else` branch exists for a tag whose draft is gone. `draft-release.yaml` keeps exactly
+      # one draft, so any tag older than the current candidate has none — and a rollback deploy is
+      # precisely that case. It must still leave a published release behind, otherwise the record of
+      # what is in production has a hole exactly where an incident put it.
+      #
+      # `gh release view` rather than `gh release edit ... || gh release create ...`: the `||` form
+      # would also swallow a genuine failure of the edit — a ruleset denial, a 5xx — and create a
+      # duplicate on top of it.
+      #
+      # `--repo` means no checkout is needed at all; this job never touches the working tree.
+      - name: Publish the release for this version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if gh release view "$VERSION" --repo "$REPO" >/dev/null 2>&1; then
+            gh release edit "$VERSION" --draft=false --latest --repo "$REPO"
+          else
+            echo "No release exists for $VERSION — creating a published one (rollback path)."
+            gh release create "$VERSION" --generate-notes --latest --repo "$REPO"
+          fi
+          {
+            echo "### 🚀 \`$VERSION\` is in production"
+            echo ""
+            echo "Its GitHub release is now published and marked latest."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report publish failure to job summary
+        if: failure()
+        run: |
+          echo "### ⚠️ Deploy succeeded, publishing the release did not" >> $GITHUB_STEP_SUMMARY
+          echo "The version IS deployed. Only the GitHub release record is stale — publish it by hand." >> $GITHUB_STEP_SUMMARY

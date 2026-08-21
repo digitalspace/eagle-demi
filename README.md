@@ -473,8 +473,18 @@ not redeploy the other:
 |---|---|---|
 | `azure-deploy-staging-frontend.yaml` | `$web` on the static-website storage account (repo variable `AZURE_FRONTEND_STORAGE_ACCOUNT`) | `frontend/**` |
 | `azure-deploy-staging-api.yaml` | `demi-api-test` | `src/**`, `api/**`, `public/**`, `index.js`, `host.json`, `package.json`, `yarn.lock`, `frontend/public/assets/geojson/**` |
+| `draft-release.yaml` | nothing — mints the tag and draft release for the same push (see [Releases](#releases)) | *any path* |
 
-Both also accept `workflow_dispatch`. The API's paths mirror `scripts/package-api.py`, which decides
+**The two staging workflows stay separate, and `draft-release.yaml` is a third.** Folding the deploys
+into one "Deploy to Test" was considered and rejected: they have different path filters, different
+concurrency groups, different Node versions, different Azure targets under different RBAC (Website
+Contributor on a Function App vs Storage Blob Data Contributor on `$web`), and only the frontend
+rewrites `env.js`. One workflow would have to re-derive "did the frontend change?" at runtime to keep
+the current behaviour, which is the coupling the 2026-08-05 split removed. Tagging is the one thing
+that must happen once per push regardless of paths, so it lives in the workflow that has no path
+filter.
+
+All three also accept `workflow_dispatch`. The API's paths mirror `scripts/package-api.py`, which decides
 what actually ships — root `public/` is not excluded there, and `frontend/public/assets/geojson/**`
 is explicitly re-included because the boundary seeder reads it at runtime, so that one path fires
 both workflows. Adding a directory to the package without adding it here gives you a deploy that
@@ -522,6 +532,11 @@ on staging, never a branch. Both jobs declare `environment: prod`, which is what
 subject `repo:digitalspace/eagle-demi:environment:prod`; renaming the environment breaks the
 federated credential. An earlier note here said no prod workflow existed, which was true only
 between 2026-08-05 and the prod estate being built.
+
+Its last job, `publish-release`, flips that version's draft release to published and marks it latest.
+It runs only when every deploy job has succeeded, holds `contents: write` and nothing else, and
+declares no `environment:` — it touches no Azure resource, and a second approval gate in front of
+"record that the approved deploy finished" would be theatre. See [Releases](#releases).
 
 Recreating them is not a copy job. Each environment needs its own managed identity, its own federated
 credential — subject `repo:digitalspace/eagle-demi:environment:test` or `:environment:prod`, matching
@@ -574,35 +589,51 @@ More, including the Kudu and basic-auth situation, in
 
 ## Releases
 
+**Two workflows, and the tag is cut at test time.** This is the paradigm the other Azure repos are
+meant to copy, so the shape matters more than the details:
+
+| | Workflow | Does |
+|---|---|---|
+| **test** | `draft-release.yaml` + the two `azure-deploy-staging-*.yaml` | Every push to `main` **mints a git tag**, refreshes the single draft release for it, and deploys that push to staging |
+| **prod** | `azure-deploy-prod.yaml` | Dispatched with a version, deploys `refs/tags/<version>`, and **publishes that release as its last step** |
+
+**The tag exists before anything is deployed.** That is the change: a draft release mints no git ref,
+so under the previous model the build running on staging had no name and "deploy the tag you verified
+on staging" could not be obeyed until a human had already published it. Publishing therefore meant
+"somebody intends to ship this". Now the tag is minted alongside the draft, the prod workflow deploys
+it, and **publishing means the version is in production**. Nothing else publishes — do not click
+Publish in the UI.
+
+The cost is deliberate: **a version is spent on every push to `main`**, and tags accumulate for
+candidates that never reach prod. A tag is a 40-byte ref, and the payoff is that every staging build
+is addressable — including for a rollback, which is just a dispatch naming an older tag.
+
 **Versions are computed, never typed.** `scripts/next-version.js` reads the commit messages between
-the last **published** release — the rolling draft below is invisible to that lookup, which is what
-keeps the version from climbing once per push — and the commit being built, then applies
-conventional-commit rules to the whole set: a breaking change bumps major, otherwise any `feat`
-bumps minor, otherwise patch. A breaking change is `!` before the `:`, or a `BREAKING CHANGE:` /
-`BREAKING-CHANGE:` footer line in the body; both spellings are normative and both are honoured.
-**While the major is `0` a breaking change bumps the minor instead** — a stray `refactor!:` must not
-mint `v1.0.0` on a product that has never shipped to prod.
+the **highest existing tag** and the commit being built, then applies conventional-commit rules to
+the whole set: a breaking change bumps major, otherwise any `feat` bumps minor, otherwise patch. A
+breaking change is `!` before the `:`, or a `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer line in the
+body; both spellings are normative and both are honoured. **While the major is `0` a breaking change
+bumps the minor instead** — a stray `refactor!:` must not mint `v1.0.0` on a product that has never
+shipped to prod.
 
-`.github/workflows/draft-release.yaml` runs on every push to `main` and maintains **exactly one
-rolling draft release**, deleting and recreating it each run. That means **any hand-edit to the draft
-body is lost on the next push**; write release prose in the commits instead.
+The base is the highest **tag**, not the latest published release. With a tag per push, a base that
+only saw published releases would recompute the same number every push and collide with the tag it
+had just created. A side effect worth knowing: ticking *Set as the latest release* on an older
+release no longer moves the version base backwards, which used to be a live trap.
 
-A draft release **creates no git tag**. The version number is reserved and visible, but not spent, so
-the draft is free to be retargeted at a newer SHA as more commits land — which is what lets an
-automatic version coexist with a staging deploy that fires on every push.
+The bump range and the **release-notes** range are therefore different, on purpose.
+`--generate-notes` infers its own start, which is the last *published* release — the last version
+that actually reached production. So the notes on the candidate that ships carry the work of every
+candidate that did not, which is the right answer to "what is new in prod".
 
-**Publishing the draft, by hand in the GitHub UI, is what mints the tag** — a lightweight tag at the
-exact SHA the draft targeted. That click is the "verified on staging" gate, and the tag it produces
-is what the prod workflow described above will deploy once prod becomes real. Nothing publishes
-automatically.
+`draft-release.yaml` maintains **exactly one draft release**, deleting and recreating it each run, so
+**any hand-edit to the draft body is lost on the next push**; write release prose in the commits
+instead. Deleting a draft never deletes its tag — `gh release delete` is run without `--cleanup-tag`,
+and that flag must never be added, since it would destroy the previous candidate's tag on every push.
+A tag whose draft has been superseded is still deployable; if prod deploys one, the publish step
+creates the published release itself.
 
-Publish it as a normal release — do **not** tick *Set as a pre-release*. The version base is the
-repository's latest published release, a lookup that skips pre-releases, so a pre-released version
-is recomputed unchanged on the next push and then collides with the tag it just minted. The same
-lookup honours GitHub's *Set as the latest release* flag rather than tag order, so ticking that on
-an older release moves the base backwards with the same result.
-
-Once a first release has been published, `git describe --tags` resolves and the deploy script stamps
+Once a first release exists, `git describe --tags` resolves and the deploy script stamps
 `BUILD_ID` as `v0.1.1-3-gabc1234-121314`, reported at `GET /api/config`. Before that it is a bare
 SHA, exactly as today.
 
@@ -616,9 +647,10 @@ gh release create v0.1.0 --repo digitalspace/eagle-demi \
   --notes "Baseline: the state of staging as of the first tagged release."
 ```
 
-Create it **before** this automation lands on `main`, or the first Draft release run fails: the
-script has no first-run path at all, by design. Every later version is computed against a real
+Create it **before** this automation lands on `main`, or the first *Tag and draft release* run fails:
+the script has no first-run path at all, by design. Every later version is computed against a real
 predecessor, which is what removes the untestable "no previous release" branch from the script.
+Publishing that seed is what puts the `v0.1.0` tag in place; from there the workflow tags on its own.
 
 `release-drafter` was the closest off-the-shelf fit and was rejected on a specific point: its
 `version-resolver` reads **pull-request labels** and its notes are assembled from **merged PRs**.
