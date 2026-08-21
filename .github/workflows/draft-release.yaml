@@ -131,7 +131,16 @@ jobs:
       # version step has already seen the tag it created last time and computed the NEXT one, so
       # there is nothing to collide with; a genuine collision means the base lookup is wrong and
       # must stop the run rather than silently reuse a shipped version.
+      #
+      # BRANCH-GUARDED, and the guard is load-bearing. `workflow_dispatch` is kept as a testing
+      # escape hatch and carries no branch restriction — only the `push` trigger does. That was
+      # harmless while this workflow only produced a draft, because a draft mints no ref. Now it
+      # pushes a REAL tag, and azure-deploy-prod.yaml checks out `refs/tags/<input>` after
+      # validating only the `^v[0-9]+\.[0-9]+\.[0-9]+$` SHAPE — so a tag cut from an unmerged
+      # branch would pass every gate and deploy to production. The draft refresh above stays
+      # dispatchable from anywhere; only the tag is pinned to main.
       - name: Tag the commit
+        if: github.ref == 'refs/heads/main'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
