@@ -3,11 +3,54 @@ import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { RegistryStateService } from './registry-state.service';
 
+// Any payload loadData() accepts. At module scope because the default stub below needs it before
+// any individual spec runs.
+const okResponse = (payload: unknown = [{ searchResults: [] }]) =>
+  new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' }
+  });
+
+// Reassign in a spec that needs different behaviour — `sharedFetchSpy.and.resolveTo(...)`. Do NOT
+// call spyOn(window, 'fetch') again; jasmine throws once a method is already spied.
+let sharedFetchSpy: jasmine.Spy;
+
+// STUB FETCH BEFORE THE SERVICE IS CONSTRUCTED, in every describe that injects it.
+//
+// The constructor kicks off I/O: initKeycloak() -> authSettled() -> loadData(). With auth disabled
+// that runs on inject, so EVERY spec issued a real request, karma answered 404, and loadData()'s
+// catch logged "[Registry loadData] API search fetch failed: Error: Projects API returned status
+// 404" (registry-state.service.ts:1112). The catch handles it, so no spec ever failed — but the
+// rejection settles after the spec that started it has finished, which jasmine 7 reports as a
+// run-level ERROR where jasmine 6 swallowed it silently.
+//
+// Measured before this stub: 41 of the 44 specs leaked one. It was FLAKY rather than merely noisy —
+// whether the rejection lands inside the run or after it is a timing race, so the same commit
+// exited 0 locally and ERROR in CI.
+function stubFetch(): jasmine.Spy {
+  return spyOn(window, 'fetch').and.callFake(() => Promise.resolve(okResponse()));
+}
+
+// Let the constructor's own loadData() finish before a spec starts, then zero the call count.
+//
+// Without this the two are racing: a spec that sets `.and.rejectWith(...)` and awaits its own
+// loadData() can have the constructor's earlier, successful load land afterwards and clear the
+// error banner it just asserted. It also keeps `expect(sharedFetchSpy).not.toHaveBeenCalled()`
+// meaning "this spec issued no request" rather than "nothing has ever fetched", which is the
+// claim those specs are actually making.
+async function settleInitialLoad(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 0));
+  sharedFetchSpy.calls.reset();
+}
+
 describe('RegistryStateService', () => {
   let service: RegistryStateService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorage.clear();
+
+    sharedFetchSpy = stubFetch();
+
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(withXhr()),
@@ -16,6 +59,7 @@ describe('RegistryStateService', () => {
       ]
     });
     service = TestBed.inject(RegistryStateService);
+    await settleInitialLoad();
   });
 
   it('should be created', () => {
@@ -58,7 +102,7 @@ describe('RegistryStateService', () => {
 
   it('should fetch boundary geometry and update cache if not cached', async () => {
     const mockResponse = [{ name: 'Fetched District' }];
-    const fetchSpy = spyOn(window, 'fetch').and.resolveTo(new Response(JSON.stringify(mockResponse), {
+    const fetchSpy = sharedFetchSpy.and.resolveTo(new Response(JSON.stringify(mockResponse), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
     }));
@@ -88,7 +132,7 @@ describe('RegistryStateService', () => {
     });
 
     const mockResponse = { name: 'Victoria-Beacon Hill', geometry: { type: 'Polygon', coordinates: [[1, 2]] } };
-    const fetchSpy = spyOn(window, 'fetch').and.resolveTo(new Response(JSON.stringify(mockResponse), {
+    const fetchSpy = sharedFetchSpy.and.resolveTo(new Response(JSON.stringify(mockResponse), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
     }));
@@ -216,7 +260,7 @@ describe('RegistryStateService', () => {
   // backend rendered as a healthy demo full of fictional data. It must fail visibly.
   describe('loadData failure handling', () => {
     it('should surface an error and NOT substitute mock data when the API fails', async () => {
-      spyOn(window, 'fetch').and.rejectWith(new Error('network down'));
+      sharedFetchSpy.and.rejectWith(new Error('network down'));
 
       await service.loadData();
 
@@ -226,13 +270,13 @@ describe('RegistryStateService', () => {
     });
 
     it('should clear a previous error at the start of a new load', async () => {
-      spyOn(window, 'fetch').and.rejectWith(new Error('network down'));
+      sharedFetchSpy.and.rejectWith(new Error('network down'));
       await service.loadData();
       expect(service.loadError()).toBeTruthy();
 
       // A subsequent successful load must clear the banner. loadData fetches projects AND
       // documents, so build a fresh Response per call — a body can only be read once.
-      (window.fetch as jasmine.Spy).and.callFake(async () =>
+      sharedFetchSpy.and.callFake(async () =>
         new Response(JSON.stringify([{ searchResults: [] }]), {
           status: 200,
           headers: { 'Content-Type': 'application/json' }
@@ -247,13 +291,8 @@ describe('RegistryStateService', () => {
   // Before cancellation existed, the last request to RESOLVE won each signal rather than the last
   // one issued — and fetchWithRetry's backoff sleeps made that window seconds wide.
   describe('search cancellation', () => {
-    const jsonResponse = (payload: unknown) => new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
-
     it('cancels a superseded search without raising the error banner', async () => {
-      spyOn(window, 'fetch').and.callFake((_input: any, init?: RequestInit) =>
+      sharedFetchSpy.and.callFake((_input: any, init?: RequestInit) =>
         new Promise<Response>((resolve, reject) => {
           const signal = init?.signal;
           if (signal?.aborted) {
@@ -261,7 +300,7 @@ describe('RegistryStateService', () => {
             return;
           }
           signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
-          setTimeout(() => resolve(jsonResponse([{ searchResults: [] }])), 5);
+          setTimeout(() => resolve(okResponse([{ searchResults: [] }])), 5);
         })
       );
 
@@ -276,9 +315,9 @@ describe('RegistryStateService', () => {
 
     it('issues the three searches together, each cancellable', async () => {
       const inits: (RequestInit | undefined)[] = [];
-      spyOn(window, 'fetch').and.callFake((_input: any, init?: RequestInit) => {
+      sharedFetchSpy.and.callFake((_input: any, init?: RequestInit) => {
         inits.push(init);
-        return Promise.resolve(jsonResponse([{ searchResults: [], count: 7 }]));
+        return Promise.resolve(okResponse([{ searchResults: [], count: 7 }]));
       });
 
       service.searchQuery.set('pipeline');
@@ -289,8 +328,8 @@ describe('RegistryStateService', () => {
     });
 
     it('records the index-wide total the API reports', async () => {
-      spyOn(window, 'fetch').and.callFake(() =>
-        Promise.resolve(jsonResponse([{ searchResults: [], count: 1204 }]))
+      sharedFetchSpy.and.callFake(() =>
+        Promise.resolve(okResponse([{ searchResults: [], count: 1204 }]))
       );
 
       service.searchQuery.set('pipeline');
@@ -432,13 +471,15 @@ describe('RegistryStateService', () => {
 describe('RegistryStateService — isStaff', () => {
   let service: RegistryStateService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorage.clear();
+    sharedFetchSpy = stubFetch();
     TestBed.configureTestingModule({
       providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), RegistryStateService]
     });
     service = TestBed.inject(RegistryStateService);
     service.authEnabled.set(true);
+    await settleInitialLoad();
   });
 
   it('is false for an anonymous visitor', () => {
@@ -495,20 +536,22 @@ describe('RegistryStateService — isStaff', () => {
 describe('RegistryStateService — loadSummary gating', () => {
   let service: RegistryStateService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     localStorage.clear();
+    sharedFetchSpy = stubFetch();
     TestBed.configureTestingModule({
       providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), RegistryStateService]
     });
     service = TestBed.inject(RegistryStateService);
     service.authEnabled.set(true);
+    await settleInitialLoad();
   });
 
   it('issues NO request when the user is not staff', async () => {
     // The whole reason the gate is `isStaff` and not `isAuthenticated`: the endpoint is
     // privileged-only, so a non-staff request is a guaranteed 401 straight into the fetch
     // interceptor's refresh-and-replay.
-    const fetchSpy = spyOn(window, 'fetch');
+    const fetchSpy = sharedFetchSpy;
     service.isAuthenticated.set(true);
     service.isUnauthorized.set(true);
     service.summaryQuery.set('pipeline');
@@ -521,7 +564,7 @@ describe('RegistryStateService — loadSummary gating', () => {
   });
 
   it('issues NO request for an empty question', async () => {
-    const fetchSpy = spyOn(window, 'fetch');
+    const fetchSpy = sharedFetchSpy;
     service.isAuthenticated.set(true);
     service.isUnauthorized.set(false);
     service.summaryQuery.set('   ');
@@ -535,7 +578,7 @@ describe('RegistryStateService — loadSummary gating', () => {
   // already carries — it is the Cosmos partition key, and omitting it costs a cross-partition query.
 
   it('sends the partition key when fetchDocument is given a projectId', async () => {
-    const fetchSpy = spyOn(window, 'fetch').and.resolveTo(new Response(JSON.stringify({ id: 'doc1' }), {
+    const fetchSpy = sharedFetchSpy.and.resolveTo(new Response(JSON.stringify({ id: 'doc1' }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
     }));
@@ -547,13 +590,13 @@ describe('RegistryStateService — loadSummary gating', () => {
   });
 
   it('returns null rather than throwing when fetchDocument is refused', async () => {
-    spyOn(window, 'fetch').and.resolveTo(new Response('{}', { status: 403 }));
+    sharedFetchSpy.and.resolveTo(new Response('{}', { status: 403 }));
 
     await expectAsync(service.fetchDocument('doc1', 'proj1')).toBeResolvedTo(null);
   });
 
   it('returns the presigned url from getDownloadUrl', async () => {
-    spyOn(window, 'fetch').and.resolveTo(new Response(JSON.stringify({ url: 'https://store/file.pdf' }), {
+    sharedFetchSpy.and.resolveTo(new Response(JSON.stringify({ url: 'https://store/file.pdf' }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
     }));
@@ -562,7 +605,7 @@ describe('RegistryStateService — loadSummary gating', () => {
   });
 
   it('throws a permission message when the download is refused', async () => {
-    spyOn(window, 'fetch').and.resolveTo(new Response('{}', { status: 403 }));
+    sharedFetchSpy.and.resolveTo(new Response('{}', { status: 403 }));
 
     await expectAsync(service.getDownloadUrl('doc1', 'proj1'))
       .toBeRejectedWithError('You do not have permission to download this document.');
