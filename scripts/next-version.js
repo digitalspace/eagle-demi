@@ -144,7 +144,7 @@ if (require.main === module) {
     // different repositories: without it `gh` infers from the checkout's origin remote, while the
     // compare uses GITHUB_REPOSITORY. In a fork or a mirror clone that yields a base tag from one
     // repository and a commit range from another.
-    lastTag = highestReleaseTag(gh(['api', `repos/${repository}/tags`, '--paginate', '--jq', '.[].name']).split('\n'));
+    lastTag = highestReleaseTag(gh(['api', `repos/${repository}/tags`, '--paginate', '--per-page', '100', '--jq', '.[].name']).split('\n'));
   } catch {
     // gh has already printed its own reason on stderr; fall through so nextVersion raises the
     // actionable "create the seed release" error rather than a bare non-zero exit.

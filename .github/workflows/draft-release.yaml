@@ -76,6 +76,13 @@ permissions:
 jobs:
   draft-release:
     name: Tag the commit and refresh the draft release
+    # GUARDED AT JOB LEVEL, NOT ON THE TAG STEP. `workflow_dispatch` carries no branch restriction
+    # — only the `push` trigger does — and guarding the tag step alone is not enough: the delete
+    # step would still remove the LIVE candidate's draft (its notes, with no undo) and the create
+    # step would still stage a draft at the unmerged SHA. Publishing that draft in the UI mints the
+    # tag, and azure-deploy-prod.yaml validates only the `^v[0-9]+\.[0-9]+\.[0-9]+$` shape before
+    # checking out `refs/tags/<input>` — so it reaches production. The whole job is pinned to main.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -131,16 +138,7 @@ jobs:
       # version step has already seen the tag it created last time and computed the NEXT one, so
       # there is nothing to collide with; a genuine collision means the base lookup is wrong and
       # must stop the run rather than silently reuse a shipped version.
-      #
-      # BRANCH-GUARDED, and the guard is load-bearing. `workflow_dispatch` is kept as a testing
-      # escape hatch and carries no branch restriction — only the `push` trigger does. That was
-      # harmless while this workflow only produced a draft, because a draft mints no ref. Now it
-      # pushes a REAL tag, and azure-deploy-prod.yaml checks out `refs/tags/<input>` after
-      # validating only the `^v[0-9]+\.[0-9]+\.[0-9]+$` SHAPE — so a tag cut from an unmerged
-      # branch would pass every gate and deploy to production. The draft refresh above stays
-      # dispatchable from anywhere; only the tag is pinned to main.
       - name: Tag the commit
-        if: github.ref == 'refs/heads/main'
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
