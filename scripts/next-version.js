@@ -144,10 +144,18 @@ if (require.main === module) {
     // different repositories: without it `gh` infers from the checkout's origin remote, while the
     // compare uses GITHUB_REPOSITORY. In a fork or a mirror clone that yields a base tag from one
     // repository and a commit range from another.
-    lastTag = highestReleaseTag(gh(['api', `repos/${repository}/tags`, '--paginate', '--per-page', '100', '--jq', '.[].name']).split('\n'));
-  } catch {
-    // gh has already printed its own reason on stderr; fall through so nextVersion raises the
-    // actionable "create the seed release" error rather than a bare non-zero exit.
+    lastTag = highestReleaseTag(gh(['api', `repos/${repository}/tags?per_page=100`, '--paginate', '--jq', '.[].name']).split('\n'));
+  } catch (err) {
+    // gh has already printed its own reason on stderr. Falling through lets nextVersion raise the
+    // actionable "create the seed release" error — but ONLY a 404 actually means the seed is
+    // missing. A bad flag, a rate limit or a 5xx all land here too, and pointing the operator at
+    // `gh release create v0.1.0` for those is a wrong instruction they might follow: the tag they
+    // would be told to create already exists. So say which failure this was.
+    process.stderr.write(
+      `Could not list tags for ${repository}: ${err.message}\n` +
+      'If that is a 404 the seed release is genuinely missing; anything else is a gh or API ' +
+      'failure and the message below about creating a seed release does not apply.\n'
+    );
   }
 
   // `total_commits` is fetched alongside the messages so truncation is detectable — see the guard

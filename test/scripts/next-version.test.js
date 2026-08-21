@@ -1,4 +1,9 @@
 'use strict';
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const SCRIPT = require('node:path').join(__dirname, '..', '..', 'scripts', 'next-version.js');
 
 // The bump rules in `scripts/next-version.js` are the only non-trivial logic in the release
 // automation, and they are logic nobody watches: the workflow runs unattended on every push to
@@ -124,4 +129,39 @@ test('surrounding whitespace and blank lines from the API stream are tolerated',
 test('no release tag at all yields an empty base, which nextVersion turns into the seed error', () => {
   assert.strictEqual(highestReleaseTag([]), '');
   assert.throws(() => nextVersion(highestReleaseTag(['nightly']), ['fix: x']), /seed release/);
+});
+
+// THE ARGV THE SCRIPT ACTUALLY HANDS TO gh, which no other test in this file reaches.
+//
+// Everything above imports { nextVersion, highestReleaseTag } and exercises pure functions. The
+// `require.main === module` block is what runs in CI, and it shipped `--per-page 100` — a flag
+// `gh api` does not have — through a fully green suite. The script exited 1 on every push to main
+// and no test noticed, because no test ran the script.
+//
+// gh is stubbed on PATH rather than mocked in-process: the script spawns a real child, so only a
+// real executable observes what it was invoked with.
+test('the tags lookup uses argv gh actually accepts', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nv-argv-'));
+  const argvLog = path.join(dir, 'argv.txt');
+  fs.writeFileSync(path.join(dir, 'gh'), `#!/bin/sh
+printf '%s\\n' "$@" >> ${argvLog}
+case "$1$2" in
+  *tags*) echo v1.2.3 ;;
+  *) echo '{"total":1,"messages":["fix: x"]}' ;;
+esac
+`, { mode: 0o755 });
+
+  execFileSync(process.execPath, [SCRIPT], {
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: 'o/r' },
+    encoding: 'utf8',
+  });
+
+  const argv = fs.readFileSync(argvLog, 'utf8').split('\n').filter(Boolean);
+  // A flag gh does not define is the failure this test exists for. Per-page belongs in the query
+  // string; `gh api` has no --per-page.
+  assert.ok(!argv.includes('--per-page'), '`gh api` has no --per-page flag — put per_page in the query string');
+  assert.ok(argv.some((a) => a.includes('tags?per_page=')), 'the tags call should request a full page');
+  assert.ok(argv.includes('--paginate'), 'every page must be fetched to find the highest tag');
+
+  fs.rmSync(dir, { recursive: true, force: true });
 });
