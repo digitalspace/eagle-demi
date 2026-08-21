@@ -1,4 +1,9 @@
 'use strict';
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const SCRIPT = require('node:path').join(__dirname, '..', '..', 'scripts', 'next-version.js');
 
 // The bump rules in `scripts/next-version.js` are the only non-trivial logic in the release
 // automation, and they are logic nobody watches: the workflow runs unattended on every push to
@@ -12,7 +17,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { nextVersion } = require('../../scripts/next-version');
+const { nextVersion, highestReleaseTag } = require('../../scripts/next-version');
 
 test('patch-only commits bump the patch', () => {
   assert.strictEqual(nextVersion('v0.1.0', ['fix: bound unbounded Cosmos queries', 'chore: bump eslint']), 'v0.1.1');
@@ -95,4 +100,99 @@ test('a missing or unparseable last tag tells the operator to create the seed re
   for (const bad of [null, undefined, '', 'latest', 'v1.2']) {
     assert.throws(() => nextVersion(bad, ['fix: something']), /seed release/, `expected a throw for ${JSON.stringify(bad)}`);
   }
+});
+
+// `highestReleaseTag` is the version BASE. Since every push to `main` mints a tag, picking the wrong
+// one re-mints a version that already exists — the tag push then fails, or worse, succeeds against a
+// number a previous build already shipped under.
+
+test('the base is the highest tag, not the last one GitHub happened to return', () => {
+  assert.strictEqual(highestReleaseTag(['v0.1.0', 'v0.3.1', 'v0.2.7']), 'v0.3.1');
+});
+
+test('the base is ordered numerically, not lexically', () => {
+  // The one that a plain string sort gets backwards: 'v0.1.9' > 'v0.1.10' as text.
+  assert.strictEqual(highestReleaseTag(['v0.1.9', 'v0.1.10']), 'v0.1.10');
+  assert.strictEqual(highestReleaseTag(['v0.9.0', 'v0.10.0']), 'v0.10.0');
+  assert.strictEqual(highestReleaseTag(['v9.0.0', 'v10.0.0']), 'v10.0.0');
+});
+
+test('tags that are not release tags are never the base', () => {
+  assert.strictEqual(highestReleaseTag(['v0.1.0', 'v9.9.9-rc1', 'release/2026-08', 'latest', 'v1.2']), 'v0.1.0');
+});
+
+test('surrounding whitespace and blank lines from the API stream are tolerated', () => {
+  // The caller splits `gh --jq` output on newlines, so a trailing newline yields a final ''.
+  assert.strictEqual(highestReleaseTag([' v0.1.0 ', 'v0.2.0\r', '']), 'v0.2.0');
+});
+
+test('no release tag at all yields an empty base, which nextVersion turns into the seed error', () => {
+  assert.strictEqual(highestReleaseTag([]), '');
+  assert.throws(() => nextVersion(highestReleaseTag(['nightly']), ['fix: x']), /seed release/);
+});
+
+// THE ARGV THE SCRIPT ACTUALLY HANDS TO gh, which no other test in this file reaches.
+//
+// Everything above imports { nextVersion, highestReleaseTag } and exercises pure functions. The
+// `require.main === module` block is what runs in CI, and it shipped `--per-page 100` — a flag
+// `gh api` does not have — through a fully green suite. The script exited 1 on every push to main
+// and no test noticed, because no test ran the script.
+//
+// gh is stubbed on PATH rather than mocked in-process: the script spawns a real child, so only a
+// real executable observes what it was invoked with.
+test('the tags lookup uses argv gh actually accepts', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nv-argv-'));
+  const argvLog = path.join(dir, 'argv.txt');
+  fs.writeFileSync(path.join(dir, 'gh'), `#!/bin/sh
+printf '%s\\n' "$@" >> ${argvLog}
+case "$1$2" in
+  *tags*) echo v1.2.3 ;;
+  *) echo '{"total":1,"messages":["fix: x"]}' ;;
+esac
+`, { mode: 0o755 });
+
+  execFileSync(process.execPath, [SCRIPT], {
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: 'o/r' },
+    encoding: 'utf8',
+  });
+
+  const argv = fs.readFileSync(argvLog, 'utf8').split('\n').filter(Boolean);
+  // A flag gh does not define is the failure this test exists for. Per-page belongs in the query
+  // string; `gh api` has no --per-page.
+  assert.ok(!argv.includes('--per-page'), '`gh api` has no --per-page flag — put per_page in the query string');
+  assert.ok(argv.some((a) => a.includes('tags?per_page=')), 'the tags call should request a full page');
+  assert.ok(argv.includes('--paginate'), 'every page must be fetched to find the highest tag');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// THE gh-FAILURE PATH. The catch block deliberately does NOT substitute a fallback base: a bad
+// flag, a rate limit or a 5xx all land there alongside a genuine 404, and continuing from a base
+// that is not the highest tag computes a version that already exists — surfacing much later as a
+// `git push origin <tag>` collision in draft-release.yaml rather than here, where it is legible.
+test('a gh failure listing tags is fatal, not silently absorbed into a fallback base', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nv-ghfail-'));
+  fs.writeFileSync(path.join(dir, 'gh'), `#!/bin/sh
+case "$1$2" in
+  *tags*) echo 'gh: HTTP 403: API rate limit exceeded' >&2; exit 1 ;;
+  *) echo '{"total":1,"messages":["fix: x"]}' ;;
+esac
+`, { mode: 0o755 });
+
+  const run = () => execFileSync(process.execPath, [SCRIPT], {
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: 'o/r' },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  // Non-zero exit is the load-bearing assertion: seed a fallback base in the catch and the script
+  // exits 0 with a wrong version, which is exactly what this must not allow.
+  let err;
+  try { run(); } catch (e) { err = e; }
+  assert.ok(err, 'a gh failure must not exit 0');
+  // And the operator has to be told which failure it was, or they follow the seed-release
+  // instruction and try to create a tag that already exists.
+  assert.match(err.stderr, /Could not list tags for o\/r/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
 });
