@@ -24,7 +24,10 @@ test('Search Controller Tests', async (t) => {
         name: 'Ajax Mine',
         region: 'Thompson-Okanagan',
         sector: 'Mining',
-        status: 'Completed',
+        // `projectState`, because that is what a Cosmos project row holds. This fixture said
+        // `status` — the INDEX name — which is how a branch reading index names off a Cosmos row
+        // went unnoticed: the fixture agreed with the bug instead of with the database.
+        projectState: 'Completed',
         centroid: { type: 'Point', coordinates: [-120.37, 50.62] },
         read: ['public'],
         isPublished: true,
@@ -791,6 +794,118 @@ test('the eagle-public response contract', async (t) => {
     assert.strictEqual(eagleBacked.id, '207', 'the DEMI id stays available to DEMI\'s frontend');
     assert.strictEqual(trackOnly._id, '999', 'no Eagle counterpart: the DEMI id, never undefined');
     assert.strictEqual(eagleBacked.read, undefined, 'the row ACL is not published');
+  });
+
+  // ONE STORED ROW, both branches, one answer. The indexer's SELECT renames two of its columns
+  // (`azure/search/datasources/demi-projects-ds.json`: `c.projectState AS status`, `c.eagleId AS
+  // legacyEagleId`), so an AI Search hit and the Cosmos row it was built from spell the same two
+  // fields differently — and the keywordless branch was reading the INDEX names off a COSMOS row.
+  // `p.status` is never defined on a stored project, so `|| 'Active'` fired unconditionally and
+  // this branch reported a completed project as Active: not a gap, a wrong value asserted as fact.
+  //
+  // Written as a parity assertion rather than two literal expectations on purpose. A test that
+  // hardcodes 'Completed' twice still passes if someone later changes ONE branch; comparing the two
+  // payloads field by field is what actually holds the contract eagle-public depends on, which is
+  // that a project reads the same whether or not the caller typed a keyword.
+  await t.test('the same project reads the same on the Cosmos and AI Search branches', async () => {
+    // The STORED shape, as merge/project.js writes it (`projectState` at :38, `eagleId` at :171).
+    const stored = {
+      id: '207',
+      // A NUMBER, as merge/project.js:170 writes it (`Number(track.track_project_id)`). The index
+      // has no such field at all — the datasource SELECT does not list it — so the AI branch falls
+      // back to the index key, which is a String. That mismatch is why both branches coerce.
+      trackProjectId: 207,
+      name: 'Site C',
+      sector: 'Energy-Electricity',
+      region: 'Peace River',
+      projectState: 'Completed',
+      eagleId: '588511c4aaecd9001b826192',
+      read: ['public'],
+      isPublished: true
+    };
+    // The same row after the indexer's SELECT — the aliases applied, nothing else changed.
+    const indexed = {
+      id: stored.id,
+      name: stored.name,
+      sector: stored.sector,
+      region: stored.region,
+      status: stored.projectState,
+      legacyEagleId: stored.eagleId,
+      read: stored.read
+    };
+
+    t.mock.method(projectsRepo, 'listVisible', async () => ({ items: [stored] }));
+    t.mock.method(projectsRepo, 'countVisible', async () => 1);
+    t.mock.method(aiSearch, 'searchProjects', async () => ({ count: 1, items: [indexed] }));
+
+    const fallback = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: '', pageSize: '10' }, header: () => null },
+      fallback.res);
+    const [viaCosmos] = fallback.out.body[0].searchResults;
+
+    const keyword = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'site c', pageSize: '10' }, header: () => null },
+      keyword.res);
+    const [viaIndex] = keyword.out.body[0].searchResults;
+
+    // EVERY field both branches emit, derived from the payloads rather than listed by hand — a
+    // hand-written list is how `trackProjectId` stayed out of the comparison while it was the one
+    // field still disagreeing (Cosmos stores a Number, the index returns a String).
+    const common = Object.keys(viaCosmos).filter(k => k in viaIndex);
+    assert.ok(common.length >= 10, `expected both branches to emit ~12 fields, saw ${common.length}`);
+    for (const field of common) {
+      assert.deepStrictEqual(viaCosmos[field], viaIndex[field],
+        `${field} disagrees between the Cosmos and AI Search branches`);
+    }
+    assert.ok(common.includes('trackProjectId'), 'trackProjectId must be in the comparison');
+    // Pinned as well as compared: parity alone would also be satisfied by both branches being
+    // wrong in the same direction, which is the failure mode this route already shipped once.
+    assert.strictEqual(viaCosmos.status, 'Completed', 'the real project state, not the default');
+    assert.strictEqual(viaCosmos.legacyEagleId, '588511c4aaecd9001b826192');
+    assert.strictEqual(viaCosmos._id, '588511c4aaecd9001b826192', 'keyed on the Eagle ObjectId');
+    assert.strictEqual(viaCosmos.trackProjectId, '207', 'a String on both branches, not a Number');
+  });
+
+  await t.test('an API-created project reads right on Cosmos and WRONG on the index — the known gap', async () => {
+    // TWO WRITERS DISAGREE ON THIS FIELD. `merge/project.js:38` stores `projectState`;
+    // `controllers/nosql/project.js:87` createProject stores `status`. Reading only `projectState`
+    // fixes the synced rows and breaks the API-created ones — the same wrong answer from the other
+    // direction, which is why the mapper reads whichever name the row carries.
+    const apiCreated = {
+      id: '9001', name: 'Hand Made', status: 'Withdrawn',
+      eagleId: '588511c4aaecd9001b826192', read: ['public'], isPublished: true
+    };
+    t.mock.method(projectsRepo, 'listVisible', async () => ({ items: [apiCreated] }));
+    t.mock.method(projectsRepo, 'countVisible', async () => 1);
+
+    const c = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: '', pageSize: '10' }, header: () => null }, c.res);
+
+    assert.strictEqual(c.out.body[0].searchResults[0].status, 'Withdrawn',
+      'a row written by createProject must not read back as the Active default');
+
+    // AND THE OTHER BRANCH STILL GETS IT WRONG. Asserting only the Cosmos side above would imply a
+    // parity that does not hold: the index sources `status` from `c.projectState`
+    // (demi-projects-ds.json), and an API-created row has no such field, so the alias yields
+    // nothing and the mapper's `|| 'Active'` fires. Pinned deliberately rather than left unsaid —
+    // a test that exercises one branch and reads as if it covered both is worse than no test.
+    //
+    // THIS ASSERTION INVERTS when the write side is unified (see TODO.md F11a): at that point the
+    // index carries the real state and this must become an equality with the Cosmos branch. It is
+    // pinning a known gap, not a desired behaviour — do not "fix" the gap and leave this green.
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{ id: '9001', name: 'Hand Made', legacyEagleId: '588511c4aaecd9001b826192', read: ['public'] }]
+    }));
+    const k = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'hand made', pageSize: '10' }, header: () => null }, k.res);
+
+    assert.strictEqual(k.out.body[0].searchResults[0].status, 'Active',
+      'the index cannot know the state of a row whose writer used the other field name');
   });
 });
 

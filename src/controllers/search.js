@@ -416,11 +416,38 @@ exports.search = async (req, res) => {
           _id: p.eagleId || String(p.id),
           _schemaName: 'Project',
           id: String(p.id),
-          trackProjectId: p.trackProjectId || p.id,
-          legacyEagleId: p.legacyEagleId || '',
+          // STRING, matching the AI Search branch. Cosmos stores this as a Number
+          // (`merge/project.js:170`, `Number(track.track_project_id)`) while the index has no such
+          // field at all, so that branch falls back to the index KEY — declared `Edm.String` in
+          // `azure/search/indexes/projects.json`, hence always a String. Only this side can differ,
+          // which is why only this side coerces; a `String()` over there would be an inert line
+          // pretending to do work.
+          trackProjectId: String(p.trackProjectId || p.id),
+          // COSMOS FIELD NAMES, not index field names. The two branches of this route read two
+          // different shapes of the same record: the indexer's SELECT aliases the stored columns
+          // (`azure/search/datasources/demi-projects-ds.json`: `c.projectState AS status`,
+          // `c.eagleId AS legacyEagleId`), so an AI Search hit carries `status`/`legacyEagleId`
+          // while the row this branch reads straight out of Cosmos carries `projectState`/`eagleId`
+          // — the names `merge/project.js` writes (`:38` via TRACK_PRECEDENCE, `:171`/`:229`).
+          //
+          // Reading the aliases here was worse than a missing value: `p.status` was ALWAYS
+          // undefined, so `|| 'Active'` fired on every row and this branch asserted that every
+          // project in the registry is Active — including the completed and withdrawn ones — as
+          // fact, with no way for the caller to tell it apart from a real reading. `legacyEagleId`
+          // failed the same way but visibly, as a permanently empty string. `_id` above was already
+          // correct, which is exactly why the defect survived review: the two fields sit three lines
+          // apart and only one of them was reading the row it was handed.
+          legacyEagleId: p.eagleId || '',
           name: p.name || 'Unnamed Project',
           sector: p.sector || 'Other',
-          status: p.status || 'Active',
+          // BOTH names, because TWO WRITERS DISAGREE. `merge/project.js:38` stores `projectState`
+          // (the sync path, and where the 393 rows in the registry come from), while
+          // `controllers/nosql/project.js:87` `createProject` stores `status` and `updateProject`
+          // spreads `...changes` verbatim, so anything created or edited through the API lands
+          // under the index's alias instead. Reading only `projectState` fixed the sync rows and
+          // broke the API-created ones — the same wrong answer arriving from the other direction.
+          // Unifying the writers is its own change; until then this reads whichever the row has.
+          status: p.projectState || p.status || 'Active',
           // Same helper as the AI Search branch — one definition of the fallback centroid, and
           // no second place to get the [lng, lat] orientation wrong.
           centroid: geoPoint(p.centroid),

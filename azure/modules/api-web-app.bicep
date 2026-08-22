@@ -24,13 +24,48 @@ param searchEndpoint string = ''
 
 // All three index names are PINNED TO THE OLD `demi-` NAMES on purpose, even though the committed
 // definitions under `azure/search/` now carry the plain names. The physical indexes on
-// `demi-search-test` are still `demi-chunks`/`demi-projects`/`demi-documents`; the plain-named ones
-// do not exist yet, and are created and filled by hand from inside the VNet because the data plane
-// has `publicNetworkAccess: Disabled`. Deploying this template must therefore change nothing live.
-// The cutover is a separate, settings-only change: flip these three defaults once the new indexes
-// are populated, and roll back by flipping them back — no code release either way. That is the
-// whole reason `searchIndexProjects` and `searchIndexDocuments` exist at all; until now only the
-// chunk index had an app setting, so the other two could only be moved by a code change.
+// `demi-search-test` are still `demi-chunks`/`demi-projects`/`demi-documents`, and they keep
+// serving every query until these three lines change. Deploying this template must therefore change
+// nothing live.
+//
+// FLIPPING ALL THREE OF THESE DEFAULTS TO `chunks`/`projects`/`documents` **IS** THE CUTOVER.
+// There is no other switch, no code release and no data-plane step left in it — that is the whole
+// reason `searchIndexProjects` and `searchIndexDocuments` exist at all; until they were added only
+// the chunk index had an app setting, so the other two could only be moved by a code change.
+//
+// DO NOT FLIP THEM YET. As of 2026-08-22 the plain-named indexes EXIST but are still filling. Do
+// not trust a percentage written here — read the counts, because a stale figure in a comment is
+// exactly the thing that would talk someone into arming this early. An index name is
+// immutable, so the fill is a one-way create-and-refill from Cosmos over the indexers' PT5M
+// schedule — there is nothing to wait on but row counts. Arm this only when all three have reached
+// their Cosmos source-of-truth totals — COMPARED LIVE, not against numbers transcribed here. The
+// Track sync keeps appending, so a written total decays exactly the way a percentage would: once
+// Cosmos holds 400 projects an index sitting at the 393 someone wrote down satisfies the gate with
+// seven rows missing, which is the very outcome the next paragraph calls dangerous. Read both sides
+// and require equality:
+//
+//     az monitor metrics list --resource <demi-cosmos-*> --metric DocumentCount \\
+//       --interval PT5M --aggregation Maximum --filter "CollectionName eq '*'"
+//     GET {search-endpoint}/indexes/{projects,documents,chunks}/docs/$count   # from inside the VNet
+//
+// For the record, both sides read 393 / 60,578 / 1,128,733 on 2026-08-22, which is when the three
+// indexes finished filling. That is a log line, not the gate.
+//
+// Short of that the flip is not a slower search, it is a SILENTLY SMALLER CORPUS answering 200:
+// a partly-filled index returns fewer hits under a smaller total, which reads exactly like a query
+// that legitimately matched less. Nothing in the app can tell the two apart, which is why the gate
+// is a count read off the service rather than a judgement about how long the fill has had.
+//
+// Counting means reaching the data plane, which is `publicNetworkAccess: Disabled` — from inside
+// the app container over the App Service SSH tunnel, per the root `README.md` recipe. The same
+// place `azure/search/README.md` step 2 is run from, and that file stays the reference for the
+// staged rename; do not restate it here.
+//
+// ROLLBACK IS FLIPPING THESE THREE BACK. The `demi-` indexes are not deleted, not paused and not
+// drained by the cutover — their indexers keep running on PT5M throughout, so they stay current and
+// a revert is a settings write, not a refill. Keep them until the plain-named ones have served
+// production traffic long enough to trust; deleting them turns a one-setting rollback back into a
+// multi-hour reindex of a corpus that only exists in Cosmos.
 @description('Azure AI Search index holding document chunks. Pinned to the live name; see the cutover note above.')
 param searchIndex string = 'demi-chunks'
 
