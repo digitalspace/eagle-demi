@@ -252,6 +252,31 @@ test('a boolean value OData cannot express is dropped, not coerced to false', ()
   }
 });
 
+test('every semantic configuration is named for its own index', () => {
+  // `semanticConfigurationFor(index)` derives `<index>-semantic` at request time, so the DEFINITION
+  // has to follow the same convention or the app asks a real index for a configuration it does not
+  // have. That is a hard 400, not a degrade: semantic is on by default for chunk search and 400 is
+  // not in RETRY_STATUSES. Nothing else couples the two — every other assertion pins the DERIVED
+  // string, so the definition file could drift with the whole suite green.
+  const dir = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes');
+  const defs = fs.readdirSync(dir)
+    .filter(f => f.endsWith('.json'))
+    .map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+
+  const withSemantic = defs.filter(d => d.semantic && d.semantic.configurations);
+  assert.ok(withSemantic.length > 0, 'no index declares a semantic configuration — the convention is unguarded');
+
+  for (const def of withSemantic) {
+    for (const cfg of def.semantic.configurations) {
+      assert.strictEqual(
+        cfg.name, `${def.name}-semantic`,
+        `${def.name}: semantic configuration is "${cfg.name}", but the app will ask for ` +
+        `"${def.name}-semantic" and a mismatch is a 400 on every semantic query`
+      );
+    }
+  }
+});
+
 test('every DATASET_INDEX value names an index definition that is actually on disk', () => {
   // The guard that makes the staged index rename safe. DATASET_INDEX is a SCHEMA lookup — it picks
   // which `azure/search/indexes/*.json` to read field metadata from — while SEARCH_INDEX* name the

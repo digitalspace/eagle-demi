@@ -75,7 +75,11 @@ az functionapp config appsettings list -n demi-api-test -g c4b0a8-test-rg \
   --query "[?starts_with(name,'SEARCH_INDEX')].{name:name,value:value}" -o table
 
 # Then PUT the definition under the name that is live, overriding the body's own `name`:
-jq '.name = "demi-chunks"'         indexes/chunks.json          > /tmp/idx.json
+# THREE rewrites on the index, not one. The semantic configuration name must track the index name
+# or every chunk search answers 400 — semantic is on by default for chunks and 400 is not retried.
+jq '.name = "demi-chunks"
+    | .semantic.configurations[].name = "demi-chunks-semantic"' \
+      indexes/chunks.json          > /tmp/idx.json
 jq '.name = "demi-chunks-indexer"
     | .targetIndexName = "demi-chunks"' indexers/chunks-indexer.json > /tmp/ixr.json
 
@@ -84,11 +88,11 @@ PUT {endpoint}/datasources/demi-chunks-ds?api-version=2024-07-01    # add connec
 PUT {endpoint}/indexers/demi-chunks-indexer?api-version=2024-07-01  # body /tmp/ixr.json
 ```
 
-The semantic configuration inside `chunks.json` is named `chunks-semantic`, and the app derives that
-name from the index it is configured with — so a restore under `demi-chunks` must rename the
-configuration to `demi-chunks-semantic` too, or every semantic query answers 400. Once the cutover
-lands, all of this collapses: the file names, the live names and the configuration name agree, and
-the `jq` rewrites go away.
+That third `jq` clause is the one worth understanding rather than copying: the app derives the
+configuration name from whichever index it is configured with (`semanticConfigurationFor`), so the
+definition has to follow the same `<index>-semantic` convention. `test/search/eagle-query.test.js`
+guards it for the committed files. Once the cutover lands, all of this collapses — the file names,
+the live names and the configuration name agree, and the `jq` rewrites go away.
 
 Order matters: an indexer references both its data source and its target index, and fails to create
 if either is missing.
