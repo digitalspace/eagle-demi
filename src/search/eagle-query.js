@@ -225,6 +225,13 @@ function term(field, meta, value) {
     case 'Edm.Double':
       return Number.isFinite(Number(v)) ? `${field} eq ${Number(v)}` : null;
     case 'Edm.Boolean':
+      // ONLY the two literals OData defines, and everything else is DROPPED rather than coerced.
+      // `v === 'true'` alone made every other value mean `eq false`, so `and[isPublished]=True`
+      // — or `1`, or `yes` — silently applied the OPPOSITE filter, answered 200, and reported
+      // nothing lost. It only ever narrows, so there is no access-control impact; it is the same
+      // silently-wrong-filter class this file's header exists to prevent, and the Edm.Int32 branch
+      // eight lines up already refuses values it cannot express.
+      if (v !== 'true' && v !== 'false') return null;
       return `${field} eq ${v === 'true'}`;
     default:
       return `${field} eq ${quote(v)}`;

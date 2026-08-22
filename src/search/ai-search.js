@@ -556,7 +556,18 @@ async function runSearch(index, opts = {}) {
   let received = value.length;
   while (received === requested && value.length < wanted) {
     body.top = Math.min(wanted - value.length, SERVICE_MAX_TOP);
-    body.skip = Math.min(skip + value.length, MAX_SKIP - body.top);
+    const nextSkip = Math.min(skip + value.length, MAX_SKIP - body.top);
+    // AT THE CEILING THE OFFSET STOPS MOVING, AND A REPEATED OFFSET IS A DUPLICATED PAGE. Both
+    // iterations clamp to the same `MAX_SKIP - top`, so without this the second request re-fetches
+    // the first one's rows and appends them: measured at `{top:500, skip:100000}` — reachable from
+    // the controller as pageSize=500&pageNum=200 — the page came back 500 rows long with 250
+    // distinct, row 251 identical to row 1, for the price of a second service call.
+    //
+    // Stopping short is the honest answer. `$skip` caps at 100000 and Azure has nothing past it to
+    // give; a short page under a large total is what running out of index looks like, and it is
+    // what the caller already handles on the last page of any result set.
+    if (nextSkip <= body.skip) break;
+    body.skip = nextSkip;
     requested = body.top;
     const rows = (await once()).value || [];
     received = rows.length;

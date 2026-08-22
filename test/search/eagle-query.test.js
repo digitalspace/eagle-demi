@@ -230,3 +230,22 @@ test('eagle-query parameters', async (t) => {
       .includes("projectId eq '207'"));
   });
 });
+
+test('a boolean value OData cannot express is dropped, not coerced to false', () => {
+  // `v === 'true'` alone made every other value mean `eq false`, so `and[isPublished]=True`
+  // applied the OPPOSITE filter under a 200 with nothing reported lost.
+  // NOT the empty string: `valuesOf` filters blanks out, so `and[isPublished]=` carries no value
+  // to express and reports nothing — a different case from a value that cannot be expressed.
+  for (const v of ['1', 'True', 'TRUE', 'yes', 'banana']) {
+    const out = eagleQuery.buildFilter({ 'and[isPublished]': v }, 'Document', { filter: null, empty: false });
+    assert.strictEqual(out.filter, undefined, `${v} must not build a filter`);
+    assert.deepStrictEqual(out.dropped, ['isPublished'], `${v} must be reported dropped`);
+  }
+  // The control: the two literals OData does define must still filter, or the assertion above is
+  // satisfied by dropping everything.
+  for (const [v, expected] of [['true', true], ['false', false]]) {
+    const out = eagleQuery.buildFilter({ 'and[isPublished]': v }, 'Document', { filter: null, empty: false });
+    assert.strictEqual(out.filter, `isPublished eq ${expected}`);
+    assert.deepStrictEqual(out.dropped, []);
+  }
+});

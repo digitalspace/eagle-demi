@@ -250,6 +250,28 @@ test('ai-search request shape', async (t) => {
     assert.strictEqual(calls[0].body.skip, 100000 - 10);
   });
 
+  // The existing ceiling test above stubs an EMPTY answer, so the fill loop never runs and could
+  // not see this. Rows keyed by the requested offset are what make a repeated offset visible.
+  await t.test('at the skip ceiling the page stops short rather than repeating itself', async (tt) => {
+    // The responder is handed the call index, so it reads the body back out of `calls` — that is
+    // what makes each answer depend on the offset actually requested.
+    const calls = captureFetch(tt, (i) => {
+      const { top, skip } = calls[i].body;
+      return { json: { value: Array.from({ length: top }, (_, n) => ({ id: `row-${skip + n}` })) } };
+    });
+
+    await aiSearch.searchChunks({ filter: null, keywords: 'river', top: 500, skip: 100000 });
+
+    // Reachable from the controller as pageSize=500&pageNum=200. Both iterations clamp to the same
+    // `MAX_SKIP - top`, so before the fix the loop issued a SECOND request at the SAME offset and
+    // appended its rows: 500 rows, 250 distinct, row 251 identical to row 1, for the price of a
+    // wasted service call. Asserted on the requests rather than the rows because searchChunks
+    // reshapes hits — the offsets are what the defect is actually about.
+    const offsets = calls.map(c => c.body.skip);
+    assert.deepStrictEqual(offsets, [100000 - 250], 'one request, clamped, and no repeat of it');
+    assert.strictEqual(new Set(offsets).size, offsets.length, 'no two requests may share an offset');
+  });
+
   await t.test('the first page sends no skip at all', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
     await aiSearch.searchChunks({ filter: null, keywords: 'river', skip: 0 });

@@ -380,6 +380,18 @@ exports.search = async (req, res) => {
         // Cosmos list criteria are fixed, so NONE of the caller's filters apply here. Named in
         // the log rather than left silent — see eagle-query.filterKeysIn.
         eagleQuery.reportDropped(dataset, 'filter', eagleQuery.filterKeysIn(req.query));
+        // AND SO DOES THE SORT. `listVisible` hardcodes its order, and `buildOrderBy` runs only on
+        // the keyword branches — so a `sortBy` on this path did nothing and said nothing, which is
+        // the one failure this endpoint's own contract singles out ("a sort doing nothing ... all
+        // under a 200"). eagle-public reaches it: the table sends `keywords: ''` together with its
+        // default sort. Reported, not honoured — honouring it means threading an order through the
+        // repository and validating it against the Cosmos indexing policy, which is its own change.
+        if (req.query.sortBy) {
+          logger.warn(
+            `[search] ${dataset}: ignored sortBy ${req.query.sortBy} — this list path takes the ` +
+            `repository's fixed order, not the caller's`
+          );
+        }
 
         const cosmosSkip = pageNum * pageSize;
         const { items: page } = await projectsRepo.listVisible(access, {
@@ -522,6 +534,14 @@ exports.search = async (req, res) => {
         // while it is in force teaches the reader to distrust the log.
         eagleQuery.reportDropped(dataset, 'filter',
           eagleQuery.filterKeysIn(req.query).filter(key => key !== 'project'));
+        // Same as the project list: the order is hardcoded in the repository, so a caller's
+        // `sortBy` is inert here and is named rather than swallowed.
+        if (req.query.sortBy) {
+          logger.warn(
+            `[search] ${dataset}: ignored sortBy ${req.query.sortBy} — this list path takes the ` +
+            `repository's fixed order, not the caller's`
+          );
+        }
 
         // Same overfetch-and-slice paging as the project list above, same 1000-row ceiling.
         const cosmosSkip = pageNum * pageSize;

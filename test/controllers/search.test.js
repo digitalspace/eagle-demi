@@ -9,6 +9,7 @@ const searchController = require('../../src/controllers/search');
 const aiSearch = require('../../src/search/ai-search');
 const documentsRepo = require('../../src/repositories/documents');
 const projectsRepo = require('../../src/repositories/projects');
+const { logger } = require('../../src/utils/logger');
 
 test('Search Controller Tests', async (t) => {
 
@@ -807,6 +808,31 @@ test('the answer matches the request that was made', async (t) => {
     };
     return { out, res };
   };
+
+  // A `sortBy` on either keywordless list path is inert — the repositories hardcode their order,
+  // and `buildOrderBy` runs only on the keyword branches. Inert is acceptable; SILENTLY inert is
+  // not, and it is the exact case this endpoint's contract singles out ("a sort doing nothing ...
+  // all under a 200"). eagle-public reaches it: the table sends `keywords: ''` with its default
+  // sort. Asserted through the logger because reporting IS the behaviour under test.
+  for (const [dataset, repo] of [['Project', projectsRepo], ['Document', documentsRepo]]) {
+    await t.test(`an inert sort on the keywordless ${dataset} list is reported, not swallowed`, async () => {
+      t.mock.method(repo, 'listVisible', async () => ({ items: [] }));
+      t.mock.method(repo, 'countVisible', async () => 0);
+      const warned = [];
+      t.mock.method(logger, 'info', (msg) => warned.push(String(msg)));
+      t.mock.method(logger, 'warn', (msg) => warned.push(String(msg)));
+
+      const { out, res } = capture();
+      await searchController.search(
+        { query: { dataset, keywords: '', sortBy: '-name', pageSize: '10' } }, res);
+
+      assert.strictEqual(out.status, 200);
+      assert.ok(
+        warned.some(m => /ignored sortBy/.test(m) && /-name/.test(m)),
+        `${dataset}: an ignored sortBy must be named in the log, got: ${JSON.stringify(warned)}`
+      );
+    });
+  }
 
   // [C2] The keywordless Document path resolved the Eagle ObjectId to a DEMI project id and then
   // dropped it: a request for ONE project's documents was answered with the whole corpus, under a
