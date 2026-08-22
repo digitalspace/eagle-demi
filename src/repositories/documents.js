@@ -15,14 +15,28 @@ const { eq, inList, selectWhere, countWhere, pageOptions } = require('./_sql');
 const CONTAINER = 'documents';
 const PARTITION_FIELD = 'projectId';
 
+/**
+ * The projects a caller asked for, as a list, from either wire shape.
+ *
+ * Presence, not truthiness — `''` is a REAL partition, and a falsy test silently turns "the
+ * unlinked partition" into "every document in the container".
+ *
+ * A LIST as well as a single value because `GET /search?dataset=Document&project=a,b` is one
+ * request naming two projects, and the search controller has to be able to hand both here. Keeping
+ * one option name rather than adding a second is deliberate: `projectId` and a parallel
+ * `projectIds` would be two ways to say the same thing, and the count and the read would eventually
+ * be built from different ones — which leaks the size of a set the caller cannot see.
+ */
+function projectIdList(projectId) {
+  if (projectId === undefined || projectId === null) return [];
+  return (Array.isArray(projectId) ? projectId : [projectId]).map(String);
+}
+
 function buildCriteria({ projectId, extracted, sourceSystem }) {
   const criteria = [];
-  // Presence, not truthiness — `''` is a REAL partition, and a
-  // falsy test silently turns "the unlinked partition" into "every document in the container".
-  // Nothing passes `''` today; aligning now is what keeps that true when something does.
-  if (projectId !== undefined && projectId !== null) {
-    criteria.push(eq('projectId', String(projectId), '@projectId'));
-  }
+  const projectIds = projectIdList(projectId);
+  if (projectIds.length === 1) criteria.push(eq('projectId', projectIds[0], '@projectId'));
+  else if (projectIds.length > 1) criteria.push(inList('projectId', projectIds, '@projectId'));
   if (sourceSystem) criteria.push(eq('sourceSystem', sourceSystem, '@sourceSystem'));
 
   // Defaults are written on every document, so this is a plain equality. The Mongo original
@@ -35,23 +49,41 @@ function buildCriteria({ projectId, extracted, sourceSystem }) {
 }
 
 /**
+ * The partition to pin this query to, when there is exactly one.
+ *
+ * Naming `''` here is what makes a read of the unlinked partition a single-partition query rather
+ * than a cross-partition scan. Two or more projects cannot be pinned to one partition, so those
+ * queries fan out and the `IN` clause is what narrows them.
+ */
+function partitionKeyFor(projectId) {
+  const ids = projectIdList(projectId);
+  return ids.length === 1 ? ids[0] : undefined;
+}
+
+/**
  * List documents visible to this caller.
  * When a project is supplied the query is scoped to that partition — the fast path.
+ *
+ * ORDER BY c.id ASC is not cosmetic: WITHOUT it the SQL API gives no order guarantee at all, and
+ * the search controller pages this list by re-running it and slicing, so two requests could return
+ * the same row twice and never return another — the same failure `DEFAULT_ORDER` in
+ * `search/eagle-query.js` exists to prevent on the AI Search side. `id` rather than a display field
+ * because it is the one path that is always present and always indexed (Cosmos REJECTS `/id/?` in
+ * an indexing policy precisely because it is never optional), and a single-property ORDER BY drops
+ * every row that lacks the property — sorting on `displayName` would silently hide untitled
+ * documents instead of ordering them.
  */
 async function listVisible(access, opts = {}) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: buildCriteria(opts)
+    criteria: buildCriteria(opts),
+    orderBy: 'c.id ASC'
   });
 
   const options = pageOptions({
     ...opts,
-    // Same presence test as buildCriteria. Naming `''` as the partition key is what makes a read of
-    // the unlinked partition a single-partition query rather than a cross-partition scan.
-    partitionKey: opts.projectId !== undefined && opts.projectId !== null
-      ? String(opts.projectId)
-      : undefined
+    partitionKey: partitionKeyFor(opts.projectId)
   });
 
   return cosmos.query(CONTAINER, spec, options);
@@ -67,9 +99,7 @@ async function countVisible(access, opts = {}) {
   // for a single-row aggregate. Without this a count carrying a projectId still fanned out across
   // every partition while the matching read did not.
   const value = await cosmos.queryValue(CONTAINER, spec, pageOptions({
-    partitionKey: opts.projectId !== undefined && opts.projectId !== null
-      ? String(opts.projectId)
-      : undefined
+    partitionKey: partitionKeyFor(opts.projectId)
   }));
   return value || 0;
 }

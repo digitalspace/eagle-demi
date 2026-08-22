@@ -126,8 +126,35 @@ jobs:
       - name: Validate Extractor Module
         run: az bicep build --file ./azure/modules/extractor.bicep
 
+      # The param file is where the subnet ids, the object-store coordinates and the CORS origin
+      # list actually live, and none of it is covered by compiling main.bicep. It was ungated
+      # because it cannot compile at all as checked out: four params call
+      # `readEnvironmentVariable` with NO default (MINIO_ACCESS_KEY, MINIO_SECRET_KEY,
+      # ADMIN_API_KEY, DOCLING_API_KEY), so BCP427 fires on all four and even
+      # `az deployment group what-if` never gets to run.
+      #
+      # THE MISSING DEFAULTS ARE THE SAFETY PROPERTY — do not "fix" this by adding `''`. Quoting
+      # the note at azure/main.test.bicepparam:22-25: with a `''` fallback a forgotten export
+      # resolves to empty and the deploy writes that over the live credential — silently, because
+      # the app settings collection is a whole-collection PUT and what-if masks @secure() values as
+      # "*******" in BOTH before and after. That is the mechanism that destroyed ADMIN_API_KEY and
+      # DOCLING_API_KEY irrecoverably on 2026-08-13; only MinIO survived, because OpenShift held an
+      # authoritative copy.
+      #
+      # The hazard is an UNSET variable, not the function, so CI pays the cost with placeholders
+      # instead: the values below are set, prove the rest of the file still resolves, and reach
+      # nothing — this job has no Azure login and deploys nowhere.
+      # eagle-search's own pr.yaml:129-135 already gates its param files exactly this way.
+      - name: Validate Test Parameters
+        env:
+          MINIO_ACCESS_KEY: ci-placeholder-not-a-real-key
+          MINIO_SECRET_KEY: ci-placeholder-not-a-real-key
+          ADMIN_API_KEY: ci-placeholder-not-a-real-key
+          DOCLING_API_KEY: ci-placeholder-not-a-real-key
+        run: az bicep build-params --file ./azure/main.test.bicepparam --outfile /dev/null
+
       - name: Report Validation Failure to Job Summary
         if: failure()
         run: |
           echo "### ❌ Bicep template failed to compile" >> $GITHUB_STEP_SUMMARY
-          echo "Fix \`azure/main.bicep\`." >> $GITHUB_STEP_SUMMARY
+          echo "Fix \`azure/main.bicep\`, \`azure/modules/extractor.bicep\` or \`azure/main.test.bicepparam\`." >> $GITHUB_STEP_SUMMARY

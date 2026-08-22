@@ -1159,7 +1159,13 @@ export class RegistryStateService {
         this.documentChunks.set(resultsChunk.map((c: any) => ({
           id: String(c._id),
           documentId: String(c.documentId || ''),
-          projectId: c.project || '',
+          // `project` is the {_id, name} pair eagle-public's row templates bind. The bare id it
+          // used to be is still accepted so a rollback of the API needs no frontend deploy.
+          // `projectId` is the DEMI id — the Cosmos partition key `fetchDocument`/`getDownloadUrl`
+          // pass back, and the id-space `Project.id` holds. `project._id` is the EAGLE ObjectId
+          // eagle-public's row templates route on, so it is NOT a source for this field; it is only
+          // read as a rollback fallback, from before the API carried both.
+          projectId: c.projectId || c.project?._id || c.project || '',
           projectName: c.projectName || 'Associated Project',
           documentName: c.documentName || 'Untitled Document',
           documentType: c.documentType || 'PDF Document',
@@ -1232,7 +1238,13 @@ export class RegistryStateService {
 
       if (Array.isArray(resultsDoc) && resultsDoc.length > 0) {
         const mappedDocs: Document[] = resultsDoc.map((d: any) => {
-          const projId = d.project || '';
+          // See the chunk mapping above. `projectId` is the DEMI id and is what the two consumers
+          // of this field compare against `Project.id`: `filteredDocuments` (line 446) and
+          // `map-explorer.getProjDocCount`. Taking it from `project._id` — which the envelope
+          // change made an EAGLE ObjectId — compared across id-spaces and matched nothing, so the
+          // per-project document counts read 0 and the document list emptied on every page but
+          // /search. The fallbacks are for a rolled-back API only.
+          const projId = d.projectId || d.project?._id || d.project || '';
           const matchedProj = (this.projects() || []).find(p => p.id === projId || p.legacyEagleId === projId);
           const resolvedProjectName = matchedProj ? matchedProj.name : (d.projectName || 'Associated Project');
 

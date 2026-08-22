@@ -90,11 +90,39 @@ test('API deploy package', async (t) => {
     );
   });
 
+  await t.test('ships the search index definitions — read at REQUIRE time by every route', () => {
+    // `src/search/eagle-query.js` runs `const FIELDS = loadFields()` at module scope, and
+    // src/routes/api.js -> src/controllers/search.js reaches it during boot. A package without
+    // these does not degrade search, it kills the whole API on startup with an ENOENT on a
+    // scandir. That shipped once: `azure/` is excluded as infra and the definitions live under it.
+    //
+    // Compared against what is on disk rather than a hardcoded list, so a fourth index added to
+    // the repo and forgotten by the packager is RED here rather than a boot loop in Azure. The
+    // two sides are independent — the zip is built by package-api.py, this side is the working
+    // tree — so this cannot pass by agreeing with itself.
+    const onDisk = fs.readdirSync(path.join(REPO_ROOT, 'azure', 'search', 'indexes'))
+      .filter(f => f.endsWith('.json'))
+      .map(f => `azure/search/indexes/${f}`)
+      .sort();
+    assert.ok(onDisk.length > 0, 'the repo must hold index definitions for this test to mean anything');
+    const packaged = [...entries].filter(e => e.startsWith('azure/search/indexes/')).sort();
+    assert.deepStrictEqual(packaged, onDisk, 'every committed index definition must be packaged');
+  });
+
   await t.test('does not ship non-runtime directories', () => {
-    for (const dir of ['test/', 'azure/', '.github/', '.vscode/', '.claude/', '.git/']) {
+    for (const dir of ['test/', '.github/', '.vscode/', '.claude/', '.git/']) {
       const hits = [...entries].filter(e => e.startsWith(dir));
       assert.deepStrictEqual(hits, [], `${dir} must not be packaged, found ${hits.length} entries`);
     }
+    // `azure/` was in that list, asserting it ships NOTHING. The point of that assertion — infra
+    // does not ship; Bicep, parameter files and deploy templates are not runtime, and shipping
+    // them is how wwwroot ended up holding a copy of the repository — survives, narrowed to
+    // everything BUT the index definitions above. The blanket form was itself the bug: it locked
+    // in an exclusion that the search query builder had since grown a hard dependency on.
+    const azureExtras = [...entries]
+      .filter(e => e.startsWith('azure/') && !e.startsWith('azure/search/indexes/'));
+    assert.deepStrictEqual(azureExtras, [],
+      `only azure/search/indexes may be packaged, found: ${azureExtras.join(', ')}`);
   });
 
   await t.test('never ships a .env at any depth', () => {

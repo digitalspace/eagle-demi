@@ -46,6 +46,23 @@ function escapeHtml(text) {
 /** Beyond this the query grows without adding recall; BM25 is already dominated by the rest. */
 const MAX_TERMS = 16;
 
+/** Azure AI Search rejects `$skip` above this; `skip + top` must stay inside it. */
+const MAX_SKIP = 100000;
+
+/** Rows one search request can return. A larger page costs more requests, not fewer rows. */
+const SERVICE_MAX_TOP = 250;
+
+/**
+ * The largest page this layer will assemble, whatever `pageSize` says.
+ *
+ * 500 is eagle-public's own ceiling — `MAX_SHOW_ALL_ITEMS` in `table-template.component.ts:122-126`
+ * is the biggest page any live caller asks for — so every real request fits in two service calls.
+ * The controller REFUSES a larger page rather than letting this clamp it: a short page under a
+ * large total is a page the caller never learns they did not receive, which is the whole defect
+ * this constant exists to close.
+ */
+const MAX_PAGE_ROWS = 500;
+
 let tokenCache = null;
 let credential = null;
 let unconfiguredWarned = false;
@@ -438,19 +455,38 @@ function noteSemanticExhausted() {
 /**
  * One search request. Every dataset goes through here so the ACL filter, the query shape and the
  * "null filter means unrestricted, empty filter is a bug" rule are written once.
+ *
+ * `opts.top` is the PAGE the caller asked for, which is not the same thing as one request: the
+ * service returns at most SERVICE_MAX_TOP rows however many are asked for. A page larger than that
+ * is filled by consecutive requests rather than truncated — see MAX_PAGE_ROWS. Truncating is what
+ * this used to do, and it is invisible from outside: eagle-public's "Show All" asks for 500
+ * (`table-template.component.ts:122-126`, MAX_SHOW_ALL_ITEMS), got 250 rows and a total in the
+ * thousands, and nothing anywhere said the other 250 had been dropped.
  */
 async function runSearch(index, opts = {}) {
   const terms = tokenize(opts.keywords);
   if (terms.length === 0 && !opts.matchAll) return { value: [], count: 0 };
 
+  const wanted = Math.min(Math.max(Number(opts.top) || 20, 1), MAX_PAGE_ROWS);
   const body = {
     search: opts.matchAll ? '*' : buildQuery(terms, opts.fuzzy === true, opts.prefix === true),
     queryType: opts.matchAll ? 'simple' : 'full',
-    top: Math.min(Math.max(Number(opts.top) || 20, 1), 250),
+    top: Math.min(wanted, SERVICE_MAX_TOP),
     count: true
   };
   if (opts.select) body.select = opts.select;
   if (opts.searchFields) body.searchFields = opts.searchFields;
+  // `top` is a page SIZE, `skip` is the offset before it — until this was here, `top` was the only
+  // knob and result 251 was unreachable by any caller. Azure caps `$skip` at 100,000 and rejects
+  // more, and a deep skip is re-scored work the service throws away, so this is a real ceiling
+  // rather than a formality: page ~1,000 of a 10-row page is the end of the road, whatever the
+  // count says. Floored at 0 because eagle-public can send `pageNum=-1` outright
+  // (project.service.ts:33 defaults the page to 0 and api.ts:173 sends `pageNum - 1`).
+  const skip = Math.max(0, Math.floor(Number(opts.skip) || 0));
+  if (skip > 0) body.skip = Math.min(skip, MAX_SKIP - body.top);
+  // Omitted when absent, never sent empty: an empty `$orderby` is a 400, and eagle-query returns
+  // undefined precisely where the index can express no order.
+  if (opts.orderby) body.orderby = opts.orderby;
   if (opts.highlight) {
     body.highlight = opts.highlight;
     body.highlightPreTag = HL_PRE;
@@ -473,36 +509,72 @@ async function runSearch(index, opts = {}) {
     // frontend searches on a debounced keystroke — being over that is the expected path, not an
     // edge. `partial` returns the BM25 order instead of erroring.
     body.semanticErrorHandling = 'partial';
-    semanticCounters.requested++;
   }
 
   const path = `/indexes/${index}/docs/search?api-version=${API_VERSION}`;
 
-  let data;
-  try {
-    data = await request(path, body);
-  } catch (err) {
-    if (!semantic || err.status !== 402) throw err;
-    noteSemanticExhausted();
-    // Counted as a degraded search, not just a latch event: this request was asked to rerank and
-    // the order it served is BM25. Leave it out and `ranked` claims a ranked result for the one
-    // search that provoked the 402.
-    notePartialRerank('the monthly allowance is exhausted (HTTP 402)');
-    delete body.semanticQuery;
-    delete body.semanticConfiguration;
-    delete body.semanticErrorHandling;
-    data = await request(path, body);
+  const once = async () => {
+    // Counted per REQUEST, not per call: a page larger than SERVICE_MAX_TOP costs one semantic
+    // query per request and the scorecard divides by this number. `semanticQuery` is deleted after
+    // a 402, so the stripped retry below is correctly not counted as a semantic one.
+    if (semantic && body.semanticQuery) semanticCounters.requested++;
+    let data;
+    try {
+      data = await request(path, body);
+    } catch (err) {
+      if (!semantic || err.status !== 402) throw err;
+      noteSemanticExhausted();
+      // Counted as a degraded search, not just a latch event: this request was asked to rerank and
+      // the order it served is BM25. Leave it out and `ranked` claims a ranked result for the one
+      // search that provoked the 402.
+      notePartialRerank('the monthly allowance is exhausted (HTTP 402)');
+      delete body.semanticQuery;
+      delete body.semanticConfiguration;
+      delete body.semanticErrorHandling;
+      data = await request(path, body);
+    }
+
+    // Whether L2 actually ran is invisible in the results — the same shape comes back either way,
+    // in a different order. Unlogged, a service that is silently serving BM25 all day looks exactly
+    // like one where reranking is working, and the scorecard would be measuring something no user
+    // gets.
+    if (semantic && data['@search.semanticPartialResponseReason']) {
+      notePartialRerank(data['@search.semanticPartialResponseReason']);
+    }
+    return data;
+  };
+
+  const first = await once();
+  const value = [...(first.value || [])];
+  const count = first['@odata.count'] ?? value.length;
+
+  // Fill the rest of the page, one service-sized request at a time. The loop ends on a SHORT
+  // answer, never on the count: `@odata.count` is the index-wide total and a page can run out long
+  // before it. Bounded at MAX_PAGE_ROWS / SERVICE_MAX_TOP requests — two today — so `pageSize`
+  // cannot be turned into a request multiplier against a 1-SU service.
+  let requested = body.top;
+  let received = value.length;
+  while (received === requested && value.length < wanted) {
+    body.top = Math.min(wanted - value.length, SERVICE_MAX_TOP);
+    const nextSkip = Math.min(skip + value.length, MAX_SKIP - body.top);
+    // AT THE CEILING THE OFFSET STOPS MOVING, AND A REPEATED OFFSET IS A DUPLICATED PAGE. Both
+    // iterations clamp to the same `MAX_SKIP - top`, so without this the second request re-fetches
+    // the first one's rows and appends them: measured at `{top:500, skip:100000}` — reachable from
+    // the controller as pageSize=500&pageNum=200 — the page came back 500 rows long with 250
+    // distinct, row 251 identical to row 1, for the price of a second service call.
+    //
+    // Stopping short is the honest answer. `$skip` caps at 100000 and Azure has nothing past it to
+    // give; a short page under a large total is what running out of index looks like, and it is
+    // what the caller already handles on the last page of any result set.
+    if (nextSkip <= body.skip) break;
+    body.skip = nextSkip;
+    requested = body.top;
+    const rows = (await once()).value || [];
+    received = rows.length;
+    value.push(...rows);
   }
 
-  // Whether L2 actually ran is invisible in the results — the same shape comes back either way, in
-  // a different order. Unlogged, a service that is silently serving BM25 all day looks exactly like
-  // one where reranking is working, and the scorecard would be measuring something no user gets.
-  if (semantic && data['@search.semanticPartialResponseReason']) {
-    notePartialRerank(data['@search.semanticPartialResponseReason']);
-  }
-
-  const value = data.value || [];
-  return { value, count: data['@odata.count'] ?? value.length };
+  return { value, count };
 }
 
 /**
@@ -683,7 +755,7 @@ async function searchDocuments(opts = {}) {
     return { items: [], count: 0 };
   }
 
-  const top = Math.min(Math.max(Number(opts.top) || 20, 1), 250);
+  const top = Math.min(Math.max(Number(opts.top) || 20, 1), MAX_PAGE_ROWS);
   const select = 'id,displayName,documentFileName,description,type,projectId,read,isPublished';
 
   const direct = await runSearch(documentsIndex, {
@@ -697,9 +769,19 @@ async function searchDocuments(opts = {}) {
 
   const items = [...direct.value];
   const seen = new Set(items.map(d => String(d.id)));
+  // The total, assembled below from every leg that contributes rows. `direct.count` alone is what
+  // it starts as, and what it stays when there is no project leg to run.
+  let total = direct.count;
 
-  // Leg two runs only when there is room left; a full page of direct hits is already the answer.
-  if (items.length < top && opts.projectFilter !== undefined) {
+  // Leg two runs on EVERY page, not only when there is room for its rows. It owns part of the
+  // total — `byProject.count` is index-wide — and eagle-public divides that total by `pageSize` to
+  // decide how many pages exist. Skipping the leg on a full page made the total jump from 771 to
+  // ~3,000 the moment the caller reached the last page of direct hits; reporting the PAGE LENGTH,
+  // which this used to do (`Math.max(direct.count, items.length)`), was worse still: a probe with
+  // 3 direct matches, one matching project and 500 documents under it reported 10 against a true
+  // ~503, so the pager said one page and every later page was unreachable. Where the leg cannot
+  // contribute rows its requests are trimmed to one row each — the count is what they are for.
+  if (opts.projectFilter !== undefined) {
     const projects = await runSearch(config().projectsIndex, {
       keywords: opts.keywords,
       fuzzy: opts.fuzzy,
@@ -717,8 +799,33 @@ async function searchDocuments(opts = {}) {
       const scope = `search.in(projectId, ${quoteList(projectIds)}, ',')`;
       const byProject = await runSearch(documentsIndex, {
         matchAll: true,
-        top,
+        // Sized to the WHOLE page, not to the deficit `top - items.length`. The rows below are
+        // deduped against leg one, and the two legs OVERLAP by construction — a document whose own
+        // name matches a project-shaped query is normally also inside that project — so a request
+        // sized before dedup is sized against a yield nobody knows yet, and every deduped row
+        // leaves a hole. Measured: 20 documents in the matching project, 3 of them also direct
+        // hits, `top=10` returned a 7-row page under a reported total of 20.
+        //
+        // Asking for `top` closes it arithmetically rather than by retrying: `seen` holds exactly
+        // `items.length` ids and each duplicate consumes a distinct one, so at most `items.length`
+        // of the `top` rows can be dropped and at least `top - items.length` survive — a full page
+        // at 0%, 50% and 100% overlap, from ONE runSearch call either way — still bounded by its
+        // own MAX_PAGE_ROWS / SERVICE_MAX_TOP page fill, two requests today. Re-asking until the
+        // page filled would instead have turned the overlap ratio into a request multiplier
+        // against a 1-SU service, which is the trade runSearch already refuses.
+        //
+        // Still one row where the page is ALREADY full: no row of this leg can be used there (the
+        // fill loop breaks immediately), and the count is the only reason the request is issued.
+        top: items.length >= top ? 1 : top,
         select,
+        orderby: opts.orderby,
+        // Leg two continues where the DIRECT hits ran out. `direct.count` is the index-wide number
+        // of direct matches, so a page that starts past it starts that far into this leg instead.
+        // Imperfect on the boundary page: a document matching both legs can appear on the page
+        // where the direct hits end and again on the next. The alternative — dropping leg two
+        // beyond page one — silently loses every project-name match after the first page, and
+        // those are 60-77% of the hits for a project-shaped query (see the measurements above).
+        skip: Math.max(0, (Number(opts.skip) || 0) - (direct.count || 0)),
         filter: opts.filter ? `(${opts.filter}) and ${scope}` : scope
       });
 
@@ -728,6 +835,26 @@ async function searchDocuments(opts = {}) {
         seen.add(String(doc.id));
         items.push(doc);
       }
+
+      // The two legs OVERLAP, so summing their counts double-counts the intersection: a document
+      // whose own metadata matches AND whose project matches is in both. For "Ajax" that is most
+      // of the 199 direct hits inside the 850 — roughly 30% of the pager's pages would have come
+      // back empty. One count-only request measures it exactly, and only when there is an
+      // intersection to measure: no direct matches means nothing to subtract.
+      let overlap = 0;
+      if (direct.count > 0) {
+        const both = await runSearch(documentsIndex, {
+          keywords: opts.keywords,
+          fuzzy: opts.fuzzy,
+          prefix: true,
+          searchFields: 'displayName,documentFileName,description',
+          select: 'id',
+          top: 1,
+          filter: opts.filter ? `(${opts.filter}) and ${scope}` : scope
+        });
+        overlap = both.count;
+      }
+      total = direct.count + byProject.count - overlap;
     }
   }
 
@@ -735,7 +862,7 @@ async function searchDocuments(opts = {}) {
   // `@search.highlights` — `markedField` returns their escaped text and the card renders unmarked,
   // which is the honest result: nothing in that document's own fields matched the query.
   return {
-    count: Math.max(direct.count, items.length),
+    count: total,
     items: items.map(hit => ({
       ...hit,
       highlighted: {
@@ -884,6 +1011,10 @@ module.exports = {
   deleteChunksForDocument,
   deleteFromIndex,
   indexes,
+  // The controller refuses a larger page rather than letting this layer clamp one, so the limit
+  // has to be readable from there — two copies of it would drift into exactly the silent
+  // truncation it exists to prevent.
+  MAX_PAGE_ROWS,
   // Exported so a caller can tell "search is not configured" from "search found nothing". The API
   // is right to treat the first as a degraded state and return []; an instrument is not, and must
   // refuse to publish a zero it cannot distinguish from an unset app setting.

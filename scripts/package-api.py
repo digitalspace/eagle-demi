@@ -49,7 +49,18 @@ def package_api(repo_root, zip_path):
     # the frontend serves them too. `frontend` is otherwise excluded, so without this the seed
     # fails with ENOENT on regional_districts.geojson only when run in Azure — never locally.
     # Kept as one source rather than a second copy under src/data, which would drift.
-    include_subpaths = {os.path.join("frontend", "public", "assets", "geojson")}
+    #
+    # The search index definitions are the same shape of problem, and cost more when missed.
+    # `src/search/eagle-query.js` builds its field-type gate from `azure/search/indexes/*.json` at
+    # REQUIRE time, and the boot chain reaches it: index.js -> api/index.js -> src/routes/api.js ->
+    # src/controllers/search.js -> eagle-query.js. So a package without them does not lose search,
+    # it loses EVERY endpoint, and the only thing in the log is an ENOENT on a scandir of a path
+    # that does not exist in wwwroot. Verified by unzipping the package and requiring src/app.
+    # Kept as one source for the same reason as the geojson: a copy under src/ would drift from
+    # the definitions that are actually deployed to the search service, and the gate would then be
+    # describing an index that is not the one being queried.
+    include_subpaths = {os.path.join("frontend", "public", "assets", "geojson"),
+                        os.path.join("azure", "search", "indexes")}
 
     print(f"Packaging {repo_root} -> {zip_path}...")
     count = 0
@@ -81,6 +92,14 @@ def package_api(repo_root, zip_path):
             sub_abs = os.path.join(repo_root, sub)
             if not os.path.isdir(sub_abs):
                 raise SystemExit(f"ERROR: required data directory is missing: {sub}")
+            # Counted PER SUBPATH, because the running `extra` total only ever guards the FIRST
+            # entry. Iteration is sorted, so today that is `azure/search/indexes` and the
+            # unguarded one is the geojson: once the indexes have contributed files, an empty
+            # `frontend/public/assets/geojson` would read as "fine" and ship a boundary seeder
+            # that ENOENTs only in Azure. Which entry is exposed depends purely on sort order, so
+            # adding a third subpath silently moves the hole — counting per subpath removes it
+            # rather than relocating it.
+            found = 0
             for root, _dirs, files in os.walk(sub_abs):
                 for file in files:
                     full_path = os.path.join(root, file)
@@ -88,7 +107,8 @@ def package_api(repo_root, zip_path):
                     z.write(full_path, rel_path)
                     count += 1
                     extra += 1
-            if extra == 0:
+                    found += 1
+            if found == 0:
                 raise SystemExit(f"ERROR: required data directory is empty: {sub}")
 
         # Stamp the deploy id INTO the package. /api/config reports this back and
