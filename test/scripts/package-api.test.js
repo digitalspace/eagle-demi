@@ -107,6 +107,22 @@ test('API deploy package', async (t) => {
     assert.ok(onDisk.length > 0, 'the repo must hold index definitions for this test to mean anything');
     const packaged = [...entries].filter(e => e.startsWith('azure/search/indexes/')).sort();
     assert.deepStrictEqual(packaged, onDisk, 'every committed index definition must be packaged');
+
+    // INDEXERS TOO. This assertion did not exist when `indexes` was re-included, and the gap was
+    // not theoretical: apply-search-definitions.js IS packaged and read them, so it died at
+    // `load(INDEXER_DIR)` with ENOENT before issuing a single request, on dry run and --live alike.
+    const indexersOnDisk = fs.readdirSync(path.join(REPO_ROOT, 'azure', 'search', 'indexers'))
+      .filter(f => f.endsWith('.json'))
+      .map(f => `azure/search/indexers/${f}`)
+      .sort();
+    assert.ok(indexersOnDisk.length > 0, 'the repo must hold indexer definitions for this to mean anything');
+    const packagedIndexers = [...entries].filter(e => e.startsWith('azure/search/indexers/')).sort();
+    assert.deepStrictEqual(packagedIndexers, indexersOnDisk, 'every committed indexer definition must be packaged');
+
+    // DATA SOURCES MUST NOT SHIP. connectionString comes back redacted on export, so the committed
+    // copy could only restore a broken one — and nothing reads them at runtime.
+    const packagedDatasources = [...entries].filter(e => e.startsWith('azure/search/datasources/'));
+    assert.deepStrictEqual(packagedDatasources, [], 'data source definitions must not be packaged');
   });
 
   await t.test('does not ship non-runtime directories', () => {
@@ -120,9 +136,11 @@ test('API deploy package', async (t) => {
     // everything BUT the index definitions above. The blanket form was itself the bug: it locked
     // in an exclusion that the search query builder had since grown a hard dependency on.
     const azureExtras = [...entries]
-      .filter(e => e.startsWith('azure/') && !e.startsWith('azure/search/indexes/'));
+      .filter(e => e.startsWith('azure/')
+        && !e.startsWith('azure/search/indexes/')
+        && !e.startsWith('azure/search/indexers/'));
     assert.deepStrictEqual(azureExtras, [],
-      `only azure/search/indexes may be packaged, found: ${azureExtras.join(', ')}`);
+      `only azure/search/{indexes,indexers} may be packaged, found: ${azureExtras.join(', ')}`);
   });
 
   await t.test('never ships a .env at any depth', () => {

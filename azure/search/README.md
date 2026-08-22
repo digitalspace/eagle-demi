@@ -4,10 +4,15 @@ The index, indexer and data-source definitions for `demi-search-test`, exported 
 service on 2026-08-04. Until this export they existed **only** on the service — hand-POSTed from
 inside the VNet, with nothing in git able to rebuild them.
 
-These are not deployed by anything. Bicep creates the search *service*; it cannot create the
-definitions inside it, because they are data-plane objects and the data plane is unreachable from
-outside the VNet. They are here so the environment is rebuildable and so schema changes show up in
-a diff.
+Bicep creates the search *service*; it cannot create the definitions inside it, because they are
+data-plane objects and the data plane is unreachable from outside the VNet. They are here so the
+environment is rebuildable and so schema changes show up in a diff.
+
+**`src/scripts/apply-search-definitions.js` applies them.** It is dry-run by default, writes indexes
+before indexers, refuses to touch an index the app is currently serving from, and never writes a data
+source. Its header carries the run instructions; this file stays the reference for what the objects
+ARE and for the grant they need. Do not restate one in the other — a duplicated operational doc
+drifting into a false claim is the failure this repo has already had.
 
 ## The names, and why they do not match the live service
 
@@ -22,8 +27,11 @@ So the rename is staged, and this is stage one — definitions and code defaults
 1. **This change.** Definitions take the plain names. `SEARCH_INDEX`, `SEARCH_INDEX_PROJECTS` and
    `SEARCH_INDEX_DOCUMENTS` all exist as app settings in `azure/modules/api-web-app.bicep`, and all
    three are **pinned to the old `demi-` names**, so deploying it changes nothing the app queries.
-2. **By hand, from inside the VNet.** Create the three plain-named indexes from these files, then
-   create the indexers and let them fill. The old indexes keep serving the whole time.
+2. **From inside the app container**, over the App Service SSH tunnel (not Kudu — its SCM
+   container has no managed-identity endpoint; see the root `README.md` recipe), run
+   `node src/scripts/apply-search-definitions.js --live`. It
+   creates the three plain-named indexes from these files and then the indexers, in that order,
+   and lets them fill on their PT5M schedule. The old indexes keep serving the whole time.
 3. **Settings only.** Flip the three defaults. No code release, and rolling back is flipping them
    back — which is the entire reason step 1 made all three configurable rather than just the chunk
    index, which was the only one with an app setting before.
