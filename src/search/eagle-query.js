@@ -15,7 +15,7 @@
  *
  * WHAT DEMI'S INDEXES CANNOT EXPRESS, and therefore what this drops:
  *   - `milestone`, `projectPhase`, `documentAuthorType`, `documentSource`, `isFeatured` — no such
- *     field in `demi-documents`. eagle-public's /search filter panel sends all of them.
+ *     field in `documents`. eagle-public's /search filter panel sends all of them.
  *   - any date range (`datePostedStart`, `decisionDateEnd`): there is no `Edm.DateTimeOffset` field
  *     in ANY demi index, so a range term has nothing to compare against. `datePosted` IS stored in
  *     Cosmos — it is the index that has no home for it (`datasources/demi-documents-ds.json`).
@@ -36,10 +36,20 @@ const { logger } = require('../utils/logger');
 
 const INDEX_DIR = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes');
 
+/**
+ * Dataset → which `azure/search/indexes/*.json` holds its field metadata.
+ *
+ * THESE ARE SCHEMA NAMES, NOT WIRE NAMES. They match the `name` INSIDE the committed definitions
+ * and have nothing to do with `SEARCH_INDEX*`, which name the live indexes `ai-search.js` actually
+ * queries. The two are decoupled on purpose: it is what lets the physical indexes be renamed one
+ * app setting at a time while the field metadata keeps resolving. Coupling them would mean a
+ * half-done cutover silently loses every filter and sort — `fieldsFor` falls back to an empty Map,
+ * so an unmatched name here answers 200 with no filters applied rather than failing.
+ */
 const DATASET_INDEX = {
-  Project: 'demi-projects',
-  Document: 'demi-documents',
-  DocumentChunk: 'demi-chunks'
+  Project: 'projects',
+  Document: 'documents',
+  DocumentChunk: 'chunks'
 };
 
 /**
@@ -79,7 +89,7 @@ const ALIASES = {
  * from page 1 — which reads to a user as data loss, not as a sorting quirk. It must NOT apply to a
  * keyword search: an alphabetical default there sorts the relevance ranking away.
  *
- * No entry for DocumentChunk: EVERY field in `demi-chunks` is `sortable: false`, the key included,
+ * No entry for DocumentChunk: EVERY field in `chunks` is `sortable: false`, the key included,
  * so `$orderby` on that index cannot name anything at all. Chunks page in relevance order and a
  * deep chunk page is therefore not stable — the honest statement of what the index supports.
  */
@@ -176,7 +186,7 @@ function quote(value) {
 /**
  * The Edm types `term()` has a case for — and therefore the ONLY types this endpoint can filter on.
  *
- * THIS IS THE GATE FOR A FILTER KEY, not `filterable`. `demi-projects.centroid` is an
+ * THIS IS THE GATE FOR A FILTER KEY, not `filterable`. `projects.centroid` is an
  * `Edm.GeographyPoint` and is `filterable: true` — geography fields are filterable, just not with
  * `eq` — so a `filterable` gate let it through to the quoted-string default and emitted
  * `centroid eq 'x'`. That is not an operator OData defines on a geography field, so the service
@@ -212,7 +222,7 @@ function term(field, meta, value) {
       // "Does it parse" is the wrong question; "can the field hold it" is the right one. `Number`
       // accepts both `0.5` and `1e21`, and `and[pageNumber]=0.5` emitted `pageNumber eq 0.5` while
       // `1e21` emitted `pageNumber eq 1e+21` — both 400s against the `Edm.Int32` that
-      // `demi-chunks.pageNumber` is, and a 400 on this endpoint is the corpus-listing fall-through
+      // `chunks.pageNumber` is, and a 400 on this endpoint is the corpus-listing fall-through
       // described above. `Number.isInteger(1e21)` is TRUE, so the range test is not redundant with
       // the integrality test: it is the one that catches that value.
       const n = Number(v);
@@ -374,10 +384,10 @@ function buildFilter(query, dataset, acl) {
  * `search.score() desc, id asc` is the same ranking with a deterministic tiebreak.
  *
  * The tiebreak is appended only where the key is sortable, which is why chunks get no `$orderby` at
- * all: nothing in `demi-chunks` is sortable, and naming a non-sortable field is a 400.
+ * all: nothing in `chunks` is sortable, and naming a non-sortable field is a 400.
  *
  * `$orderby` also OVERRIDES semantic reranking — the L2 order is expressed as the response order
- * and nothing else. That costs nothing today because `demi-chunks` is the only semantic index and
+ * and nothing else. That costs nothing today because `chunks` is the only semantic index and
  * it is the one index this cannot emit an order for; if a second index ever gets a semantic
  * configuration, this function has to learn about it.
  */
@@ -471,6 +481,10 @@ function reportDropped(dataset, kind, dropped) {
 }
 
 module.exports = {
+  // Exported for the guard test only. Nothing in production reads it from outside this module —
+  // it is here so a test can assert every value still names a definition file on disk, which is
+  // the one failure mode this mapping has and the one that produces a 200 instead of an error.
+  DATASET_INDEX,
   buildFilter,
   buildOrderBy,
   unknownParams,

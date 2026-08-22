@@ -12,6 +12,8 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const eagleQuery = require('../../src/search/eagle-query');
 const { filterFor } = require('../../src/helpers/access-odata');
@@ -104,7 +106,7 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("region eq 'O''Brien'"));
   });
 
-  // THE GATE IS THE FIELD'S TYPE, NOT `filterable`. `demi-projects.centroid` is an
+  // THE GATE IS THE FIELD'S TYPE, NOT `filterable`. `projects.centroid` is an
   // `Edm.GeographyPoint` and IS filterable — geography fields are — so a `filterable` gate let it
   // fall to the quoted-string default and emitted `centroid eq 'x'`, which is not an operator OData
   // defines on a geography field. The 400 that came back is not retried, and the controller used to
@@ -182,7 +184,7 @@ test('eagle-query sort', async (t) => {
     assert.ok(!orderby.includes('datePosted'), 'a non-sortable name is a 400 on every query');
   });
 
-  // Every field in demi-chunks is sortable:false, the key included. There is nothing to name, so
+  // Every field in chunks is sortable:false, the key included. There is nothing to name, so
   // no $orderby may be emitted at all.
   await t.test('DocumentChunk can express no order whatsoever', () => {
     assert.strictEqual(eagleQuery.buildOrderBy('-score', 'DocumentChunk', true).orderby, undefined);
@@ -247,5 +249,45 @@ test('a boolean value OData cannot express is dropped, not coerced to false', ()
     const out = eagleQuery.buildFilter({ 'and[isPublished]': v }, 'Document', { filter: null, empty: false });
     assert.strictEqual(out.filter, `isPublished eq ${expected}`);
     assert.deepStrictEqual(out.dropped, []);
+  }
+});
+
+test('every semantic configuration is named for its own index', () => {
+  // `semanticConfigurationFor(index)` derives `<index>-semantic` at request time, so the DEFINITION
+  // has to follow the same convention or the app asks a real index for a configuration it does not
+  // have. That is a hard 400, not a degrade: semantic is on by default for chunk search and 400 is
+  // not in RETRY_STATUSES. Nothing else couples the two — every other assertion pins the DERIVED
+  // string, so the definition file could drift with the whole suite green.
+  const dir = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes');
+  const defs = fs.readdirSync(dir)
+    .filter(f => f.endsWith('.json'))
+    .map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+
+  const withSemantic = defs.filter(d => d.semantic && d.semantic.configurations);
+  assert.ok(withSemantic.length > 0, 'no index declares a semantic configuration — the convention is unguarded');
+
+  for (const def of withSemantic) {
+    for (const cfg of def.semantic.configurations) {
+      assert.strictEqual(
+        cfg.name, `${def.name}-semantic`,
+        `${def.name}: semantic configuration is "${cfg.name}", but the app will ask for ` +
+        `"${def.name}-semantic" and a mismatch is a 400 on every semantic query`
+      );
+    }
+  }
+});
+
+test('every DATASET_INDEX value names an index definition that is actually on disk', () => {
+  // The guard that makes the staged index rename safe. DATASET_INDEX is a SCHEMA lookup — it picks
+  // which `azure/search/indexes/*.json` to read field metadata from — while SEARCH_INDEX* name the
+  // live indexes. Getting this one wrong is invisible: `fieldsFor` falls back to an empty Map, so
+  // every filter and every sort is silently dropped and the caller gets a 200 over the WHOLE
+  // corpus, which is exactly what eagle-search measured (60,560 rows for a filtered question).
+  const dir = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes');
+  const onDisk = fs.readdirSync(dir).filter(f => f.endsWith('.json'))
+    .map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')).name);
+
+  for (const [dataset, index] of Object.entries(eagleQuery.DATASET_INDEX)) {
+    assert.ok(onDisk.includes(index), `${dataset} -> '${index}' has no definition; on disk: ${onDisk}`);
   }
 });

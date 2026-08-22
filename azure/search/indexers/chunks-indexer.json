@@ -1,9 +1,9 @@
 {
-  "name": "demi-chunks-indexer",
+  "name": "chunks-indexer",
   "description": null,
   "dataSourceName": "demi-chunks-ds",
   "skillsetName": null,
-  "targetIndexName": "demi-chunks",
+  "targetIndexName": "chunks",
   "disabled": null,
   "schedule": {
     "interval": "PT5M",

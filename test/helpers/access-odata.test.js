@@ -48,7 +48,7 @@ test('access-odata filter', async (t) => {
     assert.match(filter, / and /, 'both dimensions apply, not either');
   });
 
-  // A project IS its own scope, so on demi-projects the field is `id`. Scoping projects on a
+  // A project IS its own scope, so on projects the field is `id`. Scoping projects on a
   // `projectId` they do not carry would match nothing — and an empty result is indistinguishable
   // from an empty corpus, which is how this kind of bug survives review.
   await t.test('the scope field is per-index, not hardcoded', () => {

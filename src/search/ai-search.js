@@ -5,7 +5,7 @@
  *
  * Retrieval is lexical BM25. No vectors and no embedding pipeline: AI is a summariser over the
  * final top-N, not a retriever. Chunk search additionally asks Azure's semantic ranker to REORDER
- * what BM25 already found — see SEMANTIC_CONFIGURATION. That is a reranker over the top 50, not a
+ * what BM25 already found — see semanticConfigurationFor. That is a reranker over the top 50, not a
  * second retrieval path; it cannot surface anything the keyword query missed.
  *
  * Deliberately plain `fetch` against the REST API rather than `@azure/search-documents`. Two
@@ -68,8 +68,13 @@ let credential = null;
 let unconfiguredWarned = false;
 
 /**
- * One service, three indexes. `SEARCH_INDEX` names the chunk index for backward compatibility;
- * the other two are derived from it so a single app setting still configures everything.
+ * One service, three indexes, one app setting each.
+ *
+ * `SEARCH_INDEX` keeps its unqualified name for backward compatibility — it named the chunk index
+ * before there were three. The defaults are the LIVE names, which still carry the `demi-` prefix
+ * even though the committed definitions under `azure/search/` no longer do; the plain-named indexes
+ * are created and filled by hand from inside the VNet, and the cutover is a settings-only change
+ * per index. All three are settable precisely so no code release is involved either way.
  */
 function config() {
   const endpoint = (process.env.SEARCH_ENDPOINT || '').replace(/\/$/, '');
@@ -368,8 +373,17 @@ function buildQuery(terms, fuzzy, prefix = false) {
  *
  * Azure rescores at most the top 50 of L1, so this can only reorder — it can never surface a
  * document the Lucene query failed to match.
+ *
+ * DERIVED FROM THE INDEX NAME, not a constant. A semantic configuration is scoped to the index that
+ * declares it, so a hard-coded name is the one thing a staged index rename cannot survive: point
+ * `SEARCH_INDEX` at a `chunks` index while this still says `demi-chunks-semantic` and every chunk
+ * search 400s — naming a configuration the index does not declare is a hard error, not a degrade to
+ * BM25. The convention `<index>-semantic` is what `azure/search/indexes/chunks.json` carries, and
+ * keeping the two in step is why the definition file is the source of the name.
  */
-const SEMANTIC_CONFIGURATION = 'demi-chunks-semantic';
+function semanticConfigurationFor(index) {
+  return `${index}-semantic`;
+}
 
 /**
  * Latched once a 402 says the monthly allowance is spent. Gates the request, not just the log.
@@ -504,7 +518,7 @@ async function runSearch(index, opts = {}) {
     // The TOKENIZED terms rejoined, not opts.keywords verbatim. `tokenize` is what strips Lucene
     // operator characters, and operator syntax inside the semantic string is explicitly unsupported.
     body.semanticQuery = terms.join(' ');
-    body.semanticConfiguration = SEMANTIC_CONFIGURATION;
+    body.semanticConfiguration = semanticConfigurationFor(index);
     // Degrade rather than fail. A 1-SU Basic service allows 2 concurrent semantic requests, and the
     // frontend searches on a debounced keystroke — being over that is the expected path, not an
     // edge. `partial` returns the BM25 order instead of erroring.
@@ -649,7 +663,7 @@ async function searchChunks(opts = {}) {
 
   const { value, count } = await runSearch(index, {
     ...opts,
-    // ON by default, and only here — `demi-chunks` is the only index with a semantic
+    // ON by default, and only here — the chunk index is the only one with a semantic
     // configuration, and asking for one that does not exist is a 400. Measured on 78 labels,
     // 2026-08-05, paired run in one session against the same corpus:
     //
