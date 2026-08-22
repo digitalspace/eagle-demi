@@ -133,6 +133,44 @@ test('documents repository', async (t) => {
       'the dominant list should be single-partition');
   });
 
+  // The search controller pages this list by re-running it and slicing. WITHOUT an ORDER BY the
+  // SQL API guarantees no order at all, so two requests can return the same row twice and never
+  // return another — the same failure DEFAULT_ORDER prevents on the AI Search side. `c.id` because
+  // it is the one path always present and always indexed: a single-property ORDER BY DROPS rows
+  // that lack the property, so sorting on a display field would hide untitled documents.
+  await t.test('the list has a deterministic order, or paging repeats and omits rows', async () => {
+    const calls = captureQuery(t);
+    await documents.listVisible(PUBLIC, {});
+    assert.match(calls[0].spec.query, /ORDER BY c\.id ASC$/);
+  });
+
+  // `project=a,b` is one request naming two projects. Dropping the extra ids would answer the whole
+  // corpus to a request that named two — the same failure as forgetting the filter entirely.
+  await t.test('two projects become an IN clause, not a dropped filter', async () => {
+    const calls = captureQuery(t);
+    await documents.listVisible(PUBLIC, { projectId: ['207', '208'] });
+
+    const { spec, options } = calls[0];
+    assert.match(spec.query, /c\.projectId IN \(@projectId0, @projectId1\)/);
+    assert.deepStrictEqual(
+      spec.parameters.filter(p => p.name.startsWith('@projectId')).map(p => p.value),
+      ['207', '208']
+    );
+    assert.strictEqual(options.partitionKey, undefined,
+      'two projects are two partitions — this one cannot be pinned');
+  });
+
+  // The count has to carry the same scope as the read, or one project's document list reports the
+  // size of the corpus.
+  await t.test('the count is built from the same project scope as the read', async () => {
+    const calls = captureQuery(t);
+    await documents.countVisible(PUBLIC, { projectId: ['207'] });
+
+    assert.match(calls[0].spec.query, /SELECT VALUE COUNT\(1\)/);
+    assert.match(calls[0].spec.query, /c\.projectId = @projectId/);
+    assert.strictEqual(calls[0].options.partitionKey, '207');
+  });
+
   await t.test('without a project it stays cross-partition but still ACL-filtered', async () => {
     const calls = captureQuery(t);
     await documents.listVisible(PUBLIC, {});

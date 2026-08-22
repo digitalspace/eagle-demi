@@ -96,10 +96,13 @@ async function getByEagleId(access, eagleId) {
 }
 
 /**
- * Names for a bounded set of project ids, in one query.
+ * Names and Eagle ids for a bounded set of project ids, in one query.
  *
- * Chunk search hits carry a projectId and no name, so the results have to be labelled. Only the
- * name is projected — the caller is entitled to the label, not to the project record.
+ * Chunk and document search hits carry a projectId and no name, so the results have to be labelled.
+ * Only the name and the alternate identifier are projected — the caller is entitled to the label,
+ * not to the project record. `eagleId` is what the search response puts in `project._id`, because
+ * that is the id eagle-api's routes accept; it rides along here rather than in a second lookup,
+ * since this read already runs once per result page and is already ACL-gated.
  */
 async function listByIds(access, ids) {
   const unique = Array.from(new Set((ids || []).map(String)));
@@ -109,7 +112,7 @@ async function listByIds(access, ids) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: [inList(PARTITION_FIELD, unique, '@pid')],
-    select: 'c.id, c.name'
+    select: 'c.id, c.name, c.eagleId'
   });
 
   const { items } = await cosmos.query(CONTAINER, spec, {});

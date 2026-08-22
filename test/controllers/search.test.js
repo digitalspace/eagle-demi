@@ -140,7 +140,7 @@ test('Search Controller Tests', async (t) => {
 
       await searchController.search(req, res);
 
-      assert.deepStrictEqual(jsonResponse, [{ searchResults: [] }]);
+      assert.deepStrictEqual(jsonResponse[0].searchResults, []);
       assert.strictEqual(listed, false, 'the unfiltered list must not answer a keyword query');
     });
 
@@ -300,7 +300,8 @@ test('Search Controller Tests', async (t) => {
       assert.strictEqual(hit.projectName, 'Site C');
       assert.strictEqual(hit.documentName, 'Application');
       assert.strictEqual(hit.pageNumber, 2);
-      assert.deepStrictEqual(hit.read, ['public']);
+      // read[] is the caller's own ACL restated and is deliberately NOT emitted.
+      assert.strictEqual(hit.read, undefined, 'the row ACL must not be published to callers');
       // content is not retrievable from the index, so the API never ships chunk text.
       assert.strictEqual(hit.content, '');
       assert.ok(hit.snippet.includes('<mark>river</mark>'));
@@ -346,13 +347,16 @@ test('Search Controller Tests', async (t) => {
 
     await searchController.search(req, res);
 
-    assert.deepStrictEqual(jsonResponse, [{ searchResults: [] }]);
+    assert.deepStrictEqual(jsonResponse[0].searchResults, []);
     assert.strictEqual(called, false, 'no filter can express "nothing", so issue no request');
   });
 
-  // An empty result caused by a fault is not the same fact as "nothing matched", but it must not
-  // become a 5xx either: the frontend retries those twice at 1s and lands on empty regardless.
-  await t.test('a search backend failure degrades to empty rather than a 500', async () => {
+  // A FAILED search is not an empty one. This used to answer 200 with `[]` to save the frontend's
+  // two 5xx retries — but the response envelope then stamped `searchResultsTotal: 0` on it, which
+  // is a claim about the index that nothing measured. The status code is the only place the
+  // difference between "found nothing" and "could not look" can be stated, so it is stated there,
+  // and no result set is published at all.
+  await t.test('a search backend failure is reported, not answered as an empty result', async () => {
     t.mock.method(aiSearch, 'searchChunks', async () => { throw new Error('HTTP 403 forbidden'); });
 
     const req = { query: { dataset: 'DocumentChunk', keywords: 'river' }, header: () => null };
@@ -365,8 +369,9 @@ test('Search Controller Tests', async (t) => {
 
     await searchController.search(req, res);
 
-    assert.strictEqual(statusCode, 200);
-    assert.deepStrictEqual(jsonResponse, [{ searchResults: [] }]);
+    assert.strictEqual(statusCode, 502);
+    assert.ok(!Array.isArray(jsonResponse), 'a failure carries no searchResults array');
+    assert.ok(jsonResponse.error, 'and says what went wrong');
   });
 
   await t.test('DocumentChunk search with no keywords never queries', async () => {
@@ -560,5 +565,458 @@ test('restricted document text does not leak through Deep Search', async (t) => 
 
     assert.strictEqual(body[0].searchResults.length, 1);
     assert.strictEqual(body[0].count, 42, 'the index-wide total survives when nothing is withheld');
+  });
+});
+
+// eagle-public speaks eagle-api's search contract and is not changing, so this endpoint has to.
+// Every assertion below is a line in one of its templates or services, cited where it is not
+// obvious: a shape that "looks right" but misses one of them renders an empty table with a 200.
+test('the eagle-public response contract', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const capture = () => {
+    const out = { body: undefined, status: 200 };
+    const res = {
+      json: (d) => { out.body = d; return res; },
+      status: (code) => { out.status = code; return res; }
+    };
+    return { out, res };
+  };
+
+  // `search.service.ts:164` reads res[0].data.meta[0].searchResultsTotal, and
+  // `project.service.ts:49` dereferences meta[0] with NO guard — a missing meta on dataset=Project
+  // throws a TypeError that is re-thrown through two catchErrors and navigates the user off
+  // /projects to the home page. The total is the index-wide count, not the page length.
+  await t.test('every answer carries meta[0].searchResultsTotal', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 995316,
+      items: [{ id: '207', name: 'Site C', read: ['public'] }]
+    }));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'site c' }, header: () => null }, res);
+
+    assert.strictEqual(out.body[0].meta[0].searchResultsTotal, 995316);
+    assert.strictEqual(out.body[0].searchResults.length, 1, 'one row, and a corpus-wide total');
+  });
+
+  // The empty branches are exactly the ones that used to omit `count`, and they are also the ones
+  // /projects hits when a search matches nothing. meta must survive there or the page redirects.
+  await t.test('an empty answer still carries meta', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({ count: 0, items: [] }));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'zarquonflux' }, header: () => null }, res);
+
+    assert.deepStrictEqual(out.body[0].searchResults, []);
+    assert.strictEqual(out.body[0].meta[0].searchResultsTotal, 0);
+  });
+
+  // A chunk total counts PASSAGES, and several can come from one document. eagle-search flags it
+  // the same way so a caller cannot read the number as a document count.
+  await t.test('chunk meta says the total counts passages', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      count: 4210,
+      items: [{ chunkId: 'd1::p2::c0', documentId: 'd1', projectId: '207', pageNumber: 2, read: ['public'] }]
+    }));
+    t.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'Application' }]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C', eagleId: '588511c4aaecd9001b826192' }]));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'DocumentChunk', keywords: 'river' }, header: () => null }, res);
+
+    const [meta] = out.body[0].meta;
+    assert.strictEqual(meta.searchResultsTotal, 4210);
+    assert.strictEqual(meta.countsPassages, true);
+    assert.strictEqual(meta.documentsOnPage, 1);
+  });
+
+  // A parameter nobody reads is the dangerous class: `page=2` for `pageNum=1` answers page one
+  // with a 200, and nothing anywhere says so.
+  await t.test('an unknown parameter is refused, not ignored', async () => {
+    let searched = false;
+    t.mock.method(aiSearch, 'searchProjects', async () => { searched = true; return { count: 0, items: [] }; });
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'site c', page: '2' }, header: () => null }, res);
+
+    assert.strictEqual(out.status, 400);
+    assert.match(out.body.error, /page/);
+    assert.strictEqual(searched, false, 'a refused request must not reach the service');
+  });
+
+  // 0-BASED on the wire: eagle-public's currentPage is 1-based and api.ts:173 sends `pageNum - 1`.
+  await t.test('pageNum is turned into a skip', async () => {
+    let sent;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => { sent = opts; return { count: 0, items: [] }; });
+
+    const { res } = capture();
+    await searchController.search({
+      query: { dataset: 'Document', keywords: 'fish', pageNum: '2', pageSize: '10' },
+      header: () => null
+    }, res);
+
+    assert.strictEqual(sent.skip, 20, 'page 3 of 10 starts at row 20');
+  });
+
+  // `ProjectService.getAll()` defaults its page to 0 and api.ts subtracts one, so -1 is reachable
+  // from the live frontend. A negative skip is a 400 from the service.
+  await t.test('a negative pageNum floors at the first page', async () => {
+    let sent;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => { sent = opts; return { count: 0, items: [] }; });
+
+    const { res } = capture();
+    await searchController.search({
+      query: { dataset: 'Document', keywords: 'fish', pageNum: '-1', pageSize: '10' },
+      header: () => null
+    }, res);
+
+    assert.strictEqual(sent.skip, 0);
+  });
+
+  await t.test('sortBy reaches the service as an orderby', async () => {
+    let sent;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => { sent = opts; return { count: 0, items: [] }; });
+
+    const { res } = capture();
+    await searchController.search({
+      query: { dataset: 'Document', keywords: 'fish', sortBy: ['-displayName', ''] },
+      header: () => null
+    }, res);
+
+    assert.strictEqual(sent.orderby, 'displayName desc, id asc');
+  });
+
+  // eagle-public holds Eagle ObjectIds; the indexes hold DEMI project ids. Comparing one with the
+  // other matches nothing, which renders as an empty project tab rather than as an error.
+  await t.test('an Eagle project id is translated before the filter is built', async () => {
+    let sent;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => { sent = opts; return { count: 0, items: [] }; });
+    t.mock.method(projectsRepo, 'getByEagleId', async (access, eagleId) => {
+      assert.ok(access, 'the lookup runs under the caller, not a system context');
+      assert.strictEqual(eagleId, '588511c4aaecd9001b826192');
+      return { id: '207', name: 'Site C' };
+    });
+
+    const { res } = capture();
+    await searchController.search({
+      query: { dataset: 'Document', keywords: 'fish', project: '588511c4aaecd9001b826192' },
+      header: () => null
+    }, res);
+
+    assert.ok(sent.filter.includes("projectId eq '207'"), 'the DEMI id reaches OData');
+    assert.ok(!sent.filter.includes('588511c4aaecd9001b826192'), 'the Eagle id must not');
+    assert.ok(sent.filter.includes("read/any(r: search.in(r, 'public', ','))"), 'ACL clause intact');
+  });
+
+  // Dropping an unresolvable project filter would answer the WHOLE corpus to a request that asked
+  // for one project's documents — the same failure as forgetting the filter entirely.
+  await t.test('an unknown project filter returns no rows rather than every row', async () => {
+    let searched = false;
+    t.mock.method(aiSearch, 'searchDocuments', async () => { searched = true; return { count: 9, items: [] }; });
+    t.mock.method(projectsRepo, 'getByEagleId', async () => null);
+
+    const { out, res } = capture();
+    await searchController.search({
+      query: { dataset: 'Document', keywords: 'fish', project: '588511c4aaecd9001b826192' },
+      header: () => null
+    }, res);
+
+    assert.deepStrictEqual(out.body[0].searchResults, []);
+    assert.strictEqual(searched, false, 'no request may be issued for a project nobody can name');
+  });
+
+  // `search-document-table-rows.component.html:8-10` binds rowData.project.name and
+  // rowData.project._id with NO optional chaining — the only unguarded object deref in any of
+  // eagle-public's row templates. A string here throws on every render of the row.
+  await t.test('a document row carries the {_id, name} project pair, keyed on the Eagle id', async () => {
+    t.mock.method(aiSearch, 'searchDocuments', async () => ({
+      count: 1,
+      items: [{ id: '58869abba4acd4014b81f55c', displayName: 'Application', projectId: '207', read: ['public'] }]
+    }));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([
+      { id: '207', name: 'Site C', eagleId: '588511c4aaecd9001b826192' }
+    ]));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Document', keywords: 'application' }, header: () => null }, res);
+
+    const [row] = out.body[0].searchResults;
+    assert.deepStrictEqual(row.project, { _id: '588511c4aaecd9001b826192', name: 'Site C' });
+    assert.strictEqual(row.projectName, 'Site C', 'DEMI\'s own frontend still reads the flat name');
+    assert.strictEqual(row.read, undefined, 'the row ACL is not published');
+  });
+
+  // A project this caller cannot read still labels its documents — the miss is a label, not a
+  // gate — but the link then points at an id eagle-api will not resolve, so it must be visible
+  // in the payload rather than silently absent.
+  await t.test('an unreadable parent project leaves the DEMI id in the pair', async () => {
+    t.mock.method(aiSearch, 'searchDocuments', async () => ({
+      count: 1,
+      items: [{ id: 'doc1', displayName: 'Application', projectId: '207', read: ['public'] }]
+    }));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([]));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Document', keywords: 'application' }, header: () => null }, res);
+
+    assert.deepStrictEqual(out.body[0].searchResults[0].project,
+      { _id: '207', name: 'Associated Project' });
+  });
+
+  // eagle-public routes p/${_id}/project-details and then re-fetches that project FROM EAGLE-API
+  // by the same id. A DEMI Track id here is a link that 404s.
+  await t.test('a project row is keyed on the Eagle id, falling back to the DEMI id', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 2,
+      items: [
+        { id: '207', name: 'Site C', legacyEagleId: '588511c4aaecd9001b826192', read: ['public'] },
+        { id: '999', name: 'Track Only', read: ['public'] }
+      ]
+    }));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'site' }, header: () => null }, res);
+
+    const [eagleBacked, trackOnly] = out.body[0].searchResults;
+    assert.strictEqual(eagleBacked._id, '588511c4aaecd9001b826192');
+    assert.strictEqual(eagleBacked.id, '207', 'the DEMI id stays available to DEMI\'s frontend');
+    assert.strictEqual(trackOnly._id, '999', 'no Eagle counterpart: the DEMI id, never undefined');
+    assert.strictEqual(eagleBacked.read, undefined, 'the row ACL is not published');
+  });
+});
+
+// Four defects with one shape: the server read the input and then answered something else. A
+// status-code assertion cannot see any of them, so every test below asserts on the request that
+// went out or the total that came back.
+test('the answer matches the request that was made', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const capture = () => {
+    const out = { body: undefined, status: 200 };
+    const res = {
+      json: (d) => { out.body = d; return res; },
+      status: (code) => { out.status = code; return res; }
+    };
+    return { out, res };
+  };
+
+  // [C2] The keywordless Document path resolved the Eagle ObjectId to a DEMI project id and then
+  // dropped it: a request for ONE project's documents was answered with the whole corpus, under a
+  // corpus-wide total. That is the failure `resolveProjectFilter`'s docstring warns about, landing
+  // on the branch where the project WAS resolvable.
+  await t.test('a project-scoped list is scoped, and so is its total', async () => {
+    let listOpts;
+    let countOpts;
+    t.mock.method(projectsRepo, 'getByEagleId', async (access, eagleId) => {
+      assert.strictEqual(eagleId, '588511c4aaecd9001b826192');
+      return { id: '207', name: 'Site C' };
+    });
+    t.mock.method(documentsRepo, 'listVisible', async (access, opts) => {
+      listOpts = opts;
+      return { items: [] };
+    });
+    t.mock.method(documentsRepo, 'countVisible', async (access, opts) => {
+      countOpts = opts;
+      return 4;
+    });
+
+    const { out, res } = capture();
+    await searchController.search({
+      query: {
+        dataset: 'Document',
+        keywords: '',
+        project: '588511c4aaecd9001b826192',
+        pageNum: '0',
+        pageSize: '10'
+      },
+      header: () => null
+    }, res);
+
+    assert.deepStrictEqual(listOpts.projectId, ['207'], 'the resolved DEMI id reaches the read');
+    assert.deepStrictEqual(countOpts.projectId, ['207'],
+      'and the count, or one project reports the size of the corpus');
+    assert.strictEqual(out.body[0].meta[0].searchResultsTotal, 4);
+  });
+
+  // [C3] The client pages in units of `pageSize`; the server used to skip in units of
+  // `min(pageSize, 250)`. Reachable from eagle-public's "Show All", which offers 500.
+  await t.test('the offset is in the page size the caller asked for', async () => {
+    let sent;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => {
+      sent = opts;
+      return { count: 3000, items: [] };
+    });
+
+    const { res } = capture();
+    await searchController.search({
+      query: { dataset: 'Document', keywords: 'fish', pageNum: '2', pageSize: '500' },
+      header: () => null
+    }, res);
+
+    assert.strictEqual(sent.skip, 1000, 'page 3 of 500 starts at row 1000, not row 500');
+    assert.strictEqual(sent.top, 500, 'and asks for the page the caller asked for');
+  });
+
+  // The other half of that decision, written down: a page bigger than the search layer will
+  // assemble is REFUSED. Returning a short page under a large total is the failure, not the fix.
+  await t.test('a keyword page beyond the ceiling is refused, not silently shortened', async () => {
+    let searched = false;
+    t.mock.method(aiSearch, 'searchDocuments', async () => {
+      searched = true;
+      return { count: 0, items: [] };
+    });
+
+    const { out, res } = capture();
+    await searchController.search({
+      query: { dataset: 'Document', keywords: 'fish', pageSize: '501' },
+      header: () => null
+    }, res);
+
+    assert.strictEqual(out.status, 400);
+    assert.match(out.body.error, /pageSize/);
+    assert.strictEqual(searched, false);
+  });
+
+  // [C4] The Cosmos branches counted only when `pageNum` was present, and the envelope filled the
+  // gap with the page length. DEMI's own frontend is the live caller with that request shape —
+  // `registry-state.service.ts` asks for pageSize=500 and no pageNum — so a registry of any size
+  // reported 500.
+  await t.test('a page-sized list does not report its own length as the corpus', async () => {
+    t.mock.method(projectsRepo, 'listVisible', async () => ({
+      items: [{ id: '207', name: 'Site C', read: ['public'] }]
+    }));
+    t.mock.method(projectsRepo, 'countVisible', async () => 4210);
+
+    const { out, res } = capture();
+    await searchController.search({
+      query: { dataset: 'Project', keywords: '', pageSize: '500' },
+      header: () => null
+    }, res);
+
+    assert.strictEqual(out.body[0].searchResults.length, 1);
+    assert.strictEqual(out.body[0].meta[0].searchResultsTotal, 4210,
+      'the measured total, never the number of rows on the page');
+  });
+
+  // The rule itself, at the one place it is enforced. An absent count means NOT MEASURED, and the
+  // envelope must say so rather than publishing the page length as a fact about the index.
+  await t.test('an unmeasured total is omitted, not filled in from the page', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      items: [{ id: '207', name: 'Site C', read: ['public'] }]
+    }));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'site c' }, header: () => null }, res);
+
+    assert.strictEqual(out.body[0].searchResults.length, 1);
+    assert.ok(Array.isArray(out.body[0].meta), 'meta itself must survive — project.service.ts:49');
+    assert.strictEqual(out.body[0].meta[0].searchResultsTotal, undefined,
+      'not 1, which is the page length wearing the corpus total\'s name');
+  });
+
+  // [C5] A search that FAILED is not a search that found nothing. 200 with an empty array told
+  // every visitor of /projects that the registry holds no projects.
+  await t.test('a failed list is reported, not published as an empty registry', async () => {
+    t.mock.method(projectsRepo, 'listVisible', async () => {
+      throw new Error('Cosmos DB request rate is large');
+    });
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: '', pageSize: '10' }, header: () => null }, res);
+
+    assert.strictEqual(out.status, 502);
+    assert.ok(!Array.isArray(out.body), 'no result set is published for a search that did not run');
+  });
+
+  // [S1] The whole point of the type gate, seen from the endpoint: a 400 from the search service
+  // must not be answered with the keywordless corpus listing. `and[centroid]=x` is the request that
+  // proved it — the filter is dropped now, so the search still runs, and a failure that DOES reach
+  // the catch answers 502 rather than an arbitrary page.
+  await t.test('a keyword search that faults never answers with the unkeyworded list', async () => {
+    let listed = false;
+    t.mock.method(aiSearch, 'searchProjects', async () => {
+      throw Object.assign(new Error('HTTP 400 invalid expression'), { status: 400 });
+    });
+    t.mock.method(projectsRepo, 'listVisible', async () => {
+      listed = true;
+      return { items: [{ id: '999', name: 'Some Other Project', read: ['public'] }] };
+    });
+
+    const { out, res } = capture();
+    await searchController.search({
+      query: { dataset: 'Project', keywords: 'zarquonflux', 'and[centroid]': 'x' },
+      header: () => null
+    }, res);
+
+    assert.strictEqual(listed, false, 'the corpus listing must not answer a keyword search');
+    assert.strictEqual(out.status, 502);
+  });
+
+  // [C7] Two id-spaces, two fields, neither derived from the other. `project._id` is the EAGLE
+  // ObjectId eagle-public routes on; `projectId` is the DEMI id that is the Cosmos partition key
+  // and the id-space DEMI's own frontend compares against `Project.id`.
+  await t.test('a document row carries the DEMI project id as well as the Eagle one', async () => {
+    t.mock.method(aiSearch, 'searchDocuments', async () => ({
+      count: 1,
+      items: [{ id: 'doc1', displayName: 'Application', projectId: '207', read: ['public'] }]
+    }));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([
+      { id: '207', name: 'Site C', eagleId: '588511c4aaecd9001b826192' }
+    ]));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Document', keywords: 'application' }, header: () => null }, res);
+
+    const [row] = out.body[0].searchResults;
+    assert.strictEqual(row.projectId, '207', 'the DEMI id, which is the partition key');
+    assert.strictEqual(row.project._id, '588511c4aaecd9001b826192', 'the Eagle id, for the link');
+  });
+
+  await t.test('the keywordless document rows carry it too', async () => {
+    t.mock.method(documentsRepo, 'listVisible', async () => ({
+      items: [{ id: 'doc1', displayName: 'Application', projectId: '207', read: ['public'] }]
+    }));
+    t.mock.method(documentsRepo, 'countVisible', async () => 1);
+    t.mock.method(projectsRepo, 'listByIds', async () => ([
+      { id: '207', name: 'Site C', eagleId: '588511c4aaecd9001b826192' }
+    ]));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Document', keywords: '' }, header: () => null }, res);
+
+    const [row] = out.body[0].searchResults;
+    assert.strictEqual(row.projectId, '207');
+    assert.strictEqual(row.project._id, '588511c4aaecd9001b826192');
+  });
+
+  await t.test('a chunk row carries the DEMI project id as well as the Eagle one', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      count: 1,
+      items: [{ chunkId: 'c1', documentId: 'd1', projectId: '207', pageNumber: 1, read: ['public'] }]
+    }));
+    t.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'Doc' }]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([
+      { id: '207', name: 'Site C', eagleId: '588511c4aaecd9001b826192' }
+    ]));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'DocumentChunk', keywords: 'river' }, header: () => null }, res);
+
+    const [row] = out.body[0].searchResults;
+    assert.strictEqual(row.projectId, '207');
+    assert.strictEqual(row.project._id, '588511c4aaecd9001b826192');
   });
 });

@@ -234,11 +234,90 @@ test('ai-search request shape', async (t) => {
     assert.ok(!('filter' in calls[0].body));
   });
 
+  // `top` is a page SIZE and was for a long time the only knob there was, which made result 251
+  // unreachable by any caller: no offset went on the wire at all.
+  await t.test('a page offset reaches the request body', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [], '@odata.count': 0 } }));
+    await aiSearch.searchChunks({ filter: null, keywords: 'river', top: 10, skip: 30 });
+    assert.strictEqual(calls[0].body.skip, 30);
+  });
+
+  // Azure rejects `$skip` above 100,000, so `skip + top` has to stay inside it — a request that
+  // asks for more is a 400, not a short page.
+  await t.test('a skip past the service ceiling is clamped, not sent', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    await aiSearch.searchChunks({ filter: null, keywords: 'river', top: 10, skip: 250000 });
+    assert.strictEqual(calls[0].body.skip, 100000 - 10);
+  });
+
+  await t.test('the first page sends no skip at all', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    await aiSearch.searchChunks({ filter: null, keywords: 'river', skip: 0 });
+    assert.ok(!('skip' in calls[0].body));
+  });
+
+  // An empty `$orderby` is a 400, and eagle-query returns undefined exactly where the index can
+  // express no order — so the field must be absent rather than empty.
+  await t.test('an orderby is forwarded, and omitted when there is none', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    await aiSearch.searchChunks({ filter: null, keywords: 'river', orderby: 'id asc' });
+    await aiSearch.searchChunks({ filter: null, keywords: 'river' });
+    assert.strictEqual(calls[0].body.orderby, 'id asc');
+    assert.ok(!('orderby' in calls[1].body));
+  });
+
   await t.test('no usable terms means no request at all', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
     const res = await aiSearch.searchChunks({ filter: null, keywords: '  !!!  ' });
     assert.deepStrictEqual(res, { items: [], count: 0 });
     assert.strictEqual(calls.length, 0, 'must not reach the service');
+  });
+
+  // eagle-public's "Show All" asks for 500 rows (`table-template.component.ts:122-126`,
+  // MAX_SHOW_ALL_ITEMS) and the service returns at most 250 per request. The page used to be
+  // truncated to the first 250 under a total in the thousands, with nothing on the wire to say the
+  // rest had been dropped — a status-code or row-count-under-250 assertion cannot see that, so this
+  // asserts on the REQUESTS: the second one has to continue where the first ended.
+  await t.test('a page larger than the service cap is filled, not truncated', async (tt) => {
+    const rows = (n, from) => Array.from({ length: n }, (_, i) => ({ id: `c${from + i}` }));
+    const calls = captureFetch(tt, (i) => ({
+      json: { value: rows(250, i * 250), '@odata.count': 4210 }
+    }));
+
+    const res = await aiSearch.searchChunks({ filter: null, keywords: 'river', top: 500 });
+
+    assert.strictEqual(calls.length, 2, 'two requests, because one cannot carry 500 rows');
+    assert.strictEqual(calls[0].body.top, 250);
+    assert.ok(!('skip' in calls[0].body), 'the first page starts at the top');
+    assert.strictEqual(calls[1].body.top, 250);
+    assert.strictEqual(calls[1].body.skip, 250, 'the second continues where the first ended');
+    assert.strictEqual(res.items.length, 500, 'the caller gets the page it asked for');
+    assert.strictEqual(res.count, 4210, 'and the index-wide total, not the page length');
+  });
+
+  // The offset the caller asked for is carried into the continuation, not restarted from it.
+  await t.test('a deep page continues from the caller offset, not from zero', async (tt) => {
+    const calls = captureFetch(tt, () => ({
+      json: { value: Array.from({ length: 250 }, (_, i) => ({ id: `x${i}` })), '@odata.count': 9000 }
+    }));
+
+    await aiSearch.searchChunks({ filter: null, keywords: 'river', top: 500, skip: 1000 });
+
+    assert.strictEqual(calls[0].body.skip, 1000);
+    assert.strictEqual(calls[1].body.skip, 1250);
+  });
+
+  // A short answer means the matches ran out. Asking again would cost a round trip per empty page
+  // and, on a filtered query, would keep asking until MAX_PAGE_ROWS.
+  await t.test('a short answer ends the page rather than asking again', async (tt) => {
+    const calls = captureFetch(tt, () => ({
+      json: { value: [{ id: 'only' }], '@odata.count': 1 }
+    }));
+
+    const res = await aiSearch.searchChunks({ filter: null, keywords: 'river', top: 500 });
+
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(res.items.length, 1);
   });
 
   // A 403 (missing data-plane role) returns a JSON body that looks like any other response.
@@ -249,6 +328,135 @@ test('ai-search request shape', async (t) => {
       () => aiSearch.searchChunks({ filter: null, keywords: 'river' }),
       /HTTP 403/
     );
+  });
+});
+
+// The document search runs in two legs and the total belongs to both of them. Reporting the PAGE
+// LENGTH — `Math.max(direct.count, items.length)`, which is what this used to do — told
+// eagle-public there was one page and made every later page unreachable. A status code cannot see
+// it and neither can the row count; the returned total is the only place it shows.
+test('ai-search document totals', async (t) => {
+  // Probe shape from the review: 3 direct matches, one matching project, 500 documents under it.
+  const legs = (overlap) => (i) => {
+    if (i === 0) return { json: { value: [{ id: 'd1' }, { id: 'd2' }, { id: 'd3' }], '@odata.count': 3 } };
+    if (i === 1) return { json: { value: [{ id: '207' }], '@odata.count': 1 } };
+    if (i === 2) {
+      return {
+        json: {
+          value: Array.from({ length: 6 }, (_, n) => ({ id: `p${n}` })),
+          '@odata.count': 500
+        }
+      };
+    }
+    return { json: { value: [], '@odata.count': overlap } };
+  };
+
+  await t.test('the total spans both legs, net of what they share', async (tt) => {
+    const calls = captureFetch(tt, legs(2));
+
+    const res = await aiSearch.searchDocuments({
+      filter: null, projectFilter: null, keywords: 'ajax', top: 10
+    });
+
+    assert.strictEqual(res.count, 501, '3 direct + 500 by project - 2 in both');
+    assert.strictEqual(res.items.length, 9, 'and the page is still a page');
+    assert.strictEqual(calls.length, 4, 'direct, projects, by-project, overlap');
+  });
+
+  // Both legs match the same documents for a project-shaped query — for "Ajax", nearly all 199
+  // direct hits are inside the 850. Summing without the intersection would offer ~30% more pages
+  // than exist, every one of them empty.
+  await t.test('the shared documents are subtracted, not counted twice', async (tt) => {
+    captureFetch(tt, legs(3));
+    const res = await aiSearch.searchDocuments({
+      filter: null, projectFilter: null, keywords: 'ajax', top: 10
+    });
+    assert.strictEqual(res.count, 500, 'every direct hit was already inside the project leg');
+  });
+
+  // The count legs run even when the direct hits already fill the page. Skipping them there made
+  // the total jump the moment a caller reached the last page of direct hits — a pager that grows
+  // under the user is the same defect wearing a different hat.
+  await t.test('a full page of direct hits still measures the project leg', async (tt) => {
+    const calls = captureFetch(tt, (i) => {
+      if (i === 0) {
+        return {
+          json: {
+            value: Array.from({ length: 3 }, (_, n) => ({ id: `d${n}` })),
+            '@odata.count': 771
+          }
+        };
+      }
+      if (i === 1) return { json: { value: [{ id: '207' }], '@odata.count': 1 } };
+      if (i === 2) return { json: { value: [{ id: 'other' }], '@odata.count': 2267 } };
+      return { json: { value: [], '@odata.count': 700 } };
+    });
+
+    const res = await aiSearch.searchDocuments({
+      filter: null, projectFilter: null, keywords: 'pipeline', top: 3
+    });
+
+    assert.strictEqual(res.items.length, 3, 'the page was already full');
+    assert.strictEqual(res.count, 771 + 2267 - 700);
+    assert.strictEqual(calls[2].body.top, 1,
+      'the row-less leg asks for one row: the count is what it is for');
+  });
+});
+
+// Leg two is deduped against leg one and the legs overlap by construction, so a request sized to
+// the DEFICIT (`top - items.length`) is sized against a yield that only exists after dedup: every
+// deduped row left a hole. The status cannot see it and neither can the total — only the ROW COUNT
+// of the returned page can, which is what these assert, at 0%, ~66% and 100% overlap.
+test('ai-search document page fill', async (t) => {
+  // 20 documents in the matching project, 3 direct hits, `top=10`. `dupes` is how many of the
+  // direct hits are also inside the project leg's own ordering — the overlap ratio.
+  const project = (dupes) => {
+    const head = ['d0', 'd1', 'd2'].slice(0, dupes);
+    const rest = Array.from({ length: 20 - dupes }, (_, n) => ({ id: `p${n}` }));
+    return [...head.map(id => ({ id })), ...rest];
+  };
+
+  const page = async (tt, dupes) => {
+    let calls;
+    calls = captureFetch(tt, (i) => {
+      if (i === 0) {
+        return { json: { value: [{ id: 'd0' }, { id: 'd1' }, { id: 'd2' }], '@odata.count': 3 } };
+      }
+      if (i === 1) return { json: { value: [{ id: '207' }], '@odata.count': 1 } };
+      if (i === 2) {
+        // The service honours `top`. Answering with a fixed slab instead would hide the defect:
+        // the whole bug is that leg two was ASKED for too few rows.
+        const rows = project(dupes).slice(0, calls[i].body.top);
+        return { json: { value: rows, '@odata.count': 20 } };
+      }
+      return { json: { value: [], '@odata.count': dupes } };
+    });
+
+    const res = await aiSearch.searchDocuments({
+      filter: null, projectFilter: null, keywords: 'ajax', top: 10
+    });
+    return { res, calls };
+  };
+
+  await t.test('no overlap: the page is full', async (tt) => {
+    const { res } = await page(tt, 0);
+    assert.strictEqual(res.items.length, 10);
+    assert.strictEqual(res.count, 3 + 20 - 0);
+  });
+
+  await t.test('partial overlap: the deduped rows do not become holes', async (tt) => {
+    const { res } = await page(tt, 2);
+    assert.strictEqual(res.items.length, 10, '2 of the 3 direct hits were also in the project leg');
+    assert.strictEqual(res.count, 3 + 20 - 2);
+  });
+
+  await t.test('total overlap: still a full page, from one leg-two request', async (tt) => {
+    const { res, calls } = await page(tt, 3);
+    assert.strictEqual(res.items.length, 10, 'every direct hit was also in the project leg');
+    assert.strictEqual(res.count, 3 + 20 - 3);
+    // The bound: one search per leg plus the count-only overlap probe. Refilling until the page
+    // was full would have made the overlap ratio a request multiplier.
+    assert.strictEqual(calls.length, 4, 'direct, projects, by-project, overlap');
   });
 });
 

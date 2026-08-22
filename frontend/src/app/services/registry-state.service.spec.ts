@@ -288,6 +288,59 @@ describe('RegistryStateService', () => {
     });
   });
 
+  // The API answers with TWO project id-spaces on a document row: `project` is the {_id, name}
+  // pair eagle-public's templates bind, whose `_id` is the EAGLE ObjectId, and `projectId` is the
+  // DEMI id — the Cosmos partition key, and the id-space `Project.id` holds here. Taking this
+  // field from the pair compared across id-spaces: `filteredDocuments` and
+  // `map-explorer.getProjDocCount` both match it against `Project.id`, so every per-project
+  // document count read 0 and the document list emptied on every page but /search.
+  describe('document project ids', () => {
+    const byDataset = (url: string) => {
+      if (url.includes('dataset=Project')) {
+        return okResponse([{
+          searchResults: [{ _id: '588511c4aaecd9001b826192', id: '207', name: 'Site C', sector: 'Energy' }],
+          count: 1
+        }]);
+      }
+      if (url.includes('dataset=Document')) {
+        return okResponse([{
+          searchResults: [{
+            _id: 'doc1',
+            displayName: 'Application',
+            projectId: '207',
+            project: { _id: '588511c4aaecd9001b826192', name: 'Site C' },
+            projectName: 'Site C',
+            isPublished: true
+          }],
+          count: 1
+        }]);
+      }
+      return okResponse([{ searchResults: [], count: 0 }]);
+    };
+
+    it('keeps the DEMI project id, not the Eagle one the row also carries', async () => {
+      sharedFetchSpy.and.callFake((input: any) => Promise.resolve(byDataset(String(input))));
+
+      await service.loadData();
+
+      const [doc] = service.documents()!;
+      expect(doc.projectId).toBe('207');
+      expect(doc.projectId).not.toBe('588511c4aaecd9001b826192');
+    });
+
+    it('so the document still belongs to its project off the search page', async () => {
+      sharedFetchSpy.and.callFake((input: any) => Promise.resolve(byDataset(String(input))));
+
+      await service.loadData();
+      service.activePage.set('map');
+
+      expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['207']);
+      expect(service.filteredDocuments()!.length)
+        .withContext('a document whose parent is in view must not be filtered out')
+        .toBe(1);
+    });
+  });
+
   // Before cancellation existed, the last request to RESOLVE won each signal rather than the last
   // one issued — and fetchWithRetry's backoff sleeps made that window seconds wide.
   describe('search cancellation', () => {

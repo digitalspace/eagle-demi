@@ -69,3 +69,38 @@ test('the old whole-header key is what the fix removes', () => {
     'the new key does not'
   );
 });
+
+/**
+ * RATE_LIMIT_MAX_REQUESTS is read once, at require time, so each case below re-requires the module
+ * with its cache entry busted. Guarding the parse and not just the happy path is the point: an
+ * unset limit is not a lenient limit, it is no limit at all, and a typo'd app setting must not be
+ * how this app loses its ceiling.
+ */
+function maxRequestsWith(value) {
+  const modulePath = require.resolve('../../src/middleware/rate-limiter');
+  delete require.cache[modulePath];
+  if (value === undefined) {
+    delete process.env.RATE_LIMIT_MAX_REQUESTS;
+  } else {
+    process.env.RATE_LIMIT_MAX_REQUESTS = value;
+  }
+  try {
+    return require(modulePath).MAX_REQUESTS;
+  } finally {
+    delete require.cache[modulePath];
+    delete process.env.RATE_LIMIT_MAX_REQUESTS;
+  }
+}
+
+test('an unusable RATE_LIMIT_MAX_REQUESTS falls back to 300 instead of removing the ceiling', () => {
+  assert.strictEqual(maxRequestsWith(undefined), 300, 'unset means the default, not unlimited');
+  for (const bad of ['', '   ', 'abc', '0', '-5', '300.5']) {
+    assert.strictEqual(maxRequestsWith(bad), 300, `${JSON.stringify(bad)} must not move the ceiling`);
+  }
+});
+
+test('a usable RATE_LIMIT_MAX_REQUESTS raises the ceiling', () => {
+  // The reason the setting exists: behind a proxy that sets no X-Forwarded-For this is one global
+  // bucket, and 300/minute is 5 r/s for every caller combined.
+  assert.strictEqual(maxRequestsWith('2000'), 2000);
+});
