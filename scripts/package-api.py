@@ -60,7 +60,14 @@ def package_api(repo_root, zip_path):
     # the definitions that are actually deployed to the search service, and the gate would then be
     # describing an index that is not the one being queried.
     include_subpaths = {os.path.join("frontend", "public", "assets", "geojson"),
-                        os.path.join("azure", "search", "indexes")}
+                        os.path.join("azure", "search", "indexes"),
+                        # INDEXERS TOO, and the omission was not theoretical: with only `indexes`
+                        # re-included, `src/scripts/apply-search-definitions.js` — which IS packaged
+                        # — died at `load(INDEXER_DIR)` with ENOENT before issuing a single request,
+                        # on both dry run and --live. Data sources stay OUT: their connectionString
+                        # comes back redacted on export, so the committed copy could only ever
+                        # restore a broken one, and nothing reads them at runtime.
+                        os.path.join("azure", "search", "indexers")}
 
     print(f"Packaging {repo_root} -> {zip_path}...")
     count = 0

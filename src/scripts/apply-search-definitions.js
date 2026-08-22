@@ -7,9 +7,14 @@
  * inside it, which is why `azure/search/` exists and why, until this script, the definitions were
  * hand-POSTed from inside the VNet with nothing in git able to replay them.
  *
- * WHERE THIS RUNS. `demi-search-*` is `publicNetworkAccess: Disabled` with local auth off, so a
- * workstation cannot reach the data plane at all. Run it from Kudu on `demi-api-<env>`, which is
- * already inside the VNet and already runs as the identity below.
+ * MUST RUN INSIDE THE APP CONTAINER, over the App Service SSH tunnel — not Kudu's /api/command,
+ * whose SCM container has no managed-identity endpoint. This script's only auth path is
+ * `getToken()` -> DefaultAzureCredential -> managed identity, so Kudu cannot work at all. See
+ * README.md for the recipe, including the `IDENTITY_ENDPOINT`/`IDENTITY_HEADER` pair.
+ *
+ * `demi-search-*` is `publicNetworkAccess: Disabled` with local auth off, so a workstation cannot
+ * reach the data plane either: it answers 403 "the source is not allowed by applicable rules",
+ * not a connection error.
  *
  * WHAT ROLE IT NEEDS, and the part that is easy to get wrong. The app's identity holds **Search
  * Index Data Contributor**, which covers DOCUMENTS and not DEFINITIONS. Creating an index or an
@@ -17,8 +22,11 @@
  * at the SERVICE scope, not the resource group, and revoke it when the run is done — a
  * public-facing API's runtime identity should not keep index-management rights.
  *
- * The exact `az role assignment create` invocation lives in `azure/search/README.md` alongside the
- * definitions themselves — one copy, so it cannot drift into asserting something false here.
+ *   az role assignment create --role 7ca78c08-252a-4471-8644-bb5ff32d4ba0 \
+ *     --assignee-object-id <identity objectId> --assignee-principal-type ServicePrincipal \
+ *     --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Search/searchServices/<svc>
+ *
+ * Then revoke it with `az role assignment delete --ids <the id that returned>`.
  *
  * That grant IS revocable here, which was doubted for a while: the `c4b0a8` ABAC condition
  * restricts `roleAssignments/write` and `/delete` to the same six role GUIDs (Owner, Contributor,
@@ -33,7 +41,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getToken, config } = require('../search/ai-search');
+// Required as a MODULE, not destructured: `t.mock.method(aiSearch, 'getToken', ...)` is how
+// the tests avoid reaching for a real managed-identity token, and a destructured binding
+// cannot be mocked. CI has no credential, so a test that mints one really does hang for 15s
+// and then fail — which is exactly how this was found.
+const aiSearch = require('../search/ai-search');
 
 const ROOT = path.join(__dirname, '..', '..');
 const INDEX_DIR = path.join(ROOT, 'azure', 'search', 'indexes');
@@ -53,7 +65,13 @@ function parseArgs(argv) {
   for (; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
-    else if (a === '--only') args.only = value(a);
+    else if (a === '--only') {
+      // An EMPTY value is not "no filter". `--only "$IDX"` with IDX unset passes the value() guard
+      // (not undefined, no `--` prefix), and select() would then short-circuit its must-match check
+      // and apply all six objects — the opposite of what the operator asked for.
+      args.only = value(a);
+      if (!args.only.trim()) throw new Error('--only was given an empty value');
+    }
     else throw new Error(`unknown flag ${a}`);
   }
   return args;
@@ -84,7 +102,8 @@ function assertNotForbidden(status, text, what) {
     throw new Error(
       `HTTP 403 reading ${what}: the SERVICE'S NETWORK RULES rejected this, not its RBAC. ` +
       `demi-search-* is publicNetworkAccess: Disabled, so no role grant changes this — run from ` +
-      `inside the VNet (Kudu on demi-api-<env>).`
+      `inside the app container over the App Service SSH tunnel — Kudu's SCM container has no ` +
+      `managed-identity endpoint, so it cannot authenticate here either.`
     );
   }
   throw new Error(
@@ -98,7 +117,7 @@ async function call(endpoint, method, resourcePath, body) {
   const res = await fetch(`${endpoint}${resourcePath}`, {
     method,
     headers: {
-      Authorization: `Bearer ${await getToken()}`,
+      Authorization: `Bearer ${await aiSearch.getToken()}`,
       'Content-Type': 'application/json'
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -219,7 +238,7 @@ async function run({ endpoint, live, only, liveNames }) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const cfg = config();
+  const cfg = aiSearch.config();
   if (!cfg.configured) throw new Error('SEARCH_ENDPOINT is not set — nothing to apply against');
   return run({
     endpoint: cfg.endpoint.replace(/\/$/, ''),

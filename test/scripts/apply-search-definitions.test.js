@@ -52,6 +52,12 @@ test('apply-search-definitions', async (t) => {
   const stub = (t2, handler) => {
     const calls = [];
     const original = global.fetch;
+    // MOCK THE TOKEN, not just the transport. getToken() goes to DefaultAzureCredential, which on a
+    // developer box quietly succeeds off an existing az login and in CI spends ~15s probing IMDS
+    // before failing — so without this the suite passes locally and fails in CI, which is how the
+    // gap was found. Mocking it also keeps these tests from depending on any ambient credential.
+    const aiSearch = require('../../src/search/ai-search');
+    t2.mock.method(aiSearch, 'getToken', async () => 'test-token');
     global.fetch = async (url, init) => {
       calls.push({ url, method: init.method, body: init.body ? JSON.parse(init.body) : null });
       return handler ? handler(url, init) : { status: 404, text: async () => '' };

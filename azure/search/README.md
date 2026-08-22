@@ -27,7 +27,9 @@ So the rename is staged, and this is stage one — definitions and code defaults
 1. **This change.** Definitions take the plain names. `SEARCH_INDEX`, `SEARCH_INDEX_PROJECTS` and
    `SEARCH_INDEX_DOCUMENTS` all exist as app settings in `azure/modules/api-web-app.bicep`, and all
    three are **pinned to the old `demi-` names**, so deploying it changes nothing the app queries.
-2. **From inside the VNet**, run `node src/scripts/apply-search-definitions.js --live` on Kudu. It
+2. **From inside the app container**, over the App Service SSH tunnel (not Kudu — its SCM
+   container has no managed-identity endpoint; see the root `README.md` recipe), run
+   `node src/scripts/apply-search-definitions.js --live`. It
    creates the three plain-named indexes from these files and then the indexers, in that order,
    and lets them fill on their PT5M schedule. The old indexes keep serving the whole time.
 3. **Settings only.** Flip the three defaults. No code release, and rolling back is flipping them
