@@ -865,6 +865,62 @@ test('the answer matches the request that was made', async (t) => {
     assert.strictEqual(sent.top, 500, 'and asks for the page the caller asked for');
   });
 
+  // The KEYWORDLESS branches page differently and had no coverage at all. Cosmos has no offset —
+  // it pages with continuation tokens (`_sql.js:89-92`) — so both list paths overfetch
+  // `skip + pageSize` rows and drop the first `skip` by hand. Deleting that slice left the whole
+  // suite green while every page served page one: the request that goes out is IDENTICAL on both
+  // pages by construction (same predicate, only a larger pageSize), so a test that inspects the
+  // outgoing options or the status code cannot see the defect. These assert the rows that come
+  // back, and assert page 2 against page 1 — the shape a client actually experiences.
+  //
+  // The stub returns the first N rows for a pageSize of N, which is what the overfetch depends on.
+  const listStub = prefix => async (_access, opts) =>
+    ({ items: Array.from({ length: opts.pageSize }, (_, i) => ({
+      id: `${prefix}${i}`, projectId: '207', read: ['public']
+    })) });
+  const expectedIds = (prefix, from) => Array.from({ length: 10 }, (_, i) => `${prefix}${from + i}`);
+
+  await t.test('the keywordless project list serves page 2 from row 10, not row 0', async () => {
+    t.mock.method(projectsRepo, 'listVisible', listStub('proj'));
+    t.mock.method(projectsRepo, 'countVisible', async () => 40);
+
+    const idsOnPage = async (pageNum) => {
+      const { out, res } = capture();
+      await searchController.search({
+        query: { dataset: 'Project', keywords: '', pageNum: String(pageNum), pageSize: '10' },
+        header: () => null
+      }, res);
+      return out.body[0].searchResults.map(r => r._id);
+    };
+
+    const first = await idsOnPage(0);
+    const second = await idsOnPage(1);
+    assert.deepStrictEqual(first, expectedIds('proj', 0));
+    assert.deepStrictEqual(second, expectedIds('proj', 10), 'page 2 starts at row 10');
+    assert.strictEqual(second.length, 10, 'and is a page, not the overfetched 20 rows');
+  });
+
+  await t.test('the keywordless document list serves page 2 from row 10, not row 0', async () => {
+    t.mock.method(documentsRepo, 'listVisible', listStub('doc'));
+    t.mock.method(documentsRepo, 'countVisible', async () => 40);
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+
+    const idsOnPage = async (pageNum) => {
+      const { out, res } = capture();
+      await searchController.search({
+        query: { dataset: 'Document', keywords: '', pageNum: String(pageNum), pageSize: '10' },
+        header: () => null
+      }, res);
+      return out.body[0].searchResults.map(r => r._id);
+    };
+
+    const first = await idsOnPage(0);
+    const second = await idsOnPage(1);
+    assert.deepStrictEqual(first, expectedIds('doc', 0));
+    assert.deepStrictEqual(second, expectedIds('doc', 10), 'page 2 starts at row 10');
+    assert.strictEqual(second.length, 10, 'and is a page, not the overfetched 20 rows');
+  });
+
   // The other half of that decision, written down: a page bigger than the search layer will
   // assemble is REFUSED. Returning a short page under a large total is the failure, not the fix.
   await t.test('a keyword page beyond the ceiling is refused, not silently shortened', async () => {

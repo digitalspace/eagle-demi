@@ -109,7 +109,24 @@ const FIELDS = loadFields();
 
 function loadFields() {
   const byIndex = {};
-  for (const file of fs.readdirSync(INDEX_DIR)) {
+  let files;
+  try {
+    files = fs.readdirSync(INDEX_DIR);
+  } catch (err) {
+    // THROWING IS THE CORRECT BEHAVIOUR — the map built below is the type gate, and an empty map
+    // would let a `filterable` geography field through to an OData `eq` that AI Search 400s on.
+    // What was wrong was the WORDING. This runs at require time and the boot chain reaches it
+    // (index.js -> api/index.js -> src/routes/api.js -> src/controllers/search.js -> here), so
+    // when `scripts/package-api.py` shipped a package without `azure/search/indexes` the whole
+    // API died, and the entire diagnosis on offer was `ENOENT: ... scandir
+    // '/home/site/wwwroot/azure/search/indexes'` — a path, with no hint that it is a packaging
+    // fault rather than a missing mount, a bad deploy root, or a broken container image.
+    throw new Error(
+      `search index definitions not found at ${INDEX_DIR} — this deploy package is incomplete; ` +
+      'scripts/package-api.py must re-include azure/search/indexes (it excludes azure/ wholesale)',
+      { cause: err });
+  }
+  for (const file of files) {
     if (!file.endsWith('.json')) continue;
     const def = JSON.parse(fs.readFileSync(path.join(INDEX_DIR, file), 'utf8'));
     const map = new Map();
