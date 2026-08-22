@@ -27,19 +27,25 @@ new indexes matched their Cosmos totals (393 / 60,578 / 1,128,733).
 target: flipping the three `SEARCH_INDEX*` settings back is the whole rollback, with no refill,
 because those indexers never stopped. Do not delete them until the new names have soaked.
 
-The staged history, kept because the rollback walks it backwards:
+The staged history — all three steps are DONE. Past tense on purpose: the rollback walks it
+backwards, so the reader doing that needs to know what each step did.
 
-1. **This change.** Definitions take the plain names. `SEARCH_INDEX`, `SEARCH_INDEX_PROJECTS` and
-   `SEARCH_INDEX_DOCUMENTS` all exist as app settings in `azure/modules/api-web-app.bicep`, and all
-   three are **pinned to the old `demi-` names**, so deploying it changes nothing the app queries.
-2. **From inside the app container**, over the App Service SSH tunnel (not Kudu — its SCM
-   container has no managed-identity endpoint; see the root `README.md` recipe), run
-   `node src/scripts/apply-search-definitions.js --live`. It
-   creates the three plain-named indexes from these files and then the indexers, in that order,
-   and lets them fill on their PT5M schedule. The old indexes keep serving the whole time.
-3. **Settings only.** Flip the three defaults. No code release, and rolling back is flipping them
-   back — which is the entire reason step 1 made all three configurable rather than just the chunk
-   index, which was the only one with an app setting before.
+1. **Definitions took the plain names**, and `SEARCH_INDEX`, `SEARCH_INDEX_PROJECTS` and
+   `SEARCH_INDEX_DOCUMENTS` became app settings in `azure/modules/api-web-app.bicep`. They were
+   pinned to the old `demi-` names at that point, so that deploy changed nothing the app queried.
+   Only two of the three had ever been settings before, which is why a settings-only cutover was
+   impossible until then.
+2. **The indexes and indexers were created** from these files by
+   `node src/scripts/apply-search-definitions.js --live`, run from inside the app container over
+   the App Service SSH tunnel (not Kudu — its SCM container has no managed-identity endpoint; see
+   the root `README.md` recipe). They filled on their PT5M schedule to
+   393 / 60,578 / 1,128,733 while the old indexes kept serving.
+   **That command will REFUSE now** — see the restore section below for why, and for what to do
+   instead.
+3. **The three defaults were flipped** and the template deployed, which is the cutover itself.
+   Deploying `api-web-app.bicep` is therefore no longer a no-op: those defaults are what land in the
+   live app settings. Rolling back is flipping them back and deploying again — no data step, because
+   the `demi-*` indexers never stopped.
 
 `src/search/eagle-query.js`'s `DATASET_INDEX` is the one thing that moves in step 1 rather than
 step 3: it is a **schema** lookup naming which file in `indexes/` to read field types from, never a
