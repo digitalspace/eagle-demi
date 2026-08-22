@@ -14,15 +14,20 @@ source. Its header carries the run instructions; this file stays the reference f
 ARE and for the grant they need. Do not restate one in the other — a duplicated operational doc
 drifting into a false claim is the failure this repo has already had.
 
-## The names, and why they do not match the live service
+## The names
 
-These files say `chunks`, `projects` and `documents`. The indexes on `demi-search-test` are still
-called `demi-chunks`, `demi-projects` and `demi-documents`. **That is deliberate, and it is not
-drift.** DEMI serves all of EAO, so the product prefix buys nothing and the plain names are what the
-service should carry; but an index name is immutable, so "renaming" one means creating a second
-index and refilling it, and the chunk corpus cannot be rebuilt from anything outside Cosmos.
+**CUT OVER 2026-08-22. These files and the live service now agree** — `chunks`, `projects`,
+`documents`. DEMI serves all of EAO, so the product prefix bought nothing.
 
-So the rename is staged, and this is stage one — definitions and code defaults only:
+An index name is immutable, so the rename was a create-and-refill, staged over three changes:
+definitions and code defaults first, then the apply script, then the `SEARCH_INDEX*` flip once the
+new indexes matched their Cosmos totals (393 / 60,578 / 1,128,733).
+
+**The `demi-*` indexes still exist and their indexers are still running.** They are the rollback
+target: flipping the three `SEARCH_INDEX*` settings back is the whole rollback, with no refill,
+because those indexers never stopped. Do not delete them until the new names have soaked.
+
+The staged history, kept because the rollback walks it backwards:
 
 1. **This change.** Definitions take the plain names. `SEARCH_INDEX`, `SEARCH_INDEX_PROJECTS` and
    `SEARCH_INDEX_DOCUMENTS` all exist as app settings in `azure/modules/api-web-app.bicep`, and all
@@ -67,24 +72,37 @@ as the managed identity — see the SSH-tunnel recipe in the root `README.md`. T
 **Search Index Data Contributor**, which covers documents but *not* definitions; writing these back
 needs a temporary **Search Service Contributor** grant, revoked afterwards.
 
-**THE NAME IN THE FILE IS NOT THE NAME ON THE SERVICE, and restoring the wrong one CREATES rather
-than restores.** These definitions were renamed to the plain `projects` / `documents` / `chunks`
-ahead of the cutover; the live service still runs `demi-projects` / `demi-documents` /
-`demi-chunks`, and will until the `SEARCH_INDEX*` app settings are flipped. A `PUT` to the file's
-own name during an incident makes a SECOND, EMPTY index that nothing queries, leaves the broken one
-in place, and consumes partition storage — a worse outage than the one being fixed.
-
-So restore against whatever `az functionapp config appsettings list -n demi-api-<env>` reports
-today, not against the filename. While the settings still say `demi-*`:
+**READ THE LIVE NAMES FIRST — never take them from a filename.** Since the cutover the two agree, so
+a `PUT` under the file's own name is correct today. That was NOT true before it, and it stops being
+true the moment anyone rolls back: the settings would then say `demi-*` while these files still say
+the plain names, and a `PUT` under the filename would create a SECOND, EMPTY index that nothing
+queries, leave the broken one in place, and consume partition storage — a worse outage than the one
+being fixed.
 
 ```bash
-# Read the live names FIRST. Do not take them from this file.
+# ALWAYS start here. One command, and it settles which branch below applies.
 az functionapp config appsettings list -n demi-api-test -g c4b0a8-test-rg \
   --query "[?starts_with(name,'SEARCH_INDEX')].{name:name,value:value}" -o table
+```
 
-# Then PUT the definition under the name that is live, overriding the body's own `name`:
-# THREE rewrites on the index, not one. The semantic configuration name must track the index name
-# or every chunk search answers 400 — semantic is on by default for chunks and 400 is not retried.
+**If the settings report the plain names** (the state since 2026-08-22), use the script — it applies
+all six definitions in the right order and refuses to write a data source:
+
+```bash
+node src/scripts/apply-search-definitions.js --live
+```
+
+Note the script REFUSES to PUT an index named in `SEARCH_INDEX*`, which is now all three of them.
+That guard is deliberate: re-applying a definition over an index serving traffic rewrites a live
+schema. To restore one during an incident you are knowingly overriding that, so do it by hand with
+the PUTs below and know why the guard was in your way.
+
+**If the settings report `demi-*`** — i.e. someone rolled back — the filename is wrong and the body
+must be rewritten before it is sent. Three rewrites on the index, not one: the semantic
+configuration name must track the index name or every chunk search answers 400, since semantic is on
+by default for chunks and 400 is not retried.
+
+```bash
 jq '.name = "demi-chunks"
     | .semantic.configurations[].name = "demi-chunks-semantic"' \
       indexes/chunks.json          > /tmp/idx.json

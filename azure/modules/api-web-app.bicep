@@ -22,20 +22,20 @@ param minioSecretKey string
 @description('Azure AI Search endpoint, e.g. https://demi-search-dev.search.windows.net. Empty disables chunk search rather than failing it.')
 param searchEndpoint string = ''
 
-// All three index names are PINNED TO THE OLD `demi-` NAMES on purpose, even though the committed
-// definitions under `azure/search/` now carry the plain names. The physical indexes on
-// `demi-search-test` are still `demi-chunks`/`demi-projects`/`demi-documents`, and they keep
-// serving every query until these three lines change. Deploying this template must therefore change
-// nothing live.
+// All three index names are the PLAIN names, and have been since the cutover on 2026-08-22. The
+// committed definitions under `azure/search/`, these defaults, and the live indexes on
+// `demi-search-test` all agree. **Deploying this template is what makes them live** — it is not a
+// no-op, which is what it was while these lines still said `demi-`.
 //
-// FLIPPING ALL THREE OF THESE DEFAULTS TO `chunks`/`projects`/`documents` **IS** THE CUTOVER.
+// THESE THREE LINES **ARE** THE SWITCH, in both directions: flipping them back to
+// `demi-chunks`/`demi-projects`/`demi-documents` is the entire rollback.
 // There is no other switch, no code release and no data-plane step left in it — that is the whole
 // reason `searchIndexProjects` and `searchIndexDocuments` exist at all; until they were added only
 // the chunk index had an app setting, so the other two could only be moved by a code change.
 //
 // FLIPPED 2026-08-22, after the gate below was met on both sides. Kept rather than deleted because
 // the rollback is flipping these three back, and the reader doing that needs the same reasoning.
-// Formerly: DO NOT FLIP THEM YET. As of 2026-08-22 the plain-named indexes EXIST but are still filling. Do
+// Formerly: DO NOT FLIP THEM YET (superseded — the gate below was met and the flip is done).
 // not trust a percentage written here — read the counts, because a stale figure in a comment is
 // exactly the thing that would talk someone into arming this early. An index name is
 // immutable, so the fill is a one-way create-and-refill from Cosmos over the indexers' PT5M
