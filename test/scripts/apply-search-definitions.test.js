@@ -150,20 +150,25 @@ test('apply-search-definitions', async (t) => {
     assert.doesNotThrow(() => script.assertNotForbidden(200, '', 'index chunks'));
   });
 
-  await t.test('the definitions do not collide with what the app serves today', () => {
-    // THE GUARD THIS SCRIPT EXISTS AROUND. An index PUT is not additive: rewriting the schema of an
-    // index that is serving traffic is an outage, not an error. The committed definitions are
-    // renamed AHEAD of the cutover precisely so these two sets stay disjoint, and this asserts the
-    // property rather than trusting the rename.
+  await t.test('after the cutover the definitions ARE the live indexes, and the guard is what protects them', () => {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and it was right to until 2026-08-22. Before the
+    // cutover the committed definitions were renamed AHEAD of the service, so the two sets were
+    // disjoint and that disjointness was the safety property. The cutover pointed SEARCH_INDEX* at
+    // the plain names, so they now coincide BY DESIGN — the old assertion would fail, and "fixing"
+    // it by renaming a definition would be undoing the cutover.
+    //
+    // What still protects a live schema is the runtime guard in run(), covered by
+    // 'run() refuses to write an index the app is serving from' above and mutation-proven there.
+    // That guard now REFUSES a plain re-run of this script, which is correct: with the names
+    // coincident, applying the definitions again would rewrite indexes serving traffic.
     const { config } = require('../../src/search/ai-search');
     const cfg = config();
     const live = new Set([cfg.index, cfg.projectsIndex, cfg.documentsIndex].filter(Boolean));
-    for (const { body } of script.load(script.INDEX_DIR)) {
-      assert.ok(
-        !live.has(body.name),
-        `definition "${body.name}" is also what the app is configured to serve — applying it ` +
-        `would rewrite a live schema`
-      );
-    }
+    const names = script.load(script.INDEX_DIR).map(d => d.body.name);
+    assert.ok(
+      names.every(n => live.has(n)),
+      `expected the committed definitions ${names.join(', ')} to be exactly what the app serves ` +
+      `(${[...live].join(', ')}) after the cutover`
+    );
   });
 });

@@ -33,7 +33,9 @@ param searchEndpoint string = ''
 // reason `searchIndexProjects` and `searchIndexDocuments` exist at all; until they were added only
 // the chunk index had an app setting, so the other two could only be moved by a code change.
 //
-// DO NOT FLIP THEM YET. As of 2026-08-22 the plain-named indexes EXIST but are still filling. Do
+// FLIPPED 2026-08-22, after the gate below was met on both sides. Kept rather than deleted because
+// the rollback is flipping these three back, and the reader doing that needs the same reasoning.
+// Formerly: DO NOT FLIP THEM YET. As of 2026-08-22 the plain-named indexes EXIST but are still filling. Do
 // not trust a percentage written here — read the counts, because a stale figure in a comment is
 // exactly the thing that would talk someone into arming this early. An index name is
 // immutable, so the fill is a one-way create-and-refill from Cosmos over the indexers' PT5M
@@ -67,13 +69,13 @@ param searchEndpoint string = ''
 // production traffic long enough to trust; deleting them turns a one-setting rollback back into a
 // multi-hour reindex of a corpus that only exists in Cosmos.
 @description('Azure AI Search index holding document chunks. Pinned to the live name; see the cutover note above.')
-param searchIndex string = 'demi-chunks'
+param searchIndex string = 'chunks'
 
 @description('Azure AI Search index holding project metadata. Pinned to the live name; see the cutover note above.')
-param searchIndexProjects string = 'demi-projects'
+param searchIndexProjects string = 'projects'
 
 @description('Azure AI Search index holding document metadata. Pinned to the live name; see the cutover note above.')
-param searchIndexDocuments string = 'demi-documents'
+param searchIndexDocuments string = 'documents'
 
 @description('Foundry account endpoint for the AI summariser. Empty leaves the summary panel off rather than failing search.')
 param foundryEndpoint string = ''

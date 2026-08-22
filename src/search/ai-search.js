@@ -78,12 +78,12 @@ let unconfiguredWarned = false;
  */
 function config() {
   const endpoint = (process.env.SEARCH_ENDPOINT || '').replace(/\/$/, '');
-  const index = process.env.SEARCH_INDEX || 'demi-chunks';
+  const index = process.env.SEARCH_INDEX || 'chunks';
   return {
     endpoint,
     index,
-    projectsIndex: process.env.SEARCH_INDEX_PROJECTS || 'demi-projects',
-    documentsIndex: process.env.SEARCH_INDEX_DOCUMENTS || 'demi-documents',
+    projectsIndex: process.env.SEARCH_INDEX_PROJECTS || 'projects',
+    documentsIndex: process.env.SEARCH_INDEX_DOCUMENTS || 'documents',
     configured: Boolean(endpoint)
   };
 }
