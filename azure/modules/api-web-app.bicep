@@ -38,11 +38,18 @@ param searchEndpoint string = ''
 // exactly the thing that would talk someone into arming this early. An index name is
 // immutable, so the fill is a one-way create-and-refill from Cosmos over the indexers' PT5M
 // schedule — there is nothing to wait on but row counts. Arm this only when all three have reached
-// their Cosmos source-of-truth totals:
+// their Cosmos source-of-truth totals — COMPARED LIVE, not against numbers transcribed here. The
+// Track sync keeps appending, so a written total decays exactly the way a percentage would: once
+// Cosmos holds 400 projects an index sitting at the 393 someone wrote down satisfies the gate with
+// seven rows missing, which is the very outcome the next paragraph calls dangerous. Read both sides
+// and require equality:
 //
-//     projects   393
-//     documents   60,578
-//     chunks   1,128,733
+//     az monitor metrics list --resource <demi-cosmos-*> --metric DocumentCount \\
+//       --interval PT5M --aggregation Maximum --filter "CollectionName eq '*'"
+//     GET {search-endpoint}/indexes/{projects,documents,chunks}/docs/$count   # from inside the VNet
+//
+// For the record, both sides read 393 / 60,578 / 1,128,733 on 2026-08-22, which is when the three
+// indexes finished filling. That is a log line, not the gate.
 //
 // Short of that the flip is not a slower search, it is a SILENTLY SMALLER CORPUS answering 200:
 // a partly-filled index returns fewer hits under a smaller total, which reads exactly like a query

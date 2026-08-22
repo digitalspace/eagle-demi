@@ -278,7 +278,7 @@ exports.search = async (req, res) => {
                 _schemaName: 'Project',
                 id: String(doc.id),
                 // Never carried by the old Typesense schema either, so this has always been the id.
-                trackProjectId: String(doc.id),
+                trackProjectId: doc.id,
                 legacyEagleId: doc.legacyEagleId || '',
                 name: doc.name || doc.displayName || 'Unnamed Project',
                 sector: doc.sector || 'Other',
@@ -416,9 +416,12 @@ exports.search = async (req, res) => {
           _id: p.eagleId || String(p.id),
           _schemaName: 'Project',
           id: String(p.id),
-          // STRING, matching the AI Search branch. Cosmos stores this as a Number and the index
-          // returns it as a String, so the two branches answered different TYPES for the same
-          // record — the one field the parity test could not cover while it disagreed.
+          // STRING, matching the AI Search branch. Cosmos stores this as a Number
+          // (`merge/project.js:170`, `Number(track.track_project_id)`) while the index has no such
+          // field at all, so that branch falls back to the index KEY — declared `Edm.String` in
+          // `azure/search/indexes/projects.json`, hence always a String. Only this side can differ,
+          // which is why only this side coerces; a `String()` over there would be an inert line
+          // pretending to do work.
           trackProjectId: String(p.trackProjectId || p.id),
           // COSMOS FIELD NAMES, not index field names. The two branches of this route read two
           // different shapes of the same record: the indexer's SELECT aliases the stored columns

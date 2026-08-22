@@ -868,7 +868,7 @@ test('the eagle-public response contract', async (t) => {
     assert.strictEqual(viaCosmos.trackProjectId, '207', 'a String on both branches, not a Number');
   });
 
-  await t.test('a project created through the API reports its real state too', async () => {
+  await t.test('an API-created project reads right on Cosmos and WRONG on the index — the known gap', async () => {
     // TWO WRITERS DISAGREE ON THIS FIELD. `merge/project.js:38` stores `projectState`;
     // `controllers/nosql/project.js:87` createProject stores `status`. Reading only `projectState`
     // fixes the synced rows and breaks the API-created ones — the same wrong answer from the other
@@ -886,6 +886,26 @@ test('the eagle-public response contract', async (t) => {
 
     assert.strictEqual(c.out.body[0].searchResults[0].status, 'Withdrawn',
       'a row written by createProject must not read back as the Active default');
+
+    // AND THE OTHER BRANCH STILL GETS IT WRONG. Asserting only the Cosmos side above would imply a
+    // parity that does not hold: the index sources `status` from `c.projectState`
+    // (demi-projects-ds.json), and an API-created row has no such field, so the alias yields
+    // nothing and the mapper's `|| 'Active'` fires. Pinned deliberately rather than left unsaid —
+    // a test that exercises one branch and reads as if it covered both is worse than no test.
+    //
+    // THIS ASSERTION INVERTS when the write side is unified (see TODO.md F11a): at that point the
+    // index carries the real state and this must become an equality with the Cosmos branch. It is
+    // pinning a known gap, not a desired behaviour — do not "fix" the gap and leave this green.
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{ id: '9001', name: 'Hand Made', legacyEagleId: '588511c4aaecd9001b826192', read: ['public'] }]
+    }));
+    const k = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'hand made', pageSize: '10' }, header: () => null }, k.res);
+
+    assert.strictEqual(k.out.body[0].searchResults[0].status, 'Active',
+      'the index cannot know the state of a row whose writer used the other field name');
   });
 });
 
