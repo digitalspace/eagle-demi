@@ -1,13 +1,13 @@
 {
-  "name": "demi-projects-indexer",
+  "name": "documents-indexer",
   "description": null,
-  "dataSourceName": "demi-projects-ds",
+  "dataSourceName": "demi-documents-ds",
   "skillsetName": null,
-  "targetIndexName": "demi-projects",
+  "targetIndexName": "documents",
   "disabled": null,
   "schedule": {
     "interval": "PT5M",
-    "startTime": "2026-07-31T22:11:12.053Z"
+    "startTime": "2026-07-31T22:11:15.01Z"
   },
   "parameters": {
     "batchSize": null,

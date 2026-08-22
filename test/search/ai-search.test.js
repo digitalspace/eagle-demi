@@ -753,6 +753,24 @@ test('semantic reranking', async (t) => {
     assert.strictEqual(calls[0].body.semanticConfiguration, 'demi-chunks-semantic');
   });
 
+  // The assertion that makes a staged index rename survivable. The configuration name is scoped to
+  // the index that declares it, so a constant here would 400 every chunk search the moment
+  // SEARCH_INDEX moved off `demi-chunks` — and a 400 is not a degrade to BM25, it is an empty
+  // results table with nothing in it that says why. The live cutover is exactly this: one app
+  // setting, no code release.
+  await t.test('the configuration name follows SEARCH_INDEX, it is not a constant', async (tt) => {
+    const previous = process.env.SEARCH_INDEX;
+    process.env.SEARCH_INDEX = 'chunks';
+    tt.after(() => { process.env.SEARCH_INDEX = previous; });
+
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchChunks({ filter: null, keywords: 'peace river' });
+
+    assert.ok(calls[0].url.includes('/indexes/chunks/docs/search'), 'the renamed index is queried');
+    assert.strictEqual(calls[0].body.semanticConfiguration, 'chunks-semantic');
+  });
+
   await t.test('semantic: false opts out — the scorecard needs a BM25 arm', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
 
@@ -980,4 +998,40 @@ test('semantic reranking', async (t) => {
     assert.strictEqual(stats.exhausted, true, 'the latch is visible without reading a timestamp');
     assert.ok(stats.exhaustedAt, 'and stamped');
   });
+});
+
+test('the deploy template pins all three index names to the code defaults', () => {
+  // "This PR changes nothing live" is the whole claim, and nothing else checks it. The committed
+  // definitions under `azure/search/` now say `chunks`/`projects`/`documents`, but those indexes do
+  // not exist on `demi-search-test` yet — they are created and filled by hand from inside the VNet,
+  // because the data plane has `publicNetworkAccess: Disabled`. So the app settings stay on the
+  // live `demi-` names until a separate settings-only cutover, and a default that drifts ahead of
+  // the physical index points the app at nothing: an unknown index is a 404 per query, which the
+  // frontend renders as an empty results table.
+  //
+  // The second half of the pair matters just as much. `appSettings` is a WHOLE-COLLECTION PUT, so a
+  // name the app reads but the template omits is DELETED on the next deploy and the value silently
+  // falls back to the code default — which is how a finished cutover would undo itself.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const bicep = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'azure', 'modules', 'api-web-app.bicep'), 'utf8');
+
+  const saved = { ...process.env };
+  delete process.env.SEARCH_INDEX;
+  delete process.env.SEARCH_INDEX_PROJECTS;
+  delete process.env.SEARCH_INDEX_DOCUMENTS;
+  const codeDefaults = aiSearch.config();
+  Object.assign(process.env, saved);
+
+  for (const [setting, param, value] of [
+    ['SEARCH_INDEX', 'searchIndex', codeDefaults.index],
+    ['SEARCH_INDEX_PROJECTS', 'searchIndexProjects', codeDefaults.projectsIndex],
+    ['SEARCH_INDEX_DOCUMENTS', 'searchIndexDocuments', codeDefaults.documentsIndex]
+  ]) {
+    assert.match(bicep, new RegExp(`name: '${setting}'\\s*\\n\\s*value: ${param}\\b`),
+      `${setting} must be an app setting fed by ${param}, or the next deploy deletes it`);
+    assert.match(bicep, new RegExp(`param ${param} string = '${value}'`),
+      `${param} must default to '${value}', the live index name`);
+  }
 });

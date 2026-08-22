@@ -56,7 +56,7 @@ function inClause(expression, values) {
  * expressed as a filter and has to be expressed as "do not ask".
  *
  * `partitionField` exists for the same reason `visibilityFor(access, partitionField)` takes one in
- * `access-sql.js`: a project IS its own scope, so on `demi-projects` the field is `id`, while
+ * `access-sql.js`: a project IS its own scope, so on `projects` the field is `id`, while
  * documents and chunks carry `projectId`. Scoping projects on a `projectId` they do not have would
  * match nothing at all — and an empty result is indistinguishable from an empty corpus.
  */

@@ -22,8 +22,23 @@ param minioSecretKey string
 @description('Azure AI Search endpoint, e.g. https://demi-search-dev.search.windows.net. Empty disables chunk search rather than failing it.')
 param searchEndpoint string = ''
 
-@description('Azure AI Search index holding document chunks')
+// All three index names are PINNED TO THE OLD `demi-` NAMES on purpose, even though the committed
+// definitions under `azure/search/` now carry the plain names. The physical indexes on
+// `demi-search-test` are still `demi-chunks`/`demi-projects`/`demi-documents`; the plain-named ones
+// do not exist yet, and are created and filled by hand from inside the VNet because the data plane
+// has `publicNetworkAccess: Disabled`. Deploying this template must therefore change nothing live.
+// The cutover is a separate, settings-only change: flip these three defaults once the new indexes
+// are populated, and roll back by flipping them back — no code release either way. That is the
+// whole reason `searchIndexProjects` and `searchIndexDocuments` exist at all; until now only the
+// chunk index had an app setting, so the other two could only be moved by a code change.
+@description('Azure AI Search index holding document chunks. Pinned to the live name; see the cutover note above.')
 param searchIndex string = 'demi-chunks'
+
+@description('Azure AI Search index holding project metadata. Pinned to the live name; see the cutover note above.')
+param searchIndexProjects string = 'demi-projects'
+
+@description('Azure AI Search index holding document metadata. Pinned to the live name; see the cutover note above.')
+param searchIndexDocuments string = 'demi-documents'
 
 @description('Foundry account endpoint for the AI summariser. Empty leaves the summary panel off rather than failing search.')
 param foundryEndpoint string = ''
@@ -313,9 +328,20 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'SEARCH_ENDPOINT'
           value: searchEndpoint
         }
+        // All three named explicitly. `appSettings` is a WHOLE-COLLECTION PUT: a setting that
+        // exists on the live app but is absent from this list is DELETED by the next deploy, so
+        // the projects and documents indexes cannot be set once by hand and left out of here.
         {
           name: 'SEARCH_INDEX'
           value: searchIndex
+        }
+        {
+          name: 'SEARCH_INDEX_PROJECTS'
+          value: searchIndexProjects
+        }
+        {
+          name: 'SEARCH_INDEX_DOCUMENTS'
+          value: searchIndexDocuments
         }
         // AI summariser — step 5 of the search pipeline, privileged-only. No key here either: the
         // Foundry account has disableLocalAuth and the app calls it with the same user-assigned

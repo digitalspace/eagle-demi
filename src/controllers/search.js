@@ -303,8 +303,8 @@ exports.search = async (req, res) => {
                 // consumer: nothing in either frontend reads it. `isPublished` is the mirror the
                 // frontends actually render, and it stays.
                 isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true
-                // No `sources` here. The `demi-projects` index has no such field
-                // (azure/search/indexes/demi-projects.json), so the line that used to sit here
+                // No `sources` here. The `projects` index has no such field
+                // (azure/search/indexes/projects.json), so the line that used to sit here
                 // emitted `{}` on every hit and read as though the index carried the payload.
               }));
 
@@ -610,7 +610,7 @@ exports.search = async (req, res) => {
 
         const { items, count } = await aiSearch.searchChunks({
           filter,
-          // No `orderby`: every field in `demi-chunks` is sortable:false, the key included, so
+          // No `orderby`: every field in `chunks` is sortable:false, the key included, so
           // there is nothing to name — and naming a non-sortable field is a 400. Chunk pages are
           // relevance-ordered with no tiebreak, which makes a deep chunk page unstable. eagle-public
           // has no chunk UI at all and never sorts or pages this dataset.
