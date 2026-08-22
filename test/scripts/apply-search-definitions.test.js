@@ -43,6 +43,11 @@ test('apply-search-definitions', async (t) => {
     assert.strictEqual(script.parseArgs(['--live']).live, true);
     assert.strictEqual(script.parseArgs(['--only', 'chunks']).only, 'chunks');
     assert.throws(() => script.parseArgs(['--only']), /needs a value/);
+    // The EMPTY case is separate from the missing one: `--only "$IDX"` with IDX unset satisfies the
+    // value() guard, and select() would then short-circuit its must-match check and apply all six
+    // objects instead of the one asked for.
+    assert.throws(() => script.parseArgs(['--only', '']), /empty value/);
+    assert.throws(() => script.parseArgs(['--only', '   ']), /empty value/);
     assert.throws(() => script.parseArgs(['--oops']), /unknown flag/);
   });
 

@@ -73,8 +73,8 @@ let unconfiguredWarned = false;
  * `SEARCH_INDEX` keeps its unqualified name for backward compatibility — it named the chunk index
  * before there were three. The defaults are the LIVE names, which still carry the `demi-` prefix
  * even though the committed definitions under `azure/search/` no longer do; the plain-named indexes
- * are created and filled by hand from inside the VNet, and the cutover is a settings-only change
- * per index. All three are settable precisely so no code release is involved either way.
+ * are created by `src/scripts/apply-search-definitions.js` from inside the app container, fill from
+ * Cosmos on their own PT5M indexer schedule, and the cutover is a settings-only change per index. All three are settable precisely so no code release is involved either way.
  */
 function config() {
   const endpoint = (process.env.SEARCH_ENDPOINT || '').replace(/\/$/, '');
