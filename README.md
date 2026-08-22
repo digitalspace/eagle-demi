@@ -146,7 +146,7 @@ implementation:
 |---|---|
 | API | `demi-api-test` — `kind: functionapp,linux` on the **B1 Basic** plan `demi-plan-test` (1 vCPU / 1.75 GB, single worker). Manage with `az webapp` |
 | Database | **Azure Cosmos DB for NoSQL** (`@azure/cosmos`), account `demi-cosmos-test` |
-| Search | **Azure AI Search** `demi-search-test` — Basic, keyless, private endpoint only. Live indexes `demi-chunks`, `demi-projects`, `demi-documents`; the committed definitions already carry the plain names (`azure/search/README.md`, staged rename) |
+| Search | **Azure AI Search** `demi-search-test` — Basic, keyless, private endpoint only. Live indexes `chunks`, `projects`, `documents` since the cutover on 2026-08-22. The retired `demi-*` indexes are still present and still indexing — they are the rollback target (`azure/search/README.md`) |
 | Object store | `nrs.objectstore.gov.bc.ca`, bucket `asnpnn` (S3-compatible, `minio` client) |
 | Frontend | Angular, built to `frontend/dist`, published to the `$web` container of the `demiweb…` storage account (`azure/modules/static-site.bicep`) and served through the Front Door profile in `eagle-search` |
 | Edge | Azure Front Door Standard, profile `eagle-edge-<env>` — **owned by `eagle-search`**, not by this repo. It supplies TLS, the security headers and the SPA fallback rewrite that `$web` cannot |

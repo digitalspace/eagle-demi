@@ -14,27 +14,38 @@ source. Its header carries the run instructions; this file stays the reference f
 ARE and for the grant they need. Do not restate one in the other — a duplicated operational doc
 drifting into a false claim is the failure this repo has already had.
 
-## The names, and why they do not match the live service
+## The names
 
-These files say `chunks`, `projects` and `documents`. The indexes on `demi-search-test` are still
-called `demi-chunks`, `demi-projects` and `demi-documents`. **That is deliberate, and it is not
-drift.** DEMI serves all of EAO, so the product prefix buys nothing and the plain names are what the
-service should carry; but an index name is immutable, so "renaming" one means creating a second
-index and refilling it, and the chunk corpus cannot be rebuilt from anything outside Cosmos.
+**CUT OVER 2026-08-22. These files and the live service now agree** — `chunks`, `projects`,
+`documents`. DEMI serves all of EAO, so the product prefix bought nothing.
 
-So the rename is staged, and this is stage one — definitions and code defaults only:
+An index name is immutable, so the rename was a create-and-refill, staged over three changes:
+definitions and code defaults first, then the apply script, then the `SEARCH_INDEX*` flip once the
+new indexes matched their Cosmos totals (393 / 60,578 / 1,128,733).
 
-1. **This change.** Definitions take the plain names. `SEARCH_INDEX`, `SEARCH_INDEX_PROJECTS` and
-   `SEARCH_INDEX_DOCUMENTS` all exist as app settings in `azure/modules/api-web-app.bicep`, and all
-   three are **pinned to the old `demi-` names**, so deploying it changes nothing the app queries.
-2. **From inside the app container**, over the App Service SSH tunnel (not Kudu — its SCM
-   container has no managed-identity endpoint; see the root `README.md` recipe), run
-   `node src/scripts/apply-search-definitions.js --live`. It
-   creates the three plain-named indexes from these files and then the indexers, in that order,
-   and lets them fill on their PT5M schedule. The old indexes keep serving the whole time.
-3. **Settings only.** Flip the three defaults. No code release, and rolling back is flipping them
-   back — which is the entire reason step 1 made all three configurable rather than just the chunk
-   index, which was the only one with an app setting before.
+**The `demi-*` indexes still exist and their indexers are still running.** They are the rollback
+target: flipping the three `SEARCH_INDEX*` settings back is the whole rollback, with no refill,
+because those indexers never stopped. Do not delete them until the new names have soaked.
+
+The staged history — all three steps are DONE. Past tense on purpose: the rollback walks it
+backwards, so the reader doing that needs to know what each step did.
+
+1. **Definitions took the plain names**, and `SEARCH_INDEX`, `SEARCH_INDEX_PROJECTS` and
+   `SEARCH_INDEX_DOCUMENTS` became app settings in `azure/modules/api-web-app.bicep`. They were
+   pinned to the old `demi-` names at that point, so that deploy changed nothing the app queried.
+   Only two of the three had ever been settings before, which is why a settings-only cutover was
+   impossible until then.
+2. **The indexes and indexers were created** from these files by
+   `node src/scripts/apply-search-definitions.js --live`, run from inside the app container over
+   the App Service SSH tunnel (not Kudu — its SCM container has no managed-identity endpoint; see
+   the root `README.md` recipe). They filled on their PT5M schedule to
+   393 / 60,578 / 1,128,733 while the old indexes kept serving.
+   **That command will REFUSE now** — see the restore section below for why, and for what to do
+   instead.
+3. **The three defaults were flipped** and the template deployed, which is the cutover itself.
+   Deploying `api-web-app.bicep` is therefore no longer a no-op: those defaults are what land in the
+   live app settings. Rolling back is flipping them back and deploying again — no data step, because
+   the `demi-*` indexers never stopped.
 
 `src/search/eagle-query.js`'s `DATASET_INDEX` is the one thing that moves in step 1 rather than
 step 3: it is a **schema** lookup naming which file in `indexes/` to read field types from, never a
@@ -67,24 +78,47 @@ as the managed identity — see the SSH-tunnel recipe in the root `README.md`. T
 **Search Index Data Contributor**, which covers documents but *not* definitions; writing these back
 needs a temporary **Search Service Contributor** grant, revoked afterwards.
 
-**THE NAME IN THE FILE IS NOT THE NAME ON THE SERVICE, and restoring the wrong one CREATES rather
-than restores.** These definitions were renamed to the plain `projects` / `documents` / `chunks`
-ahead of the cutover; the live service still runs `demi-projects` / `demi-documents` /
-`demi-chunks`, and will until the `SEARCH_INDEX*` app settings are flipped. A `PUT` to the file's
-own name during an incident makes a SECOND, EMPTY index that nothing queries, leaves the broken one
-in place, and consumes partition storage — a worse outage than the one being fixed.
-
-So restore against whatever `az functionapp config appsettings list -n demi-api-<env>` reports
-today, not against the filename. While the settings still say `demi-*`:
+**READ THE LIVE NAMES FIRST — never take them from a filename.** Since the cutover the two agree, so
+a `PUT` under the file's own name is correct today. That was NOT true before it, and it stops being
+true the moment anyone rolls back: the settings would then say `demi-*` while these files still say
+the plain names, and a `PUT` under the filename would create a SECOND, EMPTY index that nothing
+queries, leave the broken one in place, and consume partition storage — a worse outage than the one
+being fixed.
 
 ```bash
-# Read the live names FIRST. Do not take them from this file.
+# ALWAYS start here. One command, and it settles which branch below applies.
 az functionapp config appsettings list -n demi-api-test -g c4b0a8-test-rg \
   --query "[?starts_with(name,'SEARCH_INDEX')].{name:name,value:value}" -o table
+```
 
-# Then PUT the definition under the name that is live, overriding the body's own `name`:
-# THREE rewrites on the index, not one. The semantic configuration name must track the index name
-# or every chunk search answers 400 — semantic is on by default for chunks and 400 is not retried.
+**If the settings report the plain names** (the state since 2026-08-22), start with the dry run. It
+touches nothing and it works in every state, and it marks which indexes are serving:
+
+```bash
+node src/scripts/apply-search-definitions.js
+```
+
+**`--live` will REFUSE**, and that is deliberate: every committed name is now a live name, so
+re-applying would rewrite a schema serving traffic. The script is for CREATING these objects, not
+for restoring one that is live. To restore a live index you are knowingly overriding that guard, so
+do it by hand — and note there is no `jq` here, because the file bodies already carry the right
+names:
+
+```bash
+PUT {endpoint}/indexes/chunks?api-version=2024-07-01           # body indexes/chunks.json
+PUT {endpoint}/datasources/demi-chunks-ds?api-version=2024-07-01   # add connectionString first
+PUT {endpoint}/indexers/chunks-indexer?api-version=2024-07-01  # body indexers/chunks-indexer.json
+```
+
+The data source keeps its `demi-` name — data sources were never renamed, both old and new indexers
+share them, and `connectionString` comes back redacted on export.
+
+**If the settings report `demi-*`** — i.e. someone rolled back — the filename is wrong and the body
+must be rewritten before it is sent. Three rewrites on the index, not one: the semantic
+configuration name must track the index name or every chunk search answers 400, since semantic is on
+by default for chunks and 400 is not retried.
+
+```bash
 jq '.name = "demi-chunks"
     | .semantic.configurations[].name = "demi-chunks-semantic"' \
       indexes/chunks.json          > /tmp/idx.json
@@ -99,8 +133,8 @@ PUT {endpoint}/indexers/demi-chunks-indexer?api-version=2024-07-01  # body /tmp/
 That third `jq` clause is the one worth understanding rather than copying: the app derives the
 configuration name from whichever index it is configured with (`semanticConfigurationFor`), so the
 definition has to follow the same `<index>-semantic` convention. `test/search/eagle-query.test.js`
-guards it for the committed files. Once the cutover lands, all of this collapses — the file names,
-the live names and the configuration name agree, and the `jq` rewrites go away.
+guards it for the committed files. The rewrites did NOT go away when the cutover landed — they moved
+to the rollback branch, which is the one state where the filename and the live name disagree again.
 
 Order matters: an indexer references both its data source and its target index, and fails to create
 if either is missing.
