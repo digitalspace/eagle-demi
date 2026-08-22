@@ -1044,6 +1044,12 @@ module.exports = {
       requested: 0, partial: 0, lastPartialReason: null, lastPartialAt: null, exhaustedAt: null
     });
   },
+  // Exported for `src/scripts/apply-search-definitions.js`, which PUTs index and indexer
+  // definitions and needs the same data-plane token this module already knows how to mint:
+  // the `https://search.azure.com/.default` scope, the AZURE_CLIENT_ID identity selection, and
+  // the 5-minute-margin cache. A second credential in the script would be a second place for
+  // that scope string to be wrong.
+  getToken,
   tokenize,
   buildQuery,
   snippetFrom,
