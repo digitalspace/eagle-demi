@@ -196,8 +196,8 @@ async function run({ endpoint, live, only, liveNames }) {
     const existing = await call(endpoint, 'GET', `/indexes/${body.name}?api-version=${API_VERSION}`);
     assertNotForbidden(existing.status, existing.text, `index ${body.name}`);
     const state = existing.status === 200 ? 'exists' : existing.status === 404 ? 'absent' : `HTTP ${existing.status}`;
-    const serving_note = serving.has(body.name) ? '  ** SERVING TRAFFIC — --live will refuse **' : '';
-    console.log(`index    ${body.name.padEnd(24)} ${state}   <- ${path.basename(file)}${serving_note}`);
+    const servingNote = serving.has(body.name) ? '  ** SERVING TRAFFIC — --live will refuse **' : '';
+    console.log(`index    ${body.name.padEnd(24)} ${state}   <- ${path.basename(file)}${servingNote}`);
     if (!args.live) continue;
     const put = await call(endpoint, 'PUT', `/indexes/${body.name}?api-version=${API_VERSION}`, body);
     if (put.status >= 300) throw new Error(`PUT /indexes/${body.name} -> ${put.status} ${put.text.slice(0, 400)}`);

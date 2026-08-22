@@ -114,9 +114,24 @@ test('apply-search-definitions', async (t) => {
     // printing anything. A dry run touches nothing — it must work in every state, and say which
     // indexes are serving.
     const calls = stub(tt, ok);
-    await script.run({ endpoint: ENDPOINT, live: false, only: '', liveNames: ['chunks', 'projects', 'documents'] });
+    const lines = [];
+    const realLog = console.log;
+    console.log = (...a) => lines.push(a.join(' '));
+    try {
+      await script.run({ endpoint: ENDPOINT, live: false, only: '', liveNames: ['chunks', 'projects', 'documents'] });
+    } finally {
+      console.log = realLog;
+    }
     assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0, 'still writes nothing');
     assert.ok(calls.length > 0, 'and it still probes, so it reported something');
+    // AND IT SAYS WHICH ARE SERVING. Without this the test asserted nothing the previous dry-run
+    // test did not already cover, and blanking the marker left the suite green.
+    for (const name of ['chunks', 'projects', 'documents']) {
+      assert.ok(
+        lines.some(l => l.includes(name) && l.includes('SERVING TRAFFIC')),
+        `the dry run must mark "${name}" as serving; output was:\n${lines.join('\n')}`
+      );
+    }
   });
 
   await t.test('a missing data source stops the run rather than creating one', async (tt) => {

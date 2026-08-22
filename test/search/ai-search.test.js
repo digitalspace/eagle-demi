@@ -1001,13 +1001,15 @@ test('semantic reranking', async (t) => {
 });
 
 test('the deploy template pins all three index names to the code defaults', () => {
-  // "This PR changes nothing live" is the whole claim, and nothing else checks it. The committed
-  // definitions under `azure/search/` now say `chunks`/`projects`/`documents`, but those indexes do
-  // not exist on `demi-search-test` yet — they are created and filled by hand from inside the VNet,
-  // because the data plane has `publicNetworkAccess: Disabled`. So the app settings stay on the
-  // live `demi-` names until a separate settings-only cutover, and a default that drifts ahead of
-  // the physical index points the app at nothing: an unknown index is a 404 per query, which the
-  // frontend renders as an empty results table.
+  // THE TEMPLATE AND THE CODE MUST NAME THE SAME INDEX, and nothing else checks it. They are one
+  // decision: the code default is what applies when a setting is absent, so a default that drifts
+  // from the template it deploys alongside points the app at nothing — an unknown index is a 404 per
+  // query, which the frontend renders as an empty results table.
+  //
+  // This pin is what caught the cutover being done by halves: flipping only the template turned this
+  // test red immediately. Both sides now read `chunks`/`projects`/`documents`, matching the
+  // definitions under `azure/search/` and the live indexes on `demi-search-test` since 2026-08-22.
+  // Rolling back means moving BOTH back together, for the same reason.
   //
   // The second half of the pair matters just as much. `appSettings` is a WHOLE-COLLECTION PUT, so a
   // name the app reads but the template omits is DELETED on the next deploy and the value silently
