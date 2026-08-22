@@ -17,9 +17,8 @@
  * at the SERVICE scope, not the resource group, and revoke it when the run is done — a
  * public-facing API's runtime identity should not keep index-management rights.
  *
- *   az role assignment create --role 7ca78c08-252a-4471-8644-bb5ff32d4ba0 \
- *     --assignee-object-id <identity objectId> --assignee-principal-type ServicePrincipal \
- *     --scope /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Search/searchServices/<svc>
+ * The exact `az role assignment create` invocation lives in `azure/search/README.md` alongside the
+ * definitions themselves — one copy, so it cannot drift into asserting something false here.
  *
  * That grant IS revocable here, which was doubted for a while: the `c4b0a8` ABAC condition
  * restricts `roleAssignments/write` and `/delete` to the same six role GUIDs (Owner, Contributor,
@@ -109,28 +108,57 @@ async function call(endpoint, method, resourcePath, body) {
   return { status: res.status, text };
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const cfg = config();
-  if (!cfg.configured) throw new Error('SEARCH_ENDPOINT is not set — nothing to apply against');
-  const endpoint = cfg.endpoint.replace(/\/$/, '');
+/**
+ * Pick the definitions a run touches.
+ *
+ * ONE VOCABULARY, and it must match something. The two directories name their objects differently —
+ * an index is `chunks`, its indexer is `chunks-indexer` — so `--only` accepts either and resolves to
+ * the same pair. Without that, `--only chunks-indexer` (the obvious thing to type, since the file is
+ * `chunks-indexer.json`) selected nothing, both loops walked empty, and the run printed
+ * `applied 0 definition(s).` followed by the revoke reminder — indistinguishable from success.
+ */
+function select(only) {
+  const indexes = load(INDEX_DIR);
+  const indexers = load(INDEXER_DIR);
+  if (!only) return { indexes, indexers };
+
+  const target = indexers.find(d => d.body.name === only)?.body.targetIndexName || only;
+  const picked = {
+    indexes: indexes.filter(d => d.body.name === target),
+    indexers: indexers.filter(d => d.body.targetIndexName === target)
+  };
+  if (!picked.indexes.length && !picked.indexers.length) {
+    throw new Error(
+      `--only ${only} matches no definition. Known: ` +
+      `${indexes.map(d => d.body.name).join(', ')} (or their -indexer names).`
+    );
+  }
+  return picked;
+}
+
+/**
+ * Apply the definitions. Exported so the guard below and the dry-run split are reachable from a
+ * test — the property that the committed names do not collide with the live ones can be asserted
+ * from the files alone, but that says nothing about whether this function still CHECKS it.
+ */
+async function run({ endpoint, live, only, liveNames }) {
+  const args = { live, only };
 
   // THE NAMES THE APP IS CURRENTLY POINTED AT. PUTting one of these would rewrite a schema that is
   // serving traffic — an index PUT is not additive, and a breaking change to a live index is an
   // outage rather than an error. The definitions in git are renamed AHEAD of the cutover precisely
   // so these sets do not overlap; if they ever do, that is the accident this guard exists for.
-  const live = new Set([cfg.index, cfg.projectsIndex, cfg.documentsIndex].filter(Boolean));
+  const serving = new Set(liveNames.filter(Boolean));
 
-  const indexes = load(INDEX_DIR).filter(d => !args.only || d.body.name === args.only);
-  const indexers = load(INDEXER_DIR).filter(d => !args.only || d.body.targetIndexName === args.only);
+  const { indexes, indexers } = select(args.only);
 
   console.log(`endpoint : ${endpoint}`);
-  console.log(`live now : ${[...live].join(', ') || '(none configured)'}`);
+  console.log(`live now : ${[...serving].join(', ') || '(none configured)'}`);
   console.log(`mode     : ${args.live ? 'LIVE — will PUT' : 'dry run'}`);
   console.log('');
 
   for (const { file, body } of indexes) {
-    if (live.has(body.name)) {
+    if (serving.has(body.name)) {
       throw new Error(
         `refusing to PUT index "${body.name}" (${path.basename(file)}): it is what the app is ` +
         `serving from right now. Point SEARCH_INDEX* elsewhere first, or rename the definition.`
@@ -189,6 +217,18 @@ async function main() {
   console.log('REVOKE the Search Service Contributor grant now — this script is done with it.');
 }
 
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const cfg = config();
+  if (!cfg.configured) throw new Error('SEARCH_ENDPOINT is not set — nothing to apply against');
+  return run({
+    endpoint: cfg.endpoint.replace(/\/$/, ''),
+    live: args.live,
+    only: args.only,
+    liveNames: [cfg.index, cfg.projectsIndex, cfg.documentsIndex]
+  });
+}
+
 if (require.main === module) {
   main().catch(err => {
     console.error(`[apply-search-definitions] ${err.message}`);
@@ -196,4 +236,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, load, assertNotForbidden, INDEX_DIR, INDEXER_DIR };
+module.exports = { parseArgs, load, select, run, assertNotForbidden, INDEX_DIR, INDEXER_DIR };

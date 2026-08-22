@@ -46,6 +46,77 @@ test('apply-search-definitions', async (t) => {
     assert.throws(() => script.parseArgs(['--oops']), /unknown flag/);
   });
 
+  // These drive run() with a stubbed transport, the way copy-blobs.test.js drives copyOne. Asserting
+  // the definitions-vs-live property from the files alone says nothing about whether the code still
+  // CHECKS it — deleting the guard from run() left the whole suite green until these existed.
+  const stub = (t2, handler) => {
+    const calls = [];
+    const original = global.fetch;
+    global.fetch = async (url, init) => {
+      calls.push({ url, method: init.method, body: init.body ? JSON.parse(init.body) : null });
+      return handler ? handler(url, init) : { status: 404, text: async () => '' };
+    };
+    t2.after(() => { global.fetch = original; });
+    return calls;
+  };
+  const ENDPOINT = 'https://svc.search.windows.net';
+  // GET: data sources exist, indexes and indexers do not yet (the state a first run meets).
+  // PUT: created. A stub that 404s a PUT makes run() throw before it can be observed.
+  const ok = (url, init) => ({
+    status: init.method === 'PUT' ? 201 : (/\/datasources\//.test(url) ? 200 : 404),
+    text: async () => ''
+  });
+
+  await t.test('a dry run writes nothing at all', async (tt) => {
+    const calls = stub(tt, ok);
+    await script.run({ endpoint: ENDPOINT, live: false, only: '', liveNames: ['demi-chunks'] });
+    assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0, 'a dry run must issue no PUT');
+    assert.ok(calls.length > 0, 'and it must still probe, or it proved nothing');
+  });
+
+  await t.test('--live writes indexes before indexers, and never a data source', async (tt) => {
+    const calls = stub(tt, ok);
+    await script.run({ endpoint: ENDPOINT, live: true, only: '', liveNames: ['demi-chunks'] });
+    const puts = calls.filter(c => c.method === 'PUT').map(c => c.url.split('?')[0].replace(ENDPOINT, ''));
+    assert.deepStrictEqual(puts, [
+      '/indexes/chunks', '/indexes/documents', '/indexes/projects',
+      '/indexers/chunks-indexer', '/indexers/documents-indexer', '/indexers/projects-indexer'
+    ], 'every index must be written before any indexer');
+    assert.strictEqual(
+      calls.filter(c => c.method === 'PUT' && /\/datasources\//.test(c.url)).length, 0,
+      'a data source must never be written — connectionString is redacted on export'
+    );
+  });
+
+  await t.test('run() refuses to write an index the app is serving from', async (tt) => {
+    const calls = stub(tt, ok);
+    await assert.rejects(
+      () => script.run({ endpoint: ENDPOINT, live: true, only: '', liveNames: ['chunks'] }),
+      /refusing to PUT index "chunks"/
+    );
+    assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0, 'and it must refuse BEFORE writing anything');
+  });
+
+  await t.test('a missing data source stops the run rather than creating one', async (tt) => {
+    stub(tt, () => ({ status: 404, text: async () => '' }));
+    await assert.rejects(
+      () => script.run({ endpoint: ENDPOINT, live: false, only: '', liveNames: ['demi-chunks'] }),
+      /does not exist/
+    );
+  });
+
+  await t.test('--only accepts either vocabulary and refuses a value that matches nothing', () => {
+    assert.deepStrictEqual(script.select('chunks').indexers.map(d => d.body.name), ['chunks-indexer']);
+    assert.deepStrictEqual(script.select('chunks-indexer').indexes.map(d => d.body.name), ['chunks']);
+    assert.throws(() => script.select('typo'), /matches no definition/);
+  });
+
+  await t.test('ai-search still exports the token helper this script destructures', () => {
+    // Removing the export leaves the suite green and the script dies at its first request with
+    // "getToken is not a function", because destructuring a missing property does not throw.
+    assert.strictEqual(typeof require('../../src/search/ai-search').getToken, 'function');
+  });
+
   await t.test('a 403 names the right cause — network and RBAC are told apart by the body', () => {
     // Both faults arrive as 403 and the status cannot separate them. Getting this backwards sends
     // someone to request a role grant that changes nothing, or to debug networking when the grant
