@@ -108,6 +108,17 @@ test('apply-search-definitions', async (t) => {
     assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0, 'and it must refuse BEFORE writing anything');
   });
 
+  await t.test('a DRY RUN is never refused, even when the names are the live ones', async (tt) => {
+    // The guard used to run before the dry-run split, so once the rename made the committed names
+    // the live ones, the first command an operator reaches for during an incident exited 1 without
+    // printing anything. A dry run touches nothing — it must work in every state, and say which
+    // indexes are serving.
+    const calls = stub(tt, ok);
+    await script.run({ endpoint: ENDPOINT, live: false, only: '', liveNames: ['chunks', 'projects', 'documents'] });
+    assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0, 'still writes nothing');
+    assert.ok(calls.length > 0, 'and it still probes, so it reported something');
+  });
+
   await t.test('a missing data source stops the run rather than creating one', async (tt) => {
     stub(tt, () => ({ status: 404, text: async () => '' }));
     await assert.rejects(

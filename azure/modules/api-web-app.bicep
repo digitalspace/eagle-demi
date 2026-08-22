@@ -36,7 +36,7 @@ param searchEndpoint string = ''
 // FLIPPED 2026-08-22, after the gate below was met on both sides. Kept rather than deleted because
 // the rollback is flipping these three back, and the reader doing that needs the same reasoning.
 // Formerly: DO NOT FLIP THEM YET (superseded — the gate below was met and the flip is done).
-// not trust a percentage written here — read the counts, because a stale figure in a comment is
+// Do not trust a percentage written here — read the counts, because a stale figure in a comment is
 // exactly the thing that would talk someone into arming this early. An index name is
 // immutable, so the fill is a one-way create-and-refill from Cosmos over the indexers' PT5M
 // schedule — there is nothing to wait on but row counts. Arm this only when all three have reached

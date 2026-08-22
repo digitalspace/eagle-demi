@@ -85,17 +85,27 @@ az functionapp config appsettings list -n demi-api-test -g c4b0a8-test-rg \
   --query "[?starts_with(name,'SEARCH_INDEX')].{name:name,value:value}" -o table
 ```
 
-**If the settings report the plain names** (the state since 2026-08-22), use the script — it applies
-all six definitions in the right order and refuses to write a data source:
+**If the settings report the plain names** (the state since 2026-08-22), start with the dry run. It
+touches nothing and it works in every state, and it marks which indexes are serving:
 
 ```bash
-node src/scripts/apply-search-definitions.js --live
+node src/scripts/apply-search-definitions.js
 ```
 
-Note the script REFUSES to PUT an index named in `SEARCH_INDEX*`, which is now all three of them.
-That guard is deliberate: re-applying a definition over an index serving traffic rewrites a live
-schema. To restore one during an incident you are knowingly overriding that, so do it by hand with
-the PUTs below and know why the guard was in your way.
+**`--live` will REFUSE**, and that is deliberate: every committed name is now a live name, so
+re-applying would rewrite a schema serving traffic. The script is for CREATING these objects, not
+for restoring one that is live. To restore a live index you are knowingly overriding that guard, so
+do it by hand — and note there is no `jq` here, because the file bodies already carry the right
+names:
+
+```bash
+PUT {endpoint}/indexes/chunks?api-version=2024-07-01           # body indexes/chunks.json
+PUT {endpoint}/datasources/demi-chunks-ds?api-version=2024-07-01   # add connectionString first
+PUT {endpoint}/indexers/chunks-indexer?api-version=2024-07-01  # body indexers/chunks-indexer.json
+```
+
+The data source keeps its `demi-` name — data sources were never renamed, both old and new indexers
+share them, and `connectionString` comes back redacted on export.
 
 **If the settings report `demi-*`** — i.e. someone rolled back — the filename is wrong and the body
 must be rewritten before it is sent. Three rewrites on the index, not one: the semantic
@@ -117,8 +127,8 @@ PUT {endpoint}/indexers/demi-chunks-indexer?api-version=2024-07-01  # body /tmp/
 That third `jq` clause is the one worth understanding rather than copying: the app derives the
 configuration name from whichever index it is configured with (`semanticConfigurationFor`), so the
 definition has to follow the same `<index>-semantic` convention. `test/search/eagle-query.test.js`
-guards it for the committed files. Once the cutover lands, all of this collapses — the file names,
-the live names and the configuration name agree, and the `jq` rewrites go away.
+guards it for the committed files. The rewrites did NOT go away when the cutover landed — they moved
+to the rollback branch, which is the one state where the filename and the live name disagree again.
 
 Order matters: an indexer references both its data source and its target index, and fails to create
 if either is missing.

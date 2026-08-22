@@ -176,8 +176,12 @@ async function run({ endpoint, live, only, liveNames }) {
   console.log(`mode     : ${args.live ? 'LIVE — will PUT' : 'dry run'}`);
   console.log('');
 
+  // GATES WRITING, NOT REPORTING. This used to run before the dry-run split below, so a dry run
+  // refused too — and after the index rename made the committed names the live ones, that meant the
+  // one command an operator reaches for FIRST during an incident always exited 1 without printing
+  // anything useful. A dry run touches nothing; it should be safe in every state.
   for (const { file, body } of indexes) {
-    if (serving.has(body.name)) {
+    if (serving.has(body.name) && args.live) {
       throw new Error(
         `refusing to PUT index "${body.name}" (${path.basename(file)}): it is what the app is ` +
         `serving from right now. Point SEARCH_INDEX* elsewhere first, or rename the definition.`
@@ -192,7 +196,8 @@ async function run({ endpoint, live, only, liveNames }) {
     const existing = await call(endpoint, 'GET', `/indexes/${body.name}?api-version=${API_VERSION}`);
     assertNotForbidden(existing.status, existing.text, `index ${body.name}`);
     const state = existing.status === 200 ? 'exists' : existing.status === 404 ? 'absent' : `HTTP ${existing.status}`;
-    console.log(`index    ${body.name.padEnd(24)} ${state}   <- ${path.basename(file)}`);
+    const serving_note = serving.has(body.name) ? '  ** SERVING TRAFFIC — --live will refuse **' : '';
+    console.log(`index    ${body.name.padEnd(24)} ${state}   <- ${path.basename(file)}${serving_note}`);
     if (!args.live) continue;
     const put = await call(endpoint, 'PUT', `/indexes/${body.name}?api-version=${API_VERSION}`, body);
     if (put.status >= 300) throw new Error(`PUT /indexes/${body.name} -> ${put.status} ${put.text.slice(0, 400)}`);
