@@ -63,6 +63,24 @@ const MAX_SKIP = 100000;
 const DOCUMENT_SELECT = 'id,displayName,documentFileName,description,type,projectId,read,' +
   'isPublished,typeId,milestoneId,projectPhaseId,documentAuthorTypeId,datePosted';
 
+/**
+ * The fields a PROJECT hit carries back. Same invariant, same reason, and the same exported-so-a-
+ * test-can-hold-it treatment as DOCUMENT_SELECT above.
+ *
+ * IT WAS AN INLINE LITERAL, AND THAT IS HOW THE LAST SIX WENT MISSING. Widening the index, the data
+ * source and the mapper is not enough on its own: a field absent from `select` comes back
+ * undefined, so the mapper emits `type: ''` and `currentPhaseName: null` on every hit and the
+ * columns read '-' exactly as before — a quieter version of the bug being fixed, under a 200. The
+ * document side already had the constant and the guard test; projects had neither.
+ *
+ * The last six arrived with the widened index: `type` is eagle-public's Type column, and the two
+ * label/id pairs are what the response rebuilds into the `{_id, name}` shape Phase and Decision
+ * bind. `decisionDate` backs the decision-date range filter.
+ */
+const PROJECT_SELECT = 'id,name,displayName,description,proponent,sector,status,region,centroid,' +
+  'legacyEagleId,read,isPublished,type,currentPhaseName,currentPhaseNameId,eacDecision,' +
+  'eacDecisionId,decisionDate';
+
 /** Rows one search request can return. A larger page costs more requests, not fewer rows. */
 const SERVICE_MAX_TOP = 250;
 
@@ -741,8 +759,7 @@ async function searchProjects(opts = {}) {
     // Every name here must exist in the index — a stray one is a 400 on EVERY query, not a
     // missing field in the response. `trackProjectId` was in this list and is not in the index
     // (it is an int in Cosmos), which turned all project search into a silent fallback.
-    select: 'id,name,displayName,description,proponent,sector,status,region,centroid,' +
-      'legacyEagleId,read,isPublished',
+    select: PROJECT_SELECT,
     // Only the fields the result card renders. Highlighting a field nobody displays costs a
     // response body for nothing.
     highlight: 'name,displayName,description'
@@ -1058,6 +1075,7 @@ async function deleteChunksForDocument(documentId, opts = {}) {
 
 module.exports = {
   DOCUMENT_SELECT,
+  PROJECT_SELECT,
   searchChunks,
   searchProjects,
   searchDocuments,

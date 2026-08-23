@@ -116,7 +116,9 @@ test('Search Controller Tests', async (t) => {
 
   // 34 of the 382 projects in test carry no phase and the same 34 carry no decision. The template
   // guards with `?.name || '-'`, so `{}` would print an empty cell where a dash is the answer.
-  await t.test('a project with no phase or decision yields null, not an empty object', async () => {
+  // `eagleQuery.ref` answers `undefined` for that case, which is the same dash and one helper
+  // instead of two.
+  await t.test('a project with no phase or decision yields no ref, not an empty object', async () => {
     t.mock.method(projectsRepo, 'listVisible', async () => ({
       items: [{ id: '1', name: 'Marshall Road', read: ['public'] }]
     }));
@@ -127,8 +129,8 @@ test('Search Controller Tests', async (t) => {
       { query: { dataset: 'Project', keywords: '', pageSize: '10' }, header: () => null }, res);
 
     const row = jsonResponse[0].searchResults[0];
-    assert.strictEqual(row.currentPhaseName, null);
-    assert.strictEqual(row.eacDecision, null);
+    assert.strictEqual(row.currentPhaseName, undefined);
+    assert.strictEqual(row.eacDecision, undefined);
     assert.strictEqual(row.type, '');
   });
 

@@ -25,10 +25,11 @@
  *     a 400, which is not retried, which the controller answers as 502. Apply the index BEFORE
  *     deploying the app, or as the first action after.
  *   - ~~`type` on a Project~~ — expressible now, but only through VALUE_ALIASES. DEMI stores
- *     Track's `type_name` (`merge/project.js:35`) and eagle-public sends Eagle's spelling of the
- *     same nine types; three of the ten options differ (` - ` for `-`, and a plural). Measured on
- *     the 382 rows in test: without the map, `and[type]=Energy-Electricity` matches 0 of 95 rows
- *     and answers 200 — the silent-nothing this list exists to prevent.
+ *     Track's `type_name` (`merge/project.js:35`) for a Track-backed project and Eagle's `type` for
+ *     an Eagle-only one, and eagle-public sends Eagle's spelling; three of the ten options differ
+ *     (` - ` for `-`, and a plural). Measured on the 382 rows in test: matching only the wire
+ *     spelling finds 0 of the 95 rows spelled Track's way and answers 200 — the silent-nothing this
+ *     list exists to prevent. BOTH spellings are matched, so neither origin is excluded.
  *   - `proponent` and `pcp` on a Project. eagle-public's panel sends an Org ObjectId and a PCP
  *     status; Cosmos keeps `proponentName` and no PCP field at all (`merge/project.js:36`), so
  *     there is no column to point them at. Dropped, and an index change alone cannot fix them —
@@ -133,17 +134,22 @@ const UNMAPPED_KEYS = {
 };
 
 /**
- * Wire VALUE -> stored value, for the one field where the two vocabularies disagree.
+ * Wire VALUE -> the OTHER spelling the corpus may hold it under. Both are matched, never swapped.
  *
- * ALIASES renames a field; this renames what the caller is asking FOR. `type` needs it because
- * DEMI takes the project type from Track (`merge/project.js:35`, `type_name` wins over Eagle's
- * `type`) while eagle-public's option list is Eagle's, hard-coded at
+ * ALIASES renames a field; this widens what the caller is asking FOR. `type` needs it because DEMI
+ * takes the project type from Track (`merge/project.js:35`, `type_name` wins over Eagle's `type`)
+ * while eagle-public's option list is Eagle's, hard-coded at
  * `eagle-public/src/app/shared/utils/constants.ts:62-73`. Six of the ten spellings match; three do
  * not, and the tenth (`Food Processing`) has no rows either way.
  *
- * Only these three are listed. An unlisted value passes through UNCHANGED rather than being
- * dropped, because a value this map has never heard of is a value the index may still hold —
- * Track can add a type without asking us.
+ * BOTH SPELLINGS, because BOTH ARE STORED. `merge/project.js` only prefers Track where a Track
+ * record exists — an Eagle-only project keeps Eagle's `type` verbatim (`TRACK_PRECEDENCE`'s third
+ * column), so substituting the wire value for the Track one made those rows unmatchable by the
+ * only filter that could ask for them. The index carries 393 rows against the 382 the Track export
+ * accounts for, so the Eagle-only case is not hypothetical.
+ *
+ * Only these three are listed. An unlisted value is matched as sent, because a value this map has
+ * never heard of is a value the index may still hold — Track can add a type without asking us.
  */
 const VALUE_ALIASES = {
   Project: {
@@ -454,10 +460,18 @@ function buildFilter(query, dataset, acl) {
     }
 
     const valueMap = (VALUE_ALIASES[dataset] || {})[base] || {};
-    const values = valuesOf(rawValue).map(v => valueMap[v] || v);
-    const terms = values
-      .map(v => (edge ? rangeTerm(field, meta, v, edge) : term(field, meta, v)))
-      .filter(Boolean);
+    const values = valuesOf(rawValue);
+    // ONE ENTRY PER WIRE VALUE, whatever it expands to, so the lost-value report below still
+    // compares like with like: a value that produced no term at all is the thing being counted,
+    // not the number of spellings it was tried under.
+    const terms = values.flatMap((v) => {
+      const spellings = valueMap[v] && valueMap[v] !== v ? [v, valueMap[v]] : [v];
+      const built = spellings
+        .map(spelling => (edge ? rangeTerm(field, meta, spelling, edge) : term(field, meta, spelling)))
+        .filter(Boolean);
+      if (built.length === 0) return [];
+      return [built.length === 1 ? built[0] : `(${built.join(' or ')})`];
+    });
     // Reported whenever ANY value was lost, not only when all of them were: `and[pageNumber]=1,0.5`
     // would otherwise narrow silently to `1` and look like the filter the caller asked for.
     if (terms.length !== values.length) dropped.push(key);

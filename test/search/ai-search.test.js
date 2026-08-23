@@ -1107,6 +1107,30 @@ test('every field the document search selects exists in the committed index', ()
   assert.deepStrictEqual(missing, [], `not in ${definition.name}: ${missing.join(', ')}`);
 });
 
+// The same invariant for projects, and it is the one that was missing. Widening the index, the data
+// source and the response mapper still left the Type, Phase and Decision columns blank on every
+// keyword search, because the project `select` was an inline literal nobody widened and no test
+// read. The controller test could not catch it: it mocks `searchProjects` and so asserts a row
+// shape the real function could not produce.
+test('every field the project search selects exists in the committed index', () => {
+  const definition = require('../../azure/search/indexes/projects.json');
+  const inIndex = new Set(definition.fields.map(f => f.name));
+  const missing = aiSearch.PROJECT_SELECT.split(',').filter(name => !inIndex.has(name));
+  assert.deepStrictEqual(missing, [], `not in ${definition.name}: ${missing.join(', ')}`);
+});
+
+// Presence in the index is not the same question as presence in the select — a field can be in
+// the index, be filterable, and still come back undefined because nobody asked for it. Named
+// literally rather than derived from the select under test.
+test('the project search selects the columns the project list renders', () => {
+  const selected = new Set(aiSearch.PROJECT_SELECT.split(','));
+  for (const name of ['type', 'currentPhaseName', 'currentPhaseNameId',
+    'eacDecision', 'eacDecisionId', 'decisionDate']) {
+    assert.ok(selected.has(name),
+      `${name} is not selected, so every hit returns it undefined and the column reads '-'`);
+  }
+});
+
 // THE INVARIANT THE CHUNK WINDOW RESTS ON. `group-chunks.windowFor` is handed SERVICE_MAX_TOP so a
 // page costs one request; if that ever exceeded MAX_PAGE_ROWS, `runSearch` would clamp `top` below
 // the window while `skip` still advanced by the whole window — the unreachable-chunk gap, back

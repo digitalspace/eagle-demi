@@ -173,17 +173,30 @@ test('eagle-query filters', async (t) => {
     assert.ok(filter.includes("ceaaInvolvementId eq '5e27937a749c83437054f1ff'"));
   });
 
-  // DEMI stores Track's spelling and eagle-public sends Eagle's. The literals on both sides are
-  // written out rather than read from VALUE_ALIASES: a test that maps through the same table it is
-  // checking passes whatever the table says, including nothing.
-  await t.test('a project type is translated from the wire vocabulary to the stored one', () => {
-    const { filter } = eagleQuery.buildFilter(
+  // DEMI stores Track's spelling for a Track-backed project and Eagle's for an Eagle-only one, so
+  // BOTH have to match or one origin becomes unreachable. The literals on both sides are written
+  // out rather than read from VALUE_ALIASES: a test that maps through the same table it is checking
+  // passes whatever the table says, including nothing.
+  await t.test('a project type matches both the wire spelling and the stored one', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
       { 'and[type]': 'Energy-Electricity,Tourist Destination Resorts' }, 'Project', anonAcl('id'));
 
-    assert.ok(filter.includes("type eq 'Energy - Electricity'"));
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes("type eq 'Energy - Electricity'"),
+      "Track's spelling holds 95 of the rows");
+    assert.ok(filter.includes("type eq 'Energy-Electricity'"),
+      "Eagle-only projects keep Eagle's spelling verbatim");
     assert.ok(filter.includes("type eq 'Tourist Destination Resort'"));
-    assert.ok(!filter.includes("type eq 'Energy-Electricity'"),
-      'the wire spelling matches 0 of the 95 rows that hold this type');
+    assert.ok(filter.includes("type eq 'Tourist Destination Resorts'"));
+  });
+
+  // The lost-value report counts WIRE values, not spellings. Before the two-spelling change one
+  // value produced one term; now it can produce two, and a naive length comparison would report
+  // every mapped filter as partially dropped.
+  await t.test('expanding a type into two spellings is not reported as a lost value', () => {
+    const { dropped } = eagleQuery.buildFilter(
+      { 'and[type]': 'Energy-Electricity,Mines' }, 'Project', anonAcl('id'));
+    assert.deepStrictEqual(dropped, []);
   });
 
   // Six of the ten options already agree, and an unlisted value must survive rather than be

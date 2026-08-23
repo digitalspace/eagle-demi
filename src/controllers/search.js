@@ -33,19 +33,6 @@ function geoPoint(centroid) {
 }
 
 /**
- * A `List` reference as eagle-public's templates want it: `{_id, name}`, or null.
- *
- * NULL, NOT `{}`, when the project has neither. 34 of the 382 projects in test carry no phase and
- * the same 34 carry no decision, so this is the common path, not an edge; the template guards with
- * `rowData.currentPhaseName?.name || '-'` and an object with an undefined `name` prints an empty
- * cell where a dash is what the column means.
- */
-function listRef(id, name) {
-  if (!id && !name) return null;
-  return { _id: id ? String(id) : '', name: name || '' };
-}
-
-/**
  * Label document rows with their project, under the CALLER's access — never systemAccess(),
  * a label must not outlive the ACL of the row it describes.
  *
@@ -345,9 +332,11 @@ exports.search = async (req, res) => {
                 // `{_id, name}` shape the template binds (`.name`) and the filter panel sends
                 // (`._id`) from the flat label/id pair the index stores — the same reconstruction
                 // eagle-search does, so a saved filter URL means the same thing against either.
+                // `eagleQuery.ref` is the same helper the project label on a document row uses; a
+                // project with no phase gets `undefined`, which the template renders as a dash.
                 type: doc.type || '',
-                currentPhaseName: listRef(doc.currentPhaseNameId, doc.currentPhaseName),
-                eacDecision: listRef(doc.eacDecisionId, doc.eacDecision),
+                currentPhaseName: eagleQuery.ref(doc.currentPhaseNameId, doc.currentPhaseName),
+                eacDecision: eagleQuery.ref(doc.eacDecisionId, doc.eacDecision),
                 decisionDate: doc.decisionDate || null,
                 // Pre-escaped display markup from the analyzer, keyed by INDEX field. `name` falls
                 // back to `displayName` the same way the plain value above does, so the two never
@@ -513,8 +502,8 @@ exports.search = async (req, res) => {
           // Reading `p.type` here would be undefined on every row and print '-' in the Type column
           // of the DEFAULT view — the one a visitor lands on, where no keyword has been typed yet.
           type: p.projectType || '',
-          currentPhaseName: listRef(p.currentPhaseName?._id, p.currentPhaseName?.name),
-          eacDecision: listRef(p.eacDecision?._id, p.eacDecision?.name),
+          currentPhaseName: eagleQuery.ref(p.currentPhaseName?._id, p.currentPhaseName?.name),
+          eacDecision: eagleQuery.ref(p.eacDecision?._id, p.eacDecision?.name),
           decisionDate: p.decisionDate || null,
           // 'public' in the read ACL is what makes a record public; isPublished mirrors it.
           // The frontend derives its staged/admitted badge from this field.
