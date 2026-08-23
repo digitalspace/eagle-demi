@@ -153,6 +153,25 @@ test('setAclForProject', async (t) => {
         'a row with no ACL at all still fails closed rather than being skipped');
     });
 
+  await t.test('a row with NO read field serialises a valid patch', async (tt) => {
+    // Not `read: []` — the field ABSENT. `undefined` in a `set` op emits no `value` key at all,
+    // and Cosmos rejects that. Patch ops are atomic per item, so the 400 would take the `/read`
+    // narrowing down with it: the row keeps its old ACL, and the effect is fail-OPEN for exactly
+    // the row that had no ACL to begin with.
+    const cap = harness(tt, [{ id: 'd1' }]);
+
+    await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
+
+    // Asserted on the SERIALISED form, because that is where the defect shows. `{value: undefined}`
+    // still satisfies `'value' in op` — the key exists on the object — and only JSON.stringify
+    // drops it. Checking the object would be a probe that cannot fail.
+    const wire = JSON.parse(JSON.stringify(cap.ops[0].resourceBody.operations));
+    for (const op of wire) {
+      assert.ok('value' in op, `${op.path} reaches Cosmos with no value key, which is a 400`);
+    }
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin'], 'and it still fails closed');
+  });
+
   await t.test('an empty project writes nothing', async (tt) => {
     const cap = harness(tt, []);
     const result = await documents.setAclForProject(systemAccess(), '999', PUBLIC_PROJECT);

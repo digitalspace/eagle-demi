@@ -238,7 +238,16 @@ async function setAclForProject(access, projectId, read) {
   const result = await cosmos.bulkVerified(CONTAINER, rows.map(row => {
     // The snapshot if there is one, otherwise what the row carries today — which on a first
     // cascade IS the seeded Eagle ACL, the value the snapshot exists to preserve.
-    const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead : row.read;
+    //
+    // `: []` and not `: row.read`, because a row with NO `read` field would put `undefined` in a
+    // `set` op, and Cosmos rejects a `set` with no value. Patch ops are atomic per item, so that
+    // 400 would take the `/read` narrowing down with it — the row keeps its old ACL and the failure
+    // is counted, but the effect is fail-OPEN for exactly the row that had no ACL to begin with.
+    // `[]` intersects to `['sysadmin']` instead. No current write path produces such a row (all
+    // four write an explicit `read[]`, and `seedAcl` fails closed), so this guards a legacy row
+    // nobody can rule out from outside the private endpoint.
+    const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
+      : (Array.isArray(row.read) ? row.read : []);
     const next = constrainToProject(own, read);
     return {
       operationType: 'Patch',
