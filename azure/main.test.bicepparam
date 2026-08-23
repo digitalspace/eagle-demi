@@ -98,7 +98,8 @@ param contactEmails = [
 //
 // The real per-IP control is rproxy's own `limit_req zone=api_search` (10 r/s sustained, burst 20),
 // which keys on the client address and is correct. REVERT THIS TO THE DEFAULT when the direct
-// `demi.eao.gov.bc.ca` transport replaces the proxy hop — see TODO.md F5a's exit.
+// `demi.eao.gov.bc.ca` transport replaces the proxy hop and this API stops being reached through a
+// proxy at all.
 //
 // WHAT IT ALSO DOES, said plainly: this is ONE setting serving TWO paths. DEMI's own frontend calls
 // this API directly, cross-origin, at the `azurewebsites.net` host — inbound is public, there are no
@@ -106,5 +107,16 @@ param contactEmails = [
 // So the same raise loosens the per-IP ceiling on the direct path 20x, from 300/min to 6000/min,
 // with no proxy in front of it. Accepted for TEST because the value is a circuit breaker and the
 // direct path there serves one internal frontend; it is NOT a value to carry to prod. The durable
-// fix is a limiter that knows which path a request arrived on — TODO.md F12.12.
+// fix is NOT a smarter limiter — it is moving the enforcement point. Front Door's WAF rate limit
+// keys on the SOCKET IP and offers no header-based key (`groupBy` accepts SocketAddr, GeoLocation,
+// None, Asn, Ja4 — `ClientAddr` is the Application Gateway flavour, and `RemoteAddr` is a match
+// variable that cannot be a key), so it sees real visitors only once Front Door is what the browser
+// connects to. Today the OpenShift router terminates the client's TLS and Front Door sits behind
+// rproxy, so a WAF rule there would limit rproxy's egress — this same defect, one layer out.
+//
+// DO NOT "FIX" THIS BY READING THE LEFTMOST X-Forwarded-For ENTRY. It fails whichever way App
+// Service behaves: if it appends, the leftmost is caller-supplied and the key becomes
+// attacker-controlled on the still-public direct path; if it overwrites, the change does nothing.
+// The variant that works needs `X-Real-IP $remote_addr` from the proxy AND the direct path closed —
+// and the direct path cannot be closed while DEMI's frontend calls this host from the browser.
 param rateLimitMaxRequests = 6000
