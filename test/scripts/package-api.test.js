@@ -83,6 +83,51 @@ test('API deploy package', async (t) => {
     );
   });
 
+  await t.test('ships a SYMLINKED node_modules, and does not loop on a cycle', () => {
+    // `os.walk` does not descend into a symlinked directory and says nothing when it skips one.
+    // Point node_modules at a store — a pnpm linker, a shared install, a git worktree borrowing one
+    // to avoid a 300 MB reinstall — and the packager walked past it, exited 0, and produced a zip
+    // that deploys and then cannot boot: the app has no route to a registry to npm install from.
+    // Measured against the real packager before the fix: zero node_modules/ entries, exit 0.
+    //
+    // The cycle half is not decoration. `followlinks=True` on its own re-packages the tree under
+    // node_modules/loop-back/node_modules/loop-back/... until the kernel raises ELOOP and the
+    // packager dies — after it has already written the duplicates.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-link-'));
+    const repo = path.join(dir, 'repo');
+    const store = path.join(dir, 'store');
+
+    for (const d of ['api', 'azure/search/indexes', 'azure/search/indexers',
+      'frontend/public/assets/geojson']) {
+      fs.mkdirSync(path.join(repo, d), { recursive: true });
+    }
+    for (const f of ['index.js', 'host.json', 'package.json']) {
+      fs.writeFileSync(path.join(repo, f), '//');
+    }
+    fs.writeFileSync(path.join(repo, 'api', 'index.js'), '//');
+    fs.writeFileSync(path.join(repo, 'azure/search/indexes', 'projects.json'), '{}');
+    fs.writeFileSync(path.join(repo, 'azure/search/indexers', 'projects-indexer.json'), '{}');
+    fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson', 'a.json'), '{}');
+
+    fs.mkdirSync(path.join(store, 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(store, 'pkg', 'index.js'), '//');
+    fs.symlinkSync(store, path.join(repo, 'node_modules'));
+    // The cycle: a link inside the store pointing back at the repo root.
+    fs.symlinkSync(repo, path.join(store, 'loop-back'));
+
+    const out = path.join(dir, 'api.zip');
+    execFileSync('python3', [path.join(REPO_ROOT, 'scripts', 'package-api.py'), repo, out],
+      { stdio: 'pipe', timeout: 60000 });
+    const linked = new Set(
+      execFileSync('unzip', ['-Z1', out], { encoding: 'utf8' }).split('\n').filter(Boolean));
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.ok([...linked].some(e => e.startsWith('node_modules/')),
+      'a symlinked node_modules must still be packaged');
+    assert.ok(![...linked].some(e => e.includes('loop-back/node_modules/')),
+      'the cycle must be visited once, not re-entered under a deeper path');
+  });
+
   await t.test('ships the geojson the boundary seeder reads', () => {
     assert.ok(
       [...entries].some(e => e.startsWith('frontend/public/assets/geojson/')),

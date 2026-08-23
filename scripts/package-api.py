@@ -3,6 +3,42 @@ import os
 import sys
 import zipfile
 
+def walk(top):
+    """
+    `os.walk` that FOLLOWS symlinked directories, without being able to loop forever.
+
+    The default does not descend into a symlinked directory, and it says nothing when it skips one.
+    That is silent data loss for a packager: point `node_modules` at a store — a pnpm linker, a
+    shared install, a git worktree that borrows one to avoid a 300 MB reinstall — and the packager
+    walks straight past it, exits 0, and produces a zip that deploys and then cannot boot, because
+    the app has no route to a registry to `npm install` from. Measured before this fix against a
+    tree with a symlinked `node_modules`: zero `node_modules/` entries, exit 0, no warning.
+
+    `followlinks=True` ALONE is not the fix, and not for the reason you would guess. A symlink
+    pointing back at an ancestor does not hang: the path grows one link per level, and at about
+    forty the kernel raises ELOOP and the walk dies with an uncaught OSError. Measured on a tree
+    with `node_modules/loop-back -> <repo root>`: it packaged the same files repeatedly under
+    `node_modules/loop-back/node_modules/loop-back/...`, then crashed. A packager that dies is
+    survivable; one that first writes a zip full of duplicated garbage is worse.
+
+    So every directory is keyed by its REAL path and visited once. The second approach to a
+    directory is skipped, which makes the cycle finite and the entry list the same as it would be
+    without any symlinks at all.
+    """
+    seen = set()
+    for root, dirs, files in os.walk(top, followlinks=True):
+        # Prune in place, which is what os.walk reads to decide where to go next.
+        keep = []
+        for d in dirs:
+            real = os.path.realpath(os.path.join(root, d))
+            if real in seen:
+                continue
+            seen.add(real)
+            keep.append(d)
+        dirs[:] = keep
+        yield root, dirs, files
+
+
 def package_api(repo_root, zip_path):
     # Pruned at the REPO ROOT ONLY. Excluding "dist" at every depth also strips
     # node_modules/**/dist (e.g. @mongodb-js/saslprep) and ships an app that 500s on every
@@ -73,7 +109,7 @@ def package_api(repo_root, zip_path):
     count = 0
     extra = 0
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-        for root, dirs, files in os.walk(repo_root):
+        for root, dirs, files in walk(repo_root):
             rel_root = os.path.relpath(root, repo_root)
             if rel_root == ".":
                 dirs[:] = [d for d in dirs if d not in root_exclude_dirs]
@@ -107,7 +143,7 @@ def package_api(repo_root, zip_path):
             # adding a third subpath silently moves the hole — counting per subpath removes it
             # rather than relocating it.
             found = 0
-            for root, _dirs, files in os.walk(sub_abs):
+            for root, _dirs, files in walk(sub_abs):
                 for file in files:
                     full_path = os.path.join(root, file)
                     rel_path = os.path.relpath(full_path, repo_root)
