@@ -89,3 +89,14 @@ param contactEmails = [
   'daniel@digitalspace.ca'
   'Daniel.T.Truong@gov.bc.ca'
 ]
+
+// EVERY VISITOR SHARES THIS ONE BUCKET IN TEST, so it is a circuit breaker rather than a per-caller
+// limit. eagle-public reaches demi-api through rproxy (the interim same-origin transport), rproxy
+// sets no `X-Forwarded-For` at all, and App Service appends the connecting address — so
+// `callerIp` is rproxy's egress address on every request. At the 300 default that is 5 requests per
+// second for the whole site, and eagle-public searches as you type.
+//
+// The real per-IP control is rproxy's own `limit_req zone=api_search` (10 r/s sustained, burst 20),
+// which keys on the client address and is correct. REVERT THIS TO THE DEFAULT when the direct
+// `demi.eao.gov.bc.ca` transport replaces the proxy hop — see TODO.md F5a's exit.
+param rateLimitMaxRequests = 6000

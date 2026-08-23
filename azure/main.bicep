@@ -67,6 +67,14 @@ param doclingApiKey string
 @description('Upstream eagle-api the seed loader reads. Environment-specific — the code default is the DEV instance, so this must be set per environment or staging silently reads dev data.')
 param eagleApiBase string
 
+// PER ENVIRONMENT, because the right value depends on how the browser reaches this API, which is
+// not the same in every environment. Direct browser traffic gives one bucket per caller and 300 is
+// right; behind a reverse proxy the app sees the PROXY's address on every request, so all visitors
+// share one bucket and 300/min is 5 requests per second for the whole site. See the module's own
+// parameter and `src/middleware/rate-limiter.js`.
+@description('Requests per minute per rate-limit bucket. Raise it wherever a proxy collapses every visitor into one bucket.')
+param rateLimitMaxRequests int = 300
+
 // Bucket and prefix were previously set out of band, so every template deploy silently reset them
 // to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
 @description('Object-store bucket name (dev: asnpnn, test: zdspnb).')
@@ -298,6 +306,7 @@ module apiWebApp './modules/api-web-app.bicep' = {
     auditWorkspaceId: auditLogs.outputs.workspaceId
     // The browser origins that call this API. See the parameter for why they are not derivable.
     frontendHostNames: frontendHostNames
+    rateLimitMaxRequests: rateLimitMaxRequests
   }
 }
 
