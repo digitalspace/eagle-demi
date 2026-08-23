@@ -251,8 +251,9 @@ test('Search Controller Tests', async (t) => {
       'with no ACL clause to compose with, the provenance term stands alone');
   });
 
-  await t.test('a privileged caller is still scoped to Track rows', async () => {
-    // The other half: guarding the falsy case must not become a reason to skip provenance.
+  await t.test('includeSeeded lifts provenance for a PRIVILEGED caller too', async () => {
+    // The escape hatch has to survive the falsy-filter guard as well: a privileged caller has no
+    // ACL clause, so with includeSeeded the filter has nothing left in it at all.
     let sent = null;
     t.mock.method(aiSearch, 'searchProjects', async (opts) => {
       sent = opts;
@@ -266,8 +267,28 @@ test('Search Controller Tests', async (t) => {
       header: () => null
     }, res);
 
-    assert.ok(!/sourceSystem/.test(String(sent.filter)),
-      'and includeSeeded still lifts it for a privileged caller too');
+    // `=== undefined`, not `!/sourceSystem/.test(String(...))` — the coerced form passes on a
+    // garbage filter as readily as on the right one.
+    assert.strictEqual(sent.filter, undefined,
+      'no ACL clause and no provenance clause leaves nothing to send');
+  });
+
+  await t.test('a keywordless SORT is scoped too — the shape that was reported', async () => {
+    // Every other test here passes `keywords`. The measurement that started this was
+    // `?dataset=Project&sortBy=-name` with NO keywords: 393 rows with `testtesttest` at row 1.
+    // Same code path, but the reported shape itself was not pinned by anything.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', sortBy: '-name' }, header: () => null }, res);
+
+    assert.match(sent.filter, / and sourceSystem eq 'track'$/);
+    assert.strictEqual(sent.matchAll, true, 'and it is the keywordless index read, not Cosmos');
   });
 
   await t.test('the provenance clause COMPOSES with the ACL, never replaces it', async () => {

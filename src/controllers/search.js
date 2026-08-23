@@ -498,15 +498,18 @@ exports.search = async (req, res) => {
           _id: p.eagleId || String(p.id),
           _schemaName: 'Project',
           id: String(p.id),
-          // STRING, matching the AI Search branch. Cosmos stores this as a Number
-          // (`merge/project.js:170`, `Number(track.track_project_id)`) while the index has no such
-          // field at all, so that branch falls back to the index KEY — declared `Edm.String` in
-          // `azure/search/indexes/projects.json`, hence always a String. Only this side can differ,
-          // which is why only this side coerces; a `String()` over there would be an inert line
-          // pretending to do work.
-          // NULL when absent, NOT the DEMI id — see the AI Search branch above for why. Cosmos
-          // stores the field, so this side reads it directly instead of sniffing the id prefix;
-          // `== null` and not `||`, because Track id 0 would be falsy.
+          // NULL when absent, NOT the DEMI id — see the AI Search branch above for why.
+          //
+          // STRING when present, matching that branch. Cosmos stores this as a Number
+          // (`merge/project.js:170`, `Number(track.track_project_id)`) and the index has no such
+          // field at all, so the two sides arrive at a String by different routes: this one
+          // coerces, that one is reading an `Edm.String` key. Both coerce explicitly now — an
+          // earlier version of this comment called the other side's `String()` "an inert line
+          // pretending to do work", which stopped being true when that branch started reading the
+          // key twice to test its prefix.
+          //
+          // Cosmos stores the field, so this side reads it directly rather than sniffing the id
+          // prefix; `== null` and not `||`, because Track id 0 would be falsy.
           trackProjectId: p.trackProjectId == null ? null : String(p.trackProjectId),
           // COSMOS FIELD NAMES, not index field names. The two branches of this route read two
           // different shapes of the same record: the indexer's SELECT aliases the stored columns
