@@ -295,9 +295,17 @@ exports.search = async (req, res) => {
             //
             // Orthogonal to visibility and never a substitute for it — `acl` is already inside
             // `filter` and stays there.
+            //
+            // `filter ? … : TRACK_ONLY` and NOT a bare template, because `filter` is UNDEFINED for
+            // an unscoped privileged caller: `filterFor` returns `{filter: null, empty: false}` for
+            // sysadmin/staff/demi-admin (`helpers/access-odata.js`) — an unfiltered read, not an
+            // empty one — and `buildFilter` passes that through. Interpolating it sends the literal
+            // string `(undefined) and …`, which is a 400, which this route answers as 502. Same
+            // idiom `ai-search.js` already uses twice for exactly this composition.
+            const TRACK_ONLY = "sourceSystem eq 'track'";
             const scopedFilter = allowNonTrack
               ? filter
-              : `(${filter}) and sourceSystem eq 'track'`;
+              : (filter ? `(${filter}) and ${TRACK_ONLY}` : TRACK_ONLY);
             // `Boolean(keywords)`, not `true`. With no keywords `search: '*'` has no relevance to
             // order by, and `search.score() desc` over a constant score leaves ties in whatever
             // order the service computed — which `$skip` paging then repeats and omits across
@@ -340,7 +348,14 @@ exports.search = async (req, res) => {
                 // TRACK ID — a value that is not one and never will be. Under the 2026-08-23
                 // direction, where Track ids are the master project id, that is a lie a consumer
                 // would reasonably act on. The index carries no `trackProjectId` field, so this
-                // branch can only tell the two apart by the id prefix the merge writes.
+                // branch tells the two apart by the id prefix the merge writes.
+                //
+                // NOT by `sourceSystem`, even though this change makes the index carry it: it is
+                // not in `PROJECT_SELECT` (`ai-search.js`), so it would read `undefined` here — and
+                // adding it would make this line depend on the indexer reset having already run.
+                // Between the index PUT and that reset the field is null on every row, so every
+                // project would briefly report a null trackProjectId. The prefix has no such
+                // dependency: it is written by the merge into Cosmos and is already in the key.
                 trackProjectId: String(doc.id).startsWith('eagle-') ? null : String(doc.id),
                 legacyEagleId: doc.legacyEagleId || '',
                 name: doc.name || doc.displayName || 'Unnamed Project',

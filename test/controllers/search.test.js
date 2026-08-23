@@ -226,6 +226,50 @@ test('Search Controller Tests', async (t) => {
       'without the provenance clause this route serves the non-Track rows the bare list hides');
   });
 
+  await t.test('a PRIVILEGED caller gets a valid filter, not "(undefined)"', async () => {
+    // Every other test on this route is anonymous, and that is what let a blocker through: an
+    // unscoped privileged caller has NO ACL clause at all — `filterFor` returns
+    // `{filter: null, empty: false}`, an unfiltered read rather than an empty one — so
+    // `buildFilter` yields undefined and a bare template produced the literal string
+    // `(undefined) and sourceSystem eq 'track'`. Azure answers 400 and this route turns that into
+    // 502, so every logged-in admin Project search broke while the anonymous suite stayed green.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search({
+      query: { dataset: 'Project', keywords: 'mine' },
+      user: { realm_access: { roles: ['sysadmin'] } },
+      header: () => null
+    }, res);
+
+    assert.ok(!/undefined/.test(sent.filter), `filter must be valid OData, got: ${sent.filter}`);
+    assert.strictEqual(sent.filter, "sourceSystem eq 'track'",
+      'with no ACL clause to compose with, the provenance term stands alone');
+  });
+
+  await t.test('a privileged caller is still scoped to Track rows', async () => {
+    // The other half: guarding the falsy case must not become a reason to skip provenance.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search({
+      query: { dataset: 'Project', keywords: 'mine', includeSeeded: 'true' },
+      user: { realm_access: { roles: ['sysadmin'] } },
+      header: () => null
+    }, res);
+
+    assert.ok(!/sourceSystem/.test(String(sent.filter)),
+      'and includeSeeded still lifts it for a privileged caller too');
+  });
+
   await t.test('the provenance clause COMPOSES with the ACL, never replaces it', async () => {
     // The clause is appended outside `buildFilter`, so the risk it introduces is dropping what
     // buildFilter produced. Asserting only the new term would not notice.
