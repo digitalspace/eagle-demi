@@ -79,6 +79,109 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(sources.wildfire.count, 2, 'wildfire aggregate survives for the map');
   });
 
+  // Type, Phase and Decision are three of the six columns `project-list-table-rows.component.html`
+  // renders, and every one of them printed '-' on every row of the DEFAULT view — the page a
+  // visitor lands on before typing anything. Cosmos held the values all along; this branch was
+  // reading index names off a Cosmos row, the same defect the `projectState` fixture note above
+  // describes, one field group over.
+  await t.test('the Cosmos project branch emits the type, phase and decision columns', async () => {
+    t.mock.method(projectsRepo, 'listVisible', async () => ({
+      items: [{
+        id: '46',
+        name: 'Caribou Gas Processing Plant',
+        projectState: 'Care and Maintenance',
+        // COSMOS NAMES. `projectType`, and the two List refs stored whole — not the flat
+        // label/id pair the indexer projects.
+        projectType: 'Energy - Electricity',
+        currentPhaseName: { _id: '5d3f6c7eda7a384218296037', name: 'Post Decision - Care & Maintenance' },
+        eacDecision: { _id: '5e27937a749c83437054f214', name: 'Certificate Issued' },
+        decisionDate: '1996-11-13T08:00:00.000Z',
+        read: ['public']
+      }]
+    }));
+
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: '', pageSize: '10' }, header: () => null }, res);
+
+    const row = jsonResponse[0].searchResults[0];
+    assert.strictEqual(row.type, 'Energy - Electricity');
+    assert.deepStrictEqual(row.currentPhaseName,
+      { _id: '5d3f6c7eda7a384218296037', name: 'Post Decision - Care & Maintenance' });
+    assert.deepStrictEqual(row.eacDecision,
+      { _id: '5e27937a749c83437054f214', name: 'Certificate Issued' });
+    assert.strictEqual(row.decisionDate, '1996-11-13T08:00:00.000Z');
+  });
+
+  // 34 of the 382 projects in test carry no phase and the same 34 carry no decision. The template
+  // guards with `?.name || '-'`, so `{}` would print an empty cell where a dash is the answer.
+  await t.test('a project with no phase or decision yields null, not an empty object', async () => {
+    t.mock.method(projectsRepo, 'listVisible', async () => ({
+      items: [{ id: '1', name: 'Marshall Road', read: ['public'] }]
+    }));
+
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: '', pageSize: '10' }, header: () => null }, res);
+
+    const row = jsonResponse[0].searchResults[0];
+    assert.strictEqual(row.currentPhaseName, null);
+    assert.strictEqual(row.eacDecision, null);
+    assert.strictEqual(row.type, '');
+  });
+
+  // The index stores the label and the id in two flat columns; the response has to put them back
+  // together, or the keyword-search view loses the same three columns the list view just gained.
+  await t.test('the AI Search project branch rebuilds the List refs from the flat pair', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: '46',
+        name: 'Caribou Gas Processing Plant',
+        type: 'Energy - Electricity',
+        currentPhaseName: 'Post Decision - Care & Maintenance',
+        currentPhaseNameId: '5d3f6c7eda7a384218296037',
+        eacDecision: 'Certificate Issued',
+        eacDecisionId: '5e27937a749c83437054f214',
+        decisionDate: '1996-11-13T08:00:00Z',
+        read: ['public']
+      }]
+    }));
+
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'caribou' }, header: () => null }, res);
+
+    const row = jsonResponse[0].searchResults[0];
+    assert.strictEqual(row.type, 'Energy - Electricity');
+    assert.deepStrictEqual(row.currentPhaseName,
+      { _id: '5d3f6c7eda7a384218296037', name: 'Post Decision - Care & Maintenance' });
+    assert.deepStrictEqual(row.eacDecision,
+      { _id: '5e27937a749c83437054f214', name: 'Certificate Issued' });
+  });
+
+  // eagle-public hard-codes `fuzzy=false` and eagle-search has always fuzzed anyway. Honouring the
+  // parameter made demi answer a strictly smaller set than the service it replaces: measured live,
+  // `keywords=caribou` returned 1 project from demi and 3 from prod eagle-search, and `caribuu`
+  // returned 0 against 1.
+  await t.test('fuzzy stays on even when the caller explicitly asks for it off', async () => {
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'caribou', fuzzy: 'false' }, header: () => null },
+      res);
+
+    assert.strictEqual(sent.fuzzy, true);
+  });
+
   await t.test('search projects queries AI Search when keywords are provided', async () => {
     let sent = null;
     t.mock.method(aiSearch, 'searchProjects', async (opts) => {

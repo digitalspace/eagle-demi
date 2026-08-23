@@ -24,8 +24,15 @@
  *     that has not been PUT yet emits `$orderby datePosted desc` at a service with no such field —
  *     a 400, which is not retried, which the controller answers as 502. Apply the index BEFORE
  *     deploying the app, or as the first action after.
- *   - `type` on a Project. eagle stores an EAO project type; DEMI stores a Track `sector`. The
- *     vocabularies are not known to line up, and a wrong mapping filters silently to nothing.
+ *   - ~~`type` on a Project~~ — expressible now, but only through VALUE_ALIASES. DEMI stores
+ *     Track's `type_name` (`merge/project.js:35`) and eagle-public sends Eagle's spelling of the
+ *     same nine types; three of the ten options differ (` - ` for `-`, and a plural). Measured on
+ *     the 382 rows in test: without the map, `and[type]=Energy-Electricity` matches 0 of 95 rows
+ *     and answers 200 — the silent-nothing this list exists to prevent.
+ *   - `proponent` and `pcp` on a Project. eagle-public's panel sends an Org ObjectId and a PCP
+ *     status; Cosmos keeps `proponentName` and no PCP field at all (`merge/project.js:36`), so
+ *     there is no column to point them at. Dropped, and an index change alone cannot fix them —
+ *     the data is not in DEMI.
  *   - `centroid`. It is `filterable: true` like every geography field, but `eq` is not an operator
  *     OData defines on one — a spatial filter is `geo.distance(...)`, which nothing on the wire
  *     asks for. See TERM_TYPES: the gate is the field's TYPE, never its `filterable` flag.
@@ -74,7 +81,15 @@ const ALIASES = {
     _id: 'legacyEagleId',
     // sortBy forms eagle-public sends for nested columns (project-list.constants.ts:7-38)
     'project.name': 'name',
-    'proponent.name': 'proponent'
+    'proponent.name': 'proponent',
+    // The project-list filter panel sends List ObjectIds for these three
+    // (project-list.constants.ts:62-131, every one `matchId: true`) while the columns render the
+    // LABEL, so the index carries both and the wire name resolves to the id column. Same split
+    // eagle-search uses (`eagle-search/azure/search/indexes/eagle-projects.json`), for the same
+    // reason ALIASES.Document gives: a label-valued filter is ambiguous, an id is not.
+    eacDecision: 'eacDecisionId',
+    currentPhaseName: 'currentPhaseNameId',
+    CEAAInvolvement: 'ceaaInvolvementId'
   },
   Document: {
     _id: 'id',
@@ -93,6 +108,50 @@ const ALIASES = {
     _id: 'chunkId',
     project: 'projectId',
     document: 'documentId'
+  }
+};
+
+/**
+ * Wire keys that name a REAL field of the index and must still never be filtered on.
+ *
+ * `proponent` is the whole reason this exists. eagle-public's panel sends an Org ObjectId
+ * (`project-list.constants.ts:101-107`, `matchId: true`) and `projects.proponent` holds the
+ * proponent's NAME — DEMI keeps `proponentName` and no org id at all (`merge/project.js:36`). So
+ * the key passes every gate in `buildFilter`, emits `proponent eq '58850f69…'`, matches 0 of 382
+ * rows and answers 200. Dropping it puts the loss in `dropped` where the log and the caller can
+ * see it, which is the difference between "we cannot express this" and "there are no such
+ * projects".
+ *
+ * NOT a general-purpose deny list: a key that names no field, or an unfilterable one, is already
+ * dropped by the gates below. This is only for the case where the name lands on a field holding a
+ * DIFFERENT thing than the caller is asking about.
+ */
+const EMPTY_SET = new Set();
+
+const UNMAPPED_KEYS = {
+  Project: new Set(['proponent'])
+};
+
+/**
+ * Wire VALUE -> stored value, for the one field where the two vocabularies disagree.
+ *
+ * ALIASES renames a field; this renames what the caller is asking FOR. `type` needs it because
+ * DEMI takes the project type from Track (`merge/project.js:35`, `type_name` wins over Eagle's
+ * `type`) while eagle-public's option list is Eagle's, hard-coded at
+ * `eagle-public/src/app/shared/utils/constants.ts:62-73`. Six of the ten spellings match; three do
+ * not, and the tenth (`Food Processing`) has no rows either way.
+ *
+ * Only these three are listed. An unlisted value passes through UNCHANGED rather than being
+ * dropped, because a value this map has never heard of is a value the index may still hold —
+ * Track can add a type without asking us.
+ */
+const VALUE_ALIASES = {
+  Project: {
+    type: {
+      'Energy-Electricity': 'Energy - Electricity',
+      'Energy-Petroleum & Natural Gas': 'Energy - Petroleum & Natural Gas',
+      'Tourist Destination Resorts': 'Tourist Destination Resort'
+    }
   }
 };
 
@@ -375,6 +434,13 @@ function buildFilter(query, dataset, acl) {
     // through to `dropped` instead of becoming a 400.
     const edge = /(Start|End)$/.exec(key)?.[1];
     const base = edge ? key.slice(0, -edge.length) : key;
+
+    // Before the field lookup, because this key DOES resolve to a field — see UNMAPPED_KEYS.
+    if ((UNMAPPED_KEYS[dataset] || EMPTY_SET).has(base)) {
+      dropped.push(key);
+      continue;
+    }
+
     const field = aliases[base] || base;
     const meta = fields.get(field);
     // Three ways a key cannot be filtered on, and all three are the same answer: not in the index,
@@ -387,7 +453,8 @@ function buildFilter(query, dataset, acl) {
       continue;
     }
 
-    const values = valuesOf(rawValue);
+    const valueMap = (VALUE_ALIASES[dataset] || {})[base] || {};
+    const values = valuesOf(rawValue).map(v => valueMap[v] || v);
     const terms = values
       .map(v => (edge ? rangeTerm(field, meta, v, edge) : term(field, meta, v)))
       .filter(Boolean);

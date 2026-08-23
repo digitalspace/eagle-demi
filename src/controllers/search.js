@@ -33,6 +33,19 @@ function geoPoint(centroid) {
 }
 
 /**
+ * A `List` reference as eagle-public's templates want it: `{_id, name}`, or null.
+ *
+ * NULL, NOT `{}`, when the project has neither. 34 of the 382 projects in test carry no phase and
+ * the same 34 carry no decision, so this is the common path, not an edge; the template guards with
+ * `rowData.currentPhaseName?.name || '-'` and an object with an undefined `name` prints an empty
+ * cell where a dash is what the column means.
+ */
+function listRef(id, name) {
+  if (!id && !name) return null;
+  return { _id: id ? String(id) : '', name: name || '' };
+}
+
+/**
  * Label document rows with their project, under the CALLER's access — never systemAccess(),
  * a label must not outlive the ACL of the row it describes.
  *
@@ -112,7 +125,19 @@ exports.search = async (req, res) => {
   try {
     const dataset = req.query.dataset;
     const keywords = req.query.keywords || req.query.q || '';
-    const fuzzy = req.query.fuzzy === 'true';
+    // FORCED ON, and the wire value is deliberately ignored. eagle-public hard-codes `fuzzy=false`
+    // on every search it sends (`services/search.service.ts:206` default, serialised at
+    // `services/api.ts:196`) and eagle-search has always ignored that and fuzzed anyway
+    // (`eagle-search/service/search/query-builder.js:12-14`), so honouring the parameter here made
+    // demi answer a strictly smaller result set than the service it replaces: `keywords=caribou`
+    // returned 1 project against demi and 3 against prod eagle-search, and the misspelling a fuzzy
+    // search exists for returned 0 against 1.
+    //
+    // Safe because the fuzzy arm cannot outrank the exact one: `buildQuery` emits
+    // `(term OR term~1^0.5)`, so the expansion only surfaces where nothing matched verbatim. The
+    // parameter stays ACCEPTED — dropping it from unknownParams' list would 400 every saved URL —
+    // it simply no longer decides anything.
+    const fuzzy = true;
     const requestedPageSize = parseInt(req.query.pageSize || '10', 10);
     const pageSize = Math.min(requestedPageSize, 5000);
 
@@ -314,6 +339,16 @@ exports.search = async (req, res) => {
                 region: doc.region || 'British Columbia',
                 description: doc.description || 'No project description provided.',
                 proponent: { name: doc.proponent || 'Proponent Organization' },
+                // The three columns `project-list-table-rows.component.html:7-10` renders beside
+                // name/proponent/region, and every one of them read '-' on every row until the
+                // index carried them. `currentPhaseName` and `eacDecision` are rebuilt into the
+                // `{_id, name}` shape the template binds (`.name`) and the filter panel sends
+                // (`._id`) from the flat label/id pair the index stores — the same reconstruction
+                // eagle-search does, so a saved filter URL means the same thing against either.
+                type: doc.type || '',
+                currentPhaseName: listRef(doc.currentPhaseNameId, doc.currentPhaseName),
+                eacDecision: listRef(doc.eacDecisionId, doc.eacDecision),
+                decisionDate: doc.decisionDate || null,
                 // Pre-escaped display markup from the analyzer, keyed by INDEX field. `name` falls
                 // back to `displayName` the same way the plain value above does, so the two never
                 // disagree about which string the card is showing.
@@ -472,6 +507,15 @@ exports.search = async (req, res) => {
           region: p.region || 'British Columbia',
           description: p.description || 'No project description provided.',
           proponent: { name: p.proponent?.name || p.proponentName || 'Proponent Organization' },
+          // COSMOS FIELD NAMES again, for the reason the block above gives: the indexer aliases
+          // `c.projectType AS type` and flattens the two List refs into a label/id pair, while the
+          // row read straight out of Cosmos still carries `projectType` and the whole List object.
+          // Reading `p.type` here would be undefined on every row and print '-' in the Type column
+          // of the DEFAULT view — the one a visitor lands on, where no keyword has been typed yet.
+          type: p.projectType || '',
+          currentPhaseName: listRef(p.currentPhaseName?._id, p.currentPhaseName?.name),
+          eacDecision: listRef(p.eacDecision?._id, p.eacDecision?.name),
+          decisionDate: p.decisionDate || null,
           // 'public' in the read ACL is what makes a record public; isPublished mirrors it.
           // The frontend derives its staged/admitted badge from this field.
           isPublished: Array.isArray(p.read) && p.read.length > 0

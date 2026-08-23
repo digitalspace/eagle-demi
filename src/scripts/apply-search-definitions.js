@@ -171,6 +171,61 @@ function select(only) {
 }
 
 /**
+ * Why the committed index would NOT be a safe write over the live one — empty when it would.
+ *
+ * ADDING a field to a live index is the one schema change Azure AI Search supports in place, and
+ * it is the change `azure/search/README.md` "Adding a field" documents as routine: existing
+ * documents keep their values and the new column reads null until the indexer has run again.
+ * Everything else — dropping a field, retyping one, flipping `filterable`, changing an analyzer or
+ * the similarity — is a rebuild, and doing it to the index the app is querying is an outage.
+ *
+ * So the serving guard asks whether the diff is additive rather than whether the index is live.
+ * Refusing every live index made the documented workflow impossible to run through this script:
+ * once the definitions took the plain names at the 2026-08-22 cutover, `projects` IS what the app
+ * serves, so step 1 of "Adding a field" could never execute. The refusal was written when the
+ * committed names were deliberately AHEAD of the live ones and overlap meant an accident.
+ *
+ * Deliberately strict: any field present live must appear in the committed copy with a byte-equal
+ * definition, and every index-level property outside `fields` must match too. A rename reads as a
+ * drop plus an add and is refused, which is the original accident this guard was built for.
+ */
+function notAdditive(liveBody, committedBody) {
+  const reasons = [];
+  const liveFields = new Map((liveBody.fields || []).map(f => [f.name, f]));
+  const committedFields = new Map((committedBody.fields || []).map(f => [f.name, f]));
+
+  for (const [name, liveField] of liveFields) {
+    const committedField = committedFields.get(name);
+    if (!committedField) {
+      reasons.push(`field "${name}" exists live and is missing from the committed copy`);
+      continue;
+    }
+    if (JSON.stringify(liveField) !== JSON.stringify(committedField)) {
+      reasons.push(`field "${name}" is redefined, not merely kept`);
+    }
+  }
+
+  // The rest of the index body: analyzers, tokenizers, scoring profiles, similarity, suggesters.
+  // A changed `similarity` reorders every result the app already serves — additive in field count,
+  // not additive in behaviour.
+  //
+  // `@odata.*` IS DROPPED, and not as tidying. A GET carries `@odata.context` and `@odata.etag`,
+  // which no committed file has and no PUT sends; leaving them in made every live index compare
+  // unequal, so the guard refused a widening whose only difference was two server-assigned keys —
+  // the exact false refusal it had just been rewritten to stop.
+  const strip = (b) => JSON.stringify(Object.fromEntries(
+    Object.entries(b)
+      .filter(([k]) => k !== 'fields' && !k.startsWith('@odata.'))
+      .sort(([a], [c]) => a.localeCompare(c))
+  ));
+  if (strip(liveBody) !== strip(committedBody)) {
+    reasons.push('an index-level property outside `fields` changed (analyzers, similarity, scoring)');
+  }
+
+  return reasons;
+}
+
+/**
  * Apply the definitions. Exported so the guard below and the dry-run split are reachable from a
  * test — the property that the committed names do not collide with the live ones can be asserted
  * from the files alone, but that says nothing about whether this function still CHECKS it.
@@ -195,13 +250,30 @@ async function run({ endpoint, live, only, liveNames }) {
   // refused too — and after the index rename made the committed names the live ones, that meant the
   // one command an operator reaches for FIRST during an incident always exited 1 without printing
   // anything useful. A dry run touches nothing; it should be safe in every state.
+  //
+  // FAIL BEFORE THE FIRST WRITE, not partway through: a `--only`-less run applies three indexes and
+  // stopping at the second would leave one written and two not.
+  const additive = new Map();
   for (const { file, body } of indexes) {
-    if (serving.has(body.name) && args.live) {
+    if (!serving.has(body.name) || !args.live) continue;
+    const live = await call(endpoint, 'GET', `/indexes/${body.name}?api-version=${API_VERSION}`);
+    assertNotForbidden(live.status, live.text, `index ${body.name}`);
+    if (live.status !== 200) {
       throw new Error(
-        `refusing to PUT index "${body.name}" (${path.basename(file)}): it is what the app is ` +
-        `serving from right now. Point SEARCH_INDEX* elsewhere first, or rename the definition.`
+        `index "${body.name}" is what the app is serving from, and reading it back returned ` +
+        `HTTP ${live.status}. Refusing to PUT over a schema this cannot see: ${live.text.slice(0, 200)}`
       );
     }
+    const reasons = notAdditive(safeJson(live.text) || {}, body);
+    if (reasons.length > 0) {
+      throw new Error(
+        `refusing to PUT index "${body.name}" (${path.basename(file)}): it is what the app is ` +
+        `serving from right now and the change is NOT additive — ${reasons.join('; ')}. Adding ` +
+        `fields to a live index is supported in place; anything else is a rebuild. Point ` +
+        `SEARCH_INDEX* elsewhere first, or rename the definition.`
+      );
+    }
+    additive.set(body.name, (body.fields || []).length - ((safeJson(live.text) || {}).fields || []).length);
   }
 
   // INDEXES BEFORE INDEXERS, and it is not cosmetic: an indexer references both its data source
@@ -212,7 +284,12 @@ async function run({ endpoint, live, only, liveNames }) {
     const existing = await call(endpoint, 'GET', `/indexes/${body.name}?api-version=${API_VERSION}`);
     assertNotForbidden(existing.status, existing.text, `index ${body.name}`);
     const state = existing.status === 200 ? 'exists' : existing.status === 404 ? 'absent' : `HTTP ${existing.status}`;
-    const servingNote = serving.has(body.name) ? '  ** SERVING TRAFFIC — --live will refuse **' : '';
+    // A dry run has not read the live schema, so it cannot say whether the diff is additive — it
+    // says the index is live and leaves the verdict to the --live run, which does read it.
+    const added = additive.get(body.name);
+    const servingNote = !serving.has(body.name) ? ''
+      : added === undefined ? '  ** SERVING TRAFFIC — --live refuses a non-additive change **'
+        : `  ** SERVING TRAFFIC — additive, +${added} field(s) **`;
     console.log(`index    ${body.name.padEnd(24)} ${state}   <- ${path.basename(file)}${servingNote}`);
     if (!args.live) continue;
     const put = await call(endpoint, 'PUT', `/indexes/${body.name}?api-version=${API_VERSION}`, body);
@@ -304,6 +381,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  parseArgs, load, select, run, assertNotForbidden, readCommittedDataSource, safeJson,
+  parseArgs, load, select, run, assertNotForbidden, readCommittedDataSource, safeJson, notAdditive,
   INDEX_DIR, INDEXER_DIR, DATASOURCE_DIR
 };
