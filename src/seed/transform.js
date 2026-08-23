@@ -61,6 +61,19 @@ function resolveListLabel(ref, listLookup) {
 }
 
 /**
+ * The raw List ObjectId, kept ALONGSIDE the label rather than instead of it.
+ *
+ * eagle-public's document filter panel sends List ObjectIds, never labels
+ * (`documents-tab.component.ts:47`), so a row holding only the label has nothing for those values
+ * to compare against: the filter matches zero rows under a 200, which reads as "no results" and
+ * not as a broken filter. Resolving to a label and discarding the id is what made every one of
+ * those filters inexpressible.
+ */
+function listRefId(ref) {
+  return ref ? String(ref) : null;
+}
+
+/**
  * An Eagle document -> the DEMI `documents` model.
  *
  * @param {object}   doc          a record from eagle-api's Document search
@@ -99,8 +112,13 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     mimeType: doc.internalMime || '',
 
     type: resolveListLabel(doc.type, listLookup),
+    typeId: listRefId(doc.type),
     milestone: resolveListLabel(doc.milestone, listLookup),
+    milestoneId: listRefId(doc.milestone),
     projectPhase: resolveListLabel(doc.projectPhase, listLookup),
+    projectPhaseId: listRefId(doc.projectPhase),
+    documentAuthorType: resolveListLabel(doc.documentAuthorType, listLookup),
+    documentAuthorTypeId: listRefId(doc.documentAuthorType),
 
     datePosted: toIsoOrNull(doc.datePosted),
     dateUploaded: toIsoOrNull(doc.dateUploaded),
@@ -181,6 +199,7 @@ module.exports = {
   toNumber,
   toIsoOrNull,
   resolveListLabel,
+  listRefId,
   transformDocument,
   transformBoundary
 };

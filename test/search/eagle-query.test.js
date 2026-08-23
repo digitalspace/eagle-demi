@@ -70,13 +70,68 @@ test('eagle-query filters', async (t) => {
 
   // A key the index cannot express is DROPPED, not passed through: an unknown field name is an
   // OData 400, and eagle-public swallows a failed search into an empty table.
+  //
+  // REPLACED 2026-08-22: this used `milestone` as the example, which is no longer a name the index
+  // lacks — `documents` carries `milestoneId` and ALIASES.Document maps onto it. `documentSource`
+  // is a key eagle-public's filter panel really does send and this index really does not carry, so
+  // the test still pins the behaviour with an example that is still true.
   await t.test('a filter key the index does not carry is dropped and reported', () => {
     const { filter, dropped } = eagleQuery.buildFilter(
-      { 'and[milestone]': '5cf00c03a266b7e1877504ec' }, 'Document', anonAcl());
+      { 'and[documentSource]': 'COMMENT' }, 'Document', anonAcl());
 
-    assert.deepStrictEqual(dropped, ['milestone']);
-    assert.ok(!filter.includes('milestone'), 'a name the index lacks must never reach OData');
+    assert.deepStrictEqual(dropped, ['documentSource']);
+    assert.ok(!filter.includes('documentSource'), 'a name the index lacks must never reach OData');
     assert.strictEqual(filter, "read/any(r: search.in(r, 'public', ','))");
+  });
+
+  // The four document facets eagle-public sends, all as List ObjectIds, all onto the id columns.
+  // Before the alias map they passed through onto the LABEL columns and matched nothing — a 200
+  // with an empty table, which reads as "no documents" rather than as a broken filter.
+  await t.test('the four document facets map onto the id columns', () => {
+    const { filter, dropped } = eagleQuery.buildFilter({
+      'and[type]': '5cf00c03a266b7e1877504d9',
+      'and[milestone]': '5cf00c03a266b7e1877504ec',
+      'and[projectPhase]': '5cf00c03a266b7e1877504f1',
+      'and[documentAuthorType]': '5cf00c03a266b7e1877504f6'
+    }, 'Document', anonAcl());
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes("typeId eq '5cf00c03a266b7e1877504d9'"));
+    assert.ok(filter.includes("milestoneId eq '5cf00c03a266b7e1877504ec'"));
+    assert.ok(filter.includes("projectPhaseId eq '5cf00c03a266b7e1877504f1'"));
+    assert.ok(filter.includes("documentAuthorTypeId eq '5cf00c03a266b7e1877504f6'"));
+  });
+
+  // A date range is a RANGE on the base field, and the End edge is `lt <next day>` rather than
+  // `le <that day>`: the wire carries a calendar day and the field is an instant, so `le` would
+  // exclude everything posted after midnight on the day the user included.
+  await t.test('datePostedStart/End become a half-open range on datePosted', () => {
+    const { filter, dropped } = eagleQuery.buildFilter({
+      'and[datePostedStart]': '2024-01-15',
+      'and[datePostedEnd]': '2024-01-16'
+    }, 'Document', anonAcl());
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes('datePosted ge 2024-01-15T00:00:00.000Z'), filter);
+    assert.ok(filter.includes('datePosted lt 2024-01-17T00:00:00.000Z'), filter);
+  });
+
+  // An unparseable date is a dropped key, never an omitted clause: a range that silently does not
+  // apply returns the whole corpus under a 200, which is the failure this whole module exists for.
+  await t.test('an unusable date edge is dropped, not silently ignored', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[datePostedStart]': 'last-tuesday' }, 'Document', anonAcl());
+
+    assert.deepStrictEqual(dropped, ['datePostedStart']);
+    assert.ok(!filter.includes('datePosted'), 'no clause may be built from an unusable date');
+  });
+
+  // The suffix is resolved against the index, not against a list of known date fields, so a
+  // suffixed name with no base field behind it still drops instead of reaching OData.
+  await t.test('a Start suffix on a field the index lacks is dropped', () => {
+    const { dropped } = eagleQuery.buildFilter(
+      { 'and[dateAddedStart]': '2024-01-15' }, 'Document', anonAcl());
+    assert.deepStrictEqual(dropped, ['dateAddedStart']);
   });
 
   // `read` is filterable in the index, so a caller could otherwise widen their own ACL by asking
@@ -178,10 +233,73 @@ test('eagle-query sort', async (t) => {
     assert.strictEqual(orderby, 'name asc, id asc');
   });
 
-  await t.test('a field the index cannot sort is dropped rather than sent', () => {
+  // INVERTED 2026-08-22, deliberately. This asserted that `-datePosted` was dropped, which was true
+  // while `documents` had no date field at all. It now has one, `sortable: true`, and this is
+  // eagle-public's DEFAULT document sort (documents-tab.component.ts:56) — so the old assertion
+  // pinned the very gap the index change closed.
+  await t.test('the default document sort the frontend sends is emitted, not dropped', () => {
     const { orderby, dropped } = eagleQuery.buildOrderBy('-datePosted', 'Document', false);
-    assert.deepStrictEqual(dropped, ['datePosted']);
-    assert.ok(!orderby.includes('datePosted'), 'a non-sortable name is a 400 on every query');
+    assert.deepStrictEqual(dropped, []);
+    assert.strictEqual(orderby, 'datePosted desc, id asc');
+  });
+
+  await t.test('a field that is genuinely not in the index is still dropped', () => {
+    const { orderby, dropped } = eagleQuery.buildOrderBy('-popularity', 'Document', false);
+    assert.deepStrictEqual(dropped, ['popularity']);
+    assert.ok(!orderby.includes('popularity'), 'a name the index lacks is a 400 on every query');
+  });
+
+  // The alias table redirects a FILTER key onto its id column, and sorting has to go the other way:
+  // `typeId` is `sortable: false` (an opaque ObjectId sorts to nothing a reader recognises), while
+  // the `type` LABEL beside it sorts. Without the fallback, sorting the Document type column would
+  // drop silently and the table would keep whatever order the service returned.
+  // Azure rejects a duplicate field in `$orderby` and caps the clause count at 32; either is a 400,
+  // and a 400 here is a 502 to an anonymous caller who only had to type a query string. eagle-public
+  // gets close on its own — it appends a secondary sort that can repeat the first.
+  await t.test('a repeated sort field is emitted once, and the clause count is bounded', () => {
+    const { orderby } = eagleQuery.buildOrderBy(
+      ['-displayName', '+displayName'], 'Document', false);
+    assert.strictEqual(orderby, 'displayName desc, id asc', 'the second mention adds no clause');
+
+    const many = Array.from({ length: 60 }, (_, i) => `field${i}`).concat('displayName');
+    const { orderby: capped } = eagleQuery.buildOrderBy(many, 'Document', false);
+    assert.ok(capped.split(',').length <= 32, `too many clauses: ${capped}`);
+  });
+
+  // `categorized` is not in any demi index, and it counts as criteria — so it routes the caller to
+  // the index and would otherwise vanish with nothing said anywhere.
+  await t.test('categorized on an index that lacks it is reported as dropped', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { categorized: 'true' }, 'Document', anonAcl());
+    assert.deepStrictEqual(dropped, ['categorized']);
+    assert.ok(!filter.includes('categorized'));
+  });
+
+  await t.test('a sort on an aliased key falls back to the caller name the index CAN sort', () => {
+    const { orderby, dropped } = eagleQuery.buildOrderBy('+type', 'Document', false);
+    assert.deepStrictEqual(dropped, []);
+    assert.strictEqual(orderby, 'type asc, id asc');
+  });
+
+  // THE GATE IS THE FIELD'S TYPE, NOT `sortable` — the same defect S1 fixed for filters.
+  // `projects.centroid` is an `Edm.GeographyPoint` declared `sortable: true`, and AI Search orders a
+  // geography only through `geo.distance(...)`, so `centroid asc` is a 400. 400 is not retried,
+  // `request()` throws, and the controller answers 502 — to any anonymous `?dataset=Project&
+  // keywords=x&sortBy=centroid`.
+  await t.test('a sortable field whose TYPE cannot be ordered is dropped, not emitted', () => {
+    const { orderby, dropped } = eagleQuery.buildOrderBy('centroid', 'Project', false);
+
+    assert.deepStrictEqual(dropped, ['centroid']);
+    assert.ok(!orderby.includes('centroid'), 'a geography name must never reach $orderby');
+    assert.strictEqual(orderby, 'name asc, id asc', 'the sort falls back to the stable default');
+  });
+
+  // The control for the drop above: a scalar field the index CAN sort still sorts. Without this the
+  // assertion is satisfied by dropping every sort, which would measure nothing.
+  await t.test('an ordinary sortable string field still orders', () => {
+    const { orderby, dropped } = eagleQuery.buildOrderBy('-proponent', 'Project', false);
+    assert.deepStrictEqual(dropped, []);
+    assert.strictEqual(orderby, 'proponent desc, id asc');
   });
 
   // Every field in chunks is sortable:false, the key included. There is nothing to name, so

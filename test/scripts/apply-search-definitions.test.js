@@ -99,6 +99,54 @@ test('apply-search-definitions', async (t) => {
     );
   });
 
+  // THE SILENT FAILURE. This script never writes a data source, so a field added to an index and
+  // to the committed data source is applied, reported green, and then never populated — the live
+  // indexer keeps projecting the old SELECT and every new field stays null.
+  await t.test('a live data source whose query differs from the committed copy is called out', async (tt) => {
+    const lines = [];
+    const log = console.log;
+    console.log = (...a) => lines.push(a.join(' '));
+    tt.after(() => { console.log = log; });
+
+    stub(tt, (url, init) => {
+      const ds = /\/datasources\/([^?]+)/.exec(url)?.[1];
+      if (ds) {
+        // Only the documents data source is stale, and with the pre-widening SELECT: no typeId,
+        // no datePosted. The other two match, so the tally has to be 1 — a guard that warned on
+        // every data source would pass this assertion just as well.
+        const body = ds === 'demi-documents-ds'
+          ? { name: ds, container: { name: 'documents', query: 'SELECT c.id, c.displayName FROM c' } }
+          : script.readCommittedDataSource(ds);
+        return { status: 200, text: async () => JSON.stringify(body) };
+      }
+      return { status: init.method === 'PUT' ? 201 : 404, text: async () => '' };
+    });
+
+    await script.run({ endpoint: ENDPOINT, live: false, only: '', liveNames: [] });
+    const out = lines.join('\n');
+    assert.match(out, /data source demi-documents-ds DIFFERS/);
+    assert.match(out, /stays null/);
+    assert.match(out, /WARNING: 1 data source\(s\) differ/);
+  });
+
+  await t.test('an unchanged data source raises nothing', async (tt) => {
+    const lines = [];
+    const log = console.log;
+    console.log = (...a) => lines.push(a.join(' '));
+    tt.after(() => { console.log = log; });
+
+    const committed = script.readCommittedDataSource('demi-documents-ds');
+    stub(tt, (url, init) => {
+      if (/\/datasources\//.test(url)) {
+        return { status: 200, text: async () => JSON.stringify(committed) };
+      }
+      return { status: init.method === 'PUT' ? 201 : 404, text: async () => '' };
+    });
+
+    await script.run({ endpoint: ENDPOINT, live: false, only: 'documents', liveNames: [] });
+    assert.ok(!lines.join('\n').includes('DIFFERS'), 'a matching query must not warn');
+  });
+
   await t.test('run() refuses to write an index the app is serving from', async (tt) => {
     const calls = stub(tt, ok);
     await assert.rejects(

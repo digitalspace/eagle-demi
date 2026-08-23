@@ -71,6 +71,35 @@ new one — there is nothing in it that a rename would correct. Renaming one wou
 it, and that means someone handling the `connectionString` the export deliberately redacts, for no
 change in behaviour. Old and new indexers share them.
 
+## Adding a field — the order that matters
+
+Widening an index is three separate writes in three different places, and doing them in the wrong
+order takes the live search down for anonymous callers.
+
+1. **PUT the index first** — before deploying the app that ships the widened
+   `indexes/documents.json`. `src/search/eagle-query.js` reads field metadata from the committed
+   JSON at require time, so an app deployed ahead of the index emits `$orderby datePosted desc`
+   against a service with no such field. That is a 400, 400 is not retried, and the controller
+   answers 502.
+2. **PUT the data source, by hand.** `apply-search-definitions.js` deliberately never writes one
+   (`connectionString` is redacted on export), so the new columns are NOT projected until someone
+   sends the file with the real credential added. Until then the indexer keeps its old `SELECT`,
+   the new fields stay `null`, and **nothing reports an error** — the apply run says success. The
+   script now compares the live `container.query` with the committed copy and prints a `DIFFERS`
+   warning plus a tally, which is the only signal that this step is outstanding.
+3. **Then the indexer**, and let the `PT5M` schedule refill.
+4. **The app is the LAST step, not the first.** `src/controllers/search.js` routes a keywordless
+   search carrying filters or a sort to the index, so deploying it after the index PUT but BEFORE
+   the backfill has filled the new columns turns "the filter returns everything" into "the filter
+   returns nothing" — quieter than the bug it fixes, and still a 200. Deployed before the index PUT
+   it is a 400 that reaches anonymous callers as a 502. Order: **index, data source, backfill,
+   indexer reset, app** — the backfill comes BEFORE the reset, or the re-pull carries the nulls it
+   was meant to replace and a second reset is needed. (An earlier version of this line had the
+   reset before the backfill; it was wrong, and the backfill script's own header had it right.)
+
+Adding a field is an update, not a rebuild — existing documents keep their values and the new field
+reads `null` until the indexer has run over them again.
+
 ## Restoring one
 
 Public network access is `Disabled` and local auth is off, so this only works from inside the VNet,

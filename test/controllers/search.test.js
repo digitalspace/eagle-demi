@@ -924,30 +924,194 @@ test('the answer matches the request that was made', async (t) => {
     return { out, res };
   };
 
-  // A `sortBy` on either keywordless list path is inert — the repositories hardcode their order,
-  // and `buildOrderBy` runs only on the keyword branches. Inert is acceptable; SILENTLY inert is
-  // not, and it is the exact case this endpoint's contract singles out ("a sort doing nothing ...
-  // all under a 200"). eagle-public reaches it: the table sends `keywords: ''` with its default
-  // sort. Asserted through the logger because reporting IS the behaviour under test.
-  for (const [dataset, repo] of [['Project', projectsRepo], ['Document', documentsRepo]]) {
-    await t.test(`an inert sort on the keywordless ${dataset} list is reported, not swallowed`, async () => {
-      t.mock.method(repo, 'listVisible', async () => ({ items: [] }));
-      t.mock.method(repo, 'countVisible', async () => 0);
-      const warned = [];
-      t.mock.method(logger, 'info', (msg) => warned.push(String(msg)));
-      t.mock.method(logger, 'warn', (msg) => warned.push(String(msg)));
+  // A `sortBy` on a keywordless list USED TO BE INERT: the repositories hardcode their order, so
+  // the sort was dropped, logged, and answered 200 with the repository's own order — the exact case
+  // this endpoint's contract singles out ("a sort doing nothing ... all under a 200"). eagle-public
+  // reaches it on every documents-tab render, which sends `keywords: ''` with `sortBy=-datePosted`.
+  // A search that carries a sort now goes to the INDEX, which can express one. Asserted on the
+  // `$orderby` that went out AND on the list read never being issued — a route that quietly served
+  // the fixed-order list beside a correct-looking log line is the whole defect.
+  for (const [dataset, repo, service, sortBy, expected] of [
+    ['Project', projectsRepo, 'searchProjects', '-name', 'name desc'],
+    ['Document', documentsRepo, 'searchDocuments', '-datePosted', 'datePosted desc']
+  ]) {
+    await t.test(`a sort on the keywordless ${dataset} list reaches the index, not the fixed order`,
+      async () => {
+        let listed = false;
+        t.mock.method(repo, 'listVisible', async () => { listed = true; return { items: [] }; });
+        t.mock.method(repo, 'countVisible', async () => 0);
+        let sent;
+        t.mock.method(aiSearch, service, async (opts) => {
+          sent = opts;
+          return { count: 0, items: [] };
+        });
+
+        const { out, res } = capture();
+        await searchController.search(
+          { query: { dataset, keywords: '', sortBy, pageSize: '10' }, header: () => null }, res);
+
+        assert.strictEqual(out.status, 200);
+        assert.ok(sent, `${dataset}: a sorted search must reach the index`);
+        assert.ok(sent.orderby.startsWith(expected),
+          `${dataset}: expected an $orderby of ${expected}, got ${sent.orderby}`);
+        assert.strictEqual(sent.matchAll, true, 'no keywords means match-all, not zero rows');
+        assert.strictEqual(listed, false,
+          `${dataset}: the fixed-order list read must not answer a sorted search`);
+      });
+  }
+
+  // THE DEFECT, measured live: `and[milestone]=x` on `dataset=Document` with no keywords returned
+  // 60,578 rows from demi and 0 from eagle-search for the same URL. The filter reached a Cosmos
+  // list read whose criteria are fixed, so it was dropped-and-logged and the caller got the whole
+  // corpus under a 200 — a silently-ignored parameter, which is the failure class this endpoint's
+  // own contract calls out.
+  await t.test('a keywordless filter is applied by the index, not dropped for the whole corpus',
+    async () => {
+      let listed = false;
+      t.mock.method(documentsRepo, 'listVisible', async () => { listed = true; return { items: [] }; });
+      t.mock.method(documentsRepo, 'countVisible', async () => 60578);
+      let sent;
+      t.mock.method(aiSearch, 'searchDocuments', async (opts) => {
+        sent = opts;
+        return { count: 2, items: [] };
+      });
 
       const { out, res } = capture();
-      await searchController.search(
-        { query: { dataset, keywords: '', sortBy: '-name', pageSize: '10' } }, res);
+      await searchController.search({
+        query: { dataset: 'Document', keywords: '', 'and[milestone]': '5cf00c03a266b7e1877504ca',
+          pageSize: '10' },
+        header: () => null
+      }, res);
+
+      assert.strictEqual(listed, false, 'the unfiltered list read must not answer a filtered search');
+      // `milestoneId`, not `milestone`: eagle-public's four document facets send List ObjectIds and
+      // the index carries the id column beside the label (ALIASES, eagle-query.js).
+      assert.match(sent.filter, /milestoneId eq '5cf00c03a266b7e1877504ca'/);
+      // DEFAULT_ORDER, not `search.score() desc`. `search: '*'` scores every row the same, so a
+      // relevance order leaves ties wherever the service computed them and `$skip` paging then
+      // repeats and omits rows across pages — data loss, as far as the reader is concerned.
+      assert.match(sent.orderby, /^displayName asc/,
+        `a keywordless page needs a stable order, got ${sent.orderby}`);
+      assert.strictEqual(out.body[0].meta[0].searchResultsTotal, 2,
+        'the total is the filtered one, never the corpus');
+    });
+
+  // [R2] A criteria search that matches nothing must answer NOTHING. Falling through to the
+  // keywordless list — which is what a `if (items.length === 0)` fallback would do — turns a filter
+  // with no matches into the entire readable corpus, which is the bug being fixed, not a fallback.
+  await t.test('a keywordless filter that matches nothing answers empty, never the corpus',
+    async () => {
+      let listed = false;
+      t.mock.method(documentsRepo, 'listVisible', async () => { listed = true; return { items: [] }; });
+      t.mock.method(documentsRepo, 'countVisible', async () => 60578);
+      t.mock.method(aiSearch, 'searchDocuments', async () => ({ count: 0, items: [] }));
+
+      const { out, res } = capture();
+      await searchController.search({
+        query: { dataset: 'Document', keywords: '', 'and[type]': 'nothing-matches-this',
+          pageSize: '10' },
+        header: () => null
+      }, res);
 
       assert.strictEqual(out.status, 200);
-      assert.ok(
-        warned.some(m => /ignored sortBy/.test(m) && /-name/.test(m)),
-        `${dataset}: an ignored sortBy must be named in the log, got: ${JSON.stringify(warned)}`
-      );
+      assert.strictEqual(listed, false, 'no fall-through to the unfiltered list');
+      assert.deepStrictEqual(out.body[0].searchResults, []);
+      assert.strictEqual(out.body[0].count, 0);
     });
-  }
+
+  // [R1] `project` ALONE is deliberately NOT criteria. The Cosmos read applies it — it is the
+  // container's partition key — and `&project=<id>&pageSize=500` with no sort is the shape DEMI's
+  // own frontend and eagle-public's project tabs send. Routing it to the index would move the
+  // best-covered path in this file onto the AI Search page ceiling for no gain.
+  await t.test('a project filter alone still takes the Cosmos read', async () => {
+    t.mock.method(projectsRepo, 'getByEagleId', async () => ({ id: '207', name: 'Site C' }));
+    let listOpts;
+    t.mock.method(documentsRepo, 'listVisible', async (access, opts) => {
+      listOpts = opts;
+      return { items: [] };
+    });
+    t.mock.method(documentsRepo, 'countVisible', async () => 4);
+    let searched = false;
+    t.mock.method(aiSearch, 'searchDocuments', async () => { searched = true; return { count: 0, items: [] }; });
+
+    const { out, res } = capture();
+    await searchController.search({
+      query: { dataset: 'Document', keywords: '', project: '588511c4aaecd9001b826192',
+        pageSize: '500' },
+      header: () => null
+    }, res);
+
+    assert.strictEqual(searched, false, 'a bare project list is a read, not a search');
+    assert.deepStrictEqual(listOpts.projectId, ['207']);
+    assert.strictEqual(out.body[0].meta[0].searchResultsTotal, 4);
+  });
+
+  // THE TRAP UNDER THE ROUTING TEST. eagle-public appends `sortBy` twice and the second is
+  // routinely empty (`api.ts:176-177`), so `project.service.getAll` sends `sortBy=&sortBy=` on
+  // every call — including the two `getAllFull(1, 1000000)` callers that draw the projects map. A
+  // truthiness test on `sortBy` reads that as a sort and moves a million-row read onto the index,
+  // where MAX_PAGE_ROWS would either refuse it or truncate it to 500 without saying so.
+  await t.test('eagle-public\'s empty double sortBy is not a sort', async () => {
+    let listOpts;
+    t.mock.method(projectsRepo, 'listVisible', async (access, opts) => {
+      listOpts = opts;
+      return { items: [] };
+    });
+    t.mock.method(projectsRepo, 'countVisible', async () => 382);
+    let searched = false;
+    t.mock.method(aiSearch, 'searchProjects', async () => { searched = true; return { count: 0, items: [] }; });
+
+    const { out, res } = capture();
+    await searchController.search({
+      query: { dataset: 'Project', keywords: '', sortBy: ['', ''], pageSize: '1000000' },
+      header: () => null
+    }, res);
+
+    assert.strictEqual(out.status, 200, 'the projects map is not refused for a page ceiling');
+    assert.strictEqual(searched, false, 'and it is not moved onto the index page ceiling either');
+    // 5000, not 1000000: the route's own hard cap on `pageSize`, applied before either backend.
+    // What matters here is that the Cosmos read is the one that got it.
+    assert.strictEqual(listOpts.pageSize, 5000);
+  });
+
+  // [R6] A FAILED criteria search is not an empty one and is not the unfiltered list. This is the
+  // fall-through this file already closed once for keyword searches; widening the route must not
+  // reopen it for filters.
+  await t.test('a keywordless filtered search that faults is a 502, never the unfiltered list',
+    async () => {
+      let listed = false;
+      t.mock.method(documentsRepo, 'listVisible', async () => { listed = true; return { items: [] }; });
+      t.mock.method(documentsRepo, 'countVisible', async () => 60578);
+      t.mock.method(aiSearch, 'searchDocuments', async () => { throw new Error('index 400'); });
+
+      const { out, res } = capture();
+      await searchController.search({
+        query: { dataset: 'Document', keywords: '', 'and[type]': 'x', pageSize: '10' },
+        header: () => null
+      }, res);
+
+      assert.strictEqual(out.status, 502);
+      assert.strictEqual(listed, false, 'a failed search must never be answered by the list read');
+    });
+
+  // [R7] A key the index genuinely cannot express is still dropped-and-logged, and that is correct
+  // — `isFeatured` and `documentSource` are in neither the index nor the Cosmos predicate. What had
+  // to stop is dropping keys the index CAN express. The row still comes back filtered by everything
+  // else, which is the same answer as before; the difference is that the rest of the filter applies.
+  await t.test('a key the index cannot express is still named in the log', async () => {
+    t.mock.method(aiSearch, 'searchDocuments', async () => ({ count: 0, items: [] }));
+    const warned = [];
+    t.mock.method(logger, 'warn', (msg) => warned.push(String(msg)));
+
+    const { res } = capture();
+    await searchController.search({
+      query: { dataset: 'Document', keywords: '', 'and[isFeatured]': 'true', pageSize: '5' },
+      header: () => null
+    }, res);
+
+    assert.ok(warned.some(m => /dropped filter/.test(m) && /isFeatured/.test(m)),
+      `an inexpressible key must be named, got: ${JSON.stringify(warned)}`);
+  });
 
   // [C2] The keywordless Document path resolved the Eagle ObjectId to a DEMI project id and then
   // dropped it: a request for ONE project's documents was answered with the whole corpus, under a

@@ -50,6 +50,9 @@ const aiSearch = require('../search/ai-search');
 const ROOT = path.join(__dirname, '..', '..');
 const INDEX_DIR = path.join(ROOT, 'azure', 'search', 'indexes');
 const INDEXER_DIR = path.join(ROOT, 'azure', 'search', 'indexers');
+// Read, never written. The committed data source is the only way to notice that the LIVE one is
+// projecting a different set of Cosmos columns than the indexes now expect.
+const DATASOURCE_DIR = path.join(ROOT, 'azure', 'search', 'datasources');
 const API_VERSION = '2024-07-01';
 
 function parseArgs(argv) {
@@ -83,6 +86,18 @@ function load(dir) {
     .filter(f => f.endsWith('.json'))
     .sort()
     .map(f => ({ file: path.join(dir, f), body: JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) }));
+}
+
+/** The committed copy of one data source, or null when the repo does not carry it. */
+function readCommittedDataSource(name) {
+  const file = path.join(DATASOURCE_DIR, `${name}.json`);
+  if (!fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+/** Parse a response body that is only sometimes JSON — an error page must not crash the report. */
+function safeJson(text) {
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 /**
@@ -192,6 +207,7 @@ async function run({ endpoint, live, only, liveNames }) {
   // INDEXES BEFORE INDEXERS, and it is not cosmetic: an indexer references both its data source
   // and its target index and fails to create if either is missing.
   let applied = 0;
+  let driftedDataSources = 0;
   for (const { file, body } of indexes) {
     const existing = await call(endpoint, 'GET', `/indexes/${body.name}?api-version=${API_VERSION}`);
     assertNotForbidden(existing.status, existing.text, `index ${body.name}`);
@@ -221,6 +237,26 @@ async function run({ endpoint, live, only, liveNames }) {
     if (ds.status !== 200) {
       throw new Error(`data source ${body.dataSourceName} returned HTTP ${ds.status}: ${ds.text.slice(0, 200)}`);
     }
+    // THE SILENT FAILURE THIS GUARD EXISTS FOR. The committed data source carries the SELECT that
+    // decides which Cosmos columns the indexer even sees. This script never writes one (above), so
+    // adding a field to an index and to the data source file, then running --live, reports success
+    // while the indexer keeps projecting the old columns — every new field stays null, with no
+    // error anywhere. Compare and SAY SO; the repair is a hand-run PUT with the real
+    // connectionString, which only a human holds.
+    const committedDs = readCommittedDataSource(body.dataSourceName);
+    const liveQuery = (safeJson(ds.text)?.container || {}).query || null;
+    if (committedDs && liveQuery !== null && committedDs.container.query !== liveQuery) {
+      console.log(
+        `  !! data source ${body.dataSourceName} DIFFERS from the committed copy. The indexer will\n` +
+        `     keep projecting the LIVE query, so any field added to the index but not to the live\n` +
+        `     data source stays null and nothing reports an error.\n` +
+        `       live:      ${liveQuery}\n` +
+        `       committed: ${committedDs.container.query}\n` +
+        `     Fix with a hand-run PUT /datasources/${body.dataSourceName} carrying the real\n` +
+        `     connectionString (azure/search/README.md), BEFORE relying on the new fields.`
+      );
+      driftedDataSources++;
+    }
     const existing = await call(endpoint, 'GET', `/indexers/${body.name}?api-version=${API_VERSION}`);
     assertNotForbidden(existing.status, existing.text, `indexer ${body.name}`);
     const state = existing.status === 200 ? 'exists' : existing.status === 404 ? 'absent' : `HTTP ${existing.status}`;
@@ -232,6 +268,13 @@ async function run({ endpoint, live, only, liveNames }) {
   }
 
   console.log('');
+  // Repeated at the END because the per-indexer warning above scrolls past on a full run, and this
+  // is the one failure that produces a green report and null fields.
+  if (driftedDataSources > 0) {
+    console.log(
+      `WARNING: ${driftedDataSources} data source(s) differ from the committed copy — see above. ` +
+      `Indexes applied here can still be filled with the OLD column set.`);
+  }
   if (!args.live) {
     console.log('dry run — nothing was written. Re-run with --live to apply.');
     return;
@@ -260,4 +303,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, load, select, run, assertNotForbidden, INDEX_DIR, INDEXER_DIR };
+module.exports = {
+  parseArgs, load, select, run, assertNotForbidden, readCommittedDataSource, safeJson,
+  INDEX_DIR, INDEXER_DIR, DATASOURCE_DIR
+};

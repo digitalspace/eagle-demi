@@ -501,7 +501,11 @@ async function runSearch(index, opts = {}) {
   // Omitted when absent, never sent empty: an empty `$orderby` is a 400, and eagle-query returns
   // undefined precisely where the index can express no order.
   if (opts.orderby) body.orderby = opts.orderby;
-  if (opts.highlight) {
+  // Never under `matchAll`: `search: '*'` matches without matching any TERM, so there is nothing
+  // for the analyzer to mark. Asking anyway spends a response body on empty highlight objects for
+  // every row of a filtered list page, and it is one more thing the service can refuse on a query
+  // shape it was never asked to highlight.
+  if (opts.highlight && !opts.matchAll) {
     body.highlight = opts.highlight;
     body.highlightPreTag = HL_PRE;
     body.highlightPostTag = HL_POST;
@@ -706,9 +710,14 @@ async function searchChunks(opts = {}) {
  */
 async function searchProjects(opts = {}) {
   const { configured, projectsIndex } = config();
+  // THROWS rather than answering empty, and the caller turns that into a 502. An unconfigured
+  // service has not searched anything, so `count: 0` would be a claim about the index that nobody
+  // measured — the rule this controller was rebuilt around. It matters more now than it did:
+  // every SORTED or FILTERED browse routes here, not only keyword search, so a degraded deploy
+  // would render an empty documents tab and an empty project list under a 200.
   if (!configured) {
     warnUnconfigured();
-    return { items: [], count: 0 };
+    throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
   }
 
   const { value, count } = await runSearch(projectsIndex, {
@@ -764,9 +773,10 @@ async function searchProjects(opts = {}) {
  */
 async function searchDocuments(opts = {}) {
   const { configured, documentsIndex } = config();
+  // Same as searchProjects: not configured is not "no matches". See the comment there.
   if (!configured) {
     warnUnconfigured();
-    return { items: [], count: 0 };
+    throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
   }
 
   const top = Math.min(Math.max(Number(opts.top) || 20, 1), MAX_PAGE_ROWS);
@@ -795,7 +805,17 @@ async function searchDocuments(opts = {}) {
   // 3 direct matches, one matching project and 500 documents under it reported 10 against a true
   // ~503, so the pager said one page and every later page was unreachable. Where the leg cannot
   // contribute rows its requests are trimmed to one row each — the count is what they are for.
-  if (opts.projectFilter !== undefined) {
+  // `!opts.matchAll` IS THE DELIBERATE ANSWER TO "what does leg two mean with no keywords". Leg two
+  // recovers documents whose PROJECT's NAME matches the query, and a keywordless search has no name
+  // to match — running it under `matchAll` would search the projects index for `*`, pull in every
+  // project the caller can read, and widen the document filter by `projectId` to the whole corpus.
+  // That is the unfiltered-list answer this route exists to stop.
+  //
+  // Skipped rather than left to come back empty. Keywordless leg two happens to short-circuit
+  // inside `runSearch` today — `tokenize('')` yields no terms — but that is an accident of the
+  // tokenizer, not a decision, and it stops being true the moment `matchAll` is threaded through
+  // `opts`, which is exactly what the keywordless filter path now does.
+  if (opts.projectFilter !== undefined && !opts.matchAll) {
     const projects = await runSearch(config().projectsIndex, {
       keywords: opts.keywords,
       fuzzy: opts.fuzzy,
