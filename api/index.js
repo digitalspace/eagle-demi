@@ -30,6 +30,7 @@ if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
 const { app } = require('@azure/functions');
 const { Readable } = require('stream');
 const EventEmitter = require('events');
+const querystring = require('querystring');
 
 /**
  * The query object Express would have built — repeated keys become ARRAYS, not the last value.
@@ -46,18 +47,18 @@ const EventEmitter = require('events');
  * also routed the request to the Cosmos list instead of the index. `eagle-query.sortEntries` was
  * written for exactly that double-append and never saw it.
  *
- * Array-per-repeat is Express's `query parser: 'simple'` shape, and it is what `valuesOf` and
- * `sortEntries` already normalise. Nested `and[...]` keys stay FLAT — `andParams` reads both that
- * and the `qs` nested form, and changing which one arrives here changes nothing it can see.
+ * `querystring.parse` RATHER THAN A HAND-ROLLED LOOP, because it is not merely equivalent to what
+ * Express does — it IS what Express does: `express/lib/application.js` sets `query parser` to
+ * `'simple'` by default and `express/lib/utils.js` resolves that to this exact function. A copy
+ * would be a second definition of "what Express would have parsed", free to drift from the one the
+ * `yarn start` path actually uses. It also returns a NULL-PROTOTYPE object, so a query key named
+ * `__proto__` or `constructor` is an ordinary own property rather than a prototype read.
+ *
+ * Nested `and[...]` keys stay FLAT — `andParams` reads both that and the `qs` nested form, and
+ * changing which one arrives here changes nothing it can see.
  */
 function queryFrom(searchParams) {
-  const query = {};
-  for (const [key, value] of searchParams.entries()) {
-    if (!Object.prototype.hasOwnProperty.call(query, key)) query[key] = value;
-    else if (Array.isArray(query[key])) query[key].push(value);
-    else query[key] = [query[key], value];
-  }
-  return query;
+  return querystring.parse(searchParams.toString());
 }
 
 async function handleExpress(request, context) {

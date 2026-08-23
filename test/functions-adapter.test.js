@@ -52,11 +52,45 @@ function captureLogs(t) {
 // test that rebuilds its expectation from the code under test passes either way.
 test('a repeated query key arrives as an array, not as its last value', () => {
   const query = queryFrom(new URLSearchParams(
-    'dataset=Project&and[region]=Peace&and[region]=Cariboo&pageSize=10'));
+    'dataset=Project&and[region]=Peace&and[region]=Cariboo&and[region]=Skeena&pageSize=10'));
 
-  assert.deepStrictEqual(query['and[region]'], ['Peace', 'Cariboo']);
+  // THREE values, not two. With only two, the "append to the existing array" path is never
+  // exercised — a build that keeps the first two and drops the rest stays green on a pair.
+  assert.deepStrictEqual(query['and[region]'], ['Peace', 'Cariboo', 'Skeena']);
   assert.strictEqual(query.dataset, 'Project');
   assert.strictEqual(query.pageSize, '10', 'a key that appears once stays a string');
+});
+
+// THE CALL SITE, not just the helper. `queryFrom` can be perfect and unused: reverting
+// `api/index.js` to `Object.fromEntries(...)` left every other test in this file green, because
+// they all call the helper directly. This drives a real request through the adapter and reads what
+// the Express app was actually handed.
+test('the adapter hands the app the array, not the last value', async (t) => {
+  const appPath = require.resolve('../src/app');
+  const cached = require.cache[appPath];
+  let seen = null;
+
+  require.cache[appPath] = {
+    id: appPath,
+    filename: appPath,
+    loaded: true,
+    exports: (req, res) => {
+      seen = req.query;
+      res.statusCode = 200;
+      res.end('ok');
+    }
+  };
+  t.after(() => { require.cache[appPath] = cached; });
+
+  const result = await handleExpress(functionsRequest(
+    'GET',
+    'https://demi-api-test.azurewebsites.net/api/search' +
+      '?dataset=Project&and[region]=Peace&and[region]=Cariboo&sortBy=-name&sortBy='
+  ), null);
+
+  assert.strictEqual(result.status, 200, 'the stubbed app answered, so a query was built');
+  assert.deepStrictEqual(seen['and[region]'], ['Peace', 'Cariboo']);
+  assert.deepStrictEqual(seen.sortBy, ['-name', '']);
 });
 
 // The same collapse ate SORTING, and it is a different symptom of one bug: `api.ts:176-177`
@@ -74,13 +108,15 @@ test('a repeated key keeps every value whichever order they arrive in', () => {
     ['', '-name']);
 });
 
-// A query key named like an Object.prototype member must not be read off the prototype: without
-// the hasOwnProperty guard, `constructor` is already "present" and the first value is appended to
-// a function rather than kept.
+// A query key named like an Object.prototype member must be an ordinary own property, never a
+// prototype read: on a normal object `constructor` is already "present" and `toString` is a
+// function. `querystring.parse` returns a null-prototype object, which is why this holds.
 test('a query key that collides with Object.prototype is still read correctly', () => {
-  const query = queryFrom(new URLSearchParams('constructor=a&constructor=b&toString=c'));
+  const query = queryFrom(new URLSearchParams('constructor=a&constructor=b&toString=c&__proto__=x'));
   assert.deepStrictEqual(query.constructor, ['a', 'b']);
   assert.strictEqual(query.toString, 'c');
+  assert.strictEqual(query.__proto__, 'x');
+  assert.strictEqual({}.x, undefined, 'and nothing was written to Object.prototype');
 });
 
 test('functions adapter', async (t) => {
