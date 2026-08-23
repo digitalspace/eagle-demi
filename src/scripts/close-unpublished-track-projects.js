@@ -35,18 +35,37 @@
  * writes to Cosmos and the projects indexer picks the rows up on its PT5M schedule, because a patch
  * moves `_ts` and the data source's high-water mark is `_ts`.
  *
- * VERIFY AFTERWARDS, and verify from OUTSIDE: an anonymous
- * `GET /api/search?dataset=Project&pageSize=500&sortBy=name` must return zero rows with an empty
- * `legacyEagleId`. Counting inside the container proves the write landed, not that the public can
- * no longer see it — the index is a separate copy and lags by up to five minutes.
+ * VERIFY AFTERWARDS, FROM OUTSIDE, AND NOT BY `legacyEagleId`. Counting inside the container proves
+ * the write landed, not that the public can no longer see it — the index is a separate copy and
+ * lags up to five minutes.
+ *
+ * An earlier version of this docblock said to check for "zero rows with an empty `legacyEagleId`".
+ * **That check cannot fail for the rows this script exists to catch.** `legacyEagleId` is
+ * `c.eagleId` projected by the data source, and `mergeTrackProject` sets `eagleId` from
+ * `track.epic_guid` whether or not the guid resolves — so a dangling-guid row has a NON-empty
+ * `legacyEagleId` and satisfies that check identically before and after closing. It also
+ * false-alarms the other way: `createProject` writes `eagleId: null`, so a legitimately published
+ * API row has an empty one and trips the check, which is precisely the row this script skips.
+ *
+ * Two probes that CAN fail, both anonymous:
+ *
+ *   1. `?dataset=Project&pageSize=1&sortBy=name` — `searchResultsTotal` must drop by exactly the
+ *      `closed` count this script prints. Read it before and after.
+ *   2. `?dataset=Project&keywords=<name>` must return 0 for a closed project. Spot-check ONE FROM
+ *      EACH CATEGORY — a name from the no-`epic_guid` set and one from the dangling-guid set —
+ *      because the two are only distinguishable by which of them a wrong predicate skips.
+ *
+ * The `closed` count in the summary is the discriminating signal; `legacyEagleId` is not.
  */
 
 const projects = require('../repositories/projects');
 const documents = require('../repositories/documents');
 const cosmos = require('../db/cosmos-nosql');
 const { systemAccess } = require('../helpers/access-sql');
-// The ACL comes from the MERGE, by calling it — not from a SECURE_ROLES literal. There are two
-// such lists (`merge/project.js:22` has three roles, `helpers/access-sql.js:30` has four), and this
+// The ACL comes from the MERGE, by calling it — not from a SECURE_ROLES literal. There are THREE
+// such lists (`merge/project.js:22` and `seed/transform.js:16` have three roles,
+// `helpers/access-sql.js:30` has four — the first two are byte-identical and the third is the
+// superset, so no behaviour differs today, only the drift risk), and this
 // script exists to write what a re-seed would have written. Importing the wrong one leaves the
 // backfill and a later re-seed with different arrays on the same rows. No access difference either
 // way — `readClause` short-circuits for any of them — but neither module's tests can see the drift,

@@ -16,9 +16,23 @@ const PUBLIC_ACL = ['public', ...merge.SECURE_ROLES];
 /** `sources.eagle` populated — the merge matched an Eagle record. */
 const MATCHED = { _id: '58851172aaecd9001b820335', read: ['public'] };
 
-/** Projects repository double. `listVisible` answers whole — projects fit in one page. */
+/**
+ * Projects repository double. `listVisible` answers whole — projects fit in one page.
+ *
+ * It ASSERTS the access tier, because that is the one argument deciding whether the script sees the
+ * whole corpus. A scoped or public context lists only what it can see and leaves the rest public —
+ * a partial run reporting success, which is worse than none because nobody re-runs it. Without this
+ * assertion, replacing `systemAccess()` with a public context left the whole suite green.
+ */
 function fakeProjects(items) {
-  return { CONTAINER: 'projects', async listVisible() { return { items }; } };
+  return {
+    CONTAINER: 'projects',
+    async listVisible(access) {
+      assert.strictEqual(access && access.tier, 'privileged',
+        'the project scan must run as systemAccess(), or it silently skips rows');
+      return { items };
+    }
+  };
 }
 
 /** Documents repository double, keyed by the partition the script pins. */
@@ -27,6 +41,11 @@ function fakeDocuments(countsByProject = {}) {
   return {
     state,
     async countVisible(access, opts) {
+      // Same reason as above, and it bites harder here: a scoped context counts only the documents
+      // it can SEE, so a project holding non-public documents would report 0, slip past the
+      // withDocuments guard, and be patched directly instead of routed to the ACL cascade.
+      assert.strictEqual(access && access.tier, 'privileged',
+        'the document count must run as systemAccess(), or the withDocuments guard is blind');
       state.asked.push(String(opts.projectId));
       return countsByProject[String(opts.projectId)] || 0;
     }
