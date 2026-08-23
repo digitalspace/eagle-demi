@@ -485,9 +485,10 @@ test('Search Controller Tests', async (t) => {
     ], 'each page starts exactly where the previous one ended');
   });
 
-  // The window is capped at what runSearch will actually fetch. A window of 1000 with a fetch that
-  // clamps at 500 leaves half of every window unrequested while `skip` still advances by 1000.
-  await t.test('a large page does not ask for a window the fetch layer would clamp', async () => {
+  // The window is capped at what ONE service request returns. A window past that leaves the tail of
+  // every window unrequested while `skip` still advances by the full window — and it turns each
+  // debounced keystroke into two requests against a Basic 1-SU service.
+  await t.test('a large page never costs more than one service request', async () => {
     let sent = null;
     t.mock.method(aiSearch, 'searchChunks', async (opts) => { sent = opts; return { count: 0, items: [] }; });
 
@@ -497,8 +498,10 @@ test('Search Controller Tests', async (t) => {
     };
     await searchController.search(req, { json: () => ({}), status: () => ({ json: () => ({}) }) });
 
-    assert.strictEqual(sent.top, aiSearch.MAX_PAGE_ROWS, 'clamped to the fetch ceiling, not 1000');
-    assert.strictEqual(sent.skip, aiSearch.MAX_PAGE_ROWS, 'and skip advances by the same amount');
+    assert.strictEqual(sent.top, aiSearch.SERVICE_MAX_TOP, 'one request, not two');
+    assert.strictEqual(sent.skip, aiSearch.SERVICE_MAX_TOP, 'and skip advances by the same amount');
+    assert.ok(sent.top <= aiSearch.SERVICE_MAX_TOP,
+      'above this, runSearch fills the page with a second request per keystroke');
   });
 
   // The AI Search data plane is private-endpoint-only, so this is the ONLY way to observe how many

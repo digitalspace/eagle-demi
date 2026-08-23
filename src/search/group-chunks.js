@@ -42,14 +42,22 @@ const MAX_SNIPPETS = 2;
 /**
  * Chunks to fetch for a requested page.
  *
- * CLAMPED TO WHAT THE FETCH LAYER WILL ACTUALLY ASK FOR, which is `ai-search.MAX_PAGE_ROWS` (500),
- * not Azure's `$top` limit of 1000. `runSearch` silently clamps a larger `top`, so a window of
- * 1000 issued requests covering only the first 500 chunks while `skip` still advanced by 1000 —
- * chunks 500-999 of every window were never requested and the documents in them were unreachable
- * from any page. eagle-search's original clamps at 1000 because ITS page ceiling is 1000
- * (`service/index.js:70`); DEMI's is 500, and the two numbers have to agree.
+ * THE CEILING IS REQUIRED AND IS THE CALLER'S, deliberately — no default. It has to be a number
+ * that already exists somewhere else (`ai-search.SERVICE_MAX_TOP`), and a default here would be a
+ * second copy of it, silently wrong the day that one moves. That is the failure this whole function
+ * exists to prevent: the window was clamped to Azure's `$top` limit of 1000 while `runSearch`
+ * clamps `top` to its own ceiling, so chunks past the clamp were never requested while `skip` still
+ * advanced by the full window — the documents in them were reachable from no page at all.
+ *
+ * `SERVICE_MAX_TOP`, not `MAX_PAGE_ROWS`: one page must cost ONE service request. A chunk search
+ * runs on every debounced keystroke against a Basic 1-SU service, and `runSearch`'s fill loop turns
+ * a larger window into two requests per keystroke — the multiplier `ai-search.js` explicitly says
+ * `pageSize` must not become.
  */
-function windowFor(pageSize, ceiling = 500) {
+function windowFor(pageSize, ceiling) {
+  if (!Number.isFinite(ceiling) || ceiling < 1) {
+    throw new TypeError('[group-chunks] windowFor needs the caller\'s fetch ceiling');
+  }
   return Math.min(Math.max(Number(pageSize) || 1, 1) * FANOUT, ceiling);
 }
 
@@ -69,7 +77,14 @@ function windowFor(pageSize, ceiling = 500) {
  *
  * `pageNumber` IS NOT A PDF PAGE and is not surfaced as one. It is a passage sequence number — the
  * chunker increments it per emitted block — so nothing here renders "jump to page N" from it.
- * `matchCount` is the honest count.
+ *
+ * `matchCount` is the count of that document's passages IN THIS WINDOW, which is the honest count
+ * of what this page found — not necessarily of what the corpus holds. A document whose passages
+ * straddle a window boundary is returned on BOTH pages, each carrying its own partial count;
+ * measured on a 200-passage corpus with a document at chunks 99 and 100, pages 0 and 1 each showed
+ * it with matchCount 1. Grouping per window with no carry-over is what makes paging stateless, and
+ * a true per-document total would need either a second aggregate query or a cursor. Say the count
+ * is per page rather than pretending otherwise.
  */
 function groupByDocument(rows) {
   const byDocument = new Map();

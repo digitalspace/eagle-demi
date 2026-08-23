@@ -1068,6 +1068,10 @@ module.exports = {
   // has to be readable from there — two copies of it would drift into exactly the silent
   // truncation it exists to prevent.
   MAX_PAGE_ROWS,
+  // Exported for the chunk window, which must stay inside ONE service request: a chunk page is
+  // fetched on every debounced keystroke against a Basic 1-SU service, and a window larger than
+  // this turns each of those into two requests.
+  SERVICE_MAX_TOP,
   // Exported so a caller can tell "search is not configured" from "search found nothing". The API
   // is right to treat the first as a degraded state and return []; an instrument is not, and must
   // refuse to publish a zero it cannot distinguish from an unset app setting.

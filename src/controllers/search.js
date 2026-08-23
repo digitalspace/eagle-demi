@@ -682,8 +682,13 @@ exports.search = async (req, res) => {
         // at what `runSearch` will actually fetch (MAX_PAGE_ROWS) rather than at Azure's `$top`
         // ceiling — a window larger than the fetch leaves the tail of every window unrequested.
         // `pageSize` is a fetch knob for this dataset, not a row count: a page carries every
-        // document its window covered.
-        const chunkWindow = groupChunks.windowFor(pageSize, aiSearch.MAX_PAGE_ROWS);
+        // document its window covered, which is between 1 and `window` rows.
+        //
+        // ONE SERVICE REQUEST PER PAGE. The ceiling is SERVICE_MAX_TOP rather than MAX_PAGE_ROWS
+        // because this query runs on every debounced keystroke against a Basic 1-SU service:
+        // `runSearch`'s fill loop would issue two requests per keystroke for a larger window, which
+        // is the request multiplier ai-search.js says `pageSize` must never become.
+        const chunkWindow = groupChunks.windowFor(pageSize, aiSearch.SERVICE_MAX_TOP);
         const { items, count } = await aiSearch.searchChunks({
           filter,
           // No `orderby`: every field in `chunks` is sortable:false, the key included, so
