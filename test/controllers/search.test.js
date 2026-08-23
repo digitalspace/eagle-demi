@@ -350,7 +350,13 @@ test('Search Controller Tests', async (t) => {
       assert.strictEqual(sent.fuzzy, true);
 
       const [hit] = jsonResponse[0].searchResults;
-      assert.strictEqual(hit._id, 'd1::p2::c0');
+      // GROUPED BY DOCUMENT since 2026-08-23, so `_id` is the DOCUMENT id — eagle-public's content
+      // card builds its download URL from it (`content-result.component.ts:36-39`) and a chunk id
+      // there is a link that 404s. The chunk's own id is kept beside it rather than dropped.
+      assert.strictEqual(hit._id, 'd1');
+      assert.strictEqual(hit.chunkId, 'd1::p2::c0');
+      assert.strictEqual(hit.matchCount, 1);
+      assert.deepStrictEqual(hit.snippets, [hit.snippet], 'the card reads snippets[], DEMI reads snippet');
       assert.strictEqual(hit.projectName, 'Site C');
       assert.strictEqual(hit.documentName, 'Application');
       assert.strictEqual(hit.pageNumber, 2);
@@ -361,6 +367,142 @@ test('Search Controller Tests', async (t) => {
       assert.ok(hit.snippet.includes('<mark>river</mark>'));
       assert.ok(!hit.snippet.includes('<script>'), 'document text must not reach the DOM as markup');
     });
+
+  // The defect this fixes, stated as a test: eagle-public's content card iterates `snippets` and
+  // reads `matchCount`, and against per-passage rows every card rendered "0 matches" with no
+  // snippet body. Three passages of one document are ONE row with a count of 3.
+  await t.test('chunk hits collapse to one row per document, with the match count', async () => {
+    let sent = null;
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => {
+      sent = opts;
+      return {
+        count: 42,
+        items: [
+          { chunkId: 'd1::p1', documentId: 'd1', projectId: '207', pageNumber: 1, read: ['public'], snippet: 'one' },
+          { chunkId: 'd1::p2', documentId: 'd1', projectId: '207', pageNumber: 2, read: ['public'], snippet: 'two' },
+          { chunkId: 'd1::p3', documentId: 'd1', projectId: '207', pageNumber: 3, read: ['public'], snippet: 'three' },
+          { chunkId: 'd2::p1', documentId: 'd2', projectId: '207', pageNumber: 1, read: ['public'], snippet: 'four' }
+        ]
+      };
+    });
+    t.mock.method(documentsRepo, 'listByIds', async () => ([
+      { id: 'd1', displayName: 'First' }, { id: 'd2', displayName: 'Second' }
+    ]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+
+    const req = { query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '10' }, header: () => null };
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(req, res);
+
+    const rows = jsonResponse[0].searchResults;
+    assert.strictEqual(rows.length, 2, 'four passages, two documents');
+    assert.deepStrictEqual(rows.map(r => r._id), ['d1', 'd2']);
+    assert.strictEqual(rows[0].matchCount, 3);
+    assert.deepStrictEqual(rows[0].snippets, ['one', 'two'], 'capped at MAX_SNIPPETS');
+    // A page of documents costs a WINDOW of chunks, and the window is the paging unit.
+    assert.strictEqual(sent.top, 100, 'pageSize 10 x FANOUT 10');
+    assert.strictEqual(sent.skip, 0);
+    // The total still counts passages; meta.countsPassages is what says so.
+    assert.strictEqual(jsonResponse[0].count, 42);
+    assert.strictEqual(jsonResponse[0].meta[0].countsPassages, true);
+    assert.strictEqual(jsonResponse[0].meta[0].documentsOnPage, 2, 'documents, not passages');
+  });
+
+  // The gate withholds chunks whose parent document the caller may not read, and the total is
+  // reported net of them. The floor is the surviving CHUNK count, not the row count: one row can
+  // carry a dozen matches, so flooring at rows would report fewer matches than the page shows.
+  await t.test('a withheld chunk is subtracted from the total, floored at surviving chunks', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      count: 4,
+      items: [
+        { chunkId: 'd1::p1', documentId: 'd1', projectId: '207', pageNumber: 1, snippet: 'a' },
+        { chunkId: 'd1::p2', documentId: 'd1', projectId: '207', pageNumber: 2, snippet: 'b' },
+        { chunkId: 'd1::p3', documentId: 'd1', projectId: '207', pageNumber: 3, snippet: 'c' },
+        { chunkId: 'hidden::p1', documentId: 'hidden', projectId: '999', pageNumber: 1, snippet: 'd' }
+      ]
+    }));
+    // The parent of the fourth chunk is not readable, so listByIds does not return it.
+    t.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'First' }]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+
+    const req = { query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '10' }, header: () => null };
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(req, res);
+
+    assert.strictEqual(jsonResponse[0].searchResults.length, 1, 'the withheld chunk is gone');
+    assert.strictEqual(jsonResponse[0].count, 3,
+      '4 matches minus 1 withheld — and floored at 3 surviving chunks, not at the 1 row');
+  });
+
+  // The floor only shows itself when the subtraction would take the total BELOW what this page
+  // holds. Flooring at the row count instead of the surviving chunk count is invisible in the case
+  // above — both give 3 — so this is the shape that separates them.
+  await t.test('the floor is surviving chunks, not rows, when the subtraction goes low', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      count: 1,
+      items: [
+        { chunkId: 'd1::p1', documentId: 'd1', projectId: '207', pageNumber: 1, snippet: 'a' },
+        { chunkId: 'd1::p2', documentId: 'd1', projectId: '207', pageNumber: 2, snippet: 'b' },
+        { chunkId: 'd1::p3', documentId: 'd1', projectId: '207', pageNumber: 3, snippet: 'c' },
+        { chunkId: 'hidden::p1', documentId: 'hidden', projectId: '999', pageNumber: 1, snippet: 'd' }
+      ]
+    }));
+    t.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'First' }]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+
+    const req = { query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '10' }, header: () => null };
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(req, res);
+
+    assert.strictEqual(jsonResponse[0].count, 3,
+      'three surviving chunks, not the one row that carries them');
+  });
+
+  // `skip` AND `top` MUST BE THE SAME UNIT. Reverting `skip` to `pageNum * pageSize` while `top`
+  // stays a window left the whole suite green, and the consequence is silent: consecutive pages
+  // then re-read chunks they already served, or skip past chunks nobody ever sees. Nothing in a
+  // response makes that visible — the rows look plausible on every page.
+  await t.test('chunk pages advance by a whole window, so ranges neither gap nor overlap', async () => {
+    const seen = [];
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => {
+      seen.push({ skip: opts.skip, top: opts.top });
+      return { count: 300, items: [] };
+    });
+
+    for (const pageNum of ['0', '1', '2']) {
+      const req = {
+        query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '10', pageNum },
+        header: () => null
+      };
+      await searchController.search(req, { json: () => ({}), status: () => ({ json: () => ({}) }) });
+    }
+
+    assert.deepStrictEqual(seen, [
+      { skip: 0, top: 100 }, { skip: 100, top: 100 }, { skip: 200, top: 100 }
+    ], 'each page starts exactly where the previous one ended');
+  });
+
+  // The window is capped at what ONE service request returns. A window past that leaves the tail of
+  // every window unrequested while `skip` still advances by the full window — and it turns each
+  // debounced keystroke into two requests against a Basic 1-SU service.
+  await t.test('a large page never costs more than one service request', async () => {
+    let sent = null;
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => { sent = opts; return { count: 0, items: [] }; });
+
+    const req = {
+      query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '100', pageNum: '1' },
+      header: () => null
+    };
+    await searchController.search(req, { json: () => ({}), status: () => ({ json: () => ({}) }) });
+
+    assert.strictEqual(sent.top, aiSearch.SERVICE_MAX_TOP, 'one request, not two');
+    assert.strictEqual(sent.skip, aiSearch.SERVICE_MAX_TOP, 'and skip advances by the same amount');
+    assert.ok(sent.top <= aiSearch.SERVICE_MAX_TOP,
+      'above this, runSearch fills the page with a second request per keystroke');
+  });
 
   // The AI Search data plane is private-endpoint-only, so this is the ONLY way to observe how many
   // chunks the index holds. The count deliberately differs from items.length here: a passthrough
