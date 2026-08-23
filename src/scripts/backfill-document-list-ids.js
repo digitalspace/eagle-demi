@@ -272,7 +272,19 @@ async function backfill(argv = [], opts = {}) {
   return summary;
 }
 
-module.exports = { parseArgs, listFieldsFor, planPatch, backfill, BACKFILLED, DEFAULT_BATCH };
+/**
+ * Exit code for a finished run. A partial backfill must not exit 0 — a wrapper would read that as
+ * "every filter works now" — and partial has TWO halves: a rejected write, and a walk that never
+ * reached every partition. The second used to exit 0 while printing INCOMPLETE.
+ */
+function exitCodeFor(summary) {
+  const incomplete = summary.expected !== undefined && summary.scanned !== summary.expected;
+  return summary.failed || incomplete ? 1 : 0;
+}
+
+module.exports = {
+  parseArgs, listFieldsFor, planPatch, backfill, exitCodeFor, BACKFILLED, DEFAULT_BATCH
+};
 
 if (require.main === module) {
   const { initCosmosClient } = require('../db/cosmos-nosql');
@@ -280,11 +292,7 @@ if (require.main === module) {
 
   backfill(process.argv.slice(2))
     .then(summary => {
-      // A partial backfill must not exit 0 — a wrapper would read that as "every filter works now".
-      // BOTH halves of partial: a rejected write, and a walk that never reached every partition.
-      // The second used to exit 0 while printing INCOMPLETE, which is the same lie one line up.
-      const incomplete = summary.expected !== undefined && summary.scanned !== summary.expected;
-      process.exit(summary.failed || incomplete ? 1 : 0);
+      process.exit(exitCodeFor(summary));
     })
     .catch(err => {
       console.error('[backfill] Fatal:', err);

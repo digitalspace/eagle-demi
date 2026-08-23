@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  parseArgs, listFieldsFor, planPatch, backfill, DEFAULT_BATCH
+  parseArgs, listFieldsFor, planPatch, backfill, exitCodeFor, DEFAULT_BATCH
 } = require('../../src/scripts/backfill-document-list-ids');
 
 const NOW = '2026-08-22T00:00:00.000Z';
@@ -279,4 +279,14 @@ test('backfill', async (t) => {
     assert.strictEqual(summary.failed, 3);
     assert.deepStrictEqual(summary.statusCounts, { 429: 3 }, 'summed across both requests');
   });
+});
+
+// The entry point calls process.exit, so the decision is tested where it can be: as a function of
+// the same summary the run returns. Review caught that deleting the incomplete half left the suite
+// green — a claim in the commit message with nothing holding it up.
+test('exitCodeFor — a partial run is non-zero, both ways of being partial', () => {
+  assert.strictEqual(exitCodeFor({ scanned: 60578, expected: 60578, failed: 0 }), 0);
+  assert.strictEqual(exitCodeFor({ scanned: 3, expected: 60578, failed: 0 }), 1, 'short walk');
+  assert.strictEqual(exitCodeFor({ scanned: 60578, expected: 60578, failed: 2 }), 1, 'rejected write');
+  assert.strictEqual(exitCodeFor({ scanned: 3, failed: 0 }), 0, 'no count taken, nothing to compare');
 });
