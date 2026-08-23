@@ -1106,3 +1106,14 @@ test('every field the document search selects exists in the committed index', ()
   const missing = aiSearch.DOCUMENT_SELECT.split(',').filter(name => !inIndex.has(name));
   assert.deepStrictEqual(missing, [], `not in ${definition.name}: ${missing.join(', ')}`);
 });
+
+// THE INVARIANT THE CHUNK WINDOW RESTS ON. `group-chunks.windowFor` is handed SERVICE_MAX_TOP so a
+// page costs one request; if that ever exceeded MAX_PAGE_ROWS, `runSearch` would clamp `top` below
+// the window while `skip` still advanced by the whole window — the unreachable-chunk gap, back
+// again. Asserted on the two constants rather than on either alone: mutating SERVICE_MAX_TOP to
+// 600 left every test that compares against itself green.
+test('the service page cap stays inside the page-assembly cap', () => {
+  assert.ok(aiSearch.SERVICE_MAX_TOP <= aiSearch.MAX_PAGE_ROWS,
+    `SERVICE_MAX_TOP ${aiSearch.SERVICE_MAX_TOP} must not exceed MAX_PAGE_ROWS ${aiSearch.MAX_PAGE_ROWS}`);
+  assert.strictEqual(aiSearch.SERVICE_MAX_TOP, 250, 'the chunk window is a multiple of this');
+});

@@ -13,7 +13,7 @@ const chunk = (doc, n, snippet) => ({
 test('groupByDocument', async (t) => {
   await t.test('one row per document, ordered by the first hit', () => {
     const rows = groupByDocument(
-      [chunk('d2', 1, 'a'), chunk('d1', 1, 'b'), chunk('d2', 2, 'c')], 10);
+      [chunk('d2', 1, 'a'), chunk('d1', 1, 'b'), chunk('d2', 2, 'c')]);
     assert.deepStrictEqual(rows.map(r => r._id), ['d2', 'd1'],
       'BM25 order is preserved — the first chunk sets its document position');
     assert.strictEqual(rows[0].matchCount, 2);
@@ -30,7 +30,7 @@ test('groupByDocument', async (t) => {
   // (registry-state.service.ts:1160-1175). The grouped row carries BOTH shapes rather than
   // replacing one with the other, so no frontend release is coupled to this change.
   await t.test('the lead chunk keeps its singular shape for DEMI', () => {
-    const [row] = groupByDocument([chunk('d1', 4, 'lead'), chunk('d1', 9, 'second')], 10);
+    const [row] = groupByDocument([chunk('d1', 4, 'lead'), chunk('d1', 9, 'second')]);
     assert.strictEqual(row.snippet, 'lead');
     assert.strictEqual(row.pageNumber, 4);
     assert.strictEqual(row.chunkId, 'd1::p4');
@@ -64,7 +64,7 @@ test('groupByDocument', async (t) => {
   });
 
   await t.test('a chunk with no parent id is skipped, never grouped under empty', () => {
-    const rows = groupByDocument([{ _id: 'x', snippet: 'a' }, chunk('d1', 1, 'b')], 10);
+    const rows = groupByDocument([{ _id: 'x', snippet: 'a' }, chunk('d1', 1, 'b')]);
     assert.deepStrictEqual(rows.map(r => r._id), ['d1']);
   });
 });

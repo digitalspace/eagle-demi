@@ -678,16 +678,16 @@ exports.search = async (req, res) => {
         // `eagle-search/service/index.js:355-356` does it.
         //
         // `skip` and `top` MUST BE THE SAME UNIT or matches become unreachable: consecutive pages
-        // have to cover consecutive chunk ranges with no gap. That is also why the window is capped
-        // at what `runSearch` will actually fetch (MAX_PAGE_ROWS) rather than at Azure's `$top`
-        // ceiling — a window larger than the fetch leaves the tail of every window unrequested.
-        // `pageSize` is a fetch knob for this dataset, not a row count: a page carries every
-        // document its window covered, which is between 1 and `window` rows.
+        // have to cover consecutive chunk ranges with no gap. So the window is capped at what ONE
+        // request actually returns — a window larger than the fetch leaves the tail of every window
+        // unrequested while `skip` still advances past it.
         //
-        // ONE SERVICE REQUEST PER PAGE. The ceiling is SERVICE_MAX_TOP rather than MAX_PAGE_ROWS
-        // because this query runs on every debounced keystroke against a Basic 1-SU service:
-        // `runSearch`'s fill loop would issue two requests per keystroke for a larger window, which
-        // is the request multiplier ai-search.js says `pageSize` must never become.
+        // SERVICE_MAX_TOP, not MAX_PAGE_ROWS: this query runs on every debounced keystroke against
+        // a Basic 1-SU service, and `runSearch` fills anything larger with a SECOND request. One
+        // page, one request — the multiplier ai-search.js says `pageSize` must never become.
+        //
+        // `pageSize` is therefore a fetch knob for this dataset, not a row count: a page carries
+        // every document its window covered, between 1 and `window` rows.
         const chunkWindow = groupChunks.windowFor(pageSize, aiSearch.SERVICE_MAX_TOP);
         const { items, count } = await aiSearch.searchChunks({
           filter,
