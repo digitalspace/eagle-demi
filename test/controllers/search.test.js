@@ -207,6 +207,43 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(hit.documentType, 'Application');
   });
 
+  // eagle-public's document table renders Date, Type and Milestone by resolving List ObjectIds
+  // through `idToList()`. DEMI seeded only the resolved LABELS, so those columns rendered '-' on
+  // every row; the index and the seed carry the ids now, and BOTH mappers must send them or the
+  // same dataset renders different columns depending on whether the caller typed a keyword.
+  await t.test('a document row carries the ids and the date the table renders', async () => {
+    t.mock.method(aiSearch, 'searchDocuments', async () => ({
+      count: 1,
+      items: [{
+        id: 'doc1',
+        displayName: 'Application',
+        documentFileName: 'app.pdf',
+        type: 'Application',
+        typeId: '5cf00c03a266b7e1877504da',
+        milestoneId: '5cf00c03a266b7e1877504e9',
+        projectPhaseId: '5d3f6c7eda7a38421829602f',
+        documentAuthorTypeId: '5cf00c03a266b7e1877504dc',
+        datePosted: '2020-03-11T00:00:00Z',
+        projectId: '207',
+        read: ['public']
+      }]
+    }));
+    t.mock.method(projectsRepo, 'listByIds', async () => [{ id: '207', name: 'Site C' }]);
+
+    const req = { query: { dataset: 'Document', keywords: 'Ajax' }, header: () => null };
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(req, res);
+
+    const [hit] = jsonResponse[0].searchResults;
+    assert.strictEqual(hit.type, '5cf00c03a266b7e1877504da', 'the ID, not the label beside it');
+    assert.strictEqual(hit.milestone, '5cf00c03a266b7e1877504e9');
+    assert.strictEqual(hit.projectPhase, '5d3f6c7eda7a38421829602f');
+    assert.strictEqual(hit.documentAuthorType, '5cf00c03a266b7e1877504dc');
+    assert.strictEqual(hit.datePosted, '2020-03-11T00:00:00Z');
+    assert.strictEqual(hit.documentType, 'Application', 'the label stays, for DEMI\'s own frontend');
+  });
+
   await t.test('search documents returns documents from Cosmos DB', async () => {
     const mockDocuments = [
       {
@@ -215,6 +252,11 @@ test('Search Controller Tests', async (t) => {
         s3Key: 'uploads/test_doc.pdf',
         region: 'Skeena',
         projectId: '12345',
+        typeId: '5cf00c03a266b7e1877504da',
+        milestoneId: '5cf00c03a266b7e1877504e9',
+        projectPhaseId: '5d3f6c7eda7a38421829602f',
+        documentAuthorTypeId: '5cf00c03a266b7e1877504dc',
+        datePosted: '2020-03-11T00:00:00Z',
         read: ['public'],
         isPublished: true
       }
@@ -254,6 +296,14 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(jsonResponse[0].searchResults[0].documentFileName, 'test_doc.pdf');
     assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
     assert.strictEqual(jsonResponse[0].searchResults[0].projectName, 'Ajax Mine');
+    // The SAME five fields the keyword branch sends. Two mappers answering one dataset must not
+    // disagree about which columns exist, or the table changes shape when the user types.
+    const row = jsonResponse[0].searchResults[0];
+    assert.strictEqual(row.type, '5cf00c03a266b7e1877504da');
+    assert.strictEqual(row.milestone, '5cf00c03a266b7e1877504e9');
+    assert.strictEqual(row.projectPhase, '5d3f6c7eda7a38421829602f');
+    assert.strictEqual(row.documentAuthorType, '5cf00c03a266b7e1877504dc');
+    assert.strictEqual(row.datePosted, '2020-03-11T00:00:00Z');
   });
 
   // The Cosmos full-text backend was ruled out and Azure AI Search is not built yet (TODO.md §B),

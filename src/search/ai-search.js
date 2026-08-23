@@ -49,6 +49,20 @@ const MAX_TERMS = 16;
 /** Azure AI Search rejects `$skip` above this; `skip + top` must stay inside it. */
 const MAX_SKIP = 100000;
 
+/**
+ * Fields the document search asks for.
+ *
+ * EVERY NAME MUST EXIST IN THE INDEX — a stray one is a 400 on every query, not a missing field in
+ * the response, and a 400 is not retried. Exported so a test can hold that invariant against the
+ * committed `azure/search/indexes/documents.json` rather than leaving it as a comment; a typo here
+ * broke no test until one did.
+ *
+ * The last five arrived with the widened index: `datePosted` is eagle-public's Date column and its
+ * default sort, and the four ids are what `idToList()` resolves for Type and Milestone.
+ */
+const DOCUMENT_SELECT = 'id,displayName,documentFileName,description,type,projectId,read,' +
+  'isPublished,typeId,milestoneId,projectPhaseId,documentAuthorTypeId,datePosted';
+
 /** Rows one search request can return. A larger page costs more requests, not fewer rows. */
 const SERVICE_MAX_TOP = 250;
 
@@ -780,7 +794,11 @@ async function searchDocuments(opts = {}) {
   }
 
   const top = Math.min(Math.max(Number(opts.top) || 20, 1), MAX_PAGE_ROWS);
-  const select = 'id,displayName,documentFileName,description,type,projectId,read,isPublished';
+  // Every name here must exist in the index — a stray one is a 400 on EVERY query. The five added
+  // 2026-08-23 are the ones eagle-public's document table renders and DEMI could not answer before
+  // the index carried them: `datePosted` is its Date column, and the four `*Id` values are what
+  // `idToList()` resolves against eagle-api's List collection.
+  const select = DOCUMENT_SELECT;
 
   const direct = await runSearch(documentsIndex, {
     ...opts,
@@ -1039,6 +1057,7 @@ async function deleteChunksForDocument(documentId, opts = {}) {
 }
 
 module.exports = {
+  DOCUMENT_SELECT,
   searchChunks,
   searchProjects,
   searchDocuments,
