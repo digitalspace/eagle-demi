@@ -140,6 +140,47 @@ test('transformDocument', async (t) => {
     assert.strictEqual(doc.milestone, 'Application Review');
   });
 
+  await t.test('the List ObjectId is kept ALONGSIDE the label', () => {
+    // eagle-public's document filters send List ObjectIds, never labels. A row carrying only the
+    // label has nothing for those values to compare against, so the filter matches zero rows
+    // under a 200 — indistinguishable from "no results" for whoever is looking at the screen.
+    assert.strictEqual(doc.typeId, EAGLE_DOC.type);
+    assert.strictEqual(doc.milestoneId, EAGLE_DOC.milestone);
+  });
+
+  await t.test('an unresolvable ref keeps both the raw label and the id', () => {
+    const d = transformDocument({ ...EAGLE_DOC, type: 'not-in-the-list' }, '207', LIST, OPTS);
+    assert.strictEqual(d.type, 'not-in-the-list', 'the existing rule: the ref is not lost');
+    assert.strictEqual(d.typeId, 'not-in-the-list');
+  });
+
+  await t.test('projectPhase and documentAuthorType, present and absent', () => {
+    // The real eagle-api payload carries both as ObjectIds (measured on eagle-dev 2026-08-22);
+    // the shared fixture carries neither, which is the null case the index has to tolerate.
+    assert.strictEqual(EAGLE_DOC.projectPhase, undefined);
+    assert.strictEqual(doc.projectPhase, null);
+    assert.strictEqual(doc.projectPhaseId, null);
+    assert.strictEqual(doc.documentAuthorType, null);
+    assert.strictEqual(doc.documentAuthorTypeId, null);
+
+    const both = transformDocument({
+      ...EAGLE_DOC,
+      projectPhase: '5d3f6c7eda7a38421829602f',
+      documentAuthorType: '5cf00c03a266b7e1877504dc'
+    }, '207', LIST, OPTS);
+    assert.strictEqual(both.projectPhaseId, '5d3f6c7eda7a38421829602f');
+    assert.strictEqual(both.documentAuthorTypeId, '5cf00c03a266b7e1877504dc');
+  });
+
+  await t.test('datePosted is stored as ISO — the documents index sorts on it', () => {
+    // eagle-public's default document sort is `-datePosted`, and Edm.DateTimeOffset rejects
+    // anything that is not a valid offset-bearing timestamp.
+    assert.strictEqual(doc.datePosted, '2014-01-15T20:00:00.000Z');
+    assert.strictEqual(
+      transformDocument({ ...EAGLE_DOC, datePosted: 'nonsense' }, '207', LIST, OPTS).datePosted,
+      null, 'an unparseable date is null, never Invalid Date');
+  });
+
   await t.test('size is numeric and the extension is normalised', () => {
     assert.strictEqual(doc.fileSize, 84031);
     assert.strictEqual(transformDocument(

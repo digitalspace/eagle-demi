@@ -124,7 +124,12 @@ exports.search = async (req, res) => {
       return res.status(400).json({ error: `Unsupported query parameter: ${unknown.join(', ')}` });
     }
 
-    // A keyword page larger than the search layer will assemble is REFUSED, not truncated.
+    // Did the caller ask for a filter or a sort? Computed once, here, because it decides BOTH the
+    // page-size ceiling below and which backend answers — see eagleQuery.hasCriteria for why
+    // `project` is not in it.
+    const criteria = eagleQuery.hasCriteria(req.query);
+
+    // An INDEXED page larger than the search layer will assemble is REFUSED, not truncated.
     // `ai-search.runSearch` fills a page with consecutive 250-row requests up to MAX_PAGE_ROWS.
     // Beyond it the honest answers are a 400 or twenty round trips per keystroke against a 1-SU
     // service; the one answer that is NOT available is the one this replaces — 250 rows returned
@@ -138,9 +143,15 @@ exports.search = async (req, res) => {
     // the Cosmos list path, which has its own cap, and this guard never sees them. A keyword search
     // at that size would be a different request with a different cost, which is why only that one
     // is refused. Do not "simplify" this by dropping the keyword test.
-    if (keywords && requestedPageSize > aiSearch.MAX_PAGE_ROWS) {
+    //
+    // `|| criteria` because a FILTERED keywordless search now takes the same path and inherits the
+    // same ceiling. The keyword test still has to be there, and dropping it is still wrong: the two
+    // million-row callers send no keywords AND no criteria (`storage.service.ts` and
+    // `projects.component.ts` both call `getAllFull(1, 1000000)` with an empty `sortBy` twice over),
+    // so they stay on the Cosmos list path and this guard still never sees them.
+    if ((keywords || criteria) && requestedPageSize > aiSearch.MAX_PAGE_ROWS) {
       return res.status(400).json({
-        error: `pageSize above ${aiSearch.MAX_PAGE_ROWS} is not supported for a keyword search`
+        error: `pageSize above ${aiSearch.MAX_PAGE_ROWS} is not supported for a filtered or keyword search`
       });
     }
 
@@ -238,9 +249,11 @@ exports.search = async (req, res) => {
     }
 
     if (dataset === 'Project') {
-      // Keywords go to AI Search; a bare list still comes from Cosmos below, because listing every
-      // project is a read, not a search, and the index adds nothing to it.
-      if (keywords) {
+      // Keywords OR criteria go to AI Search; a BARE list still comes from Cosmos below, because
+      // listing every project in the repository's own order is a read, not a search, and the index
+      // adds nothing to it. A filter or a sort is the opposite: Cosmos list criteria and order are
+      // fixed, so answering one from there means answering the whole corpus.
+      if (keywords || criteria) {
         try {
           // 'id', not 'projectId' — a project IS its own scope, and scoping on a field the index
           // does not have would match nothing while looking like an empty corpus.
@@ -251,8 +264,13 @@ exports.search = async (req, res) => {
             // buildFilter takes the whole `filterFor` result and refuses to run without it.
             const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
             eagleQuery.reportDropped(dataset, 'filter', dropped);
+            // `Boolean(keywords)`, not `true`. With no keywords `search: '*'` has no relevance to
+            // order by, and `search.score() desc` over a constant score leaves ties in whatever
+            // order the service computed — which `$skip` paging then repeats and omits across
+            // pages. Passing the truth here is what lets DEFAULT_ORDER supply the stable order it
+            // exists for.
             const { orderby, dropped: sortDropped } =
-              eagleQuery.buildOrderBy(req.query.sortBy, dataset, true);
+              eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords));
             eagleQuery.reportDropped(dataset, 'sort', sortDropped);
 
             // `count` is the index-wide total, not the page. The frontend shows it so a column
@@ -263,6 +281,11 @@ exports.search = async (req, res) => {
               orderby,
               skip,
               keywords,
+              // No keywords means "every row the filter admits", which is what `search: '*'` is.
+              // Without it `runSearch` short-circuits on an empty token list and the filtered
+              // search answers zero rows — a filter that matches nothing, not a filter with
+              // nothing to match.
+              matchAll: !keywords,
               fuzzy,
               top: pageSize
             });
@@ -377,21 +400,15 @@ exports.search = async (req, res) => {
         // that a page comes back empty with the real total beside it, rather than silently
         // repeating page one. Upgrade path if the corpus outgrows it: return the continuation token
         // in `meta` and have the client send it back, which is what the SDK is built for.
-        // Cosmos list criteria are fixed, so NONE of the caller's filters apply here. Named in
-        // the log rather than left silent — see eagle-query.filterKeysIn.
+        // Only `project` can still be here: anything else is criteria and was routed to the index
+        // above. It stays dropped-and-logged because it is genuinely inexpressible on this dataset
+        // — the `projects` index has no project axis and `listVisible` has no project predicate.
+        //
+        // NO sortBy report any more, and the absence IS the fix: a `sortBy` naming anything at all
+        // is criteria, so it never reaches this path to be ignored. What stays reachable is
+        // `sortBy=&sortBy=` from eagle-public's double append, and there is nothing in that to
+        // report as dropped.
         eagleQuery.reportDropped(dataset, 'filter', eagleQuery.filterKeysIn(req.query));
-        // AND SO DOES THE SORT. `listVisible` hardcodes its order, and `buildOrderBy` runs only on
-        // the keyword branches — so a `sortBy` on this path did nothing and said nothing, which is
-        // the one failure this endpoint's own contract singles out ("a sort doing nothing ... all
-        // under a 200"). eagle-public reaches it: the table sends `keywords: ''` together with its
-        // default sort. Reported, not honoured — honouring it means threading an order through the
-        // repository and validating it against the Cosmos indexing policy, which is its own change.
-        if (req.query.sortBy) {
-          logger.warn(
-            `[search] ${dataset}: ignored sortBy ${req.query.sortBy} — this list path takes the ` +
-            `repository's fixed order, not the caller's`
-          );
-        }
 
         const cosmosSkip = pageNum * pageSize;
         const { items: page } = await projectsRepo.listVisible(access, {
@@ -474,7 +491,11 @@ exports.search = async (req, res) => {
         return res.status(502).json({ error: 'Project search is unavailable' });
       }
     } else if (dataset === 'Document') {
-      if (keywords) {
+      // Same rule as Project: keywords OR criteria are answered by the index. This is the branch
+      // the documents tab lands on — empty keywords, `and[milestone]=...`, `sortBy=-datePosted`
+      // (`documents-tab.component.ts:47-56,177-190`) — and the Cosmos read below could express
+      // neither, so it answered the whole corpus with a 200 and a log line nobody reads.
+      if (keywords || criteria) {
         try {
           const acl = filterFor(access);
           // Projects are scoped on their own id; the same caller, a different index.
@@ -483,18 +504,26 @@ exports.search = async (req, res) => {
           if (!acl.empty) {
             const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
             eagleQuery.reportDropped(dataset, 'filter', dropped);
+            // See the Project branch: `Boolean(keywords)` is what lets DEFAULT_ORDER give a
+            // keywordless page a stable order instead of a constant relevance score.
             const { orderby, dropped: sortDropped } =
-              eagleQuery.buildOrderBy(req.query.sortBy, dataset, true);
+              eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords));
             eagleQuery.reportDropped(dataset, 'sort', sortDropped);
 
             const { items, count } = await aiSearch.searchDocuments({
               filter,
               orderby,
+              // The SAME `skip` the keyword path uses — rows in the caller's own `pageSize`,
+              // computed once above. The Cosmos list below derives its own offset because it pages
+              // by overfetch-and-slice; re-deriving one here is how the two units drift apart.
               skip,
               // Passed so the project-name leg can run under the caller's project visibility.
               // Undefined would disable that leg entirely; null legitimately means "unrestricted".
+              // The leg is skipped anyway under matchAll — a project-NAME match needs a name.
               projectFilter: projectScope.empty ? undefined : projectScope.filter,
               keywords,
+              // See the Project branch: no keywords means every row the filter admits.
+              matchAll: !keywords,
               fuzzy,
               top: pageSize
             });
@@ -556,19 +585,11 @@ exports.search = async (req, res) => {
         // single-partition read; the repository takes a list because `project=a,b` is one request.
         const demiProjectIds = eagleQuery.projectIdsFrom(filterQuery);
 
-        // The rest of the caller's filters still reach nothing — Cosmos list criteria are fixed.
-        // `project` is removed from that report now that it IS applied: a key named as dropped
-        // while it is in force teaches the reader to distrust the log.
-        eagleQuery.reportDropped(dataset, 'filter',
-          eagleQuery.filterKeysIn(req.query).filter(key => key !== 'project'));
-        // Same as the project list: the order is hardcoded in the repository, so a caller's
-        // `sortBy` is inert here and is named rather than swallowed.
-        if (req.query.sortBy) {
-          logger.warn(
-            `[search] ${dataset}: ignored sortBy ${req.query.sortBy} — this list path takes the ` +
-            `repository's fixed order, not the caller's`
-          );
-        }
+        // NOTHING IS DROPPED ON THIS PATH ANY MORE, so nothing is reported. `project` is applied
+        // just above, and every other filter key — and every real sort key — is criteria, which
+        // routed to the index before ever reaching here. The report that used to sit here named
+        // the keys this route had silently ignored; they are honoured now, and a report that can
+        // never fire is a comment pretending to be a check.
 
         // Same overfetch-and-slice paging as the project list above, same 1000-row ceiling.
         const cosmosSkip = pageNum * pageSize;

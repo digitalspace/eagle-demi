@@ -14,11 +14,16 @@
  * `select`: a name that is not in the index is a 400 on EVERY query, not a missing field.
  *
  * WHAT DEMI'S INDEXES CANNOT EXPRESS, and therefore what this drops:
- *   - `milestone`, `projectPhase`, `documentAuthorType`, `documentSource`, `isFeatured` — no such
- *     field in `documents`. eagle-public's /search filter panel sends all of them.
- *   - any date range (`datePostedStart`, `decisionDateEnd`): there is no `Edm.DateTimeOffset` field
- *     in ANY demi index, so a range term has nothing to compare against. `datePosted` IS stored in
- *     Cosmos — it is the index that has no home for it (`datasources/demi-documents-ds.json`).
+ *   - `documentSource`, `isFeatured` — no such field in `documents`. eagle-public's /search filter
+ *     panel sends both.
+ *   - ~~`milestone`, `projectPhase`, `documentAuthorType`, and any `datePosted` range~~ — these
+ *     ARE expressible now. `documents` carries `milestoneId`, `projectPhaseId`,
+ *     `documentAuthorTypeId`, `typeId` and `datePosted`, and ALIASES.Document maps the wire names
+ *     onto the id columns. **The index change and this map ship together**: the field metadata is
+ *     read from the committed JSON at require time, so an app that ships this file against an index
+ *     that has not been PUT yet emits `$orderby datePosted desc` at a service with no such field —
+ *     a 400, which is not retried, which the controller answers as 502. Apply the index BEFORE
+ *     deploying the app, or as the first action after.
  *   - `type` on a Project. eagle stores an EAO project type; DEMI stores a Track `sector`. The
  *     vocabularies are not known to line up, and a wrong mapping filters silently to nothing.
  *   - `centroid`. It is `filterable: true` like every geography field, but `eq` is not an operator
@@ -73,7 +78,16 @@ const ALIASES = {
   },
   Document: {
     _id: 'id',
-    project: 'projectId'
+    project: 'projectId',
+    // eagle-public's four document facets send List ObjectIds, never labels
+    // (documents-tab.component.ts:47, values built from eagle-api's List collection), so each maps
+    // to the id column beside the label. Copied from eagle-search's own map
+    // (`eagle-search/service/query.js:52-59`) rather than invented: the two services have to drop
+    // the same keys and honour the same ones, or a flip changes what a saved filter URL means.
+    type: 'typeId',
+    milestone: 'milestoneId',
+    projectPhase: 'projectPhaseId',
+    documentAuthorType: 'documentAuthorTypeId'
   },
   DocumentChunk: {
     _id: 'chunkId',
@@ -248,6 +262,29 @@ function term(field, meta, value) {
   }
 }
 
+/**
+ * Render one edge of a date range as `field ge|lt <instant>`.
+ *
+ * DAY GRANULARITY, and the asymmetry is the point: the wire carries a calendar day while the field
+ * is an instant, so `End` becomes `lt <next day>` rather than `le <that day>` — otherwise a
+ * document posted at 09:00 on the end date falls outside a range the user included. Ported from
+ * `eagle-search/service/query.js:185-194`; the two services must answer the same question for the
+ * same URL.
+ *
+ * Anything that is not a datetime returns null and lands in `dropped`, for the reason TERM_TYPES
+ * gives: a term this cannot express is an unsupported key, never a term emitted and hoped for.
+ */
+function rangeTerm(field, meta, value, edge) {
+  if (meta.type !== 'Edm.DateTimeOffset') return null;
+  const d = new Date(String(value));
+  if (isNaN(d.getTime())) return null;
+
+  const day = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  return edge === 'Start'
+    ? `${field} ge ${new Date(day).toISOString()}`
+    : `${field} lt ${new Date(day + 86400000).toISOString()}`;
+}
+
 /** Split one wire value into terms the way both frontends mean it: `a,b` is a multi-select. */
 function valuesOf(rawValue) {
   return (Array.isArray(rawValue) ? rawValue : [rawValue])
@@ -332,18 +369,28 @@ function buildFilter(query, dataset, acl) {
     // against a DEMI project id matches nothing, which reads as an empty tab rather than a bug.
     if (key === 'project') continue;
 
-    const field = aliases[key] || key;
+    // A `Start`/`End` suffix is a RANGE on the base field, not a field of its own, so
+    // `datePostedStart` resolves against `datePosted` in the index. Read off the committed
+    // definition rather than a hand-written list: a suffixed name no index carries still falls
+    // through to `dropped` instead of becoming a 400.
+    const edge = /(Start|End)$/.exec(key)?.[1];
+    const base = edge ? key.slice(0, -edge.length) : key;
+    const field = aliases[base] || base;
     const meta = fields.get(field);
     // Three ways a key cannot be filtered on, and all three are the same answer: not in the index,
-    // not `filterable`, or a TYPE term() has no case for. See TERM_TYPES for why the last one is
-    // not covered by the second.
-    if (!meta || !meta.filterable || !expressible(meta)) {
+    // not `filterable`, or a TYPE the term builder has no case for. See TERM_TYPES for why the last
+    // one is not covered by the second. A range asks a different question of the type than an `eq`
+    // does — a datetime sorts and compares but has no `eq` case — so the edge branch gates on
+    // `rangeTerm` returning something rather than on `expressible`.
+    if (!meta || !meta.filterable || (!edge && !expressible(meta))) {
       dropped.push(key);
       continue;
     }
 
     const values = valuesOf(rawValue);
-    const terms = values.map(v => term(field, meta, v)).filter(Boolean);
+    const terms = values
+      .map(v => (edge ? rangeTerm(field, meta, v, edge) : term(field, meta, v)))
+      .filter(Boolean);
     // Reported whenever ANY value was lost, not only when all of them were: `and[pageNumber]=1,0.5`
     // would otherwise narrow silently to `1` and look like the filter the caller asked for.
     if (terms.length !== values.length) dropped.push(key);
@@ -363,8 +410,15 @@ function buildFilter(query, dataset, acl) {
     }
   }
 
-  if (query.categorized !== undefined && fields.has('categorized')) {
-    groups.push(`categorized eq ${String(query.categorized) === 'true'}`);
+  if (query.categorized !== undefined) {
+    if (fields.has('categorized')) {
+      groups.push(`categorized eq ${String(query.categorized) === 'true'}`);
+    } else {
+      // Named, not silently ignored. `categorized` counts as criteria, so it routes the caller to
+      // the index — and no demi index carries the field, so without this the one filter they sent
+      // vanishes with nothing said anywhere. Same rule as every other inexpressible key.
+      dropped.push('categorized');
+    }
   }
 
   if (acl.filter) groups.push(acl.filter);
@@ -386,24 +440,83 @@ function buildFilter(query, dataset, acl) {
  * The tiebreak is appended only where the key is sortable, which is why chunks get no `$orderby` at
  * all: nothing in `chunks` is sortable, and naming a non-sortable field is a 400.
  *
+ * THE GATE FOR A SORT KEY IS THE FIELD'S TYPE, not `sortable` — the same rule TERM_TYPES states for
+ * a filter key, for the same reason. `projects.centroid` is `sortable: true` in the committed
+ * definition, so a `sortable` gate answered `?dataset=Project&keywords=x&sortBy=centroid` with
+ * `centroid asc, id asc`; AI Search orders a geography only through `geo.distance(...)`, so the
+ * service 400s, `request()` throws, and the controller answers 502 to any anonymous caller.
+ *
  * `$orderby` also OVERRIDES semantic reranking — the L2 order is expressed as the response order
  * and nothing else. That costs nothing today because `chunks` is the only semantic index and
  * it is the one index this cannot emit an order for; if a second index ever gets a semantic
  * configuration, this function has to learn about it.
  */
+/**
+ * The Edm types `$orderby` can name: the scalar ones. Same gate as TERM_TYPES, one type wider —
+ * a datetime cannot be compared with `eq` through `term()` but sorts fine. That entry is
+ * load-bearing, not future-proofing: `documents.datePosted` is an `Edm.DateTimeOffset` and it is
+ * eagle-public's DEFAULT document sort, so dropping it here would narrow a live path.
+ *
+ * A geography or a collection is NOT orderable however its `sortable` flag reads. `meta.type`
+ * keeps the whole `Collection(...)` string, so membership alone rejects both.
+ */
+const ORDER_TYPES = new Set([...TERM_TYPES, 'Edm.DateTimeOffset']);
+
+function orderable(meta) {
+  return ORDER_TYPES.has(meta.type);
+}
+
+/**
+ * The sort keys a `sortBy` actually carries, whichever of the three wire shapes it arrived in.
+ *
+ * SEPARATE FROM `buildOrderBy` BECAUSE THE ROUTER ASKS THE SAME QUESTION. eagle-public appends
+ * `sortBy` twice and the second is routinely the empty string (`api.ts:176-177`), so
+ * `project.service.getAll` — the projects map, `getAllFull(1, 1000000)` — sends `sortBy=&sortBy=`
+ * on every call. A truthiness test reads that as "the caller asked for an order" and would move a
+ * million-row list read onto the AI Search path, where MAX_PAGE_ROWS silently truncates it to 500.
+ * One normaliser, used by both, is what keeps the router and the `$orderby` from disagreeing about
+ * whether a sort was asked for at all.
+ */
+function sortEntries(sortBy) {
+  return (Array.isArray(sortBy) ? sortBy : [sortBy])
+    .filter(s => typeof s === 'string' && s.trim() !== '')
+    .flatMap(s => s.split(','))
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Did the caller ask for anything only the INDEX can answer — a filter or a sort?
+ *
+ * THIS IS THE ROUTING TEST. The Cosmos list reads take fixed criteria in a fixed order, so a
+ * request carrying either used to be answered with the whole corpus in the repository's order,
+ * dropped-and-logged under a 200 — measured live, `and[milestone]=x` on `dataset=Document`
+ * returned 60,578 rows from demi and 0 from eagle-search for the same URL. A search that carries
+ * criteria therefore goes to AI Search, where both can be expressed, and only a BARE list stays on
+ * Cosmos.
+ *
+ * `project` IS DELIBERATELY NOT CRITERIA. It is the documents container's partition key and the
+ * Cosmos read already applies it (`documentsRepo.listVisible({projectId})`), so it is honoured
+ * there rather than dropped — and `&project=<id>&pageSize=500` with no sort is the shape DEMI's own
+ * frontend and eagle-public's project tabs send, which is the best-covered path in this file. Where
+ * an index genuinely cannot express it — the `projects` index has no project axis — `buildFilter`
+ * still reports it as dropped.
+ */
+function hasCriteria(query) {
+  if (filterKeysIn(query).some(key => key !== 'project')) return true;
+  return sortEntries(query && query.sortBy).length > 0;
+}
+
 function buildOrderBy(sortBy, dataset, hasKeywords = false) {
   const fields = fieldsFor(dataset);
   const aliases = ALIASES[dataset] || {};
   const tiebreak = fields.get('id')?.sortable ? 'id asc' : null;
 
-  const raw = (Array.isArray(sortBy) ? sortBy : [sortBy])
-    .filter(s => typeof s === 'string' && s.trim() !== '')
-    .flatMap(s => s.split(','))
-    .map(s => s.trim())
-    .filter(Boolean);
+  const raw = sortEntries(sortBy);
 
   const parts = [];
   const dropped = [];
+  const seen = new Set();
   for (const entry of raw) {
     const desc = entry.startsWith('-');
     const name = entry.replace(/^[+-]/, '');
@@ -412,12 +525,27 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false) {
     // `legacyEagleId`. Sorting is the opposite: fall back to the caller's own name when the
     // redirect target cannot sort but the original can.
     const aliased = aliases[name] || name;
-    const field = fields.get(aliased)?.sortable ? aliased : name;
+    const aliasMeta = fields.get(aliased);
+    const field = aliasMeta && aliasMeta.sortable ? aliased : name;
     const meta = fields.get(field);
-    if (!meta || !meta.sortable) {
+    // Three ways a key cannot be ordered by, all the same answer: not in the index, not `sortable`,
+    // or a TYPE `$orderby` cannot name. See ORDER_TYPES for why the last is not covered by the
+    // second — `centroid` is `sortable: true` and is still a 400.
+    if (!meta || !meta.sortable || !orderable(meta)) {
       dropped.push(name);
       continue;
     }
+    // ONE CLAUSE PER FIELD. `sortBy=displayName,displayName` is a query string anyone can type, and
+    // eagle-public appends a secondary sort that can repeat the first (`api.ts:176-177` with
+    // `documents-tab.component.ts:190`). A repeated field cannot change the order — the first
+    // occurrence already decided it — so the second is at best noise and at worst a 400.
+    //
+    // NOT ALSO A CLAUSE CAP. Azure's limit is 32 and no demi index has 32 sortable fields
+    // (`documents`, the widest, has 17 in total), so a cap could never fire — dead code with a test
+    // that could not exercise it, which is how it was caught. If an index ever gets that wide, this
+    // is where the cap goes.
+    if (seen.has(field)) continue;
+    seen.add(field);
     parts.push(`${field} ${desc ? 'desc' : 'asc'}`);
   }
 
@@ -432,7 +560,10 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false) {
     parts.push(DEFAULT_ORDER[dataset]);
   }
 
-  if (tiebreak) parts.push(tiebreak);
+  // The tiebreak goes through the SAME dedupe as the caller's clauses. Without this,
+  // `sortBy=id` emitted `id asc, id asc` — the exact shape the dedupe above exists to stop, added
+  // back one line later. `_id` reaches here as `id` too, through the alias table.
+  if (tiebreak && !seen.has(tiebreak.split(' ')[0])) parts.push(tiebreak);
   return { orderby: parts.join(', '), dropped };
 }
 
@@ -474,9 +605,12 @@ function ref(id, name) {
 /** Count and log dropped keys once per request rather than per key. */
 function reportDropped(dataset, kind, dropped) {
   if (!dropped || !dropped.length) return;
+  // "not expressible" rather than "not sortable"/"not filterable": the commonest drop is a field
+  // the index DOES flag `sortable: true` whose TYPE cannot be ordered (`centroid`), and a log line
+  // that contradicts the definition sends the reader to the wrong file.
   logger.warn(
     `[eagle-query] ${dataset}: dropped ${kind} ${dropped.join(', ')} — ` +
-    `not ${kind === 'sort' ? 'sortable' : 'filterable'} in the index`
+    `not expressible as ${kind === 'sort' ? 'an $orderby' : 'a $filter'} against this index`
   );
 }
 
@@ -487,6 +621,7 @@ module.exports = {
   DATASET_INDEX,
   buildFilter,
   buildOrderBy,
+  hasCriteria,
   unknownParams,
   filterKeysIn,
   projectIdsFrom,

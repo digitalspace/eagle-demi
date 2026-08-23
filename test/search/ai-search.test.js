@@ -53,6 +53,21 @@ function stubToken() {
 }
 stubToken();
 
+// An unconfigured service has not searched anything. Answering `{items: [], count: 0}` asserts
+// "no matches" as a fact — and since every sorted or filtered browse now routes through these two
+// functions, a degraded deploy would render an empty documents tab and an empty project list under
+// a 200. The controller turns the throw into a 502, which is the only true answer.
+test('a search with no SEARCH_ENDPOINT throws rather than reporting zero matches', async () => {
+  const saved = process.env.SEARCH_ENDPOINT;
+  process.env.SEARCH_ENDPOINT = '';
+  try {
+    await assert.rejects(() => aiSearch.searchProjects({ keywords: 'x' }), /SEARCH_ENDPOINT is not set/);
+    await assert.rejects(() => aiSearch.searchDocuments({ keywords: 'x' }), /SEARCH_ENDPOINT is not set/);
+  } finally {
+    process.env.SEARCH_ENDPOINT = saved;
+  }
+});
+
 test('ai-search query construction', async (t) => {
   await t.test('fuzzy emits (term OR term~1^0.5) per term, ANDed', () => {
     assert.strictEqual(aiSearch.buildQuery(['peace', 'river'], true),
@@ -372,6 +387,49 @@ test('ai-search document totals', async (t) => {
     }
     return { json: { value: [], '@odata.count': overlap } };
   };
+
+  // [R3] WHAT LEG TWO MEANS WITH NO KEYWORDS: nothing. It recovers documents whose PROJECT's NAME
+  // matches the query, and `matchAll` has no name to match — run anyway it would search the projects
+  // index for `*`, take every project the caller can read, and widen the document filter by
+  // `projectId` to the whole corpus. That is the unfiltered-list answer the filter path exists to
+  // stop. One request goes out, and the total is the direct leg's alone.
+  await t.test('a match-all document search runs one leg, not the project-name leg', async (tt) => {
+    const calls = captureFetch(tt, () => ({
+      json: { value: [{ id: 'd1' }, { id: 'd2' }], '@odata.count': 2 }
+    }));
+
+    const res = await aiSearch.searchDocuments({
+      matchAll: true, filter: null, projectFilter: null, orderby: 'datePosted desc', top: 10
+    });
+
+    assert.strictEqual(calls.length, 1, 'direct only: no projects leg, no by-project leg, no overlap');
+    assert.strictEqual(res.count, 2, 'and the total is the direct leg, not a corpus-wide one');
+    assert.strictEqual(calls[0].body.search, '*');
+    assert.strictEqual(calls[0].body.orderby, 'datePosted desc');
+    // `search: '*'` matches without matching a TERM, so there is nothing for the analyzer to mark.
+    assert.strictEqual(calls[0].body.highlight, undefined, 'no highlight to ask for under match-all');
+  });
+
+  // The same assertion where the TOKENIZER cannot make it true by accident. A keywordless leg two
+  // short-circuits inside `runSearch` on its own — `tokenize('')` yields no terms — so the test
+  // above passes with or without the guard. `matchAll` alongside keyword text is the shape that
+  // separates them: `runSearch` prefers `matchAll`, so the query the caller is asking for is still
+  // `*`, and only the guard stops leg two from searching the projects index for that text and
+  // widening the document filter to every project it finds.
+  await t.test('match-all decides the legs, not whether keyword text happens to be present',
+    async (tt) => {
+      const calls = captureFetch(tt, () => ({
+        json: { value: [{ id: 'd1' }], '@odata.count': 1 }
+      }));
+
+      const res = await aiSearch.searchDocuments({
+        matchAll: true, keywords: 'ajax', filter: null, projectFilter: null, top: 10
+      });
+
+      assert.strictEqual(calls.length, 1, 'still one leg: `*` has no project NAME to match');
+      assert.strictEqual(calls[0].body.search, '*', 'and the query is match-all, not the text');
+      assert.strictEqual(res.count, 1);
+    });
 
   await t.test('the total spans both legs, net of what they share', async (tt) => {
     const calls = captureFetch(tt, legs(2));
