@@ -1095,3 +1095,14 @@ test('the deploy template pins all three index names to the code defaults', () =
       `${param} must default to '${value}', the live index name`);
   }
 });
+
+// A name in `select` that the index does not carry is a 400 on EVERY query — the code says so and
+// nothing held it up: changing `datePosted` to `datePostedXYZ` left the whole suite green. The
+// committed index definition is the same file `eagle-query.js` reads its field metadata from, so
+// this compares the two rather than restating either.
+test('every field the document search selects exists in the committed index', () => {
+  const definition = require('../../azure/search/indexes/documents.json');
+  const inIndex = new Set(definition.fields.map(f => f.name));
+  const missing = aiSearch.DOCUMENT_SELECT.split(',').filter(name => !inIndex.has(name));
+  assert.deepStrictEqual(missing, [], `not in ${definition.name}: ${missing.join(', ')}`);
+});
