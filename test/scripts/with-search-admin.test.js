@@ -37,7 +37,7 @@ case "$1 $2" in
   "identity show")           echo "fake-principal-id" ;;
   "role assignment")
     case "$3" in
-      create) echo "${ASSIGNMENT_ID}" ;;
+      create) [[ -n "\${AZ_CREATE_EMPTY:-}" ]] || echo "${ASSIGNMENT_ID}" ;;
       list)   echo "${ASSIGNMENT_ID}" ;;
       delete) [[ -n "\${AZ_DELETE_FAILS:-}" ]] && exit 1 ;;
     esac ;;
@@ -98,7 +98,11 @@ test('with-search-admin.sh', async (t) => {
     fs.writeFileSync(az, FAKE_AZ, { mode: 0o755 });
     fs.writeFileSync(log, '');
 
-    const child = spawn('bash', [SCRIPT, '--', 'bash', '-c', `touch ${started}; sleep 30`], {
+    // `stdio: 'ignore'`, and a short sleep. The grandchild inherits the spawn's pipes, so with
+    // pipes and `sleep 30` the test process stayed alive for the full 30s AFTER the assertions
+    // passed — 22s added to a 9.5s gate that runs before every commit.
+    const child = spawn('bash', [SCRIPT, '--', 'bash', '-c', `touch ${started}; sleep 5`], {
+      stdio: 'ignore',
       env: { ...process.env, AZ: az, AZ_LOG: log }
     });
 
@@ -126,6 +130,28 @@ test('with-search-admin.sh', async (t) => {
     assert.match(r.stderr, /az role assignment delete --ids/,
       'the message has to carry the id, or the operator cannot act on it');
     assert.ok(r.stderr.includes(ASSIGNMENT_ID), 'and the id itself, not a placeholder');
+  });
+
+  await t.test('a create that returns NO id stops, and does not run the command', async () => {
+    // The trap keys on a non-empty ASSIGNMENT_ID, so an empty one made the revoke a silent no-op:
+    // the command ran, the script exited 0, and zero delete calls were made. Reproduced before the
+    // fix. The grant may exist server-side even when the CLI returns nothing, so "no id" has to
+    // mean "stop and tell the operator", never "nothing to revoke".
+    const r = run(['--', 'bash', '-c', 'echo COMMAND-RAN'], { env: { AZ_CREATE_EMPTY: '1' } });
+    assert.notStrictEqual(r.status, 0, 'a grant that cannot be confirmed must not proceed');
+    assert.ok(!/COMMAND-RAN/.test(r.stdout), 'the command must not run without a confirmed grant');
+    assert.match(r.stderr, /no assignment id/);
+    assert.match(r.stderr, /az role assignment list --scope/,
+      'and it must hand over the query to find a grant that may be standing');
+  });
+
+  await t.test('resolves the identity in the SAME subscription it grants on', async () => {
+    // Without --subscription the identity is looked up in whatever az defaults to, while the scope
+    // names SUBSCRIPTION — best case a confusing ResourceGroupNotFound, worst case a same-named
+    // identity in another subscription becomes the principal that gets granted.
+    const r = run(['--', 'true'], { env: { SUBSCRIPTION: 'sub-x' } });
+    const lookup = r.calls.find(c => c.startsWith('identity show'));
+    assert.match(lookup, /--subscription sub-x/);
   });
 
   await t.test('does not grant at all when given no command', async () => {

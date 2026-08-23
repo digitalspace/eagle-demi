@@ -31,10 +31,21 @@ because those indexers never stopped. Do not delete them until the new names hav
 
 **They have NO committed definition file, so every widening has to be applied to them by hand too,
 or the rollback target rots silently.** It already had: measured 2026-08-23, `demi-projects` still
-carried **12** fields while `projects` had 19 — it was never widened during the rename, so a
-rollback at any point since would have lost `type`, `currentPhaseName`, `eacDecision` and
-`decisionDate` as well as whatever prompted the rollback. `apply-search-definitions.js` cannot do it
-(`--only` resolves by committed name), so it is a hand PUT with the name rewritten:
+carried **12** fields against `projects`' **20** — it was never widened during the rename. Eight
+fields were missing: `ceaaInvolvementId`, `currentPhaseName`, `currentPhaseNameId`, `decisionDate`,
+`eacDecision`, `eacDecisionId`, `type` and **`sourceSystem`**.
+
+**That last one is the difference between a degraded rollback and a broken one, so the line above
+about flipping three settings being "the whole rollback" was not true while it was missing.**
+`src/controllers/search.js` appends `sourceSystem eq 'track'` to the filter of every project search
+that is not `includeSeeded=true`; filtering on a field the index does not have is a 400, and by this
+file's own rule a 400 reaches anonymous callers as a **502**. The other seven lose columns; this one
+takes anonymous project search down. Fixed 2026-08-23 — `demi-projects` is now 20 fields with its
+indexer reset and refilled — but the lesson is that the rollback target has to be widened in the
+same session, not eventually.
+
+`apply-search-definitions.js` cannot do it (`--only` resolves by committed name), so it is a hand PUT
+with the name rewritten:
 
 ```bash
 jq '.name = "demi-projects"' indexes/projects.json > /tmp/idx.json
@@ -43,7 +54,8 @@ jq '.name = "demi-projects"' indexes/projects.json > /tmp/idx.json
 
 Then reset and run `demi-projects-indexer` the same way, or its new columns stay `null` and the
 rollback is a 200-with-no-rows instead of a working index. The data sources are shared, so the
-data-source PUT in step 2 above covers both indexers at once — that one is not doubled.
+data-source PUT in **"Adding a field"** below covers both indexers at once — that one is not
+doubled.
 
 The staged history — all three steps are DONE. Past tense on purpose: the rollback walks it
 backwards, so the reader doing that needs to know what each step did.

@@ -55,7 +55,11 @@ fi
 
 SCOPE="/subscriptions/${SUBSCRIPTION}/resourceGroups/${RG}/providers/Microsoft.Search/searchServices/${SERVICE}"
 
-PRINCIPAL_ID="$("$AZ" identity show -g "$RG" -n "$IDENTITY" --query principalId -o tsv)"
+# `--subscription` explicitly: the scope string below names SUBSCRIPTION, and without this the
+# identity is resolved in whatever subscription `az` happens to default to. Overriding SUBSCRIPTION
+# alone would then grant on one subscription's scope to a same-named identity from another.
+PRINCIPAL_ID="$("$AZ" identity show --subscription "$SUBSCRIPTION" -g "$RG" -n "$IDENTITY" \
+  --query principalId -o tsv)"
 if [[ -z "$PRINCIPAL_ID" ]]; then
   echo "with-search-admin: could not resolve principalId for $IDENTITY in $RG" >&2
   exit 1
@@ -88,12 +92,25 @@ revoke() {
 trap revoke EXIT
 
 echo "with-search-admin: granting Search Service Contributor on $SERVICE to $IDENTITY" >&2
-ASSIGNMENT_ID="$("$AZ" role assignment create \
+
+# NO ID MEANS STOP, not "nothing to revoke". The trap keys on a non-empty ASSIGNMENT_ID, so a create
+# that fails — or that exits 0 with empty stdout — would otherwise run the command and exit cleanly
+# with the revoke a silent no-op, which is precisely the failure this script exists to prevent. And
+# the grant may exist server-side even when the CLI errored (a write that lands, then the response
+# is lost), so this cannot assume there is nothing to clean up: it says so and hands over the query.
+if ! ASSIGNMENT_ID="$("$AZ" role assignment create \
   --role "$ROLE_ID" \
   --assignee-object-id "$PRINCIPAL_ID" \
   --assignee-principal-type ServicePrincipal \
   --scope "$SCOPE" \
-  --query id -o tsv)"
+  --query id -o tsv)" || [[ -z "$ASSIGNMENT_ID" ]]; then
+  ASSIGNMENT_ID=''
+  echo "with-search-admin: the grant returned no assignment id — NOT running the command." >&2
+  echo "with-search-admin: it may still have been created. Check, and remove it by hand:" >&2
+  echo "  az role assignment list --scope $SCOPE \\" >&2
+  echo "    --query \"[?roleDefinitionName=='Search Service Contributor'].id\" -o tsv" >&2
+  exit 1
+fi
 
 # The grant is not readable the instant it is created. Poll rather than sleeping a guessed interval:
 # a fixed sleep is either too short (the command 403s) or wastes time on every run.
