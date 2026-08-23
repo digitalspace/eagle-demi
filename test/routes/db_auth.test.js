@@ -2,20 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const apiRoutes = require('../../src/routes/api');
-
-// Read the router source, not its runtime stack: every middleware in the stack reports as
-// <anonymous>, so a runtime layer count cannot tell authMiddleware from passiveAuthMiddleware.
-// Same parser as test/helpers/access-coverage.test.js.
-function routeChains() {
-  const router = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'src', 'routes', 'api.js'), 'utf8'
-  );
-  return [...router.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']+)'\s*,([^;]*?)\);/g)]
-    .map(m => ({ method: m[1], path: m[2], chain: m[3] }));
-}
+const { routeChains } = require('../helpers/router-source');
 
 function routeTable() {
   return apiRoutes.stack
@@ -28,15 +16,32 @@ function routeTable() {
 
 test('DB Management Routes Security Tests', async (t) => {
   await t.test('admin DB routes exist and are behind authMiddleware', () => {
-    // Naming authMiddleware is the whole point: a layer count of 2 is equally satisfied by
-    // passiveAuthMiddleware, which attaches an anonymous access object instead of rejecting, and
-    // would make /db/stats and /admin/index-progress anonymously readable with this test green.
+    // TWO assertions per route, and they are complementary rather than redundant — each catches a
+    // downgrade the other misses, and only together do they cover every way the gate can go.
+    //
+    //   the NAME, from source: a layer count of 2 is equally satisfied by passiveAuthMiddleware,
+    //   which attaches an anonymous access object instead of rejecting. Swapping it in would make
+    //   /db/stats and /admin/index-progress anonymously readable under a green count.
+    //
+    //   the COUNT, at runtime: source text includes comments, so deleting the middleware and
+    //   leaving its name in a comment beside the handler satisfies the name check while the route
+    //   runs with one layer and no auth. routeChains() strips comments, which closes that on its
+    //   own; the count stays because a security assertion is worth two independent readings of the
+    //   same fact, and because the count is what fails if the stripper ever regresses.
     const protectedPaths = ['/db/stats', '/admin/index-progress'];
     const routes = routeTable();
     const chains = routeChains();
 
     for (const p of protectedPaths) {
-      assert.ok(routes.find(r => r.path === p), `Route ${p} must exist on API router`);
+      const match = routes.find(r => r.path === p);
+      assert.ok(match, `Route ${p} must exist on API router`);
+      // authMiddleware + controller handler = at least 2 layers
+      assert.ok(
+        match.middlewareCount >= 2,
+        `Route ${p} runs ${match.middlewareCount} layer(s) — no middleware stands in front of the ` +
+        'controller, whatever the source says'
+      );
+
       const declared = chains.find(r => r.path === p);
       assert.ok(declared, `Route ${p} must be declared in src/routes/api.js`);
       assert.ok(
