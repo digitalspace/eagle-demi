@@ -21,7 +21,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { logger } = require('../src/utils/logger');
-const { handleExpress } = require('../api/index');
+const { handleExpress, queryFrom } = require('../api/index');
 
 /** The shape @azure/functions hands a handler: a Request-like object with async body accessors. */
 function functionsRequest(method, url, headers = {}) {
@@ -43,6 +43,81 @@ function captureLogs(t) {
   }
   return records;
 }
+
+// REPEATED QUERY KEYS. `Object.fromEntries(searchParams.entries())` kept only the LAST occurrence,
+// and eagle-public repeats a key per selected option (`api.ts:186-196`) — so every multi-select
+// facet applied one option and answered 200. Measured live before the fix:
+// `and[region]=Peace&and[region]=Cariboo` returned 13 against demi and 89 against prod
+// eagle-search. Asserted on literal expected values rather than by re-parsing the URL, because a
+// test that rebuilds its expectation from the code under test passes either way.
+test('a repeated query key arrives as an array, not as its last value', () => {
+  const query = queryFrom(new URLSearchParams(
+    'dataset=Project&and[region]=Peace&and[region]=Cariboo&and[region]=Skeena&pageSize=10'));
+
+  // THREE values, not two. With only two, the "append to the existing array" path is never
+  // exercised — a build that keeps the first two and drops the rest stays green on a pair.
+  assert.deepStrictEqual(query['and[region]'], ['Peace', 'Cariboo', 'Skeena']);
+  assert.strictEqual(query.dataset, 'Project');
+  assert.strictEqual(query.pageSize, '10', 'a key that appears once stays a string');
+});
+
+// THE CALL SITE, not just the helper. `queryFrom` can be perfect and unused: reverting
+// `api/index.js` to `Object.fromEntries(...)` left every other test in this file green, because
+// they all call the helper directly. This drives a real request through the adapter and reads what
+// the Express app was actually handed.
+test('the adapter hands the app the array, not the last value', async (t) => {
+  const appPath = require.resolve('../src/app');
+  const cached = require.cache[appPath];
+  let seen = null;
+
+  require.cache[appPath] = {
+    id: appPath,
+    filename: appPath,
+    loaded: true,
+    exports: (req, res) => {
+      seen = req.query;
+      res.statusCode = 200;
+      res.end('ok');
+    }
+  };
+  t.after(() => { require.cache[appPath] = cached; });
+
+  const result = await handleExpress(functionsRequest(
+    'GET',
+    'https://demi-api-test.azurewebsites.net/api/search' +
+      '?dataset=Project&and[region]=Peace&and[region]=Cariboo&sortBy=-name&sortBy='
+  ), null);
+
+  assert.strictEqual(result.status, 200, 'the stubbed app answered, so a query was built');
+  assert.deepStrictEqual(seen['and[region]'], ['Peace', 'Cariboo']);
+  assert.deepStrictEqual(seen.sortBy, ['-name', '']);
+});
+
+// The same collapse ate SORTING, and it is a different symptom of one bug: `api.ts:176-177`
+// appends `sortBy` twice with the second routinely empty, so `sortBy=-name&sortBy=` arrived as ''
+// — no sort asked for, which also routed the request to the Cosmos list instead of the index.
+test('the empty second sortBy no longer erases the first', () => {
+  const query = queryFrom(new URLSearchParams('dataset=Project&sortBy=-name&sortBy='));
+  assert.deepStrictEqual(query.sortBy, ['-name', '']);
+});
+
+// Order must not decide the answer. Before the fix `sortBy=&sortBy=-name` worked and
+// `sortBy=-name&sortBy=` did not, which is what made the defect look like a frontend quirk.
+test('a repeated key keeps every value whichever order they arrive in', () => {
+  assert.deepStrictEqual(queryFrom(new URLSearchParams('sortBy=&sortBy=-name')).sortBy,
+    ['', '-name']);
+});
+
+// A query key named like an Object.prototype member must be an ordinary own property, never a
+// prototype read: on a normal object `constructor` is already "present" and `toString` is a
+// function. `querystring.parse` returns a null-prototype object, which is why this holds.
+test('a query key that collides with Object.prototype is still read correctly', () => {
+  const query = queryFrom(new URLSearchParams('constructor=a&constructor=b&toString=c&__proto__=x'));
+  assert.deepStrictEqual(query.constructor, ['a', 'b']);
+  assert.strictEqual(query.toString, 'c');
+  assert.strictEqual(query.__proto__, 'x');
+  assert.strictEqual({}.x, undefined, 'and nothing was written to Object.prototype');
+});
 
 test('functions adapter', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
