@@ -6,12 +6,15 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  closeUnpublished, needsClosing, parseArgs
+  closeUnpublished, needsClosing, closedAcl, exitCodeFor, parseArgs
 } = require('../../src/scripts/close-unpublished-track-projects');
-const { SECURE_ROLES } = require('../../src/helpers/access-sql');
+const merge = require('../../src/merge/project');
 
 const NOW = '2026-08-23T00:00:00.000Z';
-const PUBLIC_ACL = ['public', ...SECURE_ROLES];
+const PUBLIC_ACL = ['public', ...merge.SECURE_ROLES];
+
+/** `sources.eagle` populated — the merge matched an Eagle record. */
+const MATCHED = { _id: '58851172aaecd9001b820335', read: ['public'] };
 
 /** Projects repository double. `listVisible` answers whole — projects fit in one page. */
 function fakeProjects(items) {
@@ -35,19 +38,46 @@ function fakePatch() {
   return { calls, fn: async (id, ops) => { calls.push({ id, ops }); } };
 }
 
-const TRACK_ONLY = { id: '354', name: 'Surrey Langley SkyTrain', eagleId: null, read: PUBLIC_ACL };
+const TRACK_ONLY = {
+  id: '354', name: 'Surrey Langley SkyTrain', eagleId: null, read: PUBLIC_ACL,
+  sources: { track: {}, eagle: null }
+};
 const TRACK_LINKED = {
-  id: '207', name: 'Nicomen Wind Energy', eagleId: '58851172aaecd9001b820335', read: PUBLIC_ACL
+  id: '207', name: 'Nicomen Wind Energy', eagleId: '58851172aaecd9001b820335', read: PUBLIC_ACL,
+  sources: { track: {}, eagle: MATCHED }
+};
+// The category the first review of this branch caught: `epic_guid` is set, so `eagleId` is set,
+// but it points at nothing and no Eagle record was matched. `merge/project.js` counts 6 of these.
+const DANGLING_GUID = {
+  id: '361', name: 'Dangling Guid Project', eagleId: '58851172aaecd9001b820335',
+  read: PUBLIC_ACL, sources: { track: {}, eagle: null }
 };
 const EAGLE_ONLY = {
   id: 'eagle-6a59234357be6fca20a489dc', name: 'testtesttest',
-  eagleId: '6a59234357be6fca20a489dc', read: PUBLIC_ACL
+  eagleId: '6a59234357be6fca20a489dc', read: PUBLIC_ACL,
+  sources: { track: null, eagle: MATCHED }
 };
-const ALREADY_CLOSED = { id: '360', name: 'Berg Mine', eagleId: null, read: [...SECURE_ROLES] };
+const ALREADY_CLOSED = {
+  id: '360', name: 'Berg Mine', eagleId: null, read: [...merge.SECURE_ROLES],
+  sources: { track: {}, eagle: null }
+};
+const NO_SOURCES = { id: '362', name: 'Legacy Row', read: PUBLIC_ACL };
 
 test('needsClosing selects on the Eagle counterpart, not on provenance', async (t) => {
   await t.test('a Track project with no Eagle counterpart, currently public', () => {
     assert.strictEqual(needsClosing(TRACK_ONLY), true);
+  });
+
+  await t.test('a DANGLING epic_guid counts as no counterpart', () => {
+    // `eagleId` is populated from `track.epic_guid` whether or not the guid resolves
+    // (`merge/project.js`), while `resolveProjectAcl` keys on the record actually matched. Selecting
+    // on `eagleId` skipped these 6 rows and left them public — the exact gap the reviewer found.
+    assert.strictEqual(needsClosing(DANGLING_GUID), true);
+    assert.ok(DANGLING_GUID.eagleId, 'and it does carry an eagleId, which is the whole trap');
+  });
+
+  await t.test('a row with no sources at all fails closed', () => {
+    assert.strictEqual(needsClosing(NO_SOURCES), true);
   });
 
   await t.test('a Track project WITH an Eagle counterpart is left alone', () => {
@@ -56,9 +86,9 @@ test('needsClosing selects on the Eagle counterpart, not on provenance', async (
   });
 
   await t.test('an Eagle-only project is left alone', () => {
-    // It always carries an eagleId by construction (merge/project.js:227), so it can never match.
-    // This is the row set the PROVENANCE filter handles; conflating the two would unpublish every
-    // project Eagle holds that Track has not caught up with.
+    // It always carries `sources.eagle` by construction, so it can never match. This is the row set
+    // the PROVENANCE filter handles; conflating the two would unpublish every project Eagle holds
+    // that Track has not caught up with.
     assert.strictEqual(needsClosing(EAGLE_ONLY), false);
   });
 
@@ -102,11 +132,21 @@ test('closeUnpublished', async (t) => {
     const { id, ops } = patch.calls[0];
     assert.strictEqual(id, '354');
     assert.deepStrictEqual(ops, [
-      { op: 'set', path: '/read', value: [...SECURE_ROLES] },
+      { op: 'set', path: '/read', value: closedAcl() },
       { op: 'set', path: '/isPublished', value: false },
       { op: 'set', path: '/updatedAt', value: NOW }
     ]);
     assert.ok(!ops[0].value.includes('public'), 'public is what this script exists to remove');
+  });
+
+  await t.test('it writes exactly what a re-seed would write', async () => {
+    // Two SECURE_ROLES lists exist and they differ. Asserting against either constant would pass
+    // while the backfill and a re-seed left different arrays on the same row, and neither module's
+    // own tests could see it. Comparing against the merge's OWN output is drift-proof: whichever
+    // list moves, this fails.
+    const reseeded = merge.mergeTrackProject({ track_project_id: 354 }, null, { now: NOW });
+    assert.deepStrictEqual(closedAcl(), reseeded.read);
+    assert.strictEqual(reseeded.isPublished, false, 'and the mirror agrees');
   });
 
   await t.test('a project WITH documents is skipped, counted and never patched', async () => {
@@ -156,4 +196,24 @@ test('parseArgs refuses anything it does not understand', () => {
   assert.deepStrictEqual(parseArgs([]), { live: false });
   assert.deepStrictEqual(parseArgs(['--live']), { live: true });
   assert.throws(() => parseArgs(['--dry-run']), /unknown argument/);
+});
+
+test('exitCodeFor', async (t) => {
+  // The contract the docblock and the commit message advertise, and that an operator running under
+  // `set -e` relies on. It lived inline in the require.main block, where no test could reach it.
+  await t.test('a clean run exits 0', () => {
+    assert.strictEqual(exitCodeFor({ failed: 0, withDocuments: 0 }), 0);
+  });
+
+  await t.test('a failure exits 1', () => {
+    assert.strictEqual(exitCodeFor({ failed: 1, withDocuments: 0 }), 1);
+  });
+
+  await t.test('a SKIP exits 1 too — it is work deliberately not done', () => {
+    assert.strictEqual(exitCodeFor({ failed: 0, withDocuments: 1 }), 1);
+  });
+
+  await t.test('a partial run that also closed rows still exits 1', () => {
+    assert.strictEqual(exitCodeFor({ failed: 0, withDocuments: 2, closed: 5 }), 1);
+  });
 });

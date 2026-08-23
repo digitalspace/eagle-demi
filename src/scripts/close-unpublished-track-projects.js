@@ -44,7 +44,14 @@
 const projects = require('../repositories/projects');
 const documents = require('../repositories/documents');
 const cosmos = require('../db/cosmos-nosql');
-const { systemAccess, SECURE_ROLES } = require('../helpers/access-sql');
+const { systemAccess } = require('../helpers/access-sql');
+// The ACL comes from the MERGE, by calling it — not from a SECURE_ROLES literal. There are two
+// such lists (`merge/project.js:22` has three roles, `helpers/access-sql.js:30` has four), and this
+// script exists to write what a re-seed would have written. Importing the wrong one leaves the
+// backfill and a later re-seed with different arrays on the same rows. No access difference either
+// way — `readClause` short-circuits for any of them — but neither module's tests can see the drift,
+// because each asserts against its own constant. Asking the merge sidesteps the choice entirely.
+const { resolveProjectAcl } = require('../merge/project');
 
 function parseArgs(argv) {
   const args = { live: false };
@@ -56,14 +63,43 @@ function parseArgs(argv) {
 }
 
 /**
- * A project this rule applies to: sourced from Track, no Eagle counterpart, currently public.
+ * A project this rule applies to: no Eagle record was matched, and the row is currently public.
  *
- * `eagleId` is the test, not `sourceSystem` alone. An Eagle-only row (`sourceSystem: 'eagle'`)
- * always has one by construction (`merge/project.js:227`), so it can never match — which is
- * correct, since its ACL came from Eagle and this rule is about projects Eagle has never seen.
+ * **`sources.eagle`, NOT `eagleId`.** They disagree for a category the merge names and counts:
+ * `mergeTrackProject` writes `eagleId` from `track.epic_guid` whether or not that guid resolves to
+ * anything, so a Track row with a DANGLING guid — 6 of them, pinned at
+ * `test/merge/project.test.js:274` as `trackOnlyDanglingGuid` — carries an `eagleId` while
+ * `resolveProjectAcl` correctly saw no Eagle record and now fails closed. Keying on `eagleId` would
+ * skip exactly those 6 and leave them public in Cosmos and in the index, which is the opposite of
+ * what this script exists to do. `sources.eagle` is the merge's own record of what it matched
+ * (`merge/project.js:206-209`), so it is the same question `resolveProjectAcl` was asked.
+ *
+ * An Eagle-only row carries `sources.eagle` populated by construction, so it can never match —
+ * correct, since its ACL came from Eagle and this rule is about projects Eagle has never published.
+ *
+ * A row with no `sources` at all is treated as unmatched. Fail closed, and visible: a dry run
+ * prints every name before anything is written.
  */
 function needsClosing(project) {
-  return !project.eagleId && Array.isArray(project.read) && project.read.includes('public');
+  const matchedEagle = project.sources && project.sources.eagle;
+  return !matchedEagle && Array.isArray(project.read) && project.read.includes('public');
+}
+
+/**
+ * The ACL a re-seed would write for a project with no Eagle match — asked of the merge itself
+ * rather than rebuilt here, so the backfill and a re-seed cannot disagree.
+ */
+function closedAcl() {
+  return resolveProjectAcl(null);
+}
+
+/**
+ * 1 on a failure OR a skip. A project with documents is work this script deliberately did not do,
+ * and a silent 0 would read as "nothing left to close". Extracted and exported so it can be
+ * asserted — the sibling `backfill-document-list-ids.js` does the same for the same reason.
+ */
+function exitCodeFor(summary) {
+  return summary.failed > 0 || summary.withDocuments > 0 ? 1 : 0;
 }
 
 /**
@@ -117,7 +153,7 @@ async function closeUnpublished(argv = [], opts = {}) {
 
     try {
       await patch(project.id, [
-        { op: 'set', path: '/read', value: [...SECURE_ROLES] },
+        { op: 'set', path: '/read', value: closedAcl() },
         { op: 'set', path: '/isPublished', value: false },
         { op: 'set', path: '/updatedAt', value: now }
       ]);
@@ -131,15 +167,13 @@ async function closeUnpublished(argv = [], opts = {}) {
   return summary;
 }
 
-module.exports = { closeUnpublished, needsClosing, parseArgs };
+module.exports = { closeUnpublished, needsClosing, closedAcl, exitCodeFor, parseArgs };
 
 if (require.main === module) {
   closeUnpublished(process.argv.slice(2))
     .then((summary) => {
       console.log(JSON.stringify(summary, null, 2));
-      // Non-zero on a skip as well as a failure: a project with documents is work this script
-      // deliberately did not do, and a silent 0 would read as "nothing left to close".
-      process.exit(summary.failed > 0 || summary.withDocuments > 0 ? 1 : 0);
+      process.exit(exitCodeFor(summary));
     })
     .catch((err) => {
       console.error(`[close-unpublished] ${err.stack || err.message}`);
