@@ -8,6 +8,7 @@ const { logger } = require('../utils/logger');
 const { filterFor } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
 const eagleQuery = require('../search/eagle-query');
+const groupChunks = require('../search/group-chunks');
 const documentsRepo = require('../repositories/documents');
 const projectsRepo = require('../repositories/projects');
 const chunksRepo = require('../repositories/chunks');
@@ -670,16 +671,24 @@ exports.search = async (req, res) => {
         const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
         eagleQuery.reportDropped(dataset, 'filter', dropped);
 
+        // A PAGE OF DOCUMENTS COSTS A WINDOW OF CHUNKS. Rows are grouped by parent document below,
+        // so `pageSize` chunks would yield far fewer than `pageSize` documents — measured on the
+        // eagle-search side, ten chunk hits for one query covered four distinct files. The window
+        // is the fetch unit and therefore the paging unit too, exactly as
+        // `eagle-search/service/index.js:355-356` does it.
+        const chunkWindow = groupChunks.windowFor(pageSize);
         const { items, count } = await aiSearch.searchChunks({
           filter,
           // No `orderby`: every field in `chunks` is sortable:false, the key included, so
           // there is nothing to name — and naming a non-sortable field is a 400. Chunk pages are
-          // relevance-ordered with no tiebreak, which makes a deep chunk page unstable. eagle-public
-          // has no chunk UI at all and never sorts or pages this dataset.
-          skip,
+          // relevance-ordered with no tiebreak, which makes a deep chunk page unstable.
+          // ~~eagle-public has no chunk UI at all~~ — CORRECTED 2026-08-23: it does, at
+          // `/search/content` (`app.routes.ts:87-90`), and that card is what the grouping below
+          // exists for. It still never sorts this dataset.
+          skip: pageNum * chunkWindow,
           keywords,
           fuzzy,
-          top: pageSize
+          top: chunkWindow
         });
 
         if (items.length === 0) {
@@ -763,10 +772,17 @@ exports.search = async (req, res) => {
         // content they may not see — but reporting the PAGE length as the total is worse: `count`
         // is the whole-corpus figure the frontend shows as "N results" and pages against, so a
         // single withheld chunk would collapse it to at most one page.
+        // GROUPED AFTER THE GATE, never before: a withheld chunk must not contribute a snippet or
+        // a match to the document row, and grouping first would hide which rows the ACL removed.
+        const grouped = groupChunks.groupByDocument(mappedChunks, pageSize);
+
         const withheld = items.length - visible.length;
         return res.json([{
-          searchResults: mappedChunks,
-          count: withheld > 0 ? Math.max(count - withheld, mappedChunks.length) : count
+          searchResults: grouped,
+          // Still the PASSAGE total — `meta.countsPassages` says so, and the rows are documents.
+          // Floored at the number of chunks that survived the gate rather than at the row count,
+          // which is now smaller than the matches it represents.
+          count: withheld > 0 ? Math.max(count - withheld, visible.length) : count
         }]);
       } catch (err) {
         // An empty result caused by a fault is NOT the same fact as "nothing matched", and the
