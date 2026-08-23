@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const apiRoutes = require('../../src/routes/api');
+const { routeChains } = require('../helpers/router-source');
 
 function routeTable() {
   return apiRoutes.stack
@@ -15,14 +16,40 @@ function routeTable() {
 
 test('DB Management Routes Security Tests', async (t) => {
   await t.test('admin DB routes exist and are behind authMiddleware', () => {
+    // TWO assertions per route, and they are complementary rather than redundant — each catches a
+    // downgrade the other misses, and only together do they cover every way the gate can go.
+    //
+    //   the NAME, from source: a layer count of 2 is equally satisfied by passiveAuthMiddleware,
+    //   which attaches an anonymous access object instead of rejecting. Swapping it in would make
+    //   /db/stats and /admin/index-progress anonymously readable under a green count.
+    //
+    //   the COUNT, at runtime: source text includes comments, so deleting the middleware and
+    //   leaving its name in a comment beside the handler satisfies the name check while the route
+    //   runs with one layer and no auth. routeChains() strips comments, which closes that on its
+    //   own; the count stays because a security assertion is worth two independent readings of the
+    //   same fact, and because the count is what fails if the stripper ever regresses.
     const protectedPaths = ['/db/stats', '/admin/index-progress'];
     const routes = routeTable();
+    const chains = routeChains();
 
-    for (const path of protectedPaths) {
-      const match = routes.find(r => r.path === path);
-      assert.ok(match, `Route ${path} must exist on API router`);
+    for (const p of protectedPaths) {
+      const match = routes.find(r => r.path === p);
+      assert.ok(match, `Route ${p} must exist on API router`);
       // authMiddleware + controller handler = at least 2 layers
-      assert.ok(match.middlewareCount >= 2, `Route ${path} must be protected by authMiddleware`);
+      assert.ok(
+        match.middlewareCount >= 2,
+        `Route ${p} runs ${match.middlewareCount} layer(s) — no middleware stands in front of the ` +
+        'controller, whatever the source says'
+      );
+
+      const declared = chains.find(r => r.path === p);
+      assert.ok(declared, `Route ${p} must be declared in src/routes/api.js`);
+      assert.ok(
+        /\bauthMiddleware\b/.test(declared.chain) &&
+        !/\bpassiveAuthMiddleware\b/.test(declared.chain),
+        `Route ${p} must be behind authMiddleware, not passiveAuthMiddleware — its chain is ` +
+        `"${declared.chain.trim()}"`
+      );
     }
   });
 

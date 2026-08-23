@@ -897,7 +897,11 @@ exports.summarize = async (req, res) => {
       return res.json({ summary: null, citations: [], reason: 'no_results' });
     }
 
-    // The index cannot supply the text — `content` is retrievable:false — so it comes from Cosmos.
+    // The text comes from Cosmos, and the reason is NOT that the index cannot supply it: `content` on
+    // the chunks index is `retrievable: true, stored: true` (`azure/search/indexes/chunks.json`),
+    // flipped when the semantic configuration was added, because a semantic field must be both. What
+    // keeps whole chunks out of a search response now is the `select` list, not retrievability.
+    // The point read below stays for the OTHER reason, which is the load-bearing one:
     // `getById` takes the caller's access and re-applies the ACL at the database. The search filter
     // above already excluded anything unreadable; this is the second of two load-bearing gates, not
     // a belt-and-braces one, and a null here means the row moved out of reach between the two reads.

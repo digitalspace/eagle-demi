@@ -31,6 +31,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { code, routeChains } = require('./router-source');
+
 const REPO_DIR = path.join(__dirname, '..', '..', 'src', 'repositories');
 
 /**
@@ -76,12 +78,6 @@ function repositories() {
     .map(name => ({ name, source: fs.readFileSync(path.join(REPO_DIR, name), 'utf8') }));
 }
 
-/** Strip comments so a gate named only in prose cannot satisfy an assertion about code. */
-function code(source) {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
-}
 
 test('access gate coverage', async (t) => {
   const all = repositories();
@@ -147,12 +143,10 @@ test('access gate coverage', async (t) => {
     // The executable half of the reasons above. An allowlist entry says "no ACL needed because
     // nothing unprivileged can reach it" — this reads the router and checks that is still true,
     // so moving a route out from behind requireWrite fails here instead of rotting a comment.
-    const router = fs.readFileSync(
-      path.join(__dirname, '..', '..', 'src', 'routes', 'api.js'), 'utf8'
-    );
-
-    const routes = [...router.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']+)'\s*,([^;]*?)\);/g)]
-      .map(m => ({ method: m[1], path: m[2], chain: m[3] }));
+    // routeChains() strips comments first. Without that, deleting `requireWrite` and leaving its
+    // name in a comment beside the handler satisfies the assertion below while the route runs
+    // ungated — the same hole the sibling db_auth suite was caught on.
+    const routes = routeChains();
 
     assert.ok(routes.length >= 20, `expected the router, parsed ${routes.length} routes`);
 
