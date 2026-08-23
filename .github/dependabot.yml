@@ -86,6 +86,26 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # jasmine-core 7 CANNOT be used here, and it is not our code that stops it:
+      # zone.js's testing patch assigns to the jasmine globals, and jasmine 7 makes
+      # them read-only. `patchJasmine` throws
+      # "Cannot assign to read only property 'describe'" during zone-testing setup,
+      # so ZERO specs run — measured 2026-08-23 on jasmine-core 7.0.1 with
+      # zone.js 0.16.2, which is the LATEST zone.js. The control passes: the same
+      # tree on jasmine-core 6.3.0 runs 46 of 46 green.
+      #
+      # PR #113 was that bump, and closed unmergeable. Lift this the moment a
+      # zone.js release says it supports jasmine 7 — the minor and patch stream
+      # below still flows, so 6.x security fixes still arrive.
+      - dependency-name: jasmine-core
+        update-types:
+          - version-update:semver-major
+      # Types follow the runtime it types. @types/jasmine has no 7.x published at
+      # all, so this is belt-and-braces rather than a second decision.
+      - dependency-name: '@types/jasmine'
+        update-types:
+          - version-update:semver-major
 
   # Keeps the action versions bumped in PR #26 (checkout v7, setup-node v7,
   # azure/login v3, azure/cli v3, arm-deploy v2) from going stale again — that
