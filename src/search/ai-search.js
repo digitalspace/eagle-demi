@@ -780,7 +780,12 @@ async function searchDocuments(opts = {}) {
   }
 
   const top = Math.min(Math.max(Number(opts.top) || 20, 1), MAX_PAGE_ROWS);
-  const select = 'id,displayName,documentFileName,description,type,projectId,read,isPublished';
+  // Every name here must exist in the index — a stray one is a 400 on EVERY query. The five added
+  // 2026-08-23 are the ones eagle-public's document table renders and DEMI could not answer before
+  // the index carried them: `datePosted` is its Date column, and the four `*Id` values are what
+  // `idToList()` resolves against eagle-api's List collection.
+  const select = 'id,displayName,documentFileName,description,type,projectId,read,isPublished,' +
+    'typeId,milestoneId,projectPhaseId,documentAuthorTypeId,datePosted';
 
   const direct = await runSearch(documentsIndex, {
     ...opts,

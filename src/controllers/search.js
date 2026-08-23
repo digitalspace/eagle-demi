@@ -538,10 +538,16 @@ exports.search = async (req, res) => {
                 displayName: doc.displayName || 'Untitled Document',
                 documentFileName: doc.documentFileName || 'document.pdf',
                 documentType: doc.type || 'PDF Document',
-                // No `type`/`milestone`/`projectPhase` ObjectIds. eagle-public resolves those
-                // through `idToList()` against eagle-api's `List` collection, and DEMI seeded the
-                // RESOLVED LABELS instead (`seed/transform.js:101-103`), so there is no id to send
-                // — the columns render '-' rather than a wrong lookup.
+                // ~~No `type`/`milestone`/`projectPhase` ObjectIds.~~ There are now: the index
+                // carries them and the seed keeps them, so eagle-public's `idToList()` has
+                // something to resolve and its Type / Milestone / Date columns stop rendering '-'.
+                // Sent as the ids the frontend expects, NOT the labels beside them — a label is
+                // ambiguous across the 2002 and 2018 Acts (`Amendment` is two different List rows).
+                type: doc.typeId || null,
+                milestone: doc.milestoneId || null,
+                projectPhase: doc.projectPhaseId || null,
+                documentAuthorType: doc.documentAuthorTypeId || null,
+                datePosted: doc.datePosted || null,
                 project: String(doc.projectId || ''),
                 // The index carries no projectName — a Cosmos document row does not have one, and
                 // an indexer reads a single container. Both label and `{_id, name}` shape below.
@@ -612,6 +618,14 @@ exports.search = async (req, res) => {
           displayName: d.displayName || 'Untitled Document',
           documentFileName: d.documentFileName || (d.s3Key ? d.s3Key.split('/').pop() : 'document.pdf'),
           documentType: d.type || 'PDF Document',
+          // Same five as the AI Search branch above, and for the same reason — the Cosmos row
+          // carries them since the backfill. Two mappers answering the same dataset must not
+          // disagree about which columns exist, or a filter changes what a row renders.
+          type: d.typeId || null,
+          milestone: d.milestoneId || null,
+          projectPhase: d.projectPhaseId || null,
+          documentAuthorType: d.documentAuthorTypeId || null,
+          datePosted: d.datePosted || null,
           project: String(d.projectId || ''),
           projectName: 'Associated Project',
           // Report the record's real publication state, not a hardcoded 'public'.
