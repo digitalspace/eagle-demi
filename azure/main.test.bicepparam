@@ -106,5 +106,9 @@ param contactEmails = [
 // So the same raise loosens the per-IP ceiling on the direct path 20x, from 300/min to 6000/min,
 // with no proxy in front of it. Accepted for TEST because the value is a circuit breaker and the
 // direct path there serves one internal frontend; it is NOT a value to carry to prod. The durable
-// fix is a limiter that knows which path a request arrived on — TODO.md F12.12.
+// fix is NOT a smarter limiter — it is moving the enforcement point. Front Door's WAF rate limit
+// keys on the socket IP and offers no header-based key, so it only sees real visitors once Front
+// Door is the edge; today OpenShift terminates the client's TLS and Front Door sits behind it. See
+// TODO.md F13, and do not ship an X-Forwarded-For fix without reading F13.5 — the obvious version
+// makes the key attacker-controlled.
 param rateLimitMaxRequests = 6000
