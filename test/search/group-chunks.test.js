@@ -37,13 +37,17 @@ test('groupByDocument', async (t) => {
     assert.strictEqual(row._id, 'd1', 'and _id is the DOCUMENT, which is what the card links to');
   });
 
-  // Truncating chunk rows before grouping would drop matches and snippets from documents that are
-  // still on the page — the count would then understate what the index found.
-  await t.test('the PAGE SIZE truncates documents, not chunks', () => {
+  // THE DEFECT THAT MADE THIS DIVERGE FROM THE ORIGINAL. eagle-search slices the grouped rows to
+  // `pageSize`; the caller pages by WINDOW, so a document grouped out of the window and then sliced
+  // off the end is skipped past on the next page and reachable from none. Measured on a
+  // 300-passage / 150-document corpus at pageSize=10: page 0 ended at d9, page 1 began at d50, and
+  // 30 of 150 documents were servable in total. Every document its window covered comes back.
+  await t.test('every document in the window is returned — no slice, nothing unreachable', () => {
     const rows = groupByDocument(
-      [chunk('d1', 1, 'a'), chunk('d1', 2, 'b'), chunk('d2', 1, 'c'), chunk('d3', 1, 'd')], 2);
-    assert.strictEqual(rows.length, 2);
-    assert.strictEqual(rows[0].matchCount, 2, 'both of d1 chunks counted, not just the first');
+      [chunk('d1', 1, 'a'), chunk('d1', 2, 'b'), chunk('d2', 1, 'c'), chunk('d3', 1, 'd')]);
+    assert.deepStrictEqual(rows.map(r => r._id), ['d1', 'd2', 'd3'],
+      'a page carries every document its window covered, not the first pageSize of them');
+    assert.strictEqual(rows[0].matchCount, 2, 'both d1 chunks counted, not just the first');
   });
 
   await t.test('a chunk with no parent id is skipped, never grouped under empty', () => {
@@ -52,8 +56,20 @@ test('groupByDocument', async (t) => {
   });
 });
 
-test('windowFor — the fetch unit is a window of chunks, clamped to Azure $top', () => {
-  assert.strictEqual(windowFor(10), 10 * FANOUT);
-  assert.strictEqual(windowFor(500), 1000, 'clamped: $top rejects more');
-  assert.strictEqual(windowFor(0), FANOUT, 'a zero page still fetches a window');
+// Hardcoded, NOT computed from FANOUT: importing the constant under test makes the assertion true
+// by construction. Mutating FANOUT to 5 left this file green until these numbers were written out.
+test('windowFor — the fetch unit is a window of chunks', () => {
+  assert.strictEqual(windowFor(10), 100);
+  assert.strictEqual(windowFor(1), 10);
+  assert.strictEqual(windowFor(0), 10, 'a zero page still fetches a window');
+  assert.strictEqual(FANOUT, 10, 'the two numbers above are this one; change both or neither');
+});
+
+// The clamp is the FETCH ceiling, not Azure's `$top` limit. `runSearch` silently clamps a larger
+// `top` to MAX_PAGE_ROWS while `skip` still advances by the full window, so chunks past the clamp
+// are never requested and the documents in them are unreachable from any page.
+test('windowFor clamps to what the fetch layer will actually ask for', () => {
+  assert.strictEqual(windowFor(100, 500), 500, 'not 1000 — runSearch would only fetch 500');
+  assert.strictEqual(windowFor(500, 500), 500);
+  assert.strictEqual(windowFor(10, 500), 100, 'under the ceiling, the window is untouched');
 });

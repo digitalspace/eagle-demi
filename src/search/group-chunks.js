@@ -39,19 +39,39 @@ const FANOUT = 10;
 /** Snippets shown per document. The request asks for one fragment per chunk. */
 const MAX_SNIPPETS = 2;
 
-/** Rows to fetch for a requested page of documents, clamped to Azure's `$top` maximum. */
-function windowFor(pageSize) {
-  return Math.min(Math.max(Number(pageSize) || 1, 1) * FANOUT, 1000);
+/**
+ * Chunks to fetch for a requested page.
+ *
+ * CLAMPED TO WHAT THE FETCH LAYER WILL ACTUALLY ASK FOR, which is `ai-search.MAX_PAGE_ROWS` (500),
+ * not Azure's `$top` limit of 1000. `runSearch` silently clamps a larger `top`, so a window of
+ * 1000 issued requests covering only the first 500 chunks while `skip` still advanced by 1000 —
+ * chunks 500-999 of every window were never requested and the documents in them were unreachable
+ * from any page. eagle-search's original clamps at 1000 because ITS page ceiling is 1000
+ * (`service/index.js:70`); DEMI's is 500, and the two numbers have to agree.
+ */
+function windowFor(pageSize, ceiling = 500) {
+  return Math.min(Math.max(Number(pageSize) || 1, 1) * FANOUT, ceiling);
 }
 
 /**
  * Group mapped chunk rows into document rows, preserving order.
  *
+ * NO PAGE-SIZE TRUNCATION, and this is the one deliberate divergence from the eagle-search original
+ * (`service/group.js:86`, which slices to `pageSize`). Slicing loses documents outright: the caller
+ * pages by WINDOW — `skip` advances a whole window per page — so any document grouped out of the
+ * window and then sliced off the end is skipped past on the next page and reachable from none.
+ * Measured on a 300-passage / 150-document corpus at pageSize=10: page 0 ended at d9 and page 1
+ * began at d50, so 40 documents fell in the gap, and 30 of 150 documents were servable in total.
+ *
+ * So the WINDOW is the page. A page carries every document its window covered — between 1 and
+ * `window` rows, more than `pageSize` whenever the matches are spread thin — and consecutive pages
+ * cover consecutive, non-overlapping chunk ranges, which is what makes every match reachable.
+ *
  * `pageNumber` IS NOT A PDF PAGE and is not surfaced as one. It is a passage sequence number — the
  * chunker increments it per emitted block — so nothing here renders "jump to page N" from it.
  * `matchCount` is the honest count.
  */
-function groupByDocument(rows, pageSize) {
+function groupByDocument(rows) {
   const byDocument = new Map();
 
   for (const row of rows) {
@@ -86,9 +106,7 @@ function groupByDocument(rows, pageSize) {
     if (row.snippet && doc.snippets.length < MAX_SNIPPETS) doc.snippets.push(row.snippet);
   }
 
-  // Only the DOCUMENTS are truncated to the page size. Truncating the chunk rows first would drop
-  // matches and snippets from documents that are still on the page.
-  return [...byDocument.values()].slice(0, Math.max(Number(pageSize) || 1, 1));
+  return [...byDocument.values()];
 }
 
 module.exports = { groupByDocument, windowFor, FANOUT, MAX_SNIPPETS };

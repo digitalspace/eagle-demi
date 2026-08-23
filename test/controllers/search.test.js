@@ -402,10 +402,103 @@ test('Search Controller Tests', async (t) => {
     assert.deepStrictEqual(rows[0].snippets, ['one', 'two'], 'capped at MAX_SNIPPETS');
     // A page of documents costs a WINDOW of chunks, and the window is the paging unit.
     assert.strictEqual(sent.top, 100, 'pageSize 10 x FANOUT 10');
+    assert.strictEqual(sent.skip, 0);
     // The total still counts passages; meta.countsPassages is what says so.
     assert.strictEqual(jsonResponse[0].count, 42);
     assert.strictEqual(jsonResponse[0].meta[0].countsPassages, true);
     assert.strictEqual(jsonResponse[0].meta[0].documentsOnPage, 2, 'documents, not passages');
+  });
+
+  // The gate withholds chunks whose parent document the caller may not read, and the total is
+  // reported net of them. The floor is the surviving CHUNK count, not the row count: one row can
+  // carry a dozen matches, so flooring at rows would report fewer matches than the page shows.
+  await t.test('a withheld chunk is subtracted from the total, floored at surviving chunks', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      count: 4,
+      items: [
+        { chunkId: 'd1::p1', documentId: 'd1', projectId: '207', pageNumber: 1, snippet: 'a' },
+        { chunkId: 'd1::p2', documentId: 'd1', projectId: '207', pageNumber: 2, snippet: 'b' },
+        { chunkId: 'd1::p3', documentId: 'd1', projectId: '207', pageNumber: 3, snippet: 'c' },
+        { chunkId: 'hidden::p1', documentId: 'hidden', projectId: '999', pageNumber: 1, snippet: 'd' }
+      ]
+    }));
+    // The parent of the fourth chunk is not readable, so listByIds does not return it.
+    t.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'First' }]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+
+    const req = { query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '10' }, header: () => null };
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(req, res);
+
+    assert.strictEqual(jsonResponse[0].searchResults.length, 1, 'the withheld chunk is gone');
+    assert.strictEqual(jsonResponse[0].count, 3,
+      '4 matches minus 1 withheld — and floored at 3 surviving chunks, not at the 1 row');
+  });
+
+  // The floor only shows itself when the subtraction would take the total BELOW what this page
+  // holds. Flooring at the row count instead of the surviving chunk count is invisible in the case
+  // above — both give 3 — so this is the shape that separates them.
+  await t.test('the floor is surviving chunks, not rows, when the subtraction goes low', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      count: 1,
+      items: [
+        { chunkId: 'd1::p1', documentId: 'd1', projectId: '207', pageNumber: 1, snippet: 'a' },
+        { chunkId: 'd1::p2', documentId: 'd1', projectId: '207', pageNumber: 2, snippet: 'b' },
+        { chunkId: 'd1::p3', documentId: 'd1', projectId: '207', pageNumber: 3, snippet: 'c' },
+        { chunkId: 'hidden::p1', documentId: 'hidden', projectId: '999', pageNumber: 1, snippet: 'd' }
+      ]
+    }));
+    t.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'First' }]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+
+    const req = { query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '10' }, header: () => null };
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(req, res);
+
+    assert.strictEqual(jsonResponse[0].count, 3,
+      'three surviving chunks, not the one row that carries them');
+  });
+
+  // `skip` AND `top` MUST BE THE SAME UNIT. Reverting `skip` to `pageNum * pageSize` while `top`
+  // stays a window left the whole suite green, and the consequence is silent: consecutive pages
+  // then re-read chunks they already served, or skip past chunks nobody ever sees. Nothing in a
+  // response makes that visible — the rows look plausible on every page.
+  await t.test('chunk pages advance by a whole window, so ranges neither gap nor overlap', async () => {
+    const seen = [];
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => {
+      seen.push({ skip: opts.skip, top: opts.top });
+      return { count: 300, items: [] };
+    });
+
+    for (const pageNum of ['0', '1', '2']) {
+      const req = {
+        query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '10', pageNum },
+        header: () => null
+      };
+      await searchController.search(req, { json: () => ({}), status: () => ({ json: () => ({}) }) });
+    }
+
+    assert.deepStrictEqual(seen, [
+      { skip: 0, top: 100 }, { skip: 100, top: 100 }, { skip: 200, top: 100 }
+    ], 'each page starts exactly where the previous one ended');
+  });
+
+  // The window is capped at what runSearch will actually fetch. A window of 1000 with a fetch that
+  // clamps at 500 leaves half of every window unrequested while `skip` still advances by 1000.
+  await t.test('a large page does not ask for a window the fetch layer would clamp', async () => {
+    let sent = null;
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => { sent = opts; return { count: 0, items: [] }; });
+
+    const req = {
+      query: { dataset: 'DocumentChunk', keywords: 'river', pageSize: '100', pageNum: '1' },
+      header: () => null
+    };
+    await searchController.search(req, { json: () => ({}), status: () => ({ json: () => ({}) }) });
+
+    assert.strictEqual(sent.top, aiSearch.MAX_PAGE_ROWS, 'clamped to the fetch ceiling, not 1000');
+    assert.strictEqual(sent.skip, aiSearch.MAX_PAGE_ROWS, 'and skip advances by the same amount');
   });
 
   // The AI Search data plane is private-endpoint-only, so this is the ONLY way to observe how many

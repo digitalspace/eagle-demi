@@ -674,9 +674,16 @@ exports.search = async (req, res) => {
         // A PAGE OF DOCUMENTS COSTS A WINDOW OF CHUNKS. Rows are grouped by parent document below,
         // so `pageSize` chunks would yield far fewer than `pageSize` documents — measured on the
         // eagle-search side, ten chunk hits for one query covered four distinct files. The window
-        // is the fetch unit and therefore the paging unit too, exactly as
+        // is the fetch unit and therefore the paging unit too, as
         // `eagle-search/service/index.js:355-356` does it.
-        const chunkWindow = groupChunks.windowFor(pageSize);
+        //
+        // `skip` and `top` MUST BE THE SAME UNIT or matches become unreachable: consecutive pages
+        // have to cover consecutive chunk ranges with no gap. That is also why the window is capped
+        // at what `runSearch` will actually fetch (MAX_PAGE_ROWS) rather than at Azure's `$top`
+        // ceiling — a window larger than the fetch leaves the tail of every window unrequested.
+        // `pageSize` is a fetch knob for this dataset, not a row count: a page carries every
+        // document its window covered.
+        const chunkWindow = groupChunks.windowFor(pageSize, aiSearch.MAX_PAGE_ROWS);
         const { items, count } = await aiSearch.searchChunks({
           filter,
           // No `orderby`: every field in `chunks` is sortable:false, the key included, so
@@ -774,14 +781,17 @@ exports.search = async (req, res) => {
         // single withheld chunk would collapse it to at most one page.
         // GROUPED AFTER THE GATE, never before: a withheld chunk must not contribute a snippet or
         // a match to the document row, and grouping first would hide which rows the ACL removed.
-        const grouped = groupChunks.groupByDocument(mappedChunks, pageSize);
+        const grouped = groupChunks.groupByDocument(mappedChunks);
 
         const withheld = items.length - visible.length;
         return res.json([{
           searchResults: grouped,
           // Still the PASSAGE total — `meta.countsPassages` says so, and the rows are documents.
-          // Floored at the number of chunks that survived the gate rather than at the row count,
-          // which is now smaller than the matches it represents.
+          // Floored at the number of chunks that survived the gate. `visible.length` rather than
+          // `grouped.length`: a floor at the ROW count would report fewer matches than this page
+          // alone demonstrably contains, since one row can carry a dozen of them.
+          // (`mappedChunks.length` was the same number — a pure map of `visible` — so naming
+          // `visible` changes nothing at runtime and says which quantity is meant.)
           count: withheld > 0 ? Math.max(count - withheld, visible.length) : count
         }]);
       } catch (err) {
