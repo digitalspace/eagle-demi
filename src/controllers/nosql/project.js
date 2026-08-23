@@ -171,8 +171,14 @@ exports.updateProject = async (req, res) => {
     // project left every document under it carrying `public`, and `listVisible` gates on the
     // document's own ACL, so they stayed listable and searchable under a project nobody could see.
     //
-    // Only on the TRANSITION to private, and only downwards: publishing a project must not publish
-    // its documents, whose own state is independent and legitimately narrower.
+    // On EITHER TRANSITION, because the cascade now re-derives rather than assigns. It used to fire
+    // only on the way down, on the reasoning that publishing a project must not publish its
+    // documents — true, and still true, but it was enforced by never running rather than by the
+    // formula. So a re-publish left every document restricted with no counterpart to restore them,
+    // and recovery was ~170 individual `PUT /documents/:id/published` calls for an average project.
+    //
+    // `ownRead ∩ projectRead` returns `public` only to documents that already had it, so running on
+    // the way up cannot publish a document whose own ACL never did.
     //
     // systemAccess() deliberately — a document already private must be patched too, and the caller
     // cannot read it. AFTER the project write, matching setDocumentPublished: a failure here leaves
@@ -183,7 +189,9 @@ exports.updateProject = async (req, res) => {
     // visibility in the chunk-search join, so a stale chunk ACL cannot leak text on its own, and
     // fanning out one bulk call per document turns this into an unbounded request handler. If
     // chunk ACLs ever have to stand alone, move the whole cascade to a job and patch chunks there.
-    if (acl.isPublished === false && existing.isPublished !== false) {
+    // `!==` over the two states, so `isPublished: undefined` — a rename, a description edit — is
+    // equal to itself and cascades nothing.
+    if (acl.isPublished !== existing.isPublished) {
       try {
         const cascade = await documents.setAclForProject(systemAccess(), existing.id, acl.read);
         if (cascade.failed > 0) {
@@ -192,7 +200,7 @@ exports.updateProject = async (req, res) => {
           });
           return res.status(500).json({
             success: false,
-            error: 'Project was unpublished, but its documents were not fully restricted.'
+            error: 'Project visibility changed, but its documents were not fully updated.'
           });
         }
       } catch (cascadeErr) {
@@ -201,7 +209,7 @@ exports.updateProject = async (req, res) => {
         });
         return res.status(500).json({
           success: false,
-          error: 'Project was unpublished, but its documents were not restricted.'
+          error: 'Project visibility changed, but its documents were not updated.'
         });
       }
     }

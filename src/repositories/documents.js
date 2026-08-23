@@ -156,25 +156,66 @@ async function listByIds(access, ids, projectIds) {
   return items;
 }
 
-/** Ids of every document in one project. Single-partition. */
-async function idsForProject(access, projectId) {
+/**
+ * Every document in one project, with the two ACL fields. Single-partition.
+ *
+ * `c.read` and `c.ownRead` rather than `VALUE c.id`, because the cascade INTERSECTS and cannot do
+ * that without the document's own ACL. Cosmos loads the whole item to project any field — there is
+ * no index-only path for this filter — so the extra columns change response bytes, not item load.
+ */
+async function aclRowsForProject(access, projectId) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
     criteria: [eq('projectId', String(projectId), '@projectId')],
-    select: 'VALUE c.id'
+    select: 'c.id, c.read, c.ownRead'
   });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
   return items;
 }
 
 /**
- * Rewrite the ACL on every document of one project.
+ * The document's ACL narrowed by its project's — never widened by it.
+ *
+ * The rule is `eagle-search/worker/transform.js`'s `constrainToProject`, which is the intersecting
+ * version of what this file used to do by assignment. Three fail-closed branches: no project ACL,
+ * an empty one, or an empty intersection all collapse to `['sysadmin']` rather than to the wider
+ * of the two.
+ */
+function constrainToProject(ownRead, projectRead) {
+  if (!Array.isArray(projectRead) || projectRead.length === 0) return ['sysadmin'];
+  if (!Array.isArray(ownRead) || ownRead.length === 0) return ['sysadmin'];
+  const allowed = new Set(projectRead);
+  const kept = ownRead.filter(role => allowed.has(role));
+  return kept.length > 0 ? kept : ['sysadmin'];
+}
+
+/**
+ * Re-derive every document's ACL from its own and its project's.
  *
  * A document must never out-rank its project. `PUT /documents/:id/published` enforces that on the
  * way up — a 409 stops a document publishing under a private project — but nothing enforced it on
  * the way down: unpublishing a project left every document under it carrying `public`, and
  * `listVisible` filters on the document's own ACL, so they stayed listable and searchable.
+ *
+ * IT INTERSECTS, IT DOES NOT ASSIGN. Stamping the project's array over each document destroyed any
+ * narrower ACL the seed preserved from Eagle (`seed/transform.js` keeps roles like `project-team`
+ * verbatim), and once destroyed there was nothing to restore on re-publish and nothing to intersect
+ * against next time. That could not WIDEN anything while the only caller passed `[...SECURE_ROLES]`
+ * — every role in that set short-circuits `readClause` to `true`, so the added ones granted nobody
+ * anything — but it widens the moment a re-publish cascade passes an ACL containing `public`, which
+ * is exactly what this change adds. The two fixes are one fix.
+ *
+ * `ownRead` IS CAPTURED HERE, LAZILY, and that is why no backfill is needed. The first cascade over
+ * a document reads the value the seed wrote and stores it alongside; every later cascade re-derives
+ * from that snapshot rather than from a value a previous cascade already narrowed. Writing it at
+ * seed time instead would mean the same semantics plus a ~60,578-document backfill computing
+ * exactly what this derives for free.
+ *
+ * The one lossy set is documents a PREVIOUS cascade already flattened: their Eagle ACL is gone, so
+ * capture records the flattened value and a re-publish leaves them private. Fail-closed, bounded,
+ * and enumerable from audit rows (`project.update` with `isPublishedTo: false`) — recovery is a
+ * re-seed of that project, which rewrites `read` and drops `ownRead`.
  *
  * A bulk PATCH, not an upsert: an upsert would have to read every document back first. All of a
  * project's documents share one partition, so this is normally a single request.
@@ -187,27 +228,43 @@ async function setAclForProject(access, projectId, read) {
     throw new TypeError('[documents] setAclForProject requires a non-empty read[] ACL');
   }
 
-  const ids = await idsForProject(access, projectId);
-  if (ids.length === 0) {
+  const rows = await aclRowsForProject(access, projectId);
+  if (rows.length === 0) {
     return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0, ids: [] };
   }
 
   const pk = String(projectId);
   const updatedAt = new Date().toISOString();
-  const result = await cosmos.bulkVerified(CONTAINER, ids.map(id => ({
-    operationType: 'Patch',
-    partitionKey: pk,
-    id: String(id),
-    resourceBody: {
-      operations: [
-        { op: 'set', path: '/read', value: read },
-        { op: 'set', path: '/isPublished', value: read.includes('public') },
-        { op: 'set', path: '/updatedAt', value: updatedAt }
-      ]
-    }
-  })));
+  const result = await cosmos.bulkVerified(CONTAINER, rows.map(row => {
+    // The snapshot if there is one, otherwise what the row carries today — which on a first
+    // cascade IS the seeded Eagle ACL, the value the snapshot exists to preserve.
+    //
+    // `: []` and not `: row.read`, because a row with NO `read` field would put `undefined` in a
+    // `set` op, and Cosmos rejects a `set` with no value. Patch ops are atomic per item, so that
+    // 400 would take the `/read` narrowing down with it — the row keeps its old ACL and the failure
+    // is counted, but the effect is fail-OPEN for exactly the row that had no ACL to begin with.
+    // `[]` intersects to `['sysadmin']` instead. No current write path produces such a row (all
+    // four write an explicit `read[]`, and `seedAcl` fails closed), so this guards a legacy row
+    // nobody can rule out from outside the private endpoint.
+    const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
+      : (Array.isArray(row.read) ? row.read : []);
+    const next = constrainToProject(own, read);
+    return {
+      operationType: 'Patch',
+      partitionKey: pk,
+      id: String(row.id),
+      resourceBody: {
+        operations: [
+          { op: 'set', path: '/ownRead', value: own },
+          { op: 'set', path: '/read', value: next },
+          { op: 'set', path: '/isPublished', value: next.includes('public') },
+          { op: 'set', path: '/updatedAt', value: updatedAt }
+        ]
+      }
+    };
+  }));
 
-  return { ...result, ids };
+  return { ...result, ids: rows.map(row => String(row.id)) };
 }
 
 async function upsert(document) {
@@ -254,6 +311,12 @@ async function setPublished(id, projectId, published, secureRoles) {
   return cosmos.patch(CONTAINER, String(id), String(projectId), [
     { op: 'set', path: '/isPublished', value: Boolean(published) },
     { op: 'set', path: '/read', value: read },
+    // `ownRead` MOVES WITH IT. This is a deliberate per-document decision about that document, so
+    // it becomes the document's own ACL — the thing `setAclForProject` intersects against. Without
+    // this line the snapshot still holds whatever the row carried before, and the next time the
+    // project is re-published the cascade re-derives from that stale value and RESURRECTS a
+    // document an operator had individually unpublished.
+    { op: 'set', path: '/ownRead', value: read },
     { op: 'set', path: '/updatedAt', value: new Date().toISOString() }
   ]);
 }
@@ -281,7 +344,8 @@ module.exports = {
   countVisible,
   getById,
   listByIds,
-  idsForProject,
+  aclRowsForProject,
+  constrainToProject,
   setAclForProject,
   upsert,
   bulkUpsertForProject,
