@@ -156,6 +156,92 @@ test('eagle-query filters', async (t) => {
     assert.deepStrictEqual(dropped, ['project']);
   });
 
+  // Every project-list filter except `region` used to answer with the WHOLE corpus. Measured
+  // against the live test service before the fix: `and[eacDecision]=<id>` returned 393 of 393
+  // projects under a 200, and `and[currentPhaseName]=<id>` and `and[CEAAInvolvement]=<id>` did the
+  // same, because none of the three fields existed in the index and every one landed in `dropped`.
+  await t.test('the three id-valued project facets redirect to their id columns', () => {
+    const { filter, dropped } = eagleQuery.buildFilter({
+      'and[eacDecision]': '5e27937a749c83437054f214',
+      'and[currentPhaseName]': '5d3f6c7eda7a384218296037',
+      'and[CEAAInvolvement]': '5e27937a749c83437054f1ff'
+    }, 'Project', anonAcl('id'));
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes("eacDecisionId eq '5e27937a749c83437054f214'"));
+    assert.ok(filter.includes("currentPhaseNameId eq '5d3f6c7eda7a384218296037'"));
+    assert.ok(filter.includes("ceaaInvolvementId eq '5e27937a749c83437054f1ff'"));
+  });
+
+  // DEMI stores Track's spelling for a Track-backed project and Eagle's for an Eagle-only one, so
+  // BOTH have to match or one origin becomes unreachable. The literals on both sides are written
+  // out rather than read from VALUE_ALIASES: a test that maps through the same table it is checking
+  // passes whatever the table says, including nothing.
+  await t.test('a project type matches both the wire spelling and the stored one', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[type]': 'Energy-Electricity,Tourist Destination Resorts' }, 'Project', anonAcl('id'));
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes("type eq 'Energy - Electricity'"),
+      "Track's spelling holds 95 of the rows");
+    assert.ok(filter.includes("type eq 'Energy-Electricity'"),
+      "Eagle-only projects keep Eagle's spelling verbatim");
+    assert.ok(filter.includes("type eq 'Tourist Destination Resort'"));
+    assert.ok(filter.includes("type eq 'Tourist Destination Resorts'"));
+  });
+
+  // The lost-value report counts WIRE values, not spellings. Before the two-spelling change one
+  // value produced one term; now it can produce two, and a naive length comparison would report
+  // every mapped filter as partially dropped.
+  await t.test('expanding a type into two spellings is not reported as a lost value', () => {
+    const { dropped } = eagleQuery.buildFilter(
+      { 'and[type]': 'Energy-Electricity,Mines' }, 'Project', anonAcl('id'));
+    assert.deepStrictEqual(dropped, []);
+  });
+
+  // Six of the ten options already agree, and an unlisted value must survive rather than be
+  // dropped — Track can add a type without this table hearing about it.
+  await t.test('a project type the map does not list passes through unchanged', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[type]': 'Mines' }, 'Project', anonAcl('id'));
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes("type eq 'Mines'"));
+  });
+
+  await t.test('the decision date range is half-open, on the project index too', () => {
+    const { filter, dropped } = eagleQuery.buildFilter({
+      'and[decisionDateStart]': '2010-01-01',
+      'and[decisionDateEnd]': '2010-12-31'
+    }, 'Project', anonAcl('id'));
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes('decisionDate ge 2010-01-01T00:00:00.000Z'));
+    assert.ok(filter.includes('decisionDate lt 2011-01-01T00:00:00.000Z'),
+      'a decision issued during 31 December is inside a range that names that day');
+  });
+
+  // Cosmos keeps `proponentName` and nothing at all for PCP, so there is no column for either to
+  // point at. Dropped and reported, never emitted and hoped for.
+  await t.test('project facets DEMI holds no data for are dropped, not emitted', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[proponent]': '58850f69aaecd9001b8085cc', 'and[pcp]': 'open' },
+      'Project', anonAcl('id'));
+
+    assert.deepStrictEqual(dropped.sort(), ['pcp', 'proponent']);
+    assert.strictEqual(filter, "read/any(r: search.in(r, 'public', ','))");
+  });
+
+  // The alias table is a FILTER redirect. Sorting the Phase column by an ObjectId would order the
+  // list by hex; `currentPhaseNameId` is `sortable: false` precisely so this falls back.
+  await t.test('sorting by phase orders on the label, not on the id it filters by', () => {
+    const { orderby, dropped } = eagleQuery.buildOrderBy('-currentPhaseName', 'Project', false);
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(orderby.startsWith('currentPhaseName desc'), orderby);
+    assert.ok(!orderby.includes('currentPhaseNameId'));
+  });
+
   await t.test('a quote in a value is escaped by doubling', () => {
     const { filter } = eagleQuery.buildFilter({ 'and[region]': "O'Brien" }, 'Project', anonAcl('id'));
     assert.ok(filter.includes("region eq 'O''Brien'"));

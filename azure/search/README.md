@@ -9,8 +9,8 @@ data-plane objects and the data plane is unreachable from outside the VNet. They
 environment is rebuildable and so schema changes show up in a diff.
 
 **`src/scripts/apply-search-definitions.js` applies them.** It is dry-run by default, writes indexes
-before indexers, refuses to touch an index the app is currently serving from, and never writes a data
-source. Its header carries the run instructions; this file stays the reference for what the objects
+before indexers, applies an index the app is serving from only when the change ADDS fields, and never
+writes a data source. Its header carries the run instructions; this file stays the reference for what the objects
 ARE and for the grant they need. Do not restate one in the other — a duplicated operational doc
 drifting into a false claim is the failure this repo has already had.
 
@@ -40,8 +40,8 @@ backwards, so the reader doing that needs to know what each step did.
    the App Service SSH tunnel (not Kudu — its SCM container has no managed-identity endpoint; see
    the root `README.md` recipe). They filled on their PT5M schedule to
    393 / 60,578 / 1,128,733 while the old indexes kept serving.
-   **That command will REFUSE now** — see the restore section below for why, and for what to do
-   instead.
+   **That command still applies a WIDENING today** — see the restore section below for what it
+   refuses and what to do instead.
 3. **The three defaults were flipped** and the template deployed, which is the cutover itself.
    Deploying `api-web-app.bicep` is therefore no longer a no-op: those defaults are what land in the
    live app settings. Rolling back is flipping them back and deploying again — no data step, because
@@ -127,11 +127,18 @@ touches nothing and it works in every state, and it marks which indexes are serv
 node src/scripts/apply-search-definitions.js
 ```
 
-**`--live` will REFUSE**, and that is deliberate: every committed name is now a live name, so
-re-applying would rewrite a schema serving traffic. The script is for CREATING these objects, not
-for restoring one that is live. To restore a live index you are knowingly overriding that guard, so
-do it by hand — and note there is no `jq` here, because the file bodies already carry the right
-names:
+**`--live` asks whether the change is ADDITIVE, not whether the index is live.** Every committed
+name is now a live name, so a blanket refusal made step 1 of "Adding a field" above impossible to
+run through the script at all. Adding fields to a live index is supported in place; **a drop, a
+retype, a flipped flag, or any index-level change — analyzers, similarity, scoring, suggesters — is
+still refused**, because those are rebuilds and doing one to the index the app is querying is an
+outage. The run prints `** SERVING TRAFFIC — additive, +N field(s) **` before it writes.
+
+A dry run cannot say which it is: it never reads the live schema. Only `--live` does.
+
+**RESTORING a live index is still by hand**, and that has not changed — a restore replaces a schema
+rather than widening one, so the guard is doing its job when it refuses. Note there is no `jq` here,
+because the file bodies already carry the right names:
 
 ```bash
 PUT {endpoint}/indexes/chunks?api-version=2024-07-01           # body indexes/chunks.json

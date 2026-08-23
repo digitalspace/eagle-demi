@@ -147,13 +147,96 @@ test('apply-search-definitions', async (t) => {
     assert.ok(!lines.join('\n').includes('DIFFERS'), 'a matching query must not warn');
   });
 
-  await t.test('run() refuses to write an index the app is serving from', async (tt) => {
-    const calls = stub(tt, ok);
+  /** The committed `projects` index with `n` fields lopped off the end — a plausible "live" copy. */
+  const projectsMinus = (n) => {
+    const body = script.load(script.INDEX_DIR).find(d => d.body.name === 'projects').body;
+    return { ...body, fields: body.fields.slice(0, body.fields.length - n) };
+  };
+
+  /**
+   * Serve `live` for GET /indexes/projects, and behave like `ok` for everything else.
+   *
+   * The `@odata.*` pair is what a REAL GET returns and no committed file carries. It is stamped on
+   * here rather than left out: without it the fixture agreed with a bug that refused every live
+   * index over two server-assigned keys, which is how that bug reached the service.
+   */
+  const servingProjects = (live) => (url, init) =>
+    (init.method === 'GET' && /\/indexes\/projects\?/.test(url))
+      ? {
+        status: 200,
+        text: async () => JSON.stringify({
+          '@odata.context': `${ENDPOINT}/$metadata#indexes/$entity`,
+          '@odata.etag': '"0x8DF007286A35D0A"',
+          ...live
+        })
+      }
+      : ok(url, init);
+
+  // ADDING a field to a live index is supported in place and is what `azure/search/README.md`
+  // "Adding a field" documents as routine. The guard refused every live index, so once the
+  // 2026-08-22 rename made the committed names the live ones, step 1 of that procedure could not be
+  // run through this script at all — `projects` IS what the app serves.
+  await t.test('run() writes a live index when the change only ADDS fields', async (tt) => {
+    const calls = stub(tt, servingProjects(projectsMinus(7)));
+    await script.run({ endpoint: ENDPOINT, live: true, only: 'projects', liveNames: ['projects'] });
+    assert.strictEqual(
+      calls.filter(c => c.method === 'PUT' && /\/indexes\/projects\?/.test(c.url)).length, 1,
+      'an additive widening of the serving index must be applied');
+  });
+
+  // A field that exists live and not in the committed copy is a DROP, which is a rebuild. Same for
+  // a retype or a flipped flag: the shape below renames nothing, it redefines `region` as a
+  // collection, which would invalidate every stored value.
+  await t.test('run() still refuses a live index when a field is redefined', async (tt) => {
+    const live = projectsMinus(7);
+    live.fields = live.fields.map(f => f.name === 'region' ? { ...f, type: 'Collection(Edm.String)' } : f);
+    const calls = stub(tt, servingProjects(live));
+
     await assert.rejects(
-      () => script.run({ endpoint: ENDPOINT, live: true, only: '', liveNames: ['chunks'] }),
-      /refusing to PUT index "chunks"/
+      () => script.run({ endpoint: ENDPOINT, live: true, only: 'projects', liveNames: ['projects'] }),
+      /refusing to PUT index "projects".*NOT additive.*field "region" is redefined/s
     );
     assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0, 'and it must refuse BEFORE writing anything');
+  });
+
+  await t.test('run() still refuses a live index when a field would be dropped', async (tt) => {
+    const live = projectsMinus(7);
+    live.fields = [...live.fields, { name: 'popularity', type: 'Edm.Int32', filterable: true }];
+    stub(tt, servingProjects(live));
+
+    await assert.rejects(
+      () => script.run({ endpoint: ENDPOINT, live: true, only: 'projects', liveNames: ['projects'] }),
+      /field "popularity" exists live and is missing from the committed copy/
+    );
+  });
+
+  // Field count is not the question. This live copy has the same fields as the committed one and a
+  // different BM25 `b`, which reorders every result the app already serves.
+  await t.test('run() refuses a live index whose ranking would change, though no field moves', async (tt) => {
+    const live = projectsMinus(0);
+    live.similarity = { ...live.similarity, b: 0.2 };
+    stub(tt, servingProjects(live));
+
+    await assert.rejects(
+      () => script.run({ endpoint: ENDPOINT, live: true, only: 'projects', liveNames: ['projects'] }),
+      /an index-level property outside `fields` changed/
+    );
+  });
+
+  // A live index this cannot READ is not a live index it may overwrite. With the old blanket
+  // refusal any GET failure was moot; now the verdict depends on the response, so a non-200 has to
+  // stop the run rather than fall through to a PUT.
+  await t.test('run() refuses when the serving index cannot be read back', async (tt) => {
+    const calls = stub(tt, (url, init) =>
+      (init.method === 'GET' && /\/indexes\/projects\?/.test(url))
+        ? { status: 500, text: async () => 'upstream exploded' }
+        : ok(url, init));
+
+    await assert.rejects(
+      () => script.run({ endpoint: ENDPOINT, live: true, only: 'projects', liveNames: ['projects'] }),
+      /Refusing to PUT over a schema this cannot see/
+    );
+    assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0);
   });
 
   await t.test('a DRY RUN is never refused, even when the names are the live ones', async (tt) => {
