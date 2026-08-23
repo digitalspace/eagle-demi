@@ -2,7 +2,20 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const apiRoutes = require('../../src/routes/api');
+
+// Read the router source, not its runtime stack: every middleware in the stack reports as
+// <anonymous>, so a runtime layer count cannot tell authMiddleware from passiveAuthMiddleware.
+// Same parser as test/helpers/access-coverage.test.js.
+function routeChains() {
+  const router = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'src', 'routes', 'api.js'), 'utf8'
+  );
+  return [...router.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']+)'\s*,([^;]*?)\);/g)]
+    .map(m => ({ method: m[1], path: m[2], chain: m[3] }));
+}
 
 function routeTable() {
   return apiRoutes.stack
@@ -15,14 +28,23 @@ function routeTable() {
 
 test('DB Management Routes Security Tests', async (t) => {
   await t.test('admin DB routes exist and are behind authMiddleware', () => {
+    // Naming authMiddleware is the whole point: a layer count of 2 is equally satisfied by
+    // passiveAuthMiddleware, which attaches an anonymous access object instead of rejecting, and
+    // would make /db/stats and /admin/index-progress anonymously readable with this test green.
     const protectedPaths = ['/db/stats', '/admin/index-progress'];
     const routes = routeTable();
+    const chains = routeChains();
 
-    for (const path of protectedPaths) {
-      const match = routes.find(r => r.path === path);
-      assert.ok(match, `Route ${path} must exist on API router`);
-      // authMiddleware + controller handler = at least 2 layers
-      assert.ok(match.middlewareCount >= 2, `Route ${path} must be protected by authMiddleware`);
+    for (const p of protectedPaths) {
+      assert.ok(routes.find(r => r.path === p), `Route ${p} must exist on API router`);
+      const declared = chains.find(r => r.path === p);
+      assert.ok(declared, `Route ${p} must be declared in src/routes/api.js`);
+      assert.ok(
+        /\bauthMiddleware\b/.test(declared.chain) &&
+        !/\bpassiveAuthMiddleware\b/.test(declared.chain),
+        `Route ${p} must be behind authMiddleware, not passiveAuthMiddleware — its chain is ` +
+        `"${declared.chain.trim()}"`
+      );
     }
   });
 
