@@ -795,18 +795,31 @@ test('unpublishing a project restricts its documents too', async (t) => {
       'a document already private has to be patched too, and the caller cannot read it');
   });
 
-  await t.test('publishing a project does NOT publish its documents', async () => {
+  await t.test('publishing a project DOES cascade — the formula is what protects documents', async () => {
+    // This assertion used to be `cascaded === false`, and that assertion WAS the defect: a
+    // re-publish left every document restricted with no counterpart to restore them, because the
+    // invariant "publishing a project must not publish its documents" was enforced by never
+    // running rather than by the formula.
+    //
+    // It is now enforced by the formula. `ownRead ∩ projectRead` returns `public` only to a
+    // document whose own ACL already carried it, so the cascade is safe to run in both directions —
+    // and running it is what lets a document come back. The narrowing itself is asserted where it
+    // lives, in the repository suite.
     const priv = { ...published, read: ['sysadmin'], isPublished: false };
-    let cascaded = false;
+    let sentRead = null;
     t.mock.method(projects, 'getById', async () => priv);
     t.mock.method(projects, 'upsert', async (doc) => doc);
-    t.mock.method(documents, 'setAclForProject', async () => { cascaded = true; return { failed: 0 }; });
+    t.mock.method(documents, 'setAclForProject', async (access, id, read) => {
+      sentRead = read;
+      return { failed: 0 };
+    });
 
     await projectController.updateProject({
       params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: true }
     }, mockRes());
 
-    assert.strictEqual(cascaded, false, 'a document\'s own visibility is independent and narrower');
+    assert.ok(sentRead, 'a re-publish must reach the documents, or nothing can restore them');
+    assert.ok(sentRead.includes('public'), 'and it passes the project\'s new ACL, not the old one');
   });
 
   await t.test('an edit that does not touch visibility cascades nothing', async () => {
