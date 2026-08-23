@@ -13,8 +13,9 @@ before indexers, applies an index the app is serving from only when the change A
 writes a data source. **`--only <name>` narrows a run to one index and its indexer** — `--only
 projects` or `--only projects-indexer` both resolve to the same pair — which is what you want when
 restoring service, since it leaves the other two untouched. Its header carries the run instructions;
-this file stays the reference for what the objects ARE and for the grant they need. Do not restate one in the other — a duplicated operational doc
-drifting into a false claim is the failure this repo has already had.
+this file stays the reference for what the objects ARE and for the grant they need. Do not restate
+one in the other — a duplicated operational doc drifting into a false claim is the failure this repo
+has already had.
 
 ## The names
 

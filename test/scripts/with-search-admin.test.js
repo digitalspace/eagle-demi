@@ -38,7 +38,7 @@ case "$1 $2" in
   "role assignment")
     case "$3" in
       create) [[ -n "\${AZ_CREATE_EMPTY:-}" ]] || echo "${ASSIGNMENT_ID}" ;;
-      list)   echo "${ASSIGNMENT_ID}" ;;
+      list)   [[ -n "\${AZ_LIST_EMPTY:-}" ]] || echo "${ASSIGNMENT_ID}" ;;
       delete) [[ -n "\${AZ_DELETE_FAILS:-}" ]] && exit 1 ;;
     esac ;;
 esac
@@ -169,6 +169,19 @@ test('with-search-admin.sh', async (t) => {
     const create = creates(r.calls)[0];
     assert.match(create, /--scope \/subscriptions\/sub-x\/resourceGroups\/rg-x\/providers\/Microsoft\.Search\/searchServices\/svc-x/);
     assert.match(create, /--role 7ca78c08-252a-4471-8644-bb5ff32d4ba0/, 'Search Service Contributor');
+  });
+
+  await t.test('says so when the grant never becomes readable, and still runs', async () => {
+    // RBAC replication is often just slow, so refusing here would strand real work. But silence
+    // means the operator gets a 403 from the command with no hint why — the poll is invisible.
+    // POLL_TRIES keeps the test to two attempts rather than the default twenty.
+    const r = run(['--', 'bash', '-c', 'echo COMMAND-RAN'],
+      { env: { AZ_LIST_EMPTY: '1', POLL_TRIES: '2', POLL_SLEEP: '0' } });
+
+    assert.match(r.stderr, /not readable after/);
+    assert.match(r.stderr, /403/, 'the warning has to name the symptom the operator will hit');
+    assert.match(r.stdout, /COMMAND-RAN/, 'unconfirmed is not the same as failed');
+    assert.strictEqual(deletes(r.calls).length, 1, 'and it still revokes');
   });
 
   await t.test('the command runs only after the grant is readable', async () => {

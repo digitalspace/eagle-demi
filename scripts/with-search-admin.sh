@@ -114,12 +114,23 @@ fi
 
 # The grant is not readable the instant it is created. Poll rather than sleeping a guessed interval:
 # a fixed sleep is either too short (the command 403s) or wastes time on every run.
-for _ in $(seq 1 20); do
+readable=''
+for _ in $(seq 1 "${POLL_TRIES:-20}"); do
   if "$AZ" role assignment list --scope "$SCOPE" --query "[?id=='${ASSIGNMENT_ID}'].id" -o tsv \
      2>/dev/null | grep -q .; then
+    readable=1
     break
   fi
-  sleep 3
+  sleep "${POLL_SLEEP:-3}"
 done
+
+# Say so rather than falling through silently. The command still runs — the grant exists, it is
+# only unconfirmed, and refusing here would strand work behind a read that RBAC replication is
+# often just slow about. But without this line the operator gets 60s of silence followed by a 403
+# from the real command and no hint as to why.
+if [[ -z "$readable" ]]; then
+  echo "with-search-admin: grant not readable after ${POLL_TRIES:-20} tries — running anyway; a 403 below means" >&2
+  echo "with-search-admin: RBAC has not replicated yet, not that the command is wrong." >&2
+fi
 
 "$@"
