@@ -61,6 +61,14 @@ const ALREADY_CLOSED = {
   id: '360', name: 'Berg Mine', eagleId: null, read: [...merge.SECURE_ROLES],
   sources: { track: {}, eagle: null }
 };
+// `POST /projects` writes `sources: {}` deliberately — the wildfire sync patches
+// `/sources/wildfire` and a Cosmos patch cannot create a path recursively — alongside
+// `eagleId: null`, `sourceSystem: 'track'` and a public `read[]`. Under a `sources.eagle` test
+// alone that is byte-identical to a Track-only row.
+const API_CREATED = {
+  id: '9001', name: 'Deliberately published via POST /projects', eagleId: null,
+  sourceSystem: 'track', read: PUBLIC_ACL, isPublished: true, sources: {}
+};
 const NO_SOURCES = { id: '362', name: 'Legacy Row', read: PUBLIC_ACL };
 
 test('needsClosing selects on the Eagle counterpart, not on provenance', async (t) => {
@@ -76,8 +84,19 @@ test('needsClosing selects on the Eagle counterpart, not on provenance', async (
     assert.ok(DANGLING_GUID.eagleId, 'and it does carry an eagleId, which is the whole trap');
   });
 
-  await t.test('a row with no sources at all fails closed', () => {
-    assert.strictEqual(needsClosing(NO_SOURCES), true);
+  await t.test('an API-CREATED project is left alone', () => {
+    // The row somebody deliberately and auditably published through POST /projects — the same
+    // route the eagle-api-pushes-to-DEMI ingest path will use. `sources.eagle` alone does not tell
+    // it apart from a Track-only row; `sources.track` does, because the merge writes it and
+    // createProject does not.
+    assert.strictEqual(needsClosing(API_CREATED), false);
+  });
+
+  await t.test('a row with no sources at all is left alone', () => {
+    // Not fail-closed here, deliberately: "no sources" is the API-created shape, not an unmatched
+    // Track row. Narrowing it would unpublish a deliberate act. This script only ever closes rows
+    // it can prove the merge produced from Track with no Eagle match.
+    assert.strictEqual(needsClosing(NO_SOURCES), false);
   });
 
   await t.test('a Track project WITH an Eagle counterpart is left alone', () => {
@@ -118,13 +137,13 @@ test('closeUnpublished', async (t) => {
   await t.test('--live withdraws public and mirrors isPublished', async () => {
     const patch = fakePatch();
     const summary = await closeUnpublished(['--live'], {
-      projects: fakeProjects([TRACK_ONLY, TRACK_LINKED, EAGLE_ONLY, ALREADY_CLOSED]),
+      projects: fakeProjects([TRACK_ONLY, TRACK_LINKED, EAGLE_ONLY, ALREADY_CLOSED, API_CREATED]),
       documents: fakeDocuments(),
       patch: patch.fn,
       now: NOW
     });
 
-    assert.strictEqual(summary.scanned, 4);
+    assert.strictEqual(summary.scanned, 5);
     assert.strictEqual(summary.matched, 1, 'only the Track-only public row');
     assert.strictEqual(summary.closed, 1);
     assert.strictEqual(patch.calls.length, 1);
@@ -177,7 +196,10 @@ test('closeUnpublished', async (t) => {
   });
 
   await t.test('a failed patch is counted, and the run continues', async () => {
-    const other = { id: '355', name: 'Kimberley Water Reclamation Centre', eagleId: null, read: PUBLIC_ACL };
+    const other = {
+      id: '355', name: 'Kimberley Water Reclamation Centre', eagleId: null, read: PUBLIC_ACL,
+      sources: { track: {}, eagle: null }
+    };
     let first = true;
     const summary = await closeUnpublished(['--live'], {
       projects: fakeProjects([TRACK_ONLY, other]),

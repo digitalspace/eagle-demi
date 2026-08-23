@@ -63,26 +63,49 @@ function parseArgs(argv) {
 }
 
 /**
- * A project this rule applies to: no Eagle record was matched, and the row is currently public.
+ * A project this rule applies to: it came from the MERGE's Track path, no Eagle record was matched,
+ * and the row is currently public.
  *
- * **`sources.eagle`, NOT `eagleId`.** They disagree for a category the merge names and counts:
- * `mergeTrackProject` writes `eagleId` from `track.epic_guid` whether or not that guid resolves to
- * anything, so a Track row with a DANGLING guid — 6 of them, pinned at
+ * BOTH HALVES OF `sources` ARE LOAD-BEARING, and each was learned the hard way.
+ *
+ * `sources.eagle` and NOT `eagleId`, because those disagree for a category the merge names and
+ * counts: `mergeTrackProject` writes `eagleId` from `track.epic_guid` whether or not that guid
+ * resolves to anything, so a Track row with a DANGLING guid — 6 of them, pinned at
  * `test/merge/project.test.js:274` as `trackOnlyDanglingGuid` — carries an `eagleId` while
- * `resolveProjectAcl` correctly saw no Eagle record and now fails closed. Keying on `eagleId` would
- * skip exactly those 6 and leave them public in Cosmos and in the index, which is the opposite of
- * what this script exists to do. `sources.eagle` is the merge's own record of what it matched
- * (`merge/project.js:206-209`), so it is the same question `resolveProjectAcl` was asked.
+ * `resolveProjectAcl` correctly saw no Eagle record and fails closed. Keying on `eagleId` skipped
+ * exactly those 6. `sources.eagle` is the merge's own record of what it matched, so it is the same
+ * question `resolveProjectAcl` was asked.
  *
- * An Eagle-only row carries `sources.eagle` populated by construction, so it can never match —
- * correct, since its ACL came from Eagle and this rule is about projects Eagle has never published.
+ * `sources.track` REQUIRED, because `sources.eagle` alone does not separate a merge-produced row
+ * from an API-created one. `createProject` writes `sources: {}` — deliberately, so the wildfire
+ * sync can patch `/sources/wildfire` — together with `eagleId: null`, `sourceSystem: 'track'` and
+ * `read: ['public', ...SECURE_ROLES]` when published. That is byte-identical to a Track-only row
+ * under a `sources.eagle` test, so without this half a `--live` run would strip `public` from
+ * projects somebody deliberately and auditably published through `POST /projects` — the same route
+ * the eagle-api-pushes-to-DEMI ingest path will use.
  *
- * A row with no `sources` at all is treated as unmatched. Fail closed, and visible: a dry run
- * prints every name before anything is written.
+ * The four shapes, and what each answers:
+ *
+ * | row | `sources.track` | `sources.eagle` | closes? |
+ * |---|---|---|---|
+ * | merge, Track with no Eagle match | set | null | **yes** |
+ * | merge, Track matched to Eagle | set | set | no |
+ * | merge, Eagle-only | null | set | no |
+ * | `POST /projects` | absent | absent | no |
+ *
+ * KNOWN GAP, deliberately not covered: the merge also closes an Eagle-MATCHED row whose Eagle
+ * record had a missing or empty `read[]`, and this script skips every row with `sources.eagle`, so
+ * such a row would stay public until a re-seed. Measured 2026-08-23 and the category is empty —
+ * `GET /api/public/search?dataset=Project&pageSize=1000` returns 359 rows on eagle-dev and 358 on
+ * prod, and NOT ONE has an empty `read[]` or a `read[]` without `public`. Closing it would mean
+ * re-reading Eagle per row to learn what the merge would have written, which is a re-seed.
  */
 function needsClosing(project) {
-  const matchedEagle = project.sources && project.sources.eagle;
-  return !matchedEagle && Array.isArray(project.read) && project.read.includes('public');
+  const sources = project.sources || {};
+  const fromMergeTrackPath = Boolean(sources.track);
+  const matchedEagle = Boolean(sources.eagle);
+  return fromMergeTrackPath && !matchedEagle &&
+    Array.isArray(project.read) && project.read.includes('public');
 }
 
 /**
