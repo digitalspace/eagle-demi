@@ -40,8 +40,15 @@ const EAGLE_URL = 'https://projects.eao.gov.bc.ca/eagle-search/search';
 
 /**
  * A milestone every side knows, taken off a real prod document row rather than invented.
- * eagle-search filters on it; DEMI's `documents` index has no `milestone` field at all, so
- * `eagle-query.js` drops the key and answers with the whole corpus. That is diff class (1).
+ *
+ * WHAT THIS CASE MEASURES CHANGED, and the changing is the point: when this differ was written,
+ * DEMI's `documents` index had no `milestone` field, `eagle-query.js` dropped the key, and demi
+ * answered with the whole 60,578-row corpus against eagle-search's 36,471 — diff class (1). The
+ * index now carries `milestoneId` and the key is mapped onto it, so once the app ships this case
+ * should MATCH. It is the acceptance test for that work, not a standing example of the bug.
+ *
+ * `and[type]=Mines` on Project is still a live example of class (1): Project has no `type` alias
+ * and the projects index has no such field.
  */
 const MILESTONE = '5cf00c03a266b7e1877504e9';
 

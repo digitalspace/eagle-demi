@@ -253,17 +253,36 @@ test('eagle-query sort', async (t) => {
   // `typeId` is `sortable: false` (an opaque ObjectId sorts to nothing a reader recognises), while
   // the `type` LABEL beside it sorts. Without the fallback, sorting the Document type column would
   // drop silently and the table would keep whatever order the service returned.
-  // Azure rejects a duplicate field in `$orderby` and caps the clause count at 32; either is a 400,
-  // and a 400 here is a 502 to an anonymous caller who only had to type a query string. eagle-public
-  // gets close on its own — it appends a secondary sort that can repeat the first.
-  await t.test('a repeated sort field is emitted once, and the clause count is bounded', () => {
+  // A repeated field cannot change the order — the first occurrence already decided it — so the
+  // second is noise at best. eagle-public gets there on its own: it appends a secondary sort that
+  // can repeat the primary one.
+  //
+  // The second case is the one a clause CAP would have had to catch, and it is why there is no cap:
+  // 60 names the index does not carry are all dropped, so `parts` never grows. A cap could not fire
+  // on any demi index (`documents` has 17 fields in total against Azure's limit of 32), and the
+  // test that claimed to exercise one passed with the guard deleted.
+  await t.test('a repeated sort field is emitted once', () => {
     const { orderby } = eagleQuery.buildOrderBy(
       ['-displayName', '+displayName'], 'Document', false);
     assert.strictEqual(orderby, 'displayName desc, id asc', 'the second mention adds no clause');
 
     const many = Array.from({ length: 60 }, (_, i) => `field${i}`).concat('displayName');
-    const { orderby: capped } = eagleQuery.buildOrderBy(many, 'Document', false);
-    assert.ok(capped.split(',').length <= 32, `too many clauses: ${capped}`);
+    const { orderby: capped, dropped } = eagleQuery.buildOrderBy(many, 'Document', false);
+    assert.strictEqual(capped, 'displayName asc, id asc');
+    assert.strictEqual(dropped.length, 60, 'a name the index lacks is dropped, never emitted');
+  });
+
+  // The tiebreak used to be appended after the dedupe rather than through it, so sorting by the
+  // tiebreak field itself emitted it twice. `_id` arrives here as `id` via the alias table, and a
+  // keywordless `?dataset=Document&sortBy=id` now reaches the index where it used to take the
+  // Cosmos list path and be ignored.
+  await t.test('sorting BY the tiebreak field does not emit it twice', () => {
+    for (const sortBy of ['id', '_id']) {
+      assert.strictEqual(eagleQuery.buildOrderBy(sortBy, 'Document', false).orderby, 'id asc',
+        `${sortBy} must not produce "id asc, id asc"`);
+    }
+    assert.strictEqual(eagleQuery.buildOrderBy('-id', 'Document', false).orderby, 'id desc',
+      'the caller\'s direction wins, and the tiebreak is already satisfied');
   });
 
   // `categorized` is not in any demi index, and it counts as criteria — so it routes the caller to

@@ -462,12 +462,6 @@ function buildFilter(query, dataset, acl) {
  */
 const ORDER_TYPES = new Set([...TERM_TYPES, 'Edm.DateTimeOffset']);
 
-/**
- * Azure's own ceiling on `$orderby`, minus one clause kept for the `id asc` tiebreak this module
- * always appends. Exceeding it is a 400, and a 400 here is a 502 to whoever asked.
- */
-const MAX_ORDERBY_CLAUSES = 31;
-
 function orderable(meta) {
   return ORDER_TYPES.has(meta.type);
 }
@@ -541,16 +535,16 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false) {
       dropped.push(name);
       continue;
     }
-    // One clause per FIELD, and no more than the service accepts. Azure rejects a duplicate field
-    // in `$orderby` and caps the clause count at 32 — either is a 400, which is not retried and
-    // reaches an anonymous caller as a 502. `sortBy=displayName,displayName,…` is a query string
-    // anyone can type, and eagle-public itself appends a secondary sort that can repeat the first
-    // (`api.ts:176-177` with `documents-tab.component.ts:190`).
+    // ONE CLAUSE PER FIELD. `sortBy=displayName,displayName` is a query string anyone can type, and
+    // eagle-public appends a secondary sort that can repeat the first (`api.ts:176-177` with
+    // `documents-tab.component.ts:190`). A repeated field cannot change the order — the first
+    // occurrence already decided it — so the second is at best noise and at worst a 400.
+    //
+    // NOT ALSO A CLAUSE CAP. Azure's limit is 32 and no demi index has 32 sortable fields
+    // (`documents`, the widest, has 17 in total), so a cap could never fire — dead code with a test
+    // that could not exercise it, which is how it was caught. If an index ever gets that wide, this
+    // is where the cap goes.
     if (seen.has(field)) continue;
-    if (parts.length >= MAX_ORDERBY_CLAUSES) {
-      dropped.push(name);
-      continue;
-    }
     seen.add(field);
     parts.push(`${field} ${desc ? 'desc' : 'asc'}`);
   }
@@ -566,7 +560,10 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false) {
     parts.push(DEFAULT_ORDER[dataset]);
   }
 
-  if (tiebreak) parts.push(tiebreak);
+  // The tiebreak goes through the SAME dedupe as the caller's clauses. Without this,
+  // `sortBy=id` emitted `id asc, id asc` — the exact shape the dedupe above exists to stop, added
+  // back one line later. `_id` reaches here as `id` too, through the alias table.
+  if (tiebreak && !seen.has(tiebreak.split(' ')[0])) parts.push(tiebreak);
   return { orderby: parts.join(', '), dropped };
 }
 

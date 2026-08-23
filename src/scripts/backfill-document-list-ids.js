@@ -35,8 +35,12 @@
  * AND THE APP IS LAST OF ALL. `src/controllers/search.js` routes a keywordless search carrying a
  * filter or a sort to the index. Deployed after the index PUT but before this script has run, every
  * such filter answers ZERO rows under a 200 — quieter than the unfiltered-corpus bug it fixes, and
- * therefore easier to ship without noticing. Full order: index, data source, indexer reset, THIS,
- * then the app.
+ * therefore easier to ship without noticing.
+ *
+ * **Full order: index, data source, THIS, indexer reset, app.** The reset comes AFTER the backfill,
+ * for the reason two paragraphs up: a reset first re-pulls the nulls this script exists to replace,
+ * and costs a second full re-pull of ~60,578 rows to undo. (An earlier version of this line had the
+ * reset before the backfill, contradicting its own docblock.)
  *
  * **DRY RUN BY DEFAULT.** `--live` is the mutating flag, matching apply-search-definitions.js and
  * purge-extraction.js.
@@ -277,7 +281,10 @@ if (require.main === module) {
   backfill(process.argv.slice(2))
     .then(summary => {
       // A partial backfill must not exit 0 — a wrapper would read that as "every filter works now".
-      process.exit(summary.failed ? 1 : 0);
+      // BOTH halves of partial: a rejected write, and a walk that never reached every partition.
+      // The second used to exit 0 while printing INCOMPLETE, which is the same lie one line up.
+      const incomplete = summary.expected !== undefined && summary.scanned !== summary.expected;
+      process.exit(summary.failed || incomplete ? 1 : 0);
     })
     .catch(err => {
       console.error('[backfill] Fatal:', err);

@@ -248,6 +248,10 @@ test('backfill', async (t) => {
       });
       assert.strictEqual(summary.scanned, 3);
       assert.strictEqual(summary.expected, 60578);
+      // The summary is what the exit code is computed from, and a partial run must not exit 0 —
+      // a wrapper reads that as "every filter works now". Asserted on the same fields the entry
+      // point reads, since the entry point itself calls process.exit.
+      assert.ok(summary.scanned !== summary.expected, 'this is the state that must exit non-zero');
     } finally {
       console.log = log;
     }
