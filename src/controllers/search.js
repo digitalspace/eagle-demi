@@ -262,6 +262,11 @@ exports.search = async (req, res) => {
     }
 
     if (dataset === 'Project') {
+      // ONE definition, read by BOTH branches below. The two must never disagree about which
+      // corpus they serve, and they did: the escape hatch existed only on the Cosmos side, so a
+      // filtered read silently included the non-Track rows a bare read excluded.
+      const allowNonTrack = req.query.includeSeeded === 'true';
+
       // Keywords OR criteria go to AI Search; a BARE list still comes from Cosmos below, because
       // listing every project in the repository's own order is a read, not a search, and the index
       // adds nothing to it. A filter or a sort is the opposite: Cosmos list criteria and order are
@@ -277,6 +282,30 @@ exports.search = async (req, res) => {
             // buildFilter takes the whole `filterFor` result and refuses to run without it.
             const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
             eagleQuery.reportDropped(dataset, 'filter', dropped);
+
+            // PROVENANCE, the same predicate the Cosmos branch applies through `trackOnly` at
+            // `repositories/projects.js:32` — and it belongs here because without it this route
+            // answers a DIFFERENT CORPUS depending on whether a filter or sort is present. Measured
+            // 2026-08-23: a bare list returned 382 while `sortBy=-name` returned 393 with
+            // `testtesttest` as row 1, anonymously. Same caller, same ACL, two answers.
+            //
+            // Appended rather than passed through `buildFilter`, because that function gates every
+            // key against what the CALLER may filter on. This is not the caller's filter; it is the
+            // route deciding which corpus it serves, and it must survive a caller who sends none.
+            //
+            // Orthogonal to visibility and never a substitute for it — `acl` is already inside
+            // `filter` and stays there.
+            //
+            // `filter ? … : TRACK_ONLY` and NOT a bare template, because `filter` is UNDEFINED for
+            // an unscoped privileged caller: `filterFor` returns `{filter: null, empty: false}` for
+            // sysadmin/staff/demi-admin (`helpers/access-odata.js`) — an unfiltered read, not an
+            // empty one — and `buildFilter` passes that through. Interpolating it sends the literal
+            // string `(undefined) and …`, which is a 400, which this route answers as 502. Same
+            // idiom `ai-search.js` already uses twice for exactly this composition.
+            const TRACK_ONLY = "sourceSystem eq 'track'";
+            const scopedFilter = allowNonTrack
+              ? filter
+              : (filter ? `(${filter}) and ${TRACK_ONLY}` : TRACK_ONLY);
             // `Boolean(keywords)`, not `true`. With no keywords `search: '*'` has no relevance to
             // order by, and `search.score() desc` over a constant score leaves ties in whatever
             // order the service computed — which `$skip` paging then repeats and omits across
@@ -290,7 +319,7 @@ exports.search = async (req, res) => {
             // header stops reporting `pageSize` as though it were the number of matches, and
             // eagle-public pages against it.
             const { items, count } = await aiSearch.searchProjects({
-              filter,
+              filter: scopedFilter,
               orderby,
               skip,
               keywords,
@@ -313,8 +342,21 @@ exports.search = async (req, res) => {
                 _id: doc.legacyEagleId || String(doc.id),
                 _schemaName: 'Project',
                 id: String(doc.id),
-                // Never carried by the old Typesense schema either, so this has always been the id.
-                trackProjectId: doc.id,
+                // NULL when there is no Track counterpart, never the DEMI id. An Eagle-only row
+                // stores `trackProjectId: null` (`merge/project.js:235`) and its `id` is the
+                // literal `eagle-<ObjectId>`, so falling back to it reported that string AS A
+                // TRACK ID — a value that is not one and never will be. Under the 2026-08-23
+                // direction, where Track ids are the master project id, that is a lie a consumer
+                // would reasonably act on. The index carries no `trackProjectId` field, so this
+                // branch tells the two apart by the id prefix the merge writes.
+                //
+                // NOT by `sourceSystem`, even though this change makes the index carry it: it is
+                // not in `PROJECT_SELECT` (`ai-search.js`), so it would read `undefined` here — and
+                // adding it would make this line depend on the indexer reset having already run.
+                // Between the index PUT and that reset the field is null on every row, so every
+                // project would briefly report a null trackProjectId. The prefix has no such
+                // dependency: it is written by the merge into Cosmos and is already in the key.
+                trackProjectId: String(doc.id).startsWith('eagle-') ? null : String(doc.id),
                 legacyEagleId: doc.legacyEagleId || '',
                 name: doc.name || doc.displayName || 'Unnamed Project',
                 sector: doc.sector || 'Other',
@@ -408,8 +450,6 @@ exports.search = async (req, res) => {
 
       // Cosmos DB Fallback & Direct Search
       try {
-        const allowNonTrack = req.query.includeSeeded === 'true';
-
         // Provenance filter — orthogonal to visibility, and never a substitute for it.
         // `sourceSystem = 'track'`, not the old `sources.track EXISTS AND != null`: an indexed
         // equality, and it sidesteps the Mongo/SQL disagreement over whether a missing field
@@ -458,13 +498,19 @@ exports.search = async (req, res) => {
           _id: p.eagleId || String(p.id),
           _schemaName: 'Project',
           id: String(p.id),
-          // STRING, matching the AI Search branch. Cosmos stores this as a Number
-          // (`merge/project.js:170`, `Number(track.track_project_id)`) while the index has no such
-          // field at all, so that branch falls back to the index KEY — declared `Edm.String` in
-          // `azure/search/indexes/projects.json`, hence always a String. Only this side can differ,
-          // which is why only this side coerces; a `String()` over there would be an inert line
-          // pretending to do work.
-          trackProjectId: String(p.trackProjectId || p.id),
+          // NULL when absent, NOT the DEMI id — see the AI Search branch above for why.
+          //
+          // STRING when present, matching that branch. Cosmos stores this as a Number
+          // (`merge/project.js:170`, `Number(track.track_project_id)`) and the index has no such
+          // field at all, so the two sides arrive at a String by different routes: this one
+          // coerces, that one is reading an `Edm.String` key. Both coerce explicitly now — an
+          // earlier version of this comment called the other side's `String()` "an inert line
+          // pretending to do work", which stopped being true when that branch started reading the
+          // key twice to test its prefix.
+          //
+          // Cosmos stores the field, so this side reads it directly rather than sniffing the id
+          // prefix; `== null` and not `||`, because Track id 0 would be falsy.
+          trackProjectId: p.trackProjectId == null ? null : String(p.trackProjectId),
           // COSMOS FIELD NAMES, not index field names. The two branches of this route read two
           // different shapes of the same record: the indexer's SELECT aliases the stored columns
           // (`azure/search/datasources/demi-projects-ds.json`: `c.projectState AS status`,

@@ -184,6 +184,209 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(sent.fuzzy, true);
   });
 
+  await t.test('the Cosmos branch nulls a missing trackProjectId too', async () => {
+    // Same rule, other branch. Cosmos STORES the field, so this side reads it rather than
+    // sniffing the id prefix — and the two must agree, or the answer depends on which corpus
+    // served it, which is the whole defect this change exists to close.
+    t.mock.method(projectsRepo, 'listVisible', async () => ({
+      items: [
+        { id: 'eagle-6a59234357be6fca20a489dc', name: 'testtesttest', trackProjectId: null,
+          eagleId: '6a59234357be6fca20a489dc', read: ['public'] },
+        { id: '207', name: 'Nicomen Wind Energy', trackProjectId: 207,
+          eagleId: '58851172aaecd9001b820335', read: ['public'] }
+      ]
+    }));
+    t.mock.method(projectsRepo, 'countVisible', async () => 2);
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', includeSeeded: 'true' }, header: () => null }, res);
+
+    const rows = body[0].searchResults;
+    assert.strictEqual(rows[0].trackProjectId, null, 'no Track counterpart, no Track id');
+    assert.strictEqual(rows[1].trackProjectId, '207', 'and a real one still crosses as a String');
+  });
+
+  // PROVENANCE. Before this, `dataset=Project` answered a different corpus depending on whether a
+  // filter or a sort was present — 382 from the Cosmos branch, 393 from the index, same caller and
+  // same ACL. Measured anonymously 2026-08-23: `sortBy=-name` put `testtesttest` at row 1.
+  await t.test('the AI Search branch scopes to Track-sourced projects', async () => {
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'mine' }, header: () => null }, res);
+
+    assert.match(sent.filter, /sourceSystem eq 'track'/,
+      'without the provenance clause this route serves the non-Track rows the bare list hides');
+  });
+
+  await t.test('a PRIVILEGED caller gets a valid filter, not "(undefined)"', async () => {
+    // Every other test on this route is anonymous, and that is what let a blocker through: an
+    // unscoped privileged caller has NO ACL clause at all — `filterFor` returns
+    // `{filter: null, empty: false}`, an unfiltered read rather than an empty one — so
+    // `buildFilter` yields undefined and a bare template produced the literal string
+    // `(undefined) and sourceSystem eq 'track'`. Azure answers 400 and this route turns that into
+    // 502, so every logged-in admin Project search broke while the anonymous suite stayed green.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search({
+      query: { dataset: 'Project', keywords: 'mine' },
+      user: { realm_access: { roles: ['sysadmin'] } },
+      header: () => null
+    }, res);
+
+    assert.ok(!/undefined/.test(sent.filter), `filter must be valid OData, got: ${sent.filter}`);
+    assert.strictEqual(sent.filter, "sourceSystem eq 'track'",
+      'with no ACL clause to compose with, the provenance term stands alone');
+  });
+
+  await t.test('includeSeeded lifts provenance for a PRIVILEGED caller too', async () => {
+    // The escape hatch has to survive the falsy-filter guard as well: a privileged caller has no
+    // ACL clause, so with includeSeeded the filter has nothing left in it at all.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search({
+      query: { dataset: 'Project', keywords: 'mine', includeSeeded: 'true' },
+      user: { realm_access: { roles: ['sysadmin'] } },
+      header: () => null
+    }, res);
+
+    // `=== undefined`, not `!/sourceSystem/.test(String(...))` — the coerced form passes on a
+    // garbage filter as readily as on the right one.
+    assert.strictEqual(sent.filter, undefined,
+      'no ACL clause and no provenance clause leaves nothing to send');
+  });
+
+  await t.test('a keywordless SORT is scoped too — the shape that was reported', async () => {
+    // Every other test here passes `keywords`. The measurement that started this was
+    // `?dataset=Project&sortBy=-name` with NO keywords: 393 rows with `testtesttest` at row 1.
+    // Same code path, but the reported shape itself was not pinned by anything.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', sortBy: '-name' }, header: () => null }, res);
+
+    assert.match(sent.filter, / and sourceSystem eq 'track'$/);
+    assert.strictEqual(sent.matchAll, true, 'and it is the keywordless index read, not Cosmos');
+  });
+
+  await t.test('the provenance clause COMPOSES with the ACL, never replaces it', async () => {
+    // The clause is appended outside `buildFilter`, so the risk it introduces is dropping what
+    // buildFilter produced. Asserting only the new term would not notice.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'mine' }, header: () => null }, res);
+
+    assert.match(sent.filter, /read\/any/, 'the ACL clause must survive the composition');
+    assert.match(sent.filter, / and sourceSystem eq 'track'$/, 'and it is ANDed, not ORed');
+  });
+
+  await t.test('includeSeeded=true lifts the provenance clause on the index branch too', async () => {
+    // The escape hatch existed only on the Cosmos side. If it does not survive here, this change
+    // is silent data loss rather than a provenance filter.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'mine', includeSeeded: 'true' }, header: () => null },
+      res);
+
+    assert.ok(!/sourceSystem/.test(sent.filter), 'includeSeeded must reach the index branch');
+    assert.match(sent.filter, /read\/any/, 'lifting provenance must not lift the ACL');
+  });
+
+  await t.test('a caller cannot filter their way past the provenance clause', async () => {
+    // Adding `sourceSystem` to the index makes it filterable BY CALLERS too — `buildFilter` gates
+    // on the committed schema, so a new filterable field is a new wire capability whether or not
+    // anyone meant it to be. Sending `and[sourceSystem]=eagle` must therefore compose to nothing,
+    // not override: the route's clause is ANDed, so the two contradict and no row matches.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    const res = { json: () => res, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'test', 'and[sourceSystem]': 'eagle' },
+        header: () => null },
+      res);
+
+    assert.match(sent.filter, /sourceSystem eq 'eagle'/, "the caller's own term is still built");
+    assert.match(sent.filter, / and sourceSystem eq 'track'$/,
+      'and the route clause is ANDed after it, so the two cannot both be satisfied');
+  });
+
+  await t.test('an Eagle-only row reports trackProjectId null, not its own id', async () => {
+    // `id` on such a row is the literal `eagle-<ObjectId>`; returning it AS a trackProjectId
+    // reported a value that is not a Track id and never will be.
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: 'eagle-6a59234357be6fca20a489dc',
+        name: 'testtesttest',
+        legacyEagleId: '6a59234357be6fca20a489dc',
+        read: ['public']
+      }]
+    }));
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'test', includeSeeded: 'true' }, header: () => null },
+      res);
+
+    assert.strictEqual(body[0].searchResults[0].trackProjectId, null);
+    assert.strictEqual(body[0].searchResults[0].id, 'eagle-6a59234357be6fca20a489dc',
+      'the DEMI id itself is unchanged — only the claim that it is a Track id is withdrawn');
+  });
+
+  await t.test('a Track row still reports its trackProjectId', async () => {
+    // The other half: a fix that nulls everything would pass the test above and break the field.
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{ id: '207', name: 'Nicomen Wind Energy', legacyEagleId: '588511', read: ['public'] }]
+    }));
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'nicomen' }, header: () => null }, res);
+
+    assert.strictEqual(body[0].searchResults[0].trackProjectId, '207');
+  });
+
   await t.test('search projects queries AI Search when keywords are provided', async () => {
     let sent = null;
     t.mock.method(aiSearch, 'searchProjects', async (opts) => {
