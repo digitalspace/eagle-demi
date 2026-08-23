@@ -31,6 +31,35 @@ const { app } = require('@azure/functions');
 const { Readable } = require('stream');
 const EventEmitter = require('events');
 
+/**
+ * The query object Express would have built — repeated keys become ARRAYS, not the last value.
+ *
+ * `Object.fromEntries(searchParams.entries())` silently keeps only the LAST occurrence of a
+ * repeated key, and eagle-public repeats them as its normal encoding: `api.ts:186-196` emits one
+ * `and[key]=value` PER selected option, so `and[region]=Peace&and[region]=Cariboo` reached the app
+ * as Cariboo alone. Measured on the live test service: that URL answered 13 where prod eagle-search
+ * answers 89. Every multi-select facet on every dataset had been quietly applying one option, under
+ * a 200, since this adapter was written — indistinguishable from a filter that matched 13 rows.
+ *
+ * The same collapse ate sorting. `api.ts:176-177` appends `sortBy` TWICE and the second is
+ * routinely the empty string, so `sortBy=-name&sortBy=` arrived as `''` — no sort asked for, which
+ * also routed the request to the Cosmos list instead of the index. `eagle-query.sortEntries` was
+ * written for exactly that double-append and never saw it.
+ *
+ * Array-per-repeat is Express's `query parser: 'simple'` shape, and it is what `valuesOf` and
+ * `sortEntries` already normalise. Nested `and[...]` keys stay FLAT — `andParams` reads both that
+ * and the `qs` nested form, and changing which one arrives here changes nothing it can see.
+ */
+function queryFrom(searchParams) {
+  const query = {};
+  for (const [key, value] of searchParams.entries()) {
+    if (!Object.prototype.hasOwnProperty.call(query, key)) query[key] = value;
+    else if (Array.isArray(query[key])) query[key].push(value);
+    else query[key] = [query[key], value];
+  }
+  return query;
+}
+
 async function handleExpress(request, context) {
   // Not an async executor: a rejection thrown inside `new Promise(async ...)` is
   // swallowed rather than surfacing, so the async work is hoisted into its own
@@ -90,7 +119,7 @@ async function handleExpress(request, context) {
         url: urlObj.pathname + urlObj.search,
         originalUrl: urlObj.pathname + urlObj.search,
         headers: headers,
-        query: Object.fromEntries(urlObj.searchParams.entries()),
+        query: queryFrom(urlObj.searchParams),
         socket,
         connection: socket
       });
@@ -193,7 +222,7 @@ async function handleExpress(request, context) {
 // Exported for test/functions-adapter.test.js, which drives this the way the host does. The
 // adapter is the one piece of this app that only ever runs in Azure, so it is also the one piece
 // nothing else can exercise — hence a test that calls it directly.
-module.exports = { handleExpress };
+module.exports = { handleExpress, queryFrom };
 
 // Drain buffered audit events before the worker goes away.
 //

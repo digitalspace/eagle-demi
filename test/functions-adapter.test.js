@@ -21,7 +21,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { logger } = require('../src/utils/logger');
-const { handleExpress } = require('../api/index');
+const { handleExpress, queryFrom } = require('../api/index');
 
 /** The shape @azure/functions hands a handler: a Request-like object with async body accessors. */
 function functionsRequest(method, url, headers = {}) {
@@ -43,6 +43,45 @@ function captureLogs(t) {
   }
   return records;
 }
+
+// REPEATED QUERY KEYS. `Object.fromEntries(searchParams.entries())` kept only the LAST occurrence,
+// and eagle-public repeats a key per selected option (`api.ts:186-196`) — so every multi-select
+// facet applied one option and answered 200. Measured live before the fix:
+// `and[region]=Peace&and[region]=Cariboo` returned 13 against demi and 89 against prod
+// eagle-search. Asserted on literal expected values rather than by re-parsing the URL, because a
+// test that rebuilds its expectation from the code under test passes either way.
+test('a repeated query key arrives as an array, not as its last value', () => {
+  const query = queryFrom(new URLSearchParams(
+    'dataset=Project&and[region]=Peace&and[region]=Cariboo&pageSize=10'));
+
+  assert.deepStrictEqual(query['and[region]'], ['Peace', 'Cariboo']);
+  assert.strictEqual(query.dataset, 'Project');
+  assert.strictEqual(query.pageSize, '10', 'a key that appears once stays a string');
+});
+
+// The same collapse ate SORTING, and it is a different symptom of one bug: `api.ts:176-177`
+// appends `sortBy` twice with the second routinely empty, so `sortBy=-name&sortBy=` arrived as ''
+// — no sort asked for, which also routed the request to the Cosmos list instead of the index.
+test('the empty second sortBy no longer erases the first', () => {
+  const query = queryFrom(new URLSearchParams('dataset=Project&sortBy=-name&sortBy='));
+  assert.deepStrictEqual(query.sortBy, ['-name', '']);
+});
+
+// Order must not decide the answer. Before the fix `sortBy=&sortBy=-name` worked and
+// `sortBy=-name&sortBy=` did not, which is what made the defect look like a frontend quirk.
+test('a repeated key keeps every value whichever order they arrive in', () => {
+  assert.deepStrictEqual(queryFrom(new URLSearchParams('sortBy=&sortBy=-name')).sortBy,
+    ['', '-name']);
+});
+
+// A query key named like an Object.prototype member must not be read off the prototype: without
+// the hasOwnProperty guard, `constructor` is already "present" and the first value is appended to
+// a function rather than kept.
+test('a query key that collides with Object.prototype is still read correctly', () => {
+  const query = queryFrom(new URLSearchParams('constructor=a&constructor=b&toString=c'));
+  assert.deepStrictEqual(query.constructor, ['a', 'b']);
+  assert.strictEqual(query.toString, 'c');
+});
 
 test('functions adapter', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
