@@ -10,8 +10,10 @@ environment is rebuildable and so schema changes show up in a diff.
 
 **`src/scripts/apply-search-definitions.js` applies them.** It is dry-run by default, writes indexes
 before indexers, applies an index the app is serving from only when the change ADDS fields, and never
-writes a data source. Its header carries the run instructions; this file stays the reference for what the objects
-ARE and for the grant they need. Do not restate one in the other — a duplicated operational doc
+writes a data source. **`--only <name>` narrows a run to one index and its indexer** — `--only
+projects` or `--only projects-indexer` both resolve to the same pair — which is what you want when
+restoring service, since it leaves the other two untouched. Its header carries the run instructions;
+this file stays the reference for what the objects ARE and for the grant they need. Do not restate one in the other — a duplicated operational doc
 drifting into a false claim is the failure this repo has already had.
 
 ## The names
@@ -26,6 +28,22 @@ new indexes matched their Cosmos totals (393 / 60,578 / 1,128,733).
 **The `demi-*` indexes still exist and their indexers are still running.** They are the rollback
 target: flipping the three `SEARCH_INDEX*` settings back is the whole rollback, with no refill,
 because those indexers never stopped. Do not delete them until the new names have soaked.
+
+**They have NO committed definition file, so every widening has to be applied to them by hand too,
+or the rollback target rots silently.** It already had: measured 2026-08-23, `demi-projects` still
+carried **12** fields while `projects` had 19 — it was never widened during the rename, so a
+rollback at any point since would have lost `type`, `currentPhaseName`, `eacDecision` and
+`decisionDate` as well as whatever prompted the rollback. `apply-search-definitions.js` cannot do it
+(`--only` resolves by committed name), so it is a hand PUT with the name rewritten:
+
+```bash
+jq '.name = "demi-projects"' indexes/projects.json > /tmp/idx.json
+# PUT {endpoint}/indexes/demi-projects?api-version=2024-07-01   body /tmp/idx.json
+```
+
+Then reset and run `demi-projects-indexer` the same way, or its new columns stay `null` and the
+rollback is a 200-with-no-rows instead of a working index. The data sources are shared, so the
+data-source PUT in step 2 above covers both indexers at once — that one is not doubled.
 
 The staged history — all three steps are DONE. Past tense on purpose: the rollback walks it
 backwards, so the reader doing that needs to know what each step did.
@@ -83,11 +101,38 @@ order takes the live search down for anonymous callers.
    answers 502.
 2. **PUT the data source, by hand.** `apply-search-definitions.js` deliberately never writes one
    (`connectionString` is redacted on export), so the new columns are NOT projected until someone
-   sends the file with the real credential added. Until then the indexer keeps its old `SELECT`,
-   the new fields stay `null`, and **nothing reports an error** — the apply run says success. The
-   script now compares the live `container.query` with the committed copy and prints a `DIFFERS`
-   warning plus a tally, which is the only signal that this step is outstanding.
-3. **Then the indexer**, and let the `PT5M` schedule refill.
+   sends the file. Until then the indexer keeps its old `SELECT`, the new fields stay `null`, and
+   **nothing reports an error** — the apply run says success.
+
+   **You do not need the real credential.** `connectionString: "<unchanged>"` is accepted and
+   returns 204, which is how a projection changes without anyone handling the secret the export
+   redacts. Send the committed file with that one value swapped.
+
+   **The `DIFFERS` warning cannot fire where you run this, so do not wait for it.** The script
+   compares the live `container.query` against the committed copy — but `scripts/package-api.py`
+   ships `azure/search/indexes` and NOT `azure/search/datasources`, so inside the container there is
+   no committed copy to compare and the run prints `(ds demi-projects-ds ok)` while the data source
+   is stale. Measured 2026-08-23. **Verify the live query directly instead**: GET the data source
+   before and after and grep the new column out of `container.query`.
+3. **Then the indexer.** A schema-only widening re-pulls **nothing** — the high-water mark is
+   `_ts`, so existing rows are untouched and the new column stays `null` on every one of them,
+   which makes the new filter match zero rows under a 200. The reset is what re-pulls them:
+
+   ```
+   POST {endpoint}/indexers/{name}/reset?api-version=2024-07-01    -> 204
+   POST {endpoint}/indexers/{name}/run?api-version=2024-07-01      -> 202
+   GET  {endpoint}/indexers/{name}/status?api-version=2024-07-01
+   ```
+
+   **A 202 means the run STARTED, not that any row moved.** Poll `status` and read
+   `lastResult.itemsProcessed` / `itemsFailed` — a reset that re-pulled nothing looks identical to
+   one that worked if you stop at the 202. `lastResult.status` passes through `reset` on its way to
+   `success`, so treat `reset` as still-running rather than as a terminal state. The projects
+   indexer reports `393 processed, 0 failed` when it has done its job.
+
+   A **data-only** change needs none of this: a Cosmos patch moves `_ts`, so the `PT5M` schedule
+   picks it up on its own within five minutes — and that path needs **no role grant at all**, which
+   matters because `run` is a definition operation and 403s once the grant is revoked.
 4. **The app is the LAST step, not the first.** `src/controllers/search.js` routes a keywordless
    search carrying filters or a sort to the index, so deploying it after the index PUT but BEFORE
    the backfill has filled the new columns turns "the filter returns everything" into "the filter
@@ -106,6 +151,19 @@ Public network access is `Disabled` and local auth is off, so this only works fr
 as the managed identity — see the SSH-tunnel recipe in the root `README.md`. The identity holds
 **Search Index Data Contributor**, which covers documents but *not* definitions; writing these back
 needs a temporary **Search Service Contributor** grant, revoked afterwards.
+
+**Use `scripts/with-search-admin.sh` rather than granting by hand.** It grants, runs the command you
+give it, and revokes from a `trap` — so the revoke also fires on a failure, on Ctrl-C, and on a
+dropped tunnel. Three index changes have each done this by hand, and the failure that costs
+something is a grant left standing because the middle step errored. The script's header explains why
+the grant stays temporary rather than becoming permanent; the short version is that
+`demi-identity-test` is the identity the **public API** runs as.
+
+```bash
+scripts/with-search-admin.sh -- \
+  sshpass -p "$CONTAINER_SSH_PASSWORD" ssh -c aes256-cbc -m hmac-sha1 -p 50123 root@127.0.0.1 \
+  'cd /home/site/wwwroot && node src/scripts/apply-search-definitions.js --live --only projects'
+```
 
 **READ THE LIVE NAMES FIRST — never take them from a filename.** Since the cutover the two agree, so
 a `PUT` under the file's own name is correct today. That was NOT true before it, and it stops being
