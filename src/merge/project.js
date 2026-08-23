@@ -124,15 +124,24 @@ function normalizeCentroid(track, eagle) {
  * Eagle already carries a `read[]` in the EPIC role-type vocabulary; preserve it when present so
  * an upstream restriction is never widened by the merge.
  *
- * With no Eagle match, a Track project is PUBLIC. `track_projects_enriched.json` is the public EA
- * project registry — it is committed to a public repository — so every project in it is public
- * information. There is no draft or publication flag in that data to distinguish otherwise.
+ * **With no Eagle match, a project is NOT public.** Product owner, 2026-08-23: *"if track has a
+ * project that eagle does not have, this project is NOT public."* Eagle is what publishes; a
+ * project that has not reached it has not been published by anyone.
+ *
+ * This reverses the previous rule, which read the Track export as self-evidently public because it
+ * is committed to a public repository. That argument was about the FILE, not the projects in it,
+ * and it made "Eagle withheld this" indistinguishable from "Eagle never heard of it" — both landed
+ * on `public`. Measured before the change: 28 projects were anonymously readable in demi-test with
+ * no Eagle counterpart, and 19 of the 27 checked returned zero anonymous hits on prod eagle-search.
+ *
+ * Failing closed here is also right for the Eagle-only path (`mergeEagleOnlyProject`), where a
+ * missing or empty `read[]` on an Eagle record is an absence of evidence, not evidence of consent.
  */
 function resolveProjectAcl(eagle) {
   if (eagle && Array.isArray(eagle.read) && eagle.read.length > 0) {
     return eagle.read;
   }
-  return ['public', ...SECURE_ROLES];
+  return [...SECURE_ROLES];
 }
 
 /**

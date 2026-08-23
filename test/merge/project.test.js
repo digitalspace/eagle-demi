@@ -178,16 +178,26 @@ test('ACL — the merge never widens visibility', async (t) => {
     assert.ok(!acl.includes('public'), 'the merge must never widen an upstream restriction');
   });
 
-  await t.test('a Track project with no Eagle match is public', () => {
-    // track_projects_enriched.json is the public EA registry — it is committed to a public
-    // repository — and carries no draft or publication flag.
+  await t.test('a Track project with no Eagle match is NOT public', () => {
+    // Reversed 2026-08-23 by the product owner: "if track has a project that eagle does not have,
+    // this project is NOT public." Eagle is what publishes; a project that has not reached it has
+    // not been published by anyone.
+    //
+    // The rule this replaced read the Track export as self-evidently public because the file is
+    // committed to a public repository — an argument about the FILE, not the projects in it. It
+    // made 28 projects anonymously readable in demi-test with no Eagle counterpart, 19 of which
+    // returned zero anonymous hits on prod eagle-search.
     const acl = resolveProjectAcl(null);
-    assert.ok(acl.includes('public'));
-    for (const r of SECURE_ROLES) assert.ok(acl.includes(r));
+    assert.ok(!acl.includes('public'), 'no Eagle counterpart means nobody published it');
+    for (const r of SECURE_ROLES) assert.ok(acl.includes(r), `${r} keeps access`);
   });
 
-  await t.test('an empty read[] array is treated as absent, not as deny-all', () => {
-    assert.ok(resolveProjectAcl({ read: [] }).includes('public'));
+  await t.test('an empty read[] array is absent, and absent now fails CLOSED', () => {
+    // Still "absent, not deny-all" in the sense that SECURE_ROLES retain access — what changed is
+    // that absence no longer grants `public`.
+    const acl = resolveProjectAcl({ read: [] });
+    assert.ok(!acl.includes('public'));
+    assert.deepStrictEqual(acl, [...SECURE_ROLES]);
   });
 
   await t.test('isPublished MIRRORS read[] — it is never an independent signal', () => {
@@ -206,11 +216,17 @@ test('ACL — the merge never widens visibility', async (t) => {
 
   await t.test('is_active does NOT affect visibility, and is still carried through', () => {
     // Of the 40 Track projects it marks inactive, 17 are "Pre Work", 8 "Under Work" and 2
-    // "Operation" — it is orthogonal to both publication and lifecycle stage.
-    const merged = mergeTrackProject({ ...TRACK_207, is_active: false }, null, OPTS);
-    assert.strictEqual(merged.isPublished, true, 'a closed project is still public');
-    assert.ok(merged.read.includes('public'));
-    assert.strictEqual(merged.isActive, false, 'the flag itself is preserved');
+    // "Operation" — it is orthogonal to both publication and lifecycle stage. Asserted against an
+    // Eagle counterpart that publishes, so the subject is is_active and not the missing-match rule
+    // above: with `null` for Eagle every project is unpublished now, which would pass whatever
+    // is_active did and prove nothing.
+    const eagle = { _id: 'x', read: ['public', 'staff'] };
+    const inactive = mergeTrackProject({ ...TRACK_207, is_active: false }, eagle, OPTS);
+    const active = mergeTrackProject({ ...TRACK_207, is_active: true }, eagle, OPTS);
+
+    assert.strictEqual(inactive.isPublished, true, 'a closed project Eagle publishes is public');
+    assert.deepStrictEqual(inactive.read, active.read, 'is_active does not move the ACL');
+    assert.strictEqual(inactive.isActive, false, 'the flag itself is preserved');
   });
 });
 
