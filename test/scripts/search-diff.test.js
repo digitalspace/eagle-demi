@@ -281,22 +281,42 @@ test('the same divergence on a dataset with no declared reason still fails', () 
   assert.ok(verdict.diffs.some(d => d.field === 'sortHonoured'));
 });
 
-test('one empty page is a corpus fact, not a key delta', () => {
-  // A page past the end of ONE corpus returns no rows. Comparing keys there reports every key the
-  // other side emits as unexpected — thirteen of them, on a case that is simply out of rows.
-  // Measured: `keywords=pattullo` page 26, demi 250 matches against eagle's 262.
+test('an empty page is excused only when the side\'s own total explains it', () => {
+  // Measured: `keywords=pattullo` page 26 at pageSize 10 — demi 250 matches against eagle's 262, so
+  // `skip 250 >= 250` and demi is legitimately out of rows while eagle is not. Comparing keys there
+  // reported every key eagle emits as unexpected, thirteen of them, on a case simply past the end.
   const row = { _id: 'a', displayName: 'x', datePosted: '2020-01-01' };
+  const atPage = (n) => ({ dataset: 'Document', kase: { pageNum: n }, pageSize: 10 });
 
-  const demiRanOut = compareCase(respond([], 250), respond([row], 262), { dataset: 'Document', kase: {} });
+  const demiRanOut = compareCase(respond([], 250), respond([row], 262), atPage(25));
   assert.strictEqual(demiRanOut.pass, true, JSON.stringify(demiRanOut.diffs));
-
-  const eagleRanOut = compareCase(respond([row], 262), respond([], 250), { dataset: 'Document', kase: {} });
+  const eagleRanOut = compareCase(respond([row], 262), respond([], 250), atPage(25));
   assert.strictEqual(eagleRanOut.pass, true, JSON.stringify(eagleRanOut.diffs));
 
-  // And the check is still live where both sides HAVE rows — otherwise this fix is a mute button.
+  // THE SIGNAL THE BLUNT VERSION OF THIS FIX THREW AWAY. An empty page whose own total says it
+  // should be full is a service failing, not a corpus ending — and "both sides have rows" alone
+  // would have passed it in silence.
+  const shouldHaveRows = compareCase(respond([], 60560), respond([row], 61582), atPage(0));
+  assert.strictEqual(shouldHaveRows.pass, false);
+  assert.deepStrictEqual(
+    shouldHaveRows.diffs.find(d => d.field === 'emptyPage'), { field: 'emptyPage', demi: 60560, eagle: null });
+
+  // BOTH SIDES, and the mirror is not symmetry for its own sake: this differ exists to grade demi,
+  // so the eagle branch is the one a reader would assume is decorative and delete. eagle answering
+  // an unexplained empty page is prod misbehaving, which is worth knowing before it is copied.
+  const eagleShouldHaveRows = compareCase(respond([row], 60560), respond([], 61582), atPage(0));
+  assert.strictEqual(eagleShouldHaveRows.pass, false);
+  assert.deepStrictEqual(
+    eagleShouldHaveRows.diffs.find(d => d.field === 'emptyPage'),
+    { field: 'emptyPage', demi: null, eagle: 61582 });
+
+  // A side that reported NO total cannot use it as an excuse either.
+  const noTotal = compareCase(respond([], null), respond([row], 262), atPage(25));
+  assert.strictEqual(noTotal.pass, false, 'unknown is not the same as expected');
+
+  // And the key check is still live where both sides have rows — otherwise this is a mute button.
   const real = compareCase(
-    respond([{ ...row, somethingNew: 1 }], 10), respond([row], 10),
-    { dataset: 'Document', kase: {} });
+    respond([{ ...row, somethingNew: 1 }], 10), respond([row], 10), atPage(0));
   assert.strictEqual(real.pass, false);
   assert.deepStrictEqual(real.diffs.find(d => d.field === 'rowKeys').demiOnly, ['somethingNew']);
 });
@@ -381,7 +401,9 @@ test('a 200 that is not the search envelope is called out as such', () => {
   assert.deepStrictEqual(verdict.diffs, [{ field: 'envelope', demi: true, eagle: false }]);
 });
 
-test('two empty pages agree — no rows means no key comparison to make', () => {
-  const verdict = compareCase(respond([], 0), respond([], 0));
-  assert.strictEqual(verdict.pass, true);
+test('two empty pages agree when the query genuinely matched nothing', () => {
+  // Page 0 of a zero-result query: `0 * 10 >= 0`, so both sides are past the end and the emptiness
+  // is explained. No rows means no key comparison to make.
+  const bases = { dataset: 'Document', kase: { pageNum: 0 }, pageSize: 10 };
+  assert.strictEqual(compareCase(respond([], 0), respond([], 0), bases).pass, true);
 });
