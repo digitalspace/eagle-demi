@@ -218,8 +218,16 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       - eagle-search `deploy-infra.sh` prod branch: next prod infra deploy re-PUTs appSettings over
         the rotated 64-char `INGEST_KEY` from whatever `EAGLE_SEARCH_INGEST_KEY` is exported —
         silent, production-breaking. Durable fix: Key Vault reference.
-      - Pin `ref: ${{ inputs.version }}` on `eao-nginx/deploy-to-test.yaml:119` (prod already
-        pinned); point rproxy probes at `/` instead of `/nginx_status`.
+      - [x] ~~Pin `ref: ${{ inputs.version }}` on `eao-nginx/deploy-to-test.yaml`.~~ bcgov/eao-nginx
+        PR 43, open 2026-08-24. The `release` job pushes the tag before `deploy` runs, so it always
+        resolves.
+      - ~~Point rproxy probes at `/` instead of `/nginx_status`.~~ **STRUCK — it would CrashLoop
+        rproxy on test.** Measured 2026-08-24: `/` is **401** on eagle-test (basic auth,
+        `helm/rproxy/values-test.yaml:39`) and 200 on prod, so a kubelet probe on `/` fails
+        readiness and restarts on liveness in test only. The real gap is `conf.d/server.conf.tmpl`
+        (DNS resolved once at config load, so a moved Front Door address 502s the whole site while
+        `/nginx_status` stays green) and it needs an EXTERNAL check of a real proxied URL — the
+        webtest §4.6 already asks for — not a kubelet probe on a gated path.
       - [x] ~~Cosmos-fallback search truncates at 1000 with no continuation token (reachable only
         when AI Search faults).~~ **"Only when AI Search faults" was wrong and it was the whole
         defect**: `hasCriteria` excludes `project`, so `&project=<id>&pageSize=500` with no
