@@ -207,8 +207,8 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
         500-row page. Project keeps its Cosmos read (348 rows, and `getAllFull(1, 1000000)`).
       - [x] ~~**New, from that change**: no document LIST is a live read any more, so an unpublish
         hides the file at once but leaves the ROW listed for up to the indexer's `PT5M` pass.~~
-        Fixed on `fix/index-acl-write-through` — `aiSearch.writeAcls` merges `read`/`isPublished`
-        into the index (never `mergeOrUpload`: a row the indexer has not created yet is not
+        #149, merged 2026-08-24 (`af67934`), reviewer PASS — `aiSearch.writeAcls` merges
+        `read`/`isPublished` into the index (never `mergeOrUpload`: a row the indexer has not created yet is not
         findable), best-effort, batched at the service's 1,000. **Two siblings the line did not
         name went with it, and they were the larger leak**: an unpublished PROJECT stayed findable
         by name, and its cascade left every child document listed — ~170 rows, 2,488 on the largest
