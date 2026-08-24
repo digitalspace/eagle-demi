@@ -208,7 +208,13 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
         hand `deploy-infra.sh test`. Read truth off `az resource show
         .../basicPublishingCredentialsPolicies/scm --query properties.allow`, never the template.
       - Delete `PREVIEW_GATE_PASSPHRASE` from bcgov/eagle-public and the two stale preview
-        branches (value is burned; branches are still dispatchable into a world-readable env.js).
+        branches (value is burned). **Measured 2026-08-24, and it is smaller than written**: the
+        secret is referenced by NO workflow (`grep PREVIEW_GATE_PASSPHRASE .github/workflows/*.yaml`
+        is empty), so deleting it breaks nothing — `gh secret delete PREVIEW_GATE_PASSPHRASE --repo
+        bcgov/eagle-public`. The branches are `azure-prod-preview` and `azure-search-preview`, and
+        neither matches `preview-branch-in-test.yaml`'s push triggers (`hotfix/**`, `feat/**`,
+        `feature/**`), so they are reachable only by a manual `workflow_dispatch`. Branch deletion
+        needs Daniel: `git push --delete` is denied by settings.
       - ~~5-char `RPROXY_PASSWORD`.~~ **Misfiled**: nowhere in eagle-demi, it is a repo secret on
         `bcgov/eao-nginx` (`deploy-to-test.yaml:157,159`). Track it there.
       - [x] ~~Page-cap `GET /api/boundaries`.~~ #147, merged 2026-08-24. Bounded the `fetchAll()`
