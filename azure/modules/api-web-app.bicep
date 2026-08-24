@@ -503,6 +503,41 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
+// A PUBLIC PASSWORD-GUESSING PATH, closed. `<app>.scm.azurewebsites.net` is internet-reachable and
+// answers 401 rather than refusing the connection, so while these policies allow basic auth the
+// SCM endpoint is an unthrottled credential-guessing surface onto the box that holds the only
+// extracted copy of the corpus — and that serves eagle-public's TEST search.
+//
+// NOTHING HERE AUTHENTICATES THAT WAY, which is what makes this safe to turn off rather than a
+// trade. `scripts/deploy-azure.sh:52` mints an AAD bearer with `az account get-access-token` and
+// uses it for both the VFS reads (`:82`) and the zipdeploy (`:139`); CI logs in with OIDC. There
+// are no publish profiles and no `deployment list-publishing-credentials` call anywhere in
+// `.github/` or `scripts/`.
+//
+// Both children, though `scm: false` already neuters ftp — declaring only one leaves the other
+// reading `allow: true` in the portal, which reads as a half-applied control. `name` is a
+// deploy-time constant here: `scm` and `ftp` are the only literals that compile.
+//
+// Not parameterised. There is no environment where this should be true, and a param would invite
+// one. `azure/modules/extractor.bicep` is deliberately NOT covered by this — it sits outside
+// `main.bicep`, is Flex Consumption and deploys by hand; its `ftpsState: 'Disabled'` is a
+// different control and is not evidence it is covered.
+resource apiScmBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2023-12-01' = {
+  parent: apiWebApp
+  name: 'scm'
+  properties: {
+    allow: false
+  }
+}
+
+resource apiFtpBasicAuth 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2023-12-01' = {
+  parent: apiWebApp
+  name: 'ftp'
+  properties: {
+    allow: false
+  }
+}
+
 // Who authenticated to Kudu/SCM and deployed. Nothing captured this before: the app's own audit
 // trail covers authenticated writes through the API, and a deploy is the one authenticated change
 // that never passes through it.

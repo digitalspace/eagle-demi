@@ -49,6 +49,14 @@ sshpass -p 'Docker!' ssh -c aes256-cbc -m hmac-sha1 -p 50123 root@127.0.0.1
 `-c aes256-cbc` is required — App Service offers only legacy CBC ciphers, which OpenSSH 9+ disables
 by default (`no matching cipher found`).
 
+**Keep `az` reasonably current, or this tunnel stops working.** The app declares
+`basicPublishingCredentialsPolicies` `allow: false` for both `scm` and `ftp`, so SCM refuses basic
+auth. `az webapp create-remote-connection` copes: azure-cli checks `basic_auth_supported()` and
+falls back to an AAD bearer (verified on 2.89.1). A pre-2023 CLI has no such fallback and loses the
+tunnel — which is the ONLY route to the private Cosmos and AI Search data planes, so every database
+script goes with it. If the tunnel starts failing to authenticate, check the CLI version before
+anything else.
+
 Four things to know before running a script this way:
 
 1. **App settings are injected into the app process, not the SSH shell.** Read them from
