@@ -192,8 +192,10 @@ async function main() {
       }
       const plaintext = r.json.key || r.json.plaintext || r.json.apiKey;
       const id = String(r.json.id || r.json.keyId || (r.json.record && r.json.record.id));
-      if (!plaintext) throw new Error(`mint ${label}: no plaintext in response`);
+      // Recorded BEFORE the shape check: the key is already live for an hour by here, and a body
+      // that ever drifted would otherwise throw past the only thing that revokes it.
       keys.push({ id, plaintext, label });
+      if (!plaintext) throw new Error(`mint ${label}: no plaintext in response`);
       console.log(`minted ${label} key ${id} roles=${JSON.stringify(roles)} scope=${JSON.stringify(projectScope || null)}`);
       return plaintext;
     };
@@ -235,20 +237,23 @@ async function main() {
     cell('scoped point read outside its scope', 404, await pointRead(keyB, otherProject, projectB));
 
     console.log('\n--- search (index, PT5M indexer) ---');
+    // BOTH rows the leg asserts on, not just the control: `otherProject` is planted after it, so
+    // an indexer pass landing between the two writes would make its own control read as a MISSED
+    // prediction rather than as an unfinished index.
     const deadline = Date.now() + INDEX_WAIT_MS;
     let indexed = 0;
     while (Date.now() < deadline) {
-      indexed = await searchSees(ADMIN, term, [control]);
-      if (indexed === 1) break;
+      indexed = await searchSees(ADMIN, term, [control, otherProject]);
+      if (indexed === 2) break;
       await new Promise(r => setTimeout(r, INDEX_POLL_MS));
     }
 
-    if (indexed !== 1) {
+    if (indexed !== 2) {
       // Not a pass and not a failure of the predicate: without its control in the index the search
       // leg cannot tell a working filter from an empty index.
-      console.log(`INCONCLUSIVE search leg: the control row did not reach the index within ` +
-        `${INDEX_WAIT_MS / 60000} min. Nothing below it is evidence.`);
-      results.push({ name: 'search leg', expected: 'control indexed', actual: 'not indexed', ok: null });
+      console.log(`INCONCLUSIVE search leg: ${2 - indexed} of its 2 control rows did not reach ` +
+        `the index within ${INDEX_WAIT_MS / 60000} min. Nothing below it is evidence.`);
+      results.push({ name: 'search leg', expected: '2 controls indexed', actual: indexed, ok: null });
     } else {
       searchLegRan = true;
       cell('admin finds the hidden row by the nonsense term', 1, await searchSees(ADMIN, term, [hidden]));

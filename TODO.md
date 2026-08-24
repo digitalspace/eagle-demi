@@ -77,12 +77,12 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       read-only, scoped — for the narrowing.
       - `src/scripts/probe-acl.js` runs the whole thing: mints both keys, plants a synthetic
         hidden/control pair (a `read[]` the corpus cannot supply, since every real row is public),
-        asserts 21 cells over the live Cosmos list, the point read and the index, then deletes and
+        asserts 26 cells over the live Cosmos list, the point read and the index, then deletes and
         revokes and verifies both. `ADMIN_API_KEY=… node src/scripts/probe-acl.js`, ~7 min (the
         search leg waits for the `PT5M` indexer). Exit 0 pass, 1 a missed prediction, 2 aborted,
         3 a leg was inconclusive — an inconclusive leg proved nothing about six cells and must not
         read as a pass to anything checking only the status.
-      - **21/21 on 2026-08-24.** Anonymous and `compliance` see 0 of the hidden row and 1 of the
+      - **26/26 on 2026-08-24.** Anonymous and `compliance` see 0 of the hidden row and 1 of the
         control on list, search and point read (404/200); the scoped key sees its own project only,
         including private rows inside it, and 0 outside on every route; a revoked key is refused.
       - Proven falsifiable: flipping one expected value red-flags it and exits non-zero. Check
