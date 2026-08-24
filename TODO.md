@@ -208,14 +208,15 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
         **DECLARED, NOT APPLIED** — CI never deploys infra, so SCM still accepts passwords until a
         hand `deploy-infra.sh test`. Read truth off `az resource show
         .../basicPublishingCredentialsPolicies/scm --query properties.allow`, never the template.
-      - Delete `PREVIEW_GATE_PASSPHRASE` from bcgov/eagle-public and the two stale preview
-        branches (value is burned). **Measured 2026-08-24, and it is smaller than written**: the
-        secret is referenced by NO workflow (`grep PREVIEW_GATE_PASSPHRASE .github/workflows/*.yaml`
-        is empty), so deleting it breaks nothing — `gh secret delete PREVIEW_GATE_PASSPHRASE --repo
-        bcgov/eagle-public`. The branches are `azure-prod-preview` and `azure-search-preview`, and
-        neither matches `preview-branch-in-test.yaml`'s push triggers (`hotfix/**`, `feat/**`,
-        `feature/**`), so they are reachable only by a manual `workflow_dispatch`. Branch deletion
-        needs Daniel: `git push --delete` is denied by settings.
+      - [x] ~~Delete `PREVIEW_GATE_PASSPHRASE` from bcgov/eagle-public and the two stale preview
+        branches.~~ **Done 2026-08-24.** Smaller than written: the secret was referenced by NO
+        workflow, so deleting it broke nothing; the branches were `azure-prod-preview` and
+        `azure-search-preview`, and neither matched `preview-branch-in-test.yaml`'s push triggers
+        (`hotfix/**`, `feat/**`, `feature/**`), so they were reachable only by a manual
+        `workflow_dispatch`. Verified after: secret gone, `git ls-remote --heads` matches neither
+        name. **Tips recorded so the deletes are reversible** — `azure-prod-preview`
+        `7187eaced70a3bbfe04eae8b395ab7ae62f77779`, `azure-search-preview`
+        `0e98f135a80196f6c7f954af0bb70542e35cf220`; the secret value is not, and was already burned.
       - ~~5-char `RPROXY_PASSWORD`.~~ **Misfiled**: nowhere in eagle-demi, it is a repo secret on
         `bcgov/eao-nginx` (`deploy-to-test.yaml:157,159`). Track it there.
       - [x] ~~Page-cap `GET /api/boundaries`.~~ #147, merged 2026-08-24. Bounded the `fetchAll()`
