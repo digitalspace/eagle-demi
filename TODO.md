@@ -218,9 +218,16 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
         `x-ms-continuation`, so no token exists on that path at any size. It now answers
         `x-truncated: true` + `Cache-Control: no-store` and logs; `?type=` is single-partition and
         pages properly. Unreachable at 281 rows.
-      - eagle-search `deploy-infra.sh` prod branch: next prod infra deploy re-PUTs appSettings over
-        the rotated 64-char `INGEST_KEY` from whatever `EAGLE_SEARCH_INGEST_KEY` is exported —
-        silent, production-breaking. Durable fix: Key Vault reference.
+      - ~~eagle-search `deploy-infra.sh` prod branch re-PUTs appSettings over the rotated
+        `INGEST_KEY`.~~ **Misstated, re-read 2026-08-24.** `deploy-infra.sh` has no prod branch at
+        all — it exits 2 on anything but `test` (`:46-50`) and already sources the key from the
+        OpenShift secret, refuses under 32 chars, and re-reads the live value afterwards to confirm
+        it matches. The hazard lives in `azure/main.searchprod.bicepparam:151`, and both mechanical
+        failures are already guarded: unset is BCP427, empty is BCP333 via `@minLength(32)`. What is
+        left is an operator exporting a valid-but-WRONG key — re-running the `openssl` line on a
+        redeploy — which the file warns about at `:25-35` and nothing enforces. Key Vault is one fix;
+        a prod counterpart to `deploy-infra.sh` that reads the live key back is the cheaper one.
+        Not urgent: prod has had no infra deploy.
       - [x] ~~Pin `ref: ${{ inputs.version }}` on `eao-nginx/deploy-to-test.yaml`.~~ bcgov/eao-nginx
         PR 43, open 2026-08-24. The `release` job pushes the tag before `deploy` runs, so it always
         resolves.
