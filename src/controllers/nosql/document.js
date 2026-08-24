@@ -397,6 +397,18 @@ exports.setDocumentPublished = async (req, res) => {
       detail: { displayName: existing.displayName, isPublishedFrom: existing.isPublished }
     });
 
+    const acl = updated && Array.isArray(updated.read) && updated.read.length > 0
+      ? updated.read
+      : (published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]);
+
+    // No document LIST is a live read any more (#148), so without this the row stayed listed and
+    // keyword-searchable under its old ACL until the indexer's next PT5M pass — the file was
+    // hidden at once by the point read, its metadata was not. Best-effort and never fatal: the
+    // Cosmos write is authoritative and has already landed.
+    await aiSearch.writeAcls(aiSearch.indexes().documents, [
+      { id: existing.id, read: acl, isPublished: published }
+    ]);
+
     // The chunks carry a SNAPSHOT of this ACL, taken at ingest, and nothing else refreshes it.
     // Without this the extracted text of a document just made private stays readable — in Cosmos,
     // and in the AI Search index indefinitely, because unpublishing never advanced the chunks'
@@ -405,10 +417,6 @@ exports.setDocumentPublished = async (req, res) => {
     // AFTER the document patch, deliberately: a failure here leaves the document private and its
     // chunks over-permissive, which the search gate now covers. The reverse order could leave the
     // document public while its chunks were locked down, which nothing covers.
-    const acl = updated && Array.isArray(updated.read) && updated.read.length > 0
-      ? updated.read
-      : (published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]);
-
     try {
       const chunkAcl = await chunks.setAclForDocument(systemAccess(), existing.id, acl);
       if (chunkAcl.failed > 0) {

@@ -217,3 +217,31 @@ test('setPublished moves ownRead with it', async (t) => {
     assert.ok(ownRead.includes('public'));
   });
 });
+
+// The caller writes the same ACLs into the search index, so the cascade has to report what it
+// derived. Re-deriving the intersection at the call site would be a second implementation of the
+// rule above, free to drift from this one.
+test('setAclForProject reports the ACLs it derived', async (t) => {
+  await t.test('one row per document, carrying the INTERSECTION and its mirror', async (tt) => {
+    harness(tt, [
+      { id: 'd1', read: ['public', 'sysadmin'] },
+      { id: 'd2', read: ['sysadmin', 'project-team'] }
+    ]);
+
+    const result = await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
+
+    assert.deepStrictEqual(result.rows, [
+      { id: 'd1', read: ['public', 'sysadmin'], isPublished: true },
+      // Narrower than its project and it stays that way — so the index must NOT be told the
+      // project's ACL for this row.
+      { id: 'd2', read: ['sysadmin'], isPublished: false }
+    ]);
+    assert.deepStrictEqual(result.ids, ['d1', 'd2']);
+  });
+
+  await t.test('a project with no documents reports no rows', async (tt) => {
+    harness(tt, []);
+    const result = await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
+    assert.deepStrictEqual(result.rows, []);
+  });
+});

@@ -1028,6 +1028,74 @@ async function deleteFromIndex(index, id) {
   }
 }
 
+/** One index write carries at most this many actions — the service's own cap. */
+const INDEX_BATCH_ROWS = 1000;
+
+/**
+ * Write rows' ACLs straight into an index.
+ *
+ * REQUIRED since every document list became an index read: the indexer is a `_ts` high-water mark
+ * on a PT5M schedule, so an unpublish hid the bytes at once and left the ROW listed and searchable
+ * for up to five minutes. The Cosmos write stays authoritative; this only stops search lagging it.
+ *
+ * `merge`, never `mergeOrUpload`: a row the indexer has not created yet is not findable, so a
+ * merge that misses withholds nothing, while an upload would insert a title-less half-row that
+ * renders in results until the next pass.
+ *
+ * Best-effort, like `deleteFromIndex` — the visibility change has already landed in Cosmos and the
+ * caller has already succeeded. Loud on failure: the row stays over-permissive until the indexer
+ * catches up.
+ *
+ * @param {Array<{id: string, read: string[], isPublished: boolean}>} rows
+ * @returns {Promise<number>} rows the service accepted
+ */
+async function writeAcls(index, rows) {
+  const { configured } = config();
+  if (!configured) {
+    warnUnconfigured();
+    return 0;
+  }
+  if (!Array.isArray(rows) || rows.length === 0) return 0;
+
+  let merged = 0;
+
+  for (let start = 0; start < rows.length; start += INDEX_BATCH_ROWS) {
+    const batch = rows.slice(start, start + INDEX_BATCH_ROWS);
+    try {
+      const result = await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, {
+        value: batch.map(row => ({
+          '@search.action': 'merge',
+          id: String(row.id),
+          read: row.read,
+          isPublished: Boolean(row.isPublished)
+        }))
+      });
+
+      // A 207 is an `ok` response carrying per-row verdicts, so the status of the request says
+      // nothing about the rows. 404 is expected and benign — the indexer has not created that row
+      // yet, and a row that is not in the index is not findable.
+      const failed = (result.value || []).filter(r => r.status === false);
+      merged += batch.length - failed.length;
+
+      const real = failed.filter(r => r.statusCode !== 404);
+      if (real.length > 0) {
+        logger.error(
+          `[ai-search] could not write ${real.length} of ${batch.length} ACLs to ${index} ` +
+          `(${real[0].errorMessage || 'no message'}). Those rows stay as indexed until the ` +
+          'indexer\'s next pass.'
+        );
+      }
+    } catch (err) {
+      logger.error(
+        `[ai-search] ACL write to ${index} failed for ${batch.length} rows (${err.message}). ` +
+        'They stay as indexed until the indexer\'s next pass.'
+      );
+    }
+  }
+
+  return merged;
+}
+
 /** The index names, so callers name them once and never hardcode a string. */
 function indexes() {
   const { index, projectsIndex, documentsIndex } = config();
@@ -1193,6 +1261,7 @@ module.exports = {
   quoteList,
   deleteChunksForDocument,
   deleteFromIndex,
+  writeAcls,
   indexes,
   // The controller refuses a larger page rather than letting this layer clamp one, so the limit
   // has to be readable from there — two copies of it would drift into exactly the silent

@@ -11,7 +11,7 @@ const aiSearch = require('../../src/search/ai-search');
 const projectController = require('../../src/controllers/nosql/project');
 const documentController = require('../../src/controllers/nosql/document');
 const chunksRepo = require('../../src/repositories/chunks');
-const { TIER } = require('../../src/helpers/access-sql');
+const { TIER, SECURE_ROLES } = require('../../src/helpers/access-sql');
 
 function mockRes() {
   const res = {
@@ -954,5 +954,110 @@ test('unpublishing a document restricts its chunks too', async (t) => {
       { params: { id: 'd1' }, query: {}, body: { isPublished: false }, user: ADMIN_USER }, res);
 
     assert.strictEqual(res.statusCode, 200);
+  });
+});
+
+// Since #148 every document and project LIST is served from the search index, and the indexer is a
+// `_ts` high-water mark on a PT5M schedule. A visibility change that reached Cosmos only left the
+// ROW listed and keyword-searchable under its old ACL for up to five minutes — the file itself was
+// hidden at once by the live point read, its metadata was not.
+test('a visibility change is written into the search index, not left to the indexer', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const existingDoc = { id: 'd1', projectId: 'p1', read: ['public', 'sysadmin'], isPublished: true };
+  const publishedProject = {
+    id: 'p1', trackProjectId: 1, name: 'P', read: ['public', 'sysadmin'], isPublished: true
+  };
+
+  function captureWrites(tt) {
+    const writes = [];
+    tt.mock.method(aiSearch, 'writeAcls', async (index, rows) => {
+      writes.push({ index, rows });
+      return rows.length;
+    });
+    tt.mock.method(aiSearch, 'indexes', () => ({
+      chunks: 'chunks', projects: 'projects', documents: 'documents'
+    }));
+    return writes;
+  }
+
+  await t.test('unpublishing a document writes its row with the new ACL', async () => {
+    const patched = { ...existingDoc, isPublished: false, read: ['sysadmin', 'staff', 'demi-admin'] };
+    t.mock.method(documents, 'getById', async () => existingDoc);
+    t.mock.method(projects, 'getById', async () => ({ id: 'p1', read: ['public'] }));
+    t.mock.method(documents, 'setPublished', async () => patched);
+    t.mock.method(chunksRepo, 'setAclForDocument', async () => ({ succeeded: 0, failed: 0 }));
+    const writes = captureWrites(t);
+
+    const res = mockRes();
+    await documentController.setDocumentPublished(
+      { params: { id: 'd1' }, query: {}, body: { isPublished: false }, user: ADMIN_USER }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(writes, [{
+      index: 'documents',
+      rows: [{ id: 'd1', read: patched.read, isPublished: false }]
+    }]);
+  });
+
+  await t.test('unpublishing a project writes the project row AND every cascaded document', async () => {
+    const cascadeRows = [
+      { id: 'd1', read: ['sysadmin'], isPublished: false },
+      { id: 'd2', read: ['sysadmin', 'project-team'], isPublished: false }
+    ];
+    t.mock.method(projects, 'getById', async () => publishedProject);
+    t.mock.method(projects, 'upsert', async (doc) => doc);
+    t.mock.method(documents, 'setAclForProject', async () => ({
+      succeeded: 2, failed: 0, ids: ['d1', 'd2'], rows: cascadeRows
+    }));
+    const writes = captureWrites(t);
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: false }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(writes.length, 2);
+    // The project row goes FIRST and outside the cascade's try: its Cosmos write has already
+    // landed, so it must narrow even when the cascade below fails.
+    assert.strictEqual(writes[0].index, 'projects');
+    assert.deepStrictEqual(writes[0].rows, [
+      { id: 'p1', read: [...SECURE_ROLES], isPublished: false }
+    ]);
+    assert.strictEqual(writes[1].index, 'documents');
+    assert.deepStrictEqual(writes[1].rows, cascadeRows,
+      'the index has to get the ACLs the cascade DERIVED, not the project\'s own');
+  });
+
+  await t.test('a failed cascade still narrows the project row', async () => {
+    t.mock.method(projects, 'getById', async () => publishedProject);
+    t.mock.method(projects, 'upsert', async (doc) => doc);
+    t.mock.method(documents, 'setAclForProject', async () => ({
+      succeeded: 1, failed: 2, ids: ['a', 'b', 'c'], rows: []
+    }));
+    const writes = captureWrites(t);
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: false }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 500);
+    assert.deepStrictEqual(writes.map(w => w.index), ['projects'],
+      'the project is already private in Cosmos; leaving it findable is the worse half');
+  });
+
+  await t.test('a rename writes nothing — no visibility changed', async () => {
+    t.mock.method(projects, 'getById', async () => publishedProject);
+    t.mock.method(projects, 'upsert', async (doc) => doc);
+    t.mock.method(documents, 'setAclForProject', async () => ({ failed: 0, rows: [] }));
+    const writes = captureWrites(t);
+
+    await projectController.updateProject({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { name: 'Renamed' }
+    }, mockRes());
+
+    assert.deepStrictEqual(writes, []);
   });
 });
