@@ -19,6 +19,40 @@ test('groupByDocument', async (t) => {
     assert.strictEqual(rows[0].matchCount, 2);
   });
 
+  // WHERE THE CHIPS COME FROM, and specifically that a neighbouring date cannot stand in.
+  // `dateUploaded` is a real, populated sibling on every document (`src/seed/transform.js:124`),
+  // so `row.datePosted || row.dateUploaded || null` would render a WRONG BUT PLAUSIBLE date on
+  // every card whose document has no posting date — nothing looks broken, which for a public
+  // registry is the worst shape a defect can take. That mutation used to survive the whole suite.
+  await t.test('datePosted comes from datePosted alone, never a neighbouring date', () => {
+    const [row] = groupByDocument([{
+      ...chunk('d1', 1, 'lead'),
+      dateUploaded: '2020-01-01T00:00:00.000Z'
+    }]);
+    assert.strictEqual(row.datePosted, null,
+      'a document with no posting date has none — the upload date is a different fact');
+    assert.strictEqual(row.dateUploaded, undefined, 'and it is not passed through under its own name');
+
+    const [posted] = groupByDocument([{
+      ...chunk('d1', 1, 'lead'),
+      datePosted: '2018-07-31T06:40:37.626Z',
+      dateUploaded: '2020-01-01T00:00:00.000Z'
+    }]);
+    assert.strictEqual(posted.datePosted, '2018-07-31T06:40:37.626Z',
+      'and when both exist the posting date wins, not merely "some date is present"');
+  });
+
+  // The chip renders `{{result().milestone}}` raw, so this key carries the LABEL — the one place a
+  // chunk row deliberately differs from a Document row, where the same key is the List ObjectId.
+  await t.test('milestone is the label and milestoneId the id, both carried', () => {
+    const [row] = groupByDocument([{
+      ...chunk('d1', 1, 'lead'),
+      milestone: 'Other', milestoneId: '5d0d212c7d50161b92a80eed'
+    }]);
+    assert.strictEqual(row.milestone, 'Other', 'an id here puts a GUID on screen');
+    assert.strictEqual(row.milestoneId, '5d0d212c7d50161b92a80eed');
+  });
+
   await t.test('snippets are capped, matchCount is not', () => {
     const rows = groupByDocument(
       Array.from({ length: 7 }, (_, i) => chunk('d1', i, `s${i}`)), 10);
@@ -61,6 +95,28 @@ test('groupByDocument', async (t) => {
     assert.strictEqual(windowOne[0].matchCount, 1);
     assert.strictEqual(windowTwo[0].matchCount, 1, 'two rows for one document, 1 + 1, never 2');
     assert.strictEqual(windowOne[0]._id, windowTwo[0]._id);
+  });
+
+  // Prod eagle-search renders a date chip on every chunk card and a milestone chip on a third of
+  // them; demi rendered neither, because these two never left the parent document. Values written
+  // out rather than read off the input, and named the way the Document dataset names them — a
+  // consumer must not have to special-case a chunk row.
+  await t.test('the parent document date and milestone reach the grouped row', () => {
+    const [row] = groupByDocument([{
+      ...chunk('d1', 1, 'lead'),
+      milestone: '5cf00c03a266b7e1877504ca',
+      datePosted: '2019-05-30T07:00:00.000Z'
+    }]);
+    assert.strictEqual(row.milestone, '5cf00c03a266b7e1877504ca',
+      'the List ObjectId, not the label beside it — Amendment is two rows across the two Acts');
+    assert.strictEqual(row.datePosted, '2019-05-30T07:00:00.000Z');
+  });
+
+  await t.test('a document with neither still carries both keys, explicitly null', () => {
+    const [row] = groupByDocument([chunk('d1', 1, 'lead')]);
+    assert.strictEqual(row.milestone, null, 'null, never undefined — the key must not vanish');
+    assert.strictEqual(row.datePosted, null);
+    assert.ok('milestone' in row && 'datePosted' in row);
   });
 
   await t.test('a chunk with no parent id is skipped, never grouped under empty', () => {
