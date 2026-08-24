@@ -194,8 +194,9 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       retrievable — that interaction is why the field flipped in the first place. So this is not
       "blocked on an in-VNet highlighting check" any more; it is retrievable-false OR semantic
       ranking (measured +0.064 recall@1, +0.074 MRR on 78 labels), and highlighting reads the same
-      field. A field-attribute change is an index recreate + refill of 1,128,733 chunks, so it
-      could only ever ride the same recreate as B4 (3.1).
+      field. **It is NOT a rebuild** — corrected 2026-08-24 against the service's own list: "Set the
+      `retrievable` attribute on an existing field" is on Azure's no-rebuild list, so this is one
+      index PUT, not a refill of 1,128,733 chunks. The cost is entirely the semantic trade above.
 
 - [ ] **3.8 Small, bundle opportunistically:**
       - [x] ~~Apply the eagle-search `sync.livenessProbe.enabled: false` chart change to

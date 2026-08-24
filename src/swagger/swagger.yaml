@@ -1,13 +1,15 @@
 openapi: 3.0.3
 info:
   title: DEMI Central Repository API (demi-api)
-  description: >-
+  description: |-
     Central authoritative storage and spatial search engine for projects, documents, and
     administrative region boundaries.
 
-    NOT THE CONTRACT. This file is hand-maintained, documents 6 of 28 routes, and has drifted from
-    what the API actually serves. The routes in src/routes/api.js are authoritative; read them, or
-    the endpoint itself, before relying on anything here.
+    NOT THE CONTRACT. This file is hand-maintained, covers 6 of the 18 paths in src/routes/api.js
+    (12 of its 28 operations), and has drifted from what the API actually serves. Undocumented here:
+    /config, /db/stats, /search/summary, /boundaries, /admin/api-keys and more. The routes in
+    src/routes/api.js are authoritative; read them, or the endpoint itself, before relying on
+    anything here.
   version: 1.0.0
 paths:
   /api/search:
