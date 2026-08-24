@@ -93,6 +93,16 @@ const SERVICE_MAX_TOP = 250;
  * large total is a page the caller never learns they did not receive, which is the whole defect
  * this constant exists to close.
  */
+/**
+ * How many document ids a chunk query may be scoped to before the filter is treated as
+ * inexpressible. Bounds the OData `search.in` list rather than the result set — the chunk page is
+ * still `top`-limited — and 1,000 twenty-four-character ids is about 25 KB of filter, well inside
+ * what the service accepts while leaving room for the ACL clause and the caller's own terms.
+ *
+ * Over it, the honest answer is that the filter did not apply, reported through `meta.dropped`.
+ */
+const DOCUMENT_SCOPE_CAP = 1000;
+
 const MAX_PAGE_ROWS = 500;
 
 let tokenCache = null;
@@ -1070,12 +1080,57 @@ async function deleteChunksForDocument(documentId, opts = {}) {
   }
 }
 
+
+/**
+ * The ids of the documents matching a filter, for scoping a CHUNK query to them.
+ *
+ * The `chunks` index carries seven fields and none of them is document metadata, so a filter on
+ * `type`, `milestone`, `datePosted` or the rest cannot be evaluated against a chunk at all. The
+ * alternative to this function is denormalising that metadata onto 1,128,733 chunk rows and
+ * re-stamping it on every document edit — the eagle-search machinery DEMI deliberately did not
+ * port. Two queries instead: resolve the documents, then scope the chunks to them.
+ *
+ * BOUNDED, AND THE BOUND IS REPORTED. `search.in` takes a large list but not an unlimited one, and
+ * a filter like `and[type]=Letter` matches over twelve thousand documents. So this returns the
+ * total as well as the ids, and a caller whose match set exceeds `cap` must treat the filter as
+ * INEXPRESSIBLE — answer with the key still named in `meta.dropped` — rather than scope to an
+ * arbitrary prefix of it. A truncated scope would silently answer "these are the chunks matching
+ * your filter" about a subset nobody chose, which is worse than saying the filter did not apply.
+ *
+ * `matchAll` with no keywords: the caller's terms belong to the CHUNK query, not this one. A
+ * document whose text mentions the term is found by the chunk search; this query exists only to
+ * answer "which documents carry this metadata".
+ */
+async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
+  const { configured, documentsIndex } = config();
+  if (!configured) {
+    warnUnconfigured();
+    throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
+  }
+
+  // `cap + 1` is not an off-by-one: it is how the caller learns it was over the cap without a
+  // second round trip. `@odata.count` is authoritative, but asking for one more than we can use
+  // means a service that ever stopped returning a count still cannot look like a full match set.
+  const { value, count } = await runSearch(documentsIndex, {
+    matchAll: true,
+    filter,
+    select: 'id',
+    top: Math.min(cap + 1, MAX_PAGE_ROWS)
+  });
+
+  const ids = (value || []).map(row => String(row.id)).filter(Boolean);
+  const total = Number.isFinite(count) ? count : ids.length;
+  return { ids: ids.slice(0, cap), total, withinCap: total <= cap };
+}
+
 module.exports = {
   DOCUMENT_SELECT,
   PROJECT_SELECT,
   searchChunks,
   searchProjects,
   searchDocuments,
+  documentIdsMatching,
+  DOCUMENT_SCOPE_CAP,
   deleteChunksForDocument,
   deleteFromIndex,
   indexes,

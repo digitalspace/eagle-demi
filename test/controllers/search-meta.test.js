@@ -25,6 +25,16 @@ function capture() {
 
 const anonymous = query => ({ query, header: () => null });
 
+// A caller `filterFor` answers `{filter: null, empty: false}` for — an UNFILTERED read, not an
+// empty one. Every probe in this file was anonymous before, and an anonymous caller always has a
+// filter, which is exactly why the last route to compose a clause over `filter` took staging down
+// with `(undefined) and ...` and nothing caught it.
+const privileged = query => ({
+  query,
+  header: () => null,
+  user: { realm_access: { roles: ['sysadmin'] } }
+});
+
 test('the response says which keys it could not express', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -157,6 +167,131 @@ test('an unparseable pageSize takes the documented default', async (t) => {
     assert.ok(sent, 'the request is still issued');
     assert.ok(sent.top > 0, `top must be positive, got ${sent.top}`);
     assert.ok(sent.skip >= 0, `skip must not be negative, got ${sent.skip}`);
+  });
+});
+
+test('chunk filters are resolved through the documents index', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const chunk = { chunkId: 'd1::p1::c0', documentId: 'd1', projectId: '207', pageNumber: 1, snippet: 'x' };
+  const stubHydration = (tt) => {
+    tt.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'A', type: 'Letter' }]));
+    tt.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+  };
+
+  await t.test('a recoverable filter scopes the chunk query and leaves the report clean', async () => {
+    // The measured defect: `and[type]=Letter` on DocumentChunk answered 399,872 hits, identical to
+    // no filter, where prod answered 0. `chunks.json` has no `type` to filter on.
+    let scopeFilter = null;
+    let docFilter = null;
+    t.mock.method(aiSearch, 'documentIdsMatching', async (f) => {
+      docFilter = f;
+      return { ids: ['d1', 'd2'], total: 2, withinCap: true };
+    });
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => {
+      scopeFilter = opts.filter;
+      return { count: 1, items: [chunk] };
+    });
+    stubHydration(t);
+
+    const { out, res } = capture();
+    await searchController.search(
+      anonymous({ dataset: 'DocumentChunk', keywords: 'river', 'and[type]': '5cf00c03a266b7e1877504e9' }), res);
+
+    // THE ASSERTION THAT MATTERS MOST. Without it a resolver that built an EMPTY document filter
+    // still looks like it worked: the ACL clause alone keeps the filter non-empty, nothing is
+    // reported dropped, and the scope is applied on the strength of a query that never carried the
+    // caller's value. That is precisely the bug the first version of this had.
+    assert.ok(docFilter && docFilter.includes('5cf00c03a266b7e1877504e9'),
+      `the document query must carry the caller's own value, got: ${docFilter}`);
+    assert.match(scopeFilter, /search\.in\(documentId, 'd1,d2', ','\)/,
+      `the chunk query must be scoped to the resolved documents, got: ${scopeFilter}`);
+    assert.ok(scopeFilter.includes("'public'"), 'and the ACL still gates it');
+    // The key WORKED, so naming it as dropped would be the mirror of the defect being fixed.
+    assert.strictEqual(out.body[0].meta[0].dropped, undefined,
+      `a recovered key must not be reported as dropped: ${JSON.stringify(out.body[0].meta[0])}`);
+  });
+
+  await t.test('a key NEITHER index can express is still reported as dropped', async () => {
+    // `isFeatured` is in no demi index at all, so resolving it through `documents` recovers
+    // nothing. Sent alongside a key that IS recoverable, because the failure this closes is
+    // claiming the whole dropped list as recovered the moment any one of them resolves — which
+    // reports a working filter and a broken one identically, as neither.
+    t.mock.method(aiSearch, 'documentIdsMatching', async () => ({ ids: ['d1'], total: 1, withinCap: true }));
+    t.mock.method(aiSearch, 'searchChunks', async () => ({ count: 1, items: [chunk] }));
+    stubHydration(t);
+
+    const { out, res } = capture();
+    await searchController.search(anonymous({
+      dataset: 'DocumentChunk',
+      keywords: 'river',
+      'and[type]': '5cf00c03a266b7e1877504e9',
+      'and[isFeatured]': 'true'
+    }), res);
+
+    assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['isFeatured'],
+      'the recoverable key resolved and the unresolvable one must still be named');
+  });
+
+  await t.test('too many matching documents leaves the key dropped, never a truncated scope', async () => {
+    // The honest failure. A prefix of twelve thousand documents would answer "the chunks matching
+    // your filter" about an arbitrary subset — data-shaped, and wrong.
+    let scopeFilter = null;
+    t.mock.method(aiSearch, 'documentIdsMatching', async () => ({ ids: [], total: 12515, withinCap: false }));
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => {
+      scopeFilter = opts.filter;
+      return { count: 1, items: [chunk] };
+    });
+    stubHydration(t);
+
+    const { out, res } = capture();
+    await searchController.search(
+      anonymous({ dataset: 'DocumentChunk', keywords: 'river', 'and[type]': '5cf00c03a266b7e1877504e9' }), res);
+
+    assert.ok(!/search\.in\(documentId/.test(scopeFilter),
+      `no partial scope may be applied, got: ${scopeFilter}`);
+    assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['type'],
+      'the caller must be told the filter did not apply');
+  });
+
+  await t.test('no matching document answers nothing, and says the filter ran', async () => {
+    let scopeFilter = null;
+    t.mock.method(aiSearch, 'documentIdsMatching', async () => ({ ids: [], total: 0, withinCap: true }));
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => {
+      scopeFilter = opts.filter;
+      return { count: 0, items: [] };
+    });
+
+    const { out, res } = capture();
+    await searchController.search(
+      anonymous({ dataset: 'DocumentChunk', keywords: 'river', 'and[type]': '5cf00c03a266b7e1877504e9' }), res);
+
+    assert.match(scopeFilter, /documentId eq ''/, 'a clause that cannot match, not a dropped filter');
+    assert.deepStrictEqual(out.body[0].searchResults, []);
+    assert.strictEqual(out.body[0].meta[0].dropped, undefined, 'zero matches is the filter WORKING');
+  });
+
+  await t.test('a PRIVILEGED caller does not get "(undefined) and ..." into the service', async () => {
+    // `filterFor` returns `{filter: null, empty: false}` for an unscoped privileged caller — an
+    // unfiltered read. A bare template over that produces the literal string "(undefined) and ...",
+    // which the service 400s and this route turns into a 502. That is how the provenance clause
+    // took staging down, and every probe that missed it was anonymous.
+    let scopeFilter = null;
+    t.mock.method(aiSearch, 'documentIdsMatching', async () => ({ ids: ['d1'], total: 1, withinCap: true }));
+    t.mock.method(aiSearch, 'searchChunks', async (opts) => {
+      scopeFilter = opts.filter;
+      return { count: 1, items: [chunk] };
+    });
+    stubHydration(t);
+
+    const { out, res } = capture();
+    await searchController.search(
+      privileged({ dataset: 'DocumentChunk', keywords: 'river', 'and[type]': '5cf00c03a266b7e1877504e9' }), res);
+
+    assert.ok(!/undefined|null/.test(scopeFilter), `no placeholder may reach the service: ${scopeFilter}`);
+    assert.strictEqual(scopeFilter, "search.in(documentId, 'd1', ',')",
+      'an unfiltered caller gets the scope alone, not a clause wrapped around nothing');
+    assert.strictEqual(out.status, undefined, 'and it is a 200, not the 502 a 400 becomes');
   });
 });
 

@@ -134,17 +134,21 @@ test('a different total, on its own, is NOT a finding', () => {
 });
 
 test('a filter one service applies and the other ignores IS a finding, at any totals', () => {
-  // The measured case: DocumentChunk + and[type]=Letter. demi answers the unfiltered corpus
-  // (399,872 -> 399,872, key dropped) while eagle narrows to 0. Two DIFFERENT corpora, two
-  // different baselines, and the disagreement still surfaces — which is what makes the signal
+  // The measured case: Document + and[isFeatured]=true. demi answers the unfiltered corpus
+  // (60,560 -> 60,560, no such column) while eagle narrows 61,582 to 336. Two DIFFERENT corpora,
+  // two different baselines, and the disagreement still surfaces — which is what makes the signal
   // usable here at all.
   const verdict = compareCase(
-    respond([{ _id: 'a' }], 399872),
-    respond([{ _id: 'b' }], 0),
+    respond([{ _id: 'a' }], 60560),
+    respond([{ _id: 'b' }], 336),
     {
-      dataset: 'DocumentChunk',
-      demi: { total: 399872, ids: ['a'] },
-      eagle: { total: 430345, ids: ['b'] }
+      // `Document` rather than `DocumentChunk`, and the swap is not cosmetic: the chunk dataset now
+      // carries a DECLARED acceptance for this field, so using it here would assert that the
+      // acceptance table is empty rather than that the signal works. `isFeatured` is the same
+      // shape with no acceptance behind it — demi has no such column, eagle narrows 61,582 to 336.
+      dataset: 'Document',
+      demi: { total: 60560, ids: ['a'] },
+      eagle: { total: 61582, ids: ['b'] }
     });
   assert.strictEqual(verdict.pass, false);
   assert.deepStrictEqual(

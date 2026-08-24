@@ -120,6 +120,77 @@ async function resolveProjectFilter(access, query) {
   return eagleQuery.withProjectIds(query, demiIds);
 }
 
+/**
+ * Recover the chunk filters the `chunks` index cannot express, by resolving them against `documents`.
+ *
+ * `azure/search/indexes/chunks.json` carries seven fields — id, chunkId, documentId, projectId,
+ * pageNumber, read, content — so every document-metadata filter eagle-public's `/search/content`
+ * offers (`type`, `milestone`, the date range) was dropped and the page answered with the whole
+ * corpus: measured, `and[type]=Letter` returned 399,872 chunk hits, identical to no filter, where
+ * prod returned 0. The three chips rendered as applied and did nothing.
+ *
+ * TWO QUERIES, NOT A BACKFILL. The other way to fix this is to denormalise document metadata onto
+ * 1,128,733 chunk rows and re-stamp it whenever a document changes — the eagle-search
+ * `stamp`/`resync`/`awaitParents` machinery DEMI deliberately did not port, against a container
+ * whose backup retains eight hours. This resolves the documents first and scopes the chunk query to
+ * their ids, which needs no new data and no new invariant.
+ *
+ * WHAT IT WILL NOT DO IS PRETEND. A scope is a bounded list, and a broad filter matches more
+ * documents than can go in one: `and[type]=Letter` alone matches over twelve thousand. Above the
+ * cap the key stays in `dropped` and the caller is told the filter did not apply — a truncated
+ * scope would answer "the chunks matching your filter" about an arbitrary subset instead, which
+ * looks like data and is not. That honest failure is only expressible because `meta.dropped` exists;
+ * before it, the two outcomes were the same 200.
+ *
+ * @returns {{scope: ?string, recovered: string[], overCap: string[]}} `scope` is an OData clause to
+ *   AND into the chunk filter, or null. `recovered` are keys to remove from the dropped report.
+ */
+async function recoverChunkFilters(query, dropped, acl) {
+  if (!dropped.length) return { scope: null, recovered: [], overCap: [] };
+
+  // Only the dropped keys the DOCUMENTS index can actually express. Asked by building a filter for
+  // that dataset from those keys alone and seeing which survive — never from a hardcoded list,
+  // which would go stale the next time either index is widened.
+  //
+  // REBUILT IN THE WIRE SHAPE, and the first version of this got it wrong in a way worth recording:
+  // `dropped` holds BASE key names (`type`), the query holds `and[type]`, so copying `query[key]`
+  // produced an empty object. `buildFilter` then dropped nothing — there was nothing to drop — every
+  // key looked recovered, and the scope was applied on the strength of a filter that never carried
+  // the caller's value. The anonymous tests passed, because the ACL clause alone kept `docFilter`
+  // non-empty; only an unfiltered privileged caller exposed it.
+  const narrowed = {};
+  for (const key of dropped) {
+    for (const wire of [`and[${key}]`, `and[${key}Start]`, `and[${key}End]`, key]) {
+      if (query[wire] !== undefined) narrowed[wire] = query[wire];
+    }
+  }
+  if (Object.keys(narrowed).length === 0) return { scope: null, recovered: [], overCap: [] };
+
+  const { filter: docFilter, dropped: stillDropped } =
+    eagleQuery.buildFilter(narrowed, 'Document', acl);
+  const recovered = dropped.filter(key => !stillDropped.includes(key));
+  if (!recovered.length || !docFilter) return { scope: null, recovered: [], overCap: [] };
+
+  const { ids, total, withinCap } = await aiSearch.documentIdsMatching(docFilter);
+  if (!withinCap) {
+    logger.warn('[search] chunk filter matches too many documents to scope', {
+      keys: recovered, documents: total, cap: aiSearch.DOCUMENT_SCOPE_CAP
+    });
+    return { scope: null, recovered: [], overCap: recovered };
+  }
+
+  // No matching document means no matching chunk, and that is a MEASUREMENT — the filter ran, it
+  // just selected nothing. Expressed as a clause that cannot match rather than as an early return,
+  // so the count and the ACL below are still computed by the one code path.
+  if (ids.length === 0) return { scope: "documentId eq ''", recovered, overCap: [] };
+
+  return {
+    scope: `search.in(documentId, '${ids.join(',')}', ',')`,
+    recovered,
+    overCap: []
+  };
+}
+
 exports.search = async (req, res) => {
   try {
     const dataset = req.query.dataset;
@@ -824,7 +895,22 @@ exports.search = async (req, res) => {
         }
 
         const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
-        noteDropped('filter', dropped);
+
+        // Document metadata resolved through the documents index, because a chunk cannot be
+        // filtered on it. Reported BEFORE the scope is applied and only for what stayed dropped —
+        // a key this recovers is a key that worked, and naming it would be the mirror of the defect
+        // the report exists to fix.
+        const { scope, recovered } = await recoverChunkFilters(filterQuery, dropped, acl);
+        noteDropped('filter', dropped.filter(key => !recovered.includes(key)));
+        // `filter` IS UNDEFINED FOR AN UNSCOPED PRIVILEGED CALLER — `filterFor` returns
+        // `{filter: null, empty: false}` for one, which is an UNFILTERED read, not an empty one.
+        // A bare template over it produces the literal string "(undefined) and ...", which the
+        // service answers with a 400 and this route turns into a 502. That is not hypothetical:
+        // it is exactly how the provenance clause took staging down, and it was invisible in
+        // testing because every probe was anonymous and anonymous callers always have a filter.
+        const scopedFilter = scope
+          ? (filter ? `(${filter}) and ${scope}` : scope)
+          : filter;
 
         // A `sortBy` that REACHES THIS LINE is always dropped, and now it says so. No `$orderby` is
         // sent below — every field in `chunks` is `sortable: false` — so the caller's sort could
@@ -863,7 +949,7 @@ exports.search = async (req, res) => {
         // every document its window covered, between 1 and `window` rows.
         const chunkWindow = groupChunks.windowFor(pageSize, aiSearch.SERVICE_MAX_TOP);
         const { items, count } = await aiSearch.searchChunks({
-          filter,
+          filter: scopedFilter,
           // No `orderby`: every field in `chunks` is sortable:false, the key included, so
           // there is nothing to name — and naming a non-sortable field is a 400. Chunk pages are
           // relevance-ordered with no tiebreak, which makes a deep chunk page unstable.

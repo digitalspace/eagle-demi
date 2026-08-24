@@ -101,6 +101,13 @@ const CASES = [
   { dataset: 'DocumentChunk', keywords: 'water' },
   { dataset: 'DocumentChunk', keywords: 'water', filter: `milestone=${MILESTONE}` },
   { dataset: 'DocumentChunk', keywords: 'fish habitat', sortBy: '-datePosted' },
+  // A NARROW chunk filter, and the whole reason it is here is that the broad one is an accepted
+  // divergence. Chunk metadata filters are resolved through the documents index and scoped by
+  // documentId, which is bounded — so `milestone` (36,471 documents) is over the cap and reported
+  // as dropped, while a filter this size is under it and MUST narrow on both services. Without
+  // this case the acceptance above would cover the working half too, and a regression that broke
+  // scoping entirely would read as the known limitation.
+  { dataset: 'DocumentChunk', keywords: 'water', filter: 'documentAuthorType=5cf00c03a266b7e1877504ea' },
   // The shape eagle-public REALLY sends: `sortBy` twice, the second often empty
   // (`api.ts:176-177` appends sortBy and then secondarySort). It is the one wire form both
   // implementations wrote explicit normalisation for, so it is the one most likely to diverge.
@@ -217,6 +224,15 @@ function buildUrl(base, kase, pageSize = DEFAULTS.pageSize) {
  * Keyed `dataset:field`. Everything not listed fails the run.
  */
 const EXPECTED_DIVERGENCE = {
+  'DocumentChunk:selective':
+    'a chunk filter is resolved through the documents index and scoped by documentId, and that ' +
+    'scope is BOUNDED: above ai-search.js DOCUMENT_SCOPE_CAP the key is reported in meta.dropped ' +
+    'rather than applied to an arbitrary prefix of the match set. The two chunk cases in this ' +
+    'matrix both filter on `milestone`, which matches 36,471 documents and is far over the cap, so ' +
+    'demi answers unfiltered-and-says-so where eagle narrows. This acceptance covers the BROAD ' +
+    'case only — the narrow case is a live assertion, not an acceptance: see the ' +
+    '`and[documentAuthorType]` case below, which is small enough to scope and MUST stay selective ' +
+    'on both sides. Remove this entry if the chunks index ever carries document metadata itself.',
   'DocumentChunk:sortHonoured':
     'demi never sorts chunks: every field in azure/search/indexes/chunks.json is sortable:false, ' +
     'the key included, and naming a non-sortable field is a 400 from the service. Chunk results are ' +
