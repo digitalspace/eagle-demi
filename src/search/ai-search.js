@@ -816,18 +816,21 @@ async function searchDocuments(opts = {}) {
   // the index carried them: `datePosted` is its Date column, and the four `*Id` values are what
   // `idToList()` resolves against eagle-api's List collection.
   const select = DOCUMENT_SELECT;
+  // Named once because leg two's exclusion clause below has to complement EXACTLY these fields.
+  // A second copy is how the two would drift apart, and a drifted complement is the paging bug
+  // this function carried for its whole life.
+  const searchFields = 'displayName,documentFileName,description';
 
   const direct = await runSearch(documentsIndex, {
     ...opts,
     top,
     prefix: true,
-    searchFields: 'displayName,documentFileName,description',
+    searchFields,
     select,
     highlight: 'displayName,description'
   });
 
   const items = [...direct.value];
-  const seen = new Set(items.map(d => String(d.id)));
   // The total, assembled below from every leg that contributes rows. `direct.count` alone is what
   // it starts as, and what it stays when there is no project leg to run.
   let total = direct.count;
@@ -839,7 +842,7 @@ async function searchDocuments(opts = {}) {
   // which this used to do (`Math.max(direct.count, items.length)`), was worse still: a probe with
   // 3 direct matches, one matching project and 500 documents under it reported 10 against a true
   // ~503, so the pager said one page and every later page was unreachable. Where the leg cannot
-  // contribute rows its requests are trimmed to one row each — the count is what they are for.
+  // contribute rows its request is trimmed to one row — the count is what it is for.
   // `!opts.matchAll` IS THE DELIBERATE ANSWER TO "what does leg two mean with no keywords". Leg two
   // recovers documents whose PROJECT's NAME matches the query, and a keywordless search has no name
   // to match — running it under `matchAll` would search the projects index for `*`, pull in every
@@ -865,65 +868,59 @@ async function searchDocuments(opts = {}) {
     if (projectIds.length > 0) {
       // The caller's document ACL still applies — visibility of a project never widens access to
       // its documents, it only decides which ids are worth asking about.
-      const scope = `search.in(projectId, ${quoteList(projectIds)}, ',')`;
+      //
+      // `not search.ismatch(...)` IS THE PAGING FIX, not a tidy-up. It hands leg two exactly the
+      // documents the direct leg did NOT match, so the legs are disjoint sets and the sequence
+      // eagle-public pages through is plainly leg one followed by leg two. While they overlapped
+      // no stateless skip arithmetic could exist, because a row's position in `A ++ (B \ A)`
+      // depends on how many of B's EARLIER rows were already in A, and only a scan from 0 knows
+      // that. Measured on the live app before this clause, `keywords=pattullo` at pageSize=10 over
+      // pages 0-25: 260 slots but 197 distinct ids, 63 repeats spread over 13 non-adjacent pages,
+      // and 53 of the 250 matching documents unreachable from any page. Prod eagle-search walks
+      // the same 26 pages with 260 distinct and 0 repeats. The comment that used to sit on `skip`
+      // called the cost "one row on the boundary page"; that was wrong by two orders of magnitude,
+      // because it accounted for the boundary and not for the offset drift on every page after it.
+      //
+      // The excluded query has to be the direct leg's OWN, byte for byte — same terms, same fuzzy
+      // arm, same trailing `*`, same fields, `queryType: 'full'` — or the two stop being
+      // complements and the gap comes straight back. Single quotes are doubled for the OData
+      // literal: `tokenize` cannot emit one, but this is user text being spliced into a query
+      // string. The empty query that would 400 here cannot be reached — the projects leg
+      // short-circuits on an empty tokenisation, so `projectIds` is empty and this never runs.
+      const directQuery = buildQuery(tokenize(opts.keywords), opts.fuzzy === true, true);
+      const scope = `search.in(projectId, ${quoteList(projectIds)}, ',') and ` +
+        `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${searchFields}', 'full', 'any')`;
       const byProject = await runSearch(documentsIndex, {
         matchAll: true,
-        // Sized to the WHOLE page, not to the deficit `top - items.length`. The rows below are
-        // deduped against leg one, and the two legs OVERLAP by construction — a document whose own
-        // name matches a project-shaped query is normally also inside that project — so a request
-        // sized before dedup is sized against a yield nobody knows yet, and every deduped row
-        // leaves a hole. Measured: 20 documents in the matching project, 3 of them also direct
-        // hits, `top=10` returned a 7-row page under a reported total of 20.
-        //
-        // Asking for `top` closes it arithmetically rather than by retrying: `seen` holds exactly
-        // `items.length` ids and each duplicate consumes a distinct one, so at most `items.length`
-        // of the `top` rows can be dropped and at least `top - items.length` survive — a full page
-        // at 0%, 50% and 100% overlap, from ONE runSearch call either way — still bounded by its
-        // own MAX_PAGE_ROWS / SERVICE_MAX_TOP page fill, two requests today. Re-asking until the
-        // page filled would instead have turned the overlap ratio into a request multiplier
-        // against a 1-SU service, which is the trade runSearch already refuses.
-        //
-        // Still one row where the page is ALREADY full: no row of this leg can be used there (the
-        // fill loop breaks immediately), and the count is the only reason the request is issued.
-        top: items.length >= top ? 1 : top,
+        // Sized to the DEFICIT, which is now exactly what the page can take: no row this leg
+        // returns is dropped any more, so asking for the whole `top` would fetch rows the page
+        // cannot use — and the next page re-fetches from the right offset regardless. One row
+        // where the page is ALREADY full: no row of this leg can be used there (the fill loop
+        // breaks immediately), and the count is the only reason the request is issued.
+        top: Math.max(1, top - items.length),
         select,
         orderby: opts.orderby,
-        // Leg two continues where the DIRECT hits ran out. `direct.count` is the index-wide number
-        // of direct matches, so a page that starts past it starts that far into this leg instead.
-        // Imperfect on the boundary page: a document matching both legs can appear on the page
-        // where the direct hits end and again on the next. The alternative — dropping leg two
-        // beyond page one — silently loses every project-name match after the first page, and
-        // those are 60-77% of the hits for a project-shaped query (see the measurements above).
+        // Leg two continues where the DIRECT hits ran out, and with disjoint legs that arithmetic
+        // is exact rather than approximate. The direct leg owns union positions 0..direct.count,
+        // so a page starting at `skip` starts `skip - direct.count` rows into this leg, and
+        // consecutive pages cover consecutive ranges with no gap and no overlap. It is computed
+        // from `skip` alone, so page 17 fetched on its own returns what walking pages 0-16 first
+        // would have returned — there is no cross-request state here, and there cannot be.
         skip: Math.max(0, (Number(opts.skip) || 0) - (direct.count || 0)),
         filter: opts.filter ? `(${opts.filter}) and ${scope}` : scope
       });
 
       for (const doc of byProject.value) {
         if (items.length >= top) break;
-        if (seen.has(String(doc.id))) continue;
-        seen.add(String(doc.id));
         items.push(doc);
       }
 
-      // The two legs OVERLAP, so summing their counts double-counts the intersection: a document
-      // whose own metadata matches AND whose project matches is in both. For "Ajax" that is most
-      // of the 199 direct hits inside the 850 — roughly 30% of the pager's pages would have come
-      // back empty. One count-only request measures it exactly, and only when there is an
-      // intersection to measure: no direct matches means nothing to subtract.
-      let overlap = 0;
-      if (direct.count > 0) {
-        const both = await runSearch(documentsIndex, {
-          keywords: opts.keywords,
-          fuzzy: opts.fuzzy,
-          prefix: true,
-          searchFields: 'displayName,documentFileName,description',
-          select: 'id',
-          top: 1,
-          filter: opts.filter ? `(${opts.filter}) and ${scope}` : scope
-        });
-        overlap = both.count;
-      }
-      total = direct.count + byProject.count - overlap;
+      // No intersection left to subtract: the exclusion clause already removed the direct matches
+      // from this leg, so `byProject.count` counts precisely what leg one does not return and the
+      // two simply add up. This replaced a fourth, count-only request that measured the overlap so
+      // it could be subtracted — the fix costs one service call per document page LESS than the
+      // bug did, three where there were four.
+      total = direct.count + byProject.count;
     }
   }
 
