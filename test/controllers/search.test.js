@@ -1254,9 +1254,30 @@ test('the eagle-public response contract', async (t) => {
 
     assert.deepStrictEqual(out.body[0].searchResults, []);
     assert.ok(sent, 'the request is now issued: an unresolved id may still name a real partition');
-    const scope = JSON.stringify(sent);
-    assert.ok(scope.includes('588511c4aaecd9001b826192'),
-      `the caller's own id must survive into the query, or the filter widens: ${scope}`);
+    // `sent.filter`, NOT `JSON.stringify(sent)`. The stringified form passes as long as the id
+    // appears anywhere in the options — including in a field that does not restrict anything — and
+    // that looseness is exactly why the same defect on `dataset=Project` went unnoticed here: there
+    // the key is dropped and the corpus comes back, while the id still shows up in the object.
+    assert.ok(sent.filter.includes("projectId eq '588511c4aaecd9001b826192'"),
+      `the id must be in the FILTER, or the request widens to the corpus: ${sent.filter}`);
+  });
+
+  await t.test('an unresolved project filter on a dataset that cannot scope answers nothing', async () => {
+    // The half this file's sibling missed. `projects` has no `projectId`, so the same wire shape
+    // there is not a narrower filter — it is no filter at all, and answering the corpus to a
+    // request naming one project is the widest reading of the narrowest ask.
+    let searched = false;
+    t.mock.method(aiSearch, 'searchProjects', async () => { searched = true; return { count: 348, items: [] }; });
+    t.mock.method(projectsRepo, 'getByEagleId', async () => null);
+
+    const { out, res } = capture();
+    await searchController.search({
+      query: { dataset: 'Project', keywords: 'coal', project: '588511c4aaecd9001b826192' },
+      header: () => null
+    }, res);
+
+    assert.strictEqual(out.body[0].count, 0);
+    assert.strictEqual(searched, false, 'and nothing is queried for a scope that cannot be expressed');
   });
 
   // `search-document-table-rows.component.html:8-10` binds rowData.project.name and
