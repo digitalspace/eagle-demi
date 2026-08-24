@@ -34,6 +34,30 @@ function packagedEntries() {
   return new Set(listing.split('\n').filter(Boolean));
 }
 
+/** The minimum tree `package-api.py` accepts: entry points plus every required data directory. */
+function scaffold(repo) {
+  for (const d of ['api', 'azure/search/indexes', 'azure/search/indexers',
+    'frontend/public/assets/geojson']) {
+    fs.mkdirSync(path.join(repo, d), { recursive: true });
+  }
+  for (const f of ['index.js', 'host.json', 'package.json']) {
+    fs.writeFileSync(path.join(repo, f), '//');
+  }
+  fs.writeFileSync(path.join(repo, 'api', 'index.js'), '//');
+  fs.writeFileSync(path.join(repo, 'azure/search/indexes', 'projects.json'), '{}');
+  fs.writeFileSync(path.join(repo, 'azure/search/indexers', 'projects-indexer.json'), '{}');
+  fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson', 'a.json'), '{}');
+}
+
+/** Package `repo` and return its entry set. */
+function packageInto(dir, repo) {
+  const out = path.join(dir, 'api.zip');
+  execFileSync('python3', [path.join(REPO_ROOT, 'scripts', 'package-api.py'), repo, out],
+    { stdio: 'pipe', timeout: 60000 });
+  return new Set(
+    execFileSync('unzip', ['-Z1', out], { encoding: 'utf8' }).split('\n').filter(Boolean));
+}
+
 let entries;
 try {
   entries = packagedEntries();
@@ -96,18 +120,7 @@ test('API deploy package', async (t) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-link-'));
     const repo = path.join(dir, 'repo');
     const store = path.join(dir, 'store');
-
-    for (const d of ['api', 'azure/search/indexes', 'azure/search/indexers',
-      'frontend/public/assets/geojson']) {
-      fs.mkdirSync(path.join(repo, d), { recursive: true });
-    }
-    for (const f of ['index.js', 'host.json', 'package.json']) {
-      fs.writeFileSync(path.join(repo, f), '//');
-    }
-    fs.writeFileSync(path.join(repo, 'api', 'index.js'), '//');
-    fs.writeFileSync(path.join(repo, 'azure/search/indexes', 'projects.json'), '{}');
-    fs.writeFileSync(path.join(repo, 'azure/search/indexers', 'projects-indexer.json'), '{}');
-    fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson', 'a.json'), '{}');
+    scaffold(repo);
 
     fs.mkdirSync(path.join(store, 'pkg'), { recursive: true });
     fs.writeFileSync(path.join(store, 'pkg', 'index.js'), '//');
@@ -115,17 +128,58 @@ test('API deploy package', async (t) => {
     // The cycle: a link inside the store pointing back at the repo root.
     fs.symlinkSync(repo, path.join(store, 'loop-back'));
 
-    const out = path.join(dir, 'api.zip');
-    execFileSync('python3', [path.join(REPO_ROOT, 'scripts', 'package-api.py'), repo, out],
-      { stdio: 'pipe', timeout: 60000 });
-    const linked = new Set(
-      execFileSync('unzip', ['-Z1', out], { encoding: 'utf8' }).split('\n').filter(Boolean));
+    const linked = packageInto(dir, repo);
     fs.rmSync(dir, { recursive: true, force: true });
 
     assert.ok([...linked].some(e => e.startsWith('node_modules/')),
       'a symlinked node_modules must still be packaged');
-    assert.ok(![...linked].some(e => e.includes('loop-back/node_modules/')),
-      'the cycle must be visited once, not re-entered under a deeper path');
+    // On the ACTUAL leaked shape. An earlier version of this asserted on
+    // `loop-back/node_modules/`, a path that is produced neither before nor after a fix — it
+    // passed on the buggy output and would not have noticed the fix either way.
+    assert.deepStrictEqual([...linked].filter(e => e.includes('loop-back')), [],
+      'a link back to the root must not re-ship the root under it');
+  });
+
+  await t.test('keeps BOTH paths when two names resolve to one directory', () => {
+    // The pnpm shape, and the case that makes a global visited-set wrong. `node_modules/foo` is a
+    // link into `node_modules/.pnpm/foo@1.0.0/node_modules/foo`; Node resolves through both, so
+    // both have to ship. Marking the realpath seen at the shallower name pruned the whole store —
+    // measured, and it was content the previous version of the packager did include.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-pnpm-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+
+    const store = path.join(repo, 'node_modules', '.pnpm', 'foo@1.0.0', 'node_modules', 'foo');
+    fs.mkdirSync(store, { recursive: true });
+    fs.writeFileSync(path.join(store, 'index.js'), '//');
+    fs.symlinkSync(path.join('.pnpm', 'foo@1.0.0', 'node_modules', 'foo'),
+      path.join(repo, 'node_modules', 'foo'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.ok(packed.has('node_modules/foo/index.js'), 'the alias Node resolves through');
+    assert.ok(packed.has('node_modules/.pnpm/foo@1.0.0/node_modules/foo/index.js'),
+      'and the real store underneath it');
+  });
+
+  await t.test('follows a symlink inside a re-included data directory', () => {
+    // The second walk() call site — the one that re-includes geojson and the index definitions.
+    // Reverting it alone to os.walk left the whole suite green, so it was shipped untested.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-sub-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+
+    const outside = path.join(dir, 'outside');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'regional_districts.geojson'), '{}');
+    fs.symlinkSync(outside, path.join(repo, 'frontend/public/assets/geojson', 'linked'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.ok(packed.has('frontend/public/assets/geojson/linked/regional_districts.geojson'),
+      'a re-included data directory must be walked the same way as the rest of the tree');
   });
 
   await t.test('ships the geojson the boundary seeder reads', () => {

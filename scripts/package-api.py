@@ -5,36 +5,44 @@ import zipfile
 
 def walk(top):
     """
-    `os.walk` that FOLLOWS symlinked directories, without being able to loop forever.
+    `os.walk` that FOLLOWS symlinked directories, without re-entering one it is already inside.
 
     The default does not descend into a symlinked directory, and it says nothing when it skips one.
-    That is silent data loss for a packager: point `node_modules` at a store — a pnpm linker, a
-    shared install, a git worktree that borrows one to avoid a 300 MB reinstall — and the packager
-    walks straight past it, exits 0, and produces a zip that deploys and then cannot boot, because
-    the app has no route to a registry to `npm install` from. Measured before this fix against a
-    tree with a symlinked `node_modules`: zero `node_modules/` entries, exit 0, no warning.
+    That is silent data loss for a packager: point `node_modules` at a store — a shared install, a
+    git worktree borrowing one to avoid a 300 MB reinstall — and the packager walks straight past
+    it, exits 0, and produces a zip that deploys and then cannot boot, because the app has no route
+    to a registry to `npm install` from. Measured before this fix against a tree with a symlinked
+    `node_modules`: zero `node_modules/` entries, exit 0, no warning.
 
-    `followlinks=True` ALONE is not the fix, and not for the reason you would guess. A symlink
-    pointing back at an ancestor does not hang: the path grows one link per level, and at about
-    forty the kernel raises ELOOP and the walk dies with an uncaught OSError. Measured on a tree
-    with `node_modules/loop-back -> <repo root>`: it packaged the same files repeatedly under
-    `node_modules/loop-back/node_modules/loop-back/...`, then crashed. A packager that dies is
-    survivable; one that first writes a zip full of duplicated garbage is worse.
+    `followlinks=True` alone is not enough, and not for the usual reason. A symlink pointing back at
+    an ancestor does not hang: the path grows one link per level, and at about forty the kernel
+    raises ELOOP and the walk dies with an uncaught OSError — after it has already written the
+    duplicates it produced on the way down.
 
-    So every directory is keyed by its REAL path and visited once. The second approach to a
-    directory is skipped, which makes the cycle finite and the entry list the same as it would be
-    without any symlinks at all.
+    So the guard is per-BRANCH, not global: a directory is skipped only when its real path is
+    already somewhere on the chain of directories the walk entered to reach it. A global
+    visited-set is the obvious implementation and it is WRONG, because two different paths
+    legitimately resolve to one directory. pnpm is the case that proves it — `node_modules/foo` is
+    a link into `node_modules/.pnpm/foo@1.0.0/node_modules/foo`, and marking the realpath seen at
+    the shallower name prunes the real store underneath. Measured: the whole `.pnpm` tree vanished
+    from the package, content the previous version did ship. Both paths have to survive, because
+    Node resolves through both.
     """
-    seen = set()
+    chains = {top: (os.path.realpath(top),)}
     for root, dirs, files in os.walk(top, followlinks=True):
-        # Prune in place, which is what os.walk reads to decide where to go next.
+        chain = chains.pop(root, None) or (os.path.realpath(root),)
         keep = []
         for d in dirs:
-            real = os.path.realpath(os.path.join(root, d))
-            if real in seen:
+            child = os.path.join(root, d)
+            real = os.path.realpath(child)
+            # Already on the way in: following it would walk the same branch again.
+            if real in chain:
                 continue
-            seen.add(real)
+            # Recorded only for directories actually descended into, so a name the CALLER prunes
+            # (root_exclude_dirs) never claims a realpath another path still needs.
+            chains[child] = chain + (real,)
             keep.append(d)
+        # Prune in place, which is what os.walk reads to decide where to go next.
         dirs[:] = keep
         yield root, dirs, files
 
