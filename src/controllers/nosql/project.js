@@ -64,7 +64,10 @@ exports.getProject = async (req, res) => {
 
 exports.createProject = async (req, res) => {
   try {
-    const { trackProjectId, name, description, sector, region, status, centroid, isPublished } = req.body;
+    const {
+      trackProjectId, name, description, sector, region, status, projectState,
+      centroid, isPublished
+    } = req.body;
 
     if (!trackProjectId || !name || !centroid || !centroid.coordinates) {
       return res.status(400).json({ error: 'Missing required fields: trackProjectId, name, centroid' });
@@ -92,7 +95,12 @@ exports.createProject = async (req, res) => {
       // had no state at all. Measured 2026-08-24 before this change: 0 rows carried `status`, 389
       // carried `projectState` — nothing to migrate, because nothing had been created through this
       // route since the drift appeared.
-      projectState: status || '',
+      //
+      // BOTH INPUT NAMES, and the same precedence PUT uses. Accepting only the wire name made a
+      // GET-then-POST round trip lose the state silently: `publicView` returns the stored name, so
+      // the body a caller sends back carries `projectState`, which this route dropped on the floor
+      // while its sibling honoured it.
+      projectState: projectState || status || '',
       centroid,
       read,
       isPublished: published,
