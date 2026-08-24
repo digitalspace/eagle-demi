@@ -67,7 +67,8 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       new value into `demi-app-secrets` (6cdc9e-test), `gpu-extractor.env` on the GPU box, and the
       App Service; restart `gpu-extractor` and `gpu-ingest`.
 - [x] ~~**Mint the first scoped service key** — until one exists no live ACL probe can fail.~~
-      **Done 2026-08-24, and this line prescribed the wrong key twice.** `roles:['staff']` is
+      **#150, merged 2026-08-24 (`546b285`), reviewer PASS. This line prescribed the wrong key
+      twice.** `roles:['staff']` is
       privileged (`staff` IS in `SECURE_ROLES`, `access-sql.js:30`), so it proves the SCOPE
       narrowing and never the `read[]` predicate — the gap the item existed to close; and `staff`
       is in `WRITE_ROLES`, so the mint route refuses it without `allowWrite: true`. It takes TWO
