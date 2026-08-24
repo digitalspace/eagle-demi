@@ -7,6 +7,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
 const MAIN = fs.readFileSync(path.join(ROOT, 'azure', 'main.bicep'), 'utf8');
+const API_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'api-web-app.bicep'), 'utf8');
 const TEST_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.test.bicepparam'), 'utf8');
 
 // A STRUCTURAL GUARD, and it exists because everything else caught nothing. Deleting the one line
@@ -32,4 +33,29 @@ test('the test environment raises the ceiling above the proxy-collapsed default'
   assert.ok(match, 'test must set the ceiling explicitly, not inherit the direct-traffic default');
   assert.ok(Number(match[1]) >= 1000,
     `${match[1]}/min is ${(Number(match[1]) / 60).toFixed(1)} r/s for every visitor combined`);
+});
+
+// SCM basic auth is a public credential-guessing path onto the box holding the corpus, and this is
+// the only thing in the repo that can catch it being re-enabled. `az bicep build` (pr.yaml:121)
+// exits 0 whether these children are present, absent, or set to true — the same blind spot the
+// rateLimitMaxRequests guard above exists for.
+//
+// Text-structural, and honestly so: it fails on the deletion and on the flip it is written for, and
+// proves nothing about what Azure actually applied. The live reading is
+// `az resource show .../basicPublishingCredentialsPolicies/scm --query properties.allow`, and only
+// after someone runs deploy-infra.sh — merging this template applies nothing.
+test('the API app refuses basic publishing credentials on both scm and ftp', () => {
+  for (const name of ['scm', 'ftp']) {
+    const block = new RegExp(
+      `resource \\w+ 'Microsoft\\.Web/sites/basicPublishingCredentialsPolicies@[\\d-]+' = \\{` +
+      `\\s+parent: apiWebApp` +
+      `\\s+name: '${name}'` +
+      `\\s+properties: \\{` +
+      `\\s+allow: false`,
+      'm'
+    );
+    assert.match(API_MODULE, block,
+      `${name} must be declared on apiWebApp with allow: false — a missing child leaves the ` +
+      'endpoint accepting passwords, and nothing else in CI would notice');
+  }
 });
