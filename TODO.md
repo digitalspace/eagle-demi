@@ -161,10 +161,17 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       2026-08-24 (`f4936c3`, tag `v0.10.3`). Both write routes rename to the stored `projectState`
       and the search mapper's `|| p.status` fallback is gone. Scoped first and it was code-only:
       **0** of 393 rows carried `status`, 389 `projectState`, 4 neither — nothing to migrate.
-- [ ] **3.6 F17 registry work, in order:** (a) write up the Track-feed ASK, do not build — `GET
-      /api/v1/projects` on epictrack-api is unpaginated and serves `epic_guid`, but auth needs a
-      Keycloak `eao-epic` JWT with the `view` role, audience `epictrack-web`; the credential is the
-      whole critical path (namespace `c8b80a` vs `c72cba` unconfirmed — DNS cannot settle it).
+- [ ] **3.6 F17 registry work, in order:** (a) ~~write up the Track-feed ASK, do not build.~~
+      **Written 2026-08-24: wiki `Track-Feed-Request`, linked from `_Sidebar` and
+      `Sync-Architecture`.** Two things measured while writing it. **The push contract already
+      exists and has never been called** — a DEMI project `id` IS the Track project id (`GET
+      /api/projects` returns `id: "1", trackProjectId: 1`), so `PUT /api/projects/<trackProjectId>`
+      is the existing `authMiddleware` + `requireWrite` route, and Track needs a key DEMI can mint,
+      not a build. And the namespace question is **not answerable by probing**: the OpenShift domain
+      is a wildcard, so `eagle-track-test`, `epictrack-api-test` and `track-test` all resolve to the
+      router (142.34.194.118) and all answer 503, which is what an unrouted host looks like;
+      `track.eao.gov.bc.ca` does not resolve at all. Still open: the credential, and which of the
+      two directions Track will take.
       (b) ~~`unlinked` flag + `/db/stats` count.~~ **Shipped in #138** — flag is
       `sourceSystem: 'eagle'` (`merge/project.js:246`), count is `unlinkedProjects`
       (`controllers/db.js:112`), 4 subtests. A literal field would duplicate a stored fact. (c) The push endpoint on DEMI and the eagle-api caller — **authenticated from
