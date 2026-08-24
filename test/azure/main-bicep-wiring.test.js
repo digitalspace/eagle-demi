@@ -45,17 +45,22 @@ test('the test environment raises the ceiling above the proxy-collapsed default'
 // `az resource show .../basicPublishingCredentialsPolicies/scm --query properties.allow`, and only
 // after someone runs deploy-infra.sh — merging this template applies nothing.
 test('the API app refuses basic publishing credentials on both scm and ftp', () => {
+  // Split into resource blocks and check each one's CONTENTS, rather than matching parent/name/allow
+  // in a fixed order. The order-coupled version failed on a no-op reordering of `parent` and `name`
+  // — the compiled ARM was identical, two policies with allow:false — while reporting that the
+  // control was missing. A guard that cries deletion over formatting sends the next reader hunting
+  // for a resource that is still there.
+  const blocks = API_MODULE
+    .split(/^resource /m)
+    .filter(b => b.includes("'Microsoft.Web/sites/basicPublishingCredentialsPolicies@"));
+
   for (const name of ['scm', 'ftp']) {
-    const block = new RegExp(
-      `resource \\w+ 'Microsoft\\.Web/sites/basicPublishingCredentialsPolicies@[\\d-]+' = \\{` +
-      `\\s+parent: apiWebApp` +
-      `\\s+name: '${name}'` +
-      `\\s+properties: \\{` +
-      `\\s+allow: false`,
-      'm'
-    );
-    assert.match(API_MODULE, block,
-      `${name} must be declared on apiWebApp with allow: false — a missing child leaves the ` +
-      'endpoint accepting passwords, and nothing else in CI would notice');
+    const block = blocks.find(b => new RegExp(`name: '${name}'`).test(b));
+    assert.ok(block, `no basicPublishingCredentialsPolicies child named '${name}' — a missing ` +
+      'child leaves that endpoint accepting passwords, and nothing else in CI would notice');
+    assert.match(block, /parent: apiWebApp/,
+      `the '${name}' policy must hang off apiWebApp, or it configures nothing`);
+    assert.match(block, /allow: false/,
+      `the '${name}' policy must set allow: false`);
   }
 });
