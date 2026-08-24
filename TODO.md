@@ -161,10 +161,17 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       2026-08-24 (`f4936c3`, tag `v0.10.3`). Both write routes rename to the stored `projectState`
       and the search mapper's `|| p.status` fallback is gone. Scoped first and it was code-only:
       **0** of 393 rows carried `status`, 389 `projectState`, 4 neither — nothing to migrate.
-- [ ] **3.6 F17 registry work, in order:** (a) write up the Track-feed ASK, do not build — `GET
-      /api/v1/projects` on epictrack-api is unpaginated and serves `epic_guid`, but auth needs a
-      Keycloak `eao-epic` JWT with the `view` role, audience `epictrack-web`; the credential is the
-      whole critical path (namespace `c8b80a` vs `c72cba` unconfirmed — DNS cannot settle it).
+- [ ] **3.6 F17 registry work, in order:** (a) ~~write up the Track-feed ASK, do not build.~~
+      **Written 2026-08-24: wiki `Track-Feed-Request`, linked from `_Sidebar` and
+      `Sync-Architecture`.** Two things measured while writing it. **The push contract already
+      exists and has never been called** — a DEMI project `id` IS the Track project id (`GET
+      /api/projects` returns `id: "1", trackProjectId: 1`), so `PUT /api/projects/<trackProjectId>`
+      is the existing `authMiddleware` + `requireWrite` route, and Track needs a key DEMI can mint,
+      not a build. And the namespace question is **not answerable by probing**: the OpenShift domain
+      is a wildcard, so `eagle-track-test`, `epictrack-api-test` and `track-test` all resolve to the
+      router (142.34.194.118) and all answer 503, which is what an unrouted host looks like;
+      `track.eao.gov.bc.ca` does not resolve at all. Still open: the credential, and which of the
+      two directions Track will take.
       (b) ~~`unlinked` flag + `/db/stats` count.~~ **Shipped in #138** — flag is
       `sourceSystem: 'eagle'` (`merge/project.js:246`), count is `unlinkedProjects`
       (`controllers/db.js:112`), 4 subtests. A literal field would duplicate a stored fact. (c) The push endpoint on DEMI and the eagle-api caller — **authenticated from
@@ -187,18 +194,28 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       retrievable — that interaction is why the field flipped in the first place. So this is not
       "blocked on an in-VNet highlighting check" any more; it is retrievable-false OR semantic
       ranking (measured +0.064 recall@1, +0.074 MRR on 78 labels), and highlighting reads the same
-      field. A field-attribute change is an index recreate + refill of 1,128,733 chunks, so it
-      could only ever ride the same recreate as B4 (3.1).
+      field. **It is NOT a rebuild** — corrected 2026-08-24 against the service's own list: "Set the
+      `retrievable` attribute on an existing field" is on Azure's no-rebuild list, so this is one
+      index PUT, not a refill of 1,128,733 chunks. The cost is entirely the semantic trade above.
 
 - [ ] **3.8 Small, bundle opportunistically:**
-      - Apply the eagle-search `sync.livenessProbe.enabled: false` chart change to `6cdc9e-test`
-        (`helm upgrade`; rendered, not yet deployed). Acceptance: 0 restarts across > 6h15m.
+      - [x] ~~Apply the eagle-search `sync.livenessProbe.enabled: false` chart change to
+        `6cdc9e-test`.~~ **Already live — nothing to apply**, verified 2026-08-24 by reading the
+        cluster, not the chart: `deploy/eagle-search-sync` carries `livenessProbe: None` (and no
+        readiness probe), generation 10 = observedGeneration 10. Acceptance met and then some —
+        the pod shows **0 restarts across 2d1h**, against a bar of 6h15m.
       - [x] ~~`basicPublishingCredentialsPolicies allow=false` (scm + ftp).~~ #146 (`f25cdd4`).
         **DECLARED, NOT APPLIED** — CI never deploys infra, so SCM still accepts passwords until a
         hand `deploy-infra.sh test`. Read truth off `az resource show
         .../basicPublishingCredentialsPolicies/scm --query properties.allow`, never the template.
       - Delete `PREVIEW_GATE_PASSPHRASE` from bcgov/eagle-public and the two stale preview
-        branches (value is burned; branches are still dispatchable into a world-readable env.js).
+        branches (value is burned). **Measured 2026-08-24, and it is smaller than written**: the
+        secret is referenced by NO workflow (`grep PREVIEW_GATE_PASSPHRASE .github/workflows/*.yaml`
+        is empty), so deleting it breaks nothing — `gh secret delete PREVIEW_GATE_PASSPHRASE --repo
+        bcgov/eagle-public`. The branches are `azure-prod-preview` and `azure-search-preview`, and
+        neither matches `preview-branch-in-test.yaml`'s push triggers (`hotfix/**`, `feat/**`,
+        `feature/**`), so they are reachable only by a manual `workflow_dispatch`. Branch deletion
+        needs Daniel: `git push --delete` is denied by settings.
       - ~~5-char `RPROXY_PASSWORD`.~~ **Misfiled**: nowhere in eagle-demi, it is a repo secret on
         `bcgov/eao-nginx` (`deploy-to-test.yaml:157,159`). Track it there.
       - [x] ~~Page-cap `GET /api/boundaries`.~~ #147, merged 2026-08-24. Bounded the `fetchAll()`
@@ -208,11 +225,26 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
         `x-ms-continuation`, so no token exists on that path at any size. It now answers
         `x-truncated: true` + `Cache-Control: no-store` and logs; `?type=` is single-partition and
         pages properly. Unreachable at 281 rows.
-      - eagle-search `deploy-infra.sh` prod branch: next prod infra deploy re-PUTs appSettings over
-        the rotated 64-char `INGEST_KEY` from whatever `EAGLE_SEARCH_INGEST_KEY` is exported —
-        silent, production-breaking. Durable fix: Key Vault reference.
-      - Pin `ref: ${{ inputs.version }}` on `eao-nginx/deploy-to-test.yaml:119` (prod already
-        pinned); point rproxy probes at `/` instead of `/nginx_status`.
+      - ~~eagle-search `deploy-infra.sh` prod branch re-PUTs appSettings over the rotated
+        `INGEST_KEY`.~~ **Misstated, re-read 2026-08-24.** `deploy-infra.sh` has no prod branch at
+        all — it exits 2 on anything but `test` (`:46-50`) and already sources the key from the
+        OpenShift secret, refuses under 32 chars, and re-reads the live value afterwards to confirm
+        it matches. The hazard lives in `azure/main.searchprod.bicepparam:151`, and both mechanical
+        failures are already guarded: unset is BCP427, empty is BCP333 via `@minLength(32)`. What is
+        left is an operator exporting a valid-but-WRONG key — re-running the `openssl` line on a
+        redeploy — which the file warns about at `:25-35` and nothing enforces. Key Vault is one fix;
+        a prod counterpart to `deploy-infra.sh` that reads the live key back is the cheaper one.
+        Not urgent: prod has had no infra deploy.
+      - [x] ~~Pin `ref: ${{ inputs.version }}` on `eao-nginx/deploy-to-test.yaml`.~~ bcgov/eao-nginx
+        PR 43, open 2026-08-24. The `release` job pushes the tag before `deploy` runs, so it always
+        resolves.
+      - ~~Point rproxy probes at `/` instead of `/nginx_status`.~~ **STRUCK — it would CrashLoop
+        rproxy on test.** Measured 2026-08-24: `/` is **401** on eagle-test (basic auth,
+        `helm/rproxy/values-test.yaml:39`) and 200 on prod, so a kubelet probe on `/` fails
+        readiness and restarts on liveness in test only. The real gap is `conf.d/server.conf.tmpl`
+        (DNS resolved once at config load, so a moved Front Door address 502s the whole site while
+        `/nginx_status` stays green) and it needs an EXTERNAL check of a real proxied URL — the
+        webtest §4.6 already asks for — not a kubelet probe on a gated path.
       - [x] ~~Cosmos-fallback search truncates at 1000 with no continuation token (reachable only
         when AI Search faults).~~ **"Only when AI Search faults" was wrong and it was the whole
         defect**: `hasCriteria` excludes `project`, so `&project=<id>&pageSize=500` with no

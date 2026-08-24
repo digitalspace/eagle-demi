@@ -104,6 +104,23 @@ change in behaviour. Old and new indexers share them.
 
 ## Adding a field — the order that matters
 
+**Know which kind of change you are making before you start** — the line is not where you would
+guess, so take it from the service's own list rather than from intuition
+([Update or rebuild an index](https://learn.microsoft.com/en-us/azure/search/search-howto-reindex),
+read 2026-08-24):
+
+- **No rebuild:** adding a field; setting `retrievable` on an existing field; `searchAnalyzer` on a
+  field that already has an `indexAnalyzer`; adding an analyzer definition; semantic configurations,
+  scoring profiles, synonym maps, CORS. A new field is `null` on every existing row until an indexer
+  reset re-pulls them.
+- **Rebuild — drop and refill:** changing a field's name, data type, or `searchable` / `filterable` /
+  `sortable` / `facetable`; assigning `analyzer` or `indexAnalyzer` to an existing field; deleting a
+  field; adding an existing field to a suggester.
+
+For `chunks` a rebuild means 1,128,733 rows that cannot be regenerated from Mongo, so the difference
+is not academic there. `retrievable` being on the cheap side of that line is what makes hiding
+`content` a single PUT rather than a refill.
+
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
 
