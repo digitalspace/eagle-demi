@@ -34,6 +34,35 @@ function packagedEntries() {
   return new Set(listing.split('\n').filter(Boolean));
 }
 
+/** The minimum tree `package-api.py` accepts: entry points plus every required data directory. */
+function scaffold(repo) {
+  for (const d of ['api', 'azure/search/indexes', 'azure/search/indexers',
+    'frontend/public/assets/geojson']) {
+    fs.mkdirSync(path.join(repo, d), { recursive: true });
+  }
+  for (const f of ['index.js', 'host.json', 'package.json']) {
+    fs.writeFileSync(path.join(repo, f), '//');
+  }
+  fs.writeFileSync(path.join(repo, 'api', 'index.js'), '//');
+  fs.writeFileSync(path.join(repo, 'azure/search/indexes', 'projects.json'), '{}');
+  fs.writeFileSync(path.join(repo, 'azure/search/indexers', 'projects-indexer.json'), '{}');
+  fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson', 'a.json'), '{}');
+  // A NESTED directory, because a re-included path lives under an excluded one — geojson is
+  // inside `frontend`. Blocking the excluded realpaths wholesale in the re-include walk would
+  // empty exactly this, and a flat fixture cannot tell the two apart.
+  fs.mkdirSync(path.join(repo, 'frontend/public/assets/geojson', 'nested'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson/nested', 'deep.geojson'), '{}');
+}
+
+/** Package `repo` and return its entry set. */
+function packageInto(dir, repo) {
+  const out = path.join(dir, 'api.zip');
+  execFileSync('python3', [path.join(REPO_ROOT, 'scripts', 'package-api.py'), repo, out],
+    { stdio: 'pipe', timeout: 60000 });
+  return new Set(
+    execFileSync('unzip', ['-Z1', out], { encoding: 'utf8' }).split('\n').filter(Boolean));
+}
+
 let entries;
 try {
   entries = packagedEntries();
@@ -81,6 +110,200 @@ test('API deploy package', async (t) => {
       [...entries].some(e => e.startsWith('node_modules/')),
       'node_modules must be packaged — the app cannot npm install, its VNet has no route to the registry'
     );
+  });
+
+  await t.test('ships a SYMLINKED node_modules, and does not loop on a cycle', () => {
+    // `os.walk` does not descend into a symlinked directory and says nothing when it skips one.
+    // Point node_modules at a store — a pnpm linker, a shared install, a git worktree borrowing one
+    // to avoid a 300 MB reinstall — and the packager walked past it, exited 0, and produced a zip
+    // that deploys and then cannot boot: the app has no route to a registry to npm install from.
+    // Measured against the real packager before the fix: zero node_modules/ entries, exit 0.
+    //
+    // The cycle half is not decoration. `followlinks=True` on its own re-packages the tree under
+    // node_modules/loop-back/node_modules/loop-back/... until the kernel raises ELOOP and the
+    // packager dies — after it has already written the duplicates.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-link-'));
+    const repo = path.join(dir, 'repo');
+    const store = path.join(dir, 'store');
+    scaffold(repo);
+
+    fs.mkdirSync(path.join(store, 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(store, 'pkg', 'index.js'), '//');
+    fs.symlinkSync(store, path.join(repo, 'node_modules'));
+    // The cycle: a link inside the store pointing back at the repo root.
+    fs.symlinkSync(repo, path.join(store, 'loop-back'));
+
+    const linked = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.ok([...linked].some(e => e.startsWith('node_modules/')),
+      'a symlinked node_modules must still be packaged');
+    // What actually keeps this empty is the LINK BUDGET, not any rule about links to the root:
+    // `loop-back` sits inside the store, so reaching it costs a second link and it is pruned.
+    // An earlier message here claimed a root-loop-back guarantee the code does not make — see the
+    // next test, where a link back to the root costs only one and IS followed, once.
+    assert.deepStrictEqual([...linked].filter(e => e.includes('loop-back')), [],
+      'a second link cannot be spent, so a loop reached through the store is not followed');
+  });
+
+  await t.test('a ONE-link loop back to the root is followed once, and stays bounded', () => {
+    // Not a defect, and written down so nobody "fixes" it into one. The guarantee is the real tree
+    // plus one copy of each link target — so a link costing a single hop is followed, and the
+    // budget stops it compounding. What matters is that the fences still hold on that copy.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-root-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+    fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'src', 's.js'), '//');
+    fs.writeFileSync(path.join(repo, '.env'), 'SECRET=x');
+    fs.mkdirSync(path.join(repo, '.claude', 'worktrees'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.claude', 'worktrees', 'checkout.js'), '//');
+    fs.symlinkSync('..', path.join(repo, 'src', 'back'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    const under = [...packed].filter(e => e.startsWith('src/back/'));
+    assert.ok(under.length > 0, 'a one-link hop is within budget and is followed');
+    assert.ok(under.length < 50, `and does not compound, got ${under.length}`);
+    assert.deepStrictEqual([...packed].filter(e => e.includes('.env')), [],
+      'the .env fence holds on the copy reached through the link');
+    assert.deepStrictEqual([...packed].filter(e => e.includes('.claude')), [],
+      'and so does the excluded-directory fence');
+  });
+
+  await t.test('keeps BOTH paths when two names resolve to one directory', () => {
+    // The pnpm shape, and the case that makes a global visited-set wrong. `node_modules/foo` is a
+    // link into `node_modules/.pnpm/foo@1.0.0/node_modules/foo`; Node resolves through both, so
+    // both have to ship. Marking the realpath seen at the shallower name pruned the whole store —
+    // measured, and it was content the previous version of the packager did include.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-pnpm-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+
+    const store = path.join(repo, 'node_modules', '.pnpm', 'foo@1.0.0', 'node_modules', 'foo');
+    fs.mkdirSync(store, { recursive: true });
+    fs.writeFileSync(path.join(store, 'index.js'), '//');
+    fs.symlinkSync(path.join('.pnpm', 'foo@1.0.0', 'node_modules', 'foo'),
+      path.join(repo, 'node_modules', 'foo'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.ok(packed.has('node_modules/foo/index.js'), 'the alias Node resolves through');
+    assert.ok(packed.has('node_modules/.pnpm/foo@1.0.0/node_modules/foo/index.js'),
+      'and the real store underneath it');
+  });
+
+  await t.test('a .env reached through a symlink is still refused', () => {
+    // The re-include loop wrote whatever it walked with NO filtering at all — survivable only
+    // while it could not leave the three checked-in data directories. Following symlinks ended
+    // that. The existing '.env at any depth' test cannot catch this: it inspects the real repo's
+    // package, and there are no .env files in those directories today, so the hole was latent.
+    // The packager's own comment records a packaged .env carrying MONGODB_PASSWORD,
+    // TYPESENSE_API_KEY, MINIO_SECRET_KEY and DOCLING_API_KEY into a world-readable wwwroot path.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-env-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+
+    const outside = path.join(dir, 'outside');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, '.env'), 'MINIO_SECRET_KEY=leak');
+    fs.writeFileSync(path.join(outside, '.env.production'), 'X=1');
+    fs.writeFileSync(path.join(outside, 'regional_districts.geojson'), '{}');
+    fs.symlinkSync(outside, path.join(repo, 'frontend/public/assets/geojson', 'linked'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.deepStrictEqual([...packed].filter(e => e.includes('.env')), [],
+      'no .env may reach the package, whatever path it arrived by');
+    assert.ok(packed.has('frontend/public/assets/geojson/linked/regional_districts.geojson'),
+      'and the data the link exists for must still ship');
+  });
+
+  await t.test('a symlink cannot re-admit an excluded directory', () => {
+    // root_exclude_dirs is applied by position — only at the repo root — so a link anywhere else
+    // re-admitted the excluded tree under the link's own name. `.claude/worktrees/*` are full
+    // checkouts of this repository; shipping them once made a 202 MB package that left Kudu at
+    // status 1 for over thirty minutes against a normal thirty seconds.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-fence-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+
+    fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(repo, '.claude', 'worktrees', 'wt1'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'test', 'heavy'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.claude', 'worktrees', 'wt1', 'checkout.js'), '//');
+    fs.writeFileSync(path.join(repo, 'test', 'heavy', 'big.js'), '//');
+    fs.symlinkSync(path.join('..', '.claude'), path.join(repo, 'src', 'link-to-claude'));
+    fs.symlinkSync(path.join('..', 'test'), path.join(repo, 'src', 'link-to-test'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.deepStrictEqual([...packed].filter(e => e.includes('link-to-')), [],
+      'an exclusion is a fact about the directory, not about one name in the tree');
+  });
+
+  await t.test('a reconvergent symlink layout cannot blow the package up', () => {
+    // Cycles are not the only unbounded shape. In an ACYCLIC graph where several paths reach the
+    // same directory — what workspaces and `link:` deps produce — a guard that only refuses to
+    // re-enter the CURRENT branch still enumerates every distinct path through the graph.
+    // Measured on this fixture at 20 levels: 114,590 entries and a 58 MB zip from 22 real
+    // directories, exit 0, no warning. The packager's own comments record what an oversized
+    // package did to Kudu: status 1 for over thirty minutes against a normal thirty seconds.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-dag-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+
+    const LEVELS = 20;
+    const pkgs = path.join(repo, 'packages');
+    for (let i = 0; i <= LEVELS; i++) {
+      fs.mkdirSync(path.join(pkgs, `p${i}`, 'node_modules'), { recursive: true });
+      fs.writeFileSync(path.join(pkgs, `p${i}`, 'f.js'), '//');
+    }
+    // Each package links to the NEXT TWO, so paths reconverge without ever cycling.
+    for (let i = 0; i <= LEVELS - 2; i++) {
+      for (const j of [i + 1, i + 2]) {
+        fs.symlinkSync(path.join('..', '..', `p${j}`),
+          path.join(pkgs, `p${i}`, 'node_modules', `p${j}`));
+      }
+    }
+    fs.symlinkSync('packages', path.join(repo, 'node_modules'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    // The real tree holds 21 f.js files. A few hundred allows the one permitted copy per link;
+    // the failure this pins is four orders of magnitude away, so the exact ceiling is not
+    // delicate — what matters is that SOME ceiling exists.
+    assert.ok(packed.size < 500,
+      `output must stay bounded on a reconvergent layout, got ${packed.size} entries`);
+    assert.ok([...packed].some(e => e.startsWith('node_modules/')),
+      'and it must still package what the link points at');
+  });
+
+  await t.test('follows a symlink inside a re-included data directory', () => {
+    // The second walk() call site — the one that re-includes geojson and the index definitions.
+    // Reverting it alone to os.walk left the whole suite green, so it was shipped untested.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-sub-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+
+    const outside = path.join(dir, 'outside');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'regional_districts.geojson'), '{}');
+    fs.symlinkSync(outside, path.join(repo, 'frontend/public/assets/geojson', 'linked'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.ok(packed.has('frontend/public/assets/geojson/linked/regional_districts.geojson'),
+      'a re-included data directory must be walked the same way as the rest of the tree');
+    assert.ok(packed.has('frontend/public/assets/geojson/nested/deep.geojson'),
+      'and its own subdirectories must survive — geojson sits under the excluded `frontend`, so ' +
+      'applying the exclusion fence here unfiltered would empty the directory being re-included');
   });
 
   await t.test('ships the geojson the boundary seeder reads', () => {

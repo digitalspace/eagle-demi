@@ -3,6 +3,86 @@ import os
 import sys
 import zipfile
 
+def walk(top, blocked=()):
+    """
+    `os.walk` that follows a symlinked directory, but never a symlink reached THROUGH one.
+
+    The default does not descend into a symlinked directory, and says nothing when it skips one.
+    That is silent data loss for a packager: point `node_modules` at a store — a shared install, or
+    a git worktree borrowing one to avoid a 300 MB reinstall — and the packager walks past it,
+    exits 0, and produces a zip that deploys and then cannot boot, because the app has no route to
+    a registry to `npm install` from. Measured before this fix: zero `node_modules/` entries, exit
+    0, no warning.
+
+    ONE LINK DEEP, and the bound is the point. Two richer rules were tried and both were wrong:
+
+      * A global visited-set is bounded but drops content. Two names legitimately resolve to one
+        directory, and marking the realpath seen at the shallower one prunes the real tree under
+        the deeper. Measured on a pnpm-shaped store: the entire `.pnpm` tree vanished.
+      * Skipping only a realpath already on the current branch keeps all of that, and stops cycles,
+        but nothing then bounds the OUTPUT. A reconvergent acyclic layout — the shape workspaces
+        and `link:` dependencies produce — makes the walk enumerate every distinct path through the
+        graph. Measured on a 20-level fixture holding 22 real directories: 114,590 entries and a
+        58 MB zip, exit 0, no warning. `package_api` records below what an oversized package did to
+        Kudu: status 1 for over thirty minutes against a normal thirty seconds.
+
+    Counting links spent instead of directories seen bounds the output by construction — every
+    emitted path crosses at most one symlink, so the total is the real tree plus one copy of each
+    link target — while still covering every case this repo has: a symlinked `node_modules`, a link
+    into a re-included data directory, and an alias beside the real directory it points at. A cycle
+    needs at least two hops to close, so it cannot form.
+
+    Deeper symlink layouts are deliberately out of scope. `.yarnrc.yml` pins
+    `nodeLinker: node-modules`, so a real install is a real tree; anything more elaborate is a
+    layout this app does not deploy from, and guessing at it is what produced both earlier bugs.
+    """
+    max_links = 1
+    spent = {top: 0}
+    blocked = tuple(blocked)
+    for root, dirs, files in os.walk(top, followlinks=True):
+        used = spent.pop(root, 0)
+        keep = []
+        for d in dirs:
+            child = os.path.join(root, d)
+            cost = used + (1 if os.path.islink(child) else 0)
+            if cost > max_links:
+                continue
+            # An exclusion is a fact about a DIRECTORY, not about a name at one position in the
+            # tree — and following symlinks is exactly what makes those two stop agreeing.
+            # `root_exclude_dirs` is applied by the caller only at the repo root, so before this
+            # a link anywhere could re-admit `.claude/worktrees/*` or `test/` under the link's own
+            # name. Those worktrees are full checkouts of this repository; shipping them once made
+            # a 202 MB package that left Kudu at status 1 for over thirty minutes.
+            real = os.path.realpath(child)
+            if any(real == b or real.startswith(b + os.sep) for b in blocked):
+                continue
+            # Recorded only for directories actually descended into, so a name the CALLER prunes
+            # (root_exclude_dirs) costs nothing and starves nothing.
+            spent[child] = cost
+            keep.append(d)
+        # Prune in place, which is what os.walk reads to decide where to go next.
+        dirs[:] = keep
+        yield root, dirs, files
+
+
+def excluded_file(file, exclude_extensions):
+    """
+    Whether a file must never be packaged, wherever it was reached from.
+
+    Shared by both write loops on purpose. The re-include loop below used to write whatever it
+    walked with no filtering at all, which was survivable only while it could not leave the three
+    checked-in data directories. Following symlinks ended that: a `.env` in a directory one of them
+    links to reached the package. The comment on `.env` is not hypothetical — a packaged one
+    carried MONGODB_PASSWORD, TYPESENSE_API_KEY, MINIO_SECRET_KEY and DOCLING_API_KEY into
+    /home/site/wwwroot/.env, world-readable.
+
+    Matched at every depth, and by NAME rather than extension: ".env" has no extension to filter on.
+    """
+    if file == ".env" or file.startswith(".env."):
+        return True
+    return any(file.endswith(ext) for ext in exclude_extensions)
+
+
 def package_api(repo_root, zip_path):
     # Pruned at the REPO ROOT ONLY. Excluding "dist" at every depth also strips
     # node_modules/**/dist (e.g. @mongodb-js/saslprep) and ships an app that 500s on every
@@ -72,8 +152,14 @@ def package_api(repo_root, zip_path):
     print(f"Packaging {repo_root} -> {zip_path}...")
     count = 0
     extra = 0
+    # Realpaths of the excluded directories, so a followed symlink cannot re-admit one under a
+    # different name. Identity, not position.
+    blocked = tuple(sorted(
+        os.path.realpath(os.path.join(repo_root, d)) for d in root_exclude_dirs
+        if os.path.isdir(os.path.join(repo_root, d))))
+
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-        for root, dirs, files in os.walk(repo_root):
+        for root, dirs, files in walk(repo_root, blocked):
             rel_root = os.path.relpath(root, repo_root)
             if rel_root == ".":
                 dirs[:] = [d for d in dirs if d not in root_exclude_dirs]
@@ -81,14 +167,7 @@ def package_api(repo_root, zip_path):
             for file in files:
                 if rel_root == "." and file in root_exclude_files:
                     continue
-                if any(file.endswith(ext) for ext in exclude_extensions):
-                    continue
-                # Never ship .env. App settings supply every variable in Azure, so a packaged .env
-                # is pure liability: it carried MONGODB_PASSWORD, TYPESENSE_API_KEY, MINIO_SECRET_KEY
-                # and DOCLING_API_KEY into /home/site/wwwroot/.env world-readable. Matched at every
-                # depth, not just the repo root, and by name rather than extension — ".env" has no
-                # extension to filter on. The CI workflows already do this; this is the missing half.
-                if file == ".env" or file.startswith(".env."):
+                if excluded_file(file, exclude_extensions):
                     continue
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, repo_root)
@@ -107,8 +186,17 @@ def package_api(repo_root, zip_path):
             # adding a third subpath silently moves the hole — counting per subpath removes it
             # rather than relocating it.
             found = 0
-            for root, _dirs, files in os.walk(sub_abs):
+            # Minus any block that CONTAINS this subpath — `frontend` is excluded wholesale and the
+            # geojson lives under it, so blocking it here would empty the very directory this loop
+            # exists to re-include.
+            sub_real = os.path.realpath(sub_abs)
+            sub_blocked = tuple(
+                b for b in blocked
+                if not (sub_real == b or sub_real.startswith(b + os.sep)))
+            for root, _dirs, files in walk(sub_abs, sub_blocked):
                 for file in files:
+                    if excluded_file(file, exclude_extensions):
+                        continue
                     full_path = os.path.join(root, file)
                     rel_path = os.path.relpath(full_path, repo_root)
                     z.write(full_path, rel_path)
