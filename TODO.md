@@ -287,10 +287,22 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
         gated on a live Cosmos read of the parent document (`controllers/search.js:998-1014`), so
         writing the parent row through closes that window too. Metadata edits keep the `PT5M`
         window, as named in `controllers/search.js`.
-      - strip the unused Cosmos index paths (wildfires spatial, projects
-        composite, five scalar paths) with the next Bicep deploy; `src/swagger/swagger.yaml` is
-        stale — not the contract; `azure/search/README.md:56-59` one-liner (ADDING a field is
-        no-rebuild); grant `demi-cicd-test` what-if at RG scope (role
+      - [x] ~~`src/swagger/swagger.yaml` is stale — not the contract~~ and
+        ~~`azure/search/README.md` one-liner on what needs a rebuild~~: #151, merged 2026-08-24
+        (`980fa31`). The rebuild rule was WRONG as first written and is now taken from Azure's own
+        list — `retrievable` is changeable in place, which is what makes §3.9 one PUT.
+      - ~~strip the unused Cosmos index paths (wildfires spatial, projects composite, five scalar
+        paths).~~ **Verified unused, and still not worth doing** (2026-08-24). Every named path
+        checks out as removable — no `ST_DISTANCE`/`ST_WITHIN` anywhere, so the wildfires spatial
+        index serves nothing; `displayName` and `code` appear only in SELECT projections, which need
+        no index path; `trackProjectId`, `updatedAt` and `fileExt` appear in no query at all. The
+        only `ORDER BY` paths in use are `c.name` (projects, boundaries), `c.id` (documents) and
+        `c.createdAt` (api-keys), none of them on the list. **But the payoff is write RU on an
+        account this repo's own cost shape calls noise** (AI Search 41%, Defender 28%), it can only
+        take effect on a hand-run Bicep deploy that nothing schedules, and a wrong removal surfaces
+        as a query regression months later. Do it if a Bicep deploy happens for another reason;
+        never for its own sake.
+      - grant `demi-cicd-test` what-if at RG scope (role
         `b9331d33-8a36-4f8c-b097-4f54124fdb44`, not ABAC-denied) and record the baseline-noise
         list (was archive F6, deleted — re-measure).
 
