@@ -146,6 +146,19 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       drop the "no such field" note at `src/search/eagle-query.js:17`. Data arrives only via 2.1 —
       the 337 prod featured ids do not exist in today's corpus, so a backfill before the re-seed
       patches nothing and reports success.
+      - **BLOCKED ON AN IN-VNET RUN, and the code must not land first** (scoped 2026-08-24).
+        `eagle-query.js` reads field metadata from the committed `azure/search/indexes/*.json` at
+        require time, so the moment that JSON names `isFeatured` the app starts emitting it in
+        `$filter` — and **merging is deploying**. Against a live index that has not been PUT yet
+        that is a 400 per query, answered to anonymous callers as a 502. The live index is reachable
+        only from inside the VNet (`apply-search-definitions.js` over the App Service SSH tunnel),
+        so the whole item waits on a session with that tunnel. Order is the standing one: index PUT
+        → datasource PUT by hand (`demi-documents-ds`'s `container.query` is an explicit column
+        list and projects neither field today) → backfill → indexer reset + run → app LAST.
+      - Current state, measured: `isFeatured` exists nowhere but that note — not in
+        `seed/transform.js`, not in `indexes/documents.json`. `documentSource` IS written by
+        `transform.js:126` and is absent from the index, so its data is already in Cosmos and only
+        the index side is missing.
 - [ ] **3.3 The denormalised `projectIsPublished` ceiling (§1b).** #139 removed the urgency (the
       cascade now intersects `ownRead` and runs on both transitions), but the ceiling is still the
       lossless design and covers cascade partial-failure. Full design + the three ordering traps
