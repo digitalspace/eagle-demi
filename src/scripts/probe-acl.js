@@ -12,16 +12,18 @@
  * `true` and a staff key proves only the SCOPE narrowing. `compliance` is the one grantable role
  * that is not privileged, so it is the only credential that exercises the `read[]` predicate.
  *
- *   ADMIN_API_KEY=... node src/scripts/probe-acl.js [--keep]
+ *   ADMIN_API_KEY=... node src/scripts/probe-acl.js
  *
- * `--keep` leaves the keys and rows in place for hand-probing. Without it everything is removed and
- * the removal is itself verified. Revocation is not deletion — there is no delete endpoint — so
- * each run leaves one revoked record per key in the registry.
+ * Everything it creates is removed, and the removal is itself verified. There is no --keep: the
+ * plaintext is returned by the mint route once and is unrecoverable, so kept keys could not be
+ * used for anything — the flag only left two live credentials behind. Revocation is not deletion
+ * (there is no delete endpoint), so each run leaves one revoked record per key in the registry.
+ *
+ * Exit: 0 all cells passed, 1 a cell missed its prediction, 2 aborted, 3 a leg was inconclusive.
  */
 
 const BASE = process.env.DEMI_API_BASE || 'https://demi-api-test.azurewebsites.net';
 const ADMIN = process.env.ADMIN_API_KEY;
-const KEEP = process.argv.includes('--keep');
 
 // Documents reach the search index only on the indexer's PT5M pass, so the search leg has to wait
 // for its own control row before it can conclude anything.
@@ -56,14 +58,32 @@ async function api(path, { key, method = 'GET', body } = {}) {
   const text = await res.text();
   let json;
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
-  return { status: res.status, json, text };
+  return { status: res.status, json, text, continuation: res.headers.get('x-continuation-token') };
 }
 
-/** How many of the planted ids this caller can see on a live Cosmos list. */
+/**
+ * How many of the planted ids this caller can see on a live Cosmos list.
+ *
+ * PAGED, not one request: the controller clamps `pageSize` to 1000 and the repository orders by
+ * `c.id ASC`, so a planted UUID lands at a random depth. In a project with more than one page of
+ * documents, a single request makes "0 rows" mean "beyond the window" just as readily as "the ACL
+ * withheld it" — and every zero in this matrix is supposed to mean only the second.
+ */
 async function listSees(key, projectId, ids) {
-  const r = await api(`/api/documents?project=${encodeURIComponent(projectId)}&pageSize=1000`, { key });
-  if (r.status !== 200 || !Array.isArray(r.json)) return `HTTP ${r.status}`;
-  return r.json.filter(d => ids.includes(d._id || d.id)).length;
+  let seen = 0;
+  let token;
+  // A bound, not a limit: 60 pages is 60,000 rows, well past the largest project in the corpus.
+  // If it ever binds, the caller gets a loud string rather than a silently short count.
+  for (let page = 0; page < 60; page++) {
+    const q = `/api/documents?project=${encodeURIComponent(projectId)}&pageSize=1000` +
+      (token ? `&continuationToken=${encodeURIComponent(token)}` : '');
+    const r = await api(q, { key });
+    if (r.status !== 200 || !Array.isArray(r.json)) return `HTTP ${r.status}`;
+    seen += r.json.filter(d => ids.includes(d._id || d.id)).length;
+    token = r.continuation;
+    if (!token) return seen;
+  }
+  return 'unpaged: more than 60 pages';
 }
 
 /** How many of the planted ids this caller can find by the nonsense term. */
@@ -90,15 +110,14 @@ async function main() {
   let searchLegRan = false;
 
   const cleanup = async () => {
-    if (KEEP) {
-      console.log('\n--keep: leaving keys and rows in place.');
-      return;
-    }
     console.log('\ncleanup');
     for (const doc of created) {
       const r = await api(`/api/documents/${doc.id}?project=${encodeURIComponent(doc.projectId)}`,
         { key: ADMIN, method: 'DELETE' });
-      console.log(`  document ${doc.id}: HTTP ${r.status}`);
+      // Asserted, not logged. Two of the three planted rows are `public`, and test search is
+      // already served to eagle-public from this environment — a failed delete leaves them in the
+      // live corpus, and printing the status let the run still exit 0.
+      cell(`deleted ${doc.label}`, 200, r.status);
     }
     for (const k of keys) {
       const r = await api(`/api/admin/api-keys/${k.id}`, { key: ADMIN, method: 'DELETE' });
@@ -200,6 +219,10 @@ async function main() {
     cell('compliance key sees the control row', 1, await listSees(keyA, projectA, [control]));
 
     cell('scoped key sees its own project', 1, await listSees(keyB, projectA, [control]));
+    // The paired control the other zeroes have and this one lacked: without it a 0 below reads
+    // the same whether the scope narrowed or the row was simply never in the window.
+    cell('the out-of-scope row IS listable at all', 1, await listSees(ADMIN, projectB, [otherProject]),
+      'or the zero under it proves nothing');
     cell('scoped key sees NOTHING outside its scope', 0,
       await listSees(keyB, projectB, [otherProject]));
     cell('scoped key is privileged INSIDE its scope', 1, await listSees(keyB, projectA, [hidden]),
@@ -232,6 +255,8 @@ async function main() {
       cell('anonymous cannot find the hidden row', 0, await searchSees(null, term, [hidden]));
       cell('anonymous finds the control row', 1, await searchSees(null, term, [control]));
       cell('compliance key cannot find the hidden row', 0, await searchSees(keyA, term, [hidden]));
+      cell('the out-of-scope row IS findable at all', 1, await searchSees(ADMIN, term, [otherProject]),
+        'the same pairing, on the index');
       cell('scoped key finds nothing outside its scope', 0,
         await searchSees(keyB, term, [otherProject]));
     }
@@ -239,9 +264,12 @@ async function main() {
     await cleanup();
   }
 
+  const inconclusive = results.filter(r => r.ok === null).length;
   console.log(`\n${results.filter(r => r.ok === true).length} passed, ${failures} failed, ` +
-    `${results.filter(r => r.ok === null).length} inconclusive`);
-  process.exit(failures > 0 ? 1 : 0);
+    `${inconclusive} inconclusive`);
+  // An inconclusive leg is not a pass. It proved nothing about six of the cells, and anything
+  // reading only the exit status would have been told otherwise.
+  process.exit(failures > 0 ? 1 : (inconclusive > 0 ? 3 : 0));
 }
 
 main().catch(async (err) => {
