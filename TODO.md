@@ -103,20 +103,25 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       - Chunks do NOT come with it: new documents arrive `contentExtracted: false` until the
         extractor drains them. Deep search stays ~7 months behind until that runs.
       - Container has the 8-hour undo window and an untested restore path (correction 2).
-- [ ] **2.2 B1 — corpus-wide chunk metadata filters.** Two-phase resolver shipped in #142 works
-      for project-scoped chunk filters; corpus-wide values exceed `DOCUMENT_SCOPE_CAP` at any cap
-      one request can fill (narrowest real `type` = 2,911 documents), so the key lands in
-      `meta.dropped` — honest, not parity. Options: page the resolver (~12 service calls per
-      filtered chunk page on a Basic 1-SU, per debounced keystroke); denormalise onto 1,128,733
-      chunks (rejected once, one-way container); **or drop the three inert controls (Milestone,
-      Type, date range) from `eagle-public/src/app/search/content-search.component.ts` —
-      recommended.** The API is already honest; the UI is what still lies.
+- [x] ~~**2.2 B1 — corpus-wide chunk metadata filters.**~~ **Controls dropped**: bcgov/eagle-public
+      PR 805, merged 2026-08-24 (`89fa0527`), reviewer PASS. The resolver and the `meta.dropped`
+      machinery are untouched — the API was already honest, and what went is the UI that ignored it.
+      **The reviewer measured the drop set and it is not what this line assumed**: probing all 50
+      milestone values against test, `and[milestone]` on DocumentChunk is dropped for the 20
+      highest-volume values and **honoured for the other 30**; only Document Type and the date range
+      are dropped unconditionally. That is worse than uniformly-inert, not better — whether the
+      control worked depended on the value picked, and nothing on screen said which had happened.
+      Paging the resolver and denormalising onto 1,128,733 chunks both stay rejected.
 - [ ] **2.3 Raise `budgetAmount`.** 400 CAD against a measured ~451 CAD/month run rate (Aug 16-22
       mean 15.03/day, trending up) — the anomaly guard now fires on normal spend. Not a silent
       bump: the RG also bills eagle-search, eagle-notify and PostgreSQL (~12/month).
-- [ ] **2.4 Drop the `pcp` facet** from `eagle-public/src/app/projects/project-list.constants.ts`.
-      No PCP field exists in Track or DEMI, and on prod only `closed` (66) ever worked. Shipping a
-      control that returns everything is the one unacceptable option.
+- [x] ~~**2.4 Drop the `pcp` facet.**~~ bcgov/eagle-public PR 805, merged 2026-08-24 (`89fa0527`).
+      Path was `src/app/projects/project-list/project-list.constants.ts` — one level deeper than
+      this line said. `Constants.PCP_COLLECTION` stays: `project-notifications.config.ts` still uses
+      it, and that page is unaffected because `ApiService.AZURE_DATASETS` is
+      `{Project, Document, DocumentChunk}`, so `ProjectNotification` still reads eagle-api's Mongo,
+      which does hold PCP state. What prod loses is the `closed` value, on the legacy eagle-search
+      path only.
 - [ ] **2.5 `proponent` facet needs an org id DEMI does not hold.** The Eagle push (§3.6) is
       scheduled to carry `proponentId` + label; decide whether to wait for it or backfill ~393
       rows now. Do NOT ship the name-valued shortcut (measured: 497 of 778 dropdown options match
