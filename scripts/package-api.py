@@ -5,42 +5,50 @@ import zipfile
 
 def walk(top):
     """
-    `os.walk` that FOLLOWS symlinked directories, without re-entering one it is already inside.
+    `os.walk` that follows a symlinked directory, but never a symlink reached THROUGH one.
 
-    The default does not descend into a symlinked directory, and it says nothing when it skips one.
-    That is silent data loss for a packager: point `node_modules` at a store — a shared install, a
-    git worktree borrowing one to avoid a 300 MB reinstall — and the packager walks straight past
-    it, exits 0, and produces a zip that deploys and then cannot boot, because the app has no route
-    to a registry to `npm install` from. Measured before this fix against a tree with a symlinked
-    `node_modules`: zero `node_modules/` entries, exit 0, no warning.
+    The default does not descend into a symlinked directory, and says nothing when it skips one.
+    That is silent data loss for a packager: point `node_modules` at a store — a shared install, or
+    a git worktree borrowing one to avoid a 300 MB reinstall — and the packager walks past it,
+    exits 0, and produces a zip that deploys and then cannot boot, because the app has no route to
+    a registry to `npm install` from. Measured before this fix: zero `node_modules/` entries, exit
+    0, no warning.
 
-    `followlinks=True` alone is not enough, and not for the usual reason. A symlink pointing back at
-    an ancestor does not hang: the path grows one link per level, and at about forty the kernel
-    raises ELOOP and the walk dies with an uncaught OSError — after it has already written the
-    duplicates it produced on the way down.
+    ONE LINK DEEP, and the bound is the point. Two richer rules were tried and both were wrong:
 
-    So the guard is per-BRANCH, not global: a directory is skipped only when its real path is
-    already somewhere on the chain of directories the walk entered to reach it. A global
-    visited-set is the obvious implementation and it is WRONG, because two different paths
-    legitimately resolve to one directory. pnpm is the case that proves it — `node_modules/foo` is
-    a link into `node_modules/.pnpm/foo@1.0.0/node_modules/foo`, and marking the realpath seen at
-    the shallower name prunes the real store underneath. Measured: the whole `.pnpm` tree vanished
-    from the package, content the previous version did ship. Both paths have to survive, because
-    Node resolves through both.
+      * A global visited-set is bounded but drops content. Two names legitimately resolve to one
+        directory, and marking the realpath seen at the shallower one prunes the real tree under
+        the deeper. Measured on a pnpm-shaped store: the entire `.pnpm` tree vanished.
+      * Skipping only a realpath already on the current branch keeps all of that, and stops cycles,
+        but nothing then bounds the OUTPUT. A reconvergent acyclic layout — the shape workspaces
+        and `link:` dependencies produce — makes the walk enumerate every distinct path through the
+        graph. Measured on a 20-level fixture holding 22 real directories: 114,590 entries and a
+        58 MB zip, exit 0, no warning. `package_api` records below what an oversized package did to
+        Kudu: status 1 for over thirty minutes against a normal thirty seconds.
+
+    Counting links spent instead of directories seen bounds the output by construction — every
+    emitted path crosses at most one symlink, so the total is the real tree plus one copy of each
+    link target — while still covering every case this repo has: a symlinked `node_modules`, a link
+    into a re-included data directory, and an alias beside the real directory it points at. A cycle
+    needs at least two hops to close, so it cannot form.
+
+    Deeper symlink layouts are deliberately out of scope. `.yarnrc.yml` pins
+    `nodeLinker: node-modules`, so a real install is a real tree; anything more elaborate is a
+    layout this app does not deploy from, and guessing at it is what produced both earlier bugs.
     """
-    chains = {top: (os.path.realpath(top),)}
+    max_links = 1
+    spent = {top: 0}
     for root, dirs, files in os.walk(top, followlinks=True):
-        chain = chains.pop(root, None) or (os.path.realpath(root),)
+        used = spent.pop(root, 0)
         keep = []
         for d in dirs:
             child = os.path.join(root, d)
-            real = os.path.realpath(child)
-            # Already on the way in: following it would walk the same branch again.
-            if real in chain:
+            cost = used + (1 if os.path.islink(child) else 0)
+            if cost > max_links:
                 continue
             # Recorded only for directories actually descended into, so a name the CALLER prunes
-            # (root_exclude_dirs) never claims a realpath another path still needs.
-            chains[child] = chain + (real,)
+            # (root_exclude_dirs) costs nothing and starves nothing.
+            spent[child] = cost
             keep.append(d)
         # Prune in place, which is what os.walk reads to decide where to go next.
         dirs[:] = keep

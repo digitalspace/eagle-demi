@@ -163,6 +163,44 @@ test('API deploy package', async (t) => {
       'and the real store underneath it');
   });
 
+  await t.test('a reconvergent symlink layout cannot blow the package up', () => {
+    // Cycles are not the only unbounded shape. In an ACYCLIC graph where several paths reach the
+    // same directory — what workspaces and `link:` deps produce — a guard that only refuses to
+    // re-enter the CURRENT branch still enumerates every distinct path through the graph.
+    // Measured on this fixture at 20 levels: 114,590 entries and a 58 MB zip from 22 real
+    // directories, exit 0, no warning. The packager's own comments record what an oversized
+    // package did to Kudu: status 1 for over thirty minutes against a normal thirty seconds.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-dag-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+
+    const LEVELS = 20;
+    const pkgs = path.join(repo, 'packages');
+    for (let i = 0; i <= LEVELS; i++) {
+      fs.mkdirSync(path.join(pkgs, `p${i}`, 'node_modules'), { recursive: true });
+      fs.writeFileSync(path.join(pkgs, `p${i}`, 'f.js'), '//');
+    }
+    // Each package links to the NEXT TWO, so paths reconverge without ever cycling.
+    for (let i = 0; i <= LEVELS - 2; i++) {
+      for (const j of [i + 1, i + 2]) {
+        fs.symlinkSync(path.join('..', '..', `p${j}`),
+          path.join(pkgs, `p${i}`, 'node_modules', `p${j}`));
+      }
+    }
+    fs.symlinkSync('packages', path.join(repo, 'node_modules'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    // The real tree holds 21 f.js files. A few hundred allows the one permitted copy per link;
+    // the failure this pins is four orders of magnitude away, so the exact ceiling is not
+    // delicate — what matters is that SOME ceiling exists.
+    assert.ok(packed.size < 500,
+      `output must stay bounded on a reconvergent layout, got ${packed.size} entries`);
+    assert.ok([...packed].some(e => e.startsWith('node_modules/')),
+      'and it must still package what the link points at');
+  });
+
   await t.test('follows a symlink inside a re-included data directory', () => {
     // The second walk() call site — the one that re-includes geojson and the index definitions.
     // Reverting it alone to os.walk left the whole suite green, so it was shipped untested.
