@@ -1,11 +1,11 @@
 # TODO
 
-> Condensed 2026-08-24 from the 3,422-line original. The full pre-condense file — every closed
-> item's narrative, measurements and reviewer history — is archived verbatim in the wiki checkout at
-> `eagle-demi.wiki/TODO-Archive-2026-08-24.md`. **That archive is the ONLY full copy**: git history
-> does not hold it (the pre-condense file was mostly uncommitted working-tree growth; HEAD's copy is
-> 581 lines). Commit the wiki archive before anything else touches that checkout. Before re-deriving
-> or re-litigating anything closed, grep the archive.
+> Condensed 2026-08-24 from a 3,422-line original, and **that original is gone** — deleted
+> deliberately 2026-08-24, never committed anywhere (it was uncommitted working-tree growth; the
+> last committed pre-condense copy is 581 lines at `8777e35`, itself a partial). Closed-item
+> narrative, measurements and reviewer history that are not restated below no longer exist in any
+> copy. A handful of lines still say "in the archive" with an F-number: those pointers are dead,
+> and what they promised has to be re-derived. Nothing else points at a file that is not here.
 
 Open work only. Facts, measurements and history live in the
 [wiki](https://github.com/digitalspace/eagle-demi/wiki). **Merging is deploying** — a merge to
@@ -132,7 +132,7 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       lossless design and covers cascade partial-failure. Full design + the three ordering traps
       (datasource SELECT first, always; opt-in third arg to `filterFor` — naming a missing OData
       field is a 400 not an empty result; predicate and cascade-removal in the SAME release) are in
-      the archive under F1/§1b. Backfill before predicate, or ship
+      the deleted archive under F1/§1b — re-derive. Backfill before predicate, or ship
       `(NOT IS_DEFINED(c.projectIsPublished) OR c.projectIsPublished = true)` and tighten.
 - [x] ~~3.4 Reset the semantic 402 latch at month rollover.~~ #145, merged 2026-08-24
       (`e8ff8dc`). Latch stores the UTC month and clears itself on the first search of the next one
@@ -222,7 +222,7 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
         stale — not the contract; `azure/search/README.md:56-59` one-liner (ADDING a field is
         no-rebuild); grant `demi-cicd-test` what-if at RG scope (role
         `b9331d33-8a36-4f8c-b097-4f54124fdb44`, not ABAC-denied) and record the baseline-noise
-        list (archive, F6).
+        list (was archive F6, deleted — re-measure).
 
 ## 4. Prod promotion — ordered gates
 
@@ -264,7 +264,7 @@ hardening landed and soaked on test.
       set, against a budget already exceeded (~451/month vs 400).
 - [ ] **4.8 The flip and the soak.** Same lever as test: one Mongo `Config` field,
       `SEARCH_API_PATH`, with `/eagle-search` kept answering in parallel — cutover and rollback
-      are the same one-field update, no redeploy either way (commands in the archive, F5).
+      are the same one-field update, no redeploy either way (commands were archive F5, deleted).
       Soak with the browser console open: `EventService.getError()` has zero subscribers, so
       defects show as an empty table + a console line, never a toast. Content search (chunks) has
       NO public UI route — exercise the endpoint directly. Expect result links to 404 for
@@ -304,9 +304,9 @@ hardening landed and soaked on test.
   frontend stops calling the API directly. Never key on leftmost-XFF (attacker-controlled).
 - `demi.eao.gov.bc.ca` DNS: filed with OCIO/NRIDS route in mind; long-lead; F5a exists so nothing
   waits on it. Exit plan (absolute `SEARCH_API_PATH`, CORS step, delete the nginx block, revert
-  the rate ceiling) is in the archive, F5a.
-- NRPTI: removed entirely 2026-08-07 (`952f5de`); redesign starts from the measured census in the
-  archive, not from scratch. Only shared-project records matter, linked by `_epicProjectId`;
+  the rate ceiling) was archive F5a, deleted — re-derive before the exit.
+- NRPTI: removed entirely 2026-08-07 (`952f5de`); the measured census the redesign was to start
+  from went with the deleted archive. Only shared-project records matter, linked by `_epicProjectId`;
   `?populate=true` works; the documents are mostly already in DEMI.
 
 ## 7. Standing rules and ceilings — do not re-derive
