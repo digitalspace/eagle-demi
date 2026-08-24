@@ -159,6 +159,18 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       not the cost (Basic is flat-rate). Deleting destroys the rollback for the index cutover on the
       only extracted copy of ~1.13M chunks. Unchanged: nothing prunes them
       (`dataDeletionDetectionPolicy` null everywhere; deletes stay the application's job).
+- [ ] **3.9 `content: retrievable: false` on the `chunks` index.** Dropped by the 2026-08-24
+      condense and restored — it is OPEN, not deferred. Today the only thing keeping whole chunk
+      text out of responses is the explicit `select` in `searchChunks` (pinned by a test): a
+      convention, not a structural guarantee. **It now trades against semantic ranking**, which was
+      not true when the item was written: `content` is the sole `prioritizedContentFields` entry of
+      `chunks-semantic` (`azure/search/indexes/chunks.json`) and a semantic config's fields must be
+      retrievable — that interaction is why the field flipped in the first place. So this is not
+      "blocked on an in-VNet highlighting check" any more; it is retrievable-false OR semantic
+      ranking (measured +0.064 recall@1, +0.074 MRR on 78 labels), and highlighting reads the same
+      field. A field-attribute change is an index recreate + refill of 1,128,733 chunks, so it
+      could only ever ride the same recreate as B4 (3.1).
+
 - [ ] **3.8 Small, bundle opportunistically:**
       - Apply the eagle-search `sync.livenessProbe.enabled: false` chart change to `6cdc9e-test`
         (`helm upgrade`; rendered, not yet deployed). Acceptance: 0 restarts across > 6h15m.
