@@ -451,15 +451,33 @@ function compareCase(demi, eagle, bases = {}) {
     push(diffs, accepted, bases, { field: 'sortHonoured', demi: demiSorted, eagle: eagleSorted });
   }
 
-  if (d.keys || e.keys) {
+  // AN EMPTY PAGE IS ONLY EXCUSED WHEN THE SIDE'S OWN TOTAL EXPLAINS IT.
+  //
+  // A page past the end of one corpus returns no rows, and with `keys` null the delta computes as
+  // "eagle emits thirteen keys demi does not" — a corpus fact wearing a contract defect's clothes.
+  // Measured: `keywords=pattullo` page 26, demi 250 matches to eagle's 262, so demi answers an
+  // empty page and eagle a full one.
+  //
+  // But "both sides have rows" alone is too blunt a fix: it also drops the only signal for a page
+  // that is empty when its OWN total says it should be full — `page 0, total 60,560, zero rows` is
+  // a service failing, and it would pass in silence. So an empty page is excused only where
+  // `skip >= total`, which is the arithmetic that makes it expected, and is reported otherwise.
+  const unexplained = [
+    ['demi', d], ['eagle', e]
+  ].filter(([, side]) => !side.keys && !pageIsPastEnd(side, bases));
+  if (unexplained.length) {
+    diffs.push({
+      field: 'emptyPage',
+      demi: unexplained.some(([name]) => name === 'demi') ? d.total : null,
+      eagle: unexplained.some(([name]) => name === 'eagle') ? e.total : null
+    });
+  } else if (d.keys && e.keys) {
     const expected = EXPECTED_KEY_DELTA[dataset] || { demiOnly: [], eagleOnly: [] };
-    const demiKeys = d.keys || [];
-    const eagleKeys = e.keys || [];
-    // Only the keys NOT already accounted for. An expected key going missing is not a finding
-    // either — `highlighted` rides one branch of demi's own router — so this is a one-way check
-    // against surprises, in both directions.
-    const demiOnly = demiKeys.filter(k => !eagleKeys.includes(k) && !expected.demiOnly.includes(k));
-    const eagleOnly = eagleKeys.filter(k => !demiKeys.includes(k) && !expected.eagleOnly.includes(k));
+    // No `|| []` fallbacks: the guard above has already excluded null, and `summarize` returns
+    // either null or a non-empty array — a fallback here would read as if the null case were still
+    // being handled, which it is not.
+    const demiOnly = d.keys.filter(k => !e.keys.includes(k) && !expected.demiOnly.includes(k));
+    const eagleOnly = e.keys.filter(k => !d.keys.includes(k) && !expected.eagleOnly.includes(k));
     if (demiOnly.length || eagleOnly.length) diffs.push({ field: 'rowKeys', demiOnly, eagleOnly });
   }
 
@@ -484,6 +502,20 @@ function push(diffs, accepted, bases, diff) {
 function selectivity(side, base) {
   if (!base || side.total === null || base.total === null) return undefined;
   return side.total !== base.total;
+}
+
+/**
+ * Does this side's own total explain an empty page — i.e. is the page past the end?
+ *
+ * `undefined` for either input is NOT an excuse: a side that reported no total cannot justify an
+ * empty page with it, and treating "unknown" as "expected" is how a broken response reads as a
+ * finished corpus.
+ */
+function pageIsPastEnd(side, bases) {
+  const pageNum = bases.kase && bases.kase.pageNum;
+  const { pageSize } = bases;
+  if (!Number.isFinite(pageNum) || !Number.isFinite(pageSize) || side.total === null) return false;
+  return pageNum * pageSize >= side.total;
 }
 
 /** Did naming a SORT change the page, against the same service's unsorted answer? */
@@ -585,7 +617,9 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     const eagle = await get(buildUrl(EAGLE_URL, kase, args.pageSize), null);
     await sleep(args.delayMs);
 
-    const verdict = compareCase(demi, eagle, { demi: demiBase, eagle: eagleBase, dataset: kase.dataset, kase });
+    const verdict = compareCase(demi, eagle, {
+      demi: demiBase, eagle: eagleBase, dataset: kase.dataset, kase, pageSize: args.pageSize
+    });
     results.push({ case: kase.n, label: label(kase), spec: specKey(kase), pageNum: kase.pageNum, ...verdict });
     if (!args.json) {
       console.log(`[${String(kase.n).padStart(2)}/${all.length}] ${verdict.pass ? 'PASS' : 'DIFF'}  ${label(kase)}`);
@@ -654,5 +688,6 @@ if (require.main === module) {
 module.exports = {
   CASES, PAGES, DEMI_URL, EAGLE_URL, RPROXY_HOST, EXPECTED_KEY_DELTA,
   baselineOf, selectivity, ordered, pagingReport, specKey, EXPECTED_DIVERGENCE, acceptedReason,
+  pageIsPastEnd,
   parseArgs, credential, expandCases, buildUrl, label, summarize, compareCase, main
 };
