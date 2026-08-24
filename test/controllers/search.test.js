@@ -552,38 +552,50 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(hit.documentType, 'Application', 'the label stays, for DEMI\'s own frontend');
   });
 
-  await t.test('search documents returns documents from Cosmos DB', async () => {
-    const mockDocuments = [
-      {
-        id: 'doc1',
-        displayName: 'Test Doc',
-        s3Key: 'uploads/test_doc.pdf',
-        region: 'Skeena',
-        projectId: '12345',
-        typeId: '5cf00c03a266b7e1877504da',
-        milestoneId: '5cf00c03a266b7e1877504e9',
-        projectPhaseId: '5d3f6c7eda7a38421829602f',
-        documentAuthorTypeId: '5cf00c03a266b7e1877504dc',
-        datePosted: '2020-03-11T00:00:00Z',
-        read: ['public'],
-        isPublished: true
-      }
-    ];
-
-    t.mock.method(documentsRepo, 'listVisible', async (access, opts) => {
-      assert.ok(access, 'expected an access context');
-      assert.strictEqual(opts.pageSize, 10);
-      return { items: mockDocuments };
+  await t.test('a bare document list is served by the index, not by Cosmos', async () => {
+    // The request shape that used to take the deleted Cosmos read: no keywords, no sort, and a
+    // `project` — which `hasCriteria` excludes on purpose. It paged by overfetch-and-slice against
+    // a 1000-row clamp, so `pageNum=2` at `pageSize=500` returned zero rows beside a count of
+    // 2,488. The index serves it, so the assertions here are the offset and the row shape.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => {
+      sent = opts;
+      return {
+        count: 2488,
+        items: [{
+          id: 'doc1',
+          displayName: 'Test Doc',
+          documentFileName: 'test_doc.pdf',
+          type: 'Application',
+          typeId: '5cf00c03a266b7e1877504da',
+          milestoneId: '5cf00c03a266b7e1877504e9',
+          projectPhaseId: '5d3f6c7eda7a38421829602f',
+          documentAuthorTypeId: '5cf00c03a266b7e1877504dc',
+          datePosted: '2020-03-11T00:00:00Z',
+          projectId: '12345',
+          read: ['public']
+        }]
+      };
     });
 
-    // The keywordless path labels its results too, exactly as the AI Search path does.
+    // The regression guard. Re-adding the `keywords || criteria` gate would restore the truncation
+    // silently — every assertion below still passes on Cosmos rows, because the two mappers agreed
+    // about the fields. Only "which backend ran" tells them apart.
+    t.mock.method(documentsRepo, 'listVisible', async () => {
+      assert.fail('no document read may go to Cosmos — it cannot page past 1000 rows');
+    });
+
+    // The bare list labels its results too, exactly as a keyword search does.
     t.mock.method(projectsRepo, 'listByIds', async (access, ids) => {
       assert.deepStrictEqual(ids, ['12345']);
       return [{ id: '12345', name: 'Ajax Mine' }];
     });
 
     const req = {
-      query: { dataset: 'Document', keywords: '', pageSize: '10' },
+      query: {
+        dataset: 'Document', keywords: '', project: '12345',
+        pageSize: '500', pageNum: '2'
+      },
       header: () => null
     };
 
@@ -598,20 +610,48 @@ test('Search Controller Tests', async (t) => {
 
     await searchController.search(req, res);
 
+    // The page that answered zero rows before. `skip` is in the caller's own `pageSize`.
+    assert.strictEqual(sent.skip, 1000, 'the third page of 500 starts at row 1000');
+    assert.strictEqual(sent.top, 500);
+    assert.strictEqual(sent.matchAll, true, 'no keywords means every row the filter admits');
+
     assert.ok(Array.isArray(jsonResponse));
+    assert.strictEqual(jsonResponse[0].count, 2488, 'the real total, not the page length');
     assert.strictEqual(jsonResponse[0].searchResults.length, 1);
-    assert.strictEqual(jsonResponse[0].searchResults[0].displayName, 'Test Doc');
-    assert.strictEqual(jsonResponse[0].searchResults[0].documentFileName, 'test_doc.pdf');
-    assert.strictEqual(jsonResponse[0].searchResults[0].isPublished, true);
-    assert.strictEqual(jsonResponse[0].searchResults[0].projectName, 'Ajax Mine');
-    // The SAME five fields the keyword branch sends. Two mappers answering one dataset must not
-    // disagree about which columns exist, or the table changes shape when the user types.
     const row = jsonResponse[0].searchResults[0];
+    assert.strictEqual(row.displayName, 'Test Doc');
+    assert.strictEqual(row.documentFileName, 'test_doc.pdf');
+    assert.strictEqual(row.isPublished, true);
+    assert.strictEqual(row.projectName, 'Ajax Mine');
+    // The same five the keyword branch sends. One mapper answers this dataset now, and these are
+    // what eagle-public's Type / Milestone / Date columns resolve.
     assert.strictEqual(row.type, '5cf00c03a266b7e1877504da');
     assert.strictEqual(row.milestone, '5cf00c03a266b7e1877504e9');
     assert.strictEqual(row.projectPhase, '5d3f6c7eda7a38421829602f');
     assert.strictEqual(row.documentAuthorType, '5cf00c03a266b7e1877504dc');
     assert.strictEqual(row.datePosted, '2020-03-11T00:00:00Z');
+  });
+
+  await t.test('a bare document list above the page cap is refused, not truncated', async () => {
+    // The ceiling used to be Cosmos's 1000, applied silently. It is the index's now, so the
+    // refusal has to reach the bare list too: `runSearch` clamps `top` to MAX_PAGE_ROWS, and a
+    // 500-row answer under a 60,560 count is the same lie in a smaller size.
+    t.mock.method(aiSearch, 'searchDocuments', async () => {
+      assert.fail('a page above the cap must be refused before any search runs');
+    });
+
+    let status = null;
+    let body = null;
+    const res = {
+      status: (code) => { status = code; return res; },
+      json: (data) => { body = data; return res; }
+    };
+
+    await searchController.search(
+      { query: { dataset: 'Document', keywords: '', pageSize: '501' }, header: () => null }, res);
+
+    assert.strictEqual(status, 400);
+    assert.match(body.error, /pageSize above 500/);
   });
 
   // The Cosmos full-text backend was ruled out and Azure AI Search is not built yet (TODO.md §B),
@@ -1568,20 +1608,22 @@ test('the answer matches the request that was made', async (t) => {
       assert.strictEqual(out.body[0].count, 0);
     });
 
-  // [R1] `project` ALONE is deliberately NOT criteria. The Cosmos read applies it — it is the
-  // container's partition key — and `&project=<id>&pageSize=500` with no sort is the shape DEMI's
-  // own frontend and eagle-public's project tabs send. Routing it to the index would move the
-  // best-covered path in this file onto the AI Search page ceiling for no gain.
-  await t.test('a project filter alone still takes the Cosmos read', async () => {
+  // [R1] `project` ALONE is deliberately NOT criteria, and it used to keep this request on the
+  // Cosmos read for that reason. It does not any more: that read pages by overfetch-and-slice
+  // against a 1000-row clamp, so `&project=<id>&pageSize=500` — the shape DEMI's own frontend and
+  // eagle-public's project tabs send — served two pages of a 2,488-document project and answered
+  // every later page with zero rows beside the full count. The routing test still excludes
+  // `project` for the PROJECT dataset's sake; this dataset no longer asks it.
+  await t.test('a project filter alone is served by the index, not the Cosmos read', async () => {
     t.mock.method(projectsRepo, 'getByEagleId', async () => ({ id: '207', name: 'Site C' }));
-    let listOpts;
-    t.mock.method(documentsRepo, 'listVisible', async (access, opts) => {
-      listOpts = opts;
-      return { items: [] };
+    t.mock.method(documentsRepo, 'listVisible', async () => {
+      assert.fail('no document read may go to Cosmos — it cannot page past 1000 rows');
     });
-    t.mock.method(documentsRepo, 'countVisible', async () => 4);
-    let searched = false;
-    t.mock.method(aiSearch, 'searchDocuments', async () => { searched = true; return { count: 0, items: [] }; });
+    let sent = null;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => {
+      sent = opts;
+      return { count: 4, items: [] };
+    });
 
     const { out, res } = capture();
     await searchController.search({
@@ -1590,8 +1632,11 @@ test('the answer matches the request that was made', async (t) => {
       header: () => null
     }, res);
 
-    assert.strictEqual(searched, false, 'a bare project list is a read, not a search');
-    assert.deepStrictEqual(listOpts.projectId, ['207']);
+    // The Eagle ObjectId still resolves to the DEMI id before it reaches the filter — that
+    // translation was the Cosmos path's job to prove, and it is still the thing that decides
+    // whether one project's tab shows one project's documents or the whole corpus.
+    assert.ok(sent, 'the index answered');
+    assert.match(sent.filter, /207/, 'the resolved project id reaches the index filter');
     assert.strictEqual(out.body[0].meta[0].searchResultsTotal, 4);
   });
 
@@ -1665,21 +1710,19 @@ test('the answer matches the request that was made', async (t) => {
   // [C2] The keywordless Document path resolved the Eagle ObjectId to a DEMI project id and then
   // dropped it: a request for ONE project's documents was answered with the whole corpus, under a
   // corpus-wide total. That is the failure `resolveProjectFilter`'s docstring warns about, landing
-  // on the branch where the project WAS resolvable.
+  // on the branch where the project WAS resolvable. The read moved to the index; the way it fails
+  // did not, so this still asserts the scope reaches BOTH the rows and the total — the index
+  // returns one `count` computed under the filter it was given, so a filter that lost the project
+  // reports the corpus exactly as before.
   await t.test('a project-scoped list is scoped, and so is its total', async () => {
-    let listOpts;
-    let countOpts;
+    let sent = null;
     t.mock.method(projectsRepo, 'getByEagleId', async (access, eagleId) => {
       assert.strictEqual(eagleId, '588511c4aaecd9001b826192');
       return { id: '207', name: 'Site C' };
     });
-    t.mock.method(documentsRepo, 'listVisible', async (access, opts) => {
-      listOpts = opts;
-      return { items: [] };
-    });
-    t.mock.method(documentsRepo, 'countVisible', async (access, opts) => {
-      countOpts = opts;
-      return 4;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => {
+      sent = opts;
+      return { count: 4, items: [] };
     });
 
     const { out, res } = capture();
@@ -1694,9 +1737,8 @@ test('the answer matches the request that was made', async (t) => {
       header: () => null
     }, res);
 
-    assert.deepStrictEqual(listOpts.projectId, ['207'], 'the resolved DEMI id reaches the read');
-    assert.deepStrictEqual(countOpts.projectId, ['207'],
-      'and the count, or one project reports the size of the corpus');
+    assert.match(sent.filter, /projectId/, 'the scope is applied as a filter, not dropped');
+    assert.match(sent.filter, /207/, 'and it is the resolved DEMI id, not the Eagle ObjectId');
     assert.strictEqual(out.body[0].meta[0].searchResultsTotal, 4);
   });
 
@@ -1751,27 +1793,6 @@ test('the answer matches the request that was made', async (t) => {
     const second = await idsOnPage(1);
     assert.deepStrictEqual(first, expectedIds('proj', 0));
     assert.deepStrictEqual(second, expectedIds('proj', 10), 'page 2 starts at row 10');
-    assert.strictEqual(second.length, 10, 'and is a page, not the overfetched 20 rows');
-  });
-
-  await t.test('the keywordless document list serves page 2 from row 10, not row 0', async () => {
-    t.mock.method(documentsRepo, 'listVisible', listStub('doc'));
-    t.mock.method(documentsRepo, 'countVisible', async () => 40);
-    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
-
-    const idsOnPage = async (pageNum) => {
-      const { out, res } = capture();
-      await searchController.search({
-        query: { dataset: 'Document', keywords: '', pageNum: String(pageNum), pageSize: '10' },
-        header: () => null
-      }, res);
-      return out.body[0].searchResults.map(r => r._id);
-    };
-
-    const first = await idsOnPage(0);
-    const second = await idsOnPage(1);
-    assert.deepStrictEqual(first, expectedIds('doc', 0));
-    assert.deepStrictEqual(second, expectedIds('doc', 10), 'page 2 starts at row 10');
     assert.strictEqual(second.length, 10, 'and is a page, not the overfetched 20 rows');
   });
 
@@ -1875,6 +1896,9 @@ test('the answer matches the request that was made', async (t) => {
   // [C7] Two id-spaces, two fields, neither derived from the other. `project._id` is the EAGLE
   // ObjectId eagle-public routes on; `projectId` is the DEMI id that is the Cosmos partition key
   // and the id-space DEMI's own frontend compares against `Project.id`.
+  //
+  // Asserted once, for one mapper. There used to be a keywordless twin of this test because
+  // there used to be a keywordless mapper; both are gone with the Cosmos document read.
   await t.test('a document row carries the DEMI project id as well as the Eagle one', async () => {
     t.mock.method(aiSearch, 'searchDocuments', async () => ({
       count: 1,
@@ -1891,24 +1915,6 @@ test('the answer matches the request that was made', async (t) => {
     const [row] = out.body[0].searchResults;
     assert.strictEqual(row.projectId, '207', 'the DEMI id, which is the partition key');
     assert.strictEqual(row.project._id, '588511c4aaecd9001b826192', 'the Eagle id, for the link');
-  });
-
-  await t.test('the keywordless document rows carry it too', async () => {
-    t.mock.method(documentsRepo, 'listVisible', async () => ({
-      items: [{ id: 'doc1', displayName: 'Application', projectId: '207', read: ['public'] }]
-    }));
-    t.mock.method(documentsRepo, 'countVisible', async () => 1);
-    t.mock.method(projectsRepo, 'listByIds', async () => ([
-      { id: '207', name: 'Site C', eagleId: '588511c4aaecd9001b826192' }
-    ]));
-
-    const { out, res } = capture();
-    await searchController.search(
-      { query: { dataset: 'Document', keywords: '' }, header: () => null }, res);
-
-    const [row] = out.body[0].searchResults;
-    assert.strictEqual(row.projectId, '207');
-    assert.strictEqual(row.project._id, '588511c4aaecd9001b826192');
   });
 
   await t.test('a chunk row carries the DEMI project id as well as the Eagle one', async () => {

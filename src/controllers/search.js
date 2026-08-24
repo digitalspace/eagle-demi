@@ -288,9 +288,20 @@ exports.search = async (req, res) => {
     // million-row callers send no keywords AND no criteria (`storage.service.ts` and
     // `projects.component.ts` both call `getAllFull(1, 1000000)` with an empty `sortBy` twice over),
     // so they stay on the Cosmos list path and this guard still never sees them.
-    if ((keywords || criteria) && requestedPageSize > aiSearch.MAX_PAGE_ROWS) {
+    //
+    // `|| dataset === 'Document'` because the BARE document list is served by the index too now,
+    // so it inherits the ceiling with everything else on that path. Without this the request that
+    // used to be truncated at 1000 by Cosmos would be truncated at 500 by `runSearch`'s own `top`
+    // clamp instead — a smaller silent lie is still a silent lie. Those two million-row callers are
+    // `dataset=Project`, which keeps its Cosmos list path and is unaffected.
+    if ((keywords || criteria || dataset === 'Document') &&
+        requestedPageSize > aiSearch.MAX_PAGE_ROWS) {
       return res.status(400).json({
-        error: `pageSize above ${aiSearch.MAX_PAGE_ROWS} is not supported for a filtered or keyword search`
+        // Names the ceiling and WHO it applies to, because the two are no longer the same
+        // sentence: every document read is indexed now, so this fires for a request that carries
+        // neither a filter nor a keyword and would otherwise be told the wrong reason.
+        error: `pageSize above ${aiSearch.MAX_PAGE_ROWS} is not supported for ${
+          dataset === 'Document' ? 'a document search' : 'a filtered or keyword search'}`
       });
     }
 
@@ -763,156 +774,122 @@ exports.search = async (req, res) => {
         return res.status(502).json({ error: 'Project search is unavailable' });
       }
     } else if (dataset === 'Document') {
-      // Same rule as Project: keywords OR criteria are answered by the index. This is the branch
-      // the documents tab lands on — empty keywords, `and[milestone]=...`, `sortBy=-datePosted`
-      // (`documents-tab.component.ts:47-56,177-190`) — and the Cosmos read below could express
-      // neither, so it answered the whole corpus with a 200 and a log line nobody reads.
-      if (keywords || criteria) {
-        try {
-          const acl = filterFor(access);
-          // Projects are scoped on their own id; the same caller, a different index.
-          const projectScope = filterFor(access, 'id');
+      // EVERY document read is answered by the index — NOT the Project rule, and the difference is
+      // paging. There used to be a `keywords || criteria` gate here with a Cosmos list read under
+      // it, and `hasCriteria` deliberately excludes `project` (`eagle-query.js`), so
+      // `&project=<id>&pageSize=500` with no `sortBy` — the shape eagle-public's project tabs and
+      // DEMI's own registry send — landed on that read. It paged by overfetch-and-slice against a
+      // repository that clamps `maxItemCount` to 1000 (`_sql.js`), so every page past the first
+      // 1000 rows sliced past the end and came back EMPTY beside a full corpus count. Measured on
+      // staging before removal, one project of 2,488 documents at `pageSize=500`: pages 0-1 served
+      // 500 each, pages 2-4 served 0, 0, 0, and `count` said 2,488 the whole way. The same request
+      // with `sortBy=-datePosted` took the index and served 500/500/500/500/488. 9 of 348 projects
+      // on test are over 1000 documents and test is the smaller corpus.
+      //
+      // So the index is not a richer backend for the filtered case, it is the only one that can
+      // page this dataset at all. Cosmos is not a fallback under it: a search that FAILED is not a
+      // search that found nothing, and answering a 502 with an arbitrary page of the corpus is the
+      // failure the catch below exists to prevent.
+      //
+      // THE TRADE, NAMED: no document LIST is a live read any more, so a create, edit or unpublish
+      // shows up here only after the indexer's `PT5M` pass (`documents-indexer.json`, `_ts`
+      // high-water mark, and `setDocumentPublished` writes no index update of its own). That window
+      // already applied to every keyword and filtered read; what is new is that it now applies to
+      // the bare `&project=<id>` shape as well. It exposes LIST METADATA only — the ACL is still
+      // evaluated at the index by `filterFor(access)`, and the bytes stay behind a live Cosmos
+      // point read (`documents.getById` then `canRead`). An unpublish therefore hides the file
+      // immediately and the row up to five minutes later.
+      try {
+        const acl = filterFor(access);
+        // Projects are scoped on their own id; the same caller, a different index.
+        const projectScope = filterFor(access, 'id');
 
-          if (!acl.empty) {
-            const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
-            noteDropped('filter', dropped);
-            // See the Project branch: `Boolean(keywords)` is what lets DEFAULT_ORDER give a
-            // keywordless page a stable order instead of a constant relevance score.
-            const { orderby, dropped: sortDropped } =
-              eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords));
-            noteDropped('sort', sortDropped);
+        if (!acl.empty) {
+          const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
+          noteDropped('filter', dropped);
+          // See the Project branch: `Boolean(keywords)` is what lets DEFAULT_ORDER give a
+          // keywordless page a stable order instead of a constant relevance score.
+          const { orderby, dropped: sortDropped } =
+            eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords));
+          noteDropped('sort', sortDropped);
 
-            const { items, count } = await aiSearch.searchDocuments({
-              filter,
-              orderby,
-              // The SAME `skip` the keyword path uses — rows in the caller's own `pageSize`,
-              // computed once above. The Cosmos list below derives its own offset because it pages
-              // by overfetch-and-slice; re-deriving one here is how the two units drift apart.
-              skip,
-              // Passed so the project-name leg can run under the caller's project visibility.
-              // Undefined would disable that leg entirely; null legitimately means "unrestricted".
-              // The leg is skipped anyway under matchAll — a project-NAME match needs a name.
-              projectFilter: projectScope.empty ? undefined : projectScope.filter,
-              keywords,
-              // See the Project branch: no keywords means every row the filter admits.
-              matchAll: !keywords,
-              fuzzy,
-              top: pageSize
-            });
+          const { items, count } = await aiSearch.searchDocuments({
+            filter,
+            orderby,
+            // Rows in the caller's own `pageSize`, computed once above and shared with every
+            // other index read — one unit for the whole request.
+            //
+            // The ceiling here is the SERVICE's `$skip`, 100,000, and it is not close: 60,560
+            // documents at the 500-row page cap is a deepest skip of 60,000. Nothing enforces it
+            // in this file on purpose — a guard against a limit the corpus cannot reach is a guard
+            // nobody can test. It binds on ROWS, not pages: no page size makes row 100,001
+            // reachable, so revisit when the document count approaches 100,000.
+            skip,
+            // Passed so the project-name leg can run under the caller's project visibility.
+            // Undefined would disable that leg entirely; null legitimately means "unrestricted".
+            // The leg is skipped anyway under matchAll — a project-NAME match needs a name.
+            projectFilter: projectScope.empty ? undefined : projectScope.filter,
+            keywords,
+            // See the Project branch: no keywords means every row the filter admits.
+            matchAll: !keywords,
+            fuzzy,
+            top: pageSize
+          });
 
-            if (items.length > 0) {
-              const mappedDocs = items.map(doc => ({
-                // Already an Eagle ObjectId: documents are seeded keyed on it
-                // (`seed/transform.js:84-87`), which is what makes eagle-api's download URL
-                // `/api/public/document/{_id}/download/...` resolve.
-                _id: String(doc.id),
-                _schemaName: 'Document',
-                displayName: doc.displayName || 'Untitled Document',
-                documentFileName: doc.documentFileName || 'document.pdf',
-                documentType: doc.type || 'PDF Document',
-                // ~~No `type`/`milestone`/`projectPhase` ObjectIds.~~ There are now: the index
-                // carries them and the seed keeps them, so eagle-public's `idToList()` has
-                // something to resolve and its Type / Milestone / Date columns stop rendering '-'.
-                // Sent as the ids the frontend expects, NOT the labels beside them — a label is
-                // ambiguous across the 2002 and 2018 Acts (`Amendment` is two different List rows).
-                type: doc.typeId || null,
-                milestone: doc.milestoneId || null,
-                projectPhase: doc.projectPhaseId || null,
-                documentAuthorType: doc.documentAuthorTypeId || null,
-                datePosted: doc.datePosted || null,
-                project: String(doc.projectId || ''),
-                // The index carries no projectName — a Cosmos document row does not have one, and
-                // an indexer reads a single container. Both label and `{_id, name}` shape below.
-                projectName: 'Associated Project',
-                isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true,
-                description: doc.description || 'Official document extracted from central registry.',
-                // Pre-escaped display markup from the analyzer. Empty when the field itself is
-                // empty, in which case the frontend falls back to the default text above — that
-                // default is ours, not the user's, so there is nothing to highlight in it.
-                highlighted: doc.highlighted
-              }));
+          if (items.length > 0) {
+            const mappedDocs = items.map(doc => ({
+              // Already an Eagle ObjectId: documents are seeded keyed on it
+              // (`seed/transform.js:84-87`), which is what makes eagle-api's download URL
+              // `/api/public/document/{_id}/download/...` resolve.
+              _id: String(doc.id),
+              _schemaName: 'Document',
+              displayName: doc.displayName || 'Untitled Document',
+              // The deleted Cosmos mapper fell back to the basename of `s3Key` here. The index
+              // carries no `s3Key` and `DOCUMENT_SELECT` cannot ask for one, so restoring it would
+              // cost an index widening, a datasource edit and a refill. Measured before dropping
+              // it: 0 of 2,000 sampled documents render this placeholder, and the keyword path has
+              // answered this way all along.
+              documentFileName: doc.documentFileName || 'document.pdf',
+              documentType: doc.type || 'PDF Document',
+              // ~~No `type`/`milestone`/`projectPhase` ObjectIds.~~ There are now: the index
+              // carries them and the seed keeps them, so eagle-public's `idToList()` has
+              // something to resolve and its Type / Milestone / Date columns stop rendering '-'.
+              // Sent as the ids the frontend expects, NOT the labels beside them — a label is
+              // ambiguous across the 2002 and 2018 Acts (`Amendment` is two different List rows).
+              type: doc.typeId || null,
+              milestone: doc.milestoneId || null,
+              projectPhase: doc.projectPhaseId || null,
+              documentAuthorType: doc.documentAuthorTypeId || null,
+              datePosted: doc.datePosted || null,
+              project: String(doc.projectId || ''),
+              // The index carries no projectName — a Cosmos document row does not have one, and
+              // an indexer reads a single container. Both label and `{_id, name}` shape below.
+              projectName: 'Associated Project',
+              isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true,
+              description: doc.description || 'Official document extracted from central registry.',
+              // Pre-escaped display markup from the analyzer. Empty when the field itself is
+              // empty, in which case the frontend falls back to the default text above — that
+              // default is ours, not the user's, so there is nothing to highlight in it.
+              highlighted: doc.highlighted
+            }));
 
-              await labelWithProjectNames(access, mappedDocs);
+            await labelWithProjectNames(access, mappedDocs);
 
-              return res.json([{ searchResults: mappedDocs, count }]);
-            }
-
-            // See the project branch: no rows is an answer, and `count` is what distinguishes an
-            // empty corpus from a page past the end of a large one.
-            return res.json([{ searchResults: [], count }]);
+            return res.json([{ searchResults: mappedDocs, count }]);
           }
 
-          // Scoped to nothing: 0 is measured, not assumed.
-          return res.json([{ searchResults: [], count: 0 }]);
-        } catch (err) {
-          // Same rule as the project branch, same reason: the fall-through to the keywordless
-          // Cosmos read answered a FAILED keyword search with an arbitrary page of the corpus.
-          logger.error(`[search] document search failed: ${err.message}`);
-          return res.status(502).json({ error: 'Document search is unavailable' });
+          // See the project branch: no rows is an answer, and `count` is what distinguishes an
+          // empty corpus from a page past the end of a large one.
+          return res.json([{ searchResults: [], count }]);
         }
-      }
 
-      // Cosmos DB Fallback & Direct Search
-      try {
-        // THE RESOLVED PROJECT IDS, applied. `filterQuery` carries them already translated from
-        // Eagle ObjectIds (`resolveProjectFilter`), and this path used to drop them on the floor:
-        // a request for one project's documents was answered with the whole corpus AND a
-        // corpus-wide total — the exact failure `resolveProjectFilter`'s docstring warns about,
-        // landing on the branch where the project WAS resolvable rather than the one where it was
-        // not. `projectId` is the container's partition key, so one id turns this into a
-        // single-partition read; the repository takes a list because `project=a,b` is one request.
-        const demiProjectIds = eagleQuery.projectIdsFrom(filterQuery);
-
-        // NOTHING IS DROPPED ON THIS PATH ANY MORE, so nothing is reported. `project` is applied
-        // just above, and every other filter key — and every real sort key — is criteria, which
-        // routed to the index before ever reaching here. The report that used to sit here named
-        // the keys this route had silently ignored; they are honoured now, and a report that can
-        // never fire is a comment pretending to be a check.
-
-        // Same overfetch-and-slice paging as the project list above, same 1000-row ceiling.
-        const cosmosSkip = pageNum * pageSize;
-        const { items: docPage } = await documentsRepo.listVisible(access, {
-          projectId: demiProjectIds,
-          pageSize: cosmosSkip + pageSize
-        });
-        const docs = cosmosSkip > 0 ? docPage.slice(cosmosSkip) : docPage;
-        // Unconditional, and under the SAME project scope as the read — see the project list for
-        // why the `pageNum` condition had to go. A count built from a wider predicate than the read
-        // would report the whole corpus as the size of one project's document list.
-        const count = await documentsRepo.countVisible(access, { projectId: demiProjectIds });
-
-        // `projectId`, not the Mongo-era `project` — the NoSQL row's partition key. Reading the
-        // old field name would leave every result unlinked to a project and unlabelled below,
-        // which looks like missing data rather than a wrong field.
-        const mappedDocs = docs.map(d => ({
-          _id: String(d.id),
-          _schemaName: 'Document',
-          displayName: d.displayName || 'Untitled Document',
-          documentFileName: d.documentFileName || (d.s3Key ? d.s3Key.split('/').pop() : 'document.pdf'),
-          documentType: d.type || 'PDF Document',
-          // Same five as the AI Search branch above, and for the same reason — the Cosmos row
-          // carries them since the backfill. Two mappers answering the same dataset must not
-          // disagree about which columns exist, or a filter changes what a row renders.
-          type: d.typeId || null,
-          milestone: d.milestoneId || null,
-          projectPhase: d.projectPhaseId || null,
-          documentAuthorType: d.documentAuthorTypeId || null,
-          datePosted: d.datePosted || null,
-          project: String(d.projectId || ''),
-          projectName: 'Associated Project',
-          // Report the record's real publication state, not a hardcoded 'public'.
-          isPublished: Array.isArray(d.read) ? d.read.includes('public') : d.isPublished === true,
-          description: d.description || 'Official document extracted from central registry.'
-        }));
-
-        // Label the results the same way the AI Search branch does, under the CALLER's access.
-        // The Mongo path left every row reading 'Associated Project'; that difference is exactly
-        // how a silent degradation to the fallback stayed invisible.
-        await labelWithProjectNames(access, mappedDocs);
-
-        return res.json([{ searchResults: mappedDocs, count }]);
-      } catch (cosmosErr) {
-        logger.error(`[search] document list failed: ${cosmosErr.message}`);
+        // Scoped to nothing: 0 is measured, not assumed.
+        return res.json([{ searchResults: [], count: 0 }]);
+      } catch (err) {
+        // Same rule as the project branch: a search that failed is not a search that found
+        // nothing. There is nothing to fall through to now — the Cosmos list read this used to
+        // sit above is gone — so the failure is reported as one.
+        logger.error(`[search] document search failed: ${err.message}`);
         return res.status(502).json({ error: 'Document search is unavailable' });
       }
     } else if (dataset === 'DocumentChunk') {

@@ -576,12 +576,14 @@ function sortEntries(sortBy) {
  * criteria therefore goes to AI Search, where both can be expressed, and only a BARE list stays on
  * Cosmos.
  *
- * `project` IS DELIBERATELY NOT CRITERIA. It is the documents container's partition key and the
- * Cosmos read already applies it (`documentsRepo.listVisible({projectId})`), so it is honoured
- * there rather than dropped — and `&project=<id>&pageSize=500` with no sort is the shape DEMI's own
- * frontend and eagle-public's project tabs send, which is the best-covered path in this file. Where
- * an index genuinely cannot express it — the `projects` index has no project axis — `buildFilter`
- * still reports it as dropped.
+ * `project` IS DELIBERATELY NOT CRITERIA, and this is now a PROJECT-DATASET test only. The
+ * `Document` branch no longer consults it at all: every document read goes to the index, because
+ * `&project=<id>&pageSize=500` with no sort — the shape DEMI's own frontend and eagle-public's
+ * project tabs send — is exactly the request the Cosmos read could not page past its 1000-row
+ * clamp, and it answered pages 3+ of a 2,488-document project with zero rows and a full count.
+ * The `projects` list read stays on Cosmos (382 rows fit one page, and its keywordless callers ask
+ * for a million rows outright), so `project` stays out of the test for its sake: the `projects`
+ * index has no project axis, and `buildFilter` reports it dropped there.
  */
 function hasCriteria(query) {
   if (filterKeysIn(query).some(key => key !== 'project')) return true;
