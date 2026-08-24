@@ -1,6 +1,7 @@
 # TODO
 
-**Goal: prod — eagle-public on Azure, served by demi-api, prod data Eagle + Track only.** Every
+**Goal: prod — eagle-public on Azure, served by demi-api, prod data Eagle + Track only — and
+eagle-search + eagle-public OpenShift dev/test decommissioned (§5; prod kept as switch-back).** Every
 item below gates that or is explicitly parked. The demo frontend (`/map`, `/search`, `/summary`,
 `/intake`) and its enrichment sources (wildfire, boundaries) are TEST-ONLY: supported there, never
 deployed to prod. Inventory of every source and surface, one state each: wiki
@@ -56,9 +57,10 @@ gone — nothing below points at an archive.
 
 | Gate | Items |
 |---|---|
-| Nothing — next PR | 3.1 wildfire shape + dead-container Bicep; 3.2 `ENRICHMENT_SOURCES`; 3.6 nrpti sweep |
-| Daniel decides | 2.1 re-seed source; 2.2 budget; 2.3 proponentId; 2.4 anonymous surface; 3.4 old-index delete |
-| Needs SSH tunnel | 3.3 index widening; 3.4; 3.5 |
+| Nothing — do it | 3.6 small items; 5.1 leftovers; 5.3 preview releases |
+| Daniel decides | 2.1 re-seed source; 2.2 budget; 2.3 proponentId; 2.4 anonymous surface |
+| Needs SSH tunnel | 3.3 index widening; 3.5 |
+| Daniel decides | 5.1 retire dev whole or keep pod; 5.3 when the AFD rollback can go |
 | Someone else / long-lead | 1.1, 1.2 rotations at source; 4.1 prod role assignments; 4.4/4.5 eao-nginx + eagle-public prod tags; `demi.eao.gov.bc.ca` DNS; Track feed credential |
 | After the re-seed (2.1) | 3.3 analyzer + `isFeatured`/`documentSource`; a fully green differ; 3.7(d) reconcile |
 
@@ -73,7 +75,7 @@ gone — nothing below points at an archive.
       `deploy-to-prod.yaml:138-139`.
 - [ ] **1.3 Rotate `ADMIN_API_KEY`** (value passed through the 2026-08-13 incident and every
       `probe-acl.js` run since). Three targets, rotate all before restarting anything or the
-      extractor 401s: `demi-app-secrets` (6cdc9e-test, writable now), App Service (blocked, fact 5),
+      extractor 401s: `demi-app-secrets` (6cdc9e-test, writable now), App Service (`az` works again),
       `gpu-extractor.env` on the GPU box (`192.168.5.109` not answering 2026-08-24). Then restart
       `gpu-extractor` and `gpu-ingest`.
 - ACL probe exists and passes: `ADMIN_API_KEY=… node src/scripts/probe-acl.js`, ~7 min, 26/26 on
@@ -108,7 +110,8 @@ gone — nothing below points at an archive.
 
 ## 3. Test hardening
 
-- [ ] **3.1 Wildfire panel — repair to the real shape, keep on-demand.** Frontend-owned, one PR:
+- [x] ~~**3.1 Wildfire panel — repair to the real shape, keep on-demand.**~~ #152, merged
+      2026-08-24 (`a3e30cf`), reviewer PASS. Kept for the contract note below. Frontend-owned, one PR:
       `map-explorer.component.html:577-578` reads `activeCountWithin50km` and
       `firesOfNoteNearby > 0`, renders `lastCalculatedAt` ("as of …"), hides the panel when
       `sources.wildfire` is absent (prod rows); delete the `rawMetadata.wildfireData` fallback (no
@@ -120,7 +123,8 @@ gone — nothing below points at an archive.
       - Contract for any future enrichment source lives in wiki `Sources-and-Status` — a script
         writing `sources.<name>`, on-demand admin route, consumer renders the stamp and handles
         absence, one test that write shape == read shape. No adapter layer. NRPTI stays gone.
-- [ ] **3.2 Prod purity: `ENRICHMENT_SOURCES` app setting** feeding the `publicView` allowlist
+- [x] ~~**3.2 Prod purity: `ENRICHMENT_SOURCES` app setting**~~ #152; setting live on
+      `demi-api-test` 2026-08-24, wildfire still served through it. Prod: leave unset. feeding the `publicView` allowlist
       (`src/repositories/projects.js:168`). Test `wildfire`, prod empty. One line; makes 4.2's corpus
       copy safe (stale wildfire stats stripped at read). **Merge order:** CI deploys code only, app
       settings are a hand PUT — set `ENRICHMENT_SOURCES=wildfire` on `demi-api-test` BEFORE merging
@@ -141,21 +145,17 @@ gone — nothing below points at an archive.
         `searchChunks` keeps chunk text out of responses.
       - Rebuild rule (`azure/search/README.md`): add field / `retrievable` = no rebuild; rename,
         type, `searchable`/`filterable`/`sortable`/`facetable`, analyzer = drop-and-refill.
-- [ ] **3.4 Delete the old `demi-*` indexes + indexers — Daniel decides, recommended DELETE in the
-      3.3 session.** Not blocked on a prod soak (none has a date or criterion). The `chunks`
-      container is the real safety net; the index is refillable. Rollback value already rotted once
-      (`demi-projects` 12 vs 20 fields, would have 502'd anonymous project search). Keeping costs 6
-      indexers on `PT5M` (double Cosmos RU), ~8.5 of Basic's 15 GB, and every 3.3 change applied
-      twice by hand.
+- [x] ~~**3.4 Delete the old `demi-*` indexes + indexers.**~~ Done 2026-08-24 over the tunnel:
+      grant Search Service Contributor at service scope, `DELETE` 3 indexers then 3 indexes, revoke,
+      verify identity back to exactly Search Index Data Contributor. `demi-*-ds` data sources kept.
+      Live search re-probed: 3 datasets answer. Rollback is now refill-from-Cosmos
+      (`azure/search/README.md`). Two traps: the App Service redeploy on merge kills the SSH tunnel
+      mid-run, and `pkill -f ssh` on this box kills the caller's own shell.
 - [ ] **3.5 Denormalised `projectIsPublished` on documents** — lossless design, covers cascade
       partial failure; #139 removed the urgency. Traps: datasource SELECT first; `filterFor` third
       arg opt-in (missing OData field = 400); predicate and cascade-removal in the SAME release.
       Backfill first, or ship `(NOT IS_DEFINED(c.projectIsPublished) OR c.projectIsPublished = true)`.
 - [ ] **3.6 Small, bundle opportunistically:**
-      - Sweep 9 leftover `nrpti` mentions (comments/fixtures: `repositories/projects.js:145`,
-        `test/seed/seed-nosql.test.js:32`, `test/helpers/access-coverage.test.js:44`,
-        `test/helpers/registry-key-auth.test.js:47,64`, `test/controllers/nosql-controllers.test.js:83,103`,
-        `test/routes/db_auth.test.js:66,73`). Keep removed-route assertions.
       - Trim 15-25 line comment blocks on the way past — `src/controllers/search.js` worst. A
         comment is the non-obvious why in a line or two; anything longer is a wiki page.
       - `basicPublishingCredentialsPolicies allow=false` is declared (#146) not applied — takes a
@@ -211,7 +211,65 @@ Deploy source is a tag verified on test. Assumes §1-3 landed and soaked.
       table + console line). Chunk search has no public UI route — exercise the endpoint directly.
       Result links 404 for documents the target Mongo lacks until corpora align.
 
-## 5. Needs a human in a browser
+## 5. Decommission eagle-search and eagle-public in OpenShift dev + test
+
+Goal added 2026-08-24. **Prod stays** (`6cdc9e-prod`, `eagle-search-api-prod`, `demi-search-prod`
+`eagle-*` indexes) as the emergency switch back to `/eagle-search`; retired later under §4.
+Inventory measured 2026-08-24 via `oc --context epic-dev|epic-test` and live headers.
+
+**Where each env serves from today**
+- dev: `SEARCH_API_PATH: ""` (Mongo fallback), rproxy `NGINX__EPIC__PROXY__ROOT=http://eagle-public:8080`
+  — the OpenShift pod IS the dev site. `SEARCH`/`DEMI` proxy vars point at `localhost:9999` by
+  design. No eagle-search workload in dev at all.
+- test: `SEARCH_API_PATH: /demi-search` (demi-api), rproxy `ROOT` = AFD
+  `eagle-public-test-dbg8ghh8gjd0bscx.a02.azurefd.net` (`x-azure-ref` on every page). The 2/2
+  `eagle-public` pod is the documented AFD rollback target. `NGINX__EPIC__PROXY__SEARCH` still
+  points at `eagle-search-api-test.azurewebsites.net`, which **serves zero traffic**; its only
+  writer is `deploy/eagle-search-sync` + `CronJob/eagle-search-reindex` (Helm release
+  `eagle-search` rev 9, only those two objects).
+
+- [ ] **5.1 dev: delete eagle-public (blocked on a decision about dev itself).** Dev has no Azure
+      estate (torn down 2026-08-11), so deleting `deploy/eagle-public` (Helm rev 117) kills
+      `eagle-dev.apps…/` unless dev is retired whole or rproxy `ROOT` is repointed at the test AFD
+      host. Decide: retire dev entirely (eagle-admin-dev/eagle-api-dev/eagle-public-dev orphans, 37d,
+      ArgoCD tracking-ids with no Application, exist too) or keep dev on the pod. Leftovers to
+      delete regardless: `secret/eagle-search-extract-queue` (referenced by nothing),
+      `ImageStream/eagle-public` (last push 3 years ago).
+- [ ] **5.2 test: retire eagle-search worker + Azure app.** Order: `helm uninstall eagle-search -n
+      6cdc9e-test` (sync + reindex CronJob); delete `BuildConfig/eagle-search`,
+      `ImageStream/eagle-search`, `secret/eagle-search-ingest`, 9 `eagle-search-{7,8,9}-*` build
+      ConfigMaps + completed build pods; disable `deploy-staging-worker.yaml` and
+      `deploy-staging-api.yaml` in `digitalspace/eagle-search`. Azure RETIRE set in
+      `eagle-search/azure/main.bicep`: `modules/ai-search.bicep` (`eagle-search-test` +
+      `pe-eagle-search-test` + role assignment), `modules/api-web-app.bicep`
+      (`eagle-search-api-test`), `azure/search/indexes/**`, and `modules/extractor.bicep`
+      (`eagle-extractor-test`, `eagle-extractor-plan-test`, storage `eaglextrtestvymaysch2agd` —
+      measured: `INGEST_URL` = eagle-search-api-test, Function state None, both queues empty).
+      Then set rproxy `NGINX__EPIC__PROXY__SEARCH` to the `localhost:9999` sentinel and delete the
+      `/eagle-search/` location once prod no longer needs the template
+      (`eao-nginx/conf.d/server.conf.tmpl` is shared with prod — flag-gate, do not delete).
+- [ ] **5.3 test: retire eagle-public pods.** Delete the three preview releases first
+      (`eagle-public-feat-azure-hosting-mainline`, `-feat-typesense-angular21`,
+      `-hotfix-pcp-engage`, plus stale `Service/epic-public`, 2y172d, no workload) — nothing routes
+      through rproxy to them. The main `eagle-public` (Helm rev 70) goes only after the AFD path has
+      been the sole path long enough to drop the rollback: then `helm uninstall eagle-public`,
+      its 3 NetworkPolicies, and `NGINX__EPIC__PROXY__PUBLIC` (unused by any nginx location).
+      Keep `Route/eagle-public` (`/` → `rproxy:8080-tcp`) — it holds the Keycloak-registered host.
+      Disable `deploy-to-test.yaml` + `preview-branch-in-test.yaml` in `bcgov/eagle-public`.
+- [ ] **5.4 Move the shared edge out of the eagle-search repo BEFORE 5.2's Bicep goes.**
+      `eagle-search/azure/main.bicep` also creates what survives: Front Door profile
+      `eagle-edge-test` (endpoints `eagle-public-test`, `demi-frontend-test`, rule sets
+      `spafallback`/`securityheaders`), static site storage `eaglepubtestvymaysch2agd` (`$web` —
+      this IS eagle-public on Azure), UAMI `eagle-search-identity-test` (misnamed, everything
+      hangs off it; its prod twin holds Search Index Data Contributor on DEMI's search service),
+      `eagle-search-logs-test` / `-insights-test`. New home: eagle-public's Azure workflows exist
+      only on branch `feat/azure-hosting-mainline`, not `develop` — land them first. Retire = a
+      subset of the template, never the template.
+- [ ] **5.5 Prod (later, not now).** Same sequence once §4.8 soak passes: `eagle-search-api-prod`,
+      `eagle-search-prod` (idle, 39 MB), `eagle-*` indexes on `demi-search-prod`, the prod worker,
+      `deploy-prod-worker.yaml`. `eagle-public` prod pods are the AFD rollback (3 replicas) until then.
+
+## 6. Needs a human in a browser
 
 - Summariser (staff Keycloak login, `/summary` on the AFD host).
 - Scoped tier end to end: `project:<id>` role on a test user, confirm the filter narrows.
@@ -219,7 +277,7 @@ Deploy source is a tag verified on test. Assumes §1-3 landed and soaked.
 - Server-side highlighting (windowed fragments joined by ellipses).
 - `/map` wildfire panel after 3.1 — non-zero counts, "as of" date.
 
-## 6. Deferred, with the reason
+## 7. Deferred, with the reason
 
 - `pageNumber` citations: nothing cites; needs host + wire + API + re-extraction; ~1,496 PDFs 404.
 - Intake-cleaner backfill: intake-only by design; ride the next re-extraction.
@@ -237,7 +295,7 @@ Deploy source is a tag verified on test. Assumes §1-3 landed and soaked.
 - NRPTI: removed `952f5de` 2026-08-07. Stays gone; prod is Eagle + Track only.
 - Scheduler for wildfire sync: only if a consumer needs freshness.
 
-## 7. Standing rules — do not re-derive
+## 8. Standing rules — do not re-derive
 
 - **A probe that cannot fail proves nothing.** Every corpus row is public; only synthetic rows
   discriminate ACL behaviour. Take a BEFORE reading; use nonsense terms to detect fallback.

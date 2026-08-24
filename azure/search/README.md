@@ -26,37 +26,12 @@ An index name is immutable, so the rename was a create-and-refill, staged over t
 definitions and code defaults first, then the apply script, then the `SEARCH_INDEX*` flip once the
 new indexes matched their Cosmos totals (393 / 60,578 / 1,128,733).
 
-**The `demi-*` indexes still exist and their indexers are still running.** They are the rollback
-target: flipping the three `SEARCH_INDEX*` settings back is the whole rollback, with no refill,
-because those indexers never stopped. Do not delete them until the new names have soaked.
-
-**They have NO committed definition file, so every widening has to be applied to them by hand too,
-or the rollback target rots silently.** It already had: measured 2026-08-23, `demi-projects` still
-carried **12** fields against `projects`' **20** — it was never widened during the rename. Eight
-fields were missing: `ceaaInvolvementId`, `currentPhaseName`, `currentPhaseNameId`, `decisionDate`,
-`eacDecision`, `eacDecisionId`, `type` and **`sourceSystem`**.
-
-**That last one is the difference between a degraded rollback and a broken one, so the line above
-about flipping three settings being "the whole rollback" was not true while it was missing.**
-`src/controllers/search.js` appends `sourceSystem eq 'track'` to the filter of every project search
-that is not `includeSeeded=true`; filtering on a field the index does not have is a 400, and by this
-file's own rule a 400 reaches anonymous callers as a **502**. The other seven lose columns; this one
-takes anonymous project search down. Fixed 2026-08-23 — `demi-projects` is now 20 fields with its
-indexer reset and refilled — but the lesson is that the rollback target has to be widened in the
-same session, not eventually.
-
-`apply-search-definitions.js` cannot do it (`--only` resolves by committed name), so it is a hand PUT
-with the name rewritten:
-
-```bash
-jq '.name = "demi-projects"' indexes/projects.json > /tmp/idx.json
-# PUT {endpoint}/indexes/demi-projects?api-version=2024-07-01   body /tmp/idx.json
-```
-
-Then reset and run `demi-projects-indexer` the same way, or its new columns stay `null` and the
-rollback is a 200-with-no-rows instead of a working index. The data sources are shared, so the
-data-source PUT in **"Adding a field"** below covers both indexers at once — that one is not
-doubled.
+**The `demi-*` indexes and indexers were DELETED 2026-08-24** (Search Service Contributor granted
+to the app identity at service scope, deleted over the tunnel, grant revoked, identity verified back
+to Search Index Data Contributor only). Rollback is no longer a settings flip: it is a refill from
+Cosmos with `apply-search-definitions.js --live` + indexer run. The three `demi-*-ds` data sources
+stay — they name Cosmos containers and the live indexers use them. Keeping the old set had doubled
+every hand PUT and already rotted once (`demi-projects` 12 vs 20 fields).
 
 The staged history — all three steps are DONE. Past tense on purpose: the rollback walks it
 backwards, so the reader doing that needs to know what each step did.
@@ -75,8 +50,7 @@ backwards, so the reader doing that needs to know what each step did.
    refuses and what to do instead.
 3. **The three defaults were flipped** and the template deployed, which is the cutover itself.
    Deploying `api-web-app.bicep` is therefore no longer a no-op: those defaults are what land in the
-   live app settings. Rolling back is flipping them back and deploying again — no data step, because
-   the `demi-*` indexers never stopped.
+   live app settings. Rolling back now means refilling under the old names first (they no longer exist).
 
 `src/search/eagle-query.js`'s `DATASET_INDEX` is the one thing that moves in step 1 rather than
 step 3: it is a **schema** lookup naming which file in `indexes/` to read field types from, never a
