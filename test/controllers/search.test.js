@@ -638,7 +638,14 @@ test('Search Controller Tests', async (t) => {
       // The caller's own access, not a system one — a name must not out-rank the row it labels.
       t.mock.method(documentsRepo, 'listByIds', async (access) => {
         assert.strictEqual(access.tier, 'public');
-        return [{ id: 'd1', displayName: 'Application', documentFileName: 'app.pdf', type: 'Application' }];
+        return [{
+          id: 'd1', displayName: 'Application', documentFileName: 'app.pdf', type: 'Application',
+          // The two chip columns. Present here because the mapper below must be shown to READ
+          // them: it builds its row field by field and does not spread the parent, so widening
+          // the repository projection alone is a change nothing on the wire can see.
+          milestone: 'Other', milestoneId: '5d0d212c7d50161b92a80eed',
+          datePosted: '2018-07-31T06:40:37.626Z'
+        }];
       });
       t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
 
@@ -658,6 +665,12 @@ test('Search Controller Tests', async (t) => {
       assert.strictEqual(sent.fuzzy, true);
 
       const [hit] = jsonResponse[0].searchResults;
+      // THE CHIPS, and specifically that `milestone` is the LABEL. The chunk card renders it raw
+      // (`content-result.component.html:13`) and has no `idToList`, so shipping the ObjectId here
+      // puts `5d0d212c7d50161b92a80eed` on screen. Prod emits both, and so do we.
+      assert.strictEqual(hit.milestone, 'Other', 'the chip renders this string directly');
+      assert.strictEqual(hit.milestoneId, '5d0d212c7d50161b92a80eed');
+      assert.strictEqual(hit.datePosted, '2018-07-31T06:40:37.626Z');
       // GROUPED BY DOCUMENT since 2026-08-23, so `_id` is the DOCUMENT id — eagle-public's content
       // card builds its download URL from it (`content-result.component.ts:36-39`) and a chunk id
       // there is a link that 404s. The chunk's own id is kept beside it rather than dropped.
@@ -1219,9 +1232,18 @@ test('the eagle-public response contract', async (t) => {
 
   // Dropping an unresolvable project filter would answer the WHOLE corpus to a request that asked
   // for one project's documents — the same failure as forgetting the filter entirely.
-  await t.test('an unknown project filter returns no rows rather than every row', async () => {
-    let searched = false;
-    t.mock.method(aiSearch, 'searchDocuments', async () => { searched = true; return { count: 9, items: [] }; });
+  await t.test('an unresolved project filter is QUERIED as a literal, never dropped', async () => {
+    // The requirement is unchanged — a project filter naming something unknown must not answer the
+    // whole corpus — but the mechanism is. This used to short-circuit to `count: 0` without
+    // querying, which was right while every ObjectId-shaped id in DEMI belonged to a project. It
+    // stopped being right when the seed began admitting documents parented by a ProjectNotification:
+    // that `_id` is ObjectId-shaped, has no project row, and IS the partition its documents live
+    // under, so refusing to query it emptied the Project Notifications tab by construction.
+    //
+    // What actually prevents the widening is the id reaching the filter. Assert THAT, not the
+    // absence of a request — an unmatched literal answers nothing on its own.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => { sent = opts; return { count: 0, items: [] }; });
     t.mock.method(projectsRepo, 'getByEagleId', async () => null);
 
     const { out, res } = capture();
@@ -1231,7 +1253,10 @@ test('the eagle-public response contract', async (t) => {
     }, res);
 
     assert.deepStrictEqual(out.body[0].searchResults, []);
-    assert.strictEqual(searched, false, 'no request may be issued for a project nobody can name');
+    assert.ok(sent, 'the request is now issued: an unresolved id may still name a real partition');
+    const scope = JSON.stringify(sent);
+    assert.ok(scope.includes('588511c4aaecd9001b826192'),
+      `the caller's own id must survive into the query, or the filter widens: ${scope}`);
   });
 
   // `search-document-table-rows.component.html:8-10` binds rowData.project.name and

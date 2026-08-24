@@ -85,14 +85,24 @@ const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
  * requests that carry a project filter. A cached map would add a staleness window on a container
  * the Track sync writes to, in exchange for one query per filtered request.
  *
- * @returns {{query: object, resolved: boolean}} resolved false = the caller named a project that
- *   does not exist or that they may not read. The route must answer with NO rows: dropping an
- *   unresolvable project filter would answer the whole corpus to a request that asked for one
- *   project's documents.
+ * AN UNRESOLVED OBJECTID IS PASSED THROUGH AS A LITERAL, not refused. It used to return
+ * `resolved: false` and the route answered `count: 0` without querying anything — which was right
+ * while every ObjectId-shaped id in DEMI belonged to a project, and became wrong the moment the
+ * seed started admitting documents parented by a **ProjectNotification**. A notification `_id` is
+ * ObjectId-shaped by construction and has no project row, so the short-circuit made the Project
+ * Notifications tab answer 0 rows however well the seed ran. eagle-public sends that `_id` as the
+ * `project` filter and there is nothing to translate it into — the notification id IS the partition
+ * key those documents are stored under.
+ *
+ * Passing it through is safe in the direction that matters: a literal id matching nothing answers
+ * nothing. What the old refusal was guarding against is DROPPING the key, which would widen to the
+ * whole corpus — and that is not what happens here, because the id still goes into the filter.
+ *
+ * @returns {object} the query with every project id in DEMI's id space.
  */
 async function resolveProjectFilter(access, query) {
   const requested = eagleQuery.projectIdsFrom(query);
-  if (requested.length === 0) return { query, resolved: true };
+  if (requested.length === 0) return query;
 
   const demiIds = [];
   for (const id of requested) {
@@ -101,11 +111,13 @@ async function resolveProjectFilter(access, query) {
       continue;
     }
     const project = await projectsRepo.getByEagleId(access, id);
-    if (!project) return { query, resolved: false };
-    demiIds.push(String(project.id));
+    // No project row: keep the caller's own id. Either it is a ProjectNotification `_id` — a real
+    // partition holding real documents — or it is a project that does not exist or that this caller
+    // may not read, in which case a literal that matches nothing is exactly the right answer.
+    demiIds.push(project ? String(project.id) : id);
   }
 
-  return { query: eagleQuery.withProjectIds(query, demiIds), resolved: true };
+  return eagleQuery.withProjectIds(query, demiIds);
 }
 
 exports.search = async (req, res) => {
@@ -125,7 +137,26 @@ exports.search = async (req, res) => {
     // parameter stays ACCEPTED — dropping it from unknownParams' list would 400 every saved URL —
     // it simply no longer decides anything.
     const fuzzy = true;
-    const requestedPageSize = parseInt(req.query.pageSize || '10', 10);
+    // THREE bad shapes, one expression, because they all end in the same place — a number this
+    // endpoint never validated being handed to something that trusted it.
+    //
+    //   `pageSize=abc` parses to NaN, `Math.min(NaN, 5000)` is NaN, and NaN travelled into the
+    //     repository's own page size. Measured against test: 348 rows, the entire visible corpus,
+    //     where `pageSize=10` answers 10.
+    //   `pageSize=0` is a page of no rows, which is not a request anyone means.
+    //   `pageSize=-1` is the one the first pass missed. It is a NUMBER, so `|| 10` never fires and
+    //     `Math.min(-1, 5000)` is -1; measured, `pageSize=-5&pageNum=3` reached Azure AI Search as
+    //     `{top: -5, skip: -15}`, and the `requestedPageSize > MAX_PAGE_ROWS` refusal below cannot
+    //     fire on a negative. `Math.max(1, ...)` is the whole fix and it belongs here rather than
+    //     at each consumer, which is how the first two got through.
+    //
+    // All three land on the SAME default an absent value does, which is the only default this
+    // endpoint documents. One comparison covers all of them because `NaN >= 1` is false — which is
+    // why this is a comparison and not `Math.max(1, ... || 10)`: that form clamps -1 to a ONE-row
+    // page instead of the default, quietly inventing a fourth behaviour for the shape it was added
+    // to fix.
+    const parsedPageSize = parseInt(req.query.pageSize, 10);
+    const requestedPageSize = parsedPageSize >= 1 ? parsedPageSize : 10;
     const pageSize = Math.min(requestedPageSize, 5000);
 
     // A parameter this endpoint does not read is refused, not ignored. `page=2` for `pageNum=1`,
@@ -185,6 +216,26 @@ exports.search = async (req, res) => {
     // between were served twice. Reachable from eagle-public's "Show All" (500), which is why the
     // cap now bounds a REFUSAL above and never the offset.
     const skip = pageNum * pageSize;
+
+    // EVERY KEY THIS REQUEST COULD NOT EXPRESS, told to the caller and not only to the log.
+    //
+    // The comments that justify dropping a key rather than answering 400 — eagle-query.js:114-129
+    // and :481-493 — rest on the drop being visible: "the log and the caller can see it". Only the
+    // log could. `reportDropped` writes a `logger.warn` and the response carried nothing, so a
+    // caller whose whole filter was discarded got a 200 and a plausible full-corpus page with no
+    // signal at all: measured, `and[proponent]=<ObjectId>` on Project answers `pageSize` rows with
+    // `searchResultsTotal: 348` — the unfiltered corpus, indistinguishable from a filter that
+    // matched everything.
+    //
+    // Accumulated here rather than at each branch because the meta object is built once, in the
+    // response wrapper below. `noteDropped` also keeps the log line and the response fact from
+    // drifting apart: a future branch that reports one now reports both, or neither.
+    const droppedKeys = { filter: [], sort: [] };
+    const noteDropped = (kind, keys) => {
+      if (!keys || !keys.length) return;
+      eagleQuery.reportDropped(dataset, kind, keys);
+      droppedKeys[kind].push(...keys);
+    };
 
     // Usage analytics AND the eagle envelope, applied once by wrapping the response rather than at
     // each exit — this handler has a dozen `return res.json(...)` points and a call at every one of
@@ -246,7 +297,21 @@ exports.search = async (req, res) => {
           // for a document count.
           ...(dataset === 'DocumentChunk'
             ? { countsPassages: true, documentsOnPage: first.searchResults.length }
-            : {})
+            : {}),
+          // OMITTED when nothing was dropped, which is the rule every key beside it already
+          // follows: `searchResultsTotal` is absent when no total was measured and `countsPassages`
+          // is absent where passages are not what is counted. An empty array on every response
+          // would be the same fact told in a way that trains a reader to stop looking at it.
+          //
+          // ONE key and ONE shape for all three datasets: a caller tests `meta[0].dropped` and, if
+          // it is there, reads `.filter` and `.sort` — both always present inside it, because a
+          // discarded SORT and a discarded FILTER are different injuries. A dropped filter widened
+          // the result set; a dropped sort left the caller reading an arbitrary order believing it
+          // is the one they asked for. Flattening the two into one array would say neither.
+          //
+          // ADDITIVE. Nothing here is removed or renamed — eagle-public pages off
+          // `searchResultsTotal` and a missing key breaks its pager.
+          ...(droppedKeys.filter.length || droppedKeys.sort.length ? { dropped: droppedKeys } : {})
         }];
       }
       return sendJson(payload);
@@ -254,12 +319,7 @@ exports.search = async (req, res) => {
 
     // Project filters arrive as Eagle ObjectIds and the indexes hold DEMI project ids. Resolved
     // once for every dataset, before any filter is built, because the translation is a read.
-    const { query: filterQuery, resolved } = await resolveProjectFilter(access, req.query);
-    if (!resolved) {
-      // `count: 0` is a MEASUREMENT here, not a synthesis: the caller named a project that does not
-      // exist or that they may not read, so no row can match it and nothing was left unqueried.
-      return res.json([{ searchResults: [], count: 0 }]);
-    }
+    const filterQuery = await resolveProjectFilter(access, req.query);
 
     if (dataset === 'Project') {
       // ONE definition, read by BOTH branches below. The two must never disagree about which
@@ -281,7 +341,7 @@ exports.search = async (req, res) => {
             // The caller's `and[...]` filters COMPOSED WITH the ACL clause, never instead of it —
             // buildFilter takes the whole `filterFor` result and refuses to run without it.
             const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
-            eagleQuery.reportDropped(dataset, 'filter', dropped);
+            noteDropped('filter', dropped);
 
             // PROVENANCE, the same predicate the Cosmos branch applies through `trackOnly` at
             // `repositories/projects.js:32` — and it belongs here because without it this route
@@ -313,7 +373,7 @@ exports.search = async (req, res) => {
             // exists for.
             const { orderby, dropped: sortDropped } =
               eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords));
-            eagleQuery.reportDropped(dataset, 'sort', sortDropped);
+            noteDropped('sort', sortDropped);
 
             // `count` is the index-wide total, not the page. The frontend shows it so a column
             // header stops reporting `pageSize` as though it were the number of matches, and
@@ -473,7 +533,7 @@ exports.search = async (req, res) => {
         // is criteria, so it never reaches this path to be ignored. What stays reachable is
         // `sortBy=&sortBy=` from eagle-public's double append, and there is nothing in that to
         // report as dropped.
-        eagleQuery.reportDropped(dataset, 'filter', eagleQuery.filterKeysIn(req.query));
+        noteDropped('filter', eagleQuery.filterKeysIn(req.query));
 
         const cosmosSkip = pageNum * pageSize;
         const { items: page } = await projectsRepo.listVisible(access, {
@@ -540,6 +600,22 @@ exports.search = async (req, res) => {
           // no second place to get the [lng, lat] orientation wrong.
           centroid: geoPoint(p.centroid),
           region: p.region || 'British Columbia',
+          // `location` on the wire, `address` at rest. The merge renames Eagle's `location` to
+          // `address` on the way in (`merge/project.js:40`) and `GET /api/projects/1` returns it
+          // intact, so the value has been stored and simply never read back: eagle-public's map
+          // popup renders "Location: -" and the marker hover tooltip renders the literal string
+          // "null" for every one of the 348 projects. Renamed back here rather than at rest — the
+          // stored name is the one the Track merge and the indexer both already use.
+          //
+          // THE COSMOS BRANCH ONLY, deliberately. `address` is not a column of the `projects` index
+          // (`azure/search/indexes/projects.json`), so the AI Search branch above cannot emit it
+          // without a new field and a full reindex — a separate change with a separate cost. Until
+          // that ships the two mappers disagree about this ONE column, which is the hazard the note
+          // on the document mappers below names; the disagreement is bounded to `location` and it
+          // renders as a dash on a keyword search where a bare list renders the address. Emitting
+          // an always-empty `location` from the index branch to make them agree would be worse: a
+          // dash that says "this project has no address" instead of "this page did not ask Cosmos".
+          location: p.address || '',
           description: p.description || 'No project description provided.',
           proponent: { name: p.proponent?.name || p.proponentName || 'Proponent Organization' },
           // COSMOS FIELD NAMES again, for the reason the block above gives: the indexer aliases
@@ -583,12 +659,12 @@ exports.search = async (req, res) => {
 
           if (!acl.empty) {
             const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
-            eagleQuery.reportDropped(dataset, 'filter', dropped);
+            noteDropped('filter', dropped);
             // See the Project branch: `Boolean(keywords)` is what lets DEFAULT_ORDER give a
             // keywordless page a stable order instead of a constant relevance score.
             const { orderby, dropped: sortDropped } =
               eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords));
-            eagleQuery.reportDropped(dataset, 'sort', sortDropped);
+            noteDropped('sort', sortDropped);
 
             const { items, count } = await aiSearch.searchDocuments({
               filter,
@@ -748,7 +824,25 @@ exports.search = async (req, res) => {
         }
 
         const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
-        eagleQuery.reportDropped(dataset, 'filter', dropped);
+        noteDropped('filter', dropped);
+
+        // A `sortBy` that REACHES THIS LINE is always dropped, and now it says so. No `$orderby` is
+        // sent below — every field in `chunks` is `sortable: false` — so the caller's sort could
+        // only ever be discarded, and this was the one place that discarded one without telling
+        // anyone, log included. Left silent it would make the new `dropped` key lie by omission:
+        // absent reads as "nothing was dropped", which is the false reassurance it exists to end.
+        //
+        // NOT every request, and the exception is worth naming rather than glossing: the keywordless
+        // return above fires FIRST, so `dataset=DocumentChunk&keywords=&sortBy=datePosted` answers
+        // `{searchResultsTotal: 0, countsPassages: true, documentsOnPage: 0}` with no `dropped` key
+        // at all. That is defensible — nothing was searched, so nothing was sorted — but it means
+        // "absent" carries two meanings on this one path, and a reader who only saw this paragraph
+        // would conclude otherwise.
+        //
+        // `buildOrderBy` is called for its drop list and nothing else. With no sortable field, no
+        // `DEFAULT_ORDER` entry for this dataset and no `id` tiebreak, it has nothing to return as
+        // an `orderby` — so there is no result here to ignore, only one to report.
+        noteDropped('sort', eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords)).dropped);
 
         // A PAGE OF DOCUMENTS COSTS A WINDOW OF CHUNKS. Rows are grouped by parent document below,
         // so `pageSize` chunks would yield far fewer than `pageSize` documents — measured on the
@@ -840,6 +934,20 @@ exports.search = async (req, res) => {
             documentName:
               (parent && (parent.displayName || parent.documentFileName)) || 'Untitled Document',
             documentType: (parent && parent.type) || 'PDF Document',
+            // The date and milestone chips, from the SAME parent this mapper already holds — the
+            // chunks index carries neither, and adding them there would mean denormalising document
+            // metadata onto 1,128,733 rows to render two chips.
+            //
+            // WITHOUT THESE TWO LINES the widened `listByIds` projection and the grouping mapper
+            // that reads them are both dead: this mapper builds its row field by field and does not
+            // spread `parent`, so a column nobody names here never reaches `groupByDocument`.
+            //
+            // `milestone` is the LABEL and `milestoneId` the id, which is prod's shape and is NOT
+            // the Document dataset's — see the paragraph in `group-chunks.js` for why the chunk
+            // card is the one consumer that resolves neither.
+            milestone: (parent && parent.milestone) || null,
+            milestoneId: (parent && parent.milestoneId) || null,
+            datePosted: (parent && parent.datePosted) || null,
             pageNumber: chunk.pageNumber ?? 0,
             // Empty by design: `content` is not retrievable from the index, so the API never
             // ships whole chunks. The UI renders `snippet` and only falls back to `content`
@@ -949,15 +1057,40 @@ exports.summarize = async (req, res) => {
     // keeps whole chunks out of a search response now is the `select` list, not retrievability.
     // The point read below stays for the OTHER reason, which is the load-bearing one:
     // `getById` takes the caller's access and re-applies the ACL at the database. The search filter
-    // above already excluded anything unreadable; this is the second of two load-bearing gates, not
-    // a belt-and-braces one, and a null here means the row moved out of reach between the two reads.
-    const fetched = await Promise.all(
-      items.map(c => chunksRepo.getById(access, String(c.chunkId), String(c.documentId)))
-    );
+    // above already excluded anything unreadable; this is the second of THREE load-bearing gates,
+    // not a belt-and-braces one, and a null here means the row moved out of reach between the two
+    // reads.
+    //
+    // Read ALONGSIDE the parent documents, which are the third. Neither gate above is that one.
+    // THE SAME GATE THE CHUNK SEARCH PATH APPLIES, and it was missing here. Both reads that
+    // precede it — the AI Search `filter` and `chunksRepo.getById` — evaluate the CHUNK's own
+    // `read[]`, and that is a snapshot taken at ingest: DEMI cascades a document's ACL onto its
+    // chunks only on unpublish and by overwrite (`controllers/nosql/project.js:186-207`), so a
+    // chunk can outlive its parent's visibility. On the search path that stale row is withheld by
+    // `docById.has(...)`; here it was retrieved, its full `content` handed to the model, and
+    // paraphrased back to the caller — with only the citation LABEL falling back to 'Untitled
+    // Document', which reads as a cosmetic miss rather than as a disclosure.
+    //
+    // This is worth more here than on the search path, not less: a <mark> fragment discloses a
+    // phrase, a synthesised cross-chunk answer discloses substance. The route is behind
+    // `authMiddleware` today, so nothing is leaking to the public — which is the reason to close it
+    // now, before passive auth is ever considered for it, and not the reason to leave it open.
+    //
+    // Adds no latency: `listByIds` is the read the citations were already hydrated from below,
+    // moved ahead of the model call and widened from the cited chunks to all of them, and it now
+    // runs in parallel with the chunk point reads instead of serially after the model. One extra
+    // REQUEST does happen in one case — a response the model cites nothing from used to skip this
+    // read entirely — which is why this says latency rather than round trips. It is ACL-enforcing
+    // and unbounded (`fetchAll`), so a miss means DENIED, not truncated.
+    const [fetched, parentDocs] = await Promise.all([
+      Promise.all(items.map(c => chunksRepo.getById(access, String(c.chunkId), String(c.documentId)))),
+      documentsRepo.listByIds(access, items.map(c => c.documentId), items.map(c => c.projectId))
+    ]);
+    const docById = new Map(parentDocs.map(d => [String(d.id), d]));
 
     const chunks = items
       .map((item, i) => ({ item, row: fetched[i] }))
-      .filter(({ row }) => row && row.content)
+      .filter(({ item, row }) => row && row.content && docById.has(String(item.documentId)))
       .map(({ item, row }) => ({
         chunkId: String(item.chunkId),
         documentId: String(item.documentId || ''),
@@ -966,21 +1099,37 @@ exports.summarize = async (req, res) => {
         content: row.content
       }));
 
+    // Logged for the same reason the chunk-SEARCH path logs it (`[search] withheld chunks whose
+    // parent document is not visible`). A gate that is silent on one path and noisy on the other is
+    // how this gap survived on the search side for as long as it did: the cascade that keeps a
+    // chunk's own `read[]` in step with its document runs only on unpublish and overwrites rather
+    // than intersecting, so a withheld count here is the visible symptom of a stale ACL and not
+    // merely a quiet ACL working.
+    //
+    // `row.content` being empty also lands in this count. That is a different cause with the same
+    // remedy — look at the chunk — so it is not worth two log lines, but do not read a non-zero
+    // withheld as proof of an ACL problem on its own.
+    if (chunks.length !== items.length) {
+      logger.warn('[search/summary] withheld chunks whose parent document is not visible or whose text is empty', {
+        withheld: items.length - chunks.length, returned: chunks.length
+      });
+    }
+
     const { summary, citations, reason, usage, estimatedCostCad } =
       await summarizer.summarize(keywords, chunks);
 
     // Hydrate ONLY the chunks the model actually cited — at most a handful, and usually fewer than
-    // were sent. Two bounded reads under the CALLER's access, never systemAccess(): a name is a
+    // were sent. One bounded read under the CALLER's access, never systemAccess(): a name is a
     // disclosure about the row it describes, so it must not outlive the ACL that governs the row.
-    // Same pair of calls the chunk-search branch makes above.
+    //
+    // ONE read and not two now: the documents are already in `docById`, read above under the same
+    // access to gate the chunks. A cited chunk cannot miss that map — a chunk whose parent was
+    // unreadable never reached the model — so the 'Untitled Document' fallback below is no longer
+    // reachable on this path and stays only as the same defensive default the search path uses.
     const cited = citations.map(i => chunks[i]);
-    const [citedDocs, citedProjects] = cited.length > 0
-      ? await Promise.all([
-        documentsRepo.listByIds(access, cited.map(c => c.documentId), cited.map(c => c.projectId)),
-        projectsRepo.listByIds(access, cited.map(c => c.projectId))
-      ])
-      : [[], []];
-    const docById = new Map(citedDocs.map(d => [String(d.id), d]));
+    const citedProjects = cited.length > 0
+      ? await projectsRepo.listByIds(access, cited.map(c => c.projectId))
+      : [];
     const projById = new Map(citedProjects.map(p => [String(p.id), p]));
 
     return res.json({
