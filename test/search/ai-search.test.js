@@ -373,19 +373,18 @@ test('ai-search request shape', async (t) => {
 // eagle-public there was one page and made every later page unreachable. A status code cannot see
 // it and neither can the row count; the returned total is the only place it shows.
 test('ai-search document totals', async (t) => {
-  // Probe shape from the review: 3 direct matches, one matching project, 500 documents under it.
-  const legs = (overlap) => (i) => {
+  // Probe shape from the review: 3 direct matches, one matching project, and 500 documents under
+  // that project which the direct leg did NOT match — leg two's filter excludes those, so its
+  // count is already net of the intersection and there is no fourth request to go and measure one.
+  const legs = (i) => {
     if (i === 0) return { json: { value: [{ id: 'd1' }, { id: 'd2' }, { id: 'd3' }], '@odata.count': 3 } };
     if (i === 1) return { json: { value: [{ id: '207' }], '@odata.count': 1 } };
-    if (i === 2) {
-      return {
-        json: {
-          value: Array.from({ length: 6 }, (_, n) => ({ id: `p${n}` })),
-          '@odata.count': 500
-        }
-      };
-    }
-    return { json: { value: [], '@odata.count': overlap } };
+    return {
+      json: {
+        value: Array.from({ length: 6 }, (_, n) => ({ id: `p${n}` })),
+        '@odata.count': 500
+      }
+    };
   };
 
   // [R3] WHAT LEG TWO MEANS WITH NO KEYWORDS: nothing. It recovers documents whose PROJECT's NAME
@@ -431,30 +430,69 @@ test('ai-search document totals', async (t) => {
       assert.strictEqual(res.count, 1);
     });
 
-  await t.test('the total spans both legs, net of what they share', async (tt) => {
-    const calls = captureFetch(tt, legs(2));
+  await t.test('the total spans both legs', async (tt) => {
+    const calls = captureFetch(tt, legs);
 
     const res = await aiSearch.searchDocuments({
       filter: null, projectFilter: null, keywords: 'ajax', top: 10
     });
 
-    assert.strictEqual(res.count, 501, '3 direct + 500 by project - 2 in both');
+    assert.strictEqual(res.count, 503, '3 direct + the 500 the direct leg did not match');
     assert.strictEqual(res.items.length, 9, 'and the page is still a page');
-    assert.strictEqual(calls.length, 4, 'direct, projects, by-project, overlap');
+    assert.strictEqual(calls.length, 3, 'direct, projects, by-project — and no overlap probe');
   });
 
-  // Both legs match the same documents for a project-shaped query — for "Ajax", nearly all 199
-  // direct hits are inside the 850. Summing without the intersection would offer ~30% more pages
-  // than exist, every one of them empty.
-  await t.test('the shared documents are subtracted, not counted twice', async (tt) => {
-    captureFetch(tt, legs(3));
-    const res = await aiSearch.searchDocuments({
-      filter: null, projectFilter: null, keywords: 'ajax', top: 10
+  // The legs must not double-count, and — see the paging test below — their ROWS must not overlap
+  // either. Both follow from one clause: leg two is asked only for the documents the direct leg
+  // did not match, using the direct leg's OWN query string and its own fields. Anything less than
+  // byte-for-byte identical and the two stop being complements.
+  await t.test('leg two excludes the direct leg by its own query, and still applies the ACL',
+    async (tt) => {
+      const calls = captureFetch(tt, legs);
+
+      await aiSearch.searchDocuments({
+        filter: 'isPublished eq true', projectFilter: null, keywords: 'ajax', fuzzy: true, top: 10
+      });
+
+      const clause = `not search.ismatch('${calls[0].body.search}', ` +
+        "'displayName,documentFileName,description', 'full', 'any')";
+      assert.ok(calls[2].body.filter.includes(clause),
+        `leg two must exclude exactly what leg one matched, got: ${calls[2].body.filter}`);
+      assert.ok(calls[2].body.filter.startsWith('(isPublished eq true) and '),
+        'and the caller ACL still gates it — a project match never widens document access');
     });
-    assert.strictEqual(res.count, 500, 'every direct hit was already inside the project leg');
+
+  // `opts.fuzzy === true`, never `opts.fuzzy`, and the strictness is the whole assertion. The wire
+  // value is a STRING: under the truthy form `fuzzy: 'false'` enables fuzzing, which is the exact
+  // opposite of what the caller asked for — and it would show up only as leg two excluding a
+  // WIDER set than leg one matched, i.e. as documents missing from the page, not as an error.
+  await t.test('leg two fuzzes only on a real boolean true, never on the string "false"',
+    async (tt) => {
+      const calls = captureFetch(tt, legs);
+      await aiSearch.searchDocuments({
+        filter: null, projectFilter: null, keywords: 'ajax', fuzzy: 'false', top: 10
+      });
+      // Leg one is built from the same expression, so the two must agree — comparing them is what
+      // makes this independent of how `buildQuery` happens to spell a fuzzy term.
+      assert.ok(calls[2].body.filter.includes(`not search.ismatch('${calls[0].body.search}'`),
+        `the string "false" must not fuzz leg two while leg one stays exact: ${calls[2].body.filter}`);
+      assert.ok(!calls[0].body.search.includes('~'),
+        `the string "false" must not fuzz leg one either, got: ${calls[0].body.search}`);
+    });
+
+  await t.test('leg two fuzzes when the caller really did pass true', async (tt) => {
+    // The other half, without which the assertion above is satisfied by never fuzzing at all.
+    const calls = captureFetch(tt, legs);
+    await aiSearch.searchDocuments({
+      filter: null, projectFilter: null, keywords: 'ajax', fuzzy: true, top: 10
+    });
+    assert.ok(calls[0].body.search.includes('~'),
+      `a boolean true must fuzz, got: ${calls[0].body.search}`);
+    assert.ok(calls[2].body.filter.includes(`not search.ismatch('${calls[0].body.search}'`),
+      'and leg two must exclude the fuzzed set, not the exact one');
   });
 
-  // The count legs run even when the direct hits already fill the page. Skipping them there made
+  // The count leg runs even when the direct hits already fill the page. Skipping it there made
   // the total jump the moment a caller reached the last page of direct hits — a pager that grows
   // under the user is the same defect wearing a different hat.
   await t.test('a full page of direct hits still measures the project leg', async (tt) => {
@@ -468,8 +506,7 @@ test('ai-search document totals', async (t) => {
         };
       }
       if (i === 1) return { json: { value: [{ id: '207' }], '@odata.count': 1 } };
-      if (i === 2) return { json: { value: [{ id: 'other' }], '@odata.count': 2267 } };
-      return { json: { value: [], '@odata.count': 700 } };
+      return { json: { value: [{ id: 'other' }], '@odata.count': 1496 } };
     });
 
     const res = await aiSearch.searchDocuments({
@@ -477,66 +514,121 @@ test('ai-search document totals', async (t) => {
     });
 
     assert.strictEqual(res.items.length, 3, 'the page was already full');
-    assert.strictEqual(res.count, 771 + 2267 - 700);
+    // The measured "pipeline" numbers: 771 documents match on their own metadata and 2,267 once
+    // the project name counts too, so 1,496 belong to the project leg alone.
+    assert.strictEqual(res.count, 2267);
     assert.strictEqual(calls[2].body.top, 1,
       'the row-less leg asks for one row: the count is what it is for');
   });
 });
 
-// Leg two is deduped against leg one and the legs overlap by construction, so a request sized to
-// the DEFICIT (`top - items.length`) is sized against a yield that only exists after dedup: every
-// deduped row left a hole. The status cannot see it and neither can the total — only the ROW COUNT
-// of the returned page can, which is what these assert, at 0%, ~66% and 100% overlap.
-test('ai-search document page fill', async (t) => {
-  // 20 documents in the matching project, 3 direct hits, `top=10`. `dupes` is how many of the
-  // direct hits are also inside the project leg's own ordering — the overlap ratio.
-  const project = (dupes) => {
-    const head = ['d0', 'd1', 'd2'].slice(0, dupes);
-    const rest = Array.from({ length: 20 - dupes }, (_, n) => ({ id: `p${n}` }));
-    return [...head.map(id => ({ id })), ...rest];
+// THE PAGING INVARIANT: consecutive pages cover consecutive ranges of the union, with no row
+// repeated and none skipped. It was measurably false on the live app until leg two stopped
+// overlapping leg one — `keywords=pattullo` at pageSize=10, pages 0-25: 260 slots holding 197
+// distinct ids, 63 repeats spread over 13 non-adjacent pages, and 53 of the 250 matching documents
+// unreachable from any page, against prod eagle-search's 260 distinct and 0 repeats over the same
+// 26 pages. A single page cannot show any of that. Only a walk can, so these tests walk.
+test('ai-search document paging', async (t) => {
+  const DIRECT = Array.from({ length: 12 }, (_, n) => `d${String(n).padStart(2, '0')}`);
+  // The first six direct hits are ALSO inside the matching project, which is the normal case
+  // rather than a contrived one: a document whose own name matches a project-shaped query usually
+  // sits in that project. That overlap is precisely what used to break the offsets.
+  const SHARED = DIRECT.slice(0, 6);
+  const PROJECT_ONLY = Array.from({ length: 18 }, (_, n) => `p${String(n).padStart(2, '0')}`);
+  // The known full set the walk is measured against: leg one in its order, then what leg two adds.
+  const UNION = [...DIRECT, ...PROJECT_ONLY];
+
+  // A fake index, not a fixed slab: it honours `skip` and `top`, and it honours the exclusion
+  // clause. Asked WITH `not search.ismatch(...)` the project leg answers the project's documents
+  // minus the direct matches; asked without it — which is what this code did before the fix — it
+  // answers all of them, direct hits included, and its count says so. Modelling the service rather
+  // than the code is what lets these assertions go red.
+  const index = ({ body, url }) => {
+    let rows;
+    if (url.includes('/indexes/projects/')) rows = ['prj1'];
+    else if (body.search !== '*') {
+      // The direct leg — or, before the fix, the count-only probe for the intersection, which was
+      // the same query narrowed to the project scope.
+      rows = /search\.in\(projectId/.test(body.filter || '') ? SHARED : DIRECT;
+    } else {
+      rows = /not search\.ismatch\(/.test(body.filter || '')
+        ? PROJECT_ONLY
+        : [...SHARED, ...PROJECT_ONLY];
+    }
+    const skip = body.skip || 0;
+    return {
+      json: {
+        value: rows.slice(skip, skip + body.top).map(id => ({ id })),
+        '@odata.count': rows.length
+      }
+    };
   };
 
-  const page = async (tt, dupes) => {
+  await t.test('walking every page returns every match exactly once', async (tt) => {
     let calls;
-    calls = captureFetch(tt, (i) => {
-      if (i === 0) {
-        return { json: { value: [{ id: 'd0' }, { id: 'd1' }, { id: 'd2' }], '@odata.count': 3 } };
-      }
-      if (i === 1) return { json: { value: [{ id: '207' }], '@odata.count': 1 } };
-      if (i === 2) {
-        // The service honours `top`. Answering with a fixed slab instead would hide the defect:
-        // the whole bug is that leg two was ASKED for too few rows.
-        const rows = project(dupes).slice(0, calls[i].body.top);
-        return { json: { value: rows, '@odata.count': 20 } };
-      }
-      return { json: { value: [], '@odata.count': dupes } };
-    });
+    calls = captureFetch(tt, (i) => index(calls[i]));
+
+    const pageSize = 5;
+    const walked = [];
+    const totals = [];
+    for (let pageNum = 0; pageNum * pageSize < UNION.length; pageNum++) {
+      const res = await aiSearch.searchDocuments({
+        filter: null, projectFilter: null, keywords: 'pattullo',
+        top: pageSize, skip: pageNum * pageSize
+      });
+      totals.push(res.count);
+      assert.strictEqual(res.items.length, pageSize, `page ${pageNum} came back short`);
+      walked.push(...res.items.map(d => d.id));
+    }
+
+    // No overlap: a repeated id means two pages covered the same range.
+    const repeats = walked.filter((id, i) => walked.indexOf(id) !== i);
+    assert.deepStrictEqual(repeats, [], 'no document may appear on two pages');
+    // No gap: anything missing here is a match no page of the pager can reach.
+    assert.deepStrictEqual([...walked].sort(), [...UNION].sort(),
+      'every match must be reachable from some page');
+    // Asserted last because it is the supporting fact, not the invariant: a total the pager
+    // divides into page numbers is useless if the pages themselves do not tile the result set.
+    assert.deepStrictEqual(totals, Array(6).fill(30), 'the total must not move under the pager');
+  });
+
+  // The invariant has to hold for a caller that jumps — eagle-public's pager links straight to a
+  // page number, and there is no cross-request state in this layer to carry a `seen` set anyway.
+  await t.test('a page fetched on its own is the page the walk would have given', async (tt) => {
+    let calls;
+    calls = captureFetch(tt, (i) => index(calls[i]));
 
     const res = await aiSearch.searchDocuments({
-      filter: null, projectFilter: null, keywords: 'ajax', top: 10
+      filter: null, projectFilter: null, keywords: 'pattullo', top: 5, skip: 15
     });
-    return { res, calls };
-  };
 
-  await t.test('no overlap: the page is full', async (tt) => {
-    const { res } = await page(tt, 0);
-    assert.strictEqual(res.items.length, 10);
-    assert.strictEqual(res.count, 3 + 20 - 0);
+    assert.deepStrictEqual(res.items.map(d => d.id), UNION.slice(15, 20));
+    assert.strictEqual(calls.length, 3, 'three service calls per page: direct, projects, project leg');
   });
 
-  await t.test('partial overlap: the deduped rows do not become holes', async (tt) => {
-    const { res } = await page(tt, 2);
-    assert.strictEqual(res.items.length, 10, '2 of the 3 direct hits were also in the project leg');
-    assert.strictEqual(res.count, 3 + 20 - 2);
-  });
+  // Leg two used to be asked for the WHOLE page because dedup would eat some of the rows. With
+  // nothing left to eat, the deficit is exactly what the page takes — and the page still fills,
+  // which is the assertion the old sizing bug (a 7-row page under a total of 20) failed.
+  await t.test('leg two is asked for the deficit, and the page still fills', async (tt) => {
+    let calls;
+    calls = captureFetch(tt, (i) => index(calls[i]));
 
-  await t.test('total overlap: still a full page, from one leg-two request', async (tt) => {
-    const { res, calls } = await page(tt, 3);
-    assert.strictEqual(res.items.length, 10, 'every direct hit was also in the project leg');
-    assert.strictEqual(res.count, 3 + 20 - 3);
-    // The bound: one search per leg plus the count-only overlap probe. Refilling until the page
-    // was full would have made the overlap ratio a request multiplier.
-    assert.strictEqual(calls.length, 4, 'direct, projects, by-project, overlap');
+    const res = await aiSearch.searchDocuments({
+      filter: null, projectFilter: null, keywords: 'pattullo', top: 20, orderby: 'datePosted desc'
+    });
+
+    assert.strictEqual(calls[2].body.top, 8, '12 direct hits of a 20-row page leaves 8');
+    // THE SHARPEST ASSERTION IN THIS FILE, and it was missing. The disjoint-legs skip arithmetic
+    // presupposes leg two returns rows in a deterministic order: without the caller's `orderby`,
+    // ties under `search.score()` are free to move between requests, and the repeated-and-
+    // unreachable-rows defect this whole change closes comes straight back — intermittently, which
+    // is worse than reliably. Deleting `orderby: opts.orderby` from leg two used to leave the
+    // entire suite green.
+    assert.strictEqual(calls[2].body.orderby, 'datePosted desc',
+      'leg two must page in the caller\'s order, or its ties move between requests');
+    assert.strictEqual(res.items.length, 20);
+    assert.deepStrictEqual(res.items.map(d => d.id), UNION.slice(0, 20));
+    assert.strictEqual(res.count, 30);
   });
 });
 
@@ -1140,4 +1232,80 @@ test('the service page cap stays inside the page-assembly cap', () => {
   assert.ok(aiSearch.SERVICE_MAX_TOP <= aiSearch.MAX_PAGE_ROWS,
     `SERVICE_MAX_TOP ${aiSearch.SERVICE_MAX_TOP} must not exceed MAX_PAGE_ROWS ${aiSearch.MAX_PAGE_ROWS}`);
   assert.strictEqual(aiSearch.SERVICE_MAX_TOP, 250, 'the chunk window is a multiple of this');
+});
+
+/**
+ * `documentIdsMatching` — the resolver behind chunk-metadata filters.
+ *
+ * It had no test at all. Every reference to it in `test/` was a `t.mock.method` stub, so the five
+ * controller tests that look like cap coverage were asserting the CONTROLLER's handling of a
+ * hand-supplied `{ids, total, withinCap}` and exercising none of the code that decides it. Deleting
+ * the over-cap guard outright left the whole 1,042-test suite green, and a cap set above what one
+ * request can return truncated every real filter to a 500-id prefix and reported it as applied.
+ *
+ * These stub `fetch`, not the function.
+ */
+test('ai-search document id resolution', async (t) => {
+  const page = (n, count) => ({
+    json: { value: Array.from({ length: n }, (_, i) => ({ id: `doc${i}` })), '@odata.count': count }
+  });
+
+  await t.test('a match set within the cap comes back whole', async (tt) => {
+    const calls = captureFetch(tt, () => page(3, 3));
+    const res = await aiSearch.documentIdsMatching("type eq 'x'");
+
+    assert.deepStrictEqual(res.ids, ['doc0', 'doc1', 'doc2']);
+    assert.strictEqual(res.total, 3);
+    assert.strictEqual(res.withinCap, true);
+    // `matchAll` with no keywords: the caller's terms belong to the CHUNK query, not this one.
+    assert.strictEqual(calls[0].body.search, '*');
+    assert.strictEqual(calls[0].body.select, 'id');
+    assert.strictEqual(calls[0].body.filter, "type eq 'x'");
+  });
+
+  await t.test('a match set over the cap yields NO ids, not a prefix', async (tt) => {
+    // The measured defect: a `type` filter matching 2,911 documents scoped the chunk query to 500
+    // of them — 17.2% coverage — and reported the filter as applied. Returning a prefix at all is
+    // the failure; the caller cannot tell it from a complete answer.
+    captureFetch(tt, () => page(aiSearch.DOCUMENT_SCOPE_CAP + 1, 2911));
+    const res = await aiSearch.documentIdsMatching("type eq 'x'");
+
+    assert.strictEqual(res.withinCap, false);
+    assert.deepStrictEqual(res.ids, [], 'an arbitrary prefix is worse than nothing here');
+    assert.strictEqual(res.total, 2911);
+  });
+
+  await t.test('a full page with NO count is over the cap too', async (tt) => {
+    // The count is authoritative when present. When it is missing the old fallback was
+    // `ids.length`, which for a truncated page reports the truncation as the whole match set —
+    // the same defect arriving through the error path instead of the happy one.
+    captureFetch(tt, () => ({
+      json: { value: Array.from({ length: aiSearch.DOCUMENT_SCOPE_CAP + 1 }, (_, i) => ({ id: `d${i}` })) }
+    }));
+    const res = await aiSearch.documentIdsMatching("type eq 'x'");
+    assert.strictEqual(res.withinCap, false);
+    assert.deepStrictEqual(res.ids, []);
+  });
+
+  await t.test('the cap cannot exceed what one request returns', () => {
+    // The two numbers drifted once and nothing noticed: `runSearch` clamps `top` to MAX_PAGE_ROWS,
+    // so a cap above it is unreachable by construction and every match set between them is
+    // silently truncated. Derived rather than chosen now, and pinned so it stays derived.
+    assert.ok(aiSearch.DOCUMENT_SCOPE_CAP < aiSearch.SERVICE_MAX_TOP,
+      `cap ${aiSearch.DOCUMENT_SCOPE_CAP} must be under SERVICE_MAX_TOP ${aiSearch.SERVICE_MAX_TOP}`);
+  });
+
+  await t.test('it asks for one more than the cap, across however many requests that takes', async (tt) => {
+    // Asserted as the SUM and the CALL COUNT together, because the two are the whole design: the
+    // cap is `SERVICE_MAX_TOP - 1` precisely so that `cap + 1` fits in one request. At the previous
+    // cap of 499 this took two calls and then discarded all 500 rows to conclude "too many" — on
+    // every filter measured on prod, since all of them are over the cap.
+    const calls = captureFetch(tt, () => page(250, 600));
+    await aiSearch.documentIdsMatching("type eq 'x'");
+    const asked = calls.reduce((n, c) => n + c.body.top, 0);
+    assert.strictEqual(asked, aiSearch.DOCUMENT_SCOPE_CAP + 1,
+      `the resolver must ask for cap + 1 in total, got ${asked} across ${calls.length} request(s)`);
+    assert.strictEqual(calls.length, 1,
+      'cap + 1 must fit one request, or every over-cap filter pays for rows it throws away');
+  });
 });

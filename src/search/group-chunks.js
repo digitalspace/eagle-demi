@@ -108,6 +108,26 @@ function groupByDocument(rows) {
         projectName: row.projectName,
         documentName: row.documentName,
         documentType: row.documentType,
+        // The date and milestone chips. Both are the PARENT document's — a chunk row has neither —
+        // so they arrive from the same parent lookup that supplied `documentName`.
+        //
+        // `milestone` IS THE LABEL HERE, NOT THE ID, and a chunk row is the one place that is true.
+        // The Document dataset emits the ObjectId under this name because every component that
+        // renders a Document row resolves it through `idToList()`. The chunk card does not:
+        // `eagle-public/src/app/search/content-result/content-result.component.html:13` binds
+        // `{{result().milestone}}` raw, and ContentResultComponent has no `lists` input and no
+        // `idToList` method — the three components that do are all Document tables. So an id under
+        // this key would render `5cf00c03a266b7e1877504ca` in the chip.
+        //
+        // Prod is the tiebreak and it emits BOTH: a chunk row there carries
+        // `milestone: 'Other'` alongside `milestoneId: '5d0d212c7d50161b92a80eed'`. Matching that
+        // shape costs one column and removes the choice.
+        //
+        // `|| null` for the same reason the Document mappers do it: the key is always present, so
+        // an absent value reads as "this document has none" rather than as a missing field.
+        milestone: row.milestone || null,
+        milestoneId: row.milestoneId || null,
+        datePosted: row.datePosted || null,
         pageNumber: row.pageNumber,
         content: '',
         snippet: row.snippet || '',

@@ -93,7 +93,41 @@ const SERVICE_MAX_TOP = 250;
  * large total is a page the caller never learns they did not receive, which is the whole defect
  * this constant exists to close.
  */
+
+
 const MAX_PAGE_ROWS = 500;
+
+/**
+ * How many document ids a chunk query may be scoped to before the filter is treated as
+ * inexpressible.
+ *
+ * DERIVED FROM `MAX_PAGE_ROWS`, NOT CHOSEN, because it cannot exceed what one request yields and a
+ * second number here can silently stop agreeing with the first. It did: this was set to 20,000 on
+ * the reasoning that `search.in` handles large lists and a POST body has room. True, and irrelevant
+ * — `runSearch` clamps `top` to `MAX_PAGE_ROWS`, so the resolver could never return more than 500
+ * ids no matter what this said. A filter matching 501 to 20,000 documents was then truncated to an
+ * arbitrary 500-id prefix and reported to the caller as APPLIED: measured on the branch's own
+ * figure, a `type` filter matching 2,911 documents scoped the chunk query to 500 of them, 17.2%
+ * coverage, with `meta.dropped` absent. Exactly what the docblock below forbids.
+ *
+ * `SERVICE_MAX_TOP - 1`, not `MAX_PAGE_ROWS - 1`, so the whole thing is ONE service request.
+ * `runSearch` fills anything over `SERVICE_MAX_TOP` with a second request, so a cap of 499 meant
+ * asking for 500 rows across two calls and — on every filter measured on prod, since all of them
+ * are over the cap — throwing all 500 away to conclude "too many". Two calls to learn a number the
+ * first one already carried in `@odata.count`. At 249 the answer arrives in one call either way,
+ * and nothing real is lost: no corpus-wide filter fits under 499 either, and the project-scoped
+ * sets this actually serves are a handful of documents.
+ *
+ * WHAT THIS COSTS, stated plainly because it is the honest limit of the two-query design: measured
+ * against prod, the narrowest document-type filter in the corpus matches 2,911 documents,
+ * `projectPhase` 1,425, `milestone` 36,471. Every one of them is over this cap, so today the
+ * resolver reports the filter as inexpressible rather than applying it. That is a real improvement
+ * — a silently unfiltered answer becomes an explicitly unfiltered one the caller can see — but it
+ * is NOT parity with prod. Reaching parity needs either paging this query (about six sequential
+ * service calls for `type`, on a Basic 1-SU service, on every debounced keystroke) or denormalising
+ * document metadata onto 1,128,733 chunk rows. Both are decisions, not follow-ups.
+ */
+const DOCUMENT_SCOPE_CAP = SERVICE_MAX_TOP - 1;
 
 let tokenCache = null;
 let credential = null;
@@ -816,18 +850,21 @@ async function searchDocuments(opts = {}) {
   // the index carried them: `datePosted` is its Date column, and the four `*Id` values are what
   // `idToList()` resolves against eagle-api's List collection.
   const select = DOCUMENT_SELECT;
+  // Named once because leg two's exclusion clause below has to complement EXACTLY these fields.
+  // A second copy is how the two would drift apart, and a drifted complement is the paging bug
+  // this function carried for its whole life.
+  const searchFields = 'displayName,documentFileName,description';
 
   const direct = await runSearch(documentsIndex, {
     ...opts,
     top,
     prefix: true,
-    searchFields: 'displayName,documentFileName,description',
+    searchFields,
     select,
     highlight: 'displayName,description'
   });
 
   const items = [...direct.value];
-  const seen = new Set(items.map(d => String(d.id)));
   // The total, assembled below from every leg that contributes rows. `direct.count` alone is what
   // it starts as, and what it stays when there is no project leg to run.
   let total = direct.count;
@@ -839,7 +876,7 @@ async function searchDocuments(opts = {}) {
   // which this used to do (`Math.max(direct.count, items.length)`), was worse still: a probe with
   // 3 direct matches, one matching project and 500 documents under it reported 10 against a true
   // ~503, so the pager said one page and every later page was unreachable. Where the leg cannot
-  // contribute rows its requests are trimmed to one row each — the count is what they are for.
+  // contribute rows its request is trimmed to one row — the count is what it is for.
   // `!opts.matchAll` IS THE DELIBERATE ANSWER TO "what does leg two mean with no keywords". Leg two
   // recovers documents whose PROJECT's NAME matches the query, and a keywordless search has no name
   // to match — running it under `matchAll` would search the projects index for `*`, pull in every
@@ -865,65 +902,59 @@ async function searchDocuments(opts = {}) {
     if (projectIds.length > 0) {
       // The caller's document ACL still applies — visibility of a project never widens access to
       // its documents, it only decides which ids are worth asking about.
-      const scope = `search.in(projectId, ${quoteList(projectIds)}, ',')`;
+      //
+      // `not search.ismatch(...)` IS THE PAGING FIX, not a tidy-up. It hands leg two exactly the
+      // documents the direct leg did NOT match, so the legs are disjoint sets and the sequence
+      // eagle-public pages through is plainly leg one followed by leg two. While they overlapped
+      // no stateless skip arithmetic could exist, because a row's position in `A ++ (B \ A)`
+      // depends on how many of B's EARLIER rows were already in A, and only a scan from 0 knows
+      // that. Measured on the live app before this clause, `keywords=pattullo` at pageSize=10 over
+      // pages 0-25: 260 slots but 197 distinct ids, 63 repeats spread over 13 non-adjacent pages,
+      // and 53 of the 250 matching documents unreachable from any page. Prod eagle-search walks
+      // the same 26 pages with 260 distinct and 0 repeats. The comment that used to sit on `skip`
+      // called the cost "one row on the boundary page"; that was wrong by two orders of magnitude,
+      // because it accounted for the boundary and not for the offset drift on every page after it.
+      //
+      // The excluded query has to be the direct leg's OWN, byte for byte — same terms, same fuzzy
+      // arm, same trailing `*`, same fields, `queryType: 'full'` — or the two stop being
+      // complements and the gap comes straight back. Single quotes are doubled for the OData
+      // literal: `tokenize` cannot emit one, but this is user text being spliced into a query
+      // string. The empty query that would 400 here cannot be reached — the projects leg
+      // short-circuits on an empty tokenisation, so `projectIds` is empty and this never runs.
+      const directQuery = buildQuery(tokenize(opts.keywords), opts.fuzzy === true, true);
+      const scope = `search.in(projectId, ${quoteList(projectIds)}, ',') and ` +
+        `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${searchFields}', 'full', 'any')`;
       const byProject = await runSearch(documentsIndex, {
         matchAll: true,
-        // Sized to the WHOLE page, not to the deficit `top - items.length`. The rows below are
-        // deduped against leg one, and the two legs OVERLAP by construction — a document whose own
-        // name matches a project-shaped query is normally also inside that project — so a request
-        // sized before dedup is sized against a yield nobody knows yet, and every deduped row
-        // leaves a hole. Measured: 20 documents in the matching project, 3 of them also direct
-        // hits, `top=10` returned a 7-row page under a reported total of 20.
-        //
-        // Asking for `top` closes it arithmetically rather than by retrying: `seen` holds exactly
-        // `items.length` ids and each duplicate consumes a distinct one, so at most `items.length`
-        // of the `top` rows can be dropped and at least `top - items.length` survive — a full page
-        // at 0%, 50% and 100% overlap, from ONE runSearch call either way — still bounded by its
-        // own MAX_PAGE_ROWS / SERVICE_MAX_TOP page fill, two requests today. Re-asking until the
-        // page filled would instead have turned the overlap ratio into a request multiplier
-        // against a 1-SU service, which is the trade runSearch already refuses.
-        //
-        // Still one row where the page is ALREADY full: no row of this leg can be used there (the
-        // fill loop breaks immediately), and the count is the only reason the request is issued.
-        top: items.length >= top ? 1 : top,
+        // Sized to the DEFICIT, which is now exactly what the page can take: no row this leg
+        // returns is dropped any more, so asking for the whole `top` would fetch rows the page
+        // cannot use — and the next page re-fetches from the right offset regardless. One row
+        // where the page is ALREADY full: no row of this leg can be used there (the fill loop
+        // breaks immediately), and the count is the only reason the request is issued.
+        top: Math.max(1, top - items.length),
         select,
         orderby: opts.orderby,
-        // Leg two continues where the DIRECT hits ran out. `direct.count` is the index-wide number
-        // of direct matches, so a page that starts past it starts that far into this leg instead.
-        // Imperfect on the boundary page: a document matching both legs can appear on the page
-        // where the direct hits end and again on the next. The alternative — dropping leg two
-        // beyond page one — silently loses every project-name match after the first page, and
-        // those are 60-77% of the hits for a project-shaped query (see the measurements above).
+        // Leg two continues where the DIRECT hits ran out, and with disjoint legs that arithmetic
+        // is exact rather than approximate. The direct leg owns union positions 0..direct.count,
+        // so a page starting at `skip` starts `skip - direct.count` rows into this leg, and
+        // consecutive pages cover consecutive ranges with no gap and no overlap. It is computed
+        // from `skip` alone, so page 17 fetched on its own returns what walking pages 0-16 first
+        // would have returned — there is no cross-request state here, and there cannot be.
         skip: Math.max(0, (Number(opts.skip) || 0) - (direct.count || 0)),
         filter: opts.filter ? `(${opts.filter}) and ${scope}` : scope
       });
 
       for (const doc of byProject.value) {
         if (items.length >= top) break;
-        if (seen.has(String(doc.id))) continue;
-        seen.add(String(doc.id));
         items.push(doc);
       }
 
-      // The two legs OVERLAP, so summing their counts double-counts the intersection: a document
-      // whose own metadata matches AND whose project matches is in both. For "Ajax" that is most
-      // of the 199 direct hits inside the 850 — roughly 30% of the pager's pages would have come
-      // back empty. One count-only request measures it exactly, and only when there is an
-      // intersection to measure: no direct matches means nothing to subtract.
-      let overlap = 0;
-      if (direct.count > 0) {
-        const both = await runSearch(documentsIndex, {
-          keywords: opts.keywords,
-          fuzzy: opts.fuzzy,
-          prefix: true,
-          searchFields: 'displayName,documentFileName,description',
-          select: 'id',
-          top: 1,
-          filter: opts.filter ? `(${opts.filter}) and ${scope}` : scope
-        });
-        overlap = both.count;
-      }
-      total = direct.count + byProject.count - overlap;
+      // No intersection left to subtract: the exclusion clause already removed the direct matches
+      // from this leg, so `byProject.count` counts precisely what leg one does not return and the
+      // two simply add up. This replaced a fourth, count-only request that measured the overlap so
+      // it could be subtracted — the fix costs one service call per document page LESS than the
+      // bug did, three where there were four.
+      total = direct.count + byProject.count;
     }
   }
 
@@ -1073,12 +1104,75 @@ async function deleteChunksForDocument(documentId, opts = {}) {
   }
 }
 
+
+/**
+ * The ids of the documents matching a filter, for scoping a CHUNK query to them.
+ *
+ * The `chunks` index carries seven fields and none of them is document metadata, so a filter on
+ * `type`, `milestone`, `datePosted` or the rest cannot be evaluated against a chunk at all. The
+ * alternative to this function is denormalising that metadata onto 1,128,733 chunk rows and
+ * re-stamping it on every document edit — the eagle-search machinery DEMI deliberately did not
+ * port. Two queries instead: resolve the documents, then scope the chunks to them.
+ *
+ * BOUNDED, AND THE BOUND IS REPORTED. `search.in` takes a large list but not an unlimited one, and
+ * a filter like `and[type]=Letter` matches over twelve thousand documents. So this returns the
+ * total as well as the ids, and a caller whose match set exceeds `cap` must treat the filter as
+ * INEXPRESSIBLE — answer with the key still named in `meta.dropped` — rather than scope to an
+ * arbitrary prefix of it. A truncated scope would silently answer "these are the chunks matching
+ * your filter" about a subset nobody chose, which is worse than saying the filter did not apply.
+ *
+ * `matchAll` with no keywords: the caller's terms belong to the CHUNK query, not this one. A
+ * document whose text mentions the term is found by the chunk search; this query exists only to
+ * answer "which documents carry this metadata".
+ *
+ * ONE SERVICE CALL, because `cap + 1` is exactly `SERVICE_MAX_TOP`. So a filtered chunk page costs
+ * two round trips, not three. Raising the cap past this point buys nothing today and costs another
+ * call per 250 ids — see the constant.
+ */
+async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
+  const { configured, documentsIndex } = config();
+  if (!configured) {
+    warnUnconfigured();
+    throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
+  }
+
+  // `cap + 1` is not an off-by-one: it is how the caller learns it was over the cap without a
+  // second round trip. `@odata.count` is authoritative, but asking for one more than we can use
+  // means a service that ever stopped returning a count still cannot look like a full match set.
+  const { value, count } = await runSearch(documentsIndex, {
+    matchAll: true,
+    filter,
+    select: 'id',
+    top: Math.min(cap + 1, MAX_PAGE_ROWS)
+  });
+
+  const ids = (value || []).map(row => String(row.id)).filter(Boolean);
+  // `cap` is `MAX_PAGE_ROWS - 1`, so asking for `cap + 1` is a request one page CAN answer — which
+  // is what makes the row count a sufficient signal on its own when `@odata.count` is missing. The
+  // earlier version set the cap above what one page returns, so a filter matching 501 to 20,000
+  // documents came back as an arbitrary 500-id prefix and was reported to the caller as applied.
+  //
+  // One comparison, not two: an `ids.length <= cap` clause beside this looks like it covers the
+  // no-count path, and does not — the fallback below already makes `total` the page length there,
+  // so the extra clause can never change the answer. A guard nothing can trip reads as protection
+  // that is not there.
+  const total = Number.isFinite(count) ? count : ids.length;
+  const withinCap = total <= cap;
+  // NO PREFIX. A partial scope answers "the chunks matching your filter" about a subset nobody
+  // chose, and the caller cannot tell it from a complete answer; the empty list forces the caller
+  // to report the filter as inexpressible instead.
+  return { ids: withinCap ? ids : [], total, withinCap };
+}
+
 module.exports = {
   DOCUMENT_SELECT,
   PROJECT_SELECT,
   searchChunks,
   searchProjects,
   searchDocuments,
+  documentIdsMatching,
+  DOCUMENT_SCOPE_CAP,
+  quoteList,
   deleteChunksForDocument,
   deleteFromIndex,
   indexes,

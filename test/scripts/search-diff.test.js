@@ -13,7 +13,12 @@ const {
   expandCases,
   buildUrl,
   summarize,
-  compareCase
+  compareCase,
+  selectivity,
+  pagingReport,
+  baselineOf,
+  specKey,
+  EXPECTED_DIVERGENCE,
 } = require('../../src/scripts/search-diff');
 
 // No network anywhere in this file. The transport fails loudly — a 401 or a DNS error is visible in
@@ -57,7 +62,11 @@ test('expandCases is specs x pages, numbered from 1 for --case', () => {
   assert.deepStrictEqual(cases.map(c => c.n), [1, 2, 3, 4, 5, 6]);
   assert.deepStrictEqual(cases.map(c => c.pageNum), [0, 1, 2, 0, 1, 2]);
   assert.strictEqual(cases[4].keywords, 'water');
-  assert.strictEqual(expandCases().length, CASES.length * PAGES.length);
+  // Not `CASES.length * PAGES.length` any more — a case may declare its own range, and hardcoding
+  // the product meant adding one such case broke a test that had nothing to say about it.
+  const expected = CASES.reduce((n, c) => n + (c.pages || PAGES).length, 0);
+  assert.strictEqual(expandCases().length, expected);
+  assert.deepStrictEqual(expandCases().map(c => c.n), [...Array(expected).keys()].map(i => i + 1));
 });
 
 test('the shipped matrix still covers every dimension it claims to', () => {
@@ -113,59 +122,229 @@ test('identical answers PASS', () => {
   assert.deepStrictEqual(verdict.diffs, []);
 });
 
-test('a different total is a DIFF and names both numbers', () => {
+test('a different total, on its own, is NOT a finding', () => {
+  // THE WHOLE POINT OF THE REWRITE. demi holds 60,560 documents and eagle 61,582 because demi was
+  // seeded from eagle-DEV; asserting on that gap made every one of the 42 cases fail and the tool
+  // useless. Totals are still summarised for the reader, never graded.
   const rows = [{ _id: 'a' }];
-  const verdict = compareCase(respond(rows, 60578), respond(rows, 61582));
-  assert.strictEqual(verdict.pass, false);
-  assert.deepStrictEqual(verdict.diffs, [{ field: 'searchResultsTotal', demi: 60578, eagle: 61582 }]);
+  const verdict = compareCase(respond(rows, 60560), respond(rows, 61582));
+  assert.strictEqual(verdict.pass, true, JSON.stringify(verdict.diffs));
+  assert.strictEqual(verdict.demi.total, 60560);
+  assert.strictEqual(verdict.eagle.total, 61582);
 });
 
-test('the same rows in a different order is a DIFF', () => {
-  // A set comparison would call this PASS, and a paging client would still see rows repeat and
-  // vanish between pages. Order is the fact being compared.
+test('a filter one service applies and the other ignores IS a finding, at any totals', () => {
+  // The measured case: Document + and[isFeatured]=true. demi answers the unfiltered corpus
+  // (60,560 -> 60,560, no such column) while eagle narrows 61,582 to 336. Two DIFFERENT corpora,
+  // two different baselines, and the disagreement still surfaces — which is what makes the signal
+  // usable here at all.
+  const verdict = compareCase(
+    respond([{ _id: 'a' }], 60560),
+    respond([{ _id: 'b' }], 336),
+    {
+      // `Document` rather than `DocumentChunk`, and the swap is not cosmetic: the chunk dataset now
+      // carries a DECLARED acceptance for this field, so using it here would assert that the
+      // acceptance table is empty rather than that the signal works. `isFeatured` is the same
+      // shape with no acceptance behind it — demi has no such column, eagle narrows 61,582 to 336.
+      dataset: 'Document',
+      demi: { total: 60560, ids: ['a'] },
+      eagle: { total: 61582, ids: ['b'] }
+    });
+  assert.strictEqual(verdict.pass, false);
+  assert.deepStrictEqual(
+    verdict.diffs.filter(d => d.field === 'selective'),
+    [{ field: 'selective', demi: false, eagle: true }]);
+});
+
+test('both services applying the same filter passes even when the counts differ', () => {
+  // demi 102 and eagle 107 for and[type]=Mines: different corpora, same BEHAVIOUR. The old
+  // comparison failed this; failing it is what taught the reader to ignore the report.
+  const verdict = compareCase(
+    respond([{ _id: 'a' }], 102),
+    respond([{ _id: 'b' }], 107),
+    { dataset: 'Project', demi: { total: 348, ids: ['a'] }, eagle: { total: 358, ids: ['b'] } });
+  assert.strictEqual(verdict.pass, true, JSON.stringify(verdict.diffs));
+});
+
+test('selectivity is undefined, not false, when a total is missing', () => {
+  // "The service did not report a total" and "the filter matched everything" must not collapse:
+  // a broken response would otherwise read as a working filter on whichever side reported nothing.
+  assert.strictEqual(selectivity({ total: null }, { total: 5 }), undefined);
+  assert.strictEqual(selectivity({ total: 5 }, { total: null }), undefined);
+  assert.strictEqual(selectivity({ total: 5 }, null), undefined);
+  assert.strictEqual(selectivity({ total: 5 }, { total: 5 }), false);
+  assert.strictEqual(selectivity({ total: 4 }, { total: 5 }), true);
+});
+
+test('a sort one service honours and the other drops IS a finding', () => {
+  // Measured: sortBy=+project.name on Document returns demi's unsorted page byte-for-byte, because
+  // no project-name field exists in demi's documents index. Graded within each service, so the two
+  // corpora never enter into it.
   const verdict = compareCase(
     respond([{ _id: 'a' }, { _id: 'b' }], 2),
-    respond([{ _id: 'b' }, { _id: 'a' }], 2));
+    respond([{ _id: 'y' }, { _id: 'x' }], 2),
+    {
+      dataset: 'Document',
+      demi: { total: 2, ids: ['a', 'b'] },   // identical to the sorted answer: dropped
+      eagle: { total: 2, ids: ['x', 'y'] }   // reordered: honoured
+    });
   assert.strictEqual(verdict.pass, false);
-  assert.deepStrictEqual(verdict.diffs, [{ field: 'rowIds', demi: ['a', 'b'], eagle: ['b', 'a'] }]);
+  assert.deepStrictEqual(
+    verdict.diffs.filter(d => d.field === 'sortHonoured'),
+    [{ field: 'sortHonoured', demi: false, eagle: true }]);
 });
 
-test('REGRESSION 1: a dropped filter shows up as the unfiltered corpus', () => {
-  // Recorded 2026-08-22 against `and[type]=Mines`, dataset=Project: eagle applies the filter,
-  // DEMI's `projects` index has no EAO project type so eagle-query.js drops the key and answers
-  // with all 382 projects. This is the case the differ exists to keep visible.
-  const verdict = compareCase(
-    respond([{ _id: '58851158aaecd9001b81e83f', name: '29694 Marshall Road Extension' }], 382),
-    respond([{ _id: '5885175daaecd9001b83e8f0', name: 'Ajax Mine' }], 107));
-  assert.strictEqual(verdict.pass, false);
-  const fields = verdict.diffs.map(d => d.field);
-  assert.ok(fields.includes('searchResultsTotal'));
-  assert.ok(fields.includes('rowIds'));
-});
-
-test('REGRESSION 2: DocumentChunk rows are a different shape on each side', () => {
-  // Recorded 2026-08-22, keywords=water. demi returns one row per PASSAGE keyed by chunkId;
-  // eagle returns rows grouped per DOCUMENT with `snippets` and `matchCount`.
+test('an EXPECTED key delta passes; an unexpected one does not', () => {
+  // The DocumentChunk row unit genuinely differs — demi one row per PASSAGE, eagle one per
+  // DOCUMENT — and that difference is declared, so it must not fail every chunk case forever.
   const demiRow = {
-    _id: '58868f40e036fb0105767fbc::p60::c79', _schemaName: 'DocumentChunk', content: '',
-    documentId: '58868f40e036fb0105767fbc', documentName: 'x', documentType: 'PDF Document',
-    pageNumber: 60, project: {}, projectId: '1', projectName: 'p', snippet: '…water…'
+    _id: 'x::p60::c79', _schemaName: 'DocumentChunk', content: '', chunkId: 'c79',
+    documentId: 'x', documentName: 'n', documentType: 'PDF Document', matchCount: 1,
+    pageNumber: 60, project: {}, projectId: '1', projectName: 'p', snippet: '…', snippets: ['…'],
+    // The three chip fields. Present on BOTH sides now, which is why they are no longer in the
+    // eagle-only delta — this fixture is what would fail if they were dropped again.
+    datePosted: '2017-01-01', milestone: 'm', milestoneId: 'm'
   };
   const eagleRow = {
-    _id: '5886db48a4acd4014b8209ed', _schemaName: 'DocumentChunk', datePosted: '2017-01-01',
-    documentId: '5886db48a4acd4014b8209ed', documentName: 'x', documentType: 'PDF',
-    documentTypeId: 't', matchCount: 3, milestone: 'm', milestoneId: 'm', project: {},
-    projectId: '588510dcaaecd9001b816cff', read: [], snippets: ['…water…']
+    _id: 'x', _schemaName: 'DocumentChunk', datePosted: '2017-01-01', documentId: 'x',
+    documentName: 'n', documentType: 'PDF', documentTypeId: 't', matchCount: 1, milestone: 'm',
+    milestoneId: 'm', project: {}, projectId: '1', read: [], snippets: ['…']
   };
-  const verdict = compareCase(respond([demiRow], 382916), respond([eagleRow], 418190));
+  const declared = compareCase(respond([demiRow], 1), respond([eagleRow], 1), { dataset: 'DocumentChunk' });
+  assert.strictEqual(declared.pass, true, JSON.stringify(declared.diffs));
+
+  // One key nobody declared, and the run must go red — otherwise the delta list is a mute button
+  // rather than an acceptance.
+  const surprise = compareCase(
+    respond([{ ...demiRow, somethingNew: 1 }], 1), respond([eagleRow], 1),
+    { dataset: 'DocumentChunk' });
+  assert.strictEqual(surprise.pass, false);
+  assert.deepStrictEqual(surprise.diffs.find(d => d.field === 'rowKeys').demiOnly, ['somethingNew']);
+});
+
+test('pagingReport names a row that appears on two pages', () => {
+  // The invariant a pager depends on, graded within ONE service: a row on two pages is a row
+  // reachable from none. Measured on demi for keywords=pattullo — 63 ids across 13 pages.
+  const clean = pagingReport([
+    { pageNum: 0, ids: ['a', 'b'] }, { pageNum: 1, ids: ['c', 'd'] }]);
+  assert.deepStrictEqual(clean.repeated, []);
+  assert.strictEqual(clean.distinct, 4);
+  assert.strictEqual(clean.slots, 4);
+
+  const dirty = pagingReport([
+    { pageNum: 0, ids: ['a', 'b'] }, { pageNum: 1, ids: ['b', 'c'] }, { pageNum: 2, ids: ['a'] }]);
+  assert.strictEqual(dirty.slots, 5);
+  assert.strictEqual(dirty.distinct, 3);
+  assert.deepStrictEqual(dirty.repeated,
+    [{ id: 'a', pages: [0, 2] }, { id: 'b', pages: [0, 1] }]);
+});
+
+test('baselineOf strips exactly the two dimensions selectivity is measured against', () => {
+  assert.strictEqual(baselineOf({ dataset: 'Project', pageNum: 0 }), null);
+  assert.deepStrictEqual(
+    baselineOf({ dataset: 'Document', keywords: 'water', filter: 'type=x', sortBy: '-datePosted', pageNum: 2 }),
+    { dataset: 'Document', keywords: 'water', pageNum: 2 });
+});
+
+test('a DECLARED divergence is surfaced with its reason and does not fail the run', () => {
+  // demi never sorts chunks — every field in the chunks index is sortable:false — and that is a
+  // decision with a paragraph behind it, not an oversight. It must still be VISIBLE: an acceptance
+  // that prints nothing is indistinguishable from a fix.
+  const verdict = compareCase(
+    respond([{ _id: 'a' }, { _id: 'b' }], 2),
+    respond([{ _id: 'y' }, { _id: 'x' }], 2),
+    {
+      dataset: 'DocumentChunk',
+      demi: { total: 2, ids: ['a', 'b'] },
+      eagle: { total: 2, ids: ['x', 'y'] }
+    });
+  assert.strictEqual(verdict.pass, true, JSON.stringify(verdict.diffs));
+  assert.deepStrictEqual(verdict.diffs, []);
+  assert.strictEqual(verdict.accepted.length, 1);
+  assert.strictEqual(verdict.accepted[0].field, 'sortHonoured');
+  assert.match(verdict.accepted[0].reason, /sortable:false/);
+});
+
+test('the same divergence on a dataset with no declared reason still fails', () => {
+  // The acceptance is keyed dataset:field, not field. A dropped sort on Document is a defect even
+  // though the identical shape on DocumentChunk is decided.
+  const verdict = compareCase(
+    respond([{ _id: 'a' }, { _id: 'b' }], 2),
+    respond([{ _id: 'y' }, { _id: 'x' }], 2),
+    {
+      dataset: 'Document',
+      demi: { total: 2, ids: ['a', 'b'] },
+      eagle: { total: 2, ids: ['x', 'y'] }
+    });
   assert.strictEqual(verdict.pass, false);
-  const keys = verdict.diffs.find(d => d.field === 'rowKeys');
-  assert.ok(keys.demiOnly.includes('snippet'), keys.demiOnly.join(','));
-  assert.ok(keys.demiOnly.includes('pageNumber'));
-  assert.ok(keys.eagleOnly.includes('snippets'), keys.eagleOnly.join(','));
-  assert.ok(keys.eagleOnly.includes('matchCount'));
-  // The ids diverge because they are ids of different THINGS — chunk vs document.
-  assert.ok(verdict.diffs.some(d => d.field === 'rowIds'));
+  assert.deepStrictEqual(verdict.accepted, []);
+  assert.ok(verdict.diffs.some(d => d.field === 'sortHonoured'));
+});
+
+test('a case-scoped acceptance does not silence its siblings', () => {
+  // THE MUTE-BUTTON BUG, and it was mine. A `DocumentChunk:selective` entry written for the
+  // broad-filter case also passed the NARROW-filter case that exists precisely to catch chunk
+  // scoping breaking — and the whole run went green against a deployed app that had no scoping at
+  // all. An acceptance that holds for some requests belongs on the case, never on the dataset.
+  const sides = {
+    dataset: 'DocumentChunk',
+    demi: { total: 399872, ids: ['a'] },
+    eagle: { total: 430345, ids: ['b'] }
+  };
+  const ignored = () => [respond([{ _id: 'a' }], 399872), respond([{ _id: 'b' }], 0)];
+
+  const broad = compareCase(...ignored(), {
+    ...sides,
+    kase: { accept: { selective: 'over DOCUMENT_SCOPE_CAP, reported in meta.dropped' } }
+  });
+  assert.strictEqual(broad.pass, true, JSON.stringify(broad.diffs));
+  assert.strictEqual(broad.accepted.length, 1);
+
+  const narrow = compareCase(...ignored(), { ...sides, kase: {} });
+  assert.strictEqual(narrow.pass, false,
+    'the same dataset and the same field, with no acceptance on THIS case, must still fail');
+  assert.ok(narrow.diffs.some(d => d.field === 'selective'));
+});
+
+test('a dataset-wide acceptance still applies to every case of it', () => {
+  // The other scope, which is correct where it is used: demi cannot sort chunks at all, so the
+  // divergence is a property of the dataset and not of any one request.
+  const verdict = compareCase(
+    respond([{ _id: 'a' }, { _id: 'b' }], 2),
+    respond([{ _id: 'y' }, { _id: 'x' }], 2),
+    {
+      dataset: 'DocumentChunk',
+      kase: {},
+      demi: { total: 2, ids: ['a', 'b'] },
+      eagle: { total: 2, ids: ['x', 'y'] }
+    });
+  assert.strictEqual(verdict.pass, true, JSON.stringify(verdict.diffs));
+  assert.match(verdict.accepted[0].reason, /sortable:false/);
+});
+
+test('every declared divergence carries a reason', () => {
+  // The reason is the acceptance. A blank one turns this table into a mute button.
+  for (const [key, reason] of Object.entries(EXPECTED_DIVERGENCE)) {
+    assert.match(key, /^[A-Za-z]+:[A-Za-z]+$/, key);
+    assert.ok(typeof reason === 'string' && reason.length > 40, `${key} has no real reason`);
+  }
+});
+
+test('specKey drops the page instead of stripping a rendered suffix', () => {
+  // `label` prints pageNum + 1, so a null page renders as "page=1" — the first version stripped
+  // " page=null", matched nothing, and every paging line claimed to be about page 1.
+  const key = specKey({ dataset: 'Document', keywords: 'water', pageNum: 2 });
+  assert.strictEqual(key, 'Document keywords="water"');
+  assert.strictEqual(key, specKey({ dataset: 'Document', keywords: 'water', pageNum: 0 }));
+  assert.ok(!/page=/.test(key), key);
+});
+
+test('a case may carry its own page range', () => {
+  // Three pages cannot see a paging defect that starts at page 7.
+  const cases = expandCases([{ dataset: 'Document', keywords: 'x', pages: [0, 1, 2, 3] }], [0, 1]);
+  assert.strictEqual(cases.length, 4);
+  assert.deepStrictEqual(cases.map(c => c.pageNum), [0, 1, 2, 3]);
+  assert.ok(!('pages' in cases[0]), 'the range must not survive onto the case as a query param');
 });
 
 test('a non-200 is the only finding made about that case', () => {

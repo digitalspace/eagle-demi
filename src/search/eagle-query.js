@@ -656,6 +656,18 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false) {
  * log is the whole point: a filter panel that quietly does nothing returns the full corpus and
  * looks exactly like a filter that matched everything.
  */
+/**
+ * Can a `project` filter be EXPRESSED against this dataset's index at all?
+ *
+ * `documents` and `chunks` carry `projectId`; `projects` does not, because a project IS its own
+ * scope. So a project filter on `dataset=Project` is dropped — and a dropped project filter is the
+ * one drop a route must never simply answer around: the difference between one project's rows and
+ * every project's rows is the whole request.
+ */
+function canScopeToProject(dataset) {
+  return Boolean(fieldsFor(dataset).get('projectId'));
+}
+
 function filterKeysIn(query) {
   const keys = Array.from(andParams(query || {}), ([key]) => key);
   if (query && query.project) keys.push('project');
@@ -705,6 +717,8 @@ module.exports = {
   hasCriteria,
   unknownParams,
   filterKeysIn,
+  canScopeToProject,
+  andParams,
   projectIdsFrom,
   withProjectIds,
   reportDropped,

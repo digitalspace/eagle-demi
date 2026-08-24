@@ -45,6 +45,52 @@ function resolveDocumentAcl(parentProject, isPublished) {
   };
 }
 
+/**
+ * A stored document as it may leave over HTTP.
+ *
+ * The rule is the search controller's rather than a second one of this route's own: `read[]` is
+ * not emitted on any row shape there, because it is the caller's own ACL restated — it decided
+ * which rows came back, and repeating it publishes the internal role names of every restricted
+ * tier to anonymous callers for no consumer. `isPublished` is the mirror the frontends actually
+ * render, and it is DERIVED from `read[]` here exactly as the search rows derive it.
+ *
+ * Not because the stored flag is unusable — `seed/transform.js:137` writes
+ * `isPublished: read.includes('public')`, so the row this function sees already holds the derived
+ * value and a bare strip would have reported it correctly. What has no usable `isPublished` is the
+ * UPSTREAM Eagle payload, which is true on only 66% of documents that are unambiguously public by
+ * their ACL — a different record entirely, and the reason the seed derives rather than copies.
+ * Deriving again here is worth it anyway, for one reason: it fails closed relative to `read[]`,
+ * which is authoritative (ADR-004). If a write path ever sets the flag without the ACL agreeing,
+ * this route reports the ACL. That is the honest justification; the one this comment used to give
+ * was not.
+ *
+ * `s3Key` goes with it. It is the object-store key, and no consumer of these routes holds one:
+ * the bytes are reached through `GET /documents/:id/download`, which takes a document id and mints
+ * a presigned URL; the frontend labels rows from `documentFileName`; and `scripts/copy-blobs-to-
+ * azure.js` takes its key list out of Cosmos rather than off the API. It stays a required field on
+ * the way IN (`POST /documents`), which this does not touch.
+ *
+ * `_etag` is the Cosmos optimistic-concurrency token, which `db/cosmos-nosql.js` deliberately keeps
+ * because `replace()` takes one. No HTTP path calls replace, and nothing here reads an `If-Match`
+ * header or a body `_etag`, so no caller round-trips it; a conditional-write route that ever wants
+ * one can emit it itself.
+ *
+ * Applied at res.json and nowhere else, for the same reason as `repositories/projects.js`'
+ * publicView: updateDocument reads, spreads and upserts, so stripping in the data layer would
+ * erase the ACL from the stored document on the next edit.
+ */
+function publicView(doc) {
+  if (!doc) return doc;
+
+  const { read, s3Key: _s3Key, _etag, ...rest } = doc;
+  return {
+    ...rest,
+    isPublished: Array.isArray(read) && read.length > 0
+      ? read.includes('public')
+      : rest.isPublished === true
+  };
+}
+
 exports.getDocuments = async (req, res) => {
   try {
     const access = resolveAccess(req);
@@ -65,7 +111,7 @@ exports.getDocuments = async (req, res) => {
     });
 
     if (continuationToken) res.setHeader('x-continuation-token', continuationToken);
-    return res.json(items);
+    return res.json(items.map(publicView));
   } catch (err) {
     return serverError(res, err, 'document controller failed');
   }
@@ -79,7 +125,7 @@ exports.getDocument = async (req, res) => {
     if (!doc) {
       return res.status(404).json({ error: 'Document not found' });
     }
-    return res.json(doc);
+    return res.json(publicView(doc));
   } catch (err) {
     return serverError(res, err, 'document controller failed');
   }
@@ -183,7 +229,7 @@ exports.createDocument = async (req, res) => {
       detail: { displayName: saved.displayName, s3Key: saved.s3Key, isPublished: saved.isPublished }
     });
 
-    return res.status(201).json(saved);
+    return res.status(201).json(publicView(saved));
   } catch (err) {
     return serverError(res, err, 'document controller failed');
   }
@@ -307,7 +353,7 @@ exports.updateDocument = async (req, res) => {
       }
     });
 
-    return res.json(saved);
+    return res.json(publicView(saved));
   } catch (err) {
     return serverError(res, err, 'document controller failed');
   }
@@ -386,7 +432,7 @@ exports.setDocumentPublished = async (req, res) => {
       });
     }
 
-    return res.json(updated);
+    return res.json(publicView(updated));
   } catch (err) {
     return serverError(res, err, 'document controller failed');
   }
@@ -459,7 +505,7 @@ exports.deleteDocument = async (req, res) => {
 
     return res.json({
       message: 'Document deleted successfully',
-      deleted: existing,
+      deleted: publicView(existing),
       removedChunks,
       removedChunksFromSearch,
       removedFromSearch,

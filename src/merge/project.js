@@ -322,7 +322,10 @@ function buildRegistry(trackProjects, eagleProjects, opts = {}) {
  *
  * The seeder's documents stage uses it to resolve partition keys, so it must survive any change
  * to what else is being ingested. A deterministic id join only — nothing that resolves by name.
- * Rows that do not resolve are DROPPED rather than given an invented parent.
+ * Rows that do not resolve are DROPPED rather than given an invented parent — except the
+ * documents stage's ProjectNotification carve-out in `scripts/seed-nosql.js`, which admits a
+ * second, explicitly enumerated parent id space. Enumerated is the operative word: it admits
+ * only ids the notification list itself confirms, so it is still not an invented parent.
  */
 function buildProjectIndex(projects) {
   const byEagleId = new Map();

@@ -136,6 +136,21 @@ async function getById(access, id, projectId) {
  *
  * Projects only the display fields — a caller that may read a chunk still has no business
  * receiving the whole parent document.
+ *
+ * `milestone`, `milestoneId` and `datePosted` are in that set because the chunk card renders a date
+ * chip and a milestone chip beside the title and NEITHER value exists on a chunk row — the chunks
+ * index carries no document metadata at all, so the parent is the only place they can come from.
+ * They are the only columns the card draws beyond name and type; the rest of the document stays
+ * unprojected because Cosmos loads the whole item either way, so what a wider projection costs is
+ * response bytes and disclosure surface, not item load — the same reasoning `aclRowsForProject`
+ * states twenty lines down, and the two must not disagree about the cost model.
+ *
+ * BOTH the label and the id, which is what prod emits on a chunk row (`milestone: 'Other'` beside
+ * `milestoneId: '5d0d212c7d50161b92a80eed'`) and is NOT what the Document dataset emits. There the
+ * wire field called `milestone` is the ObjectId, because every component rendering a Document row
+ * resolves it through `idToList()`. The chunk card does not — it binds `{{result().milestone}}`
+ * raw and has no `lists` input — so the id alone would put a GUID on screen. Carrying both is one
+ * column and removes the need for either consumer to special-case the other.
  */
 async function listByIds(access, ids, projectIds) {
   const unique = Array.from(new Set((ids || []).map(String)));
@@ -149,7 +164,7 @@ async function listByIds(access, ids, projectIds) {
       inList('id', unique, '@did'),
       inList(PARTITION_FIELD, projects, '@dpid')
     ],
-    select: 'c.id, c.displayName, c.documentFileName, c.type'
+    select: 'c.id, c.displayName, c.documentFileName, c.type, c.milestone, c.milestoneId, c.datePosted'
   });
 
   const { items } = await cosmos.query(CONTAINER, spec, {});

@@ -144,17 +144,36 @@ async function listWithCentroid(access) {
  * An allowlist rather than a denylist for the same reason, which also retires the dead
  * `sources.nrpti` block without a second rule.
  *
+ * `read[]` goes too, and the rule is the search controller's rather than a second one of this
+ * route's own: no row shape in `controllers/search.js` emits it, because it is the caller's own
+ * ACL restated — it decided which rows came back, and repeating it publishes the internal role
+ * names of every restricted tier (`project-proponent`, `project-intake`, `system-eao`…) to
+ * anonymous callers for no consumer. `isPublished` is the mirror the frontends render, and it is
+ * DERIVED from `read[]` exactly as the search rows derive it, so dropping the array loses nothing
+ * even where the two disagree.
+ *
+ * `_etag` is the Cosmos optimistic-concurrency token, which `db/cosmos-nosql.js` deliberately
+ * keeps because `replace()` takes one. No HTTP path calls replace, and nothing accepts an
+ * `If-Match` header or a body `_etag`, so no caller round-trips it; a conditional-write route that
+ * ever wants one can emit it itself.
+ *
  * Applied at res.json and nowhere else. Stripping in the data layer instead would be silently
  * destructive: updateProject reads, spreads and upserts, so a stripped read would erase `sources`
- * from the stored document on the next edit.
+ * — and now the ACL — from the stored document on the next edit.
  */
 function publicView(project) {
   if (!project) return project;
 
-  const { sources, ...rest } = project;
+  const { sources, read, _etag, ...rest } = project;
   const wildfire = sources && sources.wildfire;
+  const view = {
+    ...rest,
+    isPublished: Array.isArray(read) && read.length > 0
+      ? read.includes('public')
+      : rest.isPublished === true
+  };
 
-  return wildfire ? { ...rest, sources: { wildfire } } : rest;
+  return wildfire ? { ...view, sources: { wildfire } } : view;
 }
 
 /**

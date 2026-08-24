@@ -8,7 +8,7 @@ const assert = require('node:assert');
 const {
   parseArgs, verifyProjects, verifyItems, seed, ALL_STAGES, DEFAULT_STAGES
 } = require('../../src/scripts/seed-nosql');
-const { unwrapSearchResponse, fetchAllPages, PAGE_SIZE } = require('../../src/seed/sources');
+const { unwrapSearchResponse, fetchAllPages, PAGE_SIZE, EAGLE_API_BASE } = require('../../src/seed/sources');
 const trackProjects = require('../../src/data/track_projects_enriched.json');
 
 const NOW = '2026-07-30T00:00:00.000Z';
@@ -155,7 +155,7 @@ test('fetchAllPages', async (t) => {
     const order = [];
     await withFetch(server(200), () => fetchAllPages('http://x', 'Document', {
       accumulate: false,
-      onPage: async (items) => {
+      onPage: async (_items) => {
         order.push('start');
         await new Promise(r => setImmediate(r));
         order.push('end');
@@ -241,6 +241,10 @@ test('seed() end to end with stubbed sources', async (t) => {
   });
 
   const stubSources = {
+    // The real module's value, not a placeholder. The seeder reads the base off the INJECTED
+    // sources object, so a stub that omits it makes every test pass `undefined` to `fetchAllPages`
+    // — which is exactly what the base-URL assertion below found on its first run.
+    EAGLE_API_BASE,
     loadTrackProjects: () => track,
     fetchEagleProjects: async () => [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)')],
     // Streaming: the seeder never holds the whole corpus. Delivered as two pages to exercise
@@ -251,6 +255,10 @@ test('seed() end to end with stubbed sources', async (t) => {
       return { count: 3, total: 3 };
     },
     fetchListLookup: async () => new Map([['t1', 'Letter']]),
+    // The seeder reads Project Notifications through the generic pager, since sources.js exposes
+    // no named loader for them. Empty here so the default fixtures still describe a corpus in
+    // which the only non-project parent is genuinely unknown.
+    fetchAllPages: async () => [],
     loadBoundaries: () => [
       {
         _id: 'b1', type: 'Regional District', name: 'RD One', code: 1,
@@ -331,6 +339,78 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(summary.stages.documents.built, 2);
     assert.strictEqual(summary.stages.documents.droppedUnresolvable, 1,
       'a silent drop would look like the corpus was complete');
+    assert.deepStrictEqual(summary.stages.documents.unresolvedRefs, ['a-project-nobody-knows'],
+      'the ref itself must reach the summary, or the next class of drops is invisible again');
+    assert.strictEqual(summary.stages.documents.distinctUnresolvedRefs, 1);
+  });
+
+  await t.test('a document parented by a Project Notification is seeded under it', async () => {
+    // A ProjectNotification is a different ENTITY TYPE, not a missing project: all 17 are public
+    // and prod serves 2-13 documents under each. Dropping them returned an empty documents tab
+    // for every notification. The notification _id IS the partition key — eagle-public sends it
+    // as the `project` filter and there is nothing to translate it into.
+    const notificationId = '5efe366b3a147c00223be181';
+    const withNotifications = {
+      ...stubSources,
+      // `base` is asserted, not ignored. Every other stub in this file reads only `dataset`, so
+      // `src.EAGLE_API_BASE` -> any typo shipped green while the seeder asked an UNDEFINED host for
+      // the notification list — a run that then drops all 80 documents again, for a new reason.
+      fetchAllPages: async (base, dataset) => {
+        assert.strictEqual(base, EAGLE_API_BASE,
+          'the seeder must pass the real Eagle base, not undefined');
+        return dataset === 'ProjectNotification' ? [{ _id: notificationId }] : [];
+      },
+      streamEagleDocuments: async (onPage) => {
+        await onPage([
+          eagleDoc('doc1', matchedGuid),
+          eagleDoc('pn1', notificationId),
+          eagleDoc('nowhere', 'a-project-nobody-knows')
+        ], 3, 3);
+        return { count: 3, total: 3 };
+      }
+    };
+
+    const { written, repos } = makeRepos();
+    const summary = await seed(['--live', '--only', 'documents'],
+      { sources: withNotifications, repos, now: NOW });
+
+    const batch = written.documents.find(([pid]) => pid === notificationId);
+    assert.ok(batch, `nothing was written under ${notificationId}`);
+    assert.deepStrictEqual(batch[1].map(d => d.id), ['pn1']);
+    assert.strictEqual(batch[1][0].projectId, notificationId);
+
+    assert.strictEqual(summary.stages.documents.built, 2);
+    assert.strictEqual(summary.stages.documents.notificationParented, 1);
+    // The unknown parent is NOT admitted along with it — only ids the notification list confirms.
+    assert.strictEqual(summary.stages.documents.droppedUnresolvable, 1);
+    assert.deepStrictEqual(summary.stages.documents.unresolvedRefs, ['a-project-nobody-knows']);
+    assert.deepStrictEqual(summary.failures, []);
+  });
+
+  await t.test('the dropped-ref report separates the true count from the capped sample', async () => {
+    // Two fields that look redundant and are not: `distinctUnresolvedRefs` is a COUNT and
+    // `unresolvedRefs` a SAMPLE capped at 20, because an upstream fault could produce thousands of
+    // distinct refs and this summary is printed in full. Every existing fixture has exactly ONE
+    // unresolved ref, so the two were indistinguishable — `.slice(0, 20)` -> `.slice(0, 1)` passed,
+    // and so did deriving the count from the capped array, which would under-report a real fault by
+    // orders of magnitude at the moment it matters most.
+    const many = {
+      ...stubSources,
+      streamEagleDocuments: async (onPage) => {
+        const docs = Array.from({ length: 25 }, (_, i) => eagleDoc(`d${i}`, `unknown-${i}`));
+        await onPage(docs, 25, 25);
+        return { count: 25, total: 25 };
+      }
+    };
+
+    const { repos } = makeRepos();
+    const summary = await seed(['--live', '--only', 'documents'], { sources: many, repos, now: NOW });
+
+    assert.strictEqual(summary.stages.documents.droppedUnresolvable, 25);
+    assert.strictEqual(summary.stages.documents.distinctUnresolvedRefs, 25,
+      'the COUNT is every distinct ref, uncapped — this is the number that says how bad it is');
+    assert.strictEqual(summary.stages.documents.unresolvedRefs.length, 20,
+      'the SAMPLE is capped, so a thousand-ref fault does not print a thousand lines');
   });
 
   await t.test('--only still builds the project index, or partition keys would be stale', async () => {
