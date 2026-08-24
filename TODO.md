@@ -198,8 +198,11 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       could only ever ride the same recreate as B4 (3.1).
 
 - [ ] **3.8 Small, bundle opportunistically:**
-      - Apply the eagle-search `sync.livenessProbe.enabled: false` chart change to `6cdc9e-test`
-        (`helm upgrade`; rendered, not yet deployed). Acceptance: 0 restarts across > 6h15m.
+      - [x] ~~Apply the eagle-search `sync.livenessProbe.enabled: false` chart change to
+        `6cdc9e-test`.~~ **Already live — nothing to apply**, verified 2026-08-24 by reading the
+        cluster, not the chart: `deploy/eagle-search-sync` carries `livenessProbe: None` (and no
+        readiness probe), generation 10 = observedGeneration 10. Acceptance met and then some —
+        the pod shows **0 restarts across 2d1h**, against a bar of 6h15m.
       - [x] ~~`basicPublishingCredentialsPolicies allow=false` (scm + ftp).~~ #146 (`f25cdd4`).
         **DECLARED, NOT APPLIED** — CI never deploys infra, so SCM still accepts passwords until a
         hand `deploy-infra.sh test`. Read truth off `az resource show
