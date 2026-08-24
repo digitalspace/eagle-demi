@@ -110,8 +110,13 @@ const MAX_PAGE_ROWS = 500;
  * figure, a `type` filter matching 2,911 documents scoped the chunk query to 500 of them, 17.2%
  * coverage, with `meta.dropped` absent. Exactly what the docblock below forbids.
  *
- * `- 1` so that asking for `cap + 1` is a request one page can actually answer, which is what lets
- * an over-cap match set be detected from the row count alone rather than only from `@odata.count`.
+ * `SERVICE_MAX_TOP - 1`, not `MAX_PAGE_ROWS - 1`, so the whole thing is ONE service request.
+ * `runSearch` fills anything over `SERVICE_MAX_TOP` with a second request, so a cap of 499 meant
+ * asking for 500 rows across two calls and — on every filter measured on prod, since all of them
+ * are over the cap — throwing all 500 away to conclude "too many". Two calls to learn a number the
+ * first one already carried in `@odata.count`. At 249 the answer arrives in one call either way,
+ * and nothing real is lost: no corpus-wide filter fits under 499 either, and the project-scoped
+ * sets this actually serves are a handful of documents.
  *
  * WHAT THIS COSTS, stated plainly because it is the honest limit of the two-query design: measured
  * against prod, the narrowest document-type filter in the corpus matches 2,911 documents,
@@ -122,7 +127,7 @@ const MAX_PAGE_ROWS = 500;
  * service calls for `type`, on a Basic 1-SU service, on every debounced keystroke) or denormalising
  * document metadata onto 1,128,733 chunk rows. Both are decisions, not follow-ups.
  */
-const DOCUMENT_SCOPE_CAP = MAX_PAGE_ROWS - 1;
+const DOCUMENT_SCOPE_CAP = SERVICE_MAX_TOP - 1;
 
 let tokenCache = null;
 let credential = null;
@@ -1120,10 +1125,9 @@ async function deleteChunksForDocument(documentId, opts = {}) {
  * document whose text mentions the term is found by the chunk search; this query exists only to
  * answer "which documents carry this metadata".
  *
- * COSTS TWO SERVICE CALLS, not one. `cap + 1` is 500 and `runSearch` fills anything over
- * `SERVICE_MAX_TOP` (250) with consecutive requests, so a filtered chunk page is three service
- * round trips in total. That is the price of not denormalising, and it is paid on every filtered
- * request — worth knowing before raising the cap, since every 250 ids adds another one.
+ * ONE SERVICE CALL, because `cap + 1` is exactly `SERVICE_MAX_TOP`. So a filtered chunk page costs
+ * two round trips, not three. Raising the cap past this point buys nothing today and costs another
+ * call per 250 ids — see the constant.
  */
 async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
   const { configured, documentsIndex } = config();

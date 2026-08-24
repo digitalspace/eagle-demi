@@ -1291,23 +1291,21 @@ test('ai-search document id resolution', async (t) => {
     // The two numbers drifted once and nothing noticed: `runSearch` clamps `top` to MAX_PAGE_ROWS,
     // so a cap above it is unreachable by construction and every match set between them is
     // silently truncated. Derived rather than chosen now, and pinned so it stays derived.
-    assert.ok(aiSearch.DOCUMENT_SCOPE_CAP < aiSearch.MAX_PAGE_ROWS,
-      `cap ${aiSearch.DOCUMENT_SCOPE_CAP} must be under MAX_PAGE_ROWS ${aiSearch.MAX_PAGE_ROWS}`);
+    assert.ok(aiSearch.DOCUMENT_SCOPE_CAP < aiSearch.SERVICE_MAX_TOP,
+      `cap ${aiSearch.DOCUMENT_SCOPE_CAP} must be under SERVICE_MAX_TOP ${aiSearch.SERVICE_MAX_TOP}`);
   });
 
   await t.test('it asks for one more than the cap, across however many requests that takes', async (tt) => {
-    // Asserted as the SUM, because `runSearch` fills a page larger than SERVICE_MAX_TOP with
-    // consecutive requests: asking for 500 issues 250 + 250, so the first body's `top` is 250 and
-    // an assertion on it would be measuring the service's per-request ceiling rather than what
-    // this function asked for.
-    //
-    // Which also names the cost, and it is worth naming: resolving a chunk filter is TWO service
-    // calls before the chunk query itself, on every filtered request.
+    // Asserted as the SUM and the CALL COUNT together, because the two are the whole design: the
+    // cap is `SERVICE_MAX_TOP - 1` precisely so that `cap + 1` fits in one request. At the previous
+    // cap of 499 this took two calls and then discarded all 500 rows to conclude "too many" — on
+    // every filter measured on prod, since all of them are over the cap.
     const calls = captureFetch(tt, () => page(250, 600));
     await aiSearch.documentIdsMatching("type eq 'x'");
     const asked = calls.reduce((n, c) => n + c.body.top, 0);
     assert.strictEqual(asked, aiSearch.DOCUMENT_SCOPE_CAP + 1,
       `the resolver must ask for cap + 1 in total, got ${asked} across ${calls.length} request(s)`);
-    assert.strictEqual(calls.length, 2, 'and that exceeds SERVICE_MAX_TOP, so it costs two');
+    assert.strictEqual(calls.length, 1,
+      'cap + 1 must fit one request, or every over-cap filter pays for rows it throws away');
   });
 });

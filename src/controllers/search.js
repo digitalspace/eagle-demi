@@ -173,14 +173,20 @@ async function recoverChunkFilters(query, dropped, acl) {
   // function has already returned, so a project-only `narrowed` cannot be reached. A check for it
   // would be dead defence, which reads as a handled case that was never a case.
   if (query.project !== undefined) narrowed.project = query.project;
+  // READ THROUGH `andParams`, the same generator `buildFilter` reads with, rather than probing
+  // `and[<key>]` by hand. It accepts BOTH wire shapes — the bracketed key and the nested `and: {}`
+  // object a qs/extended parser produces — and hand-probing only ever matched the first. Under the
+  // nested shape the caller's value was silently missing from `narrowed` while the key was still
+  // counted as recovered, which is the same "recovered for the wrong reason" defect that already
+  // cost one round here, reached through a second door. Unreachable under the shipped parser, and
+  // that is exactly the kind of thing a parser swap turns on without touching this file.
+  const wanted = new Set(dropped);
+  for (const [key, value] of eagleQuery.andParams(query)) {
+    if (wanted.has(key)) narrowed[`and[${key}]`] = value;
+  }
+  // The bare-key form, for the handful of filters that are not `and[...]` at all.
   for (const key of dropped) {
-    // `and[<key>]` and the bare key only. `buildFilter` reports the FULL wire key for a range —
-    // `datePostedStart`, not `datePosted` — so the suffixed variants this used to try could only
-    // ever have matched `and[datePostedStartStart]`. Dead defence, and dead defence reads as a
-    // handled case.
-    for (const wire of [`and[${key}]`, key]) {
-      if (query[wire] !== undefined) narrowed[wire] = query[wire];
-    }
+    if (query[key] !== undefined) narrowed[key] = query[key];
   }
   if (Object.keys(narrowed).length === 0) return { scope: null, recovered: [] };
 
@@ -202,9 +208,10 @@ async function recoverChunkFilters(query, dropped, acl) {
   // so the count and the ACL below are still computed by the one code path.
   if (ids.length === 0) return { scope: "documentId eq ''", recovered };
 
-  // `quoteList`, not a hand-rolled literal. It is the helper every other list clause in this file
-  // goes through, and it is the one that doubles an embedded quote and falls back off the comma
-  // delimiter — this is stored data being spliced into a filter, so it takes the same path.
+  // `quoteList`, not a hand-rolled literal: it is what every other list clause in this file goes
+  // through, and this is stored data being spliced into a filter. It does quote-DOUBLING only —
+  // the comma-delimiter fallback is `access-odata.js` `inClause`, a different helper — which is
+  // safe here because a document id is a GUID or an `eagle-<hex>` string and carries neither.
   return { scope: `search.in(documentId, ${aiSearch.quoteList(ids)}, ',')`, recovered };
 }
 

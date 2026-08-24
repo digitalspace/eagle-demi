@@ -250,17 +250,6 @@ function buildUrl(base, kase, pageSize = DEFAULTS.pageSize) {
  *
  * The bar this tool exists to enforce is "every disagreement with prod is either fixed or knowingly
  * accepted in writing". An acceptance with no written reason is indistinguishable from an oversight,
- * so the reason is a required field here and it is printed in the report next to the case. Deleting
- * an entry is how you re-open the question.
- *
- * Keyed `dataset:field`. Everything not listed fails the run.
- */
-/**
- * Behavioural divergences that are DECIDED, not defects — the sort counterpart to
- * `EXPECTED_KEY_DELTA`, and the reason a green run is achievable at all.
- *
- * The bar this tool exists to enforce is "every disagreement with prod is either fixed or knowingly
- * accepted in writing". An acceptance with no written reason is indistinguishable from an oversight,
  * so the reason is required and is printed next to the case. Deleting an entry re-opens the question.
  *
  * TWO SCOPES, and the distinction is not academic — getting it wrong made this table a mute button

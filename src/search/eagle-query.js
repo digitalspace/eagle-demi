@@ -718,6 +718,7 @@ module.exports = {
   unknownParams,
   filterKeysIn,
   canScopeToProject,
+  andParams,
   projectIdsFrom,
   withProjectIds,
   reportDropped,

@@ -266,6 +266,34 @@ test('chunk filters are resolved through the documents index', async (t) => {
     assert.strictEqual(out.body[0].meta[0].dropped, undefined);
   });
 
+  await t.test('the nested and:{} wire shape resolves like the bracketed one', async () => {
+    // `andParams` accepts BOTH shapes — `and[type]=x` and a nested `and: {type: 'x'}` object, which
+    // is what a qs/extended parser produces — and `buildFilter` reads through it. The resolver used
+    // to probe `and[<key>]` by hand instead, so under the nested shape the caller's value never
+    // reached the document query while the key was still counted as recovered: a scope built from a
+    // filter that carried nothing, reported as applied. Unreachable under the shipped parser, which
+    // is precisely what makes it the kind of thing a parser swap turns on silently.
+    let docFilter = null;
+    t.mock.method(aiSearch, 'documentIdsMatching', async (f) => {
+      docFilter = f;
+      return { ids: ['d1'], total: 1, withinCap: true };
+    });
+    t.mock.method(aiSearch, 'searchChunks', async () => ({ count: 1, items: [chunk] }));
+    stubHydration(t);
+
+    const { out, res } = capture();
+    await searchController.search(anonymous({
+      dataset: 'DocumentChunk',
+      keywords: 'river',
+      and: { type: '5cf00c03a266b7e1877504cf' }
+    }), res);
+
+    assert.ok(docFilter && docFilter.includes('5cf00c03a266b7e1877504cf'),
+      `the nested shape must reach the document query, got: ${docFilter}`);
+    assert.strictEqual(out.body[0].meta[0].dropped, undefined,
+      'and the key counts as recovered only because it actually was');
+  });
+
   await t.test('a key NEITHER index can express is still reported as dropped', async () => {
     // `isFeatured` is in no demi index at all, so resolving it through `documents` recovers
     // nothing. Sent alongside a key that IS recoverable, because the failure this closes is
