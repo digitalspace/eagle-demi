@@ -63,9 +63,18 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
 - [ ] **Rotate the MinIO key and OpenShift token at source** — repo secrets deleted 2026-08-07,
       credentials still live at `nrs.objectstore.gov.bc.ca` and the token's issuer. Oldest open
       item. Needs whoever owns those systems.
-- [ ] **Rotate `ADMIN_API_KEY` deliberately** (its value passed through the 2026-08-13 incident):
-      new value into `demi-app-secrets` (6cdc9e-test), `gpu-extractor.env` on the GPU box, and the
-      App Service; restart `gpu-extractor` and `gpu-ingest`.
+- [ ] **Rotate `ADMIN_API_KEY` deliberately** (its value passed through the 2026-08-13 incident,
+      and again through every `probe-acl.js` run since): new value into `demi-app-secrets`
+      (6cdc9e-test), `gpu-extractor.env` on the GPU box, and the App Service; restart
+      `gpu-extractor` and `gpu-ingest`.
+      - **Blocked on two of the three targets, measured 2026-08-24 — do not start a partial
+        rotation.** The OpenShift secret is writable (`oc --context epic-test`). The App Service is
+        NOT: the `az` token is revoked as of today (`AADSTS50173`, `TokensValidFrom
+        2026-08-24T16:28:29Z`), and `az account show` still prints a subscription because it reads
+        the cached profile — only a real call fails, so check with a call, never with
+        `account show`. The GPU box does not answer on `192.168.5.109`. Unblock with an interactive
+        `az login` and whatever brings the GPU box up; then rotate all three before restarting
+        anything, since a partial rotation 401s the extractor.
 - [x] ~~**Mint the first scoped service key** — until one exists no live ACL probe can fail.~~
       **#150, merged 2026-08-24 (`546b285`), reviewer PASS. This line prescribed the wrong key
       twice.** `roles:['staff']` is
