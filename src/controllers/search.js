@@ -392,6 +392,26 @@ exports.search = async (req, res) => {
     // once for every dataset, before any filter is built, because the translation is a read.
     const filterQuery = await resolveProjectFilter(access, req.query);
 
+    // A PROJECT FILTER THE DATASET CANNOT EXPRESS ANSWERS NOTHING, never everything.
+    //
+    // `projects` has no `projectId` column — a project is its own scope — so `buildFilter` drops
+    // the key and the request would answer the entire ACL-visible corpus to a caller who asked for
+    // one project. That is the widest possible reading of the narrowest possible request.
+    //
+    // This was already true for a RESOLVABLE id and the passthrough above extended it to an
+    // unresolvable one; closing both is better than restoring the old asymmetry, where the same
+    // request answered 0 or 348 depending only on whether the project happened to exist.
+    //
+    // `count: 0` is a measurement here: the filter names a scope this index cannot represent, so no
+    // row can be known to match it. The key is still reported, so the caller is told which one.
+    if (eagleQuery.projectIdsFrom(filterQuery).length && !eagleQuery.canScopeToProject(dataset)) {
+      noteDropped('filter', ['project']);
+      // `res.json`, not `sendJson` — the wrapper is what attaches `meta`, and this is a response
+      // whose whole value is the `dropped` key telling the caller WHY it is empty. The raw bind
+      // would answer zero rows and no reason, which is the shape this guard exists to replace.
+      return res.json([{ searchResults: [], count: 0 }]);
+    }
+
     if (dataset === 'Project') {
       // ONE definition, read by BOTH branches below. The two must never disagree about which
       // corpus they serve, and they did: the escape hatch existed only on the Cosmos side, so a

@@ -86,15 +86,40 @@ test('the response says which keys it could not express', async (t) => {
   // ONE SHAPE ACROSS ALL THREE DATASETS, and across both backends: the keywordless Cosmos list
   // can apply no `and[]` filter at all, and `project` is inexpressible against the `projects`
   // index either way. Same key, same two arrays.
-  await t.test('the Cosmos list path reports through the same key', async () => {
-    t.mock.method(projectsRepo, 'listVisible', async () => ({ items: [] }));
-    t.mock.method(projectsRepo, 'countVisible', async () => 348);
+  await t.test('a project filter the dataset cannot express answers NOTHING, and says so', async () => {
+    // `projects` has no `projectId` column — a project is its own scope — so `buildFilter` drops
+    // the key. Reporting the drop and then answering the whole ACL-visible corpus is the widest
+    // possible reading of the narrowest possible request: measured, `dataset=Project&project=<id>`
+    // returned `count: 348`, every project this caller can see, to someone who asked for one.
+    let searched = false;
+    t.mock.method(projectsRepo, 'listVisible', async () => { searched = true; return { items: [] }; });
+    t.mock.method(projectsRepo, 'countVisible', async () => { searched = true; return 348; });
+    t.mock.method(aiSearch, 'searchProjects', async () => { searched = true; return { count: 348, items: [] }; });
 
     const { out, res } = capture();
     await searchController.search(
       anonymous({ dataset: 'Project', keywords: '', project: '207', pageSize: '10' }), res);
 
-    assert.deepStrictEqual(out.body[0].meta[0].dropped, { filter: ['project'], sort: [] });
+    assert.strictEqual(out.body[0].count, 0, 'a scope this index cannot represent matches nothing');
+    assert.deepStrictEqual(out.body[0].searchResults, []);
+    assert.deepStrictEqual(out.body[0].meta[0].dropped, { filter: ['project'], sort: [] },
+      'and the caller is told which key it was, or an empty answer is indistinguishable from no data');
+    assert.strictEqual(searched, false, 'nothing is queried for a scope that cannot be expressed');
+  });
+
+  await t.test('a project filter the dataset CAN express is not refused', async () => {
+    // The other half. `documents` carries `projectId`, so the same wire shape is a real filter and
+    // must reach the index — a guard that refused both would empty every project documents tab.
+    let sent = null;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => { sent = opts; return { count: 0, items: [] }; });
+
+    const { out, res } = capture();
+    await searchController.search(
+      anonymous({ dataset: 'Document', keywords: 'fish', project: '207' }), res);
+
+    assert.ok(sent, 'the request must be issued');
+    assert.ok(sent.filter.includes("projectId eq '207'"), `got: ${sent.filter}`);
+    assert.strictEqual(out.body[0].meta[0].dropped, undefined, 'nothing was dropped');
   });
 
   // ABSENT means nothing was dropped — the same rule `searchResultsTotal` and `countsPassages`
