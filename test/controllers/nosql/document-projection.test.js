@@ -10,6 +10,10 @@ const path = require('node:path');
 const documents = require('../../../src/repositories/documents');
 const projects = require('../../../src/repositories/projects');
 const documentController = require('../../../src/controllers/nosql/document');
+const config = require('../../../src/config');
+
+// publicView allowlists by ENRICHMENT_SOURCES; test deploys name wildfire.
+config.enrichmentSources = ['wildfire'];
 
 function mockRes() {
   return {
@@ -193,7 +197,12 @@ test('projects.publicView withholds the ACL as well as the upstream payloads', a
     _etag: '"0x8DF00728"',
     sources: {
       track: { track_project_id: 207 },
-      wildfire: { count: 2 }
+      wildfire: {
+        activeCountWithin50km: 2,
+        nearestDistanceKm: 12.4,
+        firesOfNoteNearby: 1,
+        lastCalculatedAt: '2026-08-23T00:00:00.000Z'
+      }
     }
   };
 
@@ -203,7 +212,8 @@ test('projects.publicView withholds the ACL as well as the upstream payloads', a
     assert.strictEqual(view.read, undefined, 'the role vocabulary is withheld');
     assert.strictEqual(view._etag, undefined, 'the concurrency token is withheld');
     assert.strictEqual(view.sources.track, undefined, 'the Track payload is still withheld');
-    assert.strictEqual(view.sources.wildfire.count, 2, 'the wildfire aggregate still survives');
+    assert.strictEqual(view.sources.wildfire.activeCountWithin50km, 2,
+      'the wildfire aggregate still survives');
     assert.strictEqual(view.name, 'Nicomen Wind Energy', 'the record itself survives');
     assert.strictEqual(view.isPublished, true, 'the mirror survives');
   });
@@ -234,5 +244,33 @@ test('projects.publicView withholds the ACL as well as the upstream payloads', a
     assert.strictEqual(
       projects.publicView({ id: '211', name: 'S' }).isPublished, false,
       'a row that asserts neither an ACL nor a flag is not published by default');
+  });
+});
+
+test('the `sources` allowlist is ENRICHMENT_SOURCES, not a hardcoded key', async (t) => {
+  const stored = () => ({
+    id: '207',
+    name: 'Nicomen Wind Energy',
+    isPublished: true,
+    sources: { track: { track_project_id: 207 }, wildfire: { activeCountWithin50km: 2 } }
+  });
+
+  t.after(() => { config.enrichmentSources = ['wildfire']; });
+
+  await t.test('empty list: no enrichment leaves at all — the prod setting', () => {
+    config.enrichmentSources = [];
+    assert.strictEqual(projects.publicView(stored()).sources, undefined);
+  });
+
+  await t.test('a named key passes, and nothing else does', () => {
+    config.enrichmentSources = ['wildfire'];
+    const view = projects.publicView(stored());
+    assert.deepStrictEqual(view.sources, { wildfire: { activeCountWithin50km: 2 } });
+  });
+
+  await t.test('a listed key the row does not carry is never invented', () => {
+    config.enrichmentSources = ['wildfire', 'nowhere'];
+    assert.deepStrictEqual(
+      Object.keys(projects.publicView(stored()).sources), ['wildfire']);
   });
 });

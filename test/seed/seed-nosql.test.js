@@ -29,7 +29,7 @@ test('parseArgs — writes require an explicit flag', async (t) => {
   });
 
   await t.test('records is not a stage any more, and asking for it throws', () => {
-    // The NRPTI ingest was removed rather than narrowed — see TODO.md. Every stage now runs by
+    // The records ingest was removed rather than narrowed — see TODO.md. Every stage now runs by
     // default, so a divergence between the two lists means a stage was added and forgotten.
     assert.deepStrictEqual(ALL_STAGES, ['projects', 'documents', 'boundaries']);
     assert.deepStrictEqual(DEFAULT_STAGES, ALL_STAGES);

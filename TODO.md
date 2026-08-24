@@ -121,7 +121,9 @@ gone — nothing below points at an archive.
         absence, one test that write shape == read shape. No adapter layer. NRPTI stays gone.
 - [ ] **3.2 Prod purity: `ENRICHMENT_SOURCES` app setting** feeding the `publicView` allowlist
       (`src/repositories/projects.js:168`). Test `wildfire`, prod empty. One line; makes 4.2's corpus
-      copy safe (stale wildfire stats stripped at read).
+      copy safe (stale wildfire stats stripped at read). **Merge order:** CI deploys code only, app
+      settings are a hand PUT — set `ENRICHMENT_SOURCES=wildfire` on `demi-api-test` BEFORE merging
+      the PR, or the deploy hides the test panel. Blocked on fact 5 (`az login`).
 - [ ] **3.3 Index widening — one tunnel session, app LAST.** `eagle-query.js` reads field metadata
       from the committed `azure/search/indexes/*.json` at require time, so naming a field there
       before the live index has it turns every filtered query into a 400 answered as 502. Order:

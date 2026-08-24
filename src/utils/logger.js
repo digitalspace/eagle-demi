@@ -17,10 +17,7 @@ const requestIdFormat = format((info) => {
   return info;
 });
 
-// Logs go to stdout only. There used to be a second transport writing every line to the legacy
-// Mongo-API `logs` container, which made the logger — required at boot by app.js — the deepest
-// edge in the request path's dependency on that account. A database round trip per log line is
-// not this module's job: shipping is the platform's.
+// Logs go to stdout only — a database round trip per log line is not this module's job.
 //
 // Shipping is wired in `api/index.js`, which starts the Azure Monitor OpenTelemetry distro with
 // winston instrumentation enabled. That hooks this logger and forwards each line to Application

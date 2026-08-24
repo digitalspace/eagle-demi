@@ -333,54 +333,8 @@ resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases
   }
 }
 
-// TTL bounds the collection permanently. Note TTL requires indexing to stay active, so the
-// narrow include list below is deliberate — indexingMode 'none' would disable expiry.
-resource logsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
-  parent: database
-  name: 'logs'
-  properties: {
-    resource: {
-      id: 'logs'
-      partitionKey: {
-        paths: [
-          '/id'
-        ]
-        kind: 'Hash'
-      }
-      defaultTtl: 1209600 // 14 days
-      indexingPolicy: {
-        indexingMode: 'consistent'
-        automatic: true
-        includedPaths: [
-          {
-            path: '/level/?'
-          }
-          {
-            path: '/timestamp/?'
-          }
-          {
-            path: '/requestId/?'
-          }
-        ]
-        excludedPaths: noIndex
-        compositeIndexes: [
-          [
-            {
-              path: '/level'
-              order: 'ascending'
-            }
-            {
-              path: '/timestamp'
-              order: 'descending'
-            }
-          ]
-        ]
-      }
-    }
-  }
-}
-
-// The nightly sync re-upserts every fire still in the DataBC feed, refreshing _ts. Anything
+// The sync (manual: POST /admin/sync/wildfires) re-upserts every fire still in the DataBC
+// feed, refreshing _ts. Anything
 // that drops out of the feed expires itself — that deletes the stale-fire purge problem
 // rather than solving it. Spatial index supports ST_DISTANCE proximity search.
 resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
@@ -439,26 +393,6 @@ resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
 // The container still exists in the live account; this template is not deployed, so removing the
 // definition deletes nothing. Delete it with the account teardown if it is still empty.
 
-// Required by the change-feed processor / Functions trigger. Must be partitioned on /id.
-// Nothing reads it today: the real-time sync it was created for was Typesense, deleted 2026-07-31,
-// and AI Search pulls on a _ts high-water mark instead of a change feed. Kept because a change-feed
-// trigger is the only way deletes would ever propagate automatically, and that remains plausible.
-resource leasesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
-  parent: database
-  name: 'leases'
-  properties: {
-    resource: {
-      id: 'leases'
-      partitionKey: {
-        paths: [
-          '/id'
-        ]
-        kind: 'Hash'
-      }
-    }
-  }
-}
-
 // Registry API keys, one item per consumer. Partitioned on /id, where the id IS the public keyId
 // carried in the key itself — that makes verification a point read in a single partition on the
 // hot path of every X-Api-Key request, instead of a scan comparing every stored hash.
@@ -508,9 +442,8 @@ resource apiKeysContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
 // read GET /api/config performs is a point read in a single partition — ~1 RU, and serverless
 // bills consumption, so an idle container costs nothing.
 //
-// Its own container rather than a row in an existing one: `leases` is change-feed state the SDK
-// owns, and `apikeys` is a secret store whose indexing policy exists to keep /hash out of the
-// index. Neither is the right neighbour for a document that is served to the public verbatim.
+// Its own container rather than a row in `apikeys`, whose indexing policy exists to keep /hash out
+// of the index — not the right neighbour for a document served to the public verbatim.
 //
 // No indexing policy: one item, read by id, never queried.
 resource configContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {

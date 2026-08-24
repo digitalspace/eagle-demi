@@ -12,6 +12,10 @@ const projectController = require('../../src/controllers/nosql/project');
 const documentController = require('../../src/controllers/nosql/document');
 const chunksRepo = require('../../src/repositories/chunks');
 const { TIER, SECURE_ROLES } = require('../../src/helpers/access-sql');
+const config = require('../../src/config');
+
+// publicView allowlists by ENRICHMENT_SOURCES; test deploys name wildfire.
+config.enrichmentSources = ['wildfire'];
 
 function mockRes() {
   const res = {
@@ -70,9 +74,8 @@ test('nosql project controller', async (t) => {
 
   /**
    * The read ACL gates rows, not fields, so a caller entitled to the row was getting the raw
-   * upstream Track and Eagle payloads with it — unbounded, and anonymous on both these routes.
-   * `sources.wildfire` is DEMI's own aggregate and the map explorer renders it, so the rule is an
-   * allowlist rather than "drop sources".
+   * upstream payloads with it — unbounded, and anonymous on both these routes. ENRICHMENT_SOURCES
+   * is the allowlist; everything unnamed goes without needing its own rule.
    */
   const STORED = {
     id: '207',
@@ -80,8 +83,13 @@ test('nosql project controller', async (t) => {
     sources: {
       track: { track_project_id: 207, proponent_name: 'Premier Renewable Energy' },
       eagle: { _id: 'abc', projectLeadEmail: 'lead@gov.bc.ca', read: ['public'] },
-      nrpti: { records: 3 },
-      wildfire: { count: 2, activeNearby: true }
+      importer: { records: 3 },
+      wildfire: {
+        activeCountWithin50km: 2,
+        nearestDistanceKm: 12.4,
+        firesOfNoteNearby: 1,
+        lastCalculatedAt: '2026-08-23T00:00:00.000Z'
+      }
     }
   };
 
@@ -99,9 +107,9 @@ test('nosql project controller', async (t) => {
     for (const [label, body] of [['list', list.body[0]], ['point read', one.body]]) {
       assert.strictEqual(body.sources.track, undefined, `${label}: Track payload withheld`);
       assert.strictEqual(body.sources.eagle, undefined, `${label}: Eagle payload withheld`);
-      // Allowlisted, so the dead nrpti block goes without needing its own rule.
-      assert.strictEqual(body.sources.nrpti, undefined, `${label}: nrpti withheld`);
-      assert.strictEqual(body.sources.wildfire.count, 2, `${label}: wildfire aggregate survives`);
+      assert.strictEqual(body.sources.importer, undefined, `${label}: unlisted block withheld`);
+      assert.strictEqual(body.sources.wildfire.activeCountWithin50km, 2,
+        `${label}: wildfire aggregate survives`);
       assert.strictEqual(body.name, 'Nicomen Wind Energy', `${label}: the record itself survives`);
     }
   });

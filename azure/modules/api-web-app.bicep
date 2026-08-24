@@ -83,6 +83,9 @@ param foundryEndpoint string = ''
 @description('Foundry model deployment name for the AI summariser')
 param foundryDeployment string = ''
 
+@description('Comma-separated `sources` keys a project may publish over HTTP. Empty publishes none.')
+param enrichmentSources string = ''
+
 @description('Master switch for the AI summariser. Off by default — the endpoint does not exist until the Foundry account is provisioned, and a half-working summariser is worse than an absent one.')
 param summaryEnabled bool = false
 
@@ -379,6 +382,10 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SEARCH_INDEX_DOCUMENTS'
           value: searchIndexDocuments
+        }
+        {
+          name: 'ENRICHMENT_SOURCES'
+          value: enrichmentSources
         }
         // AI summariser — step 5 of the search pipeline, privileged-only. No key here either: the
         // Foundry account has disableLocalAuth and the app calls it with the same user-assigned
