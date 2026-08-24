@@ -1207,10 +1207,10 @@ module.exports = {
   // refuse to publish a zero it cannot distinguish from an unset app setting.
   config,
   semanticStats,
-  // Exported for tests. The 402 latch is process-wide and deliberately has no production reset —
-  // without this seam one 402 test would silently disable semantic for every test after it. The
-  // counters reset with it for the same reason: a partial response asserted in one test would
-  // otherwise still be in the totals the next test reads.
+  // Exported for tests. The 402 latch clears on its own at the month rollover and no sooner, so
+  // without this seam one 402 test would disable semantic for every test after it inside the same
+  // calendar month. The counters reset with it for the same reason: a partial response asserted in
+  // one test would otherwise still be in the totals the next test reads.
   resetSemanticExhausted: () => {
     semanticExhaustedMonth = null;
     Object.assign(semanticCounters, {

@@ -1153,6 +1153,18 @@ test('semantic reranking', async (t) => {
     // `alwaysOn` is true, so the worker outlives the allowance. This is the only test in the file
     // that controls the clock, because it is the only behaviour that spans a calendar boundary —
     // `apis: ['Date']` so the retry backoff's timers stay real.
+    //
+    // AND THE ONLY ONE THAT PINS A TIMEZONE. The runner, CI and App Service all sit at UTC+0, so a
+    // rollover read off the LOCAL calendar is indistinguishable from a UTC one here — measured:
+    // reimplementing the stamp as `getFullYear()/getMonth()` left this file fully green. Under
+    // UTC-7, 2026-09-01T00:00:01Z is still 31 August, so the same mutant goes red. The module's
+    // docblock says not to move this to local time; without the pin, nothing enforced that.
+    const originalTZ = process.env.TZ;
+    process.env.TZ = 'America/Vancouver';
+    tt.after(() => {
+      if (originalTZ === undefined) delete process.env.TZ; else process.env.TZ = originalTZ;
+    });
+
     tt.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-30T12:00:00Z') });
 
     const calls = captureFetch(tt, (i) => (
