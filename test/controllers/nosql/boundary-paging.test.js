@@ -149,6 +149,12 @@ test('the two boundary paging paths are not interchangeable', async (t) => {
     assert.ok(!('x-continuation-token' in res.headers), 'and the SDK gave us nothing to hand on');
     assert.ok(warnings.some(w => w.includes('no continuation token')),
       'a truncated map that says nothing is the failure this endpoint exists to have stopped having');
+
+    // The CALLER's side of it. A warn reaches telemetry; the client still holds a short map it
+    // cannot tell from a complete one, and the handler's default `public, max-age=86400` would
+    // keep that wrong answer in shared caches for a day.
+    assert.strictEqual(res.headers['x-truncated'], 'true');
+    assert.strictEqual(res.headers['Cache-Control'], 'no-store');
   });
 
   // The line is unauthenticated and winston forwards to Application Insights, so echoing a caller
@@ -189,6 +195,9 @@ test('the two boundary paging paths are not interchangeable', async (t) => {
 
     assert.strictEqual(res.headers['x-continuation-token'], 'more');
     assert.deepStrictEqual(warnings, [], 'the caller can reach the rest — nothing to report');
+    assert.ok(!('x-truncated' in res.headers), 'a resumable page is not truncated');
+    assert.strictEqual(res.headers['Cache-Control'], 'public, max-age=86400, s-maxage=86400',
+      'and it stays cacheable — the default must survive the path that is fine');
   });
 
   await t.test('a short page is complete, and says nothing', async (t2) => {

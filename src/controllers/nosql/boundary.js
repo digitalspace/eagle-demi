@@ -93,6 +93,17 @@ exports.getBoundaries = async (req, res) => {
     // winston forwards to Application Insights (`utils/logger.js:25-29`), so echoing `type` would
     // let anyone write chosen text into telemetry, once per request, at unbounded cardinality.
     if (!nextPage && items.length >= pageSize) {
+      // SAID TO THE CALLER, not only to telemetry. A log line closes nothing for the client that
+      // just received a short map: the resumable path gets `x-continuation-token`, so this path
+      // must get something too, or a truncated answer is indistinguishable from a complete one.
+      //
+      // And it must not be CACHED as though complete. The handler sets `public, max-age=86400`
+      // above, which would pin a knowingly-incomplete map into shared caches for a day; a wrong
+      // answer that persists is worse than a slow one.
+      if (typeof res.setHeader === 'function') {
+        res.setHeader('x-truncated', 'true');
+        res.setHeader('Cache-Control', 'no-store');
+      }
       logger.warn(
         `[boundaries] returned a full page of ${pageSize} with no continuation token on ` +
         `${type ? 'a type-scoped' : 'the unfiltered cross-partition'} read — any further rows ` +
