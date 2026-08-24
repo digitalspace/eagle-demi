@@ -1414,44 +1414,47 @@ test('the eagle-public response contract', async (t) => {
     assert.strictEqual(viaCosmos.trackProjectId, '207', 'a String on both branches, not a Number');
   });
 
-  await t.test('an API-created project reads right on Cosmos and WRONG on the index — the known gap', async () => {
-    // TWO WRITERS DISAGREE ON THIS FIELD. `merge/project.js:38` stores `projectState`;
-    // `controllers/nosql/project.js:87` createProject stores `status`. Reading only `projectState`
-    // fixes the synced rows and breaks the API-created ones — the same wrong answer from the other
-    // direction, which is why the mapper reads whichever name the row carries.
-    const apiCreated = {
-      id: '9001', name: 'Hand Made', status: 'Withdrawn',
-      eagleId: '588511c4aaecd9001b826192', read: ['public'], isPublished: true
-    };
-    t.mock.method(projectsRepo, 'listVisible', async () => ({ items: [apiCreated] }));
-    t.mock.method(projectsRepo, 'countVisible', async () => 1);
+  await t.test('an API-created project now reads the SAME state on both branches', async (t2) => {
+    // THE ROW COMES FROM THE REAL WRITER, not a literal. The two writers used to disagree —
+    // `merge/project.js:38` stored `projectState`, `createProject` stored `status` — and the
+    // earlier version of this test pinned that gap with a hand-made row. A literal cannot notice
+    // the day the writer changes, which is the whole failure this file exists to catch, so this
+    // drives createProject and reads back whatever it actually stored.
+    const projectController = require('../../src/controllers/nosql/project');
+    let saved;
+    t2.mock.method(projectsRepo, 'upsert', async (doc) => { saved = doc; return doc; });
+    const noop = () => noop;
+    await projectController.createProject(
+      { body: { trackProjectId: 9001, name: 'Hand Made', status: 'Withdrawn',
+        centroid: { coordinates: [0, 0] }, isPublished: true } },
+      { json: noop, status: () => ({ json: noop }) });
+    t2.mock.restoreAll();
 
+    assert.strictEqual(saved.projectState, 'Withdrawn', 'stored under the name the sync uses');
+    assert.ok(!('status' in saved), 'the wire name must not reach the container');
+
+    // Cosmos branch: reads the stored row.
+    t.mock.method(projectsRepo, 'listVisible', async () => ({ items: [saved] }));
+    t.mock.method(projectsRepo, 'countVisible', async () => 1);
     const c = capture();
     await searchController.search(
       { query: { dataset: 'Project', keywords: '', pageSize: '10' }, header: () => null }, c.res);
-
     assert.strictEqual(c.out.body[0].searchResults[0].status, 'Withdrawn',
       'a row written by createProject must not read back as the Active default');
 
-    // AND THE OTHER BRANCH STILL GETS IT WRONG. Asserting only the Cosmos side above would imply a
-    // parity that does not hold: the index sources `status` from `c.projectState`
-    // (demi-projects-ds.json), and an API-created row has no such field, so the alias yields
-    // nothing and the mapper's `|| 'Active'` fires. Pinned deliberately rather than left unsaid —
-    // a test that exercises one branch and reads as if it covered both is worse than no test.
-    //
-    // THIS ASSERTION INVERTS when the write side is unified (see TODO.md F11a): at that point the
-    // index carries the real state and this must become an equality with the Cosmos branch. It is
-    // pinning a known gap, not a desired behaviour — do not "fix" the gap and leave this green.
+    // Index branch: the data source aliases `c.projectState AS status`
+    // (`azure/search/datasources/demi-projects-ds.json`), so project the stored row through that
+    // same alias rather than inventing an index shape by hand.
     t.mock.method(aiSearch, 'searchProjects', async () => ({
       count: 1,
-      items: [{ id: '9001', name: 'Hand Made', legacyEagleId: '588511c4aaecd9001b826192', read: ['public'] }]
+      items: [{ id: saved.id, name: saved.name, status: saved.projectState, read: ['public'] }]
     }));
     const k = capture();
     await searchController.search(
       { query: { dataset: 'Project', keywords: 'hand made', pageSize: '10' }, header: () => null }, k.res);
 
-    assert.strictEqual(k.out.body[0].searchResults[0].status, 'Active',
-      'the index cannot know the state of a row whose writer used the other field name');
+    assert.strictEqual(k.out.body[0].searchResults[0].status, 'Withdrawn',
+      'the index now carries the real state — the writers agree, so the branches must too');
   });
 });
 

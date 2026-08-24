@@ -703,14 +703,15 @@ exports.search = async (req, res) => {
           legacyEagleId: p.eagleId || '',
           name: p.name || 'Unnamed Project',
           sector: p.sector || 'Other',
-          // BOTH names, because TWO WRITERS DISAGREE. `merge/project.js:38` stores `projectState`
-          // (the sync path, and where the 393 rows in the registry come from), while
-          // `controllers/nosql/project.js:87` `createProject` stores `status` and `updateProject`
-          // spreads `...changes` verbatim, so anything created or edited through the API lands
-          // under the index's alias instead. Reading only `projectState` fixed the sync rows and
-          // broke the API-created ones — the same wrong answer arriving from the other direction.
-          // Unifying the writers is its own change; until then this reads whichever the row has.
-          status: p.projectState || p.status || 'Active',
+          // ONE stored name. This read both for a while, because two writers disagreed:
+          // `merge/project.js:38` stored `projectState` while `createProject` stored `status` and
+          // `updateProject` spread the body in verbatim. Unifying them was the fix — the writers
+          // now rename at the edge (`controllers/nosql/project.js`), so `status` is a wire name
+          // only and no row can carry it. The `|| p.status` fallback went with them: it could only
+          // ever fire for a row this branch's sibling — the index — reads as stateless anyway,
+          // since the data source aliases `c.projectState AS status`. Measured before removal:
+          // 0 rows of 393 carried `status`.
+          status: p.projectState || 'Active',
           // Same helper as the AI Search branch — one definition of the fallback centroid, and
           // no second place to get the [lng, lat] orientation wrong.
           centroid: geoPoint(p.centroid),

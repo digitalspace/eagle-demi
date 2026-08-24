@@ -64,7 +64,10 @@ exports.getProject = async (req, res) => {
 
 exports.createProject = async (req, res) => {
   try {
-    const { trackProjectId, name, description, sector, region, status, centroid, isPublished } = req.body;
+    const {
+      trackProjectId, name, description, sector, region, status, projectState,
+      centroid, isPublished
+    } = req.body;
 
     if (!trackProjectId || !name || !centroid || !centroid.coordinates) {
       return res.status(400).json({ error: 'Missing required fields: trackProjectId, name, centroid' });
@@ -84,7 +87,20 @@ exports.createProject = async (req, res) => {
       description: description || '',
       sector: sector || '',
       region: region || '',
-      status: status || '',
+      // `status` ON THE WIRE, `projectState` AT REST — one stored name, chosen by the writer that
+      // owns the 389 synced rows (`merge/project.js:38` via TRACK_PRECEDENCE). This used to store
+      // the wire name verbatim, so an API-created project was the only row in the container whose
+      // state lived under a different key, and the projects data source aliases
+      // `c.projectState AS status`: the alias resolved to nothing and the row indexed as though it
+      // had no state at all. Measured 2026-08-24 before this change: 0 rows carried `status`, 389
+      // carried `projectState` — nothing to migrate, because nothing had been created through this
+      // route since the drift appeared.
+      //
+      // BOTH INPUT NAMES, and the same precedence PUT uses. Accepting only the wire name made a
+      // GET-then-POST round trip lose the state silently: `publicView` returns the stored name, so
+      // the body a caller sends back carries `projectState`, which this route dropped on the floor
+      // while its sibling honoured it.
+      projectState: projectState || status || '',
       centroid,
       read,
       isPublished: published,
@@ -127,8 +143,17 @@ exports.updateProject = async (req, res) => {
     const {
       id: _ignoredId, trackProjectId: _ignoredTrackId,
       read: _ignoredRead, isPublished,
+      status: wireStatus,
       ...changes
     } = req.body;
+
+    // Same rename as createProject, and it has to be here too: this route spreads the body in
+    // verbatim, so a caller sending `status` wrote a second field beside `projectState` and the
+    // two then disagreed on the same row. `projectState` in the body wins if both are sent —
+    // the stored name is the specific one, so honour it over the alias.
+    if (wireStatus !== undefined && changes.projectState === undefined) {
+      changes.projectState = wireStatus;
+    }
 
     const acl = isPublished === undefined
       ? { read: existing.read, isPublished: existing.isPublished }

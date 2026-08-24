@@ -159,6 +159,57 @@ test('nosql project controller', async (t) => {
     // for it. A created project without `sources` fails the next wildfire sync outright.
     assert.deepStrictEqual(saved.sources, {}, 'the wildfire patch needs /sources to exist');
   });
+
+  // ONE STORED NAME FOR THE PROJECT STATE. `status` is the wire name and the index alias
+  // (`c.projectState AS status`); `projectState` is what the sync writes and what 389 of the 393
+  // stored rows carry. Both write routes used to let the wire name through, which put the state
+  // under a key the data source does not read.
+  await t.test('create renames the wire `status` to the stored `projectState`', async () => {
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.createProject({
+      body: { trackProjectId: 2, name: 'Y', status: 'Withdrawn', centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+
+    assert.strictEqual(saved.projectState, 'Withdrawn');
+    assert.ok(!('status' in saved), 'the wire name must not reach the container');
+  });
+
+  // A GET returns `projectState` (publicView reads the stored row), so the body a caller sends
+  // back carries the stored name. Accepting only the wire name dropped it silently — no error, an
+  // empty state — while the sibling PUT route honoured it. Both routes take both names now.
+  await t.test('create accepts the stored name too, and prefers it — GET then POST round-trips', async () => {
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.createProject({
+      body: { trackProjectId: 3, name: 'Z', projectState: 'Withdrawn', centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+    assert.strictEqual(saved.projectState, 'Withdrawn', 'the body the API itself hands back must survive');
+
+    await projectController.createProject({
+      body: { trackProjectId: 4, name: 'W', status: 'Completed', projectState: 'Withdrawn',
+        centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+    assert.strictEqual(saved.projectState, 'Withdrawn', 'same precedence as update: the stored name wins');
+  });
+
+  await t.test('update renames it too, and an explicit projectState wins', async () => {
+    t.mock.method(projects, 'getById', async () => ({ id: '207', trackProjectId: 207, name: 'P' }));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, body: { status: 'Withdrawn' } }, mockRes());
+    assert.strictEqual(saved.projectState, 'Withdrawn');
+    assert.ok(!('status' in saved), 'this route spreads the body in verbatim — the rename must precede that');
+
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, body: { status: 'Withdrawn', projectState: 'Completed' } },
+      mockRes());
+    assert.strictEqual(saved.projectState, 'Completed', 'the stored name is the specific one');
+  });
 });
 
 test('nosql document controller — ACL cannot out-rank the parent project', async (t) => {
