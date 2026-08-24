@@ -452,14 +452,31 @@ function semanticConfigurationFor(index) {
 }
 
 /**
- * Latched once a 402 says the monthly allowance is spent. Gates the request, not just the log.
+ * The MONTH a 402 said the allowance was spent, `YYYY-MM` in UTC. Gates the request, not just the
+ * log.
  *
  * Without the gate, every later search still asks for reranking, still gets 402, and still pays a
- * second round trip to retry stripped — for the rest of the month. The allowance resets monthly
- * and App Service restarts long before that, so a process-lifetime latch is the whole lifetime
- * that matters; there is nothing to un-latch it for.
+ * second round trip to retry stripped — on every debounced keystroke.
+ *
+ * A MONTH, NOT A BOOLEAN, and the earlier reasoning for the boolean has expired. It read: "the
+ * allowance resets monthly and App Service restarts long before that, so a process-lifetime latch
+ * is the whole lifetime that matters". `demi-api-test` now runs with `alwaysOn: true` (measured
+ * 2026-08-24), so the worker outlives the allowance it is waiting on — a 402 on the 30th kept
+ * Deep Search in BM25 order through every month after it, silently, because
+ * `semanticErrorHandling: 'partial'` answers 200 with the same shape either way.
+ *
+ * No timer and no restart hook: the comparison runs on the request that would have been degraded,
+ * so the first search of a new month re-enables ranking by itself.
+ *
+ * UTC, because Azure meters and resets on the UTC month. If the reset were keyed to a later
+ * timezone, this would re-ask up to 7 hours early (Vancouver is UTC-7), take one 402 and re-latch
+ * — one wasted round trip, self-correcting. Do not "fix" it to local time: that direction stays
+ * latched into a month whose allowance has already reset, which is the failure this replaced.
  */
-let semanticExhausted = false;
+let semanticExhaustedMonth = null;
+
+const utcMonth = () => new Date().toISOString().slice(0, 7);
+const semanticIsExhausted = () => semanticExhaustedMonth === utcMonth();
 
 /**
  * How often reranking was asked for, and how often it did not happen.
@@ -493,7 +510,7 @@ function semanticStats() {
   return {
     ...semanticCounters,
     ranked: semanticCounters.requested - semanticCounters.partial,
-    exhausted: semanticExhausted
+    exhausted: semanticIsExhausted()
   };
 }
 
@@ -522,8 +539,8 @@ function notePartialRerank(reason) {
  * asking, and says so once per process rather than on every keystroke.
  */
 function noteSemanticExhausted() {
-  if (semanticExhausted) return;
-  semanticExhausted = true;
+  if (semanticIsExhausted()) return;
+  semanticExhaustedMonth = utcMonth();
   semanticCounters.exhaustedAt = new Date().toISOString();
   logger.warn(
     '[ai-search] HTTP 402: the semantic ranker free allowance is exhausted for this month. ' +
@@ -581,9 +598,10 @@ async function runSearch(index, opts = {}) {
 
   // `matchAll` is excluded deliberately: `search: '*'` has no relevance signal to rescore, so
   // semantic ranking does nothing on it — and Azure bills per non-empty semantic query.
-  // `semanticExhausted` is the same idea after a 402: asking again cannot succeed this month, and
-  // asking anyway costs every search a wasted round trip before the stripped retry.
-  const semantic = opts.semantic === true && !opts.matchAll && !semanticExhausted;
+  // The 402 latch is the same idea: asking again cannot succeed THIS MONTH, and asking anyway
+  // costs every search a wasted round trip before the stripped retry. Next month it can, so this
+  // is a month comparison rather than a flag.
+  const semantic = opts.semantic === true && !opts.matchAll && !semanticIsExhausted();
   if (semantic) {
     // The TOKENIZED terms rejoined, not opts.keywords verbatim. `tokenize` is what strips Lucene
     // operator characters, and operator syntax inside the semantic string is explicitly unsupported.
@@ -1189,12 +1207,12 @@ module.exports = {
   // refuse to publish a zero it cannot distinguish from an unset app setting.
   config,
   semanticStats,
-  // Exported for tests. The 402 latch is process-wide and deliberately has no production reset —
-  // without this seam one 402 test would silently disable semantic for every test after it. The
-  // counters reset with it for the same reason: a partial response asserted in one test would
-  // otherwise still be in the totals the next test reads.
+  // Exported for tests. The 402 latch clears on its own at the month rollover and no sooner, so
+  // without this seam one 402 test would disable semantic for every test after it inside the same
+  // calendar month. The counters reset with it for the same reason: a partial response asserted in
+  // one test would otherwise still be in the totals the next test reads.
   resetSemanticExhausted: () => {
-    semanticExhausted = false;
+    semanticExhaustedMonth = null;
     Object.assign(semanticCounters, {
       requested: 0, partial: 0, lastPartialReason: null, lastPartialAt: null, exhaustedAt: null
     });
