@@ -160,6 +160,19 @@ async function recoverChunkFilters(query, dropped, acl) {
   // the caller's value. The anonymous tests passed, because the ACL clause alone kept `docFilter`
   // non-empty; only an unfiltered privileged caller exposed it.
   const narrowed = {};
+  // THE CALLER'S OWN PROJECT SCOPE COMES ALONG, and leaving it out was the difference between a
+  // filter that fits under the cap and one that does not. `project` is never in `dropped` on this
+  // dataset — chunks carry `projectId`, so it is expressible and applied directly to the chunk
+  // query — which meant the narrowing the caller had already asked for was not offered to the
+  // documents query that decides whether the rest of the filter fits. Measured: a `type` filter
+  // inside one project resolved corpus-wide to 2,911 documents and was reported inexpressible,
+  // where the project-scoped set is a handful. `documents` carries `projectId` too, so this costs
+  // one clause and nothing else.
+  //
+  // No guard for "project scope but nothing else": `dropped` is empty in that case and this
+  // function has already returned, so a project-only `narrowed` cannot be reached. A check for it
+  // would be dead defence, which reads as a handled case that was never a case.
+  if (query.project !== undefined) narrowed.project = query.project;
   for (const key of dropped) {
     // `and[<key>]` and the bare key only. `buildFilter` reports the FULL wire key for a range —
     // `datePostedStart`, not `datePosted` — so the suffixed variants this used to try could only
@@ -189,7 +202,10 @@ async function recoverChunkFilters(query, dropped, acl) {
   // so the count and the ACL below are still computed by the one code path.
   if (ids.length === 0) return { scope: "documentId eq ''", recovered };
 
-  return { scope: `search.in(documentId, '${ids.join(',')}', ',')`, recovered };
+  // `quoteList`, not a hand-rolled literal. It is the helper every other list clause in this file
+  // goes through, and it is the one that doubles an embedded quote and falls back off the comma
+  // delimiter — this is stored data being spliced into a filter, so it takes the same path.
+  return { scope: `search.in(documentId, ${aiSearch.quoteList(ids)}, ',')`, recovered };
 }
 
 exports.search = async (req, res) => {

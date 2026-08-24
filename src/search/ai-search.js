@@ -1168,6 +1168,7 @@ module.exports = {
   searchDocuments,
   documentIdsMatching,
   DOCUMENT_SCOPE_CAP,
+  quoteList,
   deleteChunksForDocument,
   deleteFromIndex,
   indexes,

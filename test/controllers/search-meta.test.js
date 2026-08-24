@@ -237,6 +237,35 @@ test('chunk filters are resolved through the documents index', async (t) => {
       `a recovered key must not be reported as dropped: ${JSON.stringify(out.body[0].meta[0])}`);
   });
 
+  await t.test("the caller's own project scope narrows the document resolution", async () => {
+    // Without this the resolver asked the documents index corpus-wide and discarded the narrowing
+    // the caller had already supplied. `project` is never in `dropped` on this dataset — chunks
+    // carry `projectId`, so it is expressible and applied to the chunk query directly — which is
+    // exactly why it was invisible to a `narrowed` object built only from `dropped`. Measured: a
+    // `type` filter inside one project resolved to 2,911 documents corpus-wide and was reported
+    // inexpressible, where the project-scoped set is small enough to scope.
+    let docFilter = null;
+    t.mock.method(aiSearch, 'documentIdsMatching', async (f) => {
+      docFilter = f;
+      return { ids: ['d1'], total: 1, withinCap: true };
+    });
+    t.mock.method(aiSearch, 'searchChunks', async () => ({ count: 1, items: [chunk] }));
+    stubHydration(t);
+
+    const { out, res } = capture();
+    await searchController.search(anonymous({
+      dataset: 'DocumentChunk',
+      keywords: 'river',
+      project: '207',
+      'and[type]': '5cf00c03a266b7e1877504cf'
+    }), res);
+
+    assert.ok(docFilter.includes("projectId eq '207'"),
+      `the document query must carry the caller's project scope, got: ${docFilter}`);
+    assert.ok(docFilter.includes('5cf00c03a266b7e1877504cf'), 'and the metadata filter');
+    assert.strictEqual(out.body[0].meta[0].dropped, undefined);
+  });
+
   await t.test('a key NEITHER index can express is still reported as dropped', async () => {
     // `isFeatured` is in no demi index at all, so resolving it through `documents` recovers
     // nothing. Sent alongside a key that IS recoverable, because the failure this closes is

@@ -200,7 +200,10 @@ test('an EXPECTED key delta passes; an unexpected one does not', () => {
   const demiRow = {
     _id: 'x::p60::c79', _schemaName: 'DocumentChunk', content: '', chunkId: 'c79',
     documentId: 'x', documentName: 'n', documentType: 'PDF Document', matchCount: 1,
-    pageNumber: 60, project: {}, projectId: '1', projectName: 'p', snippet: '…', snippets: ['…']
+    pageNumber: 60, project: {}, projectId: '1', projectName: 'p', snippet: '…', snippets: ['…'],
+    // The three chip fields. Present on BOTH sides now, which is why they are no longer in the
+    // eagle-only delta — this fixture is what would fail if they were dropped again.
+    datePosted: '2017-01-01', milestone: 'm', milestoneId: 'm'
   };
   const eagleRow = {
     _id: 'x', _schemaName: 'DocumentChunk', datePosted: '2017-01-01', documentId: 'x',

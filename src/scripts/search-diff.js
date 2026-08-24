@@ -116,9 +116,21 @@ const CASES = [
     }
   },
   { dataset: 'DocumentChunk', keywords: 'fish habitat', sortBy: '-datePosted' },
-  // A SCOPEABLE chunk filter, and the whole reason it is here is that the broad one above is an
-  // accepted divergence. This one is not: `type` matches 2,911 documents, under DOCUMENT_SCOPE_CAP,
-  // so demi resolves it through the documents index and MUST narrow exactly as eagle does.
+  // AN OPEN GAP, DELIBERATELY LEFT FAILING — not a case that is expected to pass.
+  //
+  // `type` matches 2,911 documents against a DOCUMENT_SCOPE_CAP of 499, so demi reports the filter
+  // in `meta.dropped` rather than resolving it, and this case DIFFs. That is the true state of
+  // chunk metadata filtering and it does not clear when this branch deploys: the two-query design
+  // is bounded by what one request returns, and every filter measured on prod is over that bound
+  // (`type` 2,911, `projectPhase` 1,425, `milestone` 36,471).
+  //
+  // An earlier version of this comment said `type` was under the cap and MUST narrow. That was
+  // true while the cap read 20,000 and became false when it was corrected to 499 — the case was
+  // left asserting the old premise, so it could never go green and said so nowhere.
+  //
+  // It carries no `accept` ON PURPOSE. The broad case above is a decided bound with a written
+  // reason; this one is an open question about whether chunk filters get paging, denormalisation,
+  // or removal from the UI. Accepting it would file an undecided gap as a settled one.
   //
   // The value is read off a real prod row, not composed. The first version of this case used an
   // id invented by editing one character of the milestone id — it matched nothing on either
@@ -349,11 +361,17 @@ const EXPECTED_KEY_DELTA = {
       'popularity', 'projectPhaseId', 'read', 'sortOrder', 'typeId']
   },
   DocumentChunk: {
-    // The row UNIT differs here, which is why this delta is the largest: demi returns one row per
-    // passage and eagle one row per parent document. `datePosted` and `milestone` are the exception
-    // — those are an open defect, not a shape difference (the parent-document SELECT omits them).
+    // The row UNIT differs here, which is why this delta exists at all: demi returns one row per
+    // passage and eagle one row per parent document.
+    //
+    // `datePosted`, `milestone` and `milestoneId` are NO LONGER LISTED, and removing them is what
+    // proves the chip fix landed. They were an open defect when this constant was written — the
+    // parent-document SELECT omitted them — and this branch added all three. Leaving them here
+    // would let a regression that drops them again pass as a declared difference, which is the
+    // failure mode the list is supposed to prevent rather than cause. An entry removed is how a
+    // gap gets closed; that is the whole contract of this table.
     demiOnly: ['chunkId', 'content', 'pageNumber', 'projectName', 'snippet'],
-    eagleOnly: ['datePosted', 'documentTypeId', 'milestone', 'milestoneId', 'read']
+    eagleOnly: ['documentTypeId', 'read']
   }
 };
 
