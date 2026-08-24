@@ -451,7 +451,12 @@ function compareCase(demi, eagle, bases = {}) {
     push(diffs, accepted, bases, { field: 'sortHonoured', demi: demiSorted, eagle: eagleSorted });
   }
 
-  if (d.keys || e.keys) {
+  // BOTH sides must have a row, not either. A page past the end of one corpus returns no rows, and
+  // with `d.keys` null the delta computes as "eagle emits thirteen keys demi does not" — which is a
+  // corpus fact wearing a contract defect's clothes. Measured: `keywords=pattullo` page 26, demi 250
+  // matches to eagle's 262, so demi answers an empty page and eagle a full one. Keys are only
+  // comparable where there is something on each side to compare.
+  if (d.keys && e.keys) {
     const expected = EXPECTED_KEY_DELTA[dataset] || { demiOnly: [], eagleOnly: [] };
     const demiKeys = d.keys || [];
     const eagleKeys = e.keys || [];

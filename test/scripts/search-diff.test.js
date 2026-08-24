@@ -281,6 +281,26 @@ test('the same divergence on a dataset with no declared reason still fails', () 
   assert.ok(verdict.diffs.some(d => d.field === 'sortHonoured'));
 });
 
+test('one empty page is a corpus fact, not a key delta', () => {
+  // A page past the end of ONE corpus returns no rows. Comparing keys there reports every key the
+  // other side emits as unexpected — thirteen of them, on a case that is simply out of rows.
+  // Measured: `keywords=pattullo` page 26, demi 250 matches against eagle's 262.
+  const row = { _id: 'a', displayName: 'x', datePosted: '2020-01-01' };
+
+  const demiRanOut = compareCase(respond([], 250), respond([row], 262), { dataset: 'Document', kase: {} });
+  assert.strictEqual(demiRanOut.pass, true, JSON.stringify(demiRanOut.diffs));
+
+  const eagleRanOut = compareCase(respond([row], 262), respond([], 250), { dataset: 'Document', kase: {} });
+  assert.strictEqual(eagleRanOut.pass, true, JSON.stringify(eagleRanOut.diffs));
+
+  // And the check is still live where both sides HAVE rows — otherwise this fix is a mute button.
+  const real = compareCase(
+    respond([{ ...row, somethingNew: 1 }], 10), respond([row], 10),
+    { dataset: 'Document', kase: {} });
+  assert.strictEqual(real.pass, false);
+  assert.deepStrictEqual(real.diffs.find(d => d.field === 'rowKeys').demiOnly, ['somethingNew']);
+});
+
 test('a case-scoped acceptance does not silence its siblings', () => {
   // THE MUTE-BUTTON BUG, and it was mine. A `DocumentChunk:selective` entry written for the
   // broad-filter case also passed the NARROW-filter case that exists precisely to catch chunk
