@@ -104,6 +104,12 @@ change in behaviour. Old and new indexers share them.
 
 ## Adding a field — the order that matters
 
+**ADDING a field needs no rebuild.** The index keeps its documents and its key; the new column is
+simply `null` on every existing row until an indexer reset re-pulls them. CHANGING an existing
+field is the opposite — `retrievable`, `sortable`, `filterable` and the analyzer are all fixed at
+creation, so altering one means create-new-index plus refill, which for `chunks` is 1,128,733 rows
+that cannot be rebuilt from Mongo. Know which of the two you are doing before you start.
+
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
 
