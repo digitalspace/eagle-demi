@@ -47,6 +47,11 @@ function scaffold(repo) {
   fs.writeFileSync(path.join(repo, 'azure/search/indexes', 'projects.json'), '{}');
   fs.writeFileSync(path.join(repo, 'azure/search/indexers', 'projects-indexer.json'), '{}');
   fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson', 'a.json'), '{}');
+  // A NESTED directory, because a re-included path lives under an excluded one — geojson is
+  // inside `frontend`. Blocking the excluded realpaths wholesale in the re-include walk would
+  // empty exactly this, and a flat fixture cannot tell the two apart.
+  fs.mkdirSync(path.join(repo, 'frontend/public/assets/geojson', 'nested'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'frontend/public/assets/geojson/nested', 'deep.geojson'), '{}');
 }
 
 /** Package `repo` and return its entry set. */
@@ -163,6 +168,57 @@ test('API deploy package', async (t) => {
       'and the real store underneath it');
   });
 
+  await t.test('a .env reached through a symlink is still refused', () => {
+    // The re-include loop wrote whatever it walked with NO filtering at all — survivable only
+    // while it could not leave the three checked-in data directories. Following symlinks ended
+    // that. The existing '.env at any depth' test cannot catch this: it inspects the real repo's
+    // package, and there are no .env files in those directories today, so the hole was latent.
+    // The packager's own comment records a packaged .env carrying MONGODB_PASSWORD,
+    // TYPESENSE_API_KEY, MINIO_SECRET_KEY and DOCLING_API_KEY into a world-readable wwwroot path.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-env-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+
+    const outside = path.join(dir, 'outside');
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, '.env'), 'MINIO_SECRET_KEY=leak');
+    fs.writeFileSync(path.join(outside, '.env.production'), 'X=1');
+    fs.writeFileSync(path.join(outside, 'regional_districts.geojson'), '{}');
+    fs.symlinkSync(outside, path.join(repo, 'frontend/public/assets/geojson', 'linked'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.deepStrictEqual([...packed].filter(e => e.includes('.env')), [],
+      'no .env may reach the package, whatever path it arrived by');
+    assert.ok(packed.has('frontend/public/assets/geojson/linked/regional_districts.geojson'),
+      'and the data the link exists for must still ship');
+  });
+
+  await t.test('a symlink cannot re-admit an excluded directory', () => {
+    // root_exclude_dirs is applied by position — only at the repo root — so a link anywhere else
+    // re-admitted the excluded tree under the link's own name. `.claude/worktrees/*` are full
+    // checkouts of this repository; shipping them once made a 202 MB package that left Kudu at
+    // status 1 for over thirty minutes against a normal thirty seconds.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-fence-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+
+    fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(repo, '.claude', 'worktrees', 'wt1'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'test', 'heavy'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.claude', 'worktrees', 'wt1', 'checkout.js'), '//');
+    fs.writeFileSync(path.join(repo, 'test', 'heavy', 'big.js'), '//');
+    fs.symlinkSync(path.join('..', '.claude'), path.join(repo, 'src', 'link-to-claude'));
+    fs.symlinkSync(path.join('..', 'test'), path.join(repo, 'src', 'link-to-test'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    assert.deepStrictEqual([...packed].filter(e => e.includes('link-to-')), [],
+      'an exclusion is a fact about the directory, not about one name in the tree');
+  });
+
   await t.test('a reconvergent symlink layout cannot blow the package up', () => {
     // Cycles are not the only unbounded shape. In an ACYCLIC graph where several paths reach the
     // same directory — what workspaces and `link:` deps produce — a guard that only refuses to
@@ -218,6 +274,9 @@ test('API deploy package', async (t) => {
 
     assert.ok(packed.has('frontend/public/assets/geojson/linked/regional_districts.geojson'),
       'a re-included data directory must be walked the same way as the rest of the tree');
+    assert.ok(packed.has('frontend/public/assets/geojson/nested/deep.geojson'),
+      'and its own subdirectories must survive — geojson sits under the excluded `frontend`, so ' +
+      'applying the exclusion fence here unfiltered would empty the directory being re-included');
   });
 
   await t.test('ships the geojson the boundary seeder reads', () => {
