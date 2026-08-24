@@ -45,17 +45,33 @@ exports.getBoundaries = async (req, res) => {
       res.setHeader('Vary', 'Authorization');
     }
 
-    // No paging: 281 items across 3 partitions is one response. Accepting `pageSize` without
-    // returning the continuation token would hand a caller a truncated map and no way to page it.
-    const { type, geometry } = req.query;
-    const { items } = await boundaries.listByType(access, {
+    // BOUNDED, and the token comes back with it. The read used to pass no `pageSize` at all, which
+    // takes `cosmos.query`'s `fetchAll()` branch and drains the container cross-partition on an
+    // anonymous request — fine at 281 items across 3 partitions, and fine only because of that
+    // number. The earlier note here said paging was omitted because accepting `pageSize` without
+    // returning the continuation token hands a caller a truncated map and no way to page it. That
+    // objection is right, and it argues for returning the token, not for an unbounded read.
+    //
+    // Same shape as `getProjects` (`controllers/nosql/project.js:29-43`): default to the ceiling
+    // `pageOptions` already clamps to, and surface the token in a header so the body stays a plain
+    // array. At 281 rows this is byte-identical to what it served before — one page, no token — so
+    // the map is untouched and the bound only starts mattering if the corpus grows.
+    const { type, geometry, continuationToken } = req.query;
+    const { items, continuationToken: nextPage } = await boundaries.listByType(access, {
       // Geometry is opt-OUT, not opt-in. The frontend sends `geometry=simplified` for the default
       // fidelity and nothing at all on the bbox call, so requiring `geometry=true` would strip the
       // polygons from both and blank the map without erroring.
       type,
-      withGeometry: geometry !== 'false'
+      withGeometry: geometry !== 'false',
+      // 1000 is the real ceiling — `pageOptions` clamps to it, so a larger number here only looks
+      // like it does something.
+      pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 1000),
+      continuationToken
     });
 
+    if (nextPage && typeof res.setHeader === 'function') {
+      res.setHeader('x-continuation-token', nextPage);
+    }
     return res.json(items);
   } catch (err) {
     return serverError(res, err, 'getBoundaries failed');
