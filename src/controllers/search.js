@@ -297,7 +297,11 @@ exports.search = async (req, res) => {
     if ((keywords || criteria || dataset === 'Document') &&
         requestedPageSize > aiSearch.MAX_PAGE_ROWS) {
       return res.status(400).json({
-        error: `pageSize above ${aiSearch.MAX_PAGE_ROWS} is not supported for a filtered or keyword search`
+        // Names the ceiling and WHO it applies to, because the two are no longer the same
+        // sentence: every document read is indexed now, so this fires for a request that carries
+        // neither a filter nor a keyword and would otherwise be told the wrong reason.
+        error: `pageSize above ${aiSearch.MAX_PAGE_ROWS} is not supported for ${
+          dataset === 'Document' ? 'a document search' : 'a filtered or keyword search'}`
       });
     }
 
@@ -786,6 +790,15 @@ exports.search = async (req, res) => {
       // page this dataset at all. Cosmos is not a fallback under it: a search that FAILED is not a
       // search that found nothing, and answering a 502 with an arbitrary page of the corpus is the
       // failure the catch below exists to prevent.
+      //
+      // THE TRADE, NAMED: no document LIST is a live read any more, so a create, edit or unpublish
+      // shows up here only after the indexer's `PT5M` pass (`documents-indexer.json`, `_ts`
+      // high-water mark, and `setDocumentPublished` writes no index update of its own). That window
+      // already applied to every keyword and filtered read; what is new is that it now applies to
+      // the bare `&project=<id>` shape as well. It exposes LIST METADATA only — the ACL is still
+      // evaluated at the index by `filterFor(access)`, and the bytes stay behind a live Cosmos
+      // point read (`documents.getById` then `canRead`). An unpublish therefore hides the file
+      // immediately and the row up to five minutes later.
       try {
         const acl = filterFor(access);
         // Projects are scoped on their own id; the same caller, a different index.
@@ -831,6 +844,11 @@ exports.search = async (req, res) => {
               _id: String(doc.id),
               _schemaName: 'Document',
               displayName: doc.displayName || 'Untitled Document',
+              // The deleted Cosmos mapper fell back to the basename of `s3Key` here. The index
+              // carries no `s3Key` and `DOCUMENT_SELECT` cannot ask for one, so restoring it would
+              // cost an index widening, a datasource edit and a refill. Measured before dropping
+              // it: 0 of 2,000 sampled documents render this placeholder, and the keyword path has
+              // answered this way all along.
               documentFileName: doc.documentFileName || 'document.pdf',
               documentType: doc.type || 'PDF Document',
               // ~~No `type`/`milestone`/`projectPhase` ObjectIds.~~ There are now: the index
