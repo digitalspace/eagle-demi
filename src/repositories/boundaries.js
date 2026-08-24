@@ -76,7 +76,12 @@ async function listByType(access, { type, withGeometry = true, pageSize, continu
   const options = pageOptions({ pageSize, continuationToken });
   if (type) options.partitionKey = String(type);
 
-  return cosmos.query(CONTAINER, spec, options);
+  // `pageSize` back OUT, because `pageOptions` is the only clamp and the caller has to compare
+  // against the number that actually bounded the read. The controller used to clamp a second time
+  // for that comparison, and the two disagreed: `?pageSize=abc` gave the controller NaN while this
+  // bounded at 1000, so a genuinely truncated page compared false and reported nothing.
+  const result = await cosmos.query(CONTAINER, spec, options);
+  return { ...result, pageSize: options.maxItemCount };
 }
 
 /**

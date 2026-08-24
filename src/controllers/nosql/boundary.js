@@ -16,6 +16,7 @@ const boundaries = require('../../repositories/boundaries');
 const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
+const { logger } = require('../../utils/logger');
 
 /**
  * The ACL a written boundary carries.
@@ -45,16 +46,70 @@ exports.getBoundaries = async (req, res) => {
       res.setHeader('Vary', 'Authorization');
     }
 
-    // No paging: 281 items across 3 partitions is one response. Accepting `pageSize` without
-    // returning the continuation token would hand a caller a truncated map and no way to page it.
-    const { type, geometry } = req.query;
-    const { items } = await boundaries.listByType(access, {
+    // BOUNDED, and the token comes back ONLY ON THE PATH THAT CAN CARRY ONE. The read used to pass
+    // no `pageSize` at all, which takes `cosmos.query`'s `fetchAll()` branch and drains the
+    // container cross-partition on an anonymous request — fine at 281 items across 3 partitions,
+    // and fine only because of that number.
+    //
+    // THE TWO PATHS PAGE DIFFERENTLY, and it is not a choice this code makes. With `type` the query
+    // sets `partitionKey`, runs single-partition through the SDK's `DefaultQueryExecutionContext`,
+    // and `x-ms-continuation` propagates — that path pages correctly. WITHOUT `type` it is
+    // cross-partition with `ORDER BY c.name ASC`, which the SDK serves through its pipelined
+    // `LegacyFetchImplementation`, whose `mergeHeaders` does not copy `x-ms-continuation`. So
+    // `continuationToken` comes back `undefined` no matter how many rows are left.
+    //
+    // That is why the full page below is REPORTED rather than quietly served. The old note here
+    // said paging was omitted because accepting `pageSize` without returning the token hands a
+    // caller a truncated map and no way to page it. On the unfiltered path that is still true and
+    // the SDK is the reason, so the honest thing is to bound the read and say when the bound bit —
+    // not to leave it draining the container. Both frontend list calls pass `type=`
+    // (`registry-state.service.ts:903,936`), so neither can reach it.
+    const { type, geometry, continuationToken } = req.query;
+    const { items, continuationToken: nextPage, pageSize } = await boundaries.listByType(access, {
       // Geometry is opt-OUT, not opt-in. The frontend sends `geometry=simplified` for the default
       // fidelity and nothing at all on the bbox call, so requiring `geometry=true` would strip the
       // polygons from both and blank the map without erroring.
       type,
-      withGeometry: geometry !== 'false'
+      withGeometry: geometry !== 'false',
+      // Passed through UNCLAMPED and read back below. `pageOptions` clamps to [1, 1000] and is the
+      // only place that does; clamping here as well produced two numbers that disagreed on junk
+      // input, and the guard below then compared against the one that had bounded nothing.
+      // `undefined` would skip `maxItemCount` entirely and take the `fetchAll()` drain, so the
+      // default is the ceiling rather than nothing.
+      pageSize: req.query.pageSize === undefined ? 1000 : req.query.pageSize,
+      continuationToken
     });
+
+    if (nextPage && typeof res.setHeader === 'function') {
+      res.setHeader('x-continuation-token', nextPage);
+    }
+
+    // A FULL PAGE AND NO TOKEN is unresumable: either there are exactly `pageSize` rows and this is
+    // complete, or there are more and the caller can never reach them. The two are indistinguishable
+    // from here, which is precisely why it must not pass silently — a truncated map that says
+    // nothing is the failure this endpoint is meant to have stopped having.
+    // `pageSize` here is what `pageOptions` actually applied, not what the caller asked for — see
+    // the repository. No caller-supplied value is interpolated: this line is unauthenticated and
+    // winston forwards to Application Insights (`utils/logger.js:25-29`), so echoing `type` would
+    // let anyone write chosen text into telemetry, once per request, at unbounded cardinality.
+    if (!nextPage && items.length >= pageSize) {
+      // SAID TO THE CALLER, not only to telemetry. A log line closes nothing for the client that
+      // just received a short map: the resumable path gets `x-continuation-token`, so this path
+      // must get something too, or a truncated answer is indistinguishable from a complete one.
+      //
+      // And it must not be CACHED as though complete. The handler sets `public, max-age=86400`
+      // above, which would pin a knowingly-incomplete map into shared caches for a day; a wrong
+      // answer that persists is worse than a slow one.
+      if (typeof res.setHeader === 'function') {
+        res.setHeader('x-truncated', 'true');
+        res.setHeader('Cache-Control', 'no-store');
+      }
+      logger.warn(
+        `[boundaries] returned a full page of ${pageSize} with no continuation token on ` +
+        `${type ? 'a type-scoped' : 'the unfiltered cross-partition'} read — any further rows ` +
+        'are unreachable; scope by `type` to page them'
+      );
+    }
 
     return res.json(items);
   } catch (err) {
