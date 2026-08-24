@@ -791,14 +791,16 @@ exports.search = async (req, res) => {
       // search that found nothing, and answering a 502 with an arbitrary page of the corpus is the
       // failure the catch below exists to prevent.
       //
-      // THE TRADE, NAMED: no document LIST is a live read any more, so a create, edit or unpublish
-      // shows up here only after the indexer's `PT5M` pass (`documents-indexer.json`, `_ts`
-      // high-water mark, and `setDocumentPublished` writes no index update of its own). That window
-      // already applied to every keyword and filtered read; what is new is that it now applies to
-      // the bare `&project=<id>` shape as well. It exposes LIST METADATA only — the ACL is still
-      // evaluated at the index by `filterFor(access)`, and the bytes stay behind a live Cosmos
-      // point read (`documents.getById` then `canRead`). An unpublish therefore hides the file
-      // immediately and the row up to five minutes later.
+      // THE TRADE, NAMED: no document LIST is a live read any more, so a create or metadata edit
+      // shows up here only after the indexer's `PT5M` pass (`documents-indexer.json`, a `_ts`
+      // high-water mark). That window already applied to every keyword and filtered read; what is
+      // new is that it now applies to the bare `&project=<id>` shape as well. It exposes LIST
+      // METADATA only — the ACL is still evaluated at the index by `filterFor(access)`, and the
+      // bytes stay behind a live Cosmos point read (`documents.getById` then `canRead`).
+      //
+      // A VISIBILITY change is not in that trade: `setDocumentPublished` and the project cascade
+      // both write the new ACL straight into the index (`aiSearch.writeAcls`), so an unpublish
+      // hides the file and delists the row together.
       try {
         const acl = filterFor(access);
         // Projects are scoped on their own id; the same caller, a different index.

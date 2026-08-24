@@ -217,17 +217,29 @@ exports.updateProject = async (req, res) => {
     // `!==` over the two states, so `isPublished: undefined` — a rename, a description edit — is
     // equal to itself and cascades nothing.
     if (acl.isPublished !== existing.isPublished) {
+      // The project's own index row FIRST, and outside the try: no project list or search is a
+      // live read any more (#148), so an unpublished project stayed findable BY NAME until the
+      // indexer's next PT5M pass. It goes before the cascade because the project's Cosmos write
+      // has already landed — it must narrow even if the cascade below fails and returns 500.
+      await aiSearch.writeAcls(aiSearch.indexes().projects, [
+        { id: existing.id, read: acl.read, isPublished: acl.isPublished }
+      ]);
+
       try {
         const cascade = await documents.setAclForProject(systemAccess(), existing.id, acl.read);
         if (cascade.failed > 0) {
           logger.error('[Project Controller] document ACL cascade partially failed', {
-            projectId: existing.id, ...cascade, ids: undefined
+            projectId: existing.id, ...cascade, ids: undefined, rows: undefined
           });
           return res.status(500).json({
             success: false,
             error: 'Project visibility changed, but its documents were not fully updated.'
           });
         }
+
+        // The same derived ACLs the cascade just wrote to Cosmos, into the documents index. One
+        // request per 1,000 documents, and it cannot throw.
+        await aiSearch.writeAcls(aiSearch.indexes().documents, cascade.rows);
       } catch (cascadeErr) {
         logger.error('[Project Controller] document ACL cascade failed', {
           projectId: existing.id, error: cascadeErr.message

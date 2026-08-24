@@ -236,7 +236,8 @@ function constrainToProject(ownRead, projectRead) {
  * project's documents share one partition, so this is normally a single request.
  *
  * @param {string[]} read  the project's new ACL
- * @returns {Promise<object>} the bulk result, plus the `ids` it touched
+ * @returns {Promise<object>} the bulk result, plus the `ids` it touched and each row's
+ *                            derived `{id, read, isPublished}`
  */
 async function setAclForProject(access, projectId, read) {
   if (!Array.isArray(read) || read.length === 0) {
@@ -245,11 +246,14 @@ async function setAclForProject(access, projectId, read) {
 
   const rows = await aclRowsForProject(access, projectId);
   if (rows.length === 0) {
-    return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0, ids: [] };
+    return { succeeded: 0, failed: 0, statusCounts: {}, requestCharge: 0, ids: [], rows: [] };
   }
 
   const pk = String(projectId);
   const updatedAt = new Date().toISOString();
+  // Each row's derived ACL, kept so the caller can write the same values into the search index
+  // without re-deriving the intersection a second way.
+  const derived = [];
   const result = await cosmos.bulkVerified(CONTAINER, rows.map(row => {
     // The snapshot if there is one, otherwise what the row carries today — which on a first
     // cascade IS the seeded Eagle ACL, the value the snapshot exists to preserve.
@@ -264,6 +268,7 @@ async function setAclForProject(access, projectId, read) {
     const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
       : (Array.isArray(row.read) ? row.read : []);
     const next = constrainToProject(own, read);
+    derived.push({ id: String(row.id), read: next, isPublished: next.includes('public') });
     return {
       operationType: 'Patch',
       partitionKey: pk,
@@ -279,7 +284,7 @@ async function setAclForProject(access, projectId, read) {
     };
   }));
 
-  return { ...result, ids: rows.map(row => String(row.id)) };
+  return { ...result, ids: derived.map(row => row.id), rows: derived };
 }
 
 async function upsert(document) {

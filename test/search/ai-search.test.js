@@ -1355,3 +1355,80 @@ test('ai-search document id resolution', async (t) => {
       'cap + 1 must fit one request, or every over-cap filter pays for rows it throws away');
   });
 });
+
+/**
+ * ACL write-through. Every document and project LIST is served from the index (#148), so a
+ * visibility change that only reaches Cosmos leaves the row listed until the indexer's PT5M pass.
+ */
+test('writeAcls', async (t) => {
+  await t.test('it merges — never uploads — and carries only the ACL fields', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [{ key: 'd1', status: true }] } }));
+
+    const merged = await aiSearch.writeAcls('documents', [
+      { id: 'd1', read: ['sysadmin', 'staff'], isPublished: false }
+    ]);
+
+    assert.strictEqual(merged, 1);
+    assert.strictEqual(calls.length, 1);
+    assert.match(calls[0].url, /\/indexes\/documents\/docs\/index/);
+    // `mergeOrUpload` would insert a title-less half-row for a document the indexer has not
+    // created yet, and that row renders in results until the next pass.
+    assert.deepStrictEqual(calls[0].body.value, [
+      { '@search.action': 'merge', id: 'd1', read: ['sysadmin', 'staff'], isPublished: false }
+    ]);
+  });
+
+  await t.test('1,500 rows go as 1,000 + 500 — the service caps one batch at 1,000', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    const rows = Array.from({ length: 1500 }, (_, i) => ({
+      id: `d${i}`, read: ['public', 'sysadmin'], isPublished: true
+    }));
+    await aiSearch.writeAcls('documents', rows);
+
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(calls[0].body.value.length, 1000);
+    assert.strictEqual(calls[1].body.value.length, 500);
+    assert.strictEqual(calls[1].body.value[0].id, 'd1000', 'the second batch continues, not repeats');
+  });
+
+  await t.test('a per-row failure is counted, not thrown', async (tt) => {
+    // A 207 is an `ok` response carrying per-row verdicts, so the request status says nothing
+    // about the rows. 404 is the benign one: the indexer has not created that row yet, and a row
+    // that is not in the index is not findable.
+    captureFetch(tt, () => ({
+      json: {
+        value: [
+          { key: 'a', status: true },
+          { key: 'b', status: false, statusCode: 404 },
+          { key: 'c', status: false, statusCode: 500, errorMessage: 'service busy' }
+        ]
+      }
+    }));
+
+    const merged = await aiSearch.writeAcls('documents', [
+      { id: 'a', read: ['public'], isPublished: true },
+      { id: 'b', read: ['public'], isPublished: true },
+      { id: 'c', read: ['public'], isPublished: true }
+    ]);
+
+    assert.strictEqual(merged, 1);
+  });
+
+  await t.test('a transport failure returns 0 rather than failing the caller', async (tt) => {
+    // The visibility change has already landed in Cosmos and the caller has already succeeded.
+    // A throw here would turn a successful unpublish into a 500.
+    captureFetch(tt, () => ({ throws: new Error('boom') }));
+
+    assert.strictEqual(
+      await aiSearch.writeAcls('documents', [{ id: 'd1', read: ['sysadmin'], isPublished: false }]),
+      0
+    );
+  });
+
+  await t.test('no rows means no request', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    assert.strictEqual(await aiSearch.writeAcls('documents', []), 0);
+    assert.strictEqual(calls.length, 0);
+  });
+});
