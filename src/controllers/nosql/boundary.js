@@ -16,6 +16,7 @@ const boundaries = require('../../repositories/boundaries');
 const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
+const { logger } = require('../../utils/logger');
 
 /**
  * The ACL a written boundary carries.
@@ -45,18 +46,26 @@ exports.getBoundaries = async (req, res) => {
       res.setHeader('Vary', 'Authorization');
     }
 
-    // BOUNDED, and the token comes back with it. The read used to pass no `pageSize` at all, which
-    // takes `cosmos.query`'s `fetchAll()` branch and drains the container cross-partition on an
-    // anonymous request — fine at 281 items across 3 partitions, and fine only because of that
-    // number. The earlier note here said paging was omitted because accepting `pageSize` without
-    // returning the continuation token hands a caller a truncated map and no way to page it. That
-    // objection is right, and it argues for returning the token, not for an unbounded read.
+    // BOUNDED, and the token comes back ONLY ON THE PATH THAT CAN CARRY ONE. The read used to pass
+    // no `pageSize` at all, which takes `cosmos.query`'s `fetchAll()` branch and drains the
+    // container cross-partition on an anonymous request — fine at 281 items across 3 partitions,
+    // and fine only because of that number.
     //
-    // Same shape as `getProjects` (`controllers/nosql/project.js:29-43`): default to the ceiling
-    // `pageOptions` already clamps to, and surface the token in a header so the body stays a plain
-    // array. At 281 rows this is byte-identical to what it served before — one page, no token — so
-    // the map is untouched and the bound only starts mattering if the corpus grows.
+    // THE TWO PATHS PAGE DIFFERENTLY, and it is not a choice this code makes. With `type` the query
+    // sets `partitionKey`, runs single-partition through the SDK's `DefaultQueryExecutionContext`,
+    // and `x-ms-continuation` propagates — that path pages correctly. WITHOUT `type` it is
+    // cross-partition with `ORDER BY c.name ASC`, which the SDK serves through its pipelined
+    // `LegacyFetchImplementation`, whose `mergeHeaders` does not copy `x-ms-continuation`. So
+    // `continuationToken` comes back `undefined` no matter how many rows are left.
+    //
+    // That is why the full page below is REPORTED rather than quietly served. The old note here
+    // said paging was omitted because accepting `pageSize` without returning the token hands a
+    // caller a truncated map and no way to page it. On the unfiltered path that is still true and
+    // the SDK is the reason, so the honest thing is to bound the read and say when the bound bit —
+    // not to leave it draining the container. Both frontend list calls pass `type=`
+    // (`registry-state.service.ts:903,936`), so neither can reach it.
     const { type, geometry, continuationToken } = req.query;
+    const pageSize = Math.min(parseInt(req.query.pageSize || '1000', 10), 1000);
     const { items, continuationToken: nextPage } = await boundaries.listByType(access, {
       // Geometry is opt-OUT, not opt-in. The frontend sends `geometry=simplified` for the default
       // fidelity and nothing at all on the bbox call, so requiring `geometry=true` would strip the
@@ -65,13 +74,26 @@ exports.getBoundaries = async (req, res) => {
       withGeometry: geometry !== 'false',
       // 1000 is the real ceiling — `pageOptions` clamps to it, so a larger number here only looks
       // like it does something.
-      pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 1000),
+      pageSize,
       continuationToken
     });
 
     if (nextPage && typeof res.setHeader === 'function') {
       res.setHeader('x-continuation-token', nextPage);
     }
+
+    // A FULL PAGE AND NO TOKEN is unresumable: either there are exactly `pageSize` rows and this is
+    // complete, or there are more and the caller can never reach them. The two are indistinguishable
+    // from here, which is precisely why it must not pass silently — a truncated map that says
+    // nothing is the failure this endpoint is meant to have stopped having.
+    if (!nextPage && items.length >= pageSize) {
+      logger.warn(
+        `[boundaries] returned a full page of ${pageSize} with no continuation token` +
+        `${type ? ` for type=${type}` : ' on the unfiltered cross-partition read'} — ` +
+        'any further rows are unreachable; query by `type` to page them'
+      );
+    }
+
     return res.json(items);
   } catch (err) {
     return serverError(res, err, 'getBoundaries failed');
