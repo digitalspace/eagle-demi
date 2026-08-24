@@ -39,6 +39,9 @@ param minioSecretKey = readEnvironmentVariable('MINIO_SECRET_KEY')
 param adminApiKey = readEnvironmentVariable('ADMIN_API_KEY')
 param doclingApiKey = readEnvironmentVariable('DOCLING_API_KEY')
 
+// The map explorer renders the wildfire aggregate. Prod publishes no enrichment.
+param enrichmentSources = 'wildfire'
+
 // TEST, not dev. src/seed/sources.js defaults to the eagle-DEV instance when this is unset, so
 // leaving it out of the template does not merely lose a setting — it repoints staging's seed at
 // dev data with nothing logged.

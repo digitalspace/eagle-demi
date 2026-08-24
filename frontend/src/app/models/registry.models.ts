@@ -24,7 +24,13 @@ export interface Project {
   sources?: {
     track?: any;
     eagle?: any;
-    wildfire?: { count?: number; activeNearby?: boolean; nearestDistanceKm?: number; wildfires?: any[] };
+    /** Written by `src/scripts/sync-wildfires.js` (manual sync — may be stale). */
+    wildfire?: {
+      activeCountWithin50km: number;
+      nearestDistanceKm: number | null;
+      firesOfNoteNearby: number;
+      lastCalculatedAt: string;
+    };
   };
 }
 

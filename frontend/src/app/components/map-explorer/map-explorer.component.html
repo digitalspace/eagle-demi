@@ -568,16 +568,22 @@
               </div>
 
               <!-- DataBC Active Wildfire Origin -->
-              <div style="background: #fff5f5; border: 1px solid #fed7d7; border-radius: 6px; padding: 0.5rem; border-left: 4px solid #e53e3e;">
-                <div style="display:flex; justify-content:space-between; margin-bottom: 0.25rem;">
-                  <span style="font-weight: 700; color: #9b2c2c;"><i class="fa-solid fa-fire"></i> Active Wildfire Proximity</span>
-                  <span style="background: #e53e3e; color: white; font-size:0.6rem; padding: 0.1rem 0.3rem; border-radius:4px; font-weight:700;">DataBC</span>
+              @if (service.selectedProject()?.sources?.wildfire; as wf) {
+                <div style="background: #fff5f5; border: 1px solid #fed7d7; border-radius: 6px; padding: 0.5rem; border-left: 4px solid #e53e3e;">
+                  <div style="display:flex; justify-content:space-between; margin-bottom: 0.25rem;">
+                    <span style="font-weight: 700; color: #9b2c2c;"><i class="fa-solid fa-fire"></i> Active Wildfire Proximity</span>
+                    <span style="background: #e53e3e; color: white; font-size:0.6rem; padding: 0.1rem 0.3rem; border-radius:4px; font-weight:700;">DataBC</span>
+                  </div>
+                  <div style="color: #9b2c2c; font-size: 0.75rem;">
+                    <p style="margin: 0.15rem 0;"><strong>Nearby Fires (50km):</strong> {{ wf.activeCountWithin50km }} active fires</p>
+                    <p style="margin: 0.15rem 0;"><strong>Proximity Warning:</strong> {{ wf.firesOfNoteNearby > 0 ? '⚠️ Fires of Note Nearby' : '✅ Clear' }}</p>
+                    @if (wf.nearestDistanceKm != null) {
+                      <p style="margin: 0.15rem 0;"><strong>Nearest Fire:</strong> {{ wf.nearestDistanceKm }} km</p>
+                    }
+                    <p style="margin: 0.15rem 0; opacity: 0.75;">as of {{ wf.lastCalculatedAt | date:'mediumDate' }}</p>
+                  </div>
                 </div>
-                <div style="color: #9b2c2c; font-size: 0.75rem;">
-                  <p style="margin: 0.15rem 0;"><strong>Nearby Fires (50km):</strong> {{ service.selectedProject()?.sources?.wildfire?.count || (service.selectedProject()?.rawMetadata?.wildfireData ? service.selectedProject()?.rawMetadata?.wildfireData.count : 0) }} active fires</p>
-                  <p style="margin: 0.15rem 0;"><strong>Proximity Warning:</strong> {{ service.selectedProject()?.sources?.wildfire?.activeNearby ? '⚠️ Fires Active Nearby' : '✅ Clear' }}</p>
-                </div>
-              </div>
+              }
 
               <!-- Full Raw JSON Payload Codeblock -->
               <details style="border-top: 1px dashed var(--bc-gray-border); padding-top: 0.5rem;">

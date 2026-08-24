@@ -44,7 +44,7 @@ function stored(overrides = {}) {
     plaintext,
     record: {
       id: keyId,
-      name: 'nrpti-importer',
+      name: 'importer',
       hash,
       roles: ['demi-service-read'],
       projectScope: null,
@@ -61,7 +61,7 @@ test('a valid registry key authenticates as its own consumer', async (t) => {
 
   const { user } = await run(plaintext);
 
-  assert.strictEqual(user.preferred_username, 'key:nrpti-importer');
+  assert.strictEqual(user.preferred_username, 'key:importer');
   assert.strictEqual(user.keyId, record.id);
   assert.deepStrictEqual(user.realm_access.roles, ['demi-service-read']);
   forgetCachedKey(record.id);

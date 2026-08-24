@@ -37,7 +37,7 @@ gone — nothing below points at an archive.
      `firesOfNoteNearby`/`lastCalculatedAt` (`sync-wildfires.js:135-140`); the deployed bundle
      reads `count`/`activeNearby`. All 348 anonymous projects stamped `2026-08-11T05:18Z` (one
      manual run). `/map` shows "0 active fires / Clear" everywhere.
-   - `logs`, `leases`: zero code references. `syncState`: live, undeclared, empty. `wildfires`:
+   - `logs`, `leases`: zero code references, deleted 2026-08-24. `wildfires`:
      write-only. Old `demi-*` indexes: nothing in code or config names them.
    - Document parents: 60,060 of 60,560 anonymous documents paged; 59,833 under the 348 listed
      track projects, **227 under 6 Eagle-only published projects** (`sourceSystem: 'eagle'`,
@@ -46,10 +46,11 @@ gone — nothing below points at an archive.
      ProjectNotification-parented documents found — re-check under `systemAccess` before deleting
      the `search.js:88-95` branch.
    - Nonsense term `zqxjvwplk9` → 0 on all datasets: index path live, no Cosmos fallback.
-5. **`az` token revoked 2026-08-24** (`AADSTS50173`). `az account show` still prints a
-   subscription from the cached profile — test with a real call. Interactive `az login` needed.
-   The live search service is private-endpoint only: index PUTs run from the app container over
-   the App Service SSH tunnel.
+5. **`az` tokens expire without warning** (revoked 2026-08-24 `AADSTS50173`, restored by
+   interactive login the same day). `az account show` still prints a subscription from the cached
+   profile — test with a real call. `ENRICHMENT_SOURCES=wildfire` set on `demi-api-test`
+   2026-08-24. The live search service is private-endpoint only: index PUTs run from the app
+   container over the App Service SSH tunnel.
 
 ## Gate table
 
@@ -57,7 +58,7 @@ gone — nothing below points at an archive.
 |---|---|
 | Nothing — next PR | 3.1 wildfire shape + dead-container Bicep; 3.2 `ENRICHMENT_SOURCES`; 3.6 nrpti sweep |
 | Daniel decides | 2.1 re-seed source; 2.2 budget; 2.3 proponentId; 2.4 anonymous surface; 3.4 old-index delete |
-| Needs `az login` + SSH tunnel | 1.3 key rotation; 2.5 container deletes; 3.3 index widening; 3.4; 3.5 |
+| Needs SSH tunnel | 3.3 index widening; 3.4; 3.5 |
 | Someone else / long-lead | 1.1, 1.2 rotations at source; 4.1 prod role assignments; 4.4/4.5 eao-nginx + eagle-public prod tags; `demi.eao.gov.bc.ca` DNS; Track feed credential |
 | After the re-seed (2.1) | 3.3 analyzer + `isFeatured`/`documentSource`; a fully green differ; 3.7(d) reconcile |
 
@@ -101,9 +102,9 @@ gone — nothing below points at an archive.
       auth scheme). Required reviewers on the `prod` environment. App registration `acb4198f`
       still carries federated credential `github-eagle-demi-main` from a PUBLIC repo — dormant
       while it holds no role; settle before the prod build.
-- [ ] **2.5 Delete `logs`, `leases`, `syncState` containers by hand** — `az cosmosdb sql container
-      delete`, all three, zero data. Bicep is never deployed by CI, so removing the declarations
-      (3.1) deletes nothing. Blocked on fact 5.
+- [x] ~~**2.5 Delete `logs`, `leases`, `syncState` containers by hand.**~~ Done 2026-08-24:
+      `logs` and `leases` deleted, `show` answers NotFound. `syncState` never existed in the live
+      account — the Bicep comment claiming it did was stale. Bicep declarations went in PR #152.
 
 ## 3. Test hardening
 
@@ -121,7 +122,9 @@ gone — nothing below points at an archive.
         absence, one test that write shape == read shape. No adapter layer. NRPTI stays gone.
 - [ ] **3.2 Prod purity: `ENRICHMENT_SOURCES` app setting** feeding the `publicView` allowlist
       (`src/repositories/projects.js:168`). Test `wildfire`, prod empty. One line; makes 4.2's corpus
-      copy safe (stale wildfire stats stripped at read).
+      copy safe (stale wildfire stats stripped at read). **Merge order:** CI deploys code only, app
+      settings are a hand PUT — set `ENRICHMENT_SOURCES=wildfire` on `demi-api-test` BEFORE merging
+      the PR, or the deploy hides the test panel. Blocked on fact 5 (`az login`).
 - [ ] **3.3 Index widening — one tunnel session, app LAST.** `eagle-query.js` reads field metadata
       from the committed `azure/search/indexes/*.json` at require time, so naming a field there
       before the live index has it turns every filtered query into a 400 answered as 502. Order:

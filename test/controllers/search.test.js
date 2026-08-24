@@ -10,6 +10,10 @@ const aiSearch = require('../../src/search/ai-search');
 const documentsRepo = require('../../src/repositories/documents');
 const projectsRepo = require('../../src/repositories/projects');
 const { logger } = require('../../src/utils/logger');
+const config = require('../../src/config');
+
+// publicView allowlists by ENRICHMENT_SOURCES; test deploys name wildfire.
+config.enrichmentSources = ['wildfire'];
 
 test('Search Controller Tests', async (t) => {
 
@@ -31,12 +35,17 @@ test('Search Controller Tests', async (t) => {
         centroid: { type: 'Point', coordinates: [-120.37, 50.62] },
         read: ['public'],
         isPublished: true,
-        // The stored shape. Only `wildfire` — DEMI's own aggregate, which the map explorer
-        // renders — may reach a caller; the raw upstream payloads are traceability.
+        // The stored shape. Only the ENRICHMENT_SOURCES keys reach a caller; the raw upstream
+        // payloads are traceability.
         sources: {
           track: { proponent_name: 'KGHM' },
           eagle: { projectLeadEmail: 'lead@gov.bc.ca' },
-          wildfire: { count: 2, activeNearby: true }
+          wildfire: {
+            activeCountWithin50km: 2,
+            nearestDistanceKm: 12.4,
+            firesOfNoteNearby: 1,
+            lastCalculatedAt: '2026-08-23T00:00:00.000Z'
+          }
         }
       }
     ];
@@ -76,7 +85,8 @@ test('Search Controller Tests', async (t) => {
     const { sources } = jsonResponse[0].searchResults[0];
     assert.strictEqual(sources.track, undefined, 'raw Track payload withheld');
     assert.strictEqual(sources.eagle, undefined, 'raw Eagle payload withheld');
-    assert.strictEqual(sources.wildfire.count, 2, 'wildfire aggregate survives for the map');
+    assert.strictEqual(sources.wildfire.activeCountWithin50km, 2,
+      'wildfire aggregate survives for the map');
   });
 
   // Type, Phase and Decision are three of the six columns `project-list-table-rows.component.html`

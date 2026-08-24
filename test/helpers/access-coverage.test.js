@@ -41,7 +41,7 @@ const REPO_DIR = path.join(__dirname, '..', '..', 'src', 'repositories');
  * A name earns a place here by being unreachable by an ungated caller, NOT by being inconvenient
  * to gate. The reason is prose; the ROUTER is the evidence, and it is asserted below rather than
  * cited — line-number citations rot. They already did: these entries pointed at routes/api.js:106
- * and :115 until the NRPTI removal shifted every line, and the suite kept passing while the
+ * and :115 until a route removal shifted every line, and the suite kept passing while the
  * evidence silently stopped matching. `requireWritePrefixes` is the executable replacement.
  *
  * `boundaries.js` used to be listed here as "public reference data, deliberately unrestricted".

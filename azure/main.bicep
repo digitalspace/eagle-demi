@@ -130,6 +130,9 @@ param frontendUploaderPrincipalId string = ''
 @description('Deploy the Phase 3b document storage account. Off: dev still reads MinIO.')
 param deployDocumentStorage bool = false
 
+@description('Comma-separated `sources` keys a project may publish over HTTP. Empty publishes none.')
+param enrichmentSources string = ''
+
 // The kill switch for the summariser, and the only one that costs nothing to leave on. The Foundry
 // account below bills PER TOKEN rather than per hour, so an idle deployment is free; what scales
 // with use is queries, and `GET /api/search/summary` is privileged-only for exactly that reason.
@@ -297,6 +300,7 @@ module apiWebApp './modules/api-web-app.bicep' = {
     cosmosEndpoint: cosmos.outputs.cosmosEndpoint
     searchEndpoint: search.outputs.searchEndpoint
     appInsightsConnectionString: observability.outputs.connectionString
+    enrichmentSources: enrichmentSources
     summaryEnabled: summaryEnabled
     foundryEndpoint: foundry.outputs.foundryEndpoint
     foundryDeployment: foundry.outputs.deploymentName

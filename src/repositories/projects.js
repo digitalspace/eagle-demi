@@ -13,6 +13,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
+const config = require('../config');
 const { canRead } = require('../helpers/access-sql');
 const { eq, inList, isDefinedAndNotNull, selectWhere, countWhere, pageOptions } = require('./_sql');
 
@@ -133,39 +134,18 @@ async function listWithCentroid(access) {
 /**
  * A stored project as it may leave over HTTP.
  *
- * `sources` retains the raw Track and Eagle payloads so a re-merge never has to re-fetch upstream
- * (merge/project.js). That is traceability, not API surface: passing it through puts every field a
- * future upstream adds onto an anonymous response with nobody having looked at it, and the read
- * ACL cannot help — it gates which rows are returned, not which fields.
+ * `sources` holds raw upstream payloads for re-merge traceability, not API surface, so only the
+ * enrichment keys named in ENRICHMENT_SOURCES pass — an allowlist, so a new upstream field is
+ * never published by default. `read[]` is the caller's own ACL restated and would publish internal
+ * role names; `isPublished` is derived from it. `_etag` has no round-tripping caller.
  *
- * `sources.wildfire` is the exception and stays: it is DEMI's own aggregate, written by
- * patchWildfireStats below, and the map explorer renders it.
- *
- * An allowlist rather than a denylist for the same reason, which also retires the dead
- * `sources.nrpti` block without a second rule.
- *
- * `read[]` goes too, and the rule is the search controller's rather than a second one of this
- * route's own: no row shape in `controllers/search.js` emits it, because it is the caller's own
- * ACL restated — it decided which rows came back, and repeating it publishes the internal role
- * names of every restricted tier (`project-proponent`, `project-intake`, `system-eao`…) to
- * anonymous callers for no consumer. `isPublished` is the mirror the frontends render, and it is
- * DERIVED from `read[]` exactly as the search rows derive it, so dropping the array loses nothing
- * even where the two disagree.
- *
- * `_etag` is the Cosmos optimistic-concurrency token, which `db/cosmos-nosql.js` deliberately
- * keeps because `replace()` takes one. No HTTP path calls replace, and nothing accepts an
- * `If-Match` header or a body `_etag`, so no caller round-trips it; a conditional-write route that
- * ever wants one can emit it itself.
- *
- * Applied at res.json and nowhere else. Stripping in the data layer instead would be silently
- * destructive: updateProject reads, spreads and upserts, so a stripped read would erase `sources`
- * — and now the ACL — from the stored document on the next edit.
+ * Applied at res.json and nowhere else: updateProject reads, spreads and upserts, so stripping in
+ * the data layer would erase these from the stored document on the next edit.
  */
 function publicView(project) {
   if (!project) return project;
 
   const { sources, read, _etag, ...rest } = project;
-  const wildfire = sources && sources.wildfire;
   const view = {
     ...rest,
     isPublished: Array.isArray(read) && read.length > 0
@@ -173,7 +153,12 @@ function publicView(project) {
       : rest.isPublished === true
   };
 
-  return wildfire ? { ...view, sources: { wildfire } } : view;
+  const allowed = {};
+  for (const key of config.enrichmentSources) {
+    if (sources && sources[key] !== undefined) allowed[key] = sources[key];
+  }
+
+  return Object.keys(allowed).length ? { ...view, sources: allowed } : view;
 }
 
 /**

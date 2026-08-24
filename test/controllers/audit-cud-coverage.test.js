@@ -22,6 +22,7 @@ process.env.AUDIT_DCR_IMMUTABLE_ID = 'dcr-testimmutableid';
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
+const https = require('node:https');
 const { Readable } = require('node:stream');
 
 const audit = require('../../src/utils/audit');
@@ -32,7 +33,7 @@ const boundaries = require('../../src/repositories/boundaries');
 const chunksRepo = require('../../src/repositories/chunks');
 const apiKeys = require('../../src/repositories/api-keys');
 const aiSearch = require('../../src/search/ai-search');
-const syncWildfires = require('../../src/scripts/sync-wildfires');
+const wildfiresRepo = require('../../src/repositories/wildfires');
 const documentController = require('../../src/controllers/nosql/document');
 const boundaryController = require('../../src/controllers/nosql/boundary');
 const projectController = require('../../src/controllers/nosql/project');
@@ -272,7 +273,27 @@ test('authenticated CUD audit coverage', async (t) => {
   });
 
   await t.test('the wildfire sync writes one row, not one per project', async () => {
-    t.mock.method(syncWildfires, 'syncWildfiresData', async () => ({ fires: 812, projects: 357 }));
+    // The real sync runs, with only its network leg and its two repositories stood in for — a
+    // wholesale stub of syncWildfiresData cannot see the per-project patch this also asserts.
+    const feed = JSON.stringify({
+      features: [{
+        properties: {
+          FIRE_NUMBER: 'V70001', FIRE_STATUS: 'Out of Control',
+          LONGITUDE: -120.4, LATITUDE: 50.6, FIRE_OF_NOTE_IND: 'Y'
+        },
+        geometry: null
+      }]
+    });
+    t.mock.method(https, 'get', (url, cb) => {
+      cb(Readable.from([feed]));
+      return { on: () => {} };
+    });
+    t.mock.method(wildfiresRepo, 'upsert', async () => ({}));
+    t.mock.method(projects, 'listWithCentroid', async () => ({
+      items: [{ id: '207', name: 'P', centroid: { type: 'Point', coordinates: [-120.37, 50.62] } }]
+    }));
+    const patched = [];
+    t.mock.method(projects, 'patchWildfireStats', async (id, stats) => { patched.push(stats); });
 
     const written = await rowsFrom(() => wildfireController.syncWildfiresAdmin({
       query: {}, params: {}, user: STAFF
@@ -280,7 +301,16 @@ test('authenticated CUD audit coverage', async (t) => {
 
     assert.strictEqual(written.length, 1, 'one row for a job that patches every project');
     assert.strictEqual(written[0].Action, 'wildfire.sync');
-    assert.strictEqual(written[0].Detail.projects, 357);
+    assert.strictEqual(written[0].Detail.updatedProjects, 1);
+
+    // The written shape IS the public contract: repositories/projects.publicView emits this object
+    // verbatim under `sources.wildfire`, so a renamed or extra key ships straight to anonymous
+    // callers and to the map explorer that reads it.
+    assert.strictEqual(patched.length, 1, 'one patch per project with a centroid');
+    assert.deepStrictEqual(Object.keys(patched[0]).sort(),
+      ['activeCountWithin50km', 'firesOfNoteNearby', 'lastCalculatedAt', 'nearestDistanceKm']);
+    assert.strictEqual(patched[0].activeCountWithin50km, 1);
+    assert.strictEqual(patched[0].firesOfNoteNearby, 1);
   });
 
   await t.test('a failed mutation writes no row at all', async () => {
