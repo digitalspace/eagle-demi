@@ -195,9 +195,27 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
       (`controllers/db.js:112`), 4 subtests. A literal field would duplicate a stored fact. (c) The push endpoint on DEMI and the eagle-api caller — **authenticated from
       the first commit** (the old webhook died for being unauthenticated), idempotent on `eagleId`;
       the eagle-api side has never been built. The push carries id + label for every List ref and
-      `proponentId` + name. (d) Nightly reconcile + drift alarm modelled on
+      `proponentId` + name.
+      - **Scoped 2026-08-24, not started — it needs three decisions before any code.** The DEMI
+        side is DONE and unused: `PUT /api/projects/<trackProjectId>` under `authMiddleware` +
+        `requireWrite`, and DEMI can mint the key (see the wiki `Track-Feed-Request`, same
+        mechanism). What is greenfield is entirely eagle-api: **14 write entry points** —
+        `api/controllers/project.js` (`protectedPost`, `protectedPut`, `protectedDelete`,
+        `protectedPublish`, `protectedUnPublish`, three `protectedExtension*`) and
+        `api/controllers/document.js` (`unProtectedPost`, `protectedPost`, `protectedPut`,
+        `protectedDelete`, `protectedPublish`, `protectedUnPublish`) — and **no outbound HTTP
+        pattern exists to copy**: `axios` is a dependency but is imported nowhere under `api/`.
+        1. **Sync or fire-and-forget?** A DEMI outage must never fail an Eagle write, but a dropped
+           push needs somewhere to go, and ADR-002 says there is no queue. Fire-and-forget plus the
+           (d) reconcile is the cheap answer; say so explicitly or it gets decided by accident.
+        2. **What about the 60,578 rows already there?** Push-on-write mirrors nothing historical,
+           so this only converges after the §2.1 re-seed. The two are one plan, not two.
+        3. **Deletes.** `findOneAndDelete` leaves zero tombstones, so the delete push IS the only
+           signal; if it drops, nothing but (d) ever notices.
+      (d) Nightly reconcile + drift alarm modelled on
       `eagle-search/worker/full-sync.js:120-164` — the only way a lost hard-delete is ever caught
-      (eagle-api `findOneAndDelete`, zero tombstones).
+      (eagle-api `findOneAndDelete`, zero tombstones). Depends on (c), and on 2.1 for a corpus worth
+      reconciling: today it would report the whole frozen-seed delta as drift.
 - [ ] **3.7 Delete the old `demi-*` indexes — BLOCKED, trigger is §4.8 prod soak signed off.** No
       soak criterion is defined anywhere; §4.3 plans to HOLD both sets through that soak. Storage is
       not the cost (Basic is flat-rate). Deleting destroys the rollback for the index cutover on the
