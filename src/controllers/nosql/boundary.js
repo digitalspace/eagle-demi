@@ -65,16 +65,18 @@ exports.getBoundaries = async (req, res) => {
     // not to leave it draining the container. Both frontend list calls pass `type=`
     // (`registry-state.service.ts:903,936`), so neither can reach it.
     const { type, geometry, continuationToken } = req.query;
-    const pageSize = Math.min(parseInt(req.query.pageSize || '1000', 10), 1000);
-    const { items, continuationToken: nextPage } = await boundaries.listByType(access, {
+    const { items, continuationToken: nextPage, pageSize } = await boundaries.listByType(access, {
       // Geometry is opt-OUT, not opt-in. The frontend sends `geometry=simplified` for the default
       // fidelity and nothing at all on the bbox call, so requiring `geometry=true` would strip the
       // polygons from both and blank the map without erroring.
       type,
       withGeometry: geometry !== 'false',
-      // 1000 is the real ceiling — `pageOptions` clamps to it, so a larger number here only looks
-      // like it does something.
-      pageSize,
+      // Passed through UNCLAMPED and read back below. `pageOptions` clamps to [1, 1000] and is the
+      // only place that does; clamping here as well produced two numbers that disagreed on junk
+      // input, and the guard below then compared against the one that had bounded nothing.
+      // `undefined` would skip `maxItemCount` entirely and take the `fetchAll()` drain, so the
+      // default is the ceiling rather than nothing.
+      pageSize: req.query.pageSize === undefined ? 1000 : req.query.pageSize,
       continuationToken
     });
 
@@ -86,11 +88,15 @@ exports.getBoundaries = async (req, res) => {
     // complete, or there are more and the caller can never reach them. The two are indistinguishable
     // from here, which is precisely why it must not pass silently — a truncated map that says
     // nothing is the failure this endpoint is meant to have stopped having.
+    // `pageSize` here is what `pageOptions` actually applied, not what the caller asked for — see
+    // the repository. No caller-supplied value is interpolated: this line is unauthenticated and
+    // winston forwards to Application Insights (`utils/logger.js:25-29`), so echoing `type` would
+    // let anyone write chosen text into telemetry, once per request, at unbounded cardinality.
     if (!nextPage && items.length >= pageSize) {
       logger.warn(
-        `[boundaries] returned a full page of ${pageSize} with no continuation token` +
-        `${type ? ` for type=${type}` : ' on the unfiltered cross-partition read'} — ` +
-        'any further rows are unreachable; query by `type` to page them'
+        `[boundaries] returned a full page of ${pageSize} with no continuation token on ` +
+        `${type ? 'a type-scoped' : 'the unfiltered cross-partition'} read — any further rows ` +
+        'are unreachable; scope by `type` to page them'
       );
     }
 

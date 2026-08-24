@@ -30,27 +30,43 @@ test('GET /boundaries is a bounded read', async (t) => {
 
   await t.test('asks for a bounded page even when the caller says nothing', async (t2) => {
     let opts;
-    t2.mock.method(boundaries, 'listByType', async (_access, o) => { opts = o; return { items: [] }; });
+    t2.mock.method(cosmos, 'query', async (_c, _spec, o) => { opts = o; return { items: [] }; });
 
     await boundaryController.getBoundaries({ query: {} }, mockRes());
 
-    // Asserted THROUGH pageOptions, not just as a number. A pageSize the controller passes but
-    // pageOptions discards would leave maxItemCount unset and the read unbounded again — which is
-    // the actual defect, and a bare `assert.strictEqual(opts.pageSize, 1000)` cannot see it.
-    assert.ok(pageOptions({ pageSize: opts.pageSize }).maxItemCount,
-      'the value the controller passes must survive into maxItemCount');
-    assert.strictEqual(pageOptions({ pageSize: opts.pageSize }).maxItemCount, 1000);
+    // maxItemCount is the whole point: unset, cosmos.query takes fetchAll() and drains the
+    // container cross-partition on an anonymous request.
+    assert.strictEqual(opts.maxItemCount, 1000);
   });
 
-  await t.test('honours a smaller page and clamps a larger one', async (t2) => {
-    const seen = [];
-    t2.mock.method(boundaries, 'listByType', async (_a, o) => { seen.push(o.pageSize); return { items: [] }; });
+  // ONE CLAMP, and the guard must compare against it. The controller used to clamp a second time
+  // with different arithmetic — `Math.min(parseInt(x), 1000)` against pageOptions'
+  // `Math.min(Math.max(Number(x) || 1000, 1), 1000)` — so `?pageSize=abc` gave the controller NaN
+  // while the read bounded at 1000, and `1000 >= NaN` is false: a truncated page reported nothing.
+  // `0` and `-5` inverted it, firing the warn on complete answers.
+  await t.test('hostile pageSize values still bound the read, and agree with the guard', async (t2) => {
+    for (const [query, expected] of [['50', 50], ['99999', 1000], ['abc', 1000], ['0', 1000], ['-5', 1]]) {
+      let opts;
+      const warnings = [];
+      const originalWarn = logger.warn;
+      logger.warn = (m) => warnings.push(String(m));
 
-    await boundaryController.getBoundaries({ query: { pageSize: '50' } }, mockRes());
-    await boundaryController.getBoundaries({ query: { pageSize: '99999' } }, mockRes());
+      t2.mock.method(cosmos, 'query', async (_c, _spec, o) => {
+        opts = o;
+        // A SHORT page — one row, complete, nothing left. No caller input may turn this into a
+        // warning; the live 281-row corpus lands here on every request.
+        return { items: [{ id: 'b1' }] };
+      });
 
-    assert.strictEqual(seen[0], 50);
-    assert.strictEqual(seen[1], 1000, '1000 is the ceiling pageOptions enforces anyway');
+      await boundaryController.getBoundaries({ query: { pageSize: query } }, mockRes());
+      logger.warn = originalWarn;
+      t2.mock.restoreAll();
+
+      assert.strictEqual(opts.maxItemCount, expected, `pageSize=${query} must bound at ${expected}`);
+      if (expected > 1) {
+        assert.deepStrictEqual(warnings, [], `pageSize=${query} must not warn on a complete page`);
+      }
+    }
   });
 
   await t.test('returns the continuation token, and only when there is one', async (t2) => {
@@ -133,6 +149,46 @@ test('the two boundary paging paths are not interchangeable', async (t) => {
     assert.ok(!('x-continuation-token' in res.headers), 'and the SDK gave us nothing to hand on');
     assert.ok(warnings.some(w => w.includes('no continuation token')),
       'a truncated map that says nothing is the failure this endpoint exists to have stopped having');
+  });
+
+  // The line is unauthenticated and winston forwards to Application Insights, so echoing a caller
+  // value would let anyone write chosen text into telemetry once per request.
+  await t.test('the warning quotes no caller-supplied value', async (t2) => {
+    t2.mock.method(cosmos, 'query', async (_c, _spec, o) => ({
+      items: Array.from({ length: o.maxItemCount }, (_v, i) => ({ id: `b${i}` }))
+    }));
+
+    const warnings = [];
+    const originalWarn = logger.warn;
+    logger.warn = (m) => warnings.push(String(m));
+    t2.after(() => { logger.warn = originalWarn; });
+
+    const marker = 'INJECTED-BY-CALLER';
+    await boundaryController.getBoundaries({ query: { type: marker, pageSize: '10' } }, mockRes());
+
+    assert.strictEqual(warnings.length, 1, 'the guard fired, so there is something to inspect');
+    assert.ok(!warnings[0].includes(marker), 'no caller string may reach the log line');
+  });
+
+  // The OTHER half of the guard. Without `!nextPage` this still passes — a full page WITH a token
+  // is correctly paged, and calling its remainder unreachable would be a lie the caller can
+  // disprove. Reachable today: `?type=Municipality&pageSize=100` against the 160-row partition.
+  await t.test('a full page WITH a token is not reported — it is simply the next page', async (t2) => {
+    t2.mock.method(cosmos, 'query', async (_c, _spec, o) => ({
+      items: Array.from({ length: o.maxItemCount }, (_v, i) => ({ id: `b${i}` })),
+      continuationToken: 'more'
+    }));
+
+    const warnings = [];
+    const originalWarn = logger.warn;
+    logger.warn = (m) => warnings.push(String(m));
+    t2.after(() => { logger.warn = originalWarn; });
+
+    const res = mockRes();
+    await boundaryController.getBoundaries({ query: { type: 'Municipality', pageSize: '100' } }, res);
+
+    assert.strictEqual(res.headers['x-continuation-token'], 'more');
+    assert.deepStrictEqual(warnings, [], 'the caller can reach the rest — nothing to report');
   });
 
   await t.test('a short page is complete, and says nothing', async (t2) => {
