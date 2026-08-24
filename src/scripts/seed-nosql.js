@@ -192,12 +192,23 @@ async function seed(argv = [], deps = {}) {
     const listLookup = await src.fetchListLookup();
     log(`  ${listLookup.size} List items`);
 
+    // The OTHER thing a document can hang off. Read through the generic pager rather than a named
+    // loader because sources.js has none — nothing but this one carve-out needs the dataset, and
+    // the ids are all it needs: 17 rows, held as a Set to test membership per document.
+    log('Fetching Project Notifications (the other document parent)...');
+    const notifications = await src.fetchAllPages(src.EAGLE_API_BASE, 'ProjectNotification');
+    const notificationIds = new Set(notifications.map(n => String(n._id)));
+    log(`  ${notificationIds.size} notifications`);
+
     log('Streaming Eagle documents (60k+, paged at 100)...');
 
     const buffers = new Map();          // projectId -> pending transformed docs
     const perProject = new Map();       // projectId -> total transformed
     const unresolvedRefs = new Set();
-    const stats = { fetched: 0, built: 0, unresolved: 0, noKey: 0, written: 0, writeFailed: 0 };
+    const stats = {
+      fetched: 0, built: 0, unresolved: 0, notificationParented: 0,
+      noKey: 0, written: 0, writeFailed: 0
+    };
     const writeStatus = {};
     const seenIds = new Set();
     let duplicateIds = 0;
@@ -226,11 +237,35 @@ async function seed(argv = [], deps = {}) {
       for (const doc of page) {
         if (stats.built + stats.unresolved >= args.limitDocuments) break;
 
-        const projectId = projectIndex.resolve(doc.project);
+        // A document's parent is USUALLY a project, but 80 of them hang off a ProjectNotification
+        // instead — a different entity type in the same Eagle collection, with its own _id space.
+        // Those resolve to nothing in the project registry, and used to be dropped on the reasoning
+        // that an unresolvable parent meant "recently created and presumably unpublished".
+        // Measured 2026-08-24, that reasoning was wrong on every count: all 17 notifications and
+        // all 80 documents carry `public` in read[], and prod serves 2-13 documents under each one
+        // (63 of the 80 once eagle-public's own `documentSource: PROJECT-NOTIFICATION` filter is
+        // applied — the number the Project Notifications tab shows).
+        //
+        // They are carried under the NOTIFICATION's own _id as the partition key. Nothing else
+        // could work: eagle-public sends that _id as its `project` filter
+        // (project-notification-documents-table.component.ts:110) and there is nothing to translate
+        // it into — `associatedProjectId` is "" on all 17, so the source data holds no link to a
+        // real project. `documentSource` already distinguishes these rows, so this needs no new
+        // field, no new container, and no change to the documents model.
+        //
+        // Admitted by KNOWN notification id, never by "the ref resolved to nothing": a parent that
+        // is in neither list is still a document with no home, and still gets dropped below.
+        let projectId = projectIndex.resolve(doc.project);
+        if (!projectId && notificationIds.has(String(doc.project))) {
+          projectId = String(doc.project);
+          stats.notificationParented++;
+        }
+
         if (!projectId) {
-          // ~0.1% of documents point at a project absent from the public list — recently created
-          // and presumably unpublished. Dropped rather than filed under an invented parent, and
-          // COUNTED so the loss is visible instead of silent.
+          // Neither a project nor a notification. Dropped rather than filed under an invented
+          // parent, and COUNTED — with the distinct refs carried into the summary, not just the
+          // log, so the NEXT class of dropped rows shows up in the run output instead of being
+          // discovered months later from a user-facing zero.
           stats.unresolved++;
           unresolvedRefs.add(String(doc.project));
           continue;
@@ -267,8 +302,9 @@ async function seed(argv = [], deps = {}) {
     }
     buffers.clear();
 
-    log(`  ${count} fetched · ${stats.built} transformed across ${perProject.size} projects`);
-    log(`  dropped ${stats.unresolved} with an unresolvable project ` +
+    log(`  ${count} fetched · ${stats.built} transformed across ${perProject.size} parents`);
+    log(`  ${stats.notificationParented} filed under a Project Notification rather than a project`);
+    log(`  dropped ${stats.unresolved} with an unresolvable parent ` +
       `(${unresolvedRefs.size} distinct refs: ${[...unresolvedRefs].slice(0, 3).join(', ')})`);
     if (stats.noKey) {
       log(`  WARNING: ${stats.noKey} documents have no object key and cannot be downloaded`);
@@ -277,7 +313,13 @@ async function seed(argv = [], deps = {}) {
     summary.stages.documents = {
       fetched: count,
       built: stats.built,
+      notificationParented: stats.notificationParented,
       droppedUnresolvable: stats.unresolved,
+      // The refs themselves, not just the count: a drop is only visible in the output if the run
+      // says WHAT it dropped. Capped — an upstream fault could produce thousands of distinct refs
+      // and the summary is printed in full.
+      distinctUnresolvedRefs: unresolvedRefs.size,
+      unresolvedRefs: [...unresolvedRefs].slice(0, 20),
       withoutObjectKey: stats.noKey,
       duplicateIds,
       projects: perProject.size,
