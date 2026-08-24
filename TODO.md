@@ -236,8 +236,8 @@ sha** (`review.sh --repo eagle-demi <sha>`) — always pin it when more than one
         a prod counterpart to `deploy-infra.sh` that reads the live key back is the cheaper one.
         Not urgent: prod has had no infra deploy.
       - [x] ~~Pin `ref: ${{ inputs.version }}` on `eao-nginx/deploy-to-test.yaml`.~~ bcgov/eao-nginx
-        PR 43, open 2026-08-24. The `release` job pushes the tag before `deploy` runs, so it always
-        resolves.
+        PR 43, merged 2026-08-24 (`485e4eb`), reviewer PASS. The `release` job pushes the tag before
+        `deploy` runs, so it always resolves.
       - ~~Point rproxy probes at `/` instead of `/nginx_status`.~~ **STRUCK — it would CrashLoop
         rproxy on test.** Measured 2026-08-24: `/` is **401** on eagle-test (basic auth,
         `helm/rproxy/values-test.yaml:39`) and 200 on prod, so a kubelet probe on `/` fails
