@@ -93,32 +93,36 @@ const SERVICE_MAX_TOP = 250;
  * large total is a page the caller never learns they did not receive, which is the whole defect
  * this constant exists to close.
  */
-/**
- * How many document ids a chunk query may be scoped to before the filter is treated as
- * inexpressible. Bounds the OData `search.in` list, not the result set — the chunk page is still
- * `top`-limited.
- *
- * SIZED FROM THE CORPUS, not from a round number, because the round number made the feature inert.
- * At 1,000 nothing real qualified: measured against prod, the NARROWEST document-type filter in the
- * corpus matches 2,911 documents, `projectPhase` 1,425, `milestone` 36,471. A cap that every actual
- * filter exceeds converts "silently unfiltered" into "explicitly unfiltered" and stops there, which
- * is more honest and no more useful.
- *
- * The real constraint is request size, not a clause count: `runSearch` POSTs, `search.in` is the
- * form Azure documents for large lists, and 20,000 twenty-four-character ids is about 500 KB —
- * inside the 16 MB body limit with room for the ACL clause and the caller's terms. So this covers
- * `type` and `projectPhase` and still refuses `milestone`, which is the honest split: a filter
- * matching a third of the corpus is not a scope.
- *
- * UNPROVEN ABOVE ~1,000 AGAINST THE LIVE SERVICE. The search data plane is private-endpoint-only,
- * so a real large-list request cannot be issued from a workstation — the first deploy is where this
- * ceiling gets tested. If a large scope turns out to be slow rather than refused, lower this rather
- * than reaching for a denormalisation: over the cap the caller is told the filter did not apply,
- * which is a supported outcome and not an error path.
- */
-const DOCUMENT_SCOPE_CAP = 20000;
+
 
 const MAX_PAGE_ROWS = 500;
+
+/**
+ * How many document ids a chunk query may be scoped to before the filter is treated as
+ * inexpressible.
+ *
+ * DERIVED FROM `MAX_PAGE_ROWS`, NOT CHOSEN, because it cannot exceed what one request yields and a
+ * second number here can silently stop agreeing with the first. It did: this was set to 20,000 on
+ * the reasoning that `search.in` handles large lists and a POST body has room. True, and irrelevant
+ * — `runSearch` clamps `top` to `MAX_PAGE_ROWS`, so the resolver could never return more than 500
+ * ids no matter what this said. A filter matching 501 to 20,000 documents was then truncated to an
+ * arbitrary 500-id prefix and reported to the caller as APPLIED: measured on the branch's own
+ * figure, a `type` filter matching 2,911 documents scoped the chunk query to 500 of them, 17.2%
+ * coverage, with `meta.dropped` absent. Exactly what the docblock below forbids.
+ *
+ * `- 1` so that asking for `cap + 1` is a request one page can actually answer, which is what lets
+ * an over-cap match set be detected from the row count alone rather than only from `@odata.count`.
+ *
+ * WHAT THIS COSTS, stated plainly because it is the honest limit of the two-query design: measured
+ * against prod, the narrowest document-type filter in the corpus matches 2,911 documents,
+ * `projectPhase` 1,425, `milestone` 36,471. Every one of them is over this cap, so today the
+ * resolver reports the filter as inexpressible rather than applying it. That is a real improvement
+ * — a silently unfiltered answer becomes an explicitly unfiltered one the caller can see — but it
+ * is NOT parity with prod. Reaching parity needs either paging this query (about six sequential
+ * service calls for `type`, on a Basic 1-SU service, on every debounced keystroke) or denormalising
+ * document metadata onto 1,128,733 chunk rows. Both are decisions, not follow-ups.
+ */
+const DOCUMENT_SCOPE_CAP = MAX_PAGE_ROWS - 1;
 
 let tokenCache = null;
 let credential = null;
@@ -1115,6 +1119,11 @@ async function deleteChunksForDocument(documentId, opts = {}) {
  * `matchAll` with no keywords: the caller's terms belong to the CHUNK query, not this one. A
  * document whose text mentions the term is found by the chunk search; this query exists only to
  * answer "which documents carry this metadata".
+ *
+ * COSTS TWO SERVICE CALLS, not one. `cap + 1` is 500 and `runSearch` fills anything over
+ * `SERVICE_MAX_TOP` (250) with consecutive requests, so a filtered chunk page is three service
+ * round trips in total. That is the price of not denormalising, and it is paid on every filtered
+ * request — worth knowing before raising the cap, since every 250 ids adds another one.
  */
 async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
   const { configured, documentsIndex } = config();
@@ -1134,8 +1143,21 @@ async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
   });
 
   const ids = (value || []).map(row => String(row.id)).filter(Boolean);
+  // `cap` is `MAX_PAGE_ROWS - 1`, so asking for `cap + 1` is a request one page CAN answer — which
+  // is what makes the row count a sufficient signal on its own when `@odata.count` is missing. The
+  // earlier version set the cap above what one page returns, so a filter matching 501 to 20,000
+  // documents came back as an arbitrary 500-id prefix and was reported to the caller as applied.
+  //
+  // One comparison, not two: an `ids.length <= cap` clause beside this looks like it covers the
+  // no-count path, and does not — the fallback below already makes `total` the page length there,
+  // so the extra clause can never change the answer. A guard nothing can trip reads as protection
+  // that is not there.
   const total = Number.isFinite(count) ? count : ids.length;
-  return { ids: ids.slice(0, cap), total, withinCap: total <= cap };
+  const withinCap = total <= cap;
+  // NO PREFIX. A partial scope answers "the chunks matching your filter" about a subset nobody
+  // chose, and the caller cannot tell it from a complete answer; the empty list forces the caller
+  // to report the filter as inexpressible instead.
+  return { ids: withinCap ? ids : [], total, withinCap };
 }
 
 module.exports = {

@@ -142,11 +142,12 @@ async function resolveProjectFilter(access, query) {
  * looks like data and is not. That honest failure is only expressible because `meta.dropped` exists;
  * before it, the two outcomes were the same 200.
  *
- * @returns {{scope: ?string, recovered: string[], overCap: string[]}} `scope` is an OData clause to
- *   AND into the chunk filter, or null. `recovered` are keys to remove from the dropped report.
+ * @returns {{scope: ?string, recovered: string[]}} `scope` is an OData clause to AND into the chunk
+ *   filter, or null. `recovered` are the keys to REMOVE from the dropped report — everything else
+ *   stays reported, including the over-cap case, which is why there is no third return value for it.
  */
 async function recoverChunkFilters(query, dropped, acl) {
-  if (!dropped.length) return { scope: null, recovered: [], overCap: [] };
+  if (!dropped.length) return { scope: null, recovered: [] };
 
   // Only the dropped keys the DOCUMENTS index can actually express. Asked by building a filter for
   // that dataset from those keys alone and seeing which survive — never from a hardcoded list,
@@ -160,35 +161,35 @@ async function recoverChunkFilters(query, dropped, acl) {
   // non-empty; only an unfiltered privileged caller exposed it.
   const narrowed = {};
   for (const key of dropped) {
-    for (const wire of [`and[${key}]`, `and[${key}Start]`, `and[${key}End]`, key]) {
+    // `and[<key>]` and the bare key only. `buildFilter` reports the FULL wire key for a range —
+    // `datePostedStart`, not `datePosted` — so the suffixed variants this used to try could only
+    // ever have matched `and[datePostedStartStart]`. Dead defence, and dead defence reads as a
+    // handled case.
+    for (const wire of [`and[${key}]`, key]) {
       if (query[wire] !== undefined) narrowed[wire] = query[wire];
     }
   }
-  if (Object.keys(narrowed).length === 0) return { scope: null, recovered: [], overCap: [] };
+  if (Object.keys(narrowed).length === 0) return { scope: null, recovered: [] };
 
   const { filter: docFilter, dropped: stillDropped } =
     eagleQuery.buildFilter(narrowed, 'Document', acl);
   const recovered = dropped.filter(key => !stillDropped.includes(key));
-  if (!recovered.length || !docFilter) return { scope: null, recovered: [], overCap: [] };
+  if (!recovered.length || !docFilter) return { scope: null, recovered: [] };
 
   const { ids, total, withinCap } = await aiSearch.documentIdsMatching(docFilter);
   if (!withinCap) {
     logger.warn('[search] chunk filter matches too many documents to scope', {
       keys: recovered, documents: total, cap: aiSearch.DOCUMENT_SCOPE_CAP
     });
-    return { scope: null, recovered: [], overCap: recovered };
+    return { scope: null, recovered: [] };
   }
 
   // No matching document means no matching chunk, and that is a MEASUREMENT — the filter ran, it
   // just selected nothing. Expressed as a clause that cannot match rather than as an early return,
   // so the count and the ACL below are still computed by the one code path.
-  if (ids.length === 0) return { scope: "documentId eq ''", recovered, overCap: [] };
+  if (ids.length === 0) return { scope: "documentId eq ''", recovered };
 
-  return {
-    scope: `search.in(documentId, '${ids.join(',')}', ',')`,
-    recovered,
-    overCap: []
-  };
+  return { scope: `search.in(documentId, '${ids.join(',')}', ',')`, recovered };
 }
 
 exports.search = async (req, res) => {

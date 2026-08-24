@@ -1233,3 +1233,81 @@ test('the service page cap stays inside the page-assembly cap', () => {
     `SERVICE_MAX_TOP ${aiSearch.SERVICE_MAX_TOP} must not exceed MAX_PAGE_ROWS ${aiSearch.MAX_PAGE_ROWS}`);
   assert.strictEqual(aiSearch.SERVICE_MAX_TOP, 250, 'the chunk window is a multiple of this');
 });
+
+/**
+ * `documentIdsMatching` — the resolver behind chunk-metadata filters.
+ *
+ * It had no test at all. Every reference to it in `test/` was a `t.mock.method` stub, so the five
+ * controller tests that look like cap coverage were asserting the CONTROLLER's handling of a
+ * hand-supplied `{ids, total, withinCap}` and exercising none of the code that decides it. Deleting
+ * the over-cap guard outright left the whole 1,042-test suite green, and a cap set above what one
+ * request can return truncated every real filter to a 500-id prefix and reported it as applied.
+ *
+ * These stub `fetch`, not the function.
+ */
+test('ai-search document id resolution', async (t) => {
+  const page = (n, count) => ({
+    json: { value: Array.from({ length: n }, (_, i) => ({ id: `doc${i}` })), '@odata.count': count }
+  });
+
+  await t.test('a match set within the cap comes back whole', async (tt) => {
+    const calls = captureFetch(tt, () => page(3, 3));
+    const res = await aiSearch.documentIdsMatching("type eq 'x'");
+
+    assert.deepStrictEqual(res.ids, ['doc0', 'doc1', 'doc2']);
+    assert.strictEqual(res.total, 3);
+    assert.strictEqual(res.withinCap, true);
+    // `matchAll` with no keywords: the caller's terms belong to the CHUNK query, not this one.
+    assert.strictEqual(calls[0].body.search, '*');
+    assert.strictEqual(calls[0].body.select, 'id');
+    assert.strictEqual(calls[0].body.filter, "type eq 'x'");
+  });
+
+  await t.test('a match set over the cap yields NO ids, not a prefix', async (tt) => {
+    // The measured defect: a `type` filter matching 2,911 documents scoped the chunk query to 500
+    // of them — 17.2% coverage — and reported the filter as applied. Returning a prefix at all is
+    // the failure; the caller cannot tell it from a complete answer.
+    captureFetch(tt, () => page(aiSearch.DOCUMENT_SCOPE_CAP + 1, 2911));
+    const res = await aiSearch.documentIdsMatching("type eq 'x'");
+
+    assert.strictEqual(res.withinCap, false);
+    assert.deepStrictEqual(res.ids, [], 'an arbitrary prefix is worse than nothing here');
+    assert.strictEqual(res.total, 2911);
+  });
+
+  await t.test('a full page with NO count is over the cap too', async (tt) => {
+    // The count is authoritative when present. When it is missing the old fallback was
+    // `ids.length`, which for a truncated page reports the truncation as the whole match set —
+    // the same defect arriving through the error path instead of the happy one.
+    captureFetch(tt, () => ({
+      json: { value: Array.from({ length: aiSearch.DOCUMENT_SCOPE_CAP + 1 }, (_, i) => ({ id: `d${i}` })) }
+    }));
+    const res = await aiSearch.documentIdsMatching("type eq 'x'");
+    assert.strictEqual(res.withinCap, false);
+    assert.deepStrictEqual(res.ids, []);
+  });
+
+  await t.test('the cap cannot exceed what one request returns', () => {
+    // The two numbers drifted once and nothing noticed: `runSearch` clamps `top` to MAX_PAGE_ROWS,
+    // so a cap above it is unreachable by construction and every match set between them is
+    // silently truncated. Derived rather than chosen now, and pinned so it stays derived.
+    assert.ok(aiSearch.DOCUMENT_SCOPE_CAP < aiSearch.MAX_PAGE_ROWS,
+      `cap ${aiSearch.DOCUMENT_SCOPE_CAP} must be under MAX_PAGE_ROWS ${aiSearch.MAX_PAGE_ROWS}`);
+  });
+
+  await t.test('it asks for one more than the cap, across however many requests that takes', async (tt) => {
+    // Asserted as the SUM, because `runSearch` fills a page larger than SERVICE_MAX_TOP with
+    // consecutive requests: asking for 500 issues 250 + 250, so the first body's `top` is 250 and
+    // an assertion on it would be measuring the service's per-request ceiling rather than what
+    // this function asked for.
+    //
+    // Which also names the cost, and it is worth naming: resolving a chunk filter is TWO service
+    // calls before the chunk query itself, on every filtered request.
+    const calls = captureFetch(tt, () => page(250, 600));
+    await aiSearch.documentIdsMatching("type eq 'x'");
+    const asked = calls.reduce((n, c) => n + c.body.top, 0);
+    assert.strictEqual(asked, aiSearch.DOCUMENT_SCOPE_CAP + 1,
+      `the resolver must ask for cap + 1 in total, got ${asked} across ${calls.length} request(s)`);
+    assert.strictEqual(calls.length, 2, 'and that exceeds SERVICE_MAX_TOP, so it costs two');
+  });
+});
