@@ -1148,6 +1148,40 @@ test('semantic reranking', async (t) => {
     assert.strictEqual(stats.exhausted, true, 'the latch is visible without reading a timestamp');
     assert.ok(stats.exhaustedAt, 'and stamped');
   });
+
+  await t.test('the latch is scoped to the MONTH, not to the process', async (tt) => {
+    // `alwaysOn` is true, so the worker outlives the allowance. This is the only test in the file
+    // that controls the clock, because it is the only behaviour that spans a calendar boundary —
+    // `apis: ['Date']` so the retry backoff's timers stay real.
+    tt.mock.timers.enable({ apis: ['Date'], now: new Date('2026-08-30T12:00:00Z') });
+
+    const calls = captureFetch(tt, (i) => (
+      i === 0
+        ? { ok: false, status: 402, json: { error: 'Free Query Semantic Usage exceeded' } }
+        : { json: { value: [{ chunkId: 'c1', documentId: 'd1' }] } }
+    ));
+
+    await aiSearch.searchChunks({ filter: null, keywords: 'peace river', semantic: true });
+    assert.ok(calls[0].body.semanticQuery, 'the first search asked');
+
+    // BOTH HALVES, because either alone passes on a broken implementation: a latch that never
+    // latches satisfies the rollover assertion, and a latch that never clears satisfies this one.
+    //
+    // A DIFFERENT DAY of the same month, not the same instant. Asserting this at 12:00 on the 30th
+    // and the reset on 1 September moves the clock across a day boundary and a month boundary at
+    // once, so it cannot tell a monthly reset from a daily one — measured: slicing the stamp to
+    // `YYYY-MM-DD` instead of `YYYY-MM` left the whole test green.
+    tt.mock.timers.setTime(new Date('2026-08-31T12:00:00Z').getTime());
+    await aiSearch.searchChunks({ filter: null, keywords: 'site c', semantic: true });
+    assert.ok(!calls[2].body.semanticQuery, 'still latched on a LATER DAY of the same month');
+    assert.strictEqual(aiSearch.semanticStats().exhausted, true);
+
+    // Same process, next month — the allowance has reset and nothing restarted to notice.
+    tt.mock.timers.setTime(new Date('2026-09-01T00:00:01Z').getTime());
+    await aiSearch.searchChunks({ filter: null, keywords: 'site c', semantic: true });
+    assert.ok(calls[3].body.semanticQuery, 'the first search of the new month asks again');
+    assert.strictEqual(aiSearch.semanticStats().exhausted, false, 'and reads un-latched');
+  });
 });
 
 test('the deploy template pins all three index names to the code defaults', () => {
