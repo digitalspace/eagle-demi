@@ -99,15 +99,35 @@ const CASES = [
   { dataset: 'Document', keywords: 'water', sortBy: '-datePosted' },
   { dataset: 'Document', keywords: 'water', sortBy: '+displayName' },
   { dataset: 'DocumentChunk', keywords: 'water' },
-  { dataset: 'DocumentChunk', keywords: 'water', filter: `milestone=${MILESTONE}` },
+  {
+    dataset: 'DocumentChunk',
+    keywords: 'water',
+    filter: `milestone=${MILESTONE}`,
+    // ON THE CASE, not the dataset. `milestone` matches 36,471 documents — far over
+    // `ai-search.js` DOCUMENT_SCOPE_CAP — so demi reports the key in `meta.dropped` instead of
+    // scoping the chunk query to an arbitrary prefix of that match set. That is the designed
+    // bound, not a defect. The narrow case below shares this dataset and this field and MUST
+    // still fail if scoping breaks, which is exactly what a dataset-wide entry would prevent.
+    accept: {
+      selective:
+        'the chunk scope resolves through the documents index and is bounded at ' +
+        'DOCUMENT_SCOPE_CAP; `milestone` matches 36,471 documents, over the cap, so demi answers ' +
+        'unfiltered and names the key in meta.dropped where eagle narrows'
+    }
+  },
   { dataset: 'DocumentChunk', keywords: 'fish habitat', sortBy: '-datePosted' },
-  // A NARROW chunk filter, and the whole reason it is here is that the broad one is an accepted
-  // divergence. Chunk metadata filters are resolved through the documents index and scoped by
-  // documentId, which is bounded — so `milestone` (36,471 documents) is over the cap and reported
-  // as dropped, while a filter this size is under it and MUST narrow on both services. Without
-  // this case the acceptance above would cover the working half too, and a regression that broke
-  // scoping entirely would read as the known limitation.
-  { dataset: 'DocumentChunk', keywords: 'water', filter: 'documentAuthorType=5cf00c03a266b7e1877504ea' },
+  // A SCOPEABLE chunk filter, and the whole reason it is here is that the broad one above is an
+  // accepted divergence. This one is not: `type` matches 2,911 documents, under DOCUMENT_SCOPE_CAP,
+  // so demi resolves it through the documents index and MUST narrow exactly as eagle does.
+  //
+  // The value is read off a real prod row, not composed. The first version of this case used an
+  // id invented by editing one character of the milestone id — it matched nothing on either
+  // service, both answered "not selective", the case passed, and it asserted nothing at all. A
+  // probe that cannot fail is worse here than no probe, because the matrix looks broader than it is.
+  //
+  // `documentAuthorType` and `projectPhase` are deliberately NOT used: measured on prod, eagle
+  // ignores both on this dataset (418,190 either way), so they are parity and not a gap.
+  { dataset: 'DocumentChunk', keywords: 'water', filter: 'type=5cf00c03a266b7e1877504cf' },
   // The shape eagle-public REALLY sends: `sortBy` twice, the second often empty
   // (`api.ts:176-177` appends sortBy and then secondarySort). It is the one wire form both
   // implementations wrote explicit normalisation for, so it is the one most likely to diverge.
@@ -223,21 +243,35 @@ function buildUrl(base, kase, pageSize = DEFAULTS.pageSize) {
  *
  * Keyed `dataset:field`. Everything not listed fails the run.
  */
+/**
+ * Behavioural divergences that are DECIDED, not defects — the sort counterpart to
+ * `EXPECTED_KEY_DELTA`, and the reason a green run is achievable at all.
+ *
+ * The bar this tool exists to enforce is "every disagreement with prod is either fixed or knowingly
+ * accepted in writing". An acceptance with no written reason is indistinguishable from an oversight,
+ * so the reason is required and is printed next to the case. Deleting an entry re-opens the question.
+ *
+ * TWO SCOPES, and the distinction is not academic — getting it wrong made this table a mute button
+ * for a whole dataset. `EXPECTED_DIVERGENCE` is keyed `dataset:field` and is for things true of the
+ * dataset ALWAYS: demi never sorts chunks, because no field in `chunks` is sortable. A divergence
+ * that holds for SOME requests belongs on the case instead, via its own `accept`, or it silences
+ * every sibling case that should still be failing. Measured: a `DocumentChunk:selective` entry
+ * written for the broad-filter case also passed the narrow-filter case that exists specifically to
+ * catch chunk scoping breaking — and the run went green against an app that had no scoping at all.
+ */
 const EXPECTED_DIVERGENCE = {
-  'DocumentChunk:selective':
-    'a chunk filter is resolved through the documents index and scoped by documentId, and that ' +
-    'scope is BOUNDED: above ai-search.js DOCUMENT_SCOPE_CAP the key is reported in meta.dropped ' +
-    'rather than applied to an arbitrary prefix of the match set. The two chunk cases in this ' +
-    'matrix both filter on `milestone`, which matches 36,471 documents and is far over the cap, so ' +
-    'demi answers unfiltered-and-says-so where eagle narrows. This acceptance covers the BROAD ' +
-    'case only — the narrow case is a live assertion, not an acceptance: see the ' +
-    '`and[documentAuthorType]` case below, which is small enough to scope and MUST stay selective ' +
-    'on both sides. Remove this entry if the chunks index ever carries document metadata itself.',
   'DocumentChunk:sortHonoured':
     'demi never sorts chunks: every field in azure/search/indexes/chunks.json is sortable:false, ' +
     'the key included, and naming a non-sortable field is a 400 from the service. Chunk results are ' +
     'relevance-ordered. eagle-public never sorts this dataset (search/content sends no sortBy).'
 };
+
+/** The reason a divergence is accepted for this case, or undefined. Case first, dataset second. */
+function acceptedReason(kase, dataset, field) {
+  const own = kase && kase.accept && kase.accept[field];
+  return own || EXPECTED_DIVERGENCE[`${dataset}:${field}`];
+}
+
 
 /**
  * The same case with its filter and sort stripped — the denominator for selectivity.
@@ -401,13 +435,13 @@ function compareCase(demi, eagle, bases = {}) {
   const demiSel = selectivity(d, bases.demi);
   const eagleSel = selectivity(e, bases.eagle);
   if (demiSel !== undefined && eagleSel !== undefined && demiSel !== eagleSel) {
-    push(diffs, accepted, dataset, { field: 'selective', demi: demiSel, eagle: eagleSel });
+    push(diffs, accepted, bases, { field: 'selective', demi: demiSel, eagle: eagleSel });
   }
 
   const demiSorted = ordered(d, bases.demi);
   const eagleSorted = ordered(e, bases.eagle);
   if (demiSorted !== undefined && eagleSorted !== undefined && demiSorted !== eagleSorted) {
-    push(diffs, accepted, dataset, { field: 'sortHonoured', demi: demiSorted, eagle: eagleSorted });
+    push(diffs, accepted, bases, { field: 'sortHonoured', demi: demiSorted, eagle: eagleSorted });
   }
 
   if (d.keys || e.keys) {
@@ -428,8 +462,8 @@ function compareCase(demi, eagle, bases = {}) {
 /**
  * Route one disagreement to `diffs` or to `accepted`, by whether somebody wrote down a reason.
  */
-function push(diffs, accepted, dataset, diff) {
-  const reason = EXPECTED_DIVERGENCE[`${dataset}:${diff.field}`];
+function push(diffs, accepted, bases, diff) {
+  const reason = acceptedReason(bases.kase, bases.dataset, diff.field);
   (reason ? accepted : diffs).push(reason ? { ...diff, reason } : diff);
 }
 
@@ -544,7 +578,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     const eagle = await get(buildUrl(EAGLE_URL, kase, args.pageSize), null);
     await sleep(args.delayMs);
 
-    const verdict = compareCase(demi, eagle, { demi: demiBase, eagle: eagleBase, dataset: kase.dataset });
+    const verdict = compareCase(demi, eagle, { demi: demiBase, eagle: eagleBase, dataset: kase.dataset, kase });
     results.push({ case: kase.n, label: label(kase), spec: specKey(kase), pageNum: kase.pageNum, ...verdict });
     if (!args.json) {
       console.log(`[${String(kase.n).padStart(2)}/${all.length}] ${verdict.pass ? 'PASS' : 'DIFF'}  ${label(kase)}`);
@@ -612,6 +646,6 @@ if (require.main === module) {
 
 module.exports = {
   CASES, PAGES, DEMI_URL, EAGLE_URL, RPROXY_HOST, EXPECTED_KEY_DELTA,
-  baselineOf, selectivity, ordered, pagingReport, specKey, EXPECTED_DIVERGENCE,
+  baselineOf, selectivity, ordered, pagingReport, specKey, EXPECTED_DIVERGENCE, acceptedReason,
   parseArgs, credential, expandCases, buildUrl, label, summarize, compareCase, main
 };

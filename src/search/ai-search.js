@@ -95,13 +95,28 @@ const SERVICE_MAX_TOP = 250;
  */
 /**
  * How many document ids a chunk query may be scoped to before the filter is treated as
- * inexpressible. Bounds the OData `search.in` list rather than the result set — the chunk page is
- * still `top`-limited — and 1,000 twenty-four-character ids is about 25 KB of filter, well inside
- * what the service accepts while leaving room for the ACL clause and the caller's own terms.
+ * inexpressible. Bounds the OData `search.in` list, not the result set — the chunk page is still
+ * `top`-limited.
  *
- * Over it, the honest answer is that the filter did not apply, reported through `meta.dropped`.
+ * SIZED FROM THE CORPUS, not from a round number, because the round number made the feature inert.
+ * At 1,000 nothing real qualified: measured against prod, the NARROWEST document-type filter in the
+ * corpus matches 2,911 documents, `projectPhase` 1,425, `milestone` 36,471. A cap that every actual
+ * filter exceeds converts "silently unfiltered" into "explicitly unfiltered" and stops there, which
+ * is more honest and no more useful.
+ *
+ * The real constraint is request size, not a clause count: `runSearch` POSTs, `search.in` is the
+ * form Azure documents for large lists, and 20,000 twenty-four-character ids is about 500 KB —
+ * inside the 16 MB body limit with room for the ACL clause and the caller's terms. So this covers
+ * `type` and `projectPhase` and still refuses `milestone`, which is the honest split: a filter
+ * matching a third of the corpus is not a scope.
+ *
+ * UNPROVEN ABOVE ~1,000 AGAINST THE LIVE SERVICE. The search data plane is private-endpoint-only,
+ * so a real large-list request cannot be issued from a workstation — the first deploy is where this
+ * ceiling gets tested. If a large scope turns out to be slow rather than refused, lower this rather
+ * than reaching for a denormalisation: over the cap the caller is told the filter did not apply,
+ * which is a supported outcome and not an error path.
  */
-const DOCUMENT_SCOPE_CAP = 1000;
+const DOCUMENT_SCOPE_CAP = 20000;
 
 const MAX_PAGE_ROWS = 500;
 

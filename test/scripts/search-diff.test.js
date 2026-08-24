@@ -278,6 +278,47 @@ test('the same divergence on a dataset with no declared reason still fails', () 
   assert.ok(verdict.diffs.some(d => d.field === 'sortHonoured'));
 });
 
+test('a case-scoped acceptance does not silence its siblings', () => {
+  // THE MUTE-BUTTON BUG, and it was mine. A `DocumentChunk:selective` entry written for the
+  // broad-filter case also passed the NARROW-filter case that exists precisely to catch chunk
+  // scoping breaking — and the whole run went green against a deployed app that had no scoping at
+  // all. An acceptance that holds for some requests belongs on the case, never on the dataset.
+  const sides = {
+    dataset: 'DocumentChunk',
+    demi: { total: 399872, ids: ['a'] },
+    eagle: { total: 430345, ids: ['b'] }
+  };
+  const ignored = () => [respond([{ _id: 'a' }], 399872), respond([{ _id: 'b' }], 0)];
+
+  const broad = compareCase(...ignored(), {
+    ...sides,
+    kase: { accept: { selective: 'over DOCUMENT_SCOPE_CAP, reported in meta.dropped' } }
+  });
+  assert.strictEqual(broad.pass, true, JSON.stringify(broad.diffs));
+  assert.strictEqual(broad.accepted.length, 1);
+
+  const narrow = compareCase(...ignored(), { ...sides, kase: {} });
+  assert.strictEqual(narrow.pass, false,
+    'the same dataset and the same field, with no acceptance on THIS case, must still fail');
+  assert.ok(narrow.diffs.some(d => d.field === 'selective'));
+});
+
+test('a dataset-wide acceptance still applies to every case of it', () => {
+  // The other scope, which is correct where it is used: demi cannot sort chunks at all, so the
+  // divergence is a property of the dataset and not of any one request.
+  const verdict = compareCase(
+    respond([{ _id: 'a' }, { _id: 'b' }], 2),
+    respond([{ _id: 'y' }, { _id: 'x' }], 2),
+    {
+      dataset: 'DocumentChunk',
+      kase: {},
+      demi: { total: 2, ids: ['a', 'b'] },
+      eagle: { total: 2, ids: ['x', 'y'] }
+    });
+  assert.strictEqual(verdict.pass, true, JSON.stringify(verdict.diffs));
+  assert.match(verdict.accepted[0].reason, /sortable:false/);
+});
+
 test('every declared divergence carries a reason', () => {
   // The reason is the acceptance. A blank one turns this table into a mute button.
   for (const [key, reason] of Object.entries(EXPECTED_DIVERGENCE)) {
