@@ -138,11 +138,38 @@ test('API deploy package', async (t) => {
 
     assert.ok([...linked].some(e => e.startsWith('node_modules/')),
       'a symlinked node_modules must still be packaged');
-    // On the ACTUAL leaked shape. An earlier version of this asserted on
-    // `loop-back/node_modules/`, a path that is produced neither before nor after a fix — it
-    // passed on the buggy output and would not have noticed the fix either way.
+    // What actually keeps this empty is the LINK BUDGET, not any rule about links to the root:
+    // `loop-back` sits inside the store, so reaching it costs a second link and it is pruned.
+    // An earlier message here claimed a root-loop-back guarantee the code does not make — see the
+    // next test, where a link back to the root costs only one and IS followed, once.
     assert.deepStrictEqual([...linked].filter(e => e.includes('loop-back')), [],
-      'a link back to the root must not re-ship the root under it');
+      'a second link cannot be spent, so a loop reached through the store is not followed');
+  });
+
+  await t.test('a ONE-link loop back to the root is followed once, and stays bounded', () => {
+    // Not a defect, and written down so nobody "fixes" it into one. The guarantee is the real tree
+    // plus one copy of each link target — so a link costing a single hop is followed, and the
+    // budget stops it compounding. What matters is that the fences still hold on that copy.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-root-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+    fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'src', 's.js'), '//');
+    fs.writeFileSync(path.join(repo, '.env'), 'SECRET=x');
+    fs.mkdirSync(path.join(repo, '.claude', 'worktrees'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.claude', 'worktrees', 'checkout.js'), '//');
+    fs.symlinkSync('..', path.join(repo, 'src', 'back'));
+
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    const under = [...packed].filter(e => e.startsWith('src/back/'));
+    assert.ok(under.length > 0, 'a one-link hop is within budget and is followed');
+    assert.ok(under.length < 50, `and does not compound, got ${under.length}`);
+    assert.deepStrictEqual([...packed].filter(e => e.includes('.env')), [],
+      'the .env fence holds on the copy reached through the link');
+    assert.deepStrictEqual([...packed].filter(e => e.includes('.claude')), [],
+      'and so does the excluded-directory fence');
   });
 
   await t.test('keeps BOTH paths when two names resolve to one directory', () => {
