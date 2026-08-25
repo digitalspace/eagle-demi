@@ -40,6 +40,7 @@ const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const purgeHelpers = require('../helpers/purge');
 const auditHelpers = require('../utils/audit');
+const aiSearch = require('../search/ai-search');
 
 const projectsRepo = require('../repositories/projects');
 const documentsRepo = require('../repositories/documents');
@@ -276,6 +277,11 @@ async function seed(argv = [], deps = {}) {
   const cosmosReady = deps.cosmosReady !== undefined
     ? deps.cosmosReady
     : Boolean(process.env.COSMOS_ENDPOINT);
+  // A purge also deletes the index entry, and `deleteFromIndex` returns 0 rather than throwing when
+  // SEARCH_ENDPOINT is unset — so a purge would leave the row searchable with nothing to notice it.
+  const searchReady = deps.searchReady !== undefined
+    ? deps.searchReady
+    : aiSearch.config().configured;
 
   const summary = { mode: args.live ? 'live' : 'dry-run', stages: {}, failures: [] };
   if (args.reconcile && !cosmosReady) {
@@ -571,12 +577,8 @@ async function seed(argv = [], deps = {}) {
       ['Document', documentFetch && documentFetch.total, documentFetch && documentFetch.fetched]
     ].filter(([, total, fetched]) => typeof total !== 'number' || total !== fetched);
 
-    // An empty-but-consistent notification list passes every completeness gate above, so the drops
-    // are the second half of the same guard: a document the seed could not place is missing from
-    // the fetch for a reason that is not "it was removed upstream". Only a drop ALREADY in Cosmos
-    // can be deleted as surplus though, so only those refuse — matched on id alone, since a
-    // dropped document has no resolved partition to match on. Enumerated once and reused by the
-    // documents reconcile below; skipped entirely when an unverified fetch already refuses.
+    // A document the seed could not place is absent from the fetch and reads as surplus, so a drop
+    // that IS in Cosmos refuses — matched on id alone, a dropped document having no partition.
     const documentRows = unverified.length ? [] : await repos.documents.listSeededIds(access);
     const projectRows = unverified.length ? [] : await repos.projects.listEagleOnlyIds(access);
     const inCosmos = new Set(documentRows.map(row => String(row.id)));
@@ -608,6 +610,10 @@ async function seed(argv = [], deps = {}) {
     } else if (truncated.length) {
       summary.failures.push('--reconcile refused before any delete — nothing removed from either ' +
         `container: ${truncated.join('; ')}`);
+    } else if (args.live && !searchReady) {
+      summary.failures.push('--reconcile refused before any delete — nothing removed from either ' +
+        'container: SEARCH_ENDPOINT is not set, so every index delete would be a silent no-op and ' +
+        'the purged rows would stay searchable with no indexer to clean them up');
     } else {
       // Documents first: a project whose documents are already gone cannot orphan any.
       const containers = [
@@ -635,6 +641,7 @@ async function seed(argv = [], deps = {}) {
       const live = args.live && !breached.length;
       const logPath = reconcileLogPath(now);
       summary.reconcile = { log: logPath };
+      if (!searchReady) summary.reconcile.search = 'unconfigured — live would refuse';
       summary.reconcile.documents = await reconcileContainer(...containers[0],
         { live, logPath, audit });
       summary.reconcile.projects = await reconcileContainer(...containers[1],

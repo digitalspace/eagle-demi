@@ -675,7 +675,9 @@ test('seed --reconcile end to end', async (t) => {
       purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); },
       purgeProject: async (row) => { purged.projects.push(row.id); }
     };
-    return { purged, deps: { repos, purge, cosmosReady: true, now: NOW, ...over } };
+    return {
+      purged, deps: { repos, purge, cosmosReady: true, searchReady: true, now: NOW, ...over }
+    };
   };
 
   await t.test('a dry run reports wouldDelete and deletes nothing', async () => {
@@ -870,6 +872,55 @@ test('seed --reconcile end to end', async (t) => {
     assert.strictEqual(summary.reconcile.documents.deleted, 1);
   });
 
+  await t.test('the dropped-id gate sees past the 20 the summary prints', async () => {
+    // The summary caps `droppedIds` at 20 for printing; the list the gate intersects against Cosmos
+    // must stay whole. Only the 25th drop is seeded, so a capped list would miss it and delete it.
+    const { purged, deps } = makeDeps({}, [...SEEDED_DOCS, { id: 'pn24', projectId: 'orphan24' }]);
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps,
+      sources: stubSources({
+        streamEagleDocuments: async (onPage) => {
+          const docs = [eagleDoc('doc1', matchedGuid),
+            ...Array.from({ length: 25 }, (_, i) => eagleDoc(`pn${i}`, `orphan${i}`))];
+          await onPage(docs, docs.length, docs.length);
+          return { count: docs.length, total: docs.length };
+        }
+      })
+    });
+
+    assert.strictEqual(summary.stages.documents.droppedUnresolvable, 25);
+    assert.strictEqual(summary.stages.documents.droppedIds.length, 20,
+      'the printed list is still capped');
+    assert.match(summary.failures.join(' '), /1 of the 25 document\(s\)/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+    assert.strictEqual(summary.reconcile, undefined);
+  });
+
+  await t.test('a live reconcile refuses when AI Search is not configured', async () => {
+    // The live 2026-08-25 run: the tunnel recipe exported the COSMOS_* settings only, so every
+    // index delete inside purgeDocument/purgeProject returned 0 and 11 rows stayed searchable.
+    const { purged, deps } = makeDeps({ searchReady: false });
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.match(summary.failures.join(' '), /refused before any delete/);
+    assert.match(summary.failures.join(' '), /SEARCH_ENDPOINT is not set/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+    assert.strictEqual(summary.reconcile, undefined);
+    assert.strictEqual(summary.failures.length ? 1 : 0, 1, 'a refused reconcile must exit 1');
+  });
+
+  await t.test('a dry run with no AI Search reports what a live run would refuse', async () => {
+    const { purged, deps } = makeDeps({ searchReady: false });
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(summary.failures, [], 'a dry run deletes nothing, so it refuses nothing');
+    assert.strictEqual(summary.reconcile.search, 'unconfigured — live would refuse');
+    assert.strictEqual(summary.reconcile.documents.wouldDelete, 1);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
   await t.test('every surplus id reaches the log file and the audit trail', async () => {
     // The console preview stops at 20; this file is what a reconcile is reconstructed from, so it
     // carries every id in both containers — dry run included, where nothing was deleted.
@@ -1005,7 +1056,7 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
       purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); },
       purgeProject: async (row) => { purged.projects.push(row.id); }
     };
-    return { purged, deps: { repos, purge, cosmosReady: true, now: NOW } };
+    return { purged, deps: { purge, repos, cosmosReady: true, searchReady: true, now: NOW } };
   };
 
   // The reviewer's probe: eagle-api answers empty for both datasets and every gate above it
