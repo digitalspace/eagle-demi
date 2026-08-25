@@ -18,6 +18,72 @@ const aiSearch = require('../../search/ai-search');
 const { purgeProject } = require('../../helpers/purge');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
+const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
+
+/**
+ * A project's visibility change, carried to its index row and down onto its documents.
+ *
+ * A document must never out-rank its project. The 409 on PUT /documents/:id/published enforces
+ * that upwards; this is the same invariant downwards, which nothing enforced — unpublishing a
+ * project left every document under it carrying `public`, and `listVisible` gates on the
+ * document's own ACL, so they stayed listable and searchable under a project nobody could see.
+ *
+ * On EITHER TRANSITION, because the cascade re-derives rather than assigns. It used to fire only
+ * on the way down, on the reasoning that publishing a project must not publish its documents —
+ * true, and still true, but it was enforced by never running rather than by the formula. So a
+ * re-publish left every document restricted with no counterpart to restore them, and recovery was
+ * ~170 individual `PUT /documents/:id/published` calls for an average project.
+ *
+ * `ownRead ∩ projectRead` returns `public` only to documents that already had it, so running on
+ * the way up cannot publish a document whose own ACL never did.
+ *
+ * systemAccess() deliberately — a document already private must be patched too, and the caller
+ * cannot read it. Called AFTER the project write, matching setDocumentPublished: a failure here
+ * leaves the project private and its documents over-permissive, which is the direction the reader
+ * gates cover.
+ *
+ * ponytail: documents only, not their chunks. A chunk is gated on its PARENT DOCUMENT's
+ * visibility in the chunk-search join, so a stale chunk ACL cannot leak text on its own, and
+ * fanning out one bulk call per document turns this into an unbounded request handler. If chunk
+ * ACLs ever have to stand alone, move the whole cascade to a job and patch chunks there.
+ *
+ * @returns {Promise<string|null>} an error message the caller must 500 with, or null on success.
+ */
+async function cascadeProjectVisibility(projectId, acl) {
+  // The project's own index row FIRST, and outside the try: no project list or search is a live
+  // read any more (#148), so an unpublished project stayed findable BY NAME until the indexer's
+  // next PT5M pass. It goes before the cascade because the project's Cosmos write has already
+  // landed — it must narrow even if the cascade below fails.
+  await aiSearch.writeAcls(aiSearch.indexes().projects, [
+    { id: projectId, read: acl.read, isPublished: acl.isPublished }
+  ]);
+
+  try {
+    const cascade = await documents.setAclForProject(systemAccess(), projectId, acl.read);
+    if (cascade.failed > 0) {
+      // The rows that DID land still go to the index, or the succeeded subset stays listable under
+      // its old ACL until the indexer's next PT5M pass. With no per-row verdicts, nothing is
+      // written rather than claiming an ACL Cosmos may not hold.
+      const failedIds = new Set(cascade.failedIds || (cascade.rows || []).map(r => r.id));
+      const landed = (cascade.rows || []).filter(row => !failedIds.has(row.id));
+      if (landed.length) await aiSearch.writeAcls(aiSearch.indexes().documents, landed);
+      logger.error('[Project Controller] document ACL cascade partially failed', {
+        projectId, ...cascade, ids: undefined, rows: undefined
+      });
+      return 'Project visibility changed, but its documents were not fully updated.';
+    }
+
+    // The same derived ACLs the cascade just wrote to Cosmos, into the documents index. One
+    // request per 1,000 documents, and it cannot throw.
+    await aiSearch.writeAcls(aiSearch.indexes().documents, cascade.rows);
+    return null;
+  } catch (cascadeErr) {
+    logger.error('[Project Controller] document ACL cascade failed', {
+      projectId, error: cascadeErr.message
+    });
+    return 'Project visibility changed, but its documents were not updated.';
+  }
+}
 
 exports.getProjects = async (req, res) => {
   try {
@@ -192,75 +258,74 @@ exports.updateProject = async (req, res) => {
       }
     });
 
-    // A document must never out-rank its project. The 409 on PUT /documents/:id/published enforces
-    // that upwards; this is the same invariant downwards, which nothing enforced — unpublishing a
-    // project left every document under it carrying `public`, and `listVisible` gates on the
-    // document's own ACL, so they stayed listable and searchable under a project nobody could see.
-    //
-    // On EITHER TRANSITION, because the cascade now re-derives rather than assigns. It used to fire
-    // only on the way down, on the reasoning that publishing a project must not publish its
-    // documents — true, and still true, but it was enforced by never running rather than by the
-    // formula. So a re-publish left every document restricted with no counterpart to restore them,
-    // and recovery was ~170 individual `PUT /documents/:id/published` calls for an average project.
-    //
-    // `ownRead ∩ projectRead` returns `public` only to documents that already had it, so running on
-    // the way up cannot publish a document whose own ACL never did.
-    //
-    // systemAccess() deliberately — a document already private must be patched too, and the caller
-    // cannot read it. AFTER the project write, matching setDocumentPublished: a failure here leaves
-    // the project private and its documents over-permissive, which is the direction the reader
-    // gates cover.
-    //
-    // ponytail: documents only, not their chunks. A chunk is gated on its PARENT DOCUMENT's
-    // visibility in the chunk-search join, so a stale chunk ACL cannot leak text on its own, and
-    // fanning out one bulk call per document turns this into an unbounded request handler. If
-    // chunk ACLs ever have to stand alone, move the whole cascade to a job and patch chunks there.
     // `!==` over the two states, so `isPublished: undefined` — a rename, a description edit — is
     // equal to itself and cascades nothing.
     if (acl.isPublished !== existing.isPublished) {
-      // The project's own index row FIRST, and outside the try: no project list or search is a
-      // live read any more (#148), so an unpublished project stayed findable BY NAME until the
-      // indexer's next PT5M pass. It goes before the cascade because the project's Cosmos write
-      // has already landed — it must narrow even if the cascade below fails and returns 500.
-      await aiSearch.writeAcls(aiSearch.indexes().projects, [
-        { id: existing.id, read: acl.read, isPublished: acl.isPublished }
-      ]);
-
-      try {
-        const cascade = await documents.setAclForProject(systemAccess(), existing.id, acl.read);
-        if (cascade.failed > 0) {
-          // The rows that DID land still go to the index, or the succeeded subset stays listable
-          // under its old ACL until the indexer's next PT5M pass. With no per-row verdicts,
-          // nothing is written rather than claiming an ACL Cosmos may not hold.
-          const failedIds = new Set(cascade.failedIds || (cascade.rows || []).map(r => r.id));
-          const landed = (cascade.rows || []).filter(row => !failedIds.has(row.id));
-          if (landed.length) await aiSearch.writeAcls(aiSearch.indexes().documents, landed);
-          logger.error('[Project Controller] document ACL cascade partially failed', {
-            projectId: existing.id, ...cascade, ids: undefined, rows: undefined
-          });
-          return res.status(500).json({
-            success: false,
-            error: 'Project visibility changed, but its documents were not fully updated.'
-          });
-        }
-
-        // The same derived ACLs the cascade just wrote to Cosmos, into the documents index. One
-        // request per 1,000 documents, and it cannot throw.
-        await aiSearch.writeAcls(aiSearch.indexes().documents, cascade.rows);
-      } catch (cascadeErr) {
-        logger.error('[Project Controller] document ACL cascade failed', {
-          projectId: existing.id, error: cascadeErr.message
-        });
-        return res.status(500).json({
-          success: false,
-          error: 'Project visibility changed, but its documents were not updated.'
-        });
-      }
+      const failure = await cascadeProjectVisibility(existing.id, acl);
+      if (failure) return res.status(500).json({ success: false, error: failure });
     }
 
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
     // narrowed.
     return res.json(projects.publicView(saved));
+  } catch (err) {
+    return serverError(res, err, 'project controller failed');
+  }
+};
+
+/**
+ * Receive one project pushed by eagle-api, keyed by its Eagle `_id`.
+ *
+ * The body carries the RAW Eagle record, so the merge rules stay in `merge/project.js` and this
+ * route produces exactly what the seed produces — a push and a re-seed cannot disagree about the
+ * same project. Identity comes from the merge too: the Track id when the project is already
+ * matched, `eagle-<eagleId>` when it is not.
+ */
+exports.upsertFromEagle = async (req, res) => {
+  try {
+    const eagleId = String(req.params.eagleId);
+    const doc = req.body && req.body.doc;
+    if (!doc || String(doc._id || '') !== eagleId) {
+      return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
+    }
+
+    // systemAccess: the push is a mirror, so it must find a project it is about to republish even
+    // while that project is currently private.
+    const existing = await projects.getByEagleId(systemAccess(), eagleId);
+
+    const merged = existing && existing.sources && existing.sources.track
+      ? mergeTrackProject(existing.sources.track, doc)
+      : mergeEagleOnlyProject(doc);
+
+    // Every OTHER source block survives the push. A Cosmos upsert replaces the item, and the merge
+    // rebuilds only `track`/`eagle` — so without this every push wipes `sources.wildfire`, which
+    // nothing upstream can rebuild. The same trap the seed hit.
+    merged.sources = { ...(existing && existing.sources), ...merged.sources };
+
+    const saved = await projects.upsert(merged);
+
+    auditEvent(req, {
+      action: 'project.push',
+      targetType: 'project',
+      targetId: saved.id,
+      projectId: saved.id,
+      detail: {
+        eagleId,
+        isPublishedFrom: existing ? existing.isPublished : null,
+        isPublishedTo: saved.isPublished
+      }
+    });
+
+    // Only against an existing row: a project DEMI has never seen has no documents to cascade onto
+    // and no index row to correct.
+    if (existing && saved.isPublished !== existing.isPublished) {
+      const failure = await cascadeProjectVisibility(saved.id, {
+        read: saved.read, isPublished: saved.isPublished
+      });
+      if (failure) return res.status(500).json({ success: false, error: failure });
+    }
+
+    return res.json({ id: saved.id, action: 'upsert' });
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }

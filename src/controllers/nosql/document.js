@@ -24,6 +24,7 @@ const aiSearch = require('../../search/ai-search');
 const { purgeDocument } = require('../../helpers/purge');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
+const { transformDocument } = require('../../seed/transform');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -456,6 +457,79 @@ exports.setDocumentPublished = async (req, res) => {
  * The index entry is removed explicitly rather than through the change feed, which emits no
  * deletes in latest-version mode. That is also why no soft-delete marker is needed.
  */
+// The four Eagle fields that are List ObjectId refs. eagle-api resolves the labels on its side
+// and sends them by FIELD; transformDocument resolves by ObjectId, so the two are joined here.
+const LIST_LABEL_FIELDS = ['type', 'milestone', 'projectPhase', 'documentAuthorType'];
+
+function listLookupFrom(doc, labels) {
+  const lookup = new Map();
+  for (const field of LIST_LABEL_FIELDS) {
+    if (doc[field] && labels && labels[field]) lookup.set(String(doc[field]), labels[field]);
+  }
+  return lookup;
+}
+
+/**
+ * Receive one document pushed by eagle-api, keyed by its Eagle `_id`.
+ *
+ * The body carries the RAW Eagle record and `transformDocument` is the seed's own transform, so a
+ * push and a re-seed produce the same row. Two things are NOT taken from the push: extraction
+ * state, which is carried off the row already in Cosmos (an upsert replaces the item, and losing
+ * it would orphan the chunks and re-queue the document through the GPU), and the ACL, which is
+ * narrowed against the parent project's.
+ */
+exports.upsertFromEagle = async (req, res) => {
+  try {
+    const eagleId = String(req.params.eagleId);
+    const doc = req.body && req.body.doc;
+    if (!doc || String(doc._id || '') !== eagleId) {
+      return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
+    }
+
+    // systemAccess on both reads: the push is a mirror, so a private parent and a private existing
+    // row must both be visible to it.
+    const parentEagleId = String((doc.project && doc.project._id) || doc.project || '');
+    const parent = parentEagleId
+      ? await projects.getByEagleId(systemAccess(), parentEagleId)
+      : null;
+    if (!parent) {
+      return res.status(404).json({ error: 'Parent project not found' });
+    }
+
+    const existing = await documents.getById(systemAccess(), eagleId);
+    const saved = await documents.upsert(transformDocument(
+      doc, parent.id, listLookupFrom(doc, req.body.labels),
+      { existing, projectRead: parent.read }
+    ));
+
+    auditEvent(req, {
+      action: 'document.push',
+      targetType: 'document',
+      targetId: saved.id,
+      projectId: saved.projectId,
+      detail: {
+        eagleId,
+        isPublishedFrom: existing ? existing.isPublished : null,
+        isPublishedTo: saved.isPublished
+      }
+    });
+
+    // Same rule as setDocumentPublished: no document list is a live read (#148), so a row whose
+    // visibility just changed stays listed under its old ACL until the indexer's next PT5M pass.
+    // Only on a change, and only against an existing row — a document DEMI has never seen has no
+    // index row to correct, and a metadata edit does not move the ACL.
+    if (existing && saved.isPublished !== existing.isPublished) {
+      await aiSearch.writeAcls(aiSearch.indexes().documents, [
+        { id: saved.id, read: saved.read, isPublished: saved.isPublished }
+      ]);
+    }
+
+    return res.json({ id: saved.id, projectId: saved.projectId, action: 'upsert' });
+  } catch (err) {
+    return serverError(res, err, 'document controller failed');
+  }
+};
+
 exports.deleteDocument = async (req, res) => {
   try {
     const access = resolveAccess(req);
