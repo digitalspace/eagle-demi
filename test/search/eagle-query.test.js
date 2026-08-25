@@ -71,16 +71,16 @@ test('eagle-query filters', async (t) => {
   // A key the index cannot express is DROPPED, not passed through: an unknown field name is an
   // OData 400, and eagle-public swallows a failed search into an empty table.
   //
-  // REPLACED 2026-08-22: this used `milestone` as the example, which is no longer a name the index
-  // lacks — `documents` carries `milestoneId` and ALIASES.Document maps onto it. `documentSource`
-  // is a key eagle-public's filter panel really does send and this index really does not carry, so
-  // the test still pins the behaviour with an example that is still true.
+  // REPLACED TWICE, for the same reason both times: the example has to be a name the index still
+  // lacks. `milestone` stopped being one when `milestoneId` landed, `documentSource` when 3.3 added
+  // it. `documentAuthor` is the free-text author eagle carries and demi does not — and it is a
+  // near-miss for `documentAuthorType`, which is the shape that makes drop-and-report matter.
   await t.test('a filter key the index does not carry is dropped and reported', () => {
     const { filter, dropped } = eagleQuery.buildFilter(
-      { 'and[documentSource]': 'COMMENT' }, 'Document', anonAcl());
+      { 'and[documentAuthor]': 'Ministry of Mines' }, 'Document', anonAcl());
 
-    assert.deepStrictEqual(dropped, ['documentSource']);
-    assert.ok(!filter.includes('documentSource'), 'a name the index lacks must never reach OData');
+    assert.deepStrictEqual(dropped, ['documentAuthor']);
+    assert.ok(!filter.includes('documentAuthor'), 'a name the index lacks must never reach OData');
     assert.strictEqual(filter, "read/any(r: search.in(r, 'public', ','))");
   });
 

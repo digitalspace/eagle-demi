@@ -95,6 +95,21 @@ For `chunks` a rebuild means 1,128,733 rows that cannot be regenerated from Mong
 is not academic there. `retrievable` being on the cheap side of that line is what makes hiding
 `content` a single PUT rather than a refill.
 
+`fileNameTokens` on `documents` is what that line buys you. `keywords=mine` has to match
+`2019-mine-plan.pdf`, and re-analyzing `documentFileName` under the `filename` PatternTokenizer is
+squarely on the rebuild side. So the text is added a SECOND time instead: a new
+`searchable`/non-retrievable field carrying `c.documentFileName` under the new analyzer, with the
+plain column left exactly as it was. Two copies of one string is the cheap half of that trade — the
+alternative is dropping and refilling 60,578 rows. `proponentId` is deliberately NOT added the same
+way: the value is not in Cosmos until 3.7, and an empty field turns `and[proponent]` from a filter
+that is dropped and named in `meta.dropped` into one that is applied and matches nothing — a silent
+zero-row 200.
+
+Two service rules met on 2026-08-25 while adding it: `stored: false` is rejected on
+`api-version=2024-07-01` (keep `stored: true`), and adding an analyzer or tokenizer to a live index
+is refused without `allowIndexDowntime=true` on the PUT — a few seconds offline, so do it, but only
+on the index PUT and never as a default in `apply-search-definitions.js`.
+
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
 

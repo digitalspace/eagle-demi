@@ -1699,8 +1699,8 @@ test('the answer matches the request that was made', async (t) => {
     });
 
   // [R7] A key the index genuinely cannot express is still dropped-and-logged, and that is correct
-  // — `isFeatured` and `documentSource` are in neither the index nor the Cosmos predicate. What had
-  // to stop is dropping keys the index CAN express. The row still comes back filtered by everything
+  // — `documentAuthor` is in neither the index nor the Cosmos predicate. It replaced `isFeatured`,
+  // which TODO 3.3 made expressible. What had to stop is dropping keys the index CAN express. The row still comes back filtered by everything
   // else, which is the same answer as before; the difference is that the rest of the filter applies.
   await t.test('a key the index cannot express is still named in the log', async () => {
     t.mock.method(aiSearch, 'searchDocuments', async () => ({ count: 0, items: [] }));
@@ -1709,11 +1709,11 @@ test('the answer matches the request that was made', async (t) => {
 
     const { res } = capture();
     await searchController.search({
-      query: { dataset: 'Document', keywords: '', 'and[isFeatured]': 'true', pageSize: '5' },
+      query: { dataset: 'Document', keywords: '', 'and[documentAuthor]': 'x', pageSize: '5' },
       header: () => null
     }, res);
 
-    assert.ok(warned.some(m => /dropped filter/.test(m) && /isFeatured/.test(m)),
+    assert.ok(warned.some(m => /dropped filter/.test(m) && /documentAuthor/.test(m)),
       `an inexpressible key must be named, got: ${JSON.stringify(warned)}`);
   });
 

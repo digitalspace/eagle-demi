@@ -8,7 +8,7 @@
   },
   "container": {
     "name": "documents",
-    "query": "SELECT c.id, c.displayName, c.documentFileName, c.description, c.type, c.typeId, c.milestoneId, c.projectPhaseId, c.documentAuthorTypeId, c.milestone, c.projectPhase, c.documentAuthorType, c.legislation, c.datePosted, c.projectId, c.read, c.isPublished, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
+    "query": "SELECT c.id, c.displayName, c.documentFileName, c.description, c.type, c.typeId, c.milestoneId, c.projectPhaseId, c.documentAuthorTypeId, c.milestone, c.projectPhase, c.documentAuthorType, c.legislation, c.datePosted, c.projectId, c.read, c.isPublished, c.documentSource, c.isFeatured, c.documentFileName AS fileNameTokens, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
   },
   "dataChangeDetectionPolicy": {
     "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",

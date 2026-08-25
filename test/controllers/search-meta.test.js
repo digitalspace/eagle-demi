@@ -46,9 +46,9 @@ test('the response says which keys it could not express', async (t) => {
 
     const { out, res } = capture();
     await searchController.search(
-      anonymous({ dataset: 'Document', keywords: '', 'and[isFeatured]': 'true', pageSize: '5' }), res);
+      anonymous({ dataset: 'Document', keywords: '', 'and[documentAuthor]': 'x', pageSize: '5' }), res);
 
-    assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['isFeatured']);
+    assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['documentAuthor']);
     assert.strictEqual(out.body[0].meta[0].searchResultsTotal, 61,
       'and the existing keys are untouched — eagle-public pages off this one');
   });
@@ -295,10 +295,11 @@ test('chunk filters are resolved through the documents index', async (t) => {
   });
 
   await t.test('a key NEITHER index can express is still reported as dropped', async () => {
-    // `isFeatured` is in no demi index at all, so resolving it through `documents` recovers
-    // nothing. Sent alongside a key that IS recoverable, because the failure this closes is
-    // claiming the whole dropped list as recovered the moment any one of them resolves — which
-    // reports a working filter and a broken one identically, as neither.
+    // `documentAuthor` is in no demi index at all, so resolving it through `documents` recovers
+    // nothing — `isFeatured` used to sit here and stopped qualifying the moment 3.3 put it in
+    // `documents`, which is where this recovery reads. Sent alongside a key that IS recoverable,
+    // because the failure this closes is claiming the whole dropped list as recovered the moment
+    // any one of them resolves — which reports a working filter and a broken one identically.
     t.mock.method(aiSearch, 'documentIdsMatching', async () => ({ ids: ['d1'], total: 1, withinCap: true }));
     t.mock.method(aiSearch, 'searchChunks', async () => ({ count: 1, items: [chunk] }));
     stubHydration(t);
@@ -308,10 +309,10 @@ test('chunk filters are resolved through the documents index', async (t) => {
       dataset: 'DocumentChunk',
       keywords: 'river',
       'and[type]': '5cf00c03a266b7e1877504e9',
-      'and[isFeatured]': 'true'
+      'and[documentAuthor]': 'x'
     }), res);
 
-    assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['isFeatured'],
+    assert.deepStrictEqual(out.body[0].meta[0].dropped.filter, ['documentAuthor'],
       'the recoverable key resolved and the unresolvable one must still be named');
   });
 
