@@ -245,7 +245,7 @@ eagle-search at all and still serves its site from the OpenShift `eagle-public` 
 - [x] ~~**5.3 Last eagle-search PR**~~ #25 merged 2026-08-25 (`4597aa6`), reviewer minors fixed; also fails the bicep gate on `Warning BCP`.: delete the moved modules + `deploy-staging-api.yaml` +
       `deploy-staging-worker.yaml`, README pointer to the wiki page and eagle-edge. Drop local
       branch `fix/disable-sync-liveness-probe-in-test` (cluster already has the probe off).
-- [ ] **5.4 Retire the test estate.** OpenShift half DONE 2026-08-25 (helm uninstall, BC/IS/secret/CMs, dev secret; 0 `eagle-search` objects remain); eao-nginx #44 merged (`3064b3a`, sentinel, lands on next test deploy). Azure half awaits Daniel's go. Was: OpenShift `6cdc9e-test`: `helm uninstall eagle-search`,
+- [x] ~~**5.4 Retire the test estate.**~~ Done 2026-08-25. OpenShift: helm uninstall, BC/IS/secret/CMs, dev secret — 0 `eagle-search` objects remain. eao-nginx #44 (`3064b3a`, sentinel, lands on next test deploy). Azure: `eagle-search-api-test`, `eagle-search-test` + PE, `eagle-extractor-test` + plan, `eaglextrtestvymaysch2agd` + EventGrid topic, UAMI `eagle-search-cicd-test` deleted; kept `eagle-search-identity-test`, `-logs-test`, `-insights-test` (eagle-edge owns them). After: eagle-public AFD 200, DEMI `/map` 200, demi-api search 3 hits. Was: OpenShift `6cdc9e-test`: `helm uninstall eagle-search`,
       `BuildConfig/eagle-search`, `ImageStream/eagle-search`, `secret/eagle-search-ingest`, the 9
       `eagle-search-{7,8,9}-*` ConfigMaps + build pods; dev `secret/eagle-search-extract-queue`.
       Azure: `eagle-search-api-test`, `eagle-search-test` + `pe-eagle-search-test`,
@@ -253,8 +253,7 @@ eagle-search at all and still serves its site from the OpenShift `eagle-public` 
       `values-test.yaml:32` `search:` → `localhost:9999` sentinel (prod upstream and the
       `server.conf.tmpl` block stay). Verify after: `/demi-search/search` 200 via eagle-test,
       DEMI `/map` and eagle-public AFD host 200.
-- [ ] **5.5 Archive the repo** (GitHub archived=true; Actions stop). Update `/root/repos/CLAUDE.md`
-      repo table. Prod worker keeps running from `6cdc9e-tools/eagle-search:prod`; rollback needs no
+- [x] ~~**5.5 Archive the repo**~~ Archived 2026-08-25 (`gh repo archive`, isArchived true). Remote branch `fix/disable-sync-liveness-probe-in-test` left behind, harmless. Prod worker keeps running from `6cdc9e-tools/eagle-search:prod`; rollback needs no
       redeploy.
 - [ ] **5.6 eagle-public OpenShift dev/test.** Test: ~~delete the three preview releases~~
       `-feat-typesense-angular21`, `-hotfix-pcp-engage` and stale `Service/epic-public` deleted
