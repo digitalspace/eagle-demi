@@ -36,7 +36,8 @@
  *
  * What it still WILL report today, by design: `DocumentChunk` document-metadata filters are
  * `IGNORED` on demi and `applied` on eagle, because `chunks.json` carries no metadata to filter on;
- * `isFeatured` the same on Document; and demi's document paging repeats rows on project-name
+ * `proponent` the same on Project, whose index holds a NAME where eagle-public sends an ObjectId;
+ * and demi's document paging repeats rows on project-name
  * keyword queries. Those are open defects, and each one going quiet is what proves a fix landed.
  *
  * Usage:
@@ -321,9 +322,10 @@ function label(kase) {
  *
  * So the list is an ACCEPTANCE, not a suppression. Shrink it as gaps close — every entry under
  * `eagleOnly` is a column demi does not serve, and three of them are open defects rather than
- * decisions: `isFeatured` and `documentSource` on Document, and `location` / `pcpStatus` /
- * `proponentId` on Project. They are listed so the run is green on everything ELSE while they are
- * open; deleting the entry is what proves one fixed.
+ * decisions: `location` / `pcpStatus` / `proponentId` on Project. They are listed so the run is
+ * green on everything ELSE while they are open; deleting the entry is what proves one fixed.
+ * `isFeatured` and `documentSource` were the Document pair and are gone from the list because
+ * TODO 3.3 closed them: both are index fields, both are in `DOCUMENT_SELECT`, both are mapped.
  *
  * `demiOnly` is the opposite direction and mostly deliberate: `sources` carries the wildfire
  * proximity block that only DEMI computes, `legacyEagleId` and `trackProjectId` exist so an Eagle
@@ -346,7 +348,7 @@ const EXPECTED_KEY_DELTA = {
     // is expected-present rather than always-present, and an absence is not a finding.
     demiOnly: ['documentType', 'highlighted', 'isPublished'],
     eagleOnly: ['@search.score', 'categorized', 'dateUploaded', 'documentAuthorTypeId',
-      'documentSource', 'id', 'internalExt', 'isFeatured', 'legislation', 'milestoneId',
+      'id', 'internalExt', 'legislation', 'milestoneId',
       'popularity', 'projectPhaseId', 'read', 'sortOrder', 'typeId']
   },
   DocumentChunk: {

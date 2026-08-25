@@ -60,8 +60,10 @@ const MAX_SKIP = 100000;
  * The last five arrived with the widened index: `datePosted` is eagle-public's Date column and its
  * default sort, and the four ids are what `idToList()` resolves for Type and Milestone.
  */
+// `isFeatured` backs eagle-public's ★ column; `documentSource` its PROJECT-NOTIFICATION split.
 const DOCUMENT_SELECT = 'id,displayName,documentFileName,description,type,projectId,read,' +
-  'isPublished,typeId,milestoneId,projectPhaseId,documentAuthorTypeId,datePosted';
+  'isPublished,typeId,milestoneId,projectPhaseId,documentAuthorTypeId,datePosted,isFeatured,' +
+  'documentSource';
 
 /**
  * The fields a PROJECT hit carries back. Same invariant, same reason, and the same exported-so-a-
@@ -871,7 +873,9 @@ async function searchDocuments(opts = {}) {
   // Named once because leg two's exclusion clause below has to complement EXACTLY these fields.
   // A second copy is how the two would drift apart, and a drifted complement is the paging bug
   // this function carried for its whole life.
-  const searchFields = 'displayName,documentFileName,description';
+  // `fileNameTokens` is documentFileName under the `filename` analyzer — `keywords=mine` matches
+  // `2019-mine-plan.pdf`, which `en.microsoft` on documentFileName does not.
+  const searchFields = 'displayName,documentFileName,description,fileNameTokens';
 
   const direct = await runSearch(documentsIndex, {
     ...opts,

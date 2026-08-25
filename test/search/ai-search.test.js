@@ -454,8 +454,12 @@ test('ai-search document totals', async (t) => {
         filter: 'isPublished eq true', projectFilter: null, keywords: 'ajax', fuzzy: true, top: 10
       });
 
+      // Read off leg one rather than restated: a second copy of the field list here is the drift
+      // this assertion exists to catch, and it would pass while the legs stopped complementing.
+      assert.ok(calls[0].body.searchFields.split(',').includes('fileNameTokens'),
+        `the filename-analyzed field must be searched, got: ${calls[0].body.searchFields}`);
       const clause = `not search.ismatch('${calls[0].body.search}', ` +
-        "'displayName,documentFileName,description', 'full', 'any')";
+        `'${calls[0].body.searchFields}', 'full', 'any')`;
       assert.ok(calls[2].body.filter.includes(clause),
         `leg two must exclude exactly what leg one matched, got: ${calls[2].body.filter}`);
       assert.ok(calls[2].body.filter.startsWith('(isPublished eq true) and '),

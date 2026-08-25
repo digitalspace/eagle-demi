@@ -484,6 +484,9 @@ exports.search = async (req, res) => {
               // before dropping it: 0 of 2,000 sampled documents render this placeholder.
               documentFileName: doc.documentFileName || 'document.pdf',
               documentType: doc.type || 'PDF Document',
+              // Emitted because search-diff no longer accepts them as eagle-only columns.
+              isFeatured: doc.isFeatured === true,
+              documentSource: doc.documentSource || '',
               // The ids eagle-public's `idToList()` resolves, NOT the labels beside them: a label
               // is ambiguous across the 2002 and 2018 Acts (`Amendment` is two different List rows).
               type: doc.typeId || null,
