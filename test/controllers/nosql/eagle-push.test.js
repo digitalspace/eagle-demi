@@ -265,6 +265,74 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
     assert.strictEqual(written.region, 'Thompson-Nicola');
   });
 
+  await t.test('the Track-matched path flattens too', async () => {
+    // The push hits mergeTrackProject whenever the stored row has a Track payload, and that path
+    // does its own flatten. This Track record carries no name/description, so both can only come
+    // from the legislation block — drop the flatten and `name` is the stale top-level copy.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject({
+      sources: { track: { track_project_id: 207, epic_guid: PROJECT_EAGLE_ID } }
+    }));
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: rawMongoProject() }, user: STAFF
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(written.id, '207');
+    assert.strictEqual(written.name, 'Nicomen Wind Energy');
+    assert.strictEqual(written.description, 'A wind farm near Nicomen');
+    assert.strictEqual(written.region, 'Thompson-Nicola');
+  });
+
+  await t.test('a lone legislation block is used when currentLegislationYear cannot name it', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    // Missing outright, then naming a block the document does not carry. Either way there is
+    // exactly one candidate, so the answer is not ambiguous.
+    for (const top of [{ currentLegislationYear: undefined }, { currentLegislationYear: 'legislation_1996' }]) {
+      const res = mockRes();
+      await projectController.upsertFromEagle({
+        params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+        body: { doc: rawMongoProject({}, top) }, user: STAFF
+      }, res);
+
+      assert.strictEqual(res.statusCode, 200);
+      assert.strictEqual(written.name, 'Nicomen Wind Energy');
+      assert.strictEqual(written.region, 'Thompson-Nicola');
+    }
+  });
+
+  await t.test('an unresolvable block with no top-level name is a 400 and no write', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    let upserts = 0;
+    t.mock.method(projects, 'upsert', async () => { upserts++; });
+
+    // Ambiguous (two blocks, nothing naming one) and empty (the key is there, the block is not).
+    // A nameless row is worse than a rejected push: it is invisible in search and indistinguishable
+    // from a real one.
+    const ambiguous = rawMongoProject({}, {
+      name: '', currentLegislationYear: undefined, legislation_2002: { name: 'Older' }
+    });
+    const empty = rawMongoProject({}, { name: '', legislation_2018: null });
+
+    for (const doc of [ambiguous, empty]) {
+      const res = mockRes();
+      await projectController.upsertFromEagle({
+        params: { eagleId: PROJECT_EAGLE_ID }, query: {}, body: { doc }, user: STAFF
+      }, res);
+
+      assert.strictEqual(res.statusCode, 400);
+      assert.match(res.body.error, /no resolvable legislation block/);
+    }
+    assert.strictEqual(upserts, 0);
+  });
+
   await t.test('an already-flat search-shaped doc is untouched', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
     let written;

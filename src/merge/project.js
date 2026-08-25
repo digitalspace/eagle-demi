@@ -67,25 +67,33 @@ const EAGLE_TOP_LEVEL_FIELDS = [
   '_updatedBy', '_addedBy', '_deletedBy', '__v'
 ];
 
+const LEGISLATION_KEYS = ['legislation_1996', 'legislation_2002', 'legislation_2018'];
+
 /**
- * Normalise an Eagle project to the FLAT shape every rule below is written against.
- *
- * Mongo keeps a project's content under `legislation_1996` / `legislation_2002` /
- * `legislation_2018`, with `currentLegislationYear` naming the live one. eagle-api's public search
- * hoists that block to the root (`$replaceRoot` in `api/helpers/utils.js`), so the seed never sees
- * the nesting — but the DEMI push carries the RAW Mongo document, and every content field
- * (`name`, `description`, `type`, `status`, `region`, …) read off it was `undefined`. Measured on
- * test 2026-08-25: `eagle-6a5920eaf0b65c54e12eb20a` landed with no name.
- *
- * The block WINS over the top level: `region` and friends exist in both places and the top-level
- * copy is stale (usually `''`), so a plain `{...block, ...doc}` would re-blank what was just
- * recovered. An already-flat doc has no such sub-object and is returned untouched.
+ * Normalise an Eagle project to the FLAT shape every rule below is written against: Mongo nests
+ * content under `legislation_<year>`, the public search hoists it, the push does not. The block
+ * wins over the top level — `region` is declared in both and the top-level copy is stale.
  */
 function flattenEagleProject(doc) {
-  const block = doc && doc.currentLegislationYear && doc[doc.currentLegislationYear];
-  if (!block || typeof block !== 'object' || Array.isArray(block)) return doc;
+  if (!doc) return doc;
 
-  const flat = { ...block };
+  const isBlock = k => k && doc[k] && typeof doc[k] === 'object' && !Array.isArray(doc[k]);
+  const present = LEGISLATION_KEYS.filter(isBlock);
+  const key = isBlock(doc.currentLegislationYear) ? doc.currentLegislationYear
+    : present.length === 1 ? present[0]
+      : null;
+
+  if (!key) {
+    // A doc that carries legislation keys but names none of them is a raw Mongo doc we failed to
+    // read. With no top-level name to fall back on it would land nameless and published, so reject
+    // rather than guess which block is current.
+    if (hasValue(doc.name) || !LEGISLATION_KEYS.some(k => k in doc)) return doc;
+    const err = new Error('Eagle project has no resolvable legislation block');
+    err.status = 400;
+    throw err;
+  }
+
+  const flat = { ...doc[key] };
   for (const field of EAGLE_TOP_LEVEL_FIELDS) {
     if (doc[field] !== undefined) flat[field] = doc[field];
   }
@@ -392,6 +400,7 @@ function buildProjectIndex(projects) {
 module.exports = {
   SECURE_ROLES,
   TRACK_PRECEDENCE,
+  LEGISLATION_KEYS,
   EAGLE_ONLY_FIELDS,
   EAGLE_TOP_LEVEL_FIELDS,
   flattenEagleProject,

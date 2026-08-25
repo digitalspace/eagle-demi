@@ -306,6 +306,7 @@ exports.upsertFromEagle = async (req, res) => {
 
     return res.json({ id: saved.id, action: 'upsert' });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
     return serverError(res, err, 'project controller failed');
   }
 };
