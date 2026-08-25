@@ -275,7 +275,7 @@ async function seed(argv = [], deps = {}) {
   // operator is inside the private endpoint and set COSMOS_ENDPOINT.
   const cosmosReady = deps.cosmosReady !== undefined
     ? deps.cosmosReady
-    : (args.live || Boolean(process.env.COSMOS_ENDPOINT));
+    : Boolean(process.env.COSMOS_ENDPOINT);
 
   const summary = { mode: args.live ? 'live' : 'dry-run', stages: {}, failures: [] };
   if (args.reconcile && !cosmosReady) {

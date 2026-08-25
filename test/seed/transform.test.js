@@ -320,13 +320,6 @@ test('extraction state survives a re-seed', async (t) => {
     assert.strictEqual(out.isPublished, true);
     assert.strictEqual(out.projectId, '207');
   });
-
-  await t.test('the projected columns match what the repository selects', () => {
-    // Two constants that must agree: transform decides which fields are carried, the repository
-    // decides which are read. A drift means the carried set is silently smaller than intended.
-    const repo = require('../../src/repositories/documents');
-    assert.deepStrictEqual(repo.EXTRACTION_FIELDS, EXTRACTION_FIELDS);
-  });
 });
 
 test('isFeatured is carried onto the Cosmos row', async (t) => {

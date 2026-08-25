@@ -73,10 +73,7 @@ function listRefId(ref) {
   return ref ? String(ref) : null;
 }
 
-/** Extraction state, which belongs to DEMI and has no upstream counterpart. */
-const EXTRACTION_FIELDS = [
-  'contentExtracted', 'contentExtractedAt', 'contentPageCount', 'contentExtractionError'
-];
+const { EXTRACTION_FIELDS } = require('../repositories/documents');
 
 function carriedExtraction(existing) {
   if (!existing) return {};

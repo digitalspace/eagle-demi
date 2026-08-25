@@ -15,10 +15,7 @@ const { eq, inList, selectWhere, countWhere, pageOptions, fetchAll } = require('
 const CONTAINER = 'documents';
 const PARTITION_FIELD = 'projectId';
 
-/**
- * Extraction state, which belongs to DEMI and has no upstream counterpart.
- * Must stay equal to `seed/transform.js` EXTRACTION_FIELDS — asserted in test/seed/transform.test.js.
- */
+/** Extraction state, which belongs to DEMI and has no upstream counterpart. */
 const EXTRACTION_FIELDS = [
   'contentExtracted', 'contentExtractedAt', 'contentPageCount', 'contentExtractionError'
 ];
