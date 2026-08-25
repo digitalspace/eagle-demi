@@ -10,10 +10,15 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, selectWhere, countWhere, pageOptions } = require('./_sql');
+const { eq, inList, selectWhere, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'documents';
 const PARTITION_FIELD = 'projectId';
+
+/** Extraction state, which belongs to DEMI and has no upstream counterpart. */
+const EXTRACTION_FIELDS = [
+  'contentExtracted', 'contentExtractedAt', 'contentPageCount', 'contentExtractionError'
+];
 
 /**
  * The projects a caller asked for, as a list, from either wire shape.
@@ -287,6 +292,40 @@ async function setAclForProject(access, projectId, read) {
   return { ...result, ids: derived.map(row => row.id), rows: derived };
 }
 
+/**
+ * Extraction state of every document in one partition, for the seeder.
+ *
+ * A Cosmos upsert REPLACES the item, so a re-seed that does not carry these forward marks the
+ * whole corpus unextracted while its chunks stay behind. Paged: the largest project holds 2,488
+ * documents and a single page caps at 1,000.
+ */
+async function extractionRowsForProject(access, projectId) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [eq('projectId', String(projectId), '@projectId')],
+    select: ['c.id', ...EXTRACTION_FIELDS.map(f => `c.${f}`)].join(', '),
+    orderBy: 'c.id ASC'
+  });
+  return fetchAll(CONTAINER, spec, { partitionKey: String(projectId) });
+}
+
+/**
+ * `{id, projectId}` for every Eagle-seeded document in the container — the seeder's reconcile
+ * set, ~61k rows. Scoped to `sourceSystem: 'eagle'` so a row this seed never produced (an
+ * epic.submit upload) can never be computed as surplus and deleted.
+ */
+async function listSeededIds(access) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [eq('sourceSystem', 'eagle', '@sourceSystem')],
+    select: 'c.id, c.projectId',
+    orderBy: 'c.id ASC'
+  });
+  return fetchAll(CONTAINER, spec);
+}
+
 async function upsert(document) {
   return cosmos.upsert(CONTAINER, document);
 }
@@ -359,6 +398,7 @@ async function deleteById(id, projectId) {
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
+  EXTRACTION_FIELDS,
   buildCriteria,
   listVisible,
   countVisible,
@@ -367,6 +407,8 @@ module.exports = {
   aclRowsForProject,
   constrainToProject,
   setAclForProject,
+  extractionRowsForProject,
+  listSeededIds,
   upsert,
   bulkUpsertForProject,
   patchExtraction,

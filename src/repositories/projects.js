@@ -15,7 +15,7 @@
 const cosmos = require('../db/cosmos-nosql');
 const config = require('../config');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, isDefinedAndNotNull, selectWhere, countWhere, pageOptions } = require('./_sql');
+const { eq, inList, isDefinedAndNotNull, selectWhere, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'projects';
 const PARTITION_FIELD = 'id';
@@ -162,6 +162,23 @@ function publicView(project) {
 }
 
 /**
+ * `{id, eagleId}` for every Eagle-only project row — the seeder's reconcile set.
+ *
+ * Track-sourced rows are excluded by the `sourceSystem` filter: they exist whether or not Eagle
+ * still carries a counterpart, so computing them as surplus would delete the master registry.
+ */
+async function listEagleOnlyIds(access) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [eq('sourceSystem', 'eagle', '@sourceSystem')],
+    select: 'c.id, c.eagleId',
+    orderBy: 'c.id ASC'
+  });
+  return fetchAll(CONTAINER, spec);
+}
+
+/**
  * Whole-item write. Safe only because nothing is folded into the project as an embedded array
  * any more — a replace from the Track sync would silently discard it. Use the patch helpers
  * below for partial updates.
@@ -199,6 +216,7 @@ module.exports = {
   listByIds,
   listWithCentroid,
   publicView,
+  listEagleOnlyIds,
   upsert,
   patchWildfireStats,
   patchBoundaries,

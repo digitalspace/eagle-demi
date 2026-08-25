@@ -73,14 +73,25 @@ function listRefId(ref) {
   return ref ? String(ref) : null;
 }
 
+const { EXTRACTION_FIELDS } = require('../repositories/documents');
+
+function carriedExtraction(existing) {
+  if (!existing) return {};
+  return Object.fromEntries(
+    EXTRACTION_FIELDS.filter(f => existing[f] !== undefined).map(f => [f, existing[f]])
+  );
+}
+
 /**
  * An Eagle document -> the DEMI `documents` model.
  *
- * @param {object}   doc          a record from eagle-api's Document search
- * @param {string}   projectId    canonical DEMI project id (the partition key)
- * @param {Map}      listLookup   List `_id` -> name
+ * @param {object}   doc              a record from eagle-api's Document search
+ * @param {string}   projectId        canonical DEMI project id (the partition key)
+ * @param {Map}      listLookup       List `_id` -> name
  * @param {object}   [opts]
- * @param {string}   [opts.now]   ISO timestamp, injected for deterministic tests
+ * @param {string}   [opts.now]       ISO timestamp, injected for deterministic tests
+ * @param {object}   [opts.existing]  the row already in Cosmos, if any — its extraction state is
+ *                                    carried onto the result
  */
 function transformDocument(doc, projectId, listLookup, opts = {}) {
   if (!doc || !doc._id) {
@@ -124,6 +135,7 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     dateUploaded: toIsoOrNull(doc.dateUploaded),
     documentAuthor: doc.documentAuthor || '',
     documentSource: doc.documentSource || '',
+    isFeatured: doc.isFeatured === true,
     region: doc.region || '',
     eaoStatus: doc.eaoStatus || '',
     orcsClassification: doc.orcsClassification || '',
@@ -136,13 +148,14 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     // corpus. read[] is authoritative and isPublished is its mirror (ADR-004).
     isPublished: read.includes('public'),
 
-    // Reset, not carried. The old database has `contentExtracted: true` on records with no
-    // chunks behind them, and DEMI has no chunk data at all yet — importing the flag would tell
-    // the extractor there is nothing to do.
+    // Never carried from UPSTREAM — Eagle's `contentExtracted` is true on records with no chunks
+    // behind them. Carried from the EXISTING DEMI row, because a Cosmos upsert replaces the item
+    // and resetting these would orphan the chunks and re-queue the whole corpus for extraction.
     contentExtracted: false,
     contentExtractedAt: null,
     contentPageCount: 0,
     contentExtractionError: null,
+    ...carriedExtraction(opts.existing),
 
     updatedAt: opts.now || new Date().toISOString()
   };
@@ -195,6 +208,7 @@ function transformBoundary(item, opts = {}) {
 
 module.exports = {
   SECURE_ROLES,
+  EXTRACTION_FIELDS,
   seedAcl,
   toNumber,
   toIsoOrNull,

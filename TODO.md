@@ -57,8 +57,8 @@ gone — nothing below points at an archive.
 
 | Gate | Items |
 |---|---|
-| Nothing — do it | 3.6 small items; 5.6 disable the two eagle-public test workflows |
-| Daniel decides | 2.1 re-seed source; 2.2 budget; 2.3 proponentId; 2.4 anonymous surface; 5.6 retire dev whole or keep pod, and when the eagle-public AFD rollback pod can go; 5.7 `eagle-search-prod` search service delete (~100 CAD/mo, condition already met) |
+| Nothing — do it | 2.1 re-seed phases 0-2 (decided, in progress); 3.6 small items; 5.6 disable the two eagle-public test workflows |
+| Daniel decides | 2.2 budget; 2.3 proponentId; 2.4 anonymous surface; 5.6 retire dev whole or keep pod, and when the eagle-public AFD rollback pod can go; 5.7 `eagle-search-prod` search service delete (~100 CAD/mo, condition already met) |
 | Needs SSH tunnel | 3.3 index widening; 3.5 |
 | Someone else / long-lead | 1.1, 1.2 rotations at source; 4.1 prod role assignments; 4.4/4.5 eao-nginx + eagle-public prod tags; `demi.eao.gov.bc.ca` DNS; Track feed credential |
 | After the re-seed (2.1) | 3.3 analyzer + `isFeatured`/`documentSource`; a fully green differ; 3.7(d) reconcile |
@@ -75,7 +75,7 @@ gone — nothing below points at an archive.
 - [ ] **1.3 Rotate `ADMIN_API_KEY`** (value passed through the 2026-08-13 incident and every
       `probe-acl.js` run since). Three targets, rotate all before restarting anything or the
       extractor 401s: `demi-app-secrets` (6cdc9e-test, writable now), App Service (`az` works again),
-      `gpu-extractor.env` on the GPU box (`192.168.5.109` not answering 2026-08-24). Then restart
+      `gpu-extractor.env` on the GPU box (`192.168.5.99`, host `doc-ocr-processor`; `.109` was wrong). Then restart
       `gpu-extractor` and `gpu-ingest`.
 - ACL probe exists and passes: `ADMIN_API_KEY=… node src/scripts/probe-acl.js`, ~7 min, 26/26 on
   2026-08-24. Exit 0 pass, 1 missed prediction, 2 aborted, 3 inconclusive leg (not a pass). Leaves
@@ -85,13 +85,33 @@ gone — nothing below points at an archive.
 
 ## 2. Decisions — Daniel
 
-- [ ] **2.1 Re-seed source — biggest item, precondition for a green differ and for 3.7.**
-      `EAGLE_API_BASE=https://projects.eao.gov.bc.ca/api/public node src/scripts/seed-nosql.js --live`
-      upserts ~61,606 documents. Prod (complete anonymous source, carries `isFeatured` 337 and
-      `documentSource`) or eagle-test (55,845, newest 2026-07-21)? Chunks do NOT come with it —
-      new documents arrive `contentExtracted: false` until the extractor drains them. Verify the 34
-      closed track projects survive (`resolveProjectAcl` fails closed — reasoning, not measured).
-      8-hour undo window, untested restore.
+- [ ] **2.1 Re-seed from PROD eagle-api — decided 2026-08-25, in progress.** Source = prod
+      (358 projects / 61,611 documents anonymous, `isFeatured` 337, `documentSource`); eagle-dev-only
+      leftovers DELETED with chunks + index rows. Plan `/root/.claude/plans/curried-chasing-eich.md`.
+      - **Cannot run as-is, measured 2026-08-25:** `seed/transform.js:139-145` resets
+        `contentExtracted` on every row and Cosmos upsert replaces (`db/cosmos-nosql.js:230`) — a raw
+        run sends ~60k extracted docs back through the GPU (~200 GB, 1,496 PDFs 404). No delete
+        pass exists, so dev-only rows would linger in Cosmos and the index. Chunks untouched by the
+        seed. `sources.wildfire` wiped (re-run the manual sync after). Document id = Eagle `_id`
+        verbatim, so idempotent only if dev ids match prod ids — pre-flight measures it.
+      - [x] Phase 0 pre-flight, 2026-08-25, **GO**: demi ∩ prod 60,552; demi − prod 8 (each
+        re-checked absent from prod by `dataset=Item`); prod − demi 1,059 (2026: 895) = extractor
+        backlog; 50-id sample 50/50 on `displayName` + `datePosted`. Prod `isFeatured` 331;
+        `documentSource` PROJECT 60,589 / COMMENT 956 / PROJECT-NOTIFICATION 63 / DROPZONE 3. 4 new
+        Eagle-only projects (Dawson Creek Water Supply, Lawyers-Ranch, Baptiste Nickel, m.ah a
+        temEEwuh Solar) will arrive as `eagle-<id>` rows. Id files kept in the session scratchpad
+        `preflight/`. Public-visible deltas only.
+      - [ ] Phase 1 PR `feat/seed-preserve-and-reconcile`: preserve the four `content*` fields on
+        existing rows (per-partition read before upsert); `--reconcile` flag deleting through the
+        controllers' own delete helpers (index + chunks + row); `isFeatured` into `transform.js`
+        (Cosmos only — index side stays 3.3); tests; README.
+      - [ ] Phase 2 run over the tunnel: `alwaysOn` on; dry run `--reconcile` must match Phase 0;
+        `--live --reconcile` under nohup; then counts (Project ≈ 358−closed, Document ≈ 61.6k, not
+        61k+60k), `/admin/index-progress`, `close-unpublished-track-projects.js` dry run `matched 0`,
+        `POST /admin/sync/wildfires`, `search-diff.js` green, `probe-acl.js` 26/26,
+        `GET /documents?extracted=false` = |prod − demi| for the GPU box; `alwaysOn` off.
+      - Rollback = re-run the seed against eagle-dev (`projects`/`documents` regenerable); the 8-hour
+        Cosmos restore is a support ticket, untested.
 - [ ] **2.2 Raise `budgetAmount`.** 400 CAD vs ~451 CAD/month measured (Aug 16-22 mean 15.03/day).
       RG also bills eagle-search, eagle-notify, PostgreSQL (~12/month).
 - [ ] **2.3 `proponent` facet needs an org id DEMI lacks.** Wait for the Eagle push (3.7) to carry

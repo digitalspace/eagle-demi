@@ -15,6 +15,7 @@ const documents = require('../../repositories/documents');
 const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
+const { purgeProject } = require('../../helpers/purge');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 
@@ -267,13 +268,7 @@ exports.deleteProject = async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    await projects.deleteById(existing.id);
-
-    // The indexer's high-water mark never sees a delete, so without this the project stays
-    // searchable by name after it is gone. Best-effort: the row is already deleted and the
-    // caller has already succeeded, so a failure here is reported, not thrown.
-    const removedFromSearch =
-      await aiSearch.deleteFromIndex(aiSearch.indexes().projects, existing.id);
+    const { removedFromSearch } = await purgeProject(existing);
 
     auditEvent(req, {
       action: 'project.delete',

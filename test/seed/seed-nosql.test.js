@@ -4,6 +4,9 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const {
   parseArgs, verifyProjects, verifyItems, seed, ALL_STAGES, DEFAULT_STAGES
@@ -12,6 +15,12 @@ const { unwrapSearchResponse, fetchAllPages, PAGE_SIZE, EAGLE_API_BASE } = requi
 const trackProjects = require('../../src/data/track_projects_enriched.json');
 
 const NOW = '2026-07-30T00:00:00.000Z';
+
+// Every reconcile writes its surplus ids to a file, defaulting to /home. Redirected for the whole
+// suite so the tests cannot litter that mount or the repo root.
+const LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-reconcile-'));
+process.env.RECONCILE_LOG = path.join(LOG_DIR, 'default.ndjson');
+test.after(() => fs.rmSync(LOG_DIR, { recursive: true, force: true }));
 
 test('parseArgs — writes require an explicit flag', async (t) => {
   await t.test('defaults to a dry run', () => {
@@ -276,6 +285,9 @@ test('seed() end to end with stubbed sources', async (t) => {
         projects: { upsert: async (p) => { written.projects.push(p); return p; } },
         // Returns the verified shape: the seeder must count what LANDED, not what it sent.
         documents: {
+          // The seeder reads the extraction state of each partition before writing it. Empty
+          // here: these fixtures describe a first seed, where nothing exists to carry forward.
+          extractionRowsForProject: async () => [],
           bulkUpsertForProject: async (pid, docs) => {
             written.documents.push([pid, docs]);
             return { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } };
@@ -510,5 +522,567 @@ test('seed() end to end with stubbed sources', async (t) => {
     const summary = await seed(['--only', 'documents', '--limit-documents', '1'],
       { sources: stubSources, repos, now: NOW });
     assert.strictEqual(summary.stages.documents.built, 1);
+  });
+});
+
+test('--reconcile refuses anything that narrows the fetch', async (t) => {
+  await t.test('accepted on a full run', () => {
+    assert.strictEqual(parseArgs(['--reconcile']).reconcile, true);
+    assert.strictEqual(parseArgs([]).reconcile, false, 'deletes are opt-in');
+  });
+
+  await t.test('--only that drops a reconciled stage throws', () => {
+    // Reconcile deletes whatever the fetch did not produce, so skipping the documents fetch
+    // would compute all 61k documents as surplus.
+    assert.throws(() => parseArgs(['--reconcile', '--only', 'projects']),
+      /--reconcile needs the projects and documents stages; --only excluded: documents/);
+    assert.throws(() => parseArgs(['--reconcile', '--only', 'documents']),
+      /--only excluded: projects/);
+    assert.doesNotThrow(() => parseArgs(['--reconcile', '--only', 'projects,documents']));
+  });
+
+  await t.test('--limit-documents throws', () => {
+    assert.throws(() => parseArgs(['--reconcile', '--limit-documents', '10']),
+      /cannot run with --limit-documents/);
+  });
+
+  await t.test('--max-surplus needs --reconcile and a positive integer', () => {
+    assert.strictEqual(parseArgs(['--reconcile', '--max-surplus', '70000']).maxSurplus, 70000);
+    assert.strictEqual(parseArgs(['--reconcile']).maxSurplus, null);
+    assert.throws(() => parseArgs(['--max-surplus', '10']), /needs --reconcile/);
+    assert.throws(() => parseArgs(['--reconcile', '--max-surplus', '0']),
+      /needs a positive integer/);
+    assert.throws(() => parseArgs(['--reconcile', '--max-surplus', '-1']),
+      /needs a positive integer/);
+    assert.throws(() => parseArgs(['--reconcile', '--max-surplus', '1.5']),
+      /needs a positive integer/);
+    assert.throws(() => parseArgs(['--reconcile', '--max-surplus', 'lots']),
+      /needs a positive integer/);
+    assert.throws(() => parseArgs(['--reconcile', '--max-surplus']),
+      /needs a positive integer/);
+  });
+});
+
+test('reconcileContainer — the surplus set', async (t) => {
+  const { reconcileContainer } = require('../../src/scripts/seed-nosql');
+  const rows = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const fetched = new Set(['a', 'c']);
+
+  await t.test('a dry run computes the set and deletes NOTHING', async () => {
+    const removed = [];
+    const out = await reconcileContainer('documents', rows, r => r.id, fetched,
+      r => { removed.push(r.id); }, { live: false });
+
+    assert.deepStrictEqual(out, { inCosmos: 3, wouldDelete: 1, deleted: 0 });
+    assert.deepStrictEqual(removed, [], 'a dry run must not touch the container');
+  });
+
+  await t.test('a live run deletes each surplus row exactly once', async () => {
+    const removed = [];
+    const out = await reconcileContainer('documents', rows, r => r.id, fetched,
+      r => { removed.push(r.id); }, { live: true });
+
+    assert.deepStrictEqual(removed, ['b']);
+    assert.deepStrictEqual(out, { inCosmos: 3, wouldDelete: 1, deleted: 1 });
+  });
+
+  await t.test('nothing surplus deletes nothing', async () => {
+    const removed = [];
+    const out = await reconcileContainer('documents', rows, r => r.id,
+      new Set(['a', 'b', 'c']), r => { removed.push(r.id); }, { live: true });
+
+    assert.strictEqual(out.wouldDelete, 0);
+    assert.deepStrictEqual(removed, []);
+  });
+
+  await t.test('the key is composite where the container is partitioned', async () => {
+    // A document id is unique per PARTITION only, so keying on id alone would call two documents
+    // in different projects the same row and leave one of them behind.
+    const docs = [{ id: 'd1', projectId: '207' }, { id: 'd1', projectId: '373' }];
+    const removed = [];
+    const out = await reconcileContainer('documents', docs, r => `${r.projectId}|${r.id}`,
+      new Set(['207|d1']), r => { removed.push(r.projectId); }, { live: true });
+
+    assert.strictEqual(out.wouldDelete, 1);
+    assert.deepStrictEqual(removed, ['373']);
+  });
+});
+
+test('seed --reconcile end to end', async (t) => {
+  const eagleProject = (id, name) => ({
+    _id: id, name, type: 'Energy - Electricity', status: 'Operating',
+    read: ['public', 'sysadmin'], eaStatus: 'Certificate Issued'
+  });
+  const track = trackProjects.filter(p => [207, 373].includes(p.track_project_id));
+  const matchedGuid = track.find(p => p.track_project_id === 207).epic_guid;
+  const eagleDoc = (id, project) => ({
+    _id: id, project, displayName: `Doc ${id}`,
+    internalURL: `etl/x/${id}.pdf`, internalSize: '1024', internalExt: '.pdf',
+    read: ['public', 'project-team'], contentExtracted: true
+  });
+
+  // Unlike the fixtures above, these stubs deliver the upstream TOTAL — reconcile refuses without
+  // it, because a null total means sources.js never verified the fetch was complete.
+  const stubSources = (over = {}) => ({
+    EAGLE_API_BASE,
+    loadTrackProjects: () => track,
+    fetchEagleProjects: async (onPage) => {
+      const items = [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)')];
+      if (onPage) await onPage(items, items.length, items.length);
+      return items;
+    },
+    streamEagleDocuments: async (onPage) => {
+      await onPage([eagleDoc('doc1', matchedGuid)], 1, 1);
+      return { count: 1, total: 1 };
+    },
+    fetchListLookup: async () => new Map(),
+    // The notification list is gated like the other two fetches, so the stub reports its total the
+    // same way. Empty AND consistent — the shape that used to pass every gate.
+    fetchAllPages: async (_base, _dataset, opts) => {
+      if (opts && opts.onPage) await opts.onPage([], 0, 0);
+      return [];
+    },
+    loadBoundaries: () => [],
+    ...over
+  });
+
+  const makeDeps = (over = {}) => {
+    const purged = { documents: [], projects: [] };
+    const repos = {
+      projects: {
+        upsert: async (p) => p,
+        listEagleOnlyIds: async () => [
+          { id: 'eagle-gone', eagleId: 'gone' },
+          { id: `eagle-${matchedGuid}`, eagleId: matchedGuid }
+        ]
+      },
+      documents: {
+        extractionRowsForProject: async () => [],
+        bulkUpsertForProject: async (_pid, docs) => (
+          { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } }),
+        listSeededIds: async () => [
+          { id: 'doc1', projectId: '207' },
+          { id: 'stale', projectId: '207' }
+        ]
+      },
+      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
+    };
+    const purge = {
+      purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); },
+      purgeProject: async (row) => { purged.projects.push(row.id); }
+    };
+    return { purged, deps: { repos, purge, cosmosReady: true, now: NOW, ...over } };
+  };
+
+  await t.test('a dry run reports wouldDelete and deletes nothing', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(summary.failures, []);
+    assert.strictEqual(summary.reconcile.documents.wouldDelete, 1);
+    assert.strictEqual(summary.reconcile.documents.deleted, 0);
+    assert.strictEqual(summary.reconcile.projects.wouldDelete, 1);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
+  await t.test('a live run deletes the surplus through the DELETE helpers', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(purged.documents, ['207|stale'],
+      'the fetched document must survive and the orphan must not');
+    assert.deepStrictEqual(purged.projects, ['eagle-gone']);
+    assert.strictEqual(summary.reconcile.documents.deleted, 1);
+    assert.strictEqual(summary.reconcile.projects.deleted, 1);
+  });
+
+  await t.test('no reconcile without the flag, even live', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.strictEqual(summary.reconcile, undefined);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
+  await t.test('an unverified Document fetch refuses BOTH containers', async () => {
+    // sources.js only verifies the fetch against searchResultsTotal when the upstream reports
+    // one. A null total means that gate never ran, so "not in the fetch" proves nothing.
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps,
+      sources: stubSources({
+        streamEagleDocuments: async (onPage) => {
+          await onPage([eagleDoc('doc1', matchedGuid)], 1, null);
+          return { count: 1, total: null };
+        }
+      })
+    });
+
+    assert.match(summary.failures.join(' '), /refused before any delete/);
+    assert.match(summary.failures.join(' '), /Document fetch was never verified/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] },
+      'projects reconcile ran first before the fix and deleted off an unverified run');
+    assert.strictEqual(summary.reconcile, undefined);
+  });
+
+  await t.test('an unverified Project fetch refuses BOTH containers', async () => {
+    // The reviewer's probe: the projects gate used to be per container, so a null Project total
+    // left the documents reconcile free to delete.
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps,
+      sources: stubSources({
+        fetchEagleProjects: async (onPage) => {
+          const items = [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)')];
+          if (onPage) await onPage(items, items.length, null);
+          return items;
+        }
+      })
+    });
+
+    assert.match(summary.failures.join(' '), /Project fetch was never verified/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+    assert.strictEqual(summary.reconcile, undefined);
+  });
+
+  await t.test('an unverified ProjectNotification fetch refuses BOTH containers', async () => {
+    // Gated like Project and Document: the notification list decides whether a document has a
+    // parent, so an unverified one makes "not in the fetch" prove nothing here either. NOTHING is
+    // dropped in this run, so only the gate itself can produce the refusal.
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps,
+      // Reports no total at all — the shape sources.js never got to verify.
+      sources: stubSources({ fetchAllPages: async () => [] })
+    });
+
+    assert.strictEqual(summary.stages.documents.droppedUnresolvable, 0);
+    assert.match(summary.failures.join(' '), /ProjectNotification fetch was never verified/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+    assert.strictEqual(summary.reconcile, undefined);
+  });
+
+  await t.test('a document the seed could not place refuses the reconcile', async () => {
+    // The reviewer's probe. An eagle-api answering `searchResults: [], searchResultsTotal: 0` for
+    // ProjectNotification is internally consistent and clears every completeness gate, but every
+    // notification-parented document then resolves to nothing, is absent from `fetchedKeys`, and
+    // reads as surplus — under the ceiling, so it would purge quietly and exit 0.
+    const notificationId = '5efe366b3a147c00223be181';
+    const withNotifications = (list) => stubSources({
+      fetchAllPages: async (_base, dataset, opts) => {
+        const items = dataset === 'ProjectNotification' ? list : [];
+        if (opts && opts.onPage) await opts.onPage(items, items.length, items.length);
+        return items;
+      },
+      streamEagleDocuments: async (onPage) => {
+        await onPage([eagleDoc('doc1', matchedGuid), eagleDoc('pn1', notificationId)], 2, 2);
+        return { count: 2, total: 2 };
+      }
+    });
+
+    // One notification: pn1 is placed, nothing is unresolvable, the reconcile runs as normal.
+    const placed = makeDeps();
+    const ok = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...placed.deps, sources: withNotifications([{ _id: notificationId }]) });
+
+    assert.deepStrictEqual(ok.failures, []);
+    assert.strictEqual(ok.stages.documents.droppedUnresolvable, 0);
+    assert.deepStrictEqual(placed.purged.documents, ['207|stale']);
+
+    // Empty list: pn1 has nowhere to go, so nothing may be deleted anywhere.
+    const empty = makeDeps();
+    const refused = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...empty.deps, sources: withNotifications([]) });
+
+    assert.strictEqual(refused.stages.documents.droppedUnresolvable, 1);
+    assert.match(refused.failures.join(' '), /refused before any delete/);
+    assert.match(refused.failures.join(' '), /ProjectNotification/);
+    assert.deepStrictEqual(empty.purged, { documents: [], projects: [] });
+    assert.strictEqual(refused.reconcile, undefined);
+    assert.strictEqual(refused.failures.length ? 1 : 0, 1, 'a refused reconcile must exit 1');
+  });
+
+  await t.test('every surplus id reaches the log file and the audit trail', async () => {
+    // The console preview stops at 20; this file is what a reconcile is reconstructed from, so it
+    // carries every id in both containers — dry run included, where nothing was deleted.
+    const logFile = path.join(LOG_DIR, 'explicit.ndjson');
+    const previous = process.env.RECONCILE_LOG;
+    process.env.RECONCILE_LOG = logFile;
+    const events = [];
+    try {
+      const { deps } = makeDeps({ audit: { auditEvent: (_req, e) => events.push(e) } });
+      const live = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+        { ...deps, sources: stubSources() });
+
+      assert.strictEqual(live.reconcile.log, logFile, 'the path has to reach the summary');
+      assert.deepStrictEqual(
+        fs.readFileSync(logFile, 'utf8').trim().split('\n').map(l => JSON.parse(l)),
+        [
+          { label: 'documents', id: 'stale', partitionKey: '207', deleted: true },
+          { label: 'projects', id: 'eagle-gone', partitionKey: 'eagle-gone', deleted: true }
+        ]);
+
+      // The DELETE controllers' own event shape, not a second one invented for the seeder.
+      assert.deepStrictEqual(events, [
+        {
+          action: 'document.delete', targetType: 'document', targetId: 'stale',
+          projectId: '207', detail: { source: 'seed --reconcile' }
+        },
+        {
+          action: 'project.delete', targetType: 'project', targetId: 'eagle-gone',
+          projectId: 'eagle-gone', detail: { source: 'seed --reconcile' }
+        }
+      ]);
+
+      fs.rmSync(logFile);
+      const dry = makeDeps({ audit: { auditEvent: (_req, e) => events.push(e) } });
+      await seed(['--reconcile', '--only', 'projects,documents'],
+        { ...dry.deps, sources: stubSources() });
+
+      const rows = fs.readFileSync(logFile, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      assert.deepStrictEqual(rows.map(r => r.id), ['stale', 'eagle-gone'],
+        'a dry run must still name every id it would delete');
+      assert.ok(rows.every(r => r.deleted === false));
+      assert.strictEqual(events.length, 2, 'a dry run deletes nothing, so it audits nothing');
+    } finally {
+      process.env.RECONCILE_LOG = previous;
+    }
+  });
+
+  await t.test('a total that disagrees with what arrived is not a verified fetch', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps,
+      sources: stubSources({
+        streamEagleDocuments: async (onPage) => {
+          await onPage([eagleDoc('doc1', matchedGuid)], 1, 9);
+          return { count: 1, total: 9 };
+        }
+      })
+    });
+
+    assert.match(summary.failures.join(' '), /Document fetch was never verified/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
+  await t.test('documents are deleted before projects', async () => {
+    const order = [];
+    const { deps } = makeDeps();
+    deps.purge = {
+      purgeDocument: async () => { order.push('document'); },
+      purgeProject: async () => { order.push('project'); }
+    };
+    await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(order, ['document', 'project'],
+      'a project purged first would orphan its remaining documents');
+  });
+
+  await t.test('a dry run with no Cosmos refuses instead of reporting an empty surplus', async () => {
+    const { purged, deps } = makeDeps({ cosmosReady: false });
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.match(summary.failures.join(' '), /--reconcile needs COSMOS_ENDPOINT/);
+    assert.strictEqual(summary.reconcile, undefined);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+});
+
+test('--reconcile refuses a surplus over the ceiling', async (t) => {
+  const track = trackProjects.filter(p => [207, 373].includes(p.track_project_id));
+  const matchedGuid = track.find(p => p.track_project_id === 207).epic_guid;
+  const eagleDoc = (id) => ({
+    _id: id, project: matchedGuid, displayName: `Doc ${id}`,
+    internalURL: `etl/x/${id}.pdf`, internalSize: '1024', internalExt: '.pdf', read: ['public']
+  });
+
+  // Every fetch here is INTERNALLY CONSISTENT — the page count always equals the reported
+  // searchResultsTotal — so the verification gate passes and only the ceiling can stop a delete.
+  const stubSources = (docs) => ({
+    EAGLE_API_BASE,
+    loadTrackProjects: () => track,
+    fetchEagleProjects: async (onPage) => { await onPage([], 0, 0); return []; },
+    streamEagleDocuments: async (onPage) => {
+      await onPage(docs.map(eagleDoc), docs.length, docs.length);
+      return { count: docs.length, total: docs.length };
+    },
+    fetchListLookup: async () => new Map(),
+    fetchAllPages: async (_base, _dataset, opts) => {
+      if (opts && opts.onPage) await opts.onPage([], 0, 0);
+      return [];
+    },
+    loadBoundaries: () => []
+  });
+
+  const makeDeps = (docRows, projRows) => {
+    const purged = { documents: [], projects: [] };
+    const repos = {
+      projects: { upsert: async (p) => p, listEagleOnlyIds: async () => projRows },
+      documents: {
+        extractionRowsForProject: async () => [],
+        bulkUpsertForProject: async (_pid, d) => (
+          { succeeded: d.length, failed: 0, statusCounts: { 201: d.length } }),
+        listSeededIds: async () => docRows
+      },
+      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
+    };
+    const purge = {
+      purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); },
+      purgeProject: async (row) => { purged.projects.push(row.id); }
+    };
+    return { purged, deps: { repos, purge, cosmosReady: true, now: NOW } };
+  };
+
+  // The reviewer's probe: eagle-api answers empty for both datasets and every gate above it
+  // passes, so the whole corpus reads as surplus.
+  const probeDocs = Array.from({ length: 61611 }, (_, i) => ({ id: `d${i}`, projectId: '207' }));
+  const probeProjects = Array.from({ length: 4 }, (_, i) => ({ id: `eagle-${i}`, eagleId: `e${i}` }));
+
+  await t.test('an empty upstream purges nothing and exits 1', async () => {
+    const { purged, deps } = makeDeps(probeDocs, probeProjects);
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources([]) });
+
+    assert.deepStrictEqual(purged, { documents: [], projects: [] },
+      'a self-consistent empty fetch used to delete the entire corpus');
+    assert.match(summary.failures.join(' '),
+      /documents surplus 61611 exceeds the ceiling 1233/);
+    assert.strictEqual(summary.reconcile.documents.wouldDelete, 61611);
+    assert.strictEqual(summary.reconcile.documents.deleted, 0);
+    // 4 projects is UNDER the projects ceiling on its own — the documents breach stopped it.
+    assert.strictEqual(summary.reconcile.projects.wouldDelete, 4);
+    assert.strictEqual(summary.reconcile.projects.deleted, 0);
+    assert.strictEqual(summary.failures.length ? 1 : 0, 1, 'a refused reconcile must exit 1');
+  });
+
+  await t.test('a dry run reports the refusal without needing --live', async () => {
+    const { purged, deps } = makeDeps(probeDocs, probeProjects);
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources([]) });
+
+    assert.match(summary.failures.join(' '), /exceeds the ceiling 1233/);
+    assert.strictEqual(summary.reconcile.documents.wouldDelete, 61611);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
+  await t.test('--max-surplus is the operator override and lets the deletes through', async () => {
+    const { purged, deps } = makeDeps(probeDocs, probeProjects);
+    const summary = await seed(
+      ['--live', '--reconcile', '--only', 'projects,documents', '--max-surplus', '70000'],
+      { ...deps, sources: stubSources([]) });
+
+    assert.deepStrictEqual(summary.failures, []);
+    assert.strictEqual(purged.documents.length, 61611);
+    assert.strictEqual(purged.projects.length, 4);
+    assert.strictEqual(summary.reconcile.documents.deleted, 61611);
+  });
+
+  // 100 rows in Cosmos, 50 of them fetched: 2% is 2, so the floor of 50 is the ceiling.
+  const fetchedIds = Array.from({ length: 50 }, (_, i) => `d${i}`);
+  const fetchedRows = fetchedIds.map(id => ({ id, projectId: '207' }));
+  const staleRows = (n) => Array.from({ length: n }, (_, i) => ({ id: `s${i}`, projectId: '207' }));
+
+  await t.test('a surplus exactly at the ceiling proceeds', async () => {
+    const { purged, deps } = makeDeps([...fetchedRows, ...staleRows(50)], []);
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources(fetchedIds) });
+
+    assert.deepStrictEqual(summary.failures, []);
+    assert.strictEqual(summary.reconcile.documents.deleted, 50);
+    assert.strictEqual(purged.documents.length, 50);
+  });
+
+  await t.test('one row over the ceiling refuses', async () => {
+    const { purged, deps } = makeDeps([...fetchedRows, ...staleRows(51)], []);
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources(fetchedIds) });
+
+    assert.match(summary.failures.join(' '), /documents surplus 51 exceeds the ceiling 50/);
+    assert.deepStrictEqual(purged.documents, []);
+  });
+});
+
+test('a re-seed carries extraction state forward', async (t) => {
+  const eagleProject = (id, name) => ({
+    _id: id, name, read: ['public', 'sysadmin'], status: 'Operating'
+  });
+  const track = trackProjects.filter(p => p.track_project_id === 207);
+  const matchedGuid = track[0].epic_guid;
+  const eagleDoc = (id) => ({
+    _id: id, project: matchedGuid, displayName: `Doc ${id}`,
+    internalURL: `etl/x/${id}.pdf`, internalExt: '.pdf', read: ['public']
+  });
+
+  const sources = {
+    EAGLE_API_BASE,
+    loadTrackProjects: () => track,
+    fetchEagleProjects: async () => [eagleProject(matchedGuid, 'Nicomen Wind')],
+    streamEagleDocuments: async (onPage) => {
+      await onPage([eagleDoc('known'), eagleDoc('brandnew')], 2, 2);
+      return { count: 2, total: 2 };
+    },
+    fetchListLookup: async () => new Map(),
+    fetchAllPages: async () => [],
+    loadBoundaries: () => []
+  };
+
+  const run = async (cosmosReady) => {
+    const written = [];
+    const partitions = [];
+    const repos = {
+      projects: { upsert: async (p) => p },
+      documents: {
+        extractionRowsForProject: async (_access, projectId) => {
+          partitions.push(projectId);
+          return [{
+            id: 'known', contentExtracted: true, contentExtractedAt: '2026-08-01T00:00:00.000Z',
+            contentPageCount: 9, contentExtractionError: null
+          }];
+        },
+        bulkUpsertForProject: async (pid, docs) => {
+          written.push(...docs);
+          return { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } };
+        }
+      },
+      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
+    };
+    const summary = await seed(['--live', '--only', 'documents'],
+      { sources, repos, now: NOW, cosmosReady });
+    return { summary, written, partitions };
+  };
+
+  await t.test('an existing document keeps its extraction state, a new one does not', async () => {
+    const { summary, written } = await run(true);
+
+    const known = written.find(d => d.id === 'known');
+    assert.strictEqual(known.contentExtracted, true,
+      'resetting this orphans the chunks and re-queues the whole corpus');
+    assert.strictEqual(known.contentExtractedAt, '2026-08-01T00:00:00.000Z');
+    assert.strictEqual(known.contentPageCount, 9);
+
+    const fresh = written.find(d => d.id === 'brandnew');
+    assert.strictEqual(fresh.contentExtracted, false);
+    assert.strictEqual(fresh.contentPageCount, 0);
+
+    assert.strictEqual(summary.stages.documents.preserved, 1);
+  });
+
+  await t.test('the partition is read once per project, not once per batch', async () => {
+    const { partitions } = await run(true);
+    assert.deepStrictEqual(partitions, ['207']);
+  });
+
+  await t.test('without Cosmos nothing is read and nothing is preserved', async () => {
+    // The path a dry run from outside the private endpoint takes: no database, so the rows are
+    // still built and still verified, they just keep the reset values.
+    const { summary, written, partitions } = await run(false);
+    assert.deepStrictEqual(partitions, []);
+    assert.strictEqual(summary.stages.documents.preserved, 0);
+    assert.strictEqual(written.find(d => d.id === 'known').contentExtracted, false);
   });
 });

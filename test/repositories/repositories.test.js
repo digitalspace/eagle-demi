@@ -9,7 +9,7 @@ const cosmos = require('../../src/db/cosmos-nosql');
 const projects = require('../../src/repositories/projects');
 const documents = require('../../src/repositories/documents');
 const chunks = require('../../src/repositories/chunks');
-const { TIER } = require('../../src/helpers/access-sql');
+const { TIER, systemAccess } = require('../../src/helpers/access-sql');
 
 const PUBLIC = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null };
 const ADMIN = { tier: TIER.PRIVILEGED, roles: ['public', 'sysadmin'], projectScope: null };
@@ -335,5 +335,79 @@ test('chunks repository', async (t) => {
     await chunks.removeForDocument(ADMIN, 'd1');
     assert.strictEqual(ops.length, 2);
     assert.ok(ops.every(o => o.operationType === 'Delete' && o.partitionKey === 'd1'));
+  });
+});
+
+test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const SYSTEM = systemAccess();
+
+  /** Mock cosmos.query with a fixed list of pages, recording every call. */
+  const paged = (t, pages) => {
+    const calls = [];
+    let n = 0;
+    t.mock.method(cosmos, 'query', async (container, spec, options = {}) => {
+      cosmos.assertQuerySpec(spec, container);
+      calls.push({ container, spec, options });
+      return pages[n++] || { items: [], continuationToken: undefined };
+    });
+    return calls;
+  };
+
+  await t.test('a continuation token is followed and every page is returned', async () => {
+    // Without this the reconcile set stops at the 1000-row page cap and everything past it is
+    // computed as surplus — 60k documents deleted off a partial read.
+    const calls = paged(t, [
+      { items: [{ id: 'a' }, { id: 'b' }], continuationToken: 'page2' },
+      { items: [{ id: 'c' }], continuationToken: undefined }
+    ]);
+
+    const rows = await documents.listSeededIds(SYSTEM);
+
+    assert.deepStrictEqual(rows.map(r => r.id), ['a', 'b', 'c']);
+    assert.strictEqual(calls.length, 2, 'the loop must issue a second request');
+    assert.strictEqual(calls[0].options.continuationToken, undefined);
+    assert.strictEqual(calls[1].options.continuationToken, 'page2',
+      'the second request must carry the token the first returned');
+    assert.ok(calls.every(c => c.options.maxItemCount === 1000));
+  });
+
+  await t.test('extractionRowsForProject pins the partition and selects only the state', async () => {
+    const calls = paged(t, [{ items: [], continuationToken: undefined }]);
+    await documents.extractionRowsForProject(SYSTEM, 207);
+
+    const { spec, options } = calls[0];
+    assert.strictEqual(options.partitionKey, '207',
+      'a cross-partition drain per project would scan the whole container');
+    assert.match(spec.query, /c\.projectId = @projectId/);
+    // Exactly id + the four extraction fields: a wider projection reads 60k whole documents back.
+    assert.strictEqual(spec.query.split(' FROM ')[0].replace('SELECT ', ''),
+      ['c.id', ...documents.EXTRACTION_FIELDS.map(f => `c.${f}`)].join(', '));
+    assert.ok(spec.parameters.some(p => p.name === '@projectId' && p.value === '207'));
+  });
+
+  await t.test('listSeededIds is scoped to sourceSystem eagle', async () => {
+    // The SOLE guard against reconcile deleting an epic.submit upload, which this seed never
+    // produces and so would compute as surplus every run.
+    const calls = paged(t, [{ items: [], continuationToken: undefined }]);
+    await documents.listSeededIds(SYSTEM);
+
+    const { spec } = calls[0];
+    assert.match(spec.query, /c\.sourceSystem = @sourceSystem/);
+    assert.ok(spec.parameters.some(p => p.name === '@sourceSystem' && p.value === 'eagle'));
+    assert.match(spec.query, /^SELECT c\.id, c\.projectId FROM c/);
+  });
+
+  await t.test('listEagleOnlyIds is scoped to sourceSystem eagle', async () => {
+    // Track-sourced rows exist whether or not Eagle still carries a counterpart; without this
+    // the reconcile deletes the master registry.
+    const calls = paged(t, [{ items: [], continuationToken: undefined }]);
+    await projects.listEagleOnlyIds(SYSTEM);
+
+    const { spec } = calls[0];
+    assert.match(spec.query, /c\.sourceSystem = @sourceSystem/);
+    assert.ok(spec.parameters.some(p => p.name === '@sourceSystem' && p.value === 'eagle'));
+    assert.match(spec.query, /^SELECT c\.id, c\.eagleId FROM c/);
   });
 });

@@ -115,8 +115,39 @@ is the whole pattern; no wrapper is needed now that the crypto shim is not.
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
+npm run db:seed-nosql -- --reconcile   # also delete rows the fetch did not produce
 npm run db:purge-extraction      # dry run by default; --live to write
 ```
+
+A re-seed **carries extraction state forward**. A Cosmos upsert replaces the item, so the seeder
+reads `contentExtracted`, `contentExtractedAt`, `contentPageCount` and `contentExtractionError` out
+of each partition before writing it and puts them back on any document it already holds; new ids
+start unextracted. The run reports `preserved`.
+
+`--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch are
+deleted through the same helpers `DELETE /documents/:id` and `DELETE /projects/:id` use, so the
+chunks and the search-index entries go with them, and each deleted row emits the same
+`document.delete` / `project.delete` audit event those routes do. A dry run reports `wouldDelete`
+per container and deletes nothing. Deletion is a single phase after every fetch has finished —
+documents before projects — so a refusal stops it **before any delete**, in both containers at once.
+It refuses — exit 1, nothing removed — if `--only` dropped a stage, if `--limit-documents` was
+given, if the Project, ProjectNotification or Document fetch was not verified complete against
+eagle-api's `searchResultsTotal`, if any document resolved to neither a project nor a
+ProjectNotification, or if there is no `COSMOS_ENDPOINT` to enumerate the containers with: every
+one of those makes the untouched remainder look like surplus.
+
+Every surplus id goes to an NDJSON file — one `{label, id, partitionKey, deleted}` row per surplus
+row, both containers, dry run and live — and the run prints the path. It defaults to
+`/home/reconcile-<timestamp>.ndjson`, or the working directory where `/home` does not exist;
+`RECONCILE_LOG` overrides it. The console line stays capped at the first 20 ids.
+
+There is also a ceiling on how much one reconcile may delete, because a fetch verified only against
+itself is not enough — an eagle-api answering `searchResults: [], searchResultsTotal: 0` is
+internally consistent and would make the entire corpus surplus. Each container refuses when its
+surplus exceeds `max(50, 2% of the rows in it)`; the refusal names the ceiling and the surplus, and
+stops **both** containers before any delete, in a dry run too. `--max-surplus <n>` raises the
+ceiling to `n` for the run — the operator asserting the loss really is that big. It requires
+`--reconcile` and a positive integer.
 
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the

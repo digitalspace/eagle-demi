@@ -9,6 +9,7 @@
  * copy-pasted nine times and drift.
  */
 
+const cosmos = require('../db/cosmos-nosql');
 const { visibilityFor, andClauses } = require('../helpers/access-sql');
 
 /**
@@ -100,11 +101,31 @@ function pageOptions({ pageSize, continuationToken, partitionKey } = {}) {
   return options;
 }
 
+/**
+ * Every row a query matches, following continuation tokens past the 1000-row page cap.
+ *
+ * For bounded whole-container reads only (the seeder's reconcile and per-project extraction
+ * state). No request path may call this — an unbounded read is what `pageOptions` exists to
+ * prevent.
+ */
+async function fetchAll(container, spec, opts = {}) {
+  const rows = [];
+  let continuationToken;
+  do {
+    const page = await cosmos.query(container, spec,
+      pageOptions({ ...opts, pageSize: 1000, continuationToken }));
+    rows.push(...page.items);
+    continuationToken = page.continuationToken;
+  } while (continuationToken);
+  return rows;
+}
+
 module.exports = {
   eq,
   inList,
   isDefinedAndNotNull,
   selectWhere,
   countWhere,
-  pageOptions
+  pageOptions,
+  fetchAll
 };
