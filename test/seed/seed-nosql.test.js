@@ -221,6 +221,23 @@ test('verification gates', async (t) => {
       /isPublished out of step/);
   });
 
+  await t.test('a document may not be public under a non-public project', () => {
+    const projectRead = new Map([['207', ['sysadmin']], ['208', ['public', 'sysadmin']]]);
+    const doc = (over) => ({ id: 'd1', projectId: '207', read: ['public'], isPublished: true, ...over });
+
+    assert.match(verifyItems([doc()], 'documents', 'projectId', projectRead).join(' '),
+      /1 documents are public under a non-public project — d1/);
+    assert.deepStrictEqual(
+      verifyItems([doc({ projectId: '208' })], 'documents', 'projectId', projectRead), [],
+      'the same document under a public project is fine');
+    assert.deepStrictEqual(
+      verifyItems([doc({ read: ['sysadmin'], isPublished: false })], 'documents', 'projectId', projectRead),
+      [], 'constrained by transformDocument, the gate stays silent');
+    // Notification-parented documents have no project row and are exempt.
+    assert.deepStrictEqual(
+      verifyItems([doc({ projectId: 'notif-1' })], 'documents', 'projectId', projectRead), []);
+  });
+
   await t.test('the partition-key failure reports its OWN count', () => {
     const items = [
       { projectId: null, read: ['public'], isPublished: true },

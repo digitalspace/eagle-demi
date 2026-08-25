@@ -235,7 +235,7 @@ function verifyProjects(projects) {
   return failures;
 }
 
-function verifyItems(items, label, partitionField) {
+function verifyItems(items, label, partitionField, projectRead) {
   const failures = [];
 
   const noAcl = items.filter(i => !Array.isArray(i.read) || i.read.length === 0);
@@ -251,6 +251,19 @@ function verifyItems(items, label, partitionField) {
   const drifted = items.filter(i => i.isPublished !== i.read.includes('public'));
   if (drifted.length) {
     failures.push(`${drifted.length} ${label} have isPublished out of step with read[]`);
+  }
+
+  // Cross-entity: an item may never out-rank its parent. Rows whose partition key is not a project
+  // — notification-parented documents — have no parent ACL to compare against and are exempt.
+  if (projectRead) {
+    const escaped = items.filter(i => {
+      const parent = projectRead.get(String(i[partitionField]));
+      return parent && Array.isArray(i.read) && i.read.includes('public') && !parent.includes('public');
+    });
+    if (escaped.length) {
+      failures.push(`${escaped.length} ${label} are public under a non-public project — ` +
+        escaped.slice(0, 20).map(i => i.id).join(', '));
+    }
   }
 
   return failures;
@@ -318,6 +331,9 @@ async function seed(argv = [], deps = {}) {
   }
 
   const projectIndex = buildProjectIndex(projects);
+  // Parent ACLs by canonical id: documents are narrowed against these, and the pre-write gate
+  // checks the same invariant.
+  const projectRead = new Map(projects.map(p => [String(p.id), p.read]));
   summary.stages.projects = { built: projects.length, report, written: 0 };
 
   const projectFailures = verifyProjects(projects);
@@ -397,7 +413,8 @@ async function seed(argv = [], deps = {}) {
       for (const raw of rawDocs) {
         const existing = existingRows && existingRows.get(String(raw._id));
         if (existing) stats.preserved++;
-        const transformed = transform.transformDocument(raw, projectId, listLookup, { now, existing });
+        const transformed = transform.transformDocument(raw, projectId, listLookup,
+          { now, existing, projectRead: projectRead.get(projectId) });
         if (!transformed.s3Key) stats.noKey++;
         // id is unique per PARTITION in Cosmos, so a repeat within one project silently
         // overwrites. Counted so a shortfall is attributable rather than mysterious.
@@ -408,7 +425,7 @@ async function seed(argv = [], deps = {}) {
 
       // Verify each batch rather than the whole corpus: the gates are per-item, and holding
       // 60,661 documents just to check them is what streaming exists to avoid.
-      gateFailures.push(...verifyItems(docs, 'documents', 'projectId'));
+      gateFailures.push(...verifyItems(docs, 'documents', 'projectId', projectRead));
       if (args.live) {
         // Count what LANDED, never what was sent. Cosmos bulk returns a per-operation status and
         // does not throw on partial failure; counting sent operations reported 60,578 written

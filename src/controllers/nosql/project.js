@@ -229,6 +229,12 @@ exports.updateProject = async (req, res) => {
       try {
         const cascade = await documents.setAclForProject(systemAccess(), existing.id, acl.read);
         if (cascade.failed > 0) {
+          // The rows that DID land still go to the index, or the succeeded subset stays listable
+          // under its old ACL until the indexer's next PT5M pass. With no per-row verdicts,
+          // nothing is written rather than claiming an ACL Cosmos may not hold.
+          const failedIds = new Set(cascade.failedIds || (cascade.rows || []).map(r => r.id));
+          const landed = (cascade.rows || []).filter(row => !failedIds.has(row.id));
+          if (landed.length) await aiSearch.writeAcls(aiSearch.indexes().documents, landed);
           logger.error('[Project Controller] document ACL cascade partially failed', {
             projectId: existing.id, ...cascade, ids: undefined, rows: undefined
           });

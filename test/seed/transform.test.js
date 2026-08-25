@@ -119,6 +119,21 @@ test('transformDocument', async (t) => {
       'an upstream isPublished:true must not out-rank a private read[]');
   });
 
+  await t.test('projectRead narrows the ACL — a document may not out-rank its project', () => {
+    // The seed used to keep the Eagle ACL verbatim, so a public document under a project Track
+    // marks private was seeded public and stayed listable under a project nobody could see.
+    const priv = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, projectRead: ['sysadmin'] });
+    assert.deepStrictEqual(priv.read, ['sysadmin']);
+    assert.strictEqual(priv.isPublished, false);
+
+    const pub = transformDocument(EAGLE_DOC, '207', LIST,
+      { ...OPTS, projectRead: ['public', 'sysadmin'] });
+    assert.ok(pub.read.includes('public'), 'a public project does not narrow a public document');
+
+    assert.ok(transformDocument(EAGLE_DOC, '207', LIST, OPTS).read.includes('public'),
+      'with no projectRead — a notification parent — the ACL stays verbatim');
+  });
+
   await t.test('extraction state is reset, not carried', () => {
     // The old database has contentExtracted:true on records with no chunks behind them, and DEMI
     // has no chunk data at all. Importing the flag tells the extractor there is nothing to do.
