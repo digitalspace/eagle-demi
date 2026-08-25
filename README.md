@@ -126,13 +126,20 @@ start unextracted. The run reports `preserved`.
 
 `--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch are
 deleted through the same helpers `DELETE /documents/:id` and `DELETE /projects/:id` use, so the
-chunks and the search-index entries go with them. A dry run reports `wouldDelete` per container and
-logs the ids without deleting anything. Deletion is a single phase after every fetch has finished —
+chunks and the search-index entries go with them, and each deleted row emits the same
+`document.delete` / `project.delete` audit event those routes do. A dry run reports `wouldDelete`
+per container and deletes nothing. Deletion is a single phase after every fetch has finished —
 documents before projects — so a refusal stops it **before any delete**, in both containers at once.
 It refuses — exit 1, nothing removed — if `--only` dropped a stage, if `--limit-documents` was
-given, if either the Project or the Document fetch was not verified complete against eagle-api's
-`searchResultsTotal`, or if there is no `COSMOS_ENDPOINT` to enumerate the containers with: every
+given, if the Project, ProjectNotification or Document fetch was not verified complete against
+eagle-api's `searchResultsTotal`, if any document resolved to neither a project nor a
+ProjectNotification, or if there is no `COSMOS_ENDPOINT` to enumerate the containers with: every
 one of those makes the untouched remainder look like surplus.
+
+Every surplus id goes to an NDJSON file — one `{label, id, partitionKey, deleted}` row per surplus
+row, both containers, dry run and live — and the run prints the path. It defaults to
+`/home/reconcile-<timestamp>.ndjson`, or the working directory where `/home` does not exist;
+`RECONCILE_LOG` overrides it. The console line stays capped at the first 20 ids.
 
 There is also a ceiling on how much one reconcile may delete, because a fetch verified only against
 itself is not enough — an eagle-api answering `searchResults: [], searchResultsTotal: 0` is

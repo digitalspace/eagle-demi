@@ -30,6 +30,8 @@
  * a private endpoint, and `/api/command` is synchronous and will time out on a 60k-document seed.
  */
 
+const fs = require('fs');
+
 const sources = require('../seed/sources');
 const transform = require('../seed/transform');
 const { buildRegistry, buildProjectIndex } = require('../merge/project');
@@ -37,6 +39,7 @@ const { buildRegistry, buildProjectIndex } = require('../merge/project');
 const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const purgeHelpers = require('../helpers/purge');
+const auditHelpers = require('../utils/audit');
 
 const projectsRepo = require('../repositories/projects');
 const documentsRepo = require('../repositories/documents');
@@ -121,6 +124,17 @@ const surplusCeiling = (rowCount, maxSurplus) =>
   Math.max(50, Math.ceil(rowCount * 0.02), maxSurplus || 0);
 
 /**
+ * Where every surplus id goes. The console preview is capped at 20 — this file is not, because a
+ * real reconcile can carry tens of thousands and "which rows went" has to outlive the run.
+ */
+function reconcileLogPath(now) {
+  if (process.env.RECONCILE_LOG) return process.env.RECONCILE_LOG;
+  const name = `reconcile-${now}.ndjson`;
+  // `/home` is the only mount that survives a restart on the App Service plan the seed runs from.
+  return fs.existsSync('/home') ? `/home/${name}` : `./${name}`;
+}
+
+/**
  * Rows in Cosmos that this fetch did not produce.
  *
  * Generic over the container because the two differ only in how a row is keyed: documents by
@@ -132,18 +146,48 @@ const surplusCeiling = (rowCount, maxSurplus) =>
  * @param {function} keyOf     row -> the key to test against `fetched`
  * @param {Set}      fetched   keys the upstream fetch produced
  * @param {function} remove    row -> Promise, called ONLY when live
+ * @param {string}   [opts.logPath] NDJSON sink for every surplus id, dry run included
+ * @param {object}   [opts.audit]   `utils/audit`, called once per row actually deleted
  */
-async function reconcileContainer(label, rows, keyOf, fetched, remove, { live }) {
+async function reconcileContainer(label, rows, keyOf, fetched, remove, { live, logPath, audit }) {
   const surplus = surplusOf(rows, keyOf, fetched);
-  // Ids capped: a refused run can carry tens of thousands of them.
+  // Console preview only — capped because a refused run can carry tens of thousands of ids.
   const ids = surplus.slice(0, 20).map(r => r.id).join(', ');
   logger.info(`[seed] reconcile ${label}: ${rows.length} in Cosmos, ${surplus.length} not in the ` +
     `fetch${surplus.length ? ` — ${ids}${surplus.length > 20 ? ', …' : ''}` : ''}`);
 
+  // documents partition on projectId, projects on their own id.
+  const partitionOf = row => row.projectId || row.id;
+  const singular = label.replace(/s$/, '');
+  // One descriptor for the whole container: appendFileSync would reopen the file per row, and a
+  // 60k-row reconcile pays that 60,000 times.
+  const fd = logPath ? fs.openSync(logPath, 'a') : null;
+
   let deleted = 0;
-  for (const row of live ? surplus : []) {
-    await remove(row);
-    deleted++;
+  try {
+    for (const row of surplus) {
+      if (live) {
+        await remove(row);
+        deleted++;
+        // The DELETE controllers' own event, so a purge is traceable however it was issued.
+        if (audit) {
+          audit.auditEvent(null, {
+            action: `${singular}.delete`,
+            targetType: singular,
+            targetId: row.id,
+            projectId: partitionOf(row),
+            detail: { source: 'seed --reconcile' }
+          });
+        }
+      }
+      // Written AFTER the delete lands, so a throw mid-run leaves a file naming exactly what went.
+      if (fd !== null) {
+        fs.writeSync(fd, JSON.stringify(
+          { label, id: row.id, partitionKey: partitionOf(row), deleted: live }) + '\n');
+      }
+    }
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
   }
   return { inCosmos: rows.length, wouldDelete: surplus.length, deleted };
 }
@@ -225,6 +269,7 @@ async function seed(argv = [], deps = {}) {
     boundaries: boundariesRepo
   };
   const purge = deps.purge || purgeHelpers;
+  const audit = deps.audit || auditHelpers;
   const access = systemAccess();
   // Reading what is already there needs Cosmos. A live run always has it; a dry run only when the
   // operator is inside the private endpoint and set COSMOS_ENDPOINT.
@@ -287,6 +332,7 @@ async function seed(argv = [], deps = {}) {
   // ── 2. Documents ───────────────────────────────────────────────────────────
   // Reconcile is a final phase, so what the documents stage fetched has to outlive its block.
   let documentFetch = null;
+  let notificationFetch = null;
   if (args.only.includes('documents')) {
     log('Fetching the List lookup for type/milestone labels...');
     const listLookup = await src.fetchListLookup();
@@ -296,8 +342,14 @@ async function seed(argv = [], deps = {}) {
     // loader because sources.js has none — nothing but this one carve-out needs the dataset, and
     // the ids are all it needs: 17 rows, held as a Set to test membership per document.
     log('Fetching Project Notifications (the other document parent)...');
-    const notifications = await src.fetchAllPages(src.EAGLE_API_BASE, 'ProjectNotification');
+    // The total is captured for the same reason the Project fetch captures one: this list decides
+    // whether a document has a home, so an unverified one leaves every notification-parented
+    // document unresolvable, absent from `fetchedKeys`, and computed as surplus.
+    let notificationsTotal = null;
+    const notifications = await src.fetchAllPages(src.EAGLE_API_BASE, 'ProjectNotification',
+      { onPage: (_items, _count, total) => { notificationsTotal = total; } });
     const notificationIds = new Set(notifications.map(n => String(n._id)));
+    notificationFetch = { total: notificationsTotal, fetched: notifications.length };
     log(`  ${notificationIds.size} notifications`);
 
     log('Streaming Eagle documents (60k+, paged at 100)...');
@@ -509,13 +561,24 @@ async function seed(argv = [], deps = {}) {
   if (args.reconcile) {
     const unverified = [
       ['Project', projectsTotal, eagleProjects.length],
+      ['ProjectNotification', notificationFetch && notificationFetch.total,
+        notificationFetch && notificationFetch.fetched],
       ['Document', documentFetch && documentFetch.total, documentFetch && documentFetch.fetched]
     ].filter(([, total, fetched]) => typeof total !== 'number' || total !== fetched);
+
+    // An empty-but-consistent notification list passes every completeness gate above, so the drop
+    // count is the second half of the same guard: a document the seed could not place is missing
+    // from the fetch for a reason that is not "it was removed upstream".
+    const dropped = (summary.stages.documents || {}).droppedUnresolvable || 0;
 
     if (unverified.length) {
       summary.failures.push('--reconcile refused before any delete — nothing removed from either ' +
         `container: the ${unverified.map(([label]) => label).join(' and ')} fetch was never ` +
         'verified complete against a searchResultsTotal');
+    } else if (dropped) {
+      summary.failures.push('--reconcile refused before any delete — nothing removed from either ' +
+        `container: ${dropped} document(s) resolved to neither a project nor a ProjectNotification` +
+        ', so they are absent from the fetch and would be deleted as surplus');
     } else {
       // Documents first: a project whose documents are already gone cannot orphan any.
       const containers = [
@@ -541,9 +604,13 @@ async function seed(argv = [], deps = {}) {
 
       // Reported either way: a dry run must still show wouldDelete and that it would refuse.
       const live = args.live && !breached.length;
-      summary.reconcile = {};
-      summary.reconcile.documents = await reconcileContainer(...containers[0], { live });
-      summary.reconcile.projects = await reconcileContainer(...containers[1], { live });
+      const logPath = reconcileLogPath(now);
+      summary.reconcile = { log: logPath };
+      summary.reconcile.documents = await reconcileContainer(...containers[0],
+        { live, logPath, audit });
+      summary.reconcile.projects = await reconcileContainer(...containers[1],
+        { live, logPath, audit });
+      log(`  surplus ids: ${logPath}`);
     }
   }
 
@@ -592,7 +659,9 @@ if (require.main === module) {
   if (args.live || process.env.COSMOS_ENDPOINT) initCosmosClient();
 
   seed(process.argv.slice(2))
-    .then(summary => {
+    .then(async summary => {
+      // Audit rows buffer behind an unref'd timer, so process.exit would drop the purge trail.
+      await auditHelpers.flush().catch(err => logger.error(`[seed] audit flush: ${err.message}`));
       // A failed gate must not exit 0 — a wrapper script or a Kudu run would read that as success.
       process.exit(summary.failures.length ? 1 : 0);
     })

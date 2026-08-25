@@ -4,6 +4,9 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const {
   parseArgs, verifyProjects, verifyItems, seed, ALL_STAGES, DEFAULT_STAGES
@@ -12,6 +15,12 @@ const { unwrapSearchResponse, fetchAllPages, PAGE_SIZE, EAGLE_API_BASE } = requi
 const trackProjects = require('../../src/data/track_projects_enriched.json');
 
 const NOW = '2026-07-30T00:00:00.000Z';
+
+// Every reconcile writes its surplus ids to a file, defaulting to /home. Redirected for the whole
+// suite so the tests cannot litter that mount or the repo root.
+const LOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-reconcile-'));
+process.env.RECONCILE_LOG = path.join(LOG_DIR, 'default.ndjson');
+test.after(() => fs.rmSync(LOG_DIR, { recursive: true, force: true }));
 
 test('parseArgs — writes require an explicit flag', async (t) => {
   await t.test('defaults to a dry run', () => {
@@ -627,7 +636,12 @@ test('seed --reconcile end to end', async (t) => {
       return { count: 1, total: 1 };
     },
     fetchListLookup: async () => new Map(),
-    fetchAllPages: async () => [],
+    // The notification list is gated like the other two fetches, so the stub reports its total the
+    // same way. Empty AND consistent — the shape that used to pass every gate.
+    fetchAllPages: async (_base, _dataset, opts) => {
+      if (opts && opts.onPage) await opts.onPage([], 0, 0);
+      return [];
+    },
     loadBoundaries: () => [],
     ...over
   });
@@ -734,6 +748,110 @@ test('seed --reconcile end to end', async (t) => {
     assert.strictEqual(summary.reconcile, undefined);
   });
 
+  await t.test('an unverified ProjectNotification fetch refuses BOTH containers', async () => {
+    // Gated like Project and Document: the notification list decides whether a document has a
+    // parent, so an unverified one makes "not in the fetch" prove nothing here either. NOTHING is
+    // dropped in this run, so only the gate itself can produce the refusal.
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps,
+      // Reports no total at all — the shape sources.js never got to verify.
+      sources: stubSources({ fetchAllPages: async () => [] })
+    });
+
+    assert.strictEqual(summary.stages.documents.droppedUnresolvable, 0);
+    assert.match(summary.failures.join(' '), /ProjectNotification fetch was never verified/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+    assert.strictEqual(summary.reconcile, undefined);
+  });
+
+  await t.test('a document the seed could not place refuses the reconcile', async () => {
+    // The reviewer's probe. An eagle-api answering `searchResults: [], searchResultsTotal: 0` for
+    // ProjectNotification is internally consistent and clears every completeness gate, but every
+    // notification-parented document then resolves to nothing, is absent from `fetchedKeys`, and
+    // reads as surplus — under the ceiling, so it would purge quietly and exit 0.
+    const notificationId = '5efe366b3a147c00223be181';
+    const withNotifications = (list) => stubSources({
+      fetchAllPages: async (_base, dataset, opts) => {
+        const items = dataset === 'ProjectNotification' ? list : [];
+        if (opts && opts.onPage) await opts.onPage(items, items.length, items.length);
+        return items;
+      },
+      streamEagleDocuments: async (onPage) => {
+        await onPage([eagleDoc('doc1', matchedGuid), eagleDoc('pn1', notificationId)], 2, 2);
+        return { count: 2, total: 2 };
+      }
+    });
+
+    // One notification: pn1 is placed, nothing is unresolvable, the reconcile runs as normal.
+    const placed = makeDeps();
+    const ok = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...placed.deps, sources: withNotifications([{ _id: notificationId }]) });
+
+    assert.deepStrictEqual(ok.failures, []);
+    assert.strictEqual(ok.stages.documents.droppedUnresolvable, 0);
+    assert.deepStrictEqual(placed.purged.documents, ['207|stale']);
+
+    // Empty list: pn1 has nowhere to go, so nothing may be deleted anywhere.
+    const empty = makeDeps();
+    const refused = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...empty.deps, sources: withNotifications([]) });
+
+    assert.strictEqual(refused.stages.documents.droppedUnresolvable, 1);
+    assert.match(refused.failures.join(' '), /refused before any delete/);
+    assert.match(refused.failures.join(' '), /ProjectNotification/);
+    assert.deepStrictEqual(empty.purged, { documents: [], projects: [] });
+    assert.strictEqual(refused.reconcile, undefined);
+    assert.strictEqual(refused.failures.length ? 1 : 0, 1, 'a refused reconcile must exit 1');
+  });
+
+  await t.test('every surplus id reaches the log file and the audit trail', async () => {
+    // The console preview stops at 20; this file is what a reconcile is reconstructed from, so it
+    // carries every id in both containers — dry run included, where nothing was deleted.
+    const logFile = path.join(LOG_DIR, 'explicit.ndjson');
+    const previous = process.env.RECONCILE_LOG;
+    process.env.RECONCILE_LOG = logFile;
+    const events = [];
+    try {
+      const { deps } = makeDeps({ audit: { auditEvent: (_req, e) => events.push(e) } });
+      const live = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+        { ...deps, sources: stubSources() });
+
+      assert.strictEqual(live.reconcile.log, logFile, 'the path has to reach the summary');
+      assert.deepStrictEqual(
+        fs.readFileSync(logFile, 'utf8').trim().split('\n').map(l => JSON.parse(l)),
+        [
+          { label: 'documents', id: 'stale', partitionKey: '207', deleted: true },
+          { label: 'projects', id: 'eagle-gone', partitionKey: 'eagle-gone', deleted: true }
+        ]);
+
+      // The DELETE controllers' own event shape, not a second one invented for the seeder.
+      assert.deepStrictEqual(events, [
+        {
+          action: 'document.delete', targetType: 'document', targetId: 'stale',
+          projectId: '207', detail: { source: 'seed --reconcile' }
+        },
+        {
+          action: 'project.delete', targetType: 'project', targetId: 'eagle-gone',
+          projectId: 'eagle-gone', detail: { source: 'seed --reconcile' }
+        }
+      ]);
+
+      fs.rmSync(logFile);
+      const dry = makeDeps({ audit: { auditEvent: (_req, e) => events.push(e) } });
+      await seed(['--reconcile', '--only', 'projects,documents'],
+        { ...dry.deps, sources: stubSources() });
+
+      const rows = fs.readFileSync(logFile, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+      assert.deepStrictEqual(rows.map(r => r.id), ['stale', 'eagle-gone'],
+        'a dry run must still name every id it would delete');
+      assert.ok(rows.every(r => r.deleted === false));
+      assert.strictEqual(events.length, 2, 'a dry run deletes nothing, so it audits nothing');
+    } finally {
+      process.env.RECONCILE_LOG = previous;
+    }
+  });
+
   await t.test('a total that disagrees with what arrived is not a verified fetch', async () => {
     const { purged, deps } = makeDeps();
     const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
@@ -794,7 +912,10 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
       return { count: docs.length, total: docs.length };
     },
     fetchListLookup: async () => new Map(),
-    fetchAllPages: async () => [],
+    fetchAllPages: async (_base, _dataset, opts) => {
+      if (opts && opts.onPage) await opts.onPage([], 0, 0);
+      return [];
+    },
     loadBoundaries: () => []
   });
 
