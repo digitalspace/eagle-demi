@@ -39,7 +39,7 @@ const STAFF = { sub: 'kc-sub-1', preferred_username: 'push', realm_access: { rol
 const PROJECT_EAGLE_ID = '588511d0aaecd9001b825604';
 const DOC_EAGLE_ID = '58869abba4acd4014b81f55c';
 
-/** A raw Eagle project, as eagle-api stores it. */
+/** An Eagle project in the FLAT shape the public search endpoint returns. */
 function eagleProject(overrides = {}) {
   return {
     _id: PROJECT_EAGLE_ID,
@@ -49,6 +49,28 @@ function eagleProject(overrides = {}) {
     read: ['public', 'sysadmin', 'staff'],
     centroid: [-120.4, 50.6],
     ...overrides
+  };
+}
+
+/**
+ * The same project as eagle-api's Mongo actually stores it: content nested under the legislation
+ * block, with STALE top-level copies of `name` and `region` beside it. This is what the push
+ * sends — the flattening the search endpoint does is not in the push path.
+ */
+function rawMongoProject(blockOverrides = {}, topOverrides = {}) {
+  const { _id, read, ...content } = eagleProject();
+  return {
+    _id,
+    read,
+    _schemaName: 'Project',
+    currentLegislationYear: 'legislation_2018',
+    legislationYearList: [2018],
+    name: 'STALE TOP-LEVEL NAME',
+    region: '',
+    projectCAC: true,
+    cacEmail: 'cac@example.gov.bc.ca',
+    legislation_2018: { ...content, region: 'Thompson-Nicola', sector: 'Energy-Electricity', ...blockOverrides },
+    ...topOverrides
   };
 }
 
@@ -199,6 +221,130 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
     assert.strictEqual(res.statusCode, 500);
     assert.deepStrictEqual(indexWrites[1].rows, [{ id: 'd1', read: ['sysadmin'], isPublished: false }],
       'only the rows Cosmos accepted reach the index');
+  });
+
+  // The live defect, 2026-08-25: the push carries the RAW Mongo doc, whose content sits under
+  // `legislation_2018`, so `eagle-6a5920eaf0b65c54e12eb20a` landed on test with no name at all.
+  await t.test('the raw Mongo legislation block is flattened onto the row', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: rawMongoProject() }, user: STAFF
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(written.name, 'Nicomen Wind Energy');
+    assert.strictEqual(written.description, 'A wind farm near Nicomen');
+    assert.strictEqual(written.projectState, 'Under Construction');
+    assert.strictEqual(written.sourceSystem, 'eagle');
+    assert.strictEqual(written.id, `eagle-${PROJECT_EAGLE_ID}`);
+
+    // Top-level-only fields are carried over the block, not lost with it.
+    assert.deepStrictEqual(written.read, ['public', 'sysadmin', 'staff']);
+    assert.strictEqual(written.isPublished, true);
+    assert.strictEqual(written.cacEmail, 'cac@example.gov.bc.ca');
+  });
+
+  await t.test('a stale top-level copy does not shadow the legislation block', async () => {
+    // `name` and `region` exist in both places on a real project and the top-level copy is the
+    // stale one — so the block has to win, which rules out a plain `{...block, ...doc}`.
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: rawMongoProject() }, user: STAFF
+    }, mockRes());
+
+    assert.strictEqual(written.name, 'Nicomen Wind Energy');
+    assert.strictEqual(written.region, 'Thompson-Nicola');
+  });
+
+  await t.test('the Track-matched path flattens too', async () => {
+    // The push hits mergeTrackProject whenever the stored row has a Track payload, and that path
+    // does its own flatten. This Track record carries no name/description, so both can only come
+    // from the legislation block — drop the flatten and `name` is the stale top-level copy.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject({
+      sources: { track: { track_project_id: 207, epic_guid: PROJECT_EAGLE_ID } }
+    }));
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: rawMongoProject() }, user: STAFF
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(written.id, '207');
+    assert.strictEqual(written.name, 'Nicomen Wind Energy');
+    assert.strictEqual(written.description, 'A wind farm near Nicomen');
+    assert.strictEqual(written.region, 'Thompson-Nicola');
+  });
+
+  await t.test('a lone legislation block is used when currentLegislationYear cannot name it', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    // Missing outright, then naming a block the document does not carry. Either way there is
+    // exactly one candidate, so the answer is not ambiguous.
+    for (const top of [{ currentLegislationYear: undefined }, { currentLegislationYear: 'legislation_1996' }]) {
+      const res = mockRes();
+      await projectController.upsertFromEagle({
+        params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+        body: { doc: rawMongoProject({}, top) }, user: STAFF
+      }, res);
+
+      assert.strictEqual(res.statusCode, 200);
+      assert.strictEqual(written.name, 'Nicomen Wind Energy');
+      assert.strictEqual(written.region, 'Thompson-Nicola');
+    }
+  });
+
+  await t.test('an unresolvable block with no top-level name is a 400 and no write', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    let upserts = 0;
+    t.mock.method(projects, 'upsert', async () => { upserts++; });
+
+    // Ambiguous (two blocks, nothing naming one) and empty (the key is there, the block is not).
+    // A nameless row is worse than a rejected push: it is invisible in search and indistinguishable
+    // from a real one.
+    const ambiguous = rawMongoProject({}, {
+      name: '', currentLegislationYear: undefined, legislation_2002: { name: 'Older' }
+    });
+    const empty = rawMongoProject({}, { name: '', legislation_2018: null });
+
+    for (const doc of [ambiguous, empty]) {
+      const res = mockRes();
+      await projectController.upsertFromEagle({
+        params: { eagleId: PROJECT_EAGLE_ID }, query: {}, body: { doc }, user: STAFF
+      }, res);
+
+      assert.strictEqual(res.statusCode, 400);
+      assert.match(res.body.error, /no resolvable legislation block/);
+    }
+    assert.strictEqual(upserts, 0);
+  });
+
+  await t.test('an already-flat search-shaped doc is untouched', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: eagleProject({ region: 'Thompson-Nicola' }) }, user: STAFF
+    }, mockRes());
+
+    assert.strictEqual(written.name, 'Nicomen Wind Energy');
+    assert.strictEqual(written.region, 'Thompson-Nicola');
   });
 
   await t.test('a body whose doc._id disagrees with the path is a 400 and no write', async () => {

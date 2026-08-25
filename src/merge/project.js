@@ -56,6 +56,50 @@ const EAGLE_ONLY_FIELDS = [
   'overallProgress', 'code', 'nameSearchTerms'
 ];
 
+/**
+ * Fields that live ONLY at the top level of a Mongo project — identity, ACL, pins, CAC, featured
+ * documents. Everything else is content and belongs to the legislation block.
+ */
+const EAGLE_TOP_LEVEL_FIELDS = [
+  '_id', 'read', 'write', 'delete', 'pins', 'pinsRead', 'pinsHistory', 'links',
+  'featuredDocuments', 'projectCAC', 'cacMembers', 'cacEmail', 'projectCACPublished',
+  '_schemaName', 'currentLegislationYear', 'legislationYearList',
+  '_updatedBy', '_addedBy', '_deletedBy', '__v'
+];
+
+const LEGISLATION_KEYS = ['legislation_1996', 'legislation_2002', 'legislation_2018'];
+
+/**
+ * Normalise an Eagle project to the FLAT shape every rule below is written against: Mongo nests
+ * content under `legislation_<year>`, the public search hoists it, the push does not. The block
+ * wins over the top level — `region` is declared in both and the top-level copy is stale.
+ */
+function flattenEagleProject(doc) {
+  if (!doc) return doc;
+
+  const isBlock = k => k && doc[k] && typeof doc[k] === 'object' && !Array.isArray(doc[k]);
+  const present = LEGISLATION_KEYS.filter(isBlock);
+  const key = isBlock(doc.currentLegislationYear) ? doc.currentLegislationYear
+    : present.length === 1 ? present[0]
+      : null;
+
+  if (!key) {
+    // A doc that carries legislation keys but names none of them is a raw Mongo doc we failed to
+    // read. With no top-level name to fall back on it would land nameless and published, so reject
+    // rather than guess which block is current.
+    if (hasValue(doc.name) || !LEGISLATION_KEYS.some(k => k in doc)) return doc;
+    const err = new Error('Eagle project has no resolvable legislation block');
+    err.status = 400;
+    throw err;
+  }
+
+  const flat = { ...doc[key] };
+  for (const field of EAGLE_TOP_LEVEL_FIELDS) {
+    if (doc[field] !== undefined) flat[field] = doc[field];
+  }
+  return flat;
+}
+
 function hasValue(v) {
   if (v === undefined || v === null) return false;
   if (typeof v === 'string') return v.trim() !== '';
@@ -152,10 +196,13 @@ function resolveProjectAcl(eagle) {
  * @param {object}      [opts]
  * @param {string}      [opts.now]  ISO timestamp, injected for deterministic tests
  */
-function mergeTrackProject(track, eagle, opts = {}) {
+function mergeTrackProject(track, eagleRaw, opts = {}) {
   if (!track || !hasValue(track.track_project_id)) {
     throw new TypeError('[merge] a Track project with track_project_id is required');
   }
+
+  // Here, not at the call sites: the push hands over a raw Mongo doc and the seed a flat one.
+  const eagle = flattenEagleProject(eagleRaw);
 
   const now = opts.now || new Date().toISOString();
   const id = String(track.track_project_id);
@@ -227,7 +274,8 @@ function mergeTrackProject(track, eagle, opts = {}) {
  * it is identifiable for later reconciliation with Track. Keyed by its Eagle `_id`, since
  * there is no Track id to use.
  */
-function mergeEagleOnlyProject(eagle, opts = {}) {
+function mergeEagleOnlyProject(eagleRaw, opts = {}) {
+  const eagle = flattenEagleProject(eagleRaw);
   if (!eagle || !hasValue(eagle._id)) {
     throw new TypeError('[merge] an Eagle project with _id is required');
   }
@@ -352,7 +400,10 @@ function buildProjectIndex(projects) {
 module.exports = {
   SECURE_ROLES,
   TRACK_PRECEDENCE,
+  LEGISLATION_KEYS,
   EAGLE_ONLY_FIELDS,
+  EAGLE_TOP_LEVEL_FIELDS,
+  flattenEagleProject,
   hasValue,
   BC_BBOX,
   validCoordinates,

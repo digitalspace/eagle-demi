@@ -126,6 +126,7 @@ function loadTrackProjects() {
   return projects;
 }
 
+/** Already flat: the search endpoint hoists the current `legislation_*` block to the root. */
 function fetchEagleProjects(onPage) {
   return fetchAllPages(EAGLE_API_BASE, 'Project', { onPage });
 }
