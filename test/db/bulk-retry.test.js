@@ -84,6 +84,18 @@ test('bulkVerified retries a THROWN bulk failure', async (t) => {
     assert.ok(res.statusCounts.thrown >= 1);
   });
 
+  await t.test('failedIds names the rows still unwritten, for Upsert and Patch shapes alike', async () => {
+    const mixed = [
+      { operationType: 'Upsert', partitionKey: 'p', resource: { id: 'u1' } },
+      { operationType: 'Patch', partitionKey: 'p', id: 'p1', resourceBody: {} }
+    ];
+    const res = await bulkVerified('documents', mixed, {
+      maxAttempts: 1,
+      bulkFn: async (pending) => pending.map(() => ({ statusCode: 429 }))
+    });
+    assert.deepStrictEqual(res.failedIds, ['u1', 'p1']);
+  });
+
   await t.test('per-operation failures still retry exactly as before', async () => {
     let calls = 0;
     const res = await bulkVerified('chunks', ops(3), {

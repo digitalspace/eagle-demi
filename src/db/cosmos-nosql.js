@@ -389,7 +389,7 @@ async function bulkVerified(containerName, operations, opts = {}) {
   // The ids still unwritten, so a caller can act on the subset that DID land.
   return {
     succeeded, failed: pending.length, statusCounts, requestCharge,
-    failedIds: pending.map(op => op.id)
+    failedIds: pending.map(op => op.id ?? (op.resource && op.resource.id))
   };
 }
 
