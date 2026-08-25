@@ -132,8 +132,10 @@ per container and deletes nothing. Deletion is a single phase after every fetch 
 documents before projects — so a refusal stops it **before any delete**, in both containers at once.
 It refuses — exit 1, nothing removed — if `--only` dropped a stage, if `--limit-documents` was
 given, if the Project, ProjectNotification or Document fetch was not verified complete against
-eagle-api's `searchResultsTotal`, if any document resolved to neither a project nor a
-ProjectNotification, or if there is no `COSMOS_ENDPOINT` to enumerate the containers with: every
+eagle-api's `searchResultsTotal`, if a document that resolved to neither a project nor a
+ProjectNotification is already in Cosmos (a drop the fetch cannot account for is only at risk when
+there is a row to delete; drops absent from Cosmos are reported as `droppedUnresolvable` and do not
+refuse), or if there is no `COSMOS_ENDPOINT` to enumerate the containers with: every
 one of those makes the untouched remainder look like surplus.
 
 Every surplus id goes to an NDJSON file — one `{label, id, partitionKey, deleted}` row per surplus

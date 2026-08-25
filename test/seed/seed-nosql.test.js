@@ -646,7 +646,9 @@ test('seed --reconcile end to end', async (t) => {
     ...over
   });
 
-  const makeDeps = (over = {}) => {
+  const SEEDED_DOCS = [{ id: 'doc1', projectId: '207' }, { id: 'stale', projectId: '207' }];
+
+  const makeDeps = (over = {}, seededDocs = SEEDED_DOCS) => {
     const purged = { documents: [], projects: [] };
     const repos = {
       projects: {
@@ -660,10 +662,7 @@ test('seed --reconcile end to end', async (t) => {
         extractionRowsForProject: async () => [],
         bulkUpsertForProject: async (_pid, docs) => (
           { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } }),
-        listSeededIds: async () => [
-          { id: 'doc1', projectId: '207' },
-          { id: 'stale', projectId: '207' }
-        ]
+        listSeededIds: async () => seededDocs
       },
       boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
     };
@@ -765,44 +764,67 @@ test('seed --reconcile end to end', async (t) => {
     assert.strictEqual(summary.reconcile, undefined);
   });
 
-  await t.test('a document the seed could not place refuses the reconcile', async () => {
-    // The reviewer's probe. An eagle-api answering `searchResults: [], searchResultsTotal: 0` for
-    // ProjectNotification is internally consistent and clears every completeness gate, but every
-    // notification-parented document then resolves to nothing, is absent from `fetchedKeys`, and
-    // reads as surplus — under the ceiling, so it would purge quietly and exit 0.
-    const notificationId = '5efe366b3a147c00223be181';
-    const withNotifications = (list) => stubSources({
-      fetchAllPages: async (_base, dataset, opts) => {
-        const items = dataset === 'ProjectNotification' ? list : [];
-        if (opts && opts.onPage) await opts.onPage(items, items.length, items.length);
-        return items;
-      },
-      streamEagleDocuments: async (onPage) => {
-        await onPage([eagleDoc('doc1', matchedGuid), eagleDoc('pn1', notificationId)], 2, 2);
-        return { count: 2, total: 2 };
-      }
+  // The reviewer's probe. An eagle-api answering `searchResults: [], searchResultsTotal: 0` for
+  // ProjectNotification is internally consistent and clears every completeness gate, but every
+  // notification-parented document then resolves to nothing, is absent from `fetchedKeys`, and
+  // reads as surplus — under the ceiling, so it would purge quietly and exit 0.
+  const notificationId = '5efe366b3a147c00223be181';
+  const withNotifications = (list) => stubSources({
+    fetchAllPages: async (_base, dataset, opts) => {
+      const items = dataset === 'ProjectNotification' ? list : [];
+      if (opts && opts.onPage) await opts.onPage(items, items.length, items.length);
+      return items;
+    },
+    streamEagleDocuments: async (onPage) => {
+      await onPage([eagleDoc('doc1', matchedGuid), eagleDoc('pn1', notificationId)], 2, 2);
+      return { count: 2, total: 2 };
+    }
+  });
+
+  // pn1 already seeded, so a reconcile that ran would delete it.
+  const seededWithPn1 = [...SEEDED_DOCS, { id: 'pn1', projectId: notificationId }];
+
+  await t.test('a document the seed could not place, and that IS in Cosmos, refuses the reconcile',
+    async () => {
+      // One notification: pn1 is placed, nothing is unresolvable, the reconcile runs as normal.
+      const placed = makeDeps({}, seededWithPn1);
+      const ok = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+        { ...placed.deps, sources: withNotifications([{ _id: notificationId }]) });
+
+      assert.deepStrictEqual(ok.failures, []);
+      assert.strictEqual(ok.stages.documents.droppedUnresolvable, 0);
+      assert.deepStrictEqual(placed.purged.documents, ['207|stale']);
+
+      // Empty list: pn1 has nowhere to go and a row in Cosmos to lose, so nothing may be deleted
+      // anywhere.
+      const empty = makeDeps({}, seededWithPn1);
+      const refused = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+        { ...empty.deps, sources: withNotifications([]) });
+
+      assert.strictEqual(refused.stages.documents.droppedUnresolvable, 1);
+      assert.deepStrictEqual(refused.stages.documents.droppedIds, ['pn1']);
+      assert.match(refused.failures.join(' '), /refused before any delete/);
+      assert.match(refused.failures.join(' '), /1 of the 1 document\(s\)/);
+      assert.match(refused.failures.join(' '), /ProjectNotification/);
+      assert.deepStrictEqual(empty.purged, { documents: [], projects: [] });
+      assert.strictEqual(refused.reconcile, undefined);
+      assert.strictEqual(refused.failures.length ? 1 : 0, 1, 'a refused reconcile must exit 1');
     });
 
-    // One notification: pn1 is placed, nothing is unresolvable, the reconcile runs as normal.
-    const placed = makeDeps();
-    const ok = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
-      { ...placed.deps, sources: withNotifications([{ _id: notificationId }]) });
+  await t.test('a dropped document absent from Cosmos is reported, not refused', async () => {
+    // The prod case, 2026-08-25: 24 documents whose parent project the anonymous fetch does not
+    // return. None of them are in Cosmos, so there is no row a reconcile could delete and the
+    // refusal was pure over-strictness. SEEDED_DOCS holds no pn1.
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: withNotifications([]) });
 
-    assert.deepStrictEqual(ok.failures, []);
-    assert.strictEqual(ok.stages.documents.droppedUnresolvable, 0);
-    assert.deepStrictEqual(placed.purged.documents, ['207|stale']);
-
-    // Empty list: pn1 has nowhere to go, so nothing may be deleted anywhere.
-    const empty = makeDeps();
-    const refused = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
-      { ...empty.deps, sources: withNotifications([]) });
-
-    assert.strictEqual(refused.stages.documents.droppedUnresolvable, 1);
-    assert.match(refused.failures.join(' '), /refused before any delete/);
-    assert.match(refused.failures.join(' '), /ProjectNotification/);
-    assert.deepStrictEqual(empty.purged, { documents: [], projects: [] });
-    assert.strictEqual(refused.reconcile, undefined);
-    assert.strictEqual(refused.failures.length ? 1 : 0, 1, 'a refused reconcile must exit 1');
+    assert.strictEqual(summary.stages.documents.droppedUnresolvable, 1);
+    assert.deepStrictEqual(summary.stages.documents.droppedIds, ['pn1']);
+    assert.deepStrictEqual(summary.failures, [], 'a drop with nothing to lose must not refuse');
+    assert.deepStrictEqual(purged.documents, ['207|stale'],
+      'the reconcile proceeds and still removes the real surplus');
+    assert.strictEqual(summary.reconcile.documents.deleted, 1);
   });
 
   await t.test('every surplus id reaches the log file and the audit trail', async () => {
