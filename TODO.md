@@ -227,7 +227,7 @@ fed only by `deploy/eagle-search-sync` + `CronJob/eagle-search-reindex`; `eagle-
 (Function, `INGEST_URL` = eagle-search-api-test, queues empty) is search-only. Dev has no
 eagle-search at all and still serves its site from the OpenShift `eagle-public` pod.
 
-- [ ] **5.1 New repo `digitalspace/eagle-edge` owns the shared edge** (decided 2026-08-25: one Front
+- [x] ~~**5.1 New repo `digitalspace/eagle-edge` owns the shared edge**~~ Done 2026-08-25 (`6fd2a19`, what-if zero drift). Kept for the record: (decided 2026-08-25: one Front
       Door profile per env, no second base fee; eagle-admin and later frontends join as `sites[]`
       entries; eao-nginx retires too so cannot be the home). Moves from `eagle-search/azure/`:
       `modules/front-door.bicep` (profile `eagle-edge-test`, endpoints `eagle-public-test`,
@@ -237,15 +237,15 @@ eagle-search at all and still serves its site from the OpenShift `eagle-public` 
       changes before the eagle-search copy is deleted. Later: `eagle-edge-prod` + UAMI
       `eagle-search-identity-prod` (referenced by `eagle-demi/azure/ai-search.prod.bicepparam:29`)
       move in from `bcgov/eagle-public`.
-- [ ] **5.2 Docs out of the repo.** Wiki `Eagle-Search-Archive` (eagle-dev-guides): rollback recipe,
+- [x] ~~**5.2 Docs out of the repo.**~~ Done 2026-08-25 (wiki `09654c6`, `94d1f16`). Wiki `Eagle-Search-Archive` (eagle-dev-guides): rollback recipe,
       index schema decisions, propagation lags, INGEST_KEY whole-collection-PUT hazard, 2026-08-20
       cutover record. Fix `Search-Cutover.md` citations of `check-acl.js`/`check-frontend.py`/
       `deploy-infra.sh` (DEMI's `probe-acl.js` is the gate now) and the dead
       `docs/azure-test-migration.md` link in `eagle-demi.wiki/Azure-Environments.md:30`.
-- [ ] **5.3 Last eagle-search PR**: delete the moved modules + `deploy-staging-api.yaml` +
+- [x] ~~**5.3 Last eagle-search PR**~~ #25 merged 2026-08-25 (`4597aa6`), reviewer minors fixed; also fails the bicep gate on `Warning BCP`.: delete the moved modules + `deploy-staging-api.yaml` +
       `deploy-staging-worker.yaml`, README pointer to the wiki page and eagle-edge. Drop local
       branch `fix/disable-sync-liveness-probe-in-test` (cluster already has the probe off).
-- [ ] **5.4 Retire the test estate.** OpenShift `6cdc9e-test`: `helm uninstall eagle-search`,
+- [ ] **5.4 Retire the test estate.** OpenShift half DONE 2026-08-25 (helm uninstall, BC/IS/secret/CMs, dev secret; 0 `eagle-search` objects remain); eao-nginx #44 merged (`3064b3a`, sentinel, lands on next test deploy). Azure half awaits Daniel's go. Was: OpenShift `6cdc9e-test`: `helm uninstall eagle-search`,
       `BuildConfig/eagle-search`, `ImageStream/eagle-search`, `secret/eagle-search-ingest`, the 9
       `eagle-search-{7,8,9}-*` ConfigMaps + build pods; dev `secret/eagle-search-extract-queue`.
       Azure: `eagle-search-api-test`, `eagle-search-test` + `pe-eagle-search-test`,
