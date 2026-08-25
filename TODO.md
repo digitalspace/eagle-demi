@@ -16,9 +16,11 @@ gone — nothing below points at an archive.
 
 ## Facts that supersede anything found elsewhere
 
-1. **Corpus is frozen eagle-DEV, not prod** (per-year `datePosted` counts, 2026-08-24). Newest
-   document 2026-06-15; 12 documents from 2026 vs prod's 899. Prod eagle-search is not a valid
-   oracle for raw totals until the corpora share a source.
+1. **Corpus is PROD eagle-api as of 2026-08-25 19:14 UTC** (re-seed, §2.1): 392 projects /
+   61,587 documents in Cosmos, index 61,587. ~~frozen eagle-DEV~~ — superseded. Prod eagle-search
+   is now a valid oracle: `search-diff.js` 68 PASS / 3 DIFF, the 3 being the documented
+   chunk-metadata-filter difference (controls dropped in eagle-public, 2.2). New prod documents
+   (1,059) arrive `contentExtracted:false` for the GPU box (`192.168.5.99`).
 2. **`demi-cosmos-test` backup: Periodic, 240-min interval, 8-hour retention.** `chunks`
    (1,128,733 rows, ~3.95 GB) is the only extracted copy; the index is a derived copy with an
    untested restore path; ~1,496 source PDFs 404 in the object store. **Destructive ops on
@@ -59,9 +61,9 @@ gone — nothing below points at an archive.
 |---|---|
 | Nothing — do it | 2.1 re-seed phases 0-2 (decided, in progress); 3.6 small items; 5.6 disable the two eagle-public test workflows |
 | Daniel decides | 2.2 budget; 2.3 proponentId; 2.4 anonymous surface; 5.6 retire dev whole or keep pod, and when the eagle-public AFD rollback pod can go; 5.7 `eagle-search-prod` search service delete (~100 CAD/mo, condition already met) |
-| Needs SSH tunnel | 3.3 index widening; 3.5 |
+| Needs SSH tunnel | nothing open |
 | Someone else / long-lead | 1.1, 1.2 rotations at source; 4.1 prod role assignments; 4.4/4.5 eao-nginx + eagle-public prod tags; `demi.eao.gov.bc.ca` DNS; Track feed credential |
-| After the re-seed (2.1) | 3.3 analyzer + `isFeatured`/`documentSource`; a fully green differ; 3.7(d) reconcile |
+| Unblocked by 2.1 | — |
 
 ---
 
@@ -72,11 +74,12 @@ gone — nothing below points at an archive.
 - [ ] **1.2 Rotate `RPROXY_EGUIDE_PASSWORD` — low priority, do NOT delete the route** (people use
       `/eguide`, gate holds nothing confidential). Repo secret on `bcgov/eao-nginx`,
       `deploy-to-prod.yaml:138-139`.
-- [ ] **1.3 Rotate `ADMIN_API_KEY`** (value passed through the 2026-08-13 incident and every
-      `probe-acl.js` run since). Three targets, rotate all before restarting anything or the
-      extractor 401s: `demi-app-secrets` (6cdc9e-test, writable now), App Service (`az` works again),
-      `gpu-extractor.env` on the GPU box (`192.168.5.99`, host `doc-ocr-processor`; `.109` was wrong). Then restart
-      `gpu-extractor` and `gpu-ingest`.
+- [x] ~~**1.3 Rotate `ADMIN_API_KEY`.**~~ Done 2026-08-25: OpenShift `demi-app-secrets` (source of
+      truth — nothing mounts it, only `deploy-infra.sh` reads it, so skipping it would revert the
+      key on the next infra deploy) → GPU box `/root/gpu-extractor/gpu-extractor.env`
+      (`DEMI_ADMIN_KEY`; also `DEMI_API` repointed from the dead `demi-api-dev` host to test) → App
+      Service. App Service needed stop/start before the new key answered 200 (warm worker). Auth
+      accepts one key only, so a window is structural; the only client (`gpu-ingest`) was idle.
 - ACL probe exists and passes: `ADMIN_API_KEY=… node src/scripts/probe-acl.js`, ~7 min, 26/26 on
   2026-08-24. Exit 0 pass, 1 missed prediction, 2 aborted, 3 inconclusive leg (not a pass). Leaves
   one revoked key record per run by design. Re-run after any re-seed; the
@@ -85,7 +88,7 @@ gone — nothing below points at an archive.
 
 ## 2. Decisions — Daniel
 
-- [ ] **2.1 Re-seed from PROD eagle-api — decided 2026-08-25, in progress.** Source = prod
+- [x] ~~**2.1 Re-seed from PROD eagle-api.**~~ **DONE 2026-08-25.** Record kept below. Source = prod
       (358 projects / 61,611 documents anonymous, `isFeatured` 337, `documentSource`); eagle-dev-only
       leftovers DELETED with chunks + index rows. Plan `/root/.claude/plans/curried-chasing-eich.md`.
       - **Cannot run as-is, measured 2026-08-25:** `seed/transform.js:139-145` resets
@@ -101,11 +104,31 @@ gone — nothing below points at an archive.
         Eagle-only projects (Dawson Creek Water Supply, Lawyers-Ranch, Baptiste Nickel, m.ah a
         temEEwuh Solar) will arrive as `eagle-<id>` rows. Id files kept in the session scratchpad
         `preflight/`. Public-visible deltas only.
-      - [ ] Phase 1 PR `feat/seed-preserve-and-reconcile`: preserve the four `content*` fields on
-        existing rows (per-partition read before upsert); `--reconcile` flag deleting through the
-        controllers' own delete helpers (index + chunks + row); `isFeatured` into `transform.js`
-        (Cosmos only — index side stays 3.3); tests; README.
-      - [ ] Phase 2 run over the tunnel: `alwaysOn` on; dry run `--reconcile` must match Phase 0;
+      - [x] Phase 1 #153 merged 2026-08-25, reviewer PASS after three rounds (two MAJORs each
+        about the reconcile deleting on a consistent-but-wrong fetch): extraction fields preserved
+        per partition; `--reconcile` deletes via the shared `helpers/purge.js`, refused unless
+        Project + Document + ProjectNotification totals all verify, `droppedUnresolvable` = 0, and
+        surplus ≤ max(50, 2%) (`--max-surplus <n>` overrides); every surplus id to
+        `/home/reconcile-<ts>.ndjson`; live deletes audited. `isFeatured` in Cosmos only.
+      - Dry runs 2026-08-25 (build `cc5523e`, `d229388`): `preserved 60,570`, `built 61,587`,
+        `droppedUnresolvable 24` (6 unpublished prod projects, none of the 24 in Cosmos — gate
+        relaxed in #155). Snapshot `/home/backup-pre-reseed.ndjson` (393 + 60,578 rows, md5
+        `be517963…`, local copy in the session scratchpad). **Dry run 2 lied:** `listSeededIds`
+        returned 1,000 of 60,578 (cross-partition + ORDER BY drops the continuation token — the
+        same SDK trap as the old boundaries/documents lists), so surplus read 0 not 8; fixing with
+        a COUNT guard before any live run. Projects surplus is 3, not 0: eagle-dev test junk
+        `eagle-69d68d…` "test", `eagle-69fcde…` "ABC test project", `eagle-6a5923…`
+        "testtesttest" — delete is correct.
+      - [x] Phase 2 LIVE 2026-08-25 19:06-19:14 UTC (build `4436410`): written 392 projects /
+        61,587 documents / 281 boundaries, `writeFailed 0`, `preserved 60,570`, deleted 8 documents
+        + 3 projects (log `/home/reconcile-2026-08-25T19:06:39.222Z.ndjson`). After: `/db/stats`
+        392/61,587; `close-unpublished-track-projects.js` dry run `matched 0`; wildfire sync 391
+        projects; `probe-acl.js` 26/26; chunks intact (caribou 27,932). **Trap hit:** the README
+        tunnel recipe exports only `COSMOS_*` + identity vars, so `SEARCH_ENDPOINT` was unset and
+        every purge's index delete was a silent no-op (11 rows lingered in the index; replayed by
+        hand with `SEARCH_*` exported, +157 chunk entries). Fix the recipe: export `SEARCH_*` too,
+        and make `--reconcile --live` refuse when ai-search is unconfigured.
+      - Was: Phase 2 run over the tunnel: `alwaysOn` on; dry run `--reconcile` must match Phase 0;
         `--live --reconcile` under nohup; then counts (Project ≈ 358−closed, Document ≈ 61.6k, not
         61k+60k), `/admin/index-progress`, `close-unpublished-track-projects.js` dry run `matched 0`,
         `POST /admin/sync/wildfires`, `search-diff.js` green, `probe-acl.js` 26/26,
@@ -148,51 +171,107 @@ gone — nothing below points at an archive.
       copy safe (stale wildfire stats stripped at read). **Merge order:** CI deploys code only, app
       settings are a hand PUT — set `ENRICHMENT_SOURCES=wildfire` on `demi-api-test` BEFORE merging
       the PR, or the deploy hides the test panel. Blocked on fact 5 (`az login`).
-- [ ] **3.3 Index widening — one tunnel session, app LAST.** `eagle-query.js` reads field metadata
-      from the committed `azure/search/indexes/*.json` at require time, so naming a field there
-      before the live index has it turns every filtered query into a 400 answered as 502. Order:
-      index PUT → datasource PUT by hand (`demi-documents-ds` `container.query` is an explicit
-      column list) → backfill → indexer reset + run → app. Contents:
-      - `isFeatured` (exists nowhere: add to `seed/transform.js`, index, drop the note at
-        `eagle-query.js:17`), `documentSource` (written by `transform.js:126`, missing from index),
-        `proponentId` (2.3). Data only arrives via 2.1 — pair with it.
-      - Filename analyzer: `keywords=mine` returns 0 on demi, 1,686 on prod; `documents.json:53`
-        uses `en.microsoft`, eagle-search a PatternTokenizer. Recreate + refill — pair with 2.1.
-      - `content: retrievable: false` on `chunks` — one PUT, no rebuild, but trades away semantic
-        ranking (`content` is the sole `prioritizedContentFields` entry; measured +0.064 recall@1,
-        +0.074 MRR on 78 labels) and highlighting. Choose; today only the explicit `select` in
-        `searchChunks` keeps chunk text out of responses.
-      - Rebuild rule (`azure/search/README.md`): add field / `retrievable` = no rebuild; rename,
-        type, `searchable`/`filterable`/`sortable`/`facetable`, analyzer = drop-and-refill.
+- [x] ~~**3.3 Index widening.**~~ DONE 2026-08-25 (#158 `d27718d`). AFTER: `mine` 1,686 (= prod),
+      `and[isFeatured]=true` 330 (prod 331), `documentSource=COMMENT` 954 (prod 956), sort honoured.
+      Additive only after design review: `isFeatured` (sortable — eagle-public sorts its ★ column),
+      `documentSource`, and `fileNameTokens` (new field with eagle-search's PatternTokenizer
+      `filename` analyzer) instead of re-analyzing `documentFileName`, which is a rebuild; chunk
+      sortability and `content: retrievable:false` (§3.9) rejected — no consumer, and retrievable
+      trades away measured semantic gains. Live: PUT index (`allowIndexDowntime=true` needed for
+      the analyzer; `stored:false` rejected on 2024-07-01), PUT `demi-documents-ds`, indexer reset →
+      61,587 / 0 failed, grant revoked. BEFORE: `mine` 0, `and[isFeatured]=true` 61,587 dropped.
+      After #158 deploys expect `isFeatured` ≈ 331, `documentSource=COMMENT` ≈ 956, `mine` ≫ 0.
+      `proponentId` waits for 3.7 (empty filterable field = silent zero-row 200).
 - [x] ~~**3.4 Delete the old `demi-*` indexes + indexers.**~~ Done 2026-08-24 over the tunnel:
       grant Search Service Contributor at service scope, `DELETE` 3 indexers then 3 indexes, revoke,
       verify identity back to exactly Search Index Data Contributor. `demi-*-ds` data sources kept.
       Live search re-probed: 3 datasets answer. Rollback is now refill-from-Cosmos
       (`azure/search/README.md`). Two traps: the App Service redeploy on merge kills the SSH tunnel
       mid-run, and `pkill -f ssh` on this box kills the caller's own shell.
-- [ ] **3.5 Denormalised `projectIsPublished` on documents** — lossless design, covers cascade
-      partial failure; #139 removed the urgency. Traps: datasource SELECT first; `filterFor` third
-      arg opt-in (missing OData field = 400); predicate and cascade-removal in the SAME release.
-      Backfill first, or ship `(NOT IS_DEFINED(c.projectIsPublished) OR c.projectIsPublished = true)`.
+- [x] ~~**3.5 Denormalised `projectIsPublished`**~~ — STRUCK 2026-08-25; replacement shipped in #159
+      (`f7e9884`, reviewer PASS): seed invariant + `constrainToProject` at transform, 409 on null
+      parent, partial cascade writes what landed. Record: Design review: the flag would ride the same bulk PATCH that fails mid-cascade
+      (`repositories/documents.js:262-290`), so "covers partial failure" was false; every other
+      sequence is closed (#139, #149, `PUT /documents/:id/published` 409). The one real gap: the
+      seed preserves Eagle `read[]` per document with no cross-entity check, so a public document
+      under a non-public project seeds silently (it did — the 2026-08-24 "34 projects + 18
+      documents" fix). Do instead: pre-write invariant in `seed-nosql.js` `verifyItems` (public doc
+      whose project is not public → failure, dry run catches it), fix = `constrainToProject` at
+      `transform.js:~104`; plus two one-liners — `document.js:~378` drop `&& parentProject` (null
+      parent must 409, not publish), `project.js:~235` write the succeeded cascade rows' ACLs before
+      returning 500. Correct wiki `Sync-Architecture.md:90-103` (still says both cascade defects open).
 - [ ] **3.6 Small, bundle opportunistically:**
-      - Trim 15-25 line comment blocks on the way past — `src/controllers/search.js` worst. A
-        comment is the non-obvious why in a line or two; anything longer is a wiki page.
-      - `basicPublishingCredentialsPolicies allow=false` is declared (#146) not applied — takes a
-        hand `deploy-infra.sh test`. Read truth off `az resource show`, never the template.
+      - [x] ~~Trim 15-25 line comment blocks — `src/controllers/search.js` worst.~~ #154 (`ebdd3a0`):
+        search.js 775→282 comment lines, eagle-query.js 372→205, code byte-identical; narrative in
+        wiki `Search-and-Retrieval#Search-controller-decisions`. Reviewer BLOCKED on a harness bug
+        (diff too large for argv) — verified by comment-stripped hash instead.
+      - [x] ~~`basicPublishingCredentialsPolicies allow=false` declared, not applied.~~ Applied
+        2026-08-25 by `az resource update` on `scm` + `ftp` (both `false` live), not a full Bicep
+        deploy: `deploy-infra.sh test --what-if` showed 27 modifies, only this one functional, plus
+        two unprovable re-PUT risks (shared private link status, `wildfires` spatial index types).
+        Output in the session scratchpad `whatif.txt`. `create-remote-connection` still works (AAD).
       - Unused Cosmos index paths (wildfires spatial, projects composite, five scalars): verified
         removable, do it only if a Bicep deploy happens for another reason.
-      - Grant `demi-cicd-test` what-if at RG scope (role `b9331d33-8a36-4f8c-b097-4f54124fdb44`),
-        record the baseline-noise list.
-- [ ] **3.7 Eagle → DEMI push (registry work), in order.** DEMI side DONE and unused:
-      `PUT /api/projects/<trackProjectId>` under `authMiddleware` + `requireWrite`; DEMI mints the key
-      (wiki `Track-Feed-Request`). Greenfield is eagle-api: 14 write entry points
-      (`api/controllers/project.js` ×8, `api/controllers/document.js` ×6), no outbound HTTP pattern
-      to copy (`axios` installed, imported nowhere). Three decisions first: (1) fire-and-forget +
-      reconcile, or sync — a DEMI outage must never fail an Eagle write; (2) the 60,578 existing
-      rows only converge after 2.1 — one plan; (3) `findOneAndDelete` leaves no tombstone, so the
-      delete push is the only signal. Then (d) nightly reconcile + drift alarm modelled on
-      `eagle-search/worker/full-sync.js:120-164`. Track feed: still needs the credential and Track's
-      direction; namespace not probeable (wildcard router, all 503).
+      - #161 review minors (flatten): see report `eagle-demi-724a97b7.md` — three small ones on
+        `merge/project.js:83-86` and the swagger 400 wording.
+      - #158 review minors: the two new Document response fields (`search.js:~488`) have no test;
+        `ai-search.test.js:~461` lost its pin on leg-one `searchFields`; datasource-columns test
+        should assert the `filename` analyzer is defined, not just referenced.
+      - ~~Seed leftovers~~ #157 (`71d59b4`). One minor left: the production default
+        `searchReady = aiSearch.config().configured` (`seed-nosql.js:~284`) has no test — every
+        test injects `deps.searchReady`.
+      - `_sql.fetchAll` still passes `maxItemCount`, so any future cross-partition + ORDER BY caller
+        silently truncates at 1,000 (SDK `LegacyFetchImplementation` drops `x-ms-continuation`);
+        only the reconcile sites carry a COUNT guard. Decide: drop `maxItemCount` in `fetchAll`
+        (SDK's own `fetchAll()` is immune) vs keep the unbounded-read protection.
+      - ~~Grant `demi-cicd-test` what-if at RG scope (role `b9331d33-…`).~~ **GUID was wrong** —
+        `b9331d33-8a36-4f8c-b097-4f54124fdb44` is Managed Application Publisher Operator (granted
+        and reverted 2026-08-25). No general built-in role carries `deployments/whatIf/action`; it
+        needs a custom role, which c4b0a8 ABAC leaves to a human. Park; baseline-noise list is in
+        the session `whatif.txt` (27 modifies, all ARM noise except the two flagged re-PUT risks).
+- [ ] **3.7 Eagle → DEMI push — (c) DONE 2026-08-25, (d) reconcile open.** Decisions: fire-and-forget
+      from eagle-api after its own write (never fails the Eagle write), nightly reconcile (d) is the
+      backstop, deletes NOT pushed (reconcile catches them; project delete is a soft delete anyway),
+      history converges via the seed. Design (Opus, verified): eagle-api has no shared save funnel
+      (`Utils.recordAction` never sees the doc, 113 call sites), so one helper
+      `api/helpers/demiPush.js` (global `fetch`, not the unused `axios`; 10 s timeout, 2 attempts,
+      no retry on 4xx, never throws) + **14** unawaited call sites — 7 project (`protectedPost/Put/
+      Publish/UnPublish`, three `protectedExtension*` which need a re-read after `updateOne`), 7
+      document (incl. `feature/unfeatureDocument`, missed by the old count of 14 that included the
+      two deletes). Body = raw Eagle doc (+ `List` labels for documents), so DEMI's `merge/project.js`
+      + `seed/transform.js` stay the only mapper. DEMI grows `PUT /api/eagle/projects/:eagleId` and
+      `PUT /api/eagle/documents/:eagleId` (authMiddleware + requireWrite): resolve by `eagleId`
+      (`projects.getByEagleId` exists), merge/transform with `existing` (else extraction resets and
+      `sources.wildfire` is wiped — same traps as the seed), `constrainToProject`, cascade extracted
+      from `updateProject` (never copied), `writeAcls` only on an `isPublished` transition, missing
+      parent → 404. Key: `POST /admin/api-keys {roles:['demi-admin'], allowWrite:true}` — no
+      `demi-service-write` role exists; interim, 90-day expiry, Keycloak client before prod.
+      - [x] (c1) eagle-api #851 merged 2026-08-25 (`aa307ff`, 663/663, reviewer PASS after two
+        rounds — List lookup scoped to `_schemaName: 'List'`, dark unless both env vars set, every
+        call site tested; also fixes the pre-existing `projId.value` guard that 400ed every
+        `protectedExtensionAdd/Delete`). Review minors left: parameterise the secret name in the
+        chart, test the `doc && doc._id` guard. — helper + 14
+        sites + tests + Helm (`DEMI_API_BASE` in `values-test.yaml`, `DEMI_API_KEY` from secret
+        `demi-push-secret`, optional). In review; dark until the test deploy is dispatched.
+      - [x] (c2) DEMI #160 merged 2026-08-25 (reviewer PASS; minors fixed: `ownRead` kept on push,
+        old-partition row deleted on a project move). Two routes, cascade extracted to
+        `cascadeProjectVisibility`, swagger, wiki `Connecting-an-Application-to-DEMI` section.
+      - [x] (c3) DONE 2026-08-25. Key minted (registry id `b319b93a1bf35206`, `demi-admin`, write,
+        90-day expiry — diarise) into OpenShift secret `demi-push-secret` in `6cdc9e-test`;
+        eagle-api `v2.10.67` on test (`v2.10.66` burned by the ci-latest race, see memory). Proof:
+        `PUT /api/project/6a5920eaf0b65c54e12eb20a` (eagle-test "Test Test Test", via the
+        `SMOKE_API_KEY` internal-service path) → DEMI row `eagle-6a5920…` `updatedAt` 21:21:03 →
+        21:31:50 with the pushed description, no `[demiPush]` log lines; reverted the same way.
+        Discriminators: no key → 401, push key + mismatched id → 400. **Defect surfaced:** the
+        pushed row lost `name`/`description` — eagle-api's Mongo project nests content under
+        `legislation_<year>` (+ `currentLegislationYear`) and only the public search flattens it,
+        so the raw-doc push needs flattening in DEMI's handler (fix PR `fix/eagle-push-flatten`).
+        Fixed in #161 (`3cfd408`, reviewer PASS after one MAJOR round); re-push verified 23:45 UTC —
+        row carries `name`, `description`, `region`, `sourceSystem: 'eagle'`.
+      - [ ] (d) nightly reconcile + drift alarm modelled on `eagle-search/worker/full-sync.js:120-164`
+        (archived repo, readable locally) — the only thing that catches a hard-deleted document.
+      - Egress verified 2026-08-25: `deploy/eagle-api` in `6cdc9e-test` reaches
+        `demi-api-test.azurewebsites.net/api/config` (200).
 
 ## 4. Prod promotion — ordered gates
 
@@ -273,7 +352,11 @@ eagle-search at all and still serves its site from the OpenShift `eagle-public` 
       DEMI `/map` and eagle-public AFD host 200.
 - [x] ~~**5.5 Archive the repo**~~ Archived 2026-08-25 (`gh repo archive`, isArchived true). Remote branch `fix/disable-sync-liveness-probe-in-test` left behind, harmless. Prod worker keeps running from `6cdc9e-tools/eagle-search:prod`; rollback needs no
       redeploy.
-- [ ] **5.6 eagle-public OpenShift dev/test.** Test: ~~delete the three preview releases~~
+- [ ] **5.6 eagle-public OpenShift dev/test — git side DONE 2026-08-25, cluster side WAITS.**
+      Daniel 2026-08-25: nothing more deleted in OpenShift until he says so (flat-rate, only
+      rollback options lost). Azure workflows are on `develop` (#804 admin-merged; dispatch-only,
+      `deploy-to-test.yaml` stays as the tag/release factory it needs); preview workflows retired
+      (#806). Test: ~~delete the three preview releases~~
       `-feat-typesense-angular21`, `-hotfix-pcp-engage` and stale `Service/epic-public` deleted
       2026-08-25; `eagle-public-feat-azure-hosting-mainline` (2 days old, the Azure branch) kept —
       Daniel decides. The main `eagle-public` (Helm rev 70,
