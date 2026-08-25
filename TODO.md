@@ -256,9 +256,10 @@ eagle-search at all and still serves its site from the OpenShift `eagle-public` 
 - [ ] **5.5 Archive the repo** (GitHub archived=true; Actions stop). Update `/root/repos/CLAUDE.md`
       repo table. Prod worker keeps running from `6cdc9e-tools/eagle-search:prod`; rollback needs no
       redeploy.
-- [ ] **5.6 eagle-public OpenShift dev/test.** Test: delete the three preview releases
-      (`eagle-public-feat-azure-hosting-mainline`, `-feat-typesense-angular21`,
-      `-hotfix-pcp-engage`) + stale `Service/epic-public` now; the main `eagle-public` (Helm rev 70,
+- [ ] **5.6 eagle-public OpenShift dev/test.** Test: ~~delete the three preview releases~~
+      `-feat-typesense-angular21`, `-hotfix-pcp-engage` and stale `Service/epic-public` deleted
+      2026-08-25; `eagle-public-feat-azure-hosting-mainline` (2 days old, the Azure branch) kept —
+      Daniel decides. The main `eagle-public` (Helm rev 70,
       the AFD rollback target) and `NGINX__EPIC__PROXY__PUBLIC` go when the rollback can go — Daniel
       decides. Keep `Route/eagle-public` (Keycloak host). Disable `deploy-to-test.yaml` +
       `preview-branch-in-test.yaml`. Dev: site IS the pod — retire dev whole (with the orphan
