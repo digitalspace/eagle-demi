@@ -134,6 +134,14 @@ given, if either the Project or the Document fetch was not verified complete aga
 `searchResultsTotal`, or if there is no `COSMOS_ENDPOINT` to enumerate the containers with: every
 one of those makes the untouched remainder look like surplus.
 
+There is also a ceiling on how much one reconcile may delete, because a fetch verified only against
+itself is not enough — an eagle-api answering `searchResults: [], searchResultsTotal: 0` is
+internally consistent and would make the entire corpus surplus. Each container refuses when its
+surplus exceeds `max(50, 2% of the rows in it)`; the refusal names the ceiling and the surplus, and
+stops **both** containers before any delete, in a dry run too. `--max-surplus <n>` raises the
+ceiling to `n` for the run — the operator asserting the loss really is that big. It requires
+`--reconcile` and a positive integer.
+
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the
 exception — the high-water mark cannot see them, so the application removes index entries explicitly.

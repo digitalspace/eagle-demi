@@ -536,6 +536,22 @@ test('--reconcile refuses anything that narrows the fetch', async (t) => {
     assert.throws(() => parseArgs(['--reconcile', '--limit-documents', '10']),
       /cannot run with --limit-documents/);
   });
+
+  await t.test('--max-surplus needs --reconcile and a positive integer', () => {
+    assert.strictEqual(parseArgs(['--reconcile', '--max-surplus', '70000']).maxSurplus, 70000);
+    assert.strictEqual(parseArgs(['--reconcile']).maxSurplus, null);
+    assert.throws(() => parseArgs(['--max-surplus', '10']), /needs --reconcile/);
+    assert.throws(() => parseArgs(['--reconcile', '--max-surplus', '0']),
+      /needs a positive integer/);
+    assert.throws(() => parseArgs(['--reconcile', '--max-surplus', '-1']),
+      /needs a positive integer/);
+    assert.throws(() => parseArgs(['--reconcile', '--max-surplus', '1.5']),
+      /needs a positive integer/);
+    assert.throws(() => parseArgs(['--reconcile', '--max-surplus', 'lots']),
+      /needs a positive integer/);
+    assert.throws(() => parseArgs(['--reconcile', '--max-surplus']),
+      /needs a positive integer/);
+  });
 });
 
 test('reconcileContainer — the surplus set', async (t) => {
@@ -756,6 +772,117 @@ test('seed --reconcile end to end', async (t) => {
     assert.match(summary.failures.join(' '), /--reconcile needs COSMOS_ENDPOINT/);
     assert.strictEqual(summary.reconcile, undefined);
     assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+});
+
+test('--reconcile refuses a surplus over the ceiling', async (t) => {
+  const track = trackProjects.filter(p => [207, 373].includes(p.track_project_id));
+  const matchedGuid = track.find(p => p.track_project_id === 207).epic_guid;
+  const eagleDoc = (id) => ({
+    _id: id, project: matchedGuid, displayName: `Doc ${id}`,
+    internalURL: `etl/x/${id}.pdf`, internalSize: '1024', internalExt: '.pdf', read: ['public']
+  });
+
+  // Every fetch here is INTERNALLY CONSISTENT — the page count always equals the reported
+  // searchResultsTotal — so the verification gate passes and only the ceiling can stop a delete.
+  const stubSources = (docs) => ({
+    EAGLE_API_BASE,
+    loadTrackProjects: () => track,
+    fetchEagleProjects: async (onPage) => { await onPage([], 0, 0); return []; },
+    streamEagleDocuments: async (onPage) => {
+      await onPage(docs.map(eagleDoc), docs.length, docs.length);
+      return { count: docs.length, total: docs.length };
+    },
+    fetchListLookup: async () => new Map(),
+    fetchAllPages: async () => [],
+    loadBoundaries: () => []
+  });
+
+  const makeDeps = (docRows, projRows) => {
+    const purged = { documents: [], projects: [] };
+    const repos = {
+      projects: { upsert: async (p) => p, listEagleOnlyIds: async () => projRows },
+      documents: {
+        extractionRowsForProject: async () => [],
+        bulkUpsertForProject: async (_pid, d) => (
+          { succeeded: d.length, failed: 0, statusCounts: { 201: d.length } }),
+        listSeededIds: async () => docRows
+      },
+      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
+    };
+    const purge = {
+      purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); },
+      purgeProject: async (row) => { purged.projects.push(row.id); }
+    };
+    return { purged, deps: { repos, purge, cosmosReady: true, now: NOW } };
+  };
+
+  // The reviewer's probe: eagle-api answers empty for both datasets and every gate above it
+  // passes, so the whole corpus reads as surplus.
+  const probeDocs = Array.from({ length: 61611 }, (_, i) => ({ id: `d${i}`, projectId: '207' }));
+  const probeProjects = Array.from({ length: 4 }, (_, i) => ({ id: `eagle-${i}`, eagleId: `e${i}` }));
+
+  await t.test('an empty upstream purges nothing and exits 1', async () => {
+    const { purged, deps } = makeDeps(probeDocs, probeProjects);
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources([]) });
+
+    assert.deepStrictEqual(purged, { documents: [], projects: [] },
+      'a self-consistent empty fetch used to delete the entire corpus');
+    assert.match(summary.failures.join(' '),
+      /documents surplus 61611 exceeds the ceiling 1233/);
+    assert.strictEqual(summary.reconcile.documents.wouldDelete, 61611);
+    assert.strictEqual(summary.reconcile.documents.deleted, 0);
+    // 4 projects is UNDER the projects ceiling on its own — the documents breach stopped it.
+    assert.strictEqual(summary.reconcile.projects.wouldDelete, 4);
+    assert.strictEqual(summary.reconcile.projects.deleted, 0);
+    assert.strictEqual(summary.failures.length ? 1 : 0, 1, 'a refused reconcile must exit 1');
+  });
+
+  await t.test('a dry run reports the refusal without needing --live', async () => {
+    const { purged, deps } = makeDeps(probeDocs, probeProjects);
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources([]) });
+
+    assert.match(summary.failures.join(' '), /exceeds the ceiling 1233/);
+    assert.strictEqual(summary.reconcile.documents.wouldDelete, 61611);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
+  await t.test('--max-surplus is the operator override and lets the deletes through', async () => {
+    const { purged, deps } = makeDeps(probeDocs, probeProjects);
+    const summary = await seed(
+      ['--live', '--reconcile', '--only', 'projects,documents', '--max-surplus', '70000'],
+      { ...deps, sources: stubSources([]) });
+
+    assert.deepStrictEqual(summary.failures, []);
+    assert.strictEqual(purged.documents.length, 61611);
+    assert.strictEqual(purged.projects.length, 4);
+    assert.strictEqual(summary.reconcile.documents.deleted, 61611);
+  });
+
+  // 100 rows in Cosmos, 50 of them fetched: 2% is 2, so the floor of 50 is the ceiling.
+  const fetchedIds = Array.from({ length: 50 }, (_, i) => `d${i}`);
+  const fetchedRows = fetchedIds.map(id => ({ id, projectId: '207' }));
+  const staleRows = (n) => Array.from({ length: n }, (_, i) => ({ id: `s${i}`, projectId: '207' }));
+
+  await t.test('a surplus exactly at the ceiling proceeds', async () => {
+    const { purged, deps } = makeDeps([...fetchedRows, ...staleRows(50)], []);
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources(fetchedIds) });
+
+    assert.deepStrictEqual(summary.failures, []);
+    assert.strictEqual(summary.reconcile.documents.deleted, 50);
+    assert.strictEqual(purged.documents.length, 50);
+  });
+
+  await t.test('one row over the ceiling refuses', async () => {
+    const { purged, deps } = makeDeps([...fetchedRows, ...staleRows(51)], []);
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources(fetchedIds) });
+
+    assert.match(summary.failures.join(' '), /documents surplus 51 exceeds the ceiling 50/);
+    assert.deepStrictEqual(purged.documents, []);
   });
 });
 

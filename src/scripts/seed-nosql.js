@@ -19,7 +19,7 @@
  *
  * Usage:
  *   node src/scripts/seed-nosql.js [--live] [--only projects,documents,boundaries]
- *                                 [--limit-documents N] [--reconcile]
+ *                                 [--limit-documents N] [--reconcile] [--max-surplus N]
  *
  * Without --only, runs DEFAULT_STAGES: projects, documents, boundaries.
  *
@@ -63,11 +63,14 @@ const DEFAULT_STAGES = ['projects', 'documents', 'boundaries'];
 const FLUSH_THRESHOLD = 100;
 
 function parseArgs(argv) {
-  const args = { live: false, only: DEFAULT_STAGES, limitDocuments: Infinity, reconcile: false };
+  const args = {
+    live: false, only: DEFAULT_STAGES, limitDocuments: Infinity, reconcile: false, maxSurplus: null
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
     else if (a === '--reconcile') args.reconcile = true;
+    else if (a === '--max-surplus') args.maxSurplus = Number(argv[++i]);
     else if (a === '--only') {
       args.only = String(argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
     } else if (a === '--limit-documents') args.limitDocuments = parseInt(argv[++i], 10);
@@ -92,8 +95,30 @@ function parseArgs(argv) {
         'past the limit would be computed as surplus and deleted');
     }
   }
+
+  if (args.maxSurplus !== null) {
+    if (!args.reconcile) {
+      throw new Error('[seed] --max-surplus raises the reconcile ceiling and needs --reconcile');
+    }
+    if (!Number.isInteger(args.maxSurplus) || args.maxSurplus <= 0) {
+      throw new Error('[seed] --max-surplus needs a positive integer');
+    }
+  }
   return args;
 }
+
+/** Rows in `rows` that this fetch did not produce. */
+const surplusOf = (rows, keyOf, fetched) => rows.filter(row => !fetched.has(keyOf(row)));
+
+/**
+ * Most surplus one container may lose before `--reconcile` refuses.
+ *
+ * An upstream answering `searchResults: [], searchResultsTotal: 0` is internally consistent and
+ * passes every completeness gate, so verifying the fetch against itself would still compute the
+ * whole corpus as surplus. `--max-surplus` is the operator saying the loss really is that big.
+ */
+const surplusCeiling = (rowCount, maxSurplus) =>
+  Math.max(50, Math.ceil(rowCount * 0.02), maxSurplus || 0);
 
 /**
  * Rows in Cosmos that this fetch did not produce.
@@ -109,9 +134,11 @@ function parseArgs(argv) {
  * @param {function} remove    row -> Promise, called ONLY when live
  */
 async function reconcileContainer(label, rows, keyOf, fetched, remove, { live }) {
-  const surplus = rows.filter(row => !fetched.has(keyOf(row)));
+  const surplus = surplusOf(rows, keyOf, fetched);
+  // Ids capped: a refused run can carry tens of thousands of them.
+  const ids = surplus.slice(0, 20).map(r => r.id).join(', ');
   logger.info(`[seed] reconcile ${label}: ${rows.length} in Cosmos, ${surplus.length} not in the ` +
-    `fetch${surplus.length ? ` — ${surplus.map(r => r.id).join(', ')}` : ''}`);
+    `fetch${surplus.length ? ` — ${ids}${surplus.length > 20 ? ', …' : ''}` : ''}`);
 
   let deleted = 0;
   for (const row of live ? surplus : []) {
@@ -490,16 +517,33 @@ async function seed(argv = [], deps = {}) {
         `container: the ${unverified.map(([label]) => label).join(' and ')} fetch was never ` +
         'verified complete against a searchResultsTotal');
     } else {
-      summary.reconcile = {};
       // Documents first: a project whose documents are already gone cannot orphan any.
-      summary.reconcile.documents = await reconcileContainer(
-        'documents', await repos.documents.listSeededIds(access),
-        row => `${row.projectId}|${row.id}`, documentFetch.keys,
-        row => purge.purgeDocument(row), args);
-      summary.reconcile.projects = await reconcileContainer(
-        'projects', await repos.projects.listEagleOnlyIds(access),
-        row => String(row.eagleId), new Set(eagleProjects.map(p => String(p._id))),
-        row => purge.purgeProject(row), args);
+      const containers = [
+        ['documents', await repos.documents.listSeededIds(access),
+          row => `${row.projectId}|${row.id}`, documentFetch.keys,
+          row => purge.purgeDocument(row)],
+        ['projects', await repos.projects.listEagleOnlyIds(access),
+          row => String(row.eagleId), new Set(eagleProjects.map(p => String(p._id))),
+          row => purge.purgeProject(row)]
+      ];
+      // Both containers sized BEFORE either delete, so a breach in one stops the other too.
+      const breached = containers
+        .map(([label, rows, keyOf, fetched]) => [label, surplusOf(rows, keyOf, fetched).length,
+          surplusCeiling(rows.length, args.maxSurplus)])
+        .filter(([, surplus, ceiling]) => surplus > ceiling);
+
+      if (breached.length) {
+        summary.failures.push('--reconcile refused before any delete — nothing removed from ' +
+          'either container: ' + breached.map(([label, surplus, ceiling]) =>
+            `${label} surplus ${surplus} exceeds the ceiling ${ceiling}`).join('; ') +
+          '. Re-run with --max-surplus <n> if the deletion really is that large.');
+      }
+
+      // Reported either way: a dry run must still show wouldDelete and that it would refuse.
+      const live = args.live && !breached.length;
+      summary.reconcile = {};
+      summary.reconcile.documents = await reconcileContainer(...containers[0], { live });
+      summary.reconcile.projects = await reconcileContainer(...containers[1], { live });
     }
   }
 
