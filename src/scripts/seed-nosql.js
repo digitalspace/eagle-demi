@@ -357,6 +357,9 @@ async function seed(argv = [], deps = {}) {
     const buffers = new Map();          // projectId -> pending raw docs
     const perProject = new Map();       // projectId -> total transformed
     const unresolvedRefs = new Set();
+    // Complete, not capped: the reconcile gate intersects these against the ids in Cosmos, and a
+    // sample would let a dropped row that IS in Cosmos through.
+    const droppedIds = [];
     const stats = {
       fetched: 0, built: 0, unresolved: 0, notificationParented: 0,
       noKey: 0, preserved: 0, written: 0, writeFailed: 0
@@ -450,6 +453,7 @@ async function seed(argv = [], deps = {}) {
           // discovered months later from a user-facing zero.
           stats.unresolved++;
           unresolvedRefs.add(String(doc.project));
+          droppedIds.push(String(doc._id));
           continue;
         }
 
@@ -496,6 +500,7 @@ async function seed(argv = [], deps = {}) {
       // and the summary is printed in full.
       distinctUnresolvedRefs: unresolvedRefs.size,
       unresolvedRefs: [...unresolvedRefs].slice(0, 20),
+      droppedIds: droppedIds.slice(0, 20),
       withoutObjectKey: stats.noKey,
       preserved: stats.preserved,
       duplicateIds,
@@ -525,7 +530,7 @@ async function seed(argv = [], deps = {}) {
     log(`  extraction state carried forward on ${stats.preserved} existing rows`);
     log(`  documents ${args.live ? 'written' : 'would write'}: ${stats.built}\n`);
 
-    documentFetch = { keys: fetchedKeys, total: documentsTotal, fetched: count };
+    documentFetch = { keys: fetchedKeys, total: documentsTotal, fetched: count, droppedIds };
   }
 
   // ── 5. Boundaries ──────────────────────────────────────────────────────────
@@ -566,23 +571,30 @@ async function seed(argv = [], deps = {}) {
       ['Document', documentFetch && documentFetch.total, documentFetch && documentFetch.fetched]
     ].filter(([, total, fetched]) => typeof total !== 'number' || total !== fetched);
 
-    // An empty-but-consistent notification list passes every completeness gate above, so the drop
-    // count is the second half of the same guard: a document the seed could not place is missing
-    // from the fetch for a reason that is not "it was removed upstream".
-    const dropped = (summary.stages.documents || {}).droppedUnresolvable || 0;
+    // An empty-but-consistent notification list passes every completeness gate above, so the drops
+    // are the second half of the same guard: a document the seed could not place is missing from
+    // the fetch for a reason that is not "it was removed upstream". Only a drop ALREADY in Cosmos
+    // can be deleted as surplus though, so only those refuse — matched on id alone, since a
+    // dropped document has no resolved partition to match on. Enumerated once and reused by the
+    // documents reconcile below; skipped entirely when an unverified fetch already refuses.
+    const documentRows = unverified.length ? [] : await repos.documents.listSeededIds(access);
+    const inCosmos = new Set(documentRows.map(row => String(row.id)));
+    const dropped = (documentFetch || {}).droppedIds || [];
+    const droppedInCosmos = dropped.filter(id => inCosmos.has(id));
 
     if (unverified.length) {
       summary.failures.push('--reconcile refused before any delete — nothing removed from either ' +
         `container: the ${unverified.map(([label]) => label).join(' and ')} fetch was never ` +
         'verified complete against a searchResultsTotal');
-    } else if (dropped) {
+    } else if (droppedInCosmos.length) {
       summary.failures.push('--reconcile refused before any delete — nothing removed from either ' +
-        `container: ${dropped} document(s) resolved to neither a project nor a ProjectNotification` +
-        ', so they are absent from the fetch and would be deleted as surplus');
+        `container: ${droppedInCosmos.length} of the ${dropped.length} document(s) that resolved ` +
+        'to neither a project nor a ProjectNotification are in Cosmos, so they are absent from ' +
+        'the fetch and would be deleted as surplus');
     } else {
       // Documents first: a project whose documents are already gone cannot orphan any.
       const containers = [
-        ['documents', await repos.documents.listSeededIds(access),
+        ['documents', documentRows,
           row => `${row.projectId}|${row.id}`, documentFetch.keys,
           row => purge.purgeDocument(row)],
         ['projects', await repos.projects.listEagleOnlyIds(access),
