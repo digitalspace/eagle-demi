@@ -57,10 +57,9 @@ gone — nothing below points at an archive.
 
 | Gate | Items |
 |---|---|
-| Nothing — do it | 3.6 small items; 5.1-5.5 in order; 5.6 preview releases |
-| Daniel decides | 2.1 re-seed source; 2.2 budget; 2.3 proponentId; 2.4 anonymous surface |
+| Nothing — do it | 3.6 small items; 5.6 disable the two eagle-public test workflows |
+| Daniel decides | 2.1 re-seed source; 2.2 budget; 2.3 proponentId; 2.4 anonymous surface; 5.6 retire dev whole or keep pod, and when the eagle-public AFD rollback pod can go; 5.7 `eagle-search-prod` search service delete (~100 CAD/mo, condition already met) |
 | Needs SSH tunnel | 3.3 index widening; 3.5 |
-| Daniel decides | 5.6 retire dev whole or keep pod; when the eagle-public AFD rollback can go |
 | Someone else / long-lead | 1.1, 1.2 rotations at source; 4.1 prod role assignments; 4.4/4.5 eao-nginx + eagle-public prod tags; `demi.eao.gov.bc.ca` DNS; Track feed credential |
 | After the re-seed (2.1) | 3.3 analyzer + `isFeatured`/`documentSource`; a fully green differ; 3.7(d) reconcile |
 
@@ -218,8 +217,7 @@ App Service + `eagle-search-*` AI Search) with only its sync worker in OpenShift
 repo. An archived repo is read-only but hand-deployable, so **prod stays frozen on it**: prod
 search is SERVED by eagle-search today (`SEARCH_API_PATH=/eagle-search`, `eagle-search-api-prod` →
 `eagle-*` indexes on `demi-search-prod`, worker in `6cdc9e-prod`) and becomes the switch-back once
-§4.8 flips prod to demi-api. Archive condition = nothing outside the repo needs it to change again. Full inventory + order: `/root/.claude/plans/curried-chasing-eich.md` until the
-wiki page `Eagle-Search-Archive` (eagle-dev-guides) lands.
+§4.8 flips prod to demi-api. Archive condition = nothing outside the repo needs it to change again. Record: eagle-dev-guides wiki `Eagle-Search-Archive`.
 
 Measured 2026-08-24: test `SEARCH_API_PATH=/demi-search`, rproxy `ROOT` = AFD
 `eagle-public-test-dbg8ghh8gjd0bscx.a02.azurefd.net`; `eagle-search-api-test` serves zero traffic,
