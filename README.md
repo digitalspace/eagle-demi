@@ -67,8 +67,12 @@ Four things to know before running a script this way:
 
    ```bash
    export $(tr '\0' '\n' < /proc/1/environ \
-     | grep -E '^(COSMOS_ENDPOINT|COSMOS_NOSQL_DATABASE|AZURE_CLIENT_ID|IDENTITY_ENDPOINT|IDENTITY_HEADER)=')
+     | grep -E '^(COSMOS_ENDPOINT|COSMOS_NOSQL_DATABASE|AZURE_CLIENT_ID|IDENTITY_ENDPOINT|IDENTITY_HEADER|SEARCH_ENDPOINT|SEARCH_INDEX|SEARCH_INDEX_PROJECTS|SEARCH_INDEX_DOCUMENTS)=')
    ```
+
+   The `SEARCH_*` four are here because anything that deletes a row deletes its index entry too, and
+   `deleteFromIndex` returns 0 instead of throwing when `SEARCH_ENDPOINT` is unset — without them a
+   purge looks like it worked and leaves the row searchable.
 2. **`globalThis.crypto` no longer needs shimming.** The container is Node 22, which has it natively;
    `src/app.js` still shims it defensively. Measured 2026-08-20 — earlier advice here said a
    standalone script must do it itself.
@@ -135,8 +139,12 @@ given, if the Project, ProjectNotification or Document fetch was not verified co
 eagle-api's `searchResultsTotal`, if a document that resolved to neither a project nor a
 ProjectNotification is already in Cosmos (a drop the fetch cannot account for is only at risk when
 there is a row to delete; drops absent from Cosmos are reported as `droppedUnresolvable` and do not
-refuse), or if there is no `COSMOS_ENDPOINT` to enumerate the containers with: every
-one of those makes the untouched remainder look like surplus.
+refuse), if either container enumerated fewer rows than a `COUNT` of the same predicate reports (a
+truncated read is indistinguishable from a container that shrank), or if there is no
+`COSMOS_ENDPOINT` to enumerate the containers with: every one of those makes the untouched remainder
+look like surplus. A live run also refuses when `SEARCH_ENDPOINT` is unset, for the opposite reason —
+the deletes would land in Cosmos and silently no-op against the index, leaving the purged rows
+searchable. A dry run reports that as `search: unconfigured — live would refuse` instead.
 
 Every surplus id goes to an NDJSON file — one `{label, id, partitionKey, deleted}` row per surplus
 row, both containers, dry run and live — and the run prints the path. It defaults to
