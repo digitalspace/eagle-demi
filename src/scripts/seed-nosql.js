@@ -255,23 +255,11 @@ async function seed(argv = [], deps = {}) {
       }
     }
     log(`  projects ${args.live ? 'written' : 'would write'}: ${projects.length}\n`);
-
-    if (args.reconcile) {
-      if (projectsTotal === null) {
-        summary.failures.push('--reconcile refused: eagle-api reported no searchResultsTotal for ' +
-          'Project, so the fetch was never verified complete');
-      } else {
-        const fetched = new Set(eagleProjects.map(p => String(p._id)));
-        summary.reconcile = summary.reconcile || {};
-        summary.reconcile.projects = await reconcileContainer(
-          'projects', await repos.projects.listEagleOnlyIds(access),
-          row => String(row.eagleId), fetched, row => purge.purgeProject(row), args);
-        log(`  projects surplus: ${JSON.stringify(summary.reconcile.projects)}\n`);
-      }
-    }
   }
 
   // ── 2. Documents ───────────────────────────────────────────────────────────
+  // Reconcile is a final phase, so what the documents stage fetched has to outlive its block.
+  let documentFetch = null;
   if (args.only.includes('documents')) {
     log('Fetching the List lookup for type/milestone labels...');
     const listLookup = await src.fetchListLookup();
@@ -458,19 +446,7 @@ async function seed(argv = [], deps = {}) {
     log(`  extraction state carried forward on ${stats.preserved} existing rows`);
     log(`  documents ${args.live ? 'written' : 'would write'}: ${stats.built}\n`);
 
-    if (args.reconcile) {
-      if (documentsTotal === null || documentsTotal === undefined) {
-        summary.failures.push('--reconcile refused: eagle-api reported no searchResultsTotal for ' +
-          'Document, so the fetch was never verified complete');
-      } else {
-        summary.reconcile = summary.reconcile || {};
-        summary.reconcile.documents = await reconcileContainer(
-          'documents', await repos.documents.listSeededIds(access),
-          row => `${row.projectId}|${row.id}`, fetchedKeys,
-          row => purge.purgeDocument(row), args);
-        log(`  documents surplus: ${JSON.stringify(summary.reconcile.documents)}\n`);
-      }
-    }
+    documentFetch = { keys: fetchedKeys, total: documentsTotal, fetched: count };
   }
 
   // ── 5. Boundaries ──────────────────────────────────────────────────────────
@@ -496,6 +472,35 @@ async function seed(argv = [], deps = {}) {
       }
     }
     log(`  boundaries ${args.live ? 'written' : 'would write'}: ${boundaries.length}\n`);
+  }
+
+  // ── Reconcile ──────────────────────────────────────────────────────────────
+  // ONE phase after every fetch, never per container: an unverified Project fetch used to leave
+  // the documents reconcile free to delete, and vice versa. A fetch is verified only when
+  // eagle-api reported a searchResultsTotal AND it matches what arrived; either upstream falling
+  // short refuses BOTH deletions, since the surplus set is only meaningful off a complete fetch.
+  if (args.reconcile) {
+    const unverified = [
+      ['Project', projectsTotal, eagleProjects.length],
+      ['Document', documentFetch && documentFetch.total, documentFetch && documentFetch.fetched]
+    ].filter(([, total, fetched]) => typeof total !== 'number' || total !== fetched);
+
+    if (unverified.length) {
+      summary.failures.push('--reconcile refused before any delete — nothing removed from either ' +
+        `container: the ${unverified.map(([label]) => label).join(' and ')} fetch was never ` +
+        'verified complete against a searchResultsTotal');
+    } else {
+      summary.reconcile = {};
+      // Documents first: a project whose documents are already gone cannot orphan any.
+      summary.reconcile.documents = await reconcileContainer(
+        'documents', await repos.documents.listSeededIds(access),
+        row => `${row.projectId}|${row.id}`, documentFetch.keys,
+        row => purge.purgeDocument(row), args);
+      summary.reconcile.projects = await reconcileContainer(
+        'projects', await repos.projects.listEagleOnlyIds(access),
+        row => String(row.eagleId), new Set(eagleProjects.map(p => String(p._id))),
+        row => purge.purgeProject(row), args);
+    }
   }
 
   // ── Gates ──────────────────────────────────────────────────────────────────

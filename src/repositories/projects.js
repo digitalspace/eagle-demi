@@ -162,11 +162,6 @@ function publicView(project) {
 }
 
 /**
- * Whole-item write. Safe only because nothing is folded into the project as an embedded array
- * any more — a replace from the Track sync would silently discard it. Use the patch helpers
- * below for partial updates.
- */
-/**
  * `{id, eagleId}` for every Eagle-only project row — the seeder's reconcile set.
  *
  * Track-sourced rows are excluded by the `sourceSystem` filter: they exist whether or not Eagle
@@ -183,6 +178,11 @@ async function listEagleOnlyIds(access) {
   return fetchAll(CONTAINER, spec);
 }
 
+/**
+ * Whole-item write. Safe only because nothing is folded into the project as an embedded array
+ * any more — a replace from the Track sync would silently discard it. Use the patch helpers
+ * below for partial updates.
+ */
 async function upsert(project) {
   return cosmos.upsert(CONTAINER, project);
 }

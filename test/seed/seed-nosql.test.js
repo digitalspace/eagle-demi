@@ -677,7 +677,7 @@ test('seed --reconcile end to end', async (t) => {
     assert.deepStrictEqual(purged, { documents: [], projects: [] });
   });
 
-  await t.test('a fetch with no upstream total is refused, not reconciled', async () => {
+  await t.test('an unverified Document fetch refuses BOTH containers', async () => {
     // sources.js only verifies the fetch against searchResultsTotal when the upstream reports
     // one. A null total means that gate never ran, so "not in the fetch" proves nothing.
     const { purged, deps } = makeDeps();
@@ -691,9 +691,61 @@ test('seed --reconcile end to end', async (t) => {
       })
     });
 
-    assert.match(summary.failures.join(' '), /no searchResultsTotal for Document/);
-    assert.deepStrictEqual(purged.documents, [], 'nothing may be deleted off an unverified fetch');
-    assert.strictEqual(summary.reconcile.documents, undefined);
+    assert.match(summary.failures.join(' '), /refused before any delete/);
+    assert.match(summary.failures.join(' '), /Document fetch was never verified/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] },
+      'projects reconcile ran first before the fix and deleted off an unverified run');
+    assert.strictEqual(summary.reconcile, undefined);
+  });
+
+  await t.test('an unverified Project fetch refuses BOTH containers', async () => {
+    // The reviewer's probe: the projects gate used to be per container, so a null Project total
+    // left the documents reconcile free to delete.
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps,
+      sources: stubSources({
+        fetchEagleProjects: async (onPage) => {
+          const items = [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)')];
+          if (onPage) await onPage(items, items.length, null);
+          return items;
+        }
+      })
+    });
+
+    assert.match(summary.failures.join(' '), /Project fetch was never verified/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+    assert.strictEqual(summary.reconcile, undefined);
+  });
+
+  await t.test('a total that disagrees with what arrived is not a verified fetch', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps,
+      sources: stubSources({
+        streamEagleDocuments: async (onPage) => {
+          await onPage([eagleDoc('doc1', matchedGuid)], 1, 9);
+          return { count: 1, total: 9 };
+        }
+      })
+    });
+
+    assert.match(summary.failures.join(' '), /Document fetch was never verified/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
+  await t.test('documents are deleted before projects', async () => {
+    const order = [];
+    const { deps } = makeDeps();
+    deps.purge = {
+      purgeDocument: async () => { order.push('document'); },
+      purgeProject: async () => { order.push('project'); }
+    };
+    await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(order, ['document', 'project'],
+      'a project purged first would orphan its remaining documents');
   });
 
   await t.test('a dry run with no Cosmos refuses instead of reporting an empty surplus', async () => {

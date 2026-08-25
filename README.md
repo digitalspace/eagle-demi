@@ -127,10 +127,12 @@ start unextracted. The run reports `preserved`.
 `--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch are
 deleted through the same helpers `DELETE /documents/:id` and `DELETE /projects/:id` use, so the
 chunks and the search-index entries go with them. A dry run reports `wouldDelete` per container and
-logs the ids without deleting anything. It refuses — exit 1 — if `--only` dropped a stage, if
-`--limit-documents` was given, if eagle-api reported no `searchResultsTotal`, or if there is no
-`COSMOS_ENDPOINT` to enumerate the containers with: every one of those makes the untouched
-remainder look like surplus.
+logs the ids without deleting anything. Deletion is a single phase after every fetch has finished —
+documents before projects — so a refusal stops it **before any delete**, in both containers at once.
+It refuses — exit 1, nothing removed — if `--only` dropped a stage, if `--limit-documents` was
+given, if either the Project or the Document fetch was not verified complete against eagle-api's
+`searchResultsTotal`, or if there is no `COSMOS_ENDPOINT` to enumerate the containers with: every
+one of those makes the untouched remainder look like surplus.
 
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the
