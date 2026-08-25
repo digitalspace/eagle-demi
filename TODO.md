@@ -57,10 +57,10 @@ gone — nothing below points at an archive.
 
 | Gate | Items |
 |---|---|
-| Nothing — do it | 3.6 small items; 5.1 leftovers; 5.3 preview releases |
+| Nothing — do it | 3.6 small items; 5.1-5.5 in order; 5.6 preview releases |
 | Daniel decides | 2.1 re-seed source; 2.2 budget; 2.3 proponentId; 2.4 anonymous surface |
 | Needs SSH tunnel | 3.3 index widening; 3.5 |
-| Daniel decides | 5.1 retire dev whole or keep pod; 5.3 when the AFD rollback can go |
+| Daniel decides | 5.6 retire dev whole or keep pod; when the eagle-public AFD rollback can go |
 | Someone else / long-lead | 1.1, 1.2 rotations at source; 4.1 prod role assignments; 4.4/4.5 eao-nginx + eagle-public prod tags; `demi.eao.gov.bc.ca` DNS; Track feed credential |
 | After the re-seed (2.1) | 3.3 analyzer + `isFeatured`/`documentSource`; a fully green differ; 3.7(d) reconcile |
 
@@ -211,63 +211,64 @@ Deploy source is a tag verified on test. Assumes §1-3 landed and soaked.
       table + console line). Chunk search has no public UI route — exercise the endpoint directly.
       Result links 404 for documents the target Mongo lacks until corpora align.
 
-## 5. Decommission eagle-search and eagle-public in OpenShift dev + test
+## 5. Archive `digitalspace/eagle-search`; retire eagle-public OpenShift dev/test
 
-Goal added 2026-08-24. **Prod stays** (`6cdc9e-prod`, `eagle-search-api-prod`, `demi-search-prod`
-`eagle-*` indexes) as the emergency switch back to `/eagle-search`; retired later under §4.
-Inventory measured 2026-08-24 via `oc --context epic-dev|epic-test` and live headers.
+Goal added 2026-08-24, reframed 2026-08-25: eagle-search is an **Azure** app (`eagle-search-api-*`
+App Service + `eagle-search-*` AI Search) with only its sync worker in OpenShift. Target: archive the
+repo. An archived repo is read-only but hand-deployable, so **prod stays frozen on it**: prod
+search is SERVED by eagle-search today (`SEARCH_API_PATH=/eagle-search`, `eagle-search-api-prod` →
+`eagle-*` indexes on `demi-search-prod`, worker in `6cdc9e-prod`) and becomes the switch-back once
+§4.8 flips prod to demi-api. Archive condition = nothing outside the repo needs it to change again. Full inventory + order: `/root/.claude/plans/curried-chasing-eich.md` until the
+wiki page `Eagle-Search-Archive` (eagle-dev-guides) lands.
 
-**Where each env serves from today**
-- dev: `SEARCH_API_PATH: ""` (Mongo fallback), rproxy `NGINX__EPIC__PROXY__ROOT=http://eagle-public:8080`
-  — the OpenShift pod IS the dev site. `SEARCH`/`DEMI` proxy vars point at `localhost:9999` by
-  design. No eagle-search workload in dev at all.
-- test: `SEARCH_API_PATH: /demi-search` (demi-api), rproxy `ROOT` = AFD
-  `eagle-public-test-dbg8ghh8gjd0bscx.a02.azurefd.net` (`x-azure-ref` on every page). The 2/2
-  `eagle-public` pod is the documented AFD rollback target. `NGINX__EPIC__PROXY__SEARCH` still
-  points at `eagle-search-api-test.azurewebsites.net`, which **serves zero traffic**; its only
-  writer is `deploy/eagle-search-sync` + `CronJob/eagle-search-reindex` (Helm release
-  `eagle-search` rev 9, only those two objects).
+Measured 2026-08-24: test `SEARCH_API_PATH=/demi-search`, rproxy `ROOT` = AFD
+`eagle-public-test-dbg8ghh8gjd0bscx.a02.azurefd.net`; `eagle-search-api-test` serves zero traffic,
+fed only by `deploy/eagle-search-sync` + `CronJob/eagle-search-reindex`; `eagle-extractor-test`
+(Function, `INGEST_URL` = eagle-search-api-test, queues empty) is search-only. Dev has no
+eagle-search at all and still serves its site from the OpenShift `eagle-public` pod.
 
-- [ ] **5.1 dev: delete eagle-public (blocked on a decision about dev itself).** Dev has no Azure
-      estate (torn down 2026-08-11), so deleting `deploy/eagle-public` (Helm rev 117) kills
-      `eagle-dev.apps…/` unless dev is retired whole or rproxy `ROOT` is repointed at the test AFD
-      host. Decide: retire dev entirely (eagle-admin-dev/eagle-api-dev/eagle-public-dev orphans, 37d,
-      ArgoCD tracking-ids with no Application, exist too) or keep dev on the pod. Leftovers to
-      delete regardless: `secret/eagle-search-extract-queue` (referenced by nothing),
-      `ImageStream/eagle-public` (last push 3 years ago).
-- [ ] **5.2 test: retire eagle-search worker + Azure app.** Order: `helm uninstall eagle-search -n
-      6cdc9e-test` (sync + reindex CronJob); delete `BuildConfig/eagle-search`,
-      `ImageStream/eagle-search`, `secret/eagle-search-ingest`, 9 `eagle-search-{7,8,9}-*` build
-      ConfigMaps + completed build pods; disable `deploy-staging-worker.yaml` and
-      `deploy-staging-api.yaml` in `digitalspace/eagle-search`. Azure RETIRE set in
-      `eagle-search/azure/main.bicep`: `modules/ai-search.bicep` (`eagle-search-test` +
-      `pe-eagle-search-test` + role assignment), `modules/api-web-app.bicep`
-      (`eagle-search-api-test`), `azure/search/indexes/**`, and `modules/extractor.bicep`
-      (`eagle-extractor-test`, `eagle-extractor-plan-test`, storage `eaglextrtestvymaysch2agd` —
-      measured: `INGEST_URL` = eagle-search-api-test, Function state None, both queues empty).
-      Then set rproxy `NGINX__EPIC__PROXY__SEARCH` to the `localhost:9999` sentinel and delete the
-      `/eagle-search/` location once prod no longer needs the template
-      (`eao-nginx/conf.d/server.conf.tmpl` is shared with prod — flag-gate, do not delete).
-- [ ] **5.3 test: retire eagle-public pods.** Delete the three preview releases first
+- [ ] **5.1 New repo `digitalspace/eagle-edge` owns the shared edge** (decided 2026-08-25: one Front
+      Door profile per env, no second base fee; eagle-admin and later frontends join as `sites[]`
+      entries; eao-nginx retires too so cannot be the home). Moves from `eagle-search/azure/`:
+      `modules/front-door.bicep` (profile `eagle-edge-test`, endpoints `eagle-public-test`,
+      `demi-frontend-test`, rule sets), `static-site.bicep` (`eaglepubtestvymaysch2agd` `$web`),
+      `identity.bicep` (UAMI `eagle-search-identity-test`, misnamed, keep), `observability.bicep`,
+      `scripts/deploy-infra.sh`. Gate: `what-if` from eagle-edge against `c4b0a8-test-rg` shows zero
+      changes before the eagle-search copy is deleted. Later: `eagle-edge-prod` + UAMI
+      `eagle-search-identity-prod` (referenced by `eagle-demi/azure/ai-search.prod.bicepparam:29`)
+      move in from `bcgov/eagle-public`.
+- [ ] **5.2 Docs out of the repo.** Wiki `Eagle-Search-Archive` (eagle-dev-guides): rollback recipe,
+      index schema decisions, propagation lags, INGEST_KEY whole-collection-PUT hazard, 2026-08-20
+      cutover record. Fix `Search-Cutover.md` citations of `check-acl.js`/`check-frontend.py`/
+      `deploy-infra.sh` (DEMI's `probe-acl.js` is the gate now) and the dead
+      `docs/azure-test-migration.md` link in `eagle-demi.wiki/Azure-Environments.md:30`.
+- [ ] **5.3 Last eagle-search PR**: delete the moved modules + `deploy-staging-api.yaml` +
+      `deploy-staging-worker.yaml`, README pointer to the wiki page and eagle-edge. Drop local
+      branch `fix/disable-sync-liveness-probe-in-test` (cluster already has the probe off).
+- [ ] **5.4 Retire the test estate.** OpenShift `6cdc9e-test`: `helm uninstall eagle-search`,
+      `BuildConfig/eagle-search`, `ImageStream/eagle-search`, `secret/eagle-search-ingest`, the 9
+      `eagle-search-{7,8,9}-*` ConfigMaps + build pods; dev `secret/eagle-search-extract-queue`.
+      Azure: `eagle-search-api-test`, `eagle-search-test` + `pe-eagle-search-test`,
+      `eagle-extractor-test` + `eagle-extractor-plan-test` + `eaglextrtestvymaysch2agd`. eao-nginx
+      `values-test.yaml:32` `search:` → `localhost:9999` sentinel (prod upstream and the
+      `server.conf.tmpl` block stay). Verify after: `/demi-search/search` 200 via eagle-test,
+      DEMI `/map` and eagle-public AFD host 200.
+- [ ] **5.5 Archive the repo** (GitHub archived=true; Actions stop). Update `/root/repos/CLAUDE.md`
+      repo table. Prod worker keeps running from `6cdc9e-tools/eagle-search:prod`; rollback needs no
+      redeploy.
+- [ ] **5.6 eagle-public OpenShift dev/test.** Test: delete the three preview releases
       (`eagle-public-feat-azure-hosting-mainline`, `-feat-typesense-angular21`,
-      `-hotfix-pcp-engage`, plus stale `Service/epic-public`, 2y172d, no workload) — nothing routes
-      through rproxy to them. The main `eagle-public` (Helm rev 70) goes only after the AFD path has
-      been the sole path long enough to drop the rollback: then `helm uninstall eagle-public`,
-      its 3 NetworkPolicies, and `NGINX__EPIC__PROXY__PUBLIC` (unused by any nginx location).
-      Keep `Route/eagle-public` (`/` → `rproxy:8080-tcp`) — it holds the Keycloak-registered host.
-      Disable `deploy-to-test.yaml` + `preview-branch-in-test.yaml` in `bcgov/eagle-public`.
-- [ ] **5.4 Move the shared edge out of the eagle-search repo BEFORE 5.2's Bicep goes.**
-      `eagle-search/azure/main.bicep` also creates what survives: Front Door profile
-      `eagle-edge-test` (endpoints `eagle-public-test`, `demi-frontend-test`, rule sets
-      `spafallback`/`securityheaders`), static site storage `eaglepubtestvymaysch2agd` (`$web` —
-      this IS eagle-public on Azure), UAMI `eagle-search-identity-test` (misnamed, everything
-      hangs off it; its prod twin holds Search Index Data Contributor on DEMI's search service),
-      `eagle-search-logs-test` / `-insights-test`. New home: eagle-public's Azure workflows exist
-      only on branch `feat/azure-hosting-mainline`, not `develop` — land them first. Retire = a
-      subset of the template, never the template.
-- [ ] **5.5 Prod (later, not now).** Same sequence once §4.8 soak passes: `eagle-search-api-prod`,
-      `eagle-search-prod` (idle, 39 MB), `eagle-*` indexes on `demi-search-prod`, the prod worker,
-      `deploy-prod-worker.yaml`. `eagle-public` prod pods are the AFD rollback (3 replicas) until then.
+      `-hotfix-pcp-engage`) + stale `Service/epic-public` now; the main `eagle-public` (Helm rev 70,
+      the AFD rollback target) and `NGINX__EPIC__PROXY__PUBLIC` go when the rollback can go — Daniel
+      decides. Keep `Route/eagle-public` (Keycloak host). Disable `deploy-to-test.yaml` +
+      `preview-branch-in-test.yaml`. Dev: site IS the pod — retire dev whole (with the orphan
+      `eagle-{admin,api,public}-dev` trio, 37d, ArgoCD ids with no Application) or repoint rproxy
+      `ROOT` at the test AFD host — Daniel decides. eagle-public's Azure workflows live only on
+      `feat/azure-hosting-mainline`, not `develop` — land them first.
+- [ ] **5.7 Prod, later**: `eagle-search-prod` search service (idle, 39 MB, ~100 CAD/mo — its own
+      note says delete after two weeks of non-empty prod `SEARCH_API_PATH`, already met),
+      `eagle-search-api-prod`, `eagle-*` indexes on `demi-search-prod`, prod worker, once §4.8's
+      soak is signed off. eagle-public prod pods (3 replicas) stay as the AFD rollback until then.
 
 ## 6. Needs a human in a browser
 
