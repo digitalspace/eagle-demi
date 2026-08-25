@@ -648,21 +648,26 @@ test('seed --reconcile end to end', async (t) => {
 
   const SEEDED_DOCS = [{ id: 'doc1', projectId: '207' }, { id: 'stale', projectId: '207' }];
 
-  const makeDeps = (over = {}, seededDocs = SEEDED_DOCS) => {
+  // `counts` overrides what the container reports it holds; by default it agrees with the rows the
+  // stub enumerates, which is what every reconcile below needs to get past the truncation guard.
+  const makeDeps = (over = {}, seededDocs = SEEDED_DOCS, counts = {}) => {
     const purged = { documents: [], projects: [] };
+    const eagleOnlyRows = [
+      { id: 'eagle-gone', eagleId: 'gone' },
+      { id: `eagle-${matchedGuid}`, eagleId: matchedGuid }
+    ];
     const repos = {
       projects: {
         upsert: async (p) => p,
-        listEagleOnlyIds: async () => [
-          { id: 'eagle-gone', eagleId: 'gone' },
-          { id: `eagle-${matchedGuid}`, eagleId: matchedGuid }
-        ]
+        listEagleOnlyIds: async () => eagleOnlyRows,
+        countEagleOnlyIds: async () => counts.projects ?? eagleOnlyRows.length
       },
       documents: {
         extractionRowsForProject: async () => [],
         bulkUpsertForProject: async (_pid, docs) => (
           { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } }),
-        listSeededIds: async () => seededDocs
+        listSeededIds: async () => seededDocs,
+        countSeededIds: async () => counts.documents ?? seededDocs.length
       },
       boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
     };
@@ -695,6 +700,44 @@ test('seed --reconcile end to end', async (t) => {
     assert.deepStrictEqual(purged.projects, ['eagle-gone']);
     assert.strictEqual(summary.reconcile.documents.deleted, 1);
     assert.strictEqual(summary.reconcile.projects.deleted, 1);
+  });
+
+  await t.test('an enumeration shorter than the container COUNT refuses BOTH containers',
+    async () => {
+      // The live 2026-08-25 run: listSeededIds returned 1,000 of 60,578 rows because the SDK drops
+      // `x-ms-continuation` on a cross-partition ORDER BY, so 59,578 live documents computed as
+      // surplus. The fetch itself verifies clean, so only the COUNT can catch this.
+      const { purged, deps } = makeDeps({}, SEEDED_DOCS, { documents: 60578 });
+      const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+        { ...deps, sources: stubSources() });
+
+      assert.match(summary.failures.join(' '), /refused before any delete/);
+      assert.match(summary.failures.join(' '),
+        /documents enumerated 2 rows but the container holds 60578/);
+      assert.deepStrictEqual(purged, { documents: [], projects: [] });
+      assert.strictEqual(summary.reconcile, undefined);
+      assert.strictEqual(summary.failures.length ? 1 : 0, 1, 'a refused reconcile must exit 1');
+    });
+
+  await t.test('a short projects enumeration refuses the documents container too', async () => {
+    const { purged, deps } = makeDeps({}, SEEDED_DOCS, { projects: 9 });
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.match(summary.failures.join(' '), /projects enumerated 2 rows but the container holds 9/);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+    assert.strictEqual(summary.reconcile, undefined);
+  });
+
+  await t.test('an enumeration equal to the COUNT proceeds', async () => {
+    const { purged, deps } = makeDeps({}, SEEDED_DOCS,
+      { documents: SEEDED_DOCS.length, projects: 2 });
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(summary.failures, []);
+    assert.deepStrictEqual(purged.documents, ['207|stale']);
+    assert.strictEqual(summary.reconcile.documents.deleted, 1);
   });
 
   await t.test('no reconcile without the flag, even live', async () => {
@@ -944,12 +987,17 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
   const makeDeps = (docRows, projRows) => {
     const purged = { documents: [], projects: [] };
     const repos = {
-      projects: { upsert: async (p) => p, listEagleOnlyIds: async () => projRows },
+      projects: {
+        upsert: async (p) => p,
+        listEagleOnlyIds: async () => projRows,
+        countEagleOnlyIds: async () => projRows.length
+      },
       documents: {
         extractionRowsForProject: async () => [],
         bulkUpsertForProject: async (_pid, d) => (
           { succeeded: d.length, failed: 0, statusCounts: { 201: d.length } }),
-        listSeededIds: async () => docRows
+        listSeededIds: async () => docRows,
+        countSeededIds: async () => docRows.length
       },
       boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
     };

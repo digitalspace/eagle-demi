@@ -397,6 +397,10 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     assert.match(spec.query, /c\.sourceSystem = @sourceSystem/);
     assert.ok(spec.parameters.some(p => p.name === '@sourceSystem' && p.value === 'eagle'));
     assert.match(spec.query, /^SELECT c\.id, c\.projectId FROM c/);
+    // A cross-partition ORDER BY takes the SDK's query-plan path, which never copies
+    // `x-ms-continuation` into the merged headers — fetchAll then stops at the first page.
+    assert.doesNotMatch(spec.query, /ORDER BY/,
+      'the 2026-08-25 run enumerated 1,000 of 60,578 documents with the sort in place');
   });
 
   await t.test('listEagleOnlyIds is scoped to sourceSystem eagle', async () => {
@@ -409,5 +413,22 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     assert.match(spec.query, /c\.sourceSystem = @sourceSystem/);
     assert.ok(spec.parameters.some(p => p.name === '@sourceSystem' && p.value === 'eagle'));
     assert.match(spec.query, /^SELECT c\.id, c\.eagleId FROM c/);
+    assert.doesNotMatch(spec.query, /ORDER BY/, 'same continuation-token drop as listSeededIds');
+  });
+
+  await t.test('the reconcile COUNTs share the enumeration predicate exactly', async () => {
+    // The seeder's truncation guard is only meaningful if the COUNT and the read filter
+    // identically: a wider COUNT refuses every run, a narrower one never catches a short read.
+    const calls = captureQuery(t);
+    await documents.listSeededIds(SYSTEM);
+    await documents.countSeededIds(SYSTEM);
+    await projects.listEagleOnlyIds(SYSTEM);
+    await projects.countEagleOnlyIds(SYSTEM);
+
+    const where = q => q.split(' WHERE ')[1];
+    assert.strictEqual(where(calls[1].spec.query), where(calls[0].spec.query));
+    assert.strictEqual(where(calls[3].spec.query), where(calls[2].spec.query));
+    assert.match(calls[1].spec.query, /^SELECT VALUE COUNT\(1\) FROM c/);
+    assert.match(calls[3].spec.query, /^SELECT VALUE COUNT\(1\) FROM c/);
   });
 });

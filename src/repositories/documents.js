@@ -310,20 +310,32 @@ async function extractionRowsForProject(access, projectId) {
   return fetchAll(CONTAINER, spec, { partitionKey: String(projectId) });
 }
 
+/** The reconcile predicate, shared so the enumeration and its COUNT cannot drift apart. */
+const seededCriteria = () => [eq('sourceSystem', 'eagle', '@sourceSystem')];
+
 /**
  * `{id, projectId}` for every Eagle-seeded document in the container — the seeder's reconcile
  * set, ~61k rows. Scoped to `sourceSystem: 'eagle'` so a row this seed never produced (an
  * epic.submit upload) can never be computed as surplus and deleted.
+ *
+ * NO ORDER BY: a cross-partition sort takes the SDK's query-plan path, whose mergeHeaders never
+ * copies `x-ms-continuation`, so fetchAll saw no token and stopped at 1,000 of 60,578 rows.
  */
 async function listSeededIds(access) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [eq('sourceSystem', 'eagle', '@sourceSystem')],
-    select: 'c.id, c.projectId',
-    orderBy: 'c.id ASC'
+    criteria: seededCriteria(),
+    select: 'c.id, c.projectId'
   });
   return fetchAll(CONTAINER, spec);
+}
+
+/** COUNT of exactly what listSeededIds reads — the reconcile's proof that it ran to the end. */
+async function countSeededIds(access) {
+  const spec = countWhere({ access, partitionField: PARTITION_FIELD, criteria: seededCriteria() });
+  const value = await cosmos.queryValue(CONTAINER, spec);
+  return value || 0;
 }
 
 async function upsert(document) {
@@ -409,6 +421,7 @@ module.exports = {
   setAclForProject,
   extractionRowsForProject,
   listSeededIds,
+  countSeededIds,
   upsert,
   bulkUpsertForProject,
   patchExtraction,
