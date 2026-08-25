@@ -21,31 +21,10 @@ const { auditEvent } = require('../../utils/audit');
 const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
 
 /**
- * A project's visibility change, carried to its index row and down onto its documents.
+ * A project's visibility change, carried to its index row and re-derived onto its documents.
+ * Either transition, `ownRead ∩ projectRead`, systemAccess — wiki `Sync-Architecture`.
  *
- * A document must never out-rank its project. The 409 on PUT /documents/:id/published enforces
- * that upwards; this is the same invariant downwards, which nothing enforced — unpublishing a
- * project left every document under it carrying `public`, and `listVisible` gates on the
- * document's own ACL, so they stayed listable and searchable under a project nobody could see.
- *
- * On EITHER TRANSITION, because the cascade re-derives rather than assigns. It used to fire only
- * on the way down, on the reasoning that publishing a project must not publish its documents —
- * true, and still true, but it was enforced by never running rather than by the formula. So a
- * re-publish left every document restricted with no counterpart to restore them, and recovery was
- * ~170 individual `PUT /documents/:id/published` calls for an average project.
- *
- * `ownRead ∩ projectRead` returns `public` only to documents that already had it, so running on
- * the way up cannot publish a document whose own ACL never did.
- *
- * systemAccess() deliberately — a document already private must be patched too, and the caller
- * cannot read it. Called AFTER the project write, matching setDocumentPublished: a failure here
- * leaves the project private and its documents over-permissive, which is the direction the reader
- * gates cover.
- *
- * ponytail: documents only, not their chunks. A chunk is gated on its PARENT DOCUMENT's
- * visibility in the chunk-search join, so a stale chunk ACL cannot leak text on its own, and
- * fanning out one bulk call per document turns this into an unbounded request handler. If chunk
- * ACLs ever have to stand alone, move the whole cascade to a job and patch chunks there.
+ * ponytail: documents only, not chunks — a chunk gates on its parent document at query time.
  *
  * @returns {Promise<string|null>} an error message the caller must 500 with, or null on success.
  */

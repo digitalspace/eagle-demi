@@ -273,6 +273,40 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 
     assert.deepStrictEqual(written.read, ['sysadmin']);
     assert.strictEqual(written.isPublished, false);
+    assert.deepStrictEqual(written.ownRead, ['public', 'sysadmin'],
+      'the unconstrained Eagle ACL is what the cascade restores from on re-publish');
+  });
+
+  await t.test('a document that moved project leaves no row in the old partition', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject({ id: 'NEWPROJ' }));
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: 'OLDPROJ', isPublished: true, read: ['public', 'sysadmin']
+    }));
+    t.mock.method(documents, 'upsert', async (item) => item);
+    const deletes = [];
+    t.mock.method(documents, 'deleteById', async (id, projectId) => {
+      deletes.push([id, projectId]);
+    });
+
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument() }, user: STAFF
+    }, mockRes());
+
+    assert.deepStrictEqual(deletes, [[DOC_EAGLE_ID, 'OLDPROJ']],
+      'the upsert landed in the new partition; the old row would keep the old ACL');
+
+    // Same partition: nothing to clean up.
+    deletes.length = 0;
+    documents.getById.mock.mockImplementation(async () => ({
+      id: DOC_EAGLE_ID, projectId: 'NEWPROJ', isPublished: true, read: ['public', 'sysadmin']
+    }));
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument() }, user: STAFF
+    }, mockRes());
+
+    assert.strictEqual(deletes.length, 0);
   });
 
   await t.test('the pushed labels resolve the List ObjectIds, and both are stored', async () => {

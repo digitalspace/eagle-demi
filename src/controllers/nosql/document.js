@@ -24,7 +24,7 @@ const aiSearch = require('../../search/ai-search');
 const { purgeDocument } = require('../../helpers/purge');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
-const { transformDocument } = require('../../seed/transform');
+const { transformDocument, seedAcl } = require('../../seed/transform');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -497,10 +497,22 @@ exports.upsertFromEagle = async (req, res) => {
     }
 
     const existing = await documents.getById(systemAccess(), eagleId);
-    const saved = await documents.upsert(transformDocument(
+    const row = transformDocument(
       doc, parent.id, listLookupFrom(doc, req.body.labels),
       { existing, projectRead: parent.read }
-    ));
+    );
+    // The cascade restores a narrowed ACL from `ownRead` (documents.setAclForProject), so the
+    // push must carry the unconstrained Eagle ACL. A re-seed drops it deliberately; this does not.
+    row.ownRead = seedAcl(doc.read);
+    const saved = await documents.upsert(row);
+
+    // A document that moved project lands in a NEW partition and Cosmos leaves the old row behind,
+    // still listable under the old project's ACL. The index key is the same id, so the next
+    // indexer pass replaces that entry — only the stale Cosmos row needs removing. Chunks are
+    // partitioned by documentId and do not move.
+    if (existing && String(existing.projectId) !== saved.projectId) {
+      await documents.deleteById(existing.id, existing.projectId);
+    }
 
     auditEvent(req, {
       action: 'document.push',
