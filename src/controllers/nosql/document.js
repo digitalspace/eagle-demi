@@ -375,9 +375,9 @@ exports.setDocumentPublished = async (req, res) => {
     const published = req.body.isPublished === true || req.body.isPublished === 'true';
     const parentProject = await projects.getById(access, existing.projectId);
 
-    // A document still cannot out-rank its parent: publishing under a private project is a
-    // no-op that would otherwise silently expose it.
-    if (published && parentProject && !resolveDocumentAcl(parentProject, true).published) {
+    // A document still cannot out-rank its parent: publishing under a private project — or under
+    // no readable project at all — is refused rather than silently exposing it.
+    if (published && !(parentProject && resolveDocumentAcl(parentProject, true).published)) {
       return res.status(409).json({
         error: 'Cannot publish a document whose project is not published.'
       });

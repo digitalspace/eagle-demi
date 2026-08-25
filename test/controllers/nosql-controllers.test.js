@@ -303,6 +303,22 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     assert.strictEqual(res.statusCode, 409,
       'publishing under a private project would silently expose it');
   });
+
+  await t.test('a document whose project cannot be read is refused, not published', async () => {
+    // The guard used to skip entirely when the parent lookup returned null, so an orphan — or a
+    // project the caller cannot see — published unchecked.
+    t.mock.method(documents, 'getById', async () => ({ id: 'd1', projectId: '207' }));
+    t.mock.method(projects, 'getById', async () => null);
+    let published = false;
+    t.mock.method(documents, 'setPublished', async () => { published = true; return {}; });
+
+    const res = mockRes();
+    await documentController.setDocumentPublished(
+      { params: { id: 'd1' }, query: {}, body: { isPublished: true } }, res
+    );
+    assert.strictEqual(res.statusCode, 409, 'a missing parent must fail closed');
+    assert.strictEqual(published, false);
+  });
 });
 
 test('the router mounts one data layer, unconditionally', async (t) => {
@@ -895,9 +911,21 @@ test('unpublishing a project restricts its documents too', async (t) => {
   });
 
   await t.test('a partial cascade is surfaced, never swallowed', async () => {
+    const rows = [
+      { id: 'a', read: ['sysadmin'], isPublished: false },
+      { id: 'b', read: ['sysadmin'], isPublished: false },
+      { id: 'c', read: ['sysadmin'], isPublished: false }
+    ];
     t.mock.method(projects, 'getById', async () => published);
     t.mock.method(projects, 'upsert', async (doc) => doc);
-    t.mock.method(documents, 'setAclForProject', async () => ({ succeeded: 1, failed: 2, ids: ['a', 'b', 'c'] }));
+    t.mock.method(documents, 'setAclForProject', async () => ({
+      succeeded: 1, failed: 2, ids: ['a', 'b', 'c'], rows, failedIds: ['b', 'c']
+    }));
+    const writes = [];
+    t.mock.method(aiSearch, 'writeAcls', async (index, r) => { writes.push({ index, rows: r }); return r.length; });
+    t.mock.method(aiSearch, 'indexes', () => ({
+      chunks: 'chunks', projects: 'projects', documents: 'documents'
+    }));
 
     const res = mockRes();
     await projectController.updateProject({
@@ -905,6 +933,11 @@ test('unpublishing a project restricts its documents too', async (t) => {
     }, res);
 
     assert.strictEqual(res.statusCode, 500, 'a half-restricted project must not report success');
+    // The 500 used to return before the index write, leaving the rows that DID land stale and
+    // still listable under `public` until the indexer's next PT5M pass.
+    assert.deepStrictEqual(writes.map(w => w.index), ['projects', 'documents']);
+    assert.deepStrictEqual(writes[1].rows, [rows[0]],
+      'only the rows Cosmos accepted — the index must not claim an ACL Cosmos does not hold');
   });
 });
 

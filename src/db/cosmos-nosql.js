@@ -326,7 +326,8 @@ async function bulk(containerName, operations, opts = {}) {
  * the bill exactly when it matters. This is the only write path for chunks, so it is the one place
  * the number can be collected once for ingest, seeds and deletes alike.
  *
- * @returns {{succeeded: number, failed: number, statusCounts: object, requestCharge: number}}
+ * @returns {{succeeded: number, failed: number, statusCounts: object, requestCharge: number,
+ *            failedIds: string[]}}
  */
 async function bulkVerified(containerName, operations, opts = {}) {
   const maxAttempts = opts.maxAttempts || 4;
@@ -385,7 +386,11 @@ async function bulkVerified(containerName, operations, opts = {}) {
     throw lastThrown;
   }
 
-  return { succeeded, failed: pending.length, statusCounts, requestCharge };
+  // The ids still unwritten, so a caller can act on the subset that DID land.
+  return {
+    succeeded, failed: pending.length, statusCounts, requestCharge,
+    failedIds: pending.map(op => op.id)
+  };
 }
 
 /**

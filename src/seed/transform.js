@@ -73,7 +73,7 @@ function listRefId(ref) {
   return ref ? String(ref) : null;
 }
 
-const { EXTRACTION_FIELDS } = require('../repositories/documents');
+const { EXTRACTION_FIELDS, constrainToProject } = require('../repositories/documents');
 
 function carriedExtraction(existing) {
   if (!existing) return {};
@@ -92,6 +92,7 @@ function carriedExtraction(existing) {
  * @param {string}   [opts.now]       ISO timestamp, injected for deterministic tests
  * @param {object}   [opts.existing]  the row already in Cosmos, if any — its extraction state is
  *                                    carried onto the result
+ * @param {string[]} [opts.projectRead] the parent project's ACL, which this one is narrowed against
  */
 function transformDocument(doc, projectId, listLookup, opts = {}) {
   if (!doc || !doc._id) {
@@ -101,7 +102,11 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     throw new TypeError('[seed] a resolved projectId is required — never seed an orphan document');
   }
 
-  const read = seedAcl(doc.read);
+  // A document may never out-rank its project. Notification-parented rows have no project ACL to
+  // narrow against and stay verbatim.
+  const read = opts.projectRead
+    ? constrainToProject(seedAcl(doc.read), opts.projectRead)
+    : seedAcl(doc.read);
 
   return {
     // The Eagle _id is the stable natural key. Reusing it means a re-seed is idempotent and
