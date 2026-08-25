@@ -56,6 +56,42 @@ const EAGLE_ONLY_FIELDS = [
   'overallProgress', 'code', 'nameSearchTerms'
 ];
 
+/**
+ * Fields that live ONLY at the top level of a Mongo project — identity, ACL, pins, CAC, featured
+ * documents. Everything else is content and belongs to the legislation block.
+ */
+const EAGLE_TOP_LEVEL_FIELDS = [
+  '_id', 'read', 'write', 'delete', 'pins', 'pinsRead', 'pinsHistory', 'links',
+  'featuredDocuments', 'projectCAC', 'cacMembers', 'cacEmail', 'projectCACPublished',
+  '_schemaName', 'currentLegislationYear', 'legislationYearList',
+  '_updatedBy', '_addedBy', '_deletedBy', '__v'
+];
+
+/**
+ * Normalise an Eagle project to the FLAT shape every rule below is written against.
+ *
+ * Mongo keeps a project's content under `legislation_1996` / `legislation_2002` /
+ * `legislation_2018`, with `currentLegislationYear` naming the live one. eagle-api's public search
+ * hoists that block to the root (`$replaceRoot` in `api/helpers/utils.js`), so the seed never sees
+ * the nesting — but the DEMI push carries the RAW Mongo document, and every content field
+ * (`name`, `description`, `type`, `status`, `region`, …) read off it was `undefined`. Measured on
+ * test 2026-08-25: `eagle-6a5920eaf0b65c54e12eb20a` landed with no name.
+ *
+ * The block WINS over the top level: `region` and friends exist in both places and the top-level
+ * copy is stale (usually `''`), so a plain `{...block, ...doc}` would re-blank what was just
+ * recovered. An already-flat doc has no such sub-object and is returned untouched.
+ */
+function flattenEagleProject(doc) {
+  const block = doc && doc.currentLegislationYear && doc[doc.currentLegislationYear];
+  if (!block || typeof block !== 'object' || Array.isArray(block)) return doc;
+
+  const flat = { ...block };
+  for (const field of EAGLE_TOP_LEVEL_FIELDS) {
+    if (doc[field] !== undefined) flat[field] = doc[field];
+  }
+  return flat;
+}
+
 function hasValue(v) {
   if (v === undefined || v === null) return false;
   if (typeof v === 'string') return v.trim() !== '';
@@ -152,10 +188,13 @@ function resolveProjectAcl(eagle) {
  * @param {object}      [opts]
  * @param {string}      [opts.now]  ISO timestamp, injected for deterministic tests
  */
-function mergeTrackProject(track, eagle, opts = {}) {
+function mergeTrackProject(track, eagleRaw, opts = {}) {
   if (!track || !hasValue(track.track_project_id)) {
     throw new TypeError('[merge] a Track project with track_project_id is required');
   }
+
+  // Here, not at the call sites: the push hands over a raw Mongo doc and the seed a flat one.
+  const eagle = flattenEagleProject(eagleRaw);
 
   const now = opts.now || new Date().toISOString();
   const id = String(track.track_project_id);
@@ -227,7 +266,8 @@ function mergeTrackProject(track, eagle, opts = {}) {
  * it is identifiable for later reconciliation with Track. Keyed by its Eagle `_id`, since
  * there is no Track id to use.
  */
-function mergeEagleOnlyProject(eagle, opts = {}) {
+function mergeEagleOnlyProject(eagleRaw, opts = {}) {
+  const eagle = flattenEagleProject(eagleRaw);
   if (!eagle || !hasValue(eagle._id)) {
     throw new TypeError('[merge] an Eagle project with _id is required');
   }
@@ -353,6 +393,8 @@ module.exports = {
   SECURE_ROLES,
   TRACK_PRECEDENCE,
   EAGLE_ONLY_FIELDS,
+  EAGLE_TOP_LEVEL_FIELDS,
+  flattenEagleProject,
   hasValue,
   BC_BBOX,
   validCoordinates,
