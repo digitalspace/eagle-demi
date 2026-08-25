@@ -94,8 +94,13 @@ gone — nothing below points at an archive.
         pass exists, so dev-only rows would linger in Cosmos and the index. Chunks untouched by the
         seed. `sources.wildfire` wiped (re-run the manual sync after). Document id = Eagle `_id`
         verbatim, so idempotent only if dev ids match prod ids — pre-flight measures it.
-      - [ ] Phase 0 pre-flight (read-only): |demi ∩ prod|, |demi − prod| (delete set), |prod − demi|
-        (extractor backlog), 50-id sample for id stability. GO only if shared ≳ 55k, 0 mismatches.
+      - [x] Phase 0 pre-flight, 2026-08-25, **GO**: demi ∩ prod 60,552; demi − prod 8 (each
+        re-checked absent from prod by `dataset=Item`); prod − demi 1,059 (2026: 895) = extractor
+        backlog; 50-id sample 50/50 on `displayName` + `datePosted`. Prod `isFeatured` 331;
+        `documentSource` PROJECT 60,589 / COMMENT 956 / PROJECT-NOTIFICATION 63 / DROPZONE 3. 4 new
+        Eagle-only projects (Dawson Creek Water Supply, Lawyers-Ranch, Baptiste Nickel, m.ah a
+        temEEwuh Solar) will arrive as `eagle-<id>` rows. Id files kept in the session scratchpad
+        `preflight/`. Public-visible deltas only.
       - [ ] Phase 1 PR `feat/seed-preserve-and-reconcile`: preserve the four `content*` fields on
         existing rows (per-partition read before upsert); `--reconcile` flag deleting through the
         controllers' own delete helpers (index + chunks + row); `isFeatured` into `transform.js`
