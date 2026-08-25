@@ -115,8 +115,22 @@ is the whole pattern; no wrapper is needed now that the crypto shim is not.
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
+npm run db:seed-nosql -- --reconcile   # also delete rows the fetch did not produce
 npm run db:purge-extraction      # dry run by default; --live to write
 ```
+
+A re-seed **carries extraction state forward**. A Cosmos upsert replaces the item, so the seeder
+reads `contentExtracted`, `contentExtractedAt`, `contentPageCount` and `contentExtractionError` out
+of each partition before writing it and puts them back on any document it already holds; new ids
+start unextracted. The run reports `preserved`.
+
+`--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch are
+deleted through the same helpers `DELETE /documents/:id` and `DELETE /projects/:id` use, so the
+chunks and the search-index entries go with them. A dry run reports `wouldDelete` per container and
+logs the ids without deleting anything. It refuses — exit 1 — if `--only` dropped a stage, if
+`--limit-documents` was given, if eagle-api reported no `searchResultsTotal`, or if there is no
+`COSMOS_ENDPOINT` to enumerate the containers with: every one of those makes the untouched
+remainder look like surplus.
 
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the

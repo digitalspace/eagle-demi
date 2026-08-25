@@ -19,9 +19,12 @@
  *
  * Usage:
  *   node src/scripts/seed-nosql.js [--live] [--only projects,documents,boundaries]
- *                                 [--limit-documents N]
+ *                                 [--limit-documents N] [--reconcile]
  *
  * Without --only, runs DEFAULT_STAGES: projects, documents, boundaries.
+ *
+ * `--reconcile` also DELETES the rows the fetch did not produce, through the same helpers the
+ * DELETE controllers use. It needs Cosmos even in a dry run, where it only reports the count.
  *
  * Run it INSIDE the network via the Kudu command API, detached with a log file — Cosmos is behind
  * a private endpoint, and `/api/command` is synchronous and will time out on a 60k-document seed.
@@ -31,12 +34,19 @@ const sources = require('../seed/sources');
 const transform = require('../seed/transform');
 const { buildRegistry, buildProjectIndex } = require('../merge/project');
 
+const { systemAccess } = require('../helpers/access-sql');
+const { logger } = require('../utils/logger');
+const purgeHelpers = require('../helpers/purge');
+
 const projectsRepo = require('../repositories/projects');
 const documentsRepo = require('../repositories/documents');
 const boundariesRepo = require('../repositories/boundaries');
 
 /** Every stage `--only` accepts. */
 const ALL_STAGES = ['projects', 'documents', 'boundaries'];
+
+/** The stages `--reconcile` needs. Boundaries are a checked-in export with nothing to reconcile. */
+const RECONCILED_STAGES = ['projects', 'documents'];
 
 /** What runs when `--only` is not given — every stage there is. */
 const DEFAULT_STAGES = ['projects', 'documents', 'boundaries'];
@@ -53,10 +63,11 @@ const DEFAULT_STAGES = ['projects', 'documents', 'boundaries'];
 const FLUSH_THRESHOLD = 100;
 
 function parseArgs(argv) {
-  const args = { live: false, only: DEFAULT_STAGES, limitDocuments: Infinity };
+  const args = { live: false, only: DEFAULT_STAGES, limitDocuments: Infinity, reconcile: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
+    else if (a === '--reconcile') args.reconcile = true;
     else if (a === '--only') {
       args.only = String(argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
     } else if (a === '--limit-documents') args.limitDocuments = parseInt(argv[++i], 10);
@@ -66,7 +77,48 @@ function parseArgs(argv) {
   if (unknown.length) {
     throw new Error(`[seed] unknown stage(s): ${unknown.join(', ')}. Valid: ${ALL_STAGES.join(', ')}`);
   }
+
+  if (args.reconcile) {
+    // Reconcile deletes whatever the fetch did not produce, so anything that narrows the fetch
+    // turns the untouched remainder into surplus. Refused rather than intersected: a partial
+    // reconcile that looks like a full one is how a corpus disappears.
+    const missing = RECONCILED_STAGES.filter(stage => !args.only.includes(stage));
+    if (missing.length) {
+      throw new Error(`[seed] --reconcile needs the ${RECONCILED_STAGES.join(' and ')} stages; ` +
+        `--only excluded: ${missing.join(', ')}`);
+    }
+    if (Number.isFinite(args.limitDocuments)) {
+      throw new Error('[seed] --reconcile cannot run with --limit-documents — every document ' +
+        'past the limit would be computed as surplus and deleted');
+    }
+  }
   return args;
+}
+
+/**
+ * Rows in Cosmos that this fetch did not produce.
+ *
+ * Generic over the container because the two differ only in how a row is keyed: documents by
+ * `projectId|id`, Eagle-sourced projects by `eagleId`. Deletion goes through `remove`, which is
+ * the same helper the DELETE controllers use — a second delete path would eventually forget the
+ * search index, which no indexer ever cleans up.
+ *
+ * @param {Array}    rows      `{id, ...}` read out of Cosmos
+ * @param {function} keyOf     row -> the key to test against `fetched`
+ * @param {Set}      fetched   keys the upstream fetch produced
+ * @param {function} remove    row -> Promise, called ONLY when live
+ */
+async function reconcileContainer(label, rows, keyOf, fetched, remove, { live }) {
+  const surplus = rows.filter(row => !fetched.has(keyOf(row)));
+  logger.info(`[seed] reconcile ${label}: ${rows.length} in Cosmos, ${surplus.length} not in the ` +
+    `fetch${surplus.length ? ` — ${surplus.map(r => r.id).join(', ')}` : ''}`);
+
+  let deleted = 0;
+  for (const row of live ? surplus : []) {
+    await remove(row);
+    deleted++;
+  }
+  return { inCosmos: rows.length, wouldDelete: surplus.length, deleted };
 }
 
 /**
@@ -145,8 +197,22 @@ async function seed(argv = [], deps = {}) {
     documents: documentsRepo,
     boundaries: boundariesRepo
   };
+  const purge = deps.purge || purgeHelpers;
+  const access = systemAccess();
+  // Reading what is already there needs Cosmos. A live run always has it; a dry run only when the
+  // operator is inside the private endpoint and set COSMOS_ENDPOINT.
+  const cosmosReady = deps.cosmosReady !== undefined
+    ? deps.cosmosReady
+    : (args.live || Boolean(process.env.COSMOS_ENDPOINT));
 
   const summary = { mode: args.live ? 'live' : 'dry-run', stages: {}, failures: [] };
+  if (args.reconcile && !cosmosReady) {
+    summary.failures.push('--reconcile needs COSMOS_ENDPOINT: the surplus set cannot be computed ' +
+      'without enumerating the containers');
+    log('=== VERIFICATION FAILURES ===');
+    for (const f of summary.failures) log(`  \u2717 ${f}`);
+    return summary;
+  }
   log(`\n=== DEMI seed — ${args.live ? 'LIVE' : 'DRY RUN (nothing will be written)'} ===`);
   log(`Stages: ${args.only.join(', ')}\n`);
 
@@ -158,7 +224,12 @@ async function seed(argv = [], deps = {}) {
   log(`  ${trackProjects.length} from the checked-in export`);
 
   log('Fetching Eagle projects...');
-  const eagleProjects = await src.fetchEagleProjects();
+  // The upstream total, captured because `--reconcile` refuses to delete unless the fetch passed
+  // the searchResultsTotal gate in sources.js — a null total means that gate never ran.
+  let projectsTotal = null;
+  const eagleProjects = await src.fetchEagleProjects((_items, _count, total) => {
+    projectsTotal = total;
+  });
   log(`  ${eagleProjects.length} from eagle-api`);
 
   const { projects, report } = buildRegistry(trackProjects, eagleProjects, { now });
@@ -184,6 +255,20 @@ async function seed(argv = [], deps = {}) {
       }
     }
     log(`  projects ${args.live ? 'written' : 'would write'}: ${projects.length}\n`);
+
+    if (args.reconcile) {
+      if (projectsTotal === null) {
+        summary.failures.push('--reconcile refused: eagle-api reported no searchResultsTotal for ' +
+          'Project, so the fetch was never verified complete');
+      } else {
+        const fetched = new Set(eagleProjects.map(p => String(p._id)));
+        summary.reconcile = summary.reconcile || {};
+        summary.reconcile.projects = await reconcileContainer(
+          'projects', await repos.projects.listEagleOnlyIds(access),
+          row => String(row.eagleId), fetched, row => purge.purgeProject(row), args);
+        log(`  projects surplus: ${JSON.stringify(summary.reconcile.projects)}\n`);
+      }
+    }
   }
 
   // ── 2. Documents ───────────────────────────────────────────────────────────
@@ -202,19 +287,49 @@ async function seed(argv = [], deps = {}) {
 
     log('Streaming Eagle documents (60k+, paged at 100)...');
 
-    const buffers = new Map();          // projectId -> pending transformed docs
+    const buffers = new Map();          // projectId -> pending raw docs
     const perProject = new Map();       // projectId -> total transformed
     const unresolvedRefs = new Set();
     const stats = {
       fetched: 0, built: 0, unresolved: 0, notificationParented: 0,
-      noKey: 0, written: 0, writeFailed: 0
+      noKey: 0, preserved: 0, written: 0, writeFailed: 0
     };
     const writeStatus = {};
-    const seenIds = new Set();
+    const fetchedKeys = new Set();
     let duplicateIds = 0;
     let gateFailures = [];
 
-    const flush = async (projectId, docs) => {
+    // projectId -> (documentId -> extraction state already in Cosmos). One partition read per
+    // project, not per batch: a project's documents flush more than once.
+    const existingByProject = new Map();
+    const existingFor = async (projectId) => {
+      if (!cosmosReady) return null;
+      if (!existingByProject.has(projectId)) {
+        const rows = await repos.documents.extractionRowsForProject(access, projectId);
+        existingByProject.set(projectId, new Map(rows.map(r => [String(r.id), r])));
+      }
+      return existingByProject.get(projectId);
+    };
+
+    const flush = async (projectId, rawDocs) => {
+      // Transformed HERE rather than on the way into the buffer, because the extraction state a
+      // re-seed must carry forward is read one partition at a time and this is where the
+      // partition is known. A Cosmos upsert replaces the item, so without it every re-seed marks
+      // the whole corpus unextracted while its chunks stay behind.
+      const existingRows = await existingFor(projectId);
+      const docs = [];
+      for (const raw of rawDocs) {
+        const existing = existingRows && existingRows.get(String(raw._id));
+        if (existing) stats.preserved++;
+        const transformed = transform.transformDocument(raw, projectId, listLookup, { now, existing });
+        if (!transformed.s3Key) stats.noKey++;
+        // id is unique per PARTITION in Cosmos, so a repeat within one project silently
+        // overwrites. Counted so a shortfall is attributable rather than mysterious.
+        const key = `${projectId}|${transformed.id}`;
+        if (fetchedKeys.has(key)) duplicateIds++; else fetchedKeys.add(key);
+        docs.push(transformed);
+      }
+
       // Verify each batch rather than the whole corpus: the gates are per-item, and holding
       // 60,661 documents just to check them is what streaming exists to avoid.
       gateFailures.push(...verifyItems(docs, 'documents', 'projectId'));
@@ -231,7 +346,7 @@ async function seed(argv = [], deps = {}) {
       }
     };
 
-    const { count } = await src.streamEagleDocuments(async (page, fetched, total) => {
+    const { count, total: documentsTotal } = await src.streamEagleDocuments(async (page, fetched, total) => {
       stats.fetched = fetched;
 
       for (const doc of page) {
@@ -271,17 +386,11 @@ async function seed(argv = [], deps = {}) {
           continue;
         }
 
-        const transformed = transform.transformDocument(doc, projectId, listLookup, { now });
-        if (!transformed.s3Key) stats.noKey++;
-        // id is unique per PARTITION in Cosmos, so a repeat within one project silently
-        // overwrites. Counted so a shortfall is attributable rather than mysterious.
-        const key = `${projectId}|${transformed.id}`;
-        if (seenIds.has(key)) duplicateIds++; else seenIds.add(key);
         stats.built++;
         perProject.set(projectId, (perProject.get(projectId) || 0) + 1);
 
         if (!buffers.has(projectId)) buffers.set(projectId, []);
-        buffers.get(projectId).push(transformed);
+        buffers.get(projectId).push(doc);
       }
 
       // Pagination is _id-ordered and documents cluster by project, so a project's docs arrive
@@ -321,6 +430,7 @@ async function seed(argv = [], deps = {}) {
       distinctUnresolvedRefs: unresolvedRefs.size,
       unresolvedRefs: [...unresolvedRefs].slice(0, 20),
       withoutObjectKey: stats.noKey,
+      preserved: stats.preserved,
       duplicateIds,
       projects: perProject.size,
       written: stats.written,
@@ -345,7 +455,22 @@ async function seed(argv = [], deps = {}) {
     summary.failures.push(...new Set(gateFailures.map(f => f.replace(/^\d+ /, 'some '))));
     gateFailures = [];
 
+    log(`  extraction state carried forward on ${stats.preserved} existing rows`);
     log(`  documents ${args.live ? 'written' : 'would write'}: ${stats.built}\n`);
+
+    if (args.reconcile) {
+      if (documentsTotal === null || documentsTotal === undefined) {
+        summary.failures.push('--reconcile refused: eagle-api reported no searchResultsTotal for ' +
+          'Document, so the fetch was never verified complete');
+      } else {
+        summary.reconcile = summary.reconcile || {};
+        summary.reconcile.documents = await reconcileContainer(
+          'documents', await repos.documents.listSeededIds(access),
+          row => `${row.projectId}|${row.id}`, fetchedKeys,
+          row => purge.purgeDocument(row), args);
+        log(`  documents surplus: ${JSON.stringify(summary.reconcile.documents)}\n`);
+      }
+    }
   }
 
   // ── 5. Boundaries ──────────────────────────────────────────────────────────
@@ -380,6 +505,7 @@ async function seed(argv = [], deps = {}) {
   } else {
     log('=== Verification passed ===');
   }
+  if (summary.reconcile) log(`\nreconcile: ${JSON.stringify(summary.reconcile, null, 2)}`);
   log(`\n${JSON.stringify(summary.stages, null, 2)}\n`);
 
   return summary;
@@ -389,7 +515,9 @@ module.exports = {
   ALL_STAGES,
   DEFAULT_STAGES,
   FLUSH_THRESHOLD,
+  RECONCILED_STAGES,
   parseArgs,
+  reconcileContainer,
   verifyProjects,
   verifyItems,
   seed
@@ -397,11 +525,22 @@ module.exports = {
 
 if (require.main === module) {
   const { initCosmosClient } = require('../db/cosmos-nosql');
-  const args = parseArgs(process.argv.slice(2));
 
-  // Only connect when actually writing: a dry run is a pure pre-flight check and must work
-  // without database access, which is the only way to run it from outside the private endpoint.
-  if (args.live) initCosmosClient();
+  // Caught, because winston's handleExceptions swallows a throw here and the process still
+  // exits 0 — a rejected argument list would read as a successful seed.
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    logger.error(err.message);
+    process.exit(1);
+  }
+
+  // A dry run is a pure pre-flight check and must work without database access — that is the only
+  // way to run it from outside the private endpoint. Inside it, COSMOS_ENDPOINT turns on the reads
+  // that report `preserved` and `wouldDelete`; `--reconcile` without it refuses rather than
+  // reporting an empty surplus set.
+  if (args.live || process.env.COSMOS_ENDPOINT) initCosmosClient();
 
   seed(process.argv.slice(2))
     .then(summary => {

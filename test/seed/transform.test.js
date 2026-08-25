@@ -270,3 +270,72 @@ test('the real checked-in boundary exports all transform', async (t) => {
     assert.strictEqual(new Set(ids).size, ids.length);
   });
 });
+
+test('extraction state survives a re-seed', async (t) => {
+  const { EXTRACTION_FIELDS } = require('../../src/seed/transform');
+  const existing = {
+    id: EAGLE_DOC._id,
+    contentExtracted: true,
+    contentExtractedAt: '2026-08-01T10:00:00.000Z',
+    contentPageCount: 12,
+    contentExtractionError: null
+  };
+
+  await t.test('no existing row resets, so a new document is queued for extraction', () => {
+    const out = transformDocument(EAGLE_DOC, '207', LIST, OPTS);
+    assert.strictEqual(out.contentExtracted, false,
+      'upstream contentExtracted is true here and must NOT be believed');
+    assert.strictEqual(out.contentExtractedAt, null);
+    assert.strictEqual(out.contentPageCount, 0);
+    assert.strictEqual(out.contentExtractionError, null);
+  });
+
+  await t.test('an existing row carries its four fields forward verbatim', () => {
+    // A Cosmos upsert REPLACES the item. Without this a re-seed marks all 61k documents
+    // unextracted while their chunks stay behind, and the extractor redoes the whole corpus.
+    const out = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, existing });
+    for (const field of EXTRACTION_FIELDS) {
+      assert.deepStrictEqual(out[field], existing[field], field);
+    }
+  });
+
+  await t.test('a failed extraction is carried too, error and all', () => {
+    const failed = {
+      contentExtracted: false, contentExtractedAt: '2026-08-02T00:00:00.000Z',
+      contentPageCount: 0, contentExtractionError: 'docling timed out'
+    };
+    const out = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, existing: failed });
+    assert.strictEqual(out.contentExtractionError, 'docling timed out',
+      'losing the error re-queues a document that is known to fail');
+  });
+
+  await t.test('only the extraction fields are carried — never the ACL', () => {
+    // The existing row is a projection, but a widened projection must not become a way for a
+    // stale stored ACL to overwrite the one this seed just derived from upstream.
+    const out = transformDocument(EAGLE_DOC, '207', LIST, {
+      ...OPTS,
+      existing: { ...existing, read: ['sysadmin'], isPublished: false, projectId: 'somewhere-else' }
+    });
+    assert.ok(out.read.includes('public'), 'the ACL comes from upstream, not from the stored row');
+    assert.strictEqual(out.isPublished, true);
+    assert.strictEqual(out.projectId, '207');
+  });
+
+  await t.test('the projected columns match what the repository selects', () => {
+    // Two constants that must agree: transform decides which fields are carried, the repository
+    // decides which are read. A drift means the carried set is silently smaller than intended.
+    const repo = require('../../src/repositories/documents');
+    assert.deepStrictEqual(repo.EXTRACTION_FIELDS, EXTRACTION_FIELDS);
+  });
+});
+
+test('isFeatured is carried onto the Cosmos row', async (t) => {
+  await t.test('true only when upstream says exactly true', () => {
+    assert.strictEqual(transformDocument({ ...EAGLE_DOC, isFeatured: true }, '207', LIST, OPTS)
+      .isFeatured, true);
+    assert.strictEqual(transformDocument({ ...EAGLE_DOC, isFeatured: 'true' }, '207', LIST, OPTS)
+      .isFeatured, false, 'a string must not read as featured');
+    assert.strictEqual(transformDocument(EAGLE_DOC, '207', LIST, OPTS).isFeatured, false,
+      'absent means not featured, never undefined');
+  });
+});

@@ -276,6 +276,9 @@ test('seed() end to end with stubbed sources', async (t) => {
         projects: { upsert: async (p) => { written.projects.push(p); return p; } },
         // Returns the verified shape: the seeder must count what LANDED, not what it sent.
         documents: {
+          // The seeder reads the extraction state of each partition before writing it. Empty
+          // here: these fixtures describe a first seed, where nothing exists to carry forward.
+          extractionRowsForProject: async () => [],
           bulkUpsertForProject: async (pid, docs) => {
             written.documents.push([pid, docs]);
             return { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } };
@@ -510,5 +513,276 @@ test('seed() end to end with stubbed sources', async (t) => {
     const summary = await seed(['--only', 'documents', '--limit-documents', '1'],
       { sources: stubSources, repos, now: NOW });
     assert.strictEqual(summary.stages.documents.built, 1);
+  });
+});
+
+test('--reconcile refuses anything that narrows the fetch', async (t) => {
+  await t.test('accepted on a full run', () => {
+    assert.strictEqual(parseArgs(['--reconcile']).reconcile, true);
+    assert.strictEqual(parseArgs([]).reconcile, false, 'deletes are opt-in');
+  });
+
+  await t.test('--only that drops a reconciled stage throws', () => {
+    // Reconcile deletes whatever the fetch did not produce, so skipping the documents fetch
+    // would compute all 61k documents as surplus.
+    assert.throws(() => parseArgs(['--reconcile', '--only', 'projects']),
+      /--reconcile needs the projects and documents stages; --only excluded: documents/);
+    assert.throws(() => parseArgs(['--reconcile', '--only', 'documents']),
+      /--only excluded: projects/);
+    assert.doesNotThrow(() => parseArgs(['--reconcile', '--only', 'projects,documents']));
+  });
+
+  await t.test('--limit-documents throws', () => {
+    assert.throws(() => parseArgs(['--reconcile', '--limit-documents', '10']),
+      /cannot run with --limit-documents/);
+  });
+});
+
+test('reconcileContainer — the surplus set', async (t) => {
+  const { reconcileContainer } = require('../../src/scripts/seed-nosql');
+  const rows = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const fetched = new Set(['a', 'c']);
+
+  await t.test('a dry run computes the set and deletes NOTHING', async () => {
+    const removed = [];
+    const out = await reconcileContainer('documents', rows, r => r.id, fetched,
+      r => { removed.push(r.id); }, { live: false });
+
+    assert.deepStrictEqual(out, { inCosmos: 3, wouldDelete: 1, deleted: 0 });
+    assert.deepStrictEqual(removed, [], 'a dry run must not touch the container');
+  });
+
+  await t.test('a live run deletes each surplus row exactly once', async () => {
+    const removed = [];
+    const out = await reconcileContainer('documents', rows, r => r.id, fetched,
+      r => { removed.push(r.id); }, { live: true });
+
+    assert.deepStrictEqual(removed, ['b']);
+    assert.deepStrictEqual(out, { inCosmos: 3, wouldDelete: 1, deleted: 1 });
+  });
+
+  await t.test('nothing surplus deletes nothing', async () => {
+    const removed = [];
+    const out = await reconcileContainer('documents', rows, r => r.id,
+      new Set(['a', 'b', 'c']), r => { removed.push(r.id); }, { live: true });
+
+    assert.strictEqual(out.wouldDelete, 0);
+    assert.deepStrictEqual(removed, []);
+  });
+
+  await t.test('the key is composite where the container is partitioned', async () => {
+    // A document id is unique per PARTITION only, so keying on id alone would call two documents
+    // in different projects the same row and leave one of them behind.
+    const docs = [{ id: 'd1', projectId: '207' }, { id: 'd1', projectId: '373' }];
+    const removed = [];
+    const out = await reconcileContainer('documents', docs, r => `${r.projectId}|${r.id}`,
+      new Set(['207|d1']), r => { removed.push(r.projectId); }, { live: true });
+
+    assert.strictEqual(out.wouldDelete, 1);
+    assert.deepStrictEqual(removed, ['373']);
+  });
+});
+
+test('seed --reconcile end to end', async (t) => {
+  const eagleProject = (id, name) => ({
+    _id: id, name, type: 'Energy - Electricity', status: 'Operating',
+    read: ['public', 'sysadmin'], eaStatus: 'Certificate Issued'
+  });
+  const track = trackProjects.filter(p => [207, 373].includes(p.track_project_id));
+  const matchedGuid = track.find(p => p.track_project_id === 207).epic_guid;
+  const eagleDoc = (id, project) => ({
+    _id: id, project, displayName: `Doc ${id}`,
+    internalURL: `etl/x/${id}.pdf`, internalSize: '1024', internalExt: '.pdf',
+    read: ['public', 'project-team'], contentExtracted: true
+  });
+
+  // Unlike the fixtures above, these stubs deliver the upstream TOTAL — reconcile refuses without
+  // it, because a null total means sources.js never verified the fetch was complete.
+  const stubSources = (over = {}) => ({
+    EAGLE_API_BASE,
+    loadTrackProjects: () => track,
+    fetchEagleProjects: async (onPage) => {
+      const items = [eagleProject(matchedGuid, 'Nicomen Wind (Eagle)')];
+      if (onPage) await onPage(items, items.length, items.length);
+      return items;
+    },
+    streamEagleDocuments: async (onPage) => {
+      await onPage([eagleDoc('doc1', matchedGuid)], 1, 1);
+      return { count: 1, total: 1 };
+    },
+    fetchListLookup: async () => new Map(),
+    fetchAllPages: async () => [],
+    loadBoundaries: () => [],
+    ...over
+  });
+
+  const makeDeps = (over = {}) => {
+    const purged = { documents: [], projects: [] };
+    const repos = {
+      projects: {
+        upsert: async (p) => p,
+        listEagleOnlyIds: async () => [
+          { id: 'eagle-gone', eagleId: 'gone' },
+          { id: `eagle-${matchedGuid}`, eagleId: matchedGuid }
+        ]
+      },
+      documents: {
+        extractionRowsForProject: async () => [],
+        bulkUpsertForProject: async (_pid, docs) => (
+          { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } }),
+        listSeededIds: async () => [
+          { id: 'doc1', projectId: '207' },
+          { id: 'stale', projectId: '207' }
+        ]
+      },
+      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
+    };
+    const purge = {
+      purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); },
+      purgeProject: async (row) => { purged.projects.push(row.id); }
+    };
+    return { purged, deps: { repos, purge, cosmosReady: true, now: NOW, ...over } };
+  };
+
+  await t.test('a dry run reports wouldDelete and deletes nothing', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(summary.failures, []);
+    assert.strictEqual(summary.reconcile.documents.wouldDelete, 1);
+    assert.strictEqual(summary.reconcile.documents.deleted, 0);
+    assert.strictEqual(summary.reconcile.projects.wouldDelete, 1);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
+  await t.test('a live run deletes the surplus through the DELETE helpers', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.deepStrictEqual(purged.documents, ['207|stale'],
+      'the fetched document must survive and the orphan must not');
+    assert.deepStrictEqual(purged.projects, ['eagle-gone']);
+    assert.strictEqual(summary.reconcile.documents.deleted, 1);
+    assert.strictEqual(summary.reconcile.projects.deleted, 1);
+  });
+
+  await t.test('no reconcile without the flag, even live', async () => {
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.strictEqual(summary.reconcile, undefined);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+
+  await t.test('a fetch with no upstream total is refused, not reconciled', async () => {
+    // sources.js only verifies the fetch against searchResultsTotal when the upstream reports
+    // one. A null total means that gate never ran, so "not in the fetch" proves nothing.
+    const { purged, deps } = makeDeps();
+    const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'], {
+      ...deps,
+      sources: stubSources({
+        streamEagleDocuments: async (onPage) => {
+          await onPage([eagleDoc('doc1', matchedGuid)], 1, null);
+          return { count: 1, total: null };
+        }
+      })
+    });
+
+    assert.match(summary.failures.join(' '), /no searchResultsTotal for Document/);
+    assert.deepStrictEqual(purged.documents, [], 'nothing may be deleted off an unverified fetch');
+    assert.strictEqual(summary.reconcile.documents, undefined);
+  });
+
+  await t.test('a dry run with no Cosmos refuses instead of reporting an empty surplus', async () => {
+    const { purged, deps } = makeDeps({ cosmosReady: false });
+    const summary = await seed(['--reconcile', '--only', 'projects,documents'],
+      { ...deps, sources: stubSources() });
+
+    assert.match(summary.failures.join(' '), /--reconcile needs COSMOS_ENDPOINT/);
+    assert.strictEqual(summary.reconcile, undefined);
+    assert.deepStrictEqual(purged, { documents: [], projects: [] });
+  });
+});
+
+test('a re-seed carries extraction state forward', async (t) => {
+  const eagleProject = (id, name) => ({
+    _id: id, name, read: ['public', 'sysadmin'], status: 'Operating'
+  });
+  const track = trackProjects.filter(p => p.track_project_id === 207);
+  const matchedGuid = track[0].epic_guid;
+  const eagleDoc = (id) => ({
+    _id: id, project: matchedGuid, displayName: `Doc ${id}`,
+    internalURL: `etl/x/${id}.pdf`, internalExt: '.pdf', read: ['public']
+  });
+
+  const sources = {
+    EAGLE_API_BASE,
+    loadTrackProjects: () => track,
+    fetchEagleProjects: async () => [eagleProject(matchedGuid, 'Nicomen Wind')],
+    streamEagleDocuments: async (onPage) => {
+      await onPage([eagleDoc('known'), eagleDoc('brandnew')], 2, 2);
+      return { count: 2, total: 2 };
+    },
+    fetchListLookup: async () => new Map(),
+    fetchAllPages: async () => [],
+    loadBoundaries: () => []
+  };
+
+  const run = async (cosmosReady) => {
+    const written = [];
+    const partitions = [];
+    const repos = {
+      projects: { upsert: async (p) => p },
+      documents: {
+        extractionRowsForProject: async (_access, projectId) => {
+          partitions.push(projectId);
+          return [{
+            id: 'known', contentExtracted: true, contentExtractedAt: '2026-08-01T00:00:00.000Z',
+            contentPageCount: 9, contentExtractionError: null
+          }];
+        },
+        bulkUpsertForProject: async (pid, docs) => {
+          written.push(...docs);
+          return { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } };
+        }
+      },
+      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
+    };
+    const summary = await seed(['--live', '--only', 'documents'],
+      { sources, repos, now: NOW, cosmosReady });
+    return { summary, written, partitions };
+  };
+
+  await t.test('an existing document keeps its extraction state, a new one does not', async () => {
+    const { summary, written } = await run(true);
+
+    const known = written.find(d => d.id === 'known');
+    assert.strictEqual(known.contentExtracted, true,
+      'resetting this orphans the chunks and re-queues the whole corpus');
+    assert.strictEqual(known.contentExtractedAt, '2026-08-01T00:00:00.000Z');
+    assert.strictEqual(known.contentPageCount, 9);
+
+    const fresh = written.find(d => d.id === 'brandnew');
+    assert.strictEqual(fresh.contentExtracted, false);
+    assert.strictEqual(fresh.contentPageCount, 0);
+
+    assert.strictEqual(summary.stages.documents.preserved, 1);
+  });
+
+  await t.test('the partition is read once per project, not once per batch', async () => {
+    const { partitions } = await run(true);
+    assert.deepStrictEqual(partitions, ['207']);
+  });
+
+  await t.test('without Cosmos nothing is read and nothing is preserved', async () => {
+    // The path a dry run from outside the private endpoint takes: no database, so the rows are
+    // still built and still verified, they just keep the reset values.
+    const { summary, written, partitions } = await run(false);
+    assert.deepStrictEqual(partitions, []);
+    assert.strictEqual(summary.stages.documents.preserved, 0);
+    assert.strictEqual(written.find(d => d.id === 'known').contentExtracted, false);
   });
 });

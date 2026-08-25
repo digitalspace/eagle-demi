@@ -75,7 +75,7 @@ gone — nothing below points at an archive.
 - [ ] **1.3 Rotate `ADMIN_API_KEY`** (value passed through the 2026-08-13 incident and every
       `probe-acl.js` run since). Three targets, rotate all before restarting anything or the
       extractor 401s: `demi-app-secrets` (6cdc9e-test, writable now), App Service (`az` works again),
-      `gpu-extractor.env` on the GPU box (`192.168.5.109` not answering 2026-08-24). Then restart
+      `gpu-extractor.env` on the GPU box (`192.168.5.99`, host `doc-ocr-processor`; `.109` was wrong). Then restart
       `gpu-extractor` and `gpu-ingest`.
 - ACL probe exists and passes: `ADMIN_API_KEY=… node src/scripts/probe-acl.js`, ~7 min, 26/26 on
   2026-08-24. Exit 0 pass, 1 missed prediction, 2 aborted, 3 inconclusive leg (not a pass). Leaves

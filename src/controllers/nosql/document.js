@@ -21,6 +21,7 @@ const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
 const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
+const { purgeDocument } = require('../../helpers/purge');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
 
@@ -463,36 +464,10 @@ exports.deleteDocument = async (req, res) => {
       return res.status(404).json({ error: 'Document not found' });
     }
 
-    await documents.deleteById(existing.id, existing.projectId);
-
-    // The document's extracted text has to go with it. Without this the chunks survive in Cosmos
-    // and keep serving the complete text of a deleted document — the exact thing "a chunk must
-    // never be findable when its document is not" forbids. Nothing sweeps them later: the nightly
-    // full sync that used to be the backstop went with Typesense.
-    let removedChunks = 0;
-    try {
-      const result = await chunks.removeForDocument(systemAccess(), existing.id);
-      removedChunks = result.succeeded || 0;
-    } catch (err) {
-      logger.error(`[Document Controller] Chunk removal failed: ${err.message}`);
-    }
-
-    // Best-effort, and the ONLY thing that removes this document from search: the indexer's
-    // high-water mark never sees a delete, so without these two calls a deleted document stays
-    // findable — by name, and by its text — indefinitely. A failure here must still not turn a
-    // successful delete into a 500, so it is reported in the response instead.
-    const removedFromSearch =
-      await aiSearch.deleteFromIndex(aiSearch.indexes().documents, existing.id);
-
-    // "Best-effort" here does NOT mean "something else will catch it". Nothing will: the indexer
-    // runs on a high-water mark over `_ts`, which cannot see deletes AT ALL (measured: a run
-    // immediately after a hard delete processed 0 items), and there is no deletion-detection
-    // policy configured. This call is the only thing that removes the text of a deleted document
-    // from search, and if it fails the text stays searchable until someone retries. It still must
-    // not fail the request — the record is already gone — so the client is told what happened
-    // instead. `deleteChunksForDocument` swallows and logs its own errors, which is why this is a
-    // bare await rather than a try/catch.
-    const removedChunksFromSearch = await aiSearch.deleteChunksForDocument(existing.id);
+    // Chunks and both index entries go with the row — nothing sweeps them later.
+    const {
+      removedChunks, removedFromSearch, removedChunksFromSearch, storedFileRetained
+    } = await purgeDocument(existing);
 
     // Recorded after the cleanup calls so the row carries what actually happened to the search
     // index and the chunks, not what was intended. The stored file survives the record, and the
@@ -507,7 +482,7 @@ exports.deleteDocument = async (req, res) => {
         removedChunks,
         removedFromSearch,
         removedChunksFromSearch,
-        storedFileRetained: Boolean(existing.s3Key)
+        storedFileRetained
       }
     });
 
@@ -518,7 +493,7 @@ exports.deleteDocument = async (req, res) => {
       removedChunksFromSearch,
       removedFromSearch,
       // Stated in the response so it is obvious the file survives the record.
-      storedFileRetained: Boolean(existing.s3Key)
+      storedFileRetained
     });
   } catch (err) {
     return serverError(res, err, 'document controller failed');
