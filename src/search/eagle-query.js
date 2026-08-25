@@ -3,44 +3,15 @@
 /**
  * Translate eagle-public's query string into an Azure AI Search request.
  *
- * The contract belongs to eagle-api, not to us: eagle-public speaks it already and is not changing.
- * `api.ts:160-206` builds every search URL there, and it emits `and[key]=value` repeats, `sortBy`
- * TWICE (often one of them empty), a 0-BASED `pageNum`, and a flat `project=<id>` on the project
- * tabs. Everything in this file exists because of one of those.
+ * The contract belongs to eagle-api, not to us: `api.ts:160-206` emits `and[key]=value` repeats,
+ * `sortBy` TWICE (often one of them empty), a 0-BASED `pageNum`, and a flat `project=<id>` on the
+ * project tabs. Everything in this file exists because of one of those.
  *
- * FIELD METADATA COMES FROM THE COMMITTED INDEX DEFINITIONS, not from a table here. `filterable`,
- * `sortable` and the Edm type are read out of `azure/search/indexes/*.json` at load, so a schema
- * change cannot leave a hand-written copy behind — the same rule `ai-search.js` states about
- * `select`: a name that is not in the index is a 400 on EVERY query, not a missing field.
- *
- * WHAT DEMI'S INDEXES CANNOT EXPRESS, and therefore what this drops:
- *   - `documentSource`, `isFeatured` — no such field in `documents`. eagle-public's /search filter
- *     panel sends both.
- *   - ~~`milestone`, `projectPhase`, `documentAuthorType`, and any `datePosted` range~~ — these
- *     ARE expressible now. `documents` carries `milestoneId`, `projectPhaseId`,
- *     `documentAuthorTypeId`, `typeId` and `datePosted`, and ALIASES.Document maps the wire names
- *     onto the id columns. **The index change and this map ship together**: the field metadata is
- *     read from the committed JSON at require time, so an app that ships this file against an index
- *     that has not been PUT yet emits `$orderby datePosted desc` at a service with no such field —
- *     a 400, which is not retried, which the controller answers as 502. Apply the index BEFORE
- *     deploying the app, or as the first action after.
- *   - ~~`type` on a Project~~ — expressible now, but only through VALUE_ALIASES. DEMI stores
- *     Track's `type_name` (`merge/project.js:35`) for a Track-backed project and Eagle's `type` for
- *     an Eagle-only one, and eagle-public sends Eagle's spelling; three of the ten options differ
- *     (` - ` for `-`, and a plural). Measured on the 382 rows in test: matching only the wire
- *     spelling finds 0 of the 95 rows spelled Track's way and answers 200 — the silent-nothing this
- *     list exists to prevent. BOTH spellings are matched, so neither origin is excluded.
- *   - `proponent` and `pcp` on a Project. eagle-public's panel sends an Org ObjectId and a PCP
- *     status; Cosmos keeps `proponentName` and no PCP field at all (`merge/project.js:36`), so
- *     there is no column to point them at. Dropped, and an index change alone cannot fix them —
- *     the data is not in DEMI.
- *   - `centroid`. It is `filterable: true` like every geography field, but `eq` is not an operator
- *     OData defines on one — a spatial filter is `geo.distance(...)`, which nothing on the wire
- *     asks for. See TERM_TYPES: the gate is the field's TYPE, never its `filterable` flag.
- * All of those are DROPPED and logged, never passed through: an unknown field name is an OData 400,
- * and eagle-public swallows a failed search into an empty table (`search.service.ts:64-69`), which
- * is indistinguishable from "no results" for whoever is looking at the screen. Fixing any of them
- * is an index change plus a reindex, not a change here.
+ * Field metadata is read from `azure/search/indexes/*.json` at load, never from a table here, and a
+ * key the indexes cannot express is DROPPED and logged rather than emitted — an unknown field name
+ * is an OData 400, which eagle-public renders as an empty table. See
+ * wiki Search-and-Retrieval#field-metadata-comes-from-the-committed-index-definitions and
+ * #what-demis-indexes-cannot-express.
  */
 
 const fs = require('fs');
@@ -52,12 +23,9 @@ const INDEX_DIR = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes')
 /**
  * Dataset → which `azure/search/indexes/*.json` holds its field metadata.
  *
- * THESE ARE SCHEMA NAMES, NOT WIRE NAMES. They match the `name` INSIDE the committed definitions
- * and have nothing to do with `SEARCH_INDEX*`, which name the live indexes `ai-search.js` actually
- * queries. The two are decoupled on purpose: it is what lets the physical indexes be renamed one
- * app setting at a time while the field metadata keeps resolving. Coupling them would mean a
- * half-done cutover silently loses every filter and sort — `fieldsFor` falls back to an empty Map,
- * so an unmatched name here answers 200 with no filters applied rather than failing.
+ * SCHEMA NAMES, NOT WIRE NAMES: decoupled from `SEARCH_INDEX*` on purpose, so the physical indexes
+ * can be renamed one app setting at a time. An unmatched name falls back to an empty Map, which
+ * answers 200 with no filters applied rather than failing.
  */
 const DATASET_INDEX = {
   Project: 'projects',
@@ -68,14 +36,10 @@ const DATASET_INDEX = {
 /**
  * Wire key → index field, per dataset.
  *
- * `_id` is the interesting one. eagle-public holds Eagle ObjectIds, and this API answers with them
- * (see the response mappers in `controllers/search.js`), so a filter on `_id` has to land on the
- * field that HOLDS the Eagle id — `legacyEagleId` for a project, and the row key itself for a
- * document or chunk, which are already seeded in Eagle id-space (`seed/transform.js:84-87`).
- *
- * `project` is NOT here for the same reason: the value needs translating from an Eagle ObjectId to
- * a DEMI project id before it can be compared, which is a read, not a rename. See
- * `projectIdsFrom`/`withProjectIds` below and their caller.
+ * `_id` lands on whichever field holds the EAGLE id — `legacyEagleId` for a project, the row key
+ * itself for a document or chunk. `project` is deliberately absent: its value needs translating
+ * from an Eagle ObjectId to a DEMI project id, which is a read, not a rename. See
+ * `projectIdsFrom`/`withProjectIds`.
  */
 const ALIASES = {
   Project: {
@@ -83,11 +47,8 @@ const ALIASES = {
     // sortBy forms eagle-public sends for nested columns (project-list.constants.ts:7-38)
     'project.name': 'name',
     'proponent.name': 'proponent',
-    // The project-list filter panel sends List ObjectIds for these three
-    // (project-list.constants.ts:62-131, every one `matchId: true`) while the columns render the
-    // LABEL, so the index carries both and the wire name resolves to the id column. Same split
-    // eagle-search uses (`eagle-search/azure/search/indexes/eagle-projects.json`), for the same
-    // reason ALIASES.Document gives: a label-valued filter is ambiguous, an id is not.
+    // The filter panel sends List ObjectIds for these three while the columns render the LABEL, so
+    // the wire name resolves to the id column. Same split eagle-search uses: an id is unambiguous.
     eacDecision: 'eacDecisionId',
     currentPhaseName: 'currentPhaseNameId',
     CEAAInvolvement: 'ceaaInvolvementId'
@@ -95,11 +56,8 @@ const ALIASES = {
   Document: {
     _id: 'id',
     project: 'projectId',
-    // eagle-public's four document facets send List ObjectIds, never labels
-    // (documents-tab.component.ts:47, values built from eagle-api's List collection), so each maps
-    // to the id column beside the label. Copied from eagle-search's own map
-    // (`eagle-search/service/query.js:52-59`) rather than invented: the two services have to drop
-    // the same keys and honour the same ones, or a flip changes what a saved filter URL means.
+    // The four document facets send List ObjectIds, never labels. Copied from eagle-search's own
+    // map rather than invented — a flip changes what a saved filter URL means.
     type: 'typeId',
     milestone: 'milestoneId',
     projectPhase: 'projectPhaseId',
@@ -115,17 +73,10 @@ const ALIASES = {
 /**
  * Wire keys that name a REAL field of the index and must still never be filtered on.
  *
- * `proponent` is the whole reason this exists. eagle-public's panel sends an Org ObjectId
- * (`project-list.constants.ts:101-107`, `matchId: true`) and `projects.proponent` holds the
- * proponent's NAME — DEMI keeps `proponentName` and no org id at all (`merge/project.js:36`). So
- * the key passes every gate in `buildFilter`, emits `proponent eq '58850f69…'`, matches 0 of 382
- * rows and answers 200. Dropping it puts the loss in `dropped` where the log and the caller can
- * see it, which is the difference between "we cannot express this" and "there are no such
- * projects".
- *
- * NOT a general-purpose deny list: a key that names no field, or an unfilterable one, is already
- * dropped by the gates below. This is only for the case where the name lands on a field holding a
- * DIFFERENT thing than the caller is asking about.
+ * `proponent` is the whole reason this exists: it passes every gate in `buildFilter` and emits
+ * `proponent eq '<ObjectId>'` against a field holding a NAME, matching 0 of 382 rows under a 200.
+ * NOT a general deny list — a key naming no field, or an unfilterable one, is already dropped
+ * below. See wiki Search-and-Retrieval#what-demis-indexes-cannot-express.
  */
 const EMPTY_SET = new Set();
 
@@ -134,22 +85,9 @@ const UNMAPPED_KEYS = {
 };
 
 /**
- * Wire VALUE -> the OTHER spelling the corpus may hold it under. Both are matched, never swapped.
- *
- * ALIASES renames a field; this widens what the caller is asking FOR. `type` needs it because DEMI
- * takes the project type from Track (`merge/project.js:35`, `type_name` wins over Eagle's `type`)
- * while eagle-public's option list is Eagle's, hard-coded at
- * `eagle-public/src/app/shared/utils/constants.ts:62-73`. Six of the ten spellings match; three do
- * not, and the tenth (`Food Processing`) has no rows either way.
- *
- * BOTH SPELLINGS, because BOTH ARE STORED. `merge/project.js` only prefers Track where a Track
- * record exists — an Eagle-only project keeps Eagle's `type` verbatim (`TRACK_PRECEDENCE`'s third
- * column), so substituting the wire value for the Track one made those rows unmatchable by the
- * only filter that could ask for them. The index carries 393 rows against the 382 the Track export
- * accounts for, so the Eagle-only case is not hypothetical.
- *
- * Only these three are listed. An unlisted value is matched as sent, because a value this map has
- * never heard of is a value the index may still hold — Track can add a type without asking us.
+ * Wire VALUE -> the OTHER spelling the corpus may hold it under. Both are matched, never swapped,
+ * because both are stored. An unlisted value is matched as sent: Track can add a type without
+ * asking us. See wiki Search-and-Retrieval#project-type-spellings.
  */
 const VALUE_ALIASES = {
   Project: {
@@ -162,15 +100,10 @@ const VALUE_ALIASES = {
 };
 
 /**
- * Order applied when the caller asks for none AND there are no keywords.
- *
- * `search: '*'` has NO stable order in AI Search, so without this, page 2 can repeat and omit rows
- * from page 1 — which reads to a user as data loss, not as a sorting quirk. It must NOT apply to a
- * keyword search: an alphabetical default there sorts the relevance ranking away.
- *
- * No entry for DocumentChunk: EVERY field in `chunks` is `sortable: false`, the key included,
- * so `$orderby` on that index cannot name anything at all. Chunks page in relevance order and a
- * deep chunk page is therefore not stable — the honest statement of what the index supports.
+ * Order applied when the caller asks for none AND there are no keywords: `search: '*'` has no stable
+ * order, so without this page 2 repeats and omits rows from page 1. No entry for DocumentChunk —
+ * every field in `chunks` is `sortable: false`. See
+ * wiki Search-and-Retrieval#default-order-and-relevance.
  */
 const DEFAULT_ORDER = {
   Project: 'name asc',
@@ -178,18 +111,13 @@ const DEFAULT_ORDER = {
 };
 
 /**
- * Query parameters this endpoint understands. Anything else is a 400 rather than a silent no-op.
- *
- * A dropped PARAMETER is the dangerous class: `page=2` instead of `pageNum=1` serves page 1 with a
- * 200, and a filter the server never read returns the whole corpus looking exactly like a match.
- * A dropped FILTER KEY is different — it is named in the response log and the index genuinely
- * cannot express it — which is why that one is dropped and this one is refused.
+ * Query parameters this endpoint understands. Anything else is a 400 rather than a silent no-op —
+ * see wiki Search-and-Retrieval#unsupported-parameters-400-inexpressible-filter-keys-drop.
  */
 const KNOWN_PARAMS = new Set([
   // this API's own
   'dataset', 'keywords', 'q', 'fuzzy', 'pageSize', 'includeSeeded',
-  // eagle-public's (api.ts:160-206). The last four are read by nobody here and say so at §3.4 of
-  // the contract: `fields` is literally `[object Object]` on six call sites.
+  // eagle-public's (api.ts:160-206). The last four are read by nobody here.
   'pageNum', 'sortBy', 'project', 'categorized', 'projectLegislation', 'populate', 'fields'
 ]);
 
@@ -202,14 +130,10 @@ function loadFields() {
   try {
     files = fs.readdirSync(INDEX_DIR);
   } catch (err) {
-    // THROWING IS THE CORRECT BEHAVIOUR — the map built below is the type gate, and an empty map
-    // would let a `filterable` geography field through to an OData `eq` that AI Search 400s on.
-    // What was wrong was the WORDING. This runs at require time and the boot chain reaches it
-    // (index.js -> api/index.js -> src/routes/api.js -> src/controllers/search.js -> here), so
-    // when `scripts/package-api.py` shipped a package without `azure/search/indexes` the whole
-    // API died, and the entire diagnosis on offer was `ENOENT: ... scandir
-    // '/home/site/wwwroot/azure/search/indexes'` — a path, with no hint that it is a packaging
-    // fault rather than a missing mount, a bad deploy root, or a broken container image.
+    // THROWING IS CORRECT: the map built below is the type gate, and an empty one would let a
+    // `filterable` geography field through to an OData `eq` the service 400s on. The message names
+    // the packaging fault because this runs at require time, where a bare ENOENT reads as a bad
+    // mount or a broken image.
     throw new Error(
       `search index definitions not found at ${INDEX_DIR} — this deploy package is incomplete; ` +
       'scripts/package-api.py must re-include azure/search/indexes (it excludes azure/ wholesale)',
@@ -238,13 +162,7 @@ function fieldsFor(dataset) {
 
 /**
  * Yield `[key, value]` for every `and[...]` parameter, whichever shape the query parser produced.
- *
- * BOTH SHAPES, on purpose. Express 5 defaults to the `simple` query parser, which reads
- * `and[type]=x` as the LITERAL key `'and[type]'`; the `extended`/`qs` parser reads the same URL as
- * a NESTED OBJECT, `req.query.and = { type: 'x' }`. eagle-search recorded what handling only one
- * shape costs (`service/query.js:114-126`): every filter silently dropped and 60,560 documents
- * returned where a filtered handful was expected — not an error anyone sees, a page of results that
- * looks fine and is wrong. Reading both removes the dependency on a setting entirely.
+ * BOTH SHAPES, on purpose — see wiki Search-and-Retrieval#query-parser-shapes.
  */
 function* andParams(query) {
   for (const [rawKey, rawValue] of Object.entries(query)) {
@@ -263,25 +181,12 @@ function quote(value) {
 }
 
 /**
- * The Edm types `term()` has a case for — and therefore the ONLY types this endpoint can filter on.
+ * The Edm types `term()` has a case for — and THE GATE FOR A FILTER KEY, not `filterable`. A type
+ * this cannot express is an UNSUPPORTED KEY, reported through the same `dropped` path as a key the
+ * index does not carry. See wiki Search-and-Retrieval#type-gates-not-filterable-and-sortable-flags.
  *
- * THIS IS THE GATE FOR A FILTER KEY, not `filterable`. `projects.centroid` is an
- * `Edm.GeographyPoint` and is `filterable: true` — geography fields are filterable, just not with
- * `eq` — so a `filterable` gate let it through to the quoted-string default and emitted
- * `centroid eq 'x'`. That is not an operator OData defines on a geography field, so the service
- * answers 400; 400 is deliberately not in RETRY_STATUSES, `request()` throws, and the controller
- * used to log it and fall through to the KEYWORDLESS Cosmos read — which ignores the keywords
- * entirely and answers an arbitrary page of the whole readable corpus. One `and[centroid]=x` from
- * any anonymous caller turned every Project keyword search into that. Rows stayed ACL-gated, so it
- * was never a confidentiality bypass; it is exactly the failure this file's header exists to stop.
- *
- * So a type this cannot express is an UNSUPPORTED KEY, reported through the same `dropped` path as
- * a key the index does not carry, rather than emitted and hoped for.
- *
- * `Collection(Edm.String)` only, for the collections: the collection branch quotes its value, so a
- * `Collection(Edm.Int32)` would emit quoted integers and 400 the same way. `demi-*` has one
- * collection field (`read`) and it is strings; the check is what keeps that true if a second
- * arrives.
+ * `Collection(Edm.String)` only: the collection branch quotes its value, so a `Collection(Edm.Int32)`
+ * would emit quoted integers and 400 the same way.
  */
 const TERM_TYPES = new Set([
   'Edm.String', 'Edm.Int32', 'Edm.Int64', 'Edm.Double', 'Edm.Boolean'
@@ -298,28 +203,20 @@ function term(field, meta, value) {
   switch (meta.type) {
     case 'Edm.Int32':
     case 'Edm.Int64': {
-      // "Does it parse" is the wrong question; "can the field hold it" is the right one. `Number`
-      // accepts both `0.5` and `1e21`, and `and[pageNumber]=0.5` emitted `pageNumber eq 0.5` while
-      // `1e21` emitted `pageNumber eq 1e+21` — both 400s against the `Edm.Int32` that
-      // `chunks.pageNumber` is, and a 400 on this endpoint is the corpus-listing fall-through
-      // described above. `Number.isInteger(1e21)` is TRUE, so the range test is not redundant with
-      // the integrality test: it is the one that catches that value.
+      // "Can the field hold it", not "does it parse": `Number` accepts `0.5` and `1e21`, and both
+      // 400 against an `Edm.Int32`. `Number.isInteger(1e21)` is TRUE, so the range test is not
+      // redundant with the integrality one — it is what catches that value.
       const n = Number(v);
       if (!Number.isInteger(n)) return null;
       if (meta.type === 'Edm.Int32') return (n >= -2147483648 && n <= 2147483647) ? `${field} eq ${n}` : null;
-      // Beyond 2^53 the value has already lost precision before it could be compared, so an Int64
-      // term built from it would filter on a number the caller did not send.
+      // Beyond 2^53 the value lost precision before it could be compared.
       return Number.isSafeInteger(n) ? `${field} eq ${n}` : null;
     }
     case 'Edm.Double':
       return Number.isFinite(Number(v)) ? `${field} eq ${Number(v)}` : null;
     case 'Edm.Boolean':
-      // ONLY the two literals OData defines, and everything else is DROPPED rather than coerced.
-      // `v === 'true'` alone made every other value mean `eq false`, so `and[isPublished]=True`
-      // — or `1`, or `yes` — silently applied the OPPOSITE filter, answered 200, and reported
-      // nothing lost. It only ever narrows, so there is no access-control impact; it is the same
-      // silently-wrong-filter class this file's header exists to prevent, and the Edm.Int32 branch
-      // eight lines up already refuses values it cannot express.
+      // ONLY the two literals OData defines. `v === 'true'` alone made every other value mean
+      // `eq false`, so `True`, `1` or `yes` silently applied the OPPOSITE filter under a 200.
       if (v !== 'true' && v !== 'false') return null;
       return `${field} eq ${v === 'true'}`;
     default:
@@ -331,13 +228,9 @@ function term(field, meta, value) {
  * Render one edge of a date range as `field ge|lt <instant>`.
  *
  * DAY GRANULARITY, and the asymmetry is the point: the wire carries a calendar day while the field
- * is an instant, so `End` becomes `lt <next day>` rather than `le <that day>` — otherwise a
- * document posted at 09:00 on the end date falls outside a range the user included. Ported from
- * `eagle-search/service/query.js:185-194`; the two services must answer the same question for the
- * same URL.
- *
- * Anything that is not a datetime returns null and lands in `dropped`, for the reason TERM_TYPES
- * gives: a term this cannot express is an unsupported key, never a term emitted and hoped for.
+ * is an instant, so `End` becomes `lt <next day>` — `le <that day>` would exclude a document posted
+ * at 09:00 on the end date. Ported from eagle-search; both services must answer the same question
+ * for the same URL. Anything that is not a datetime returns null and lands in `dropped`.
  */
 function rangeTerm(field, meta, value, edge) {
   if (meta.type !== 'Edm.DateTimeOffset') return null;
@@ -359,12 +252,9 @@ function valuesOf(rawValue) {
 }
 
 /**
- * Every project id the caller asked to filter on, in BOTH wire forms.
- *
- * eagle-public sends two incompatible ones and both are live: `&project=<id>` flat, from `fields[]`
- * (certificates / amendments / application / featured / notifications), and `&and[project]=<id>`
- * from `queryModifier` (the documents tab). Handling only one means half the project tabs return
- * the whole corpus.
+ * Every project id the caller asked to filter on, in BOTH wire forms: `&project=<id>` flat from
+ * `fields[]`, and `&and[project]=<id>` from `queryModifier`. Both are live, and handling only one
+ * means half the project tabs return the whole corpus.
  */
 function projectIdsFrom(query) {
   const ids = query && query.project ? valuesOf(query.project) : [];
@@ -375,10 +265,8 @@ function projectIdsFrom(query) {
 }
 
 /**
- * A copy of `query` with every project key replaced by already-translated DEMI project ids.
- *
- * Returned as the flat `project` key alone, so `buildFilter` has one place to apply it rather than
- * two that can disagree.
+ * A copy of `query` with every project key replaced by already-translated DEMI project ids, flattened
+ * onto `project` alone so `buildFilter` has one place to apply it rather than two that can disagree.
  */
 function withProjectIds(query, demiIds) {
   const next = {};
@@ -399,15 +287,12 @@ function withProjectIds(query, demiIds) {
 /**
  * Build the `$filter` from `and[key]=value` parameters plus the caller's ACL clause.
  *
- * Repeats of one key are a multi-select and become an OR group; different keys are ANDed — which is
- * what eagle-public means, since it splits its own values on `,` client-side and appends one
- * `and[key]=` per value (`api.ts:179-194`).
+ * Repeats of one key are a multi-select and become an OR group; different keys are ANDed, which is
+ * what eagle-public means — it splits on `,` client-side and appends one `and[key]=` per value.
  *
  * `acl` IS REQUIRED AND IS THE WHOLE SAFETY ARGUMENT. It is `filterFor()`'s return value, not a
- * string, so this function can refuse the two ways a filter fails OPEN: a missing ACL clause, and
- * an `empty: true` caller — one who may see NOTHING, which OData cannot express as a filter because
- * it has no `false` literal (see access-odata.js). Both throw here rather than emitting a request,
- * because both would answer with the entire corpus and look like a working page.
+ * string, so this can refuse the two ways a filter fails OPEN: a missing ACL clause, and an
+ * `empty: true` caller, whom OData cannot express because it has no `false` literal.
  *
  * @param {object} query    req.query
  * @param {string} dataset  Project | Document | DocumentChunk
@@ -434,10 +319,9 @@ function buildFilter(query, dataset, acl) {
     // against a DEMI project id matches nothing, which reads as an empty tab rather than a bug.
     if (key === 'project') continue;
 
-    // A `Start`/`End` suffix is a RANGE on the base field, not a field of its own, so
-    // `datePostedStart` resolves against `datePosted` in the index. Read off the committed
-    // definition rather than a hand-written list: a suffixed name no index carries still falls
-    // through to `dropped` instead of becoming a 400.
+    // A `Start`/`End` suffix is a RANGE on the base field, not a field of its own. Resolved against
+    // the committed definition, so a suffixed name no index carries still falls through to
+    // `dropped` instead of becoming a 400.
     const edge = /(Start|End)$/.exec(key)?.[1];
     const base = edge ? key.slice(0, -edge.length) : key;
 
@@ -449,11 +333,9 @@ function buildFilter(query, dataset, acl) {
 
     const field = aliases[base] || base;
     const meta = fields.get(field);
-    // Three ways a key cannot be filtered on, and all three are the same answer: not in the index,
-    // not `filterable`, or a TYPE the term builder has no case for. See TERM_TYPES for why the last
-    // one is not covered by the second. A range asks a different question of the type than an `eq`
-    // does — a datetime sorts and compares but has no `eq` case — so the edge branch gates on
-    // `rangeTerm` returning something rather than on `expressible`.
+    // Three ways a key cannot be filtered on, all the same answer: not in the index, not
+    // `filterable`, or a TYPE the term builder has no case for. The edge branch gates on `rangeTerm`
+    // returning something instead — a range asks a different question of the type than an `eq`.
     if (!meta || !meta.filterable || (!edge && !expressible(meta))) {
       dropped.push(key);
       continue;
@@ -461,9 +343,8 @@ function buildFilter(query, dataset, acl) {
 
     const valueMap = (VALUE_ALIASES[dataset] || {})[base] || {};
     const values = valuesOf(rawValue);
-    // ONE ENTRY PER WIRE VALUE, whatever it expands to, so the lost-value report below still
-    // compares like with like: a value that produced no term at all is the thing being counted,
-    // not the number of spellings it was tried under.
+    // ONE ENTRY PER WIRE VALUE, whatever it expands to, so the report below counts values that
+    // produced no term rather than the spellings each was tried under.
     const terms = values.flatMap((v) => {
       const spellings = valueMap[v] && valueMap[v] !== v ? [v, valueMap[v]] : [v];
       const built = spellings
@@ -478,9 +359,8 @@ function buildFilter(query, dataset, acl) {
     if (terms.length) groups.push(terms.length === 1 ? terms[0] : `(${terms.join(' or ')})`);
   }
 
-  // Flat `project`, carrying DEMI ids by this point. Named as `dropped` rather than ignored on an
-  // index with no project axis — a project filter that quietly does not apply is the difference
-  // between one project's documents and all of them.
+  // Flat `project`, carrying DEMI ids by this point. Named as `dropped` on an index with no project
+  // axis: a project filter that quietly does not apply widens one project's rows to all of them.
   const projectIds = query.project ? valuesOf(query.project) : [];
   if (projectIds.length) {
     if (fields.get('projectId')) {
@@ -495,9 +375,8 @@ function buildFilter(query, dataset, acl) {
     if (fields.has('categorized')) {
       groups.push(`categorized eq ${String(query.categorized) === 'true'}`);
     } else {
-      // Named, not silently ignored. `categorized` counts as criteria, so it routes the caller to
-      // the index — and no demi index carries the field, so without this the one filter they sent
-      // vanishes with nothing said anywhere. Same rule as every other inexpressible key.
+      // Named, not silently ignored: `categorized` counts as criteria and routes the caller to the
+      // index, and no demi index carries the field.
       dropped.push('categorized');
     }
   }
@@ -507,39 +386,10 @@ function buildFilter(query, dataset, acl) {
 }
 
 /**
- * Build `$orderby` from `sortBy`, normalising the three shapes on the wire.
- *
- *  - eagle-public appends `sortBy` TWICE (`api.ts:176-177`), the second often an empty string.
- *  - eagle-admin sends one comma-joined value and omits the parameter when it is null.
- *  - `+field` / `-field` carries the direction.
- *
- * RELEVANCE IS ORDERED EXPLICITLY, not by omission. `-score` names no field in any index, so it
- * cannot be passed through; but leaving `$orderby` off entirely leaves ties in whatever order the
- * service happened to compute, and with `$skip` paging that loses and repeats rows across pages.
- * `search.score() desc, id asc` is the same ranking with a deterministic tiebreak.
- *
- * The tiebreak is appended only where the key is sortable, which is why chunks get no `$orderby` at
- * all: nothing in `chunks` is sortable, and naming a non-sortable field is a 400.
- *
- * THE GATE FOR A SORT KEY IS THE FIELD'S TYPE, not `sortable` — the same rule TERM_TYPES states for
- * a filter key, for the same reason. `projects.centroid` is `sortable: true` in the committed
- * definition, so a `sortable` gate answered `?dataset=Project&keywords=x&sortBy=centroid` with
- * `centroid asc, id asc`; AI Search orders a geography only through `geo.distance(...)`, so the
- * service 400s, `request()` throws, and the controller answers 502 to any anonymous caller.
- *
- * `$orderby` also OVERRIDES semantic reranking — the L2 order is expressed as the response order
- * and nothing else. That costs nothing today because `chunks` is the only semantic index and
- * it is the one index this cannot emit an order for; if a second index ever gets a semantic
- * configuration, this function has to learn about it.
- */
-/**
- * The Edm types `$orderby` can name: the scalar ones. Same gate as TERM_TYPES, one type wider —
- * a datetime cannot be compared with `eq` through `term()` but sorts fine. That entry is
- * load-bearing, not future-proofing: `documents.datePosted` is an `Edm.DateTimeOffset` and it is
- * eagle-public's DEFAULT document sort, so dropping it here would narrow a live path.
- *
- * A geography or a collection is NOT orderable however its `sortable` flag reads. `meta.type`
- * keeps the whole `Collection(...)` string, so membership alone rejects both.
+ * The Edm types `$orderby` can name. Same gate as TERM_TYPES, one type wider: `Edm.DateTimeOffset`
+ * has no `eq` case but sorts fine, and `documents.datePosted` is eagle-public's DEFAULT document
+ * sort. `meta.type` keeps the whole `Collection(...)` string, so membership alone rejects
+ * collections and geographies however their `sortable` flag reads.
  */
 const ORDER_TYPES = new Set([...TERM_TYPES, 'Edm.DateTimeOffset']);
 
@@ -550,13 +400,9 @@ function orderable(meta) {
 /**
  * The sort keys a `sortBy` actually carries, whichever of the three wire shapes it arrived in.
  *
- * SEPARATE FROM `buildOrderBy` BECAUSE THE ROUTER ASKS THE SAME QUESTION. eagle-public appends
- * `sortBy` twice and the second is routinely the empty string (`api.ts:176-177`), so
- * `project.service.getAll` — the projects map, `getAllFull(1, 1000000)` — sends `sortBy=&sortBy=`
- * on every call. A truthiness test reads that as "the caller asked for an order" and would move a
- * million-row list read onto the AI Search path, where MAX_PAGE_ROWS silently truncates it to 500.
- * One normaliser, used by both, is what keeps the router and the `$orderby` from disagreeing about
- * whether a sort was asked for at all.
+ * SEPARATE FROM `buildOrderBy` BECAUSE THE ROUTER ASKS THE SAME QUESTION: the projects map sends
+ * `sortBy=&sortBy=` on every call, and a truthiness test would read that as "the caller asked for an
+ * order" and move a million-row list read onto the AI Search path.
  */
 function sortEntries(sortBy) {
   return (Array.isArray(sortBy) ? sortBy : [sortBy])
@@ -569,27 +415,29 @@ function sortEntries(sortBy) {
 /**
  * Did the caller ask for anything only the INDEX can answer — a filter or a sort?
  *
- * THIS IS THE ROUTING TEST. The Cosmos list reads take fixed criteria in a fixed order, so a
- * request carrying either used to be answered with the whole corpus in the repository's order,
- * dropped-and-logged under a 200 — measured live, `and[milestone]=x` on `dataset=Document`
- * returned 60,578 rows from demi and 0 from eagle-search for the same URL. A search that carries
- * criteria therefore goes to AI Search, where both can be expressed, and only a BARE list stays on
- * Cosmos.
+ * THIS IS THE ROUTING TEST: the Cosmos list reads take fixed criteria in a fixed order, so a request
+ * carrying either would be answered with the whole corpus under a 200.
  *
- * `project` IS DELIBERATELY NOT CRITERIA, and this is now a PROJECT-DATASET test only. The
- * `Document` branch no longer consults it at all: every document read goes to the index, because
- * `&project=<id>&pageSize=500` with no sort — the shape DEMI's own frontend and eagle-public's
- * project tabs send — is exactly the request the Cosmos read could not page past its 1000-row
- * clamp, and it answered pages 3+ of a 2,488-document project with zero rows and a full count.
- * The `projects` list read stays on Cosmos (382 rows fit one page, and its keywordless callers ask
- * for a million rows outright), so `project` stays out of the test for its sake: the `projects`
- * index has no project axis, and `buildFilter` reports it dropped there.
+ * `project` IS DELIBERATELY NOT CRITERIA, and this is a PROJECT-dataset test only — the `Document`
+ * branch no longer consults it. See wiki Search-and-Retrieval#every-document-read-goes-to-the-index.
  */
 function hasCriteria(query) {
   if (filterKeysIn(query).some(key => key !== 'project')) return true;
   return sortEntries(query && query.sortBy).length > 0;
 }
 
+/**
+ * Build `$orderby` from `sortBy`, normalising the three shapes on the wire: eagle-public appends
+ * `sortBy` TWICE (the second often empty), eagle-admin sends one comma-joined value, and `+`/`-`
+ * carries the direction.
+ *
+ * RELEVANCE IS ORDERED EXPLICITLY as `search.score() desc, id asc` — leaving `$orderby` off leaves
+ * ties in whatever order the service computed, which `$skip` paging then loses and repeats. The gate
+ * for a sort key is the field's TYPE, not `sortable`. `$orderby` also overrides semantic reranking,
+ * which costs nothing while `chunks` is both the only semantic index and the one that can carry no
+ * order at all. See wiki Search-and-Retrieval#default-order-and-relevance and
+ * #type-gates-not-filterable-and-sortable-flags.
+ */
 function buildOrderBy(sortBy, dataset, hasKeywords = false) {
   const fields = fieldsFor(dataset);
   const aliases = ALIASES[dataset] || {};
@@ -604,29 +452,21 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false) {
     const desc = entry.startsWith('-');
     const name = entry.replace(/^[+-]/, '');
     if (name === 'score') continue;
-    // The aliases are FILTER redirects — a caller sends an Eagle ObjectId, so `_id` becomes
-    // `legacyEagleId`. Sorting is the opposite: fall back to the caller's own name when the
-    // redirect target cannot sort but the original can.
+    // The aliases are FILTER redirects (`_id` → `legacyEagleId`). Sorting is the opposite: fall back
+    // to the caller's own name when the redirect target cannot sort but the original can.
     const aliased = aliases[name] || name;
     const aliasMeta = fields.get(aliased);
     const field = aliasMeta && aliasMeta.sortable ? aliased : name;
     const meta = fields.get(field);
     // Three ways a key cannot be ordered by, all the same answer: not in the index, not `sortable`,
-    // or a TYPE `$orderby` cannot name. See ORDER_TYPES for why the last is not covered by the
-    // second — `centroid` is `sortable: true` and is still a 400.
+    // or a TYPE `$orderby` cannot name — `centroid` is `sortable: true` and is still a 400.
     if (!meta || !meta.sortable || !orderable(meta)) {
       dropped.push(name);
       continue;
     }
-    // ONE CLAUSE PER FIELD. `sortBy=displayName,displayName` is a query string anyone can type, and
-    // eagle-public appends a secondary sort that can repeat the first (`api.ts:176-177` with
-    // `documents-tab.component.ts:190`). A repeated field cannot change the order — the first
-    // occurrence already decided it — so the second is at best noise and at worst a 400.
-    //
-    // NOT ALSO A CLAUSE CAP. Azure's limit is 32 and no demi index has 32 sortable fields
-    // (`documents`, the widest, has 17 in total), so a cap could never fire — dead code with a test
-    // that could not exercise it, which is how it was caught. If an index ever gets that wide, this
-    // is where the cap goes.
+    // ONE CLAUSE PER FIELD: a repeated field cannot change the order, so the second clause is at
+    // best noise and at worst a 400. No clause cap beside it — Azure's limit is 32 and `documents`,
+    // the widest index, has 17 fields in total, so one could never fire. Add it here if that changes.
     if (seen.has(field)) continue;
     seen.add(field);
     parts.push(`${field} ${desc ? 'desc' : 'asc'}`);
@@ -643,33 +483,29 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false) {
     parts.push(DEFAULT_ORDER[dataset]);
   }
 
-  // The tiebreak goes through the SAME dedupe as the caller's clauses. Without this,
-  // `sortBy=id` emitted `id asc, id asc` — the exact shape the dedupe above exists to stop, added
-  // back one line later. `_id` reaches here as `id` too, through the alias table.
+  // The tiebreak goes through the SAME dedupe as the caller's clauses, or `sortBy=id` emits
+  // `id asc, id asc`. `_id` reaches here as `id` too, through the alias table.
   if (tiebreak && !seen.has(tiebreak.split(' ')[0])) parts.push(tiebreak);
   return { orderby: parts.join(', '), dropped };
 }
 
 /**
- * Every filter key the caller sent, for the paths that can apply NONE of them.
- *
- * The keywordless list reads answer from Cosmos through `listVisible`, whose criteria are fixed
- * (`repositories/projects.js:26-39`) — no `and[]` filter reaches them at all. Naming the keys in the
- * log is the whole point: a filter panel that quietly does nothing returns the full corpus and
- * looks exactly like a filter that matched everything.
- */
-/**
  * Can a `project` filter be EXPRESSED against this dataset's index at all?
  *
  * `documents` and `chunks` carry `projectId`; `projects` does not, because a project IS its own
- * scope. So a project filter on `dataset=Project` is dropped — and a dropped project filter is the
- * one drop a route must never simply answer around: the difference between one project's rows and
- * every project's rows is the whole request.
+ * scope. A dropped project filter is the one drop a route must never simply answer around: the
+ * difference between one project's rows and every project's rows is the whole request.
  */
 function canScopeToProject(dataset) {
   return Boolean(fieldsFor(dataset).get('projectId'));
 }
 
+/**
+ * Every filter key the caller sent, for the paths that can apply NONE of them — the keywordless
+ * Cosmos list reads, whose criteria are fixed. Naming the keys in the log is the whole point: a
+ * filter panel that quietly does nothing returns the full corpus and looks like a filter that
+ * matched everything.
+ */
 function filterKeysIn(query) {
   const keys = Array.from(andParams(query || {}), ([key]) => key);
   if (query && query.project) keys.push('project');
@@ -688,9 +524,8 @@ function unknownParams(query) {
 
 /**
  * The `{_id, name}` pair eagle-public's templates expect where eagle-api populated a reference.
- * Ported from eagle-search/service/shape.js, including the reason it returns `undefined` rather
- * than `{}`: the templates read `rowData.proponent?.name || '-'`, so an absent value renders a dash
- * while `{}` renders a blank cell. A dash says "no proponent"; a blank says "this page is broken".
+ * `undefined` rather than `{}`, because the templates read `?.name || '-'`: an absent value renders
+ * a dash, while `{}` renders a blank cell. A dash says "no proponent", a blank says "this is broken".
  */
 function ref(id, name) {
   if (!id && !name) return undefined;
@@ -701,8 +536,7 @@ function ref(id, name) {
 function reportDropped(dataset, kind, dropped) {
   if (!dropped || !dropped.length) return;
   // "not expressible" rather than "not sortable"/"not filterable": the commonest drop is a field
-  // the index DOES flag `sortable: true` whose TYPE cannot be ordered (`centroid`), and a log line
-  // that contradicts the definition sends the reader to the wrong file.
+  // the index DOES flag `sortable: true` whose TYPE cannot be ordered (`centroid`).
   logger.warn(
     `[eagle-query] ${dataset}: dropped ${kind} ${dropped.join(', ')} — ` +
     `not expressible as ${kind === 'sort' ? 'an $orderby' : 'a $filter'} against this index`
@@ -710,9 +544,8 @@ function reportDropped(dataset, kind, dropped) {
 }
 
 module.exports = {
-  // Exported for the guard test only. Nothing in production reads it from outside this module —
-  // it is here so a test can assert every value still names a definition file on disk, which is
-  // the one failure mode this mapping has and the one that produces a 200 instead of an error.
+  // Exported for the guard test only: it asserts every value still names a definition file on disk,
+  // which is this mapping's one failure mode and the one that produces a 200 instead of an error.
   DATASET_INDEX,
   buildFilter,
   buildOrderBy,
