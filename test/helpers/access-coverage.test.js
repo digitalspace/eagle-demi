@@ -67,9 +67,11 @@ const UNGATED = {
 
 /**
  * Path prefixes that must be behind `requireWrite` on EVERY method, checked against the router.
- * This is what the allowlist reasons above assert, expressed as something that can fail.
+ * The first two are what the allowlist reasons above assert, expressed as something that can fail;
+ * `/eagle/` is here because those handlers read and write through `systemAccess()`, so the write
+ * gate is the only thing standing between a read-only credential and the mirror.
  */
-const requireWritePrefixes = ['/admin/api-keys', '/admin/sync/'];
+const requireWritePrefixes = ['/admin/api-keys', '/admin/sync/', '/eagle/'];
 
 /** @returns {{name: string, source: string}[]} every repository module, allowlisted or not. */
 function repositories() {

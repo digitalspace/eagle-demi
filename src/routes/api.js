@@ -93,6 +93,12 @@ router.put('/documents/:id/published', authMiddleware, requireWrite, documentCon
 router.post('/documents/:id/chunks', authMiddleware, requireWrite, documentController.ingestChunks);
 router.delete('/documents/:id', authMiddleware, requireWrite, documentController.deleteDocument);
 
+// Eagle mirror. eagle-api pushes fire-and-forget on every write it makes, keyed by its own `_id`;
+// DEMI holds the merge rules, so the body is the RAW Eagle record rather than a DEMI-shaped one.
+// Write-gated like every other mutation — the push authenticates as a registry key.
+router.put('/eagle/projects/:eagleId', authMiddleware, requireWrite, projectController.upsertFromEagle);
+router.put('/eagle/documents/:eagleId', authMiddleware, requireWrite, documentController.upsertFromEagle);
+
 // Regions routes removed — the collection is empty (0 items) and nothing consumed it.
 // Administrative geography is served by /boundaries.
 

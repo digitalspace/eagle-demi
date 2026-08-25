@@ -5,8 +5,8 @@ info:
     Central authoritative storage and spatial search engine for projects, documents, and
     administrative region boundaries.
 
-    NOT THE CONTRACT. This file is hand-maintained, covers 6 of the 18 paths in src/routes/api.js
-    (12 of its 28 operations), and has drifted from what the API actually serves. Undocumented here:
+    NOT THE CONTRACT. This file is hand-maintained, covers 8 of the 20 paths in src/routes/api.js
+    (14 of its 30 operations), and has drifted from what the API actually serves. Undocumented here:
     /config, /db/stats, /search/summary, /boundaries, /admin/api-keys and more. The routes in
     src/routes/api.js are authoritative; read them, or the endpoint itself, before relying on
     anything here.
@@ -251,6 +251,88 @@ paths:
         '401':
           description: Unauthorized.
 
+  /api/eagle/projects/{eagleId}:
+    put:
+      summary: Mirror a project from eagle-api
+      description: |-
+        Receives one project pushed by eagle-api on every write it makes, keyed by the Eagle
+        `_id`. The body carries the RAW Eagle record — DEMI holds the merge rules, so the same
+        record produces the same row here as a re-seed would. Idempotent: the same eagleId
+        replaces. The DEMI id is the Track project id when the project is already matched to
+        Track, otherwise `eagle-<eagleId>`. Enrichment blocks under `sources` other than
+        `track`/`eagle` are preserved, and a change in publication state cascades onto the
+        project's documents.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the project. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: Project mirrored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. The credential is read-only.
+
+  /api/eagle/documents/{eagleId}:
+    put:
+      summary: Mirror a document from eagle-api
+      description: |-
+        Receives one document pushed by eagle-api, keyed by the Eagle `_id`. The body carries the
+        RAW Eagle record plus the labels for its four List ObjectId references. Idempotent: the
+        same eagleId replaces. Two things are NOT taken from the push — extraction state, carried
+        off the row already in DEMI, and the ACL, which is the document's own intersected with its
+        parent project's.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the document. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: Document mirrored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. The credential is read-only.
+        '404':
+          description: The document's parent project is not in DEMI.
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -328,3 +410,42 @@ components:
           maxItems: 2
           items:
             type: number
+
+    EaglePush:
+      type: object
+      required:
+        - doc
+      properties:
+        doc:
+          type: object
+          description: |-
+            The raw Eagle record, exactly as eagle-api stores it. `doc._id` must equal the
+            `eagleId` path parameter. For a document, `doc.project` is the parent project's
+            Eagle `_id` (or an object carrying it as `_id`).
+        labels:
+          type: object
+          description: |-
+            Documents only. The resolved `List` names for the record's ObjectId references, so
+            DEMI stores the label beside the id without a List collection of its own.
+          properties:
+            type:
+              type: string
+            milestone:
+              type: string
+            projectPhase:
+              type: string
+            documentAuthorType:
+              type: string
+
+    EaglePushResult:
+      type: object
+      properties:
+        id:
+          type: string
+          description: The DEMI id of the mirrored record.
+        projectId:
+          type: string
+          description: Documents only — the parent project's DEMI id.
+        action:
+          type: string
+          enum: [upsert]

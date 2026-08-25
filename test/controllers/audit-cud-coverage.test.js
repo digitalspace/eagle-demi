@@ -247,6 +247,50 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written[0].Detail.removedFromSearch, true);
   });
 
+  await t.test('an Eagle project push writes one project.push', async () => {
+    // The mirror routes are unattended — nothing renders their result — so the audit row is the
+    // only record that a project changed shape because eagle-api said so.
+    t.mock.method(projects, 'getByEagleId', async () => ({
+      id: '207', eagleId: 'eag-1', isPublished: true, read: ['public', 'staff', 'sysadmin'],
+      sources: { track: { track_project_id: 207 }, eagle: {} }
+    }));
+    t.mock.method(projects, 'upsert', async (item) => item);
+    t.mock.method(aiSearch, 'writeAcls', async () => 1);
+    t.mock.method(documents, 'setAclForProject', async () => ({ succeeded: 0, failed: 0, rows: [] }));
+
+    const written = await rowsFrom(() => projectController.upsertFromEagle({
+      params: { eagleId: 'eag-1' }, query: {},
+      body: { doc: { _id: 'eag-1', name: 'Skeena LNG', read: ['staff', 'sysadmin'] } }, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(written.length, 1, 'one row for the push, not one per cascaded document');
+    assert.strictEqual(written[0].Action, 'project.push');
+    assert.strictEqual(written[0].TargetId, '207');
+    assert.strictEqual(written[0].ProjectId, '207');
+    assert.strictEqual(written[0].Detail.isPublishedFrom, true);
+    assert.strictEqual(written[0].Detail.isPublishedTo, false);
+  });
+
+  await t.test('an Eagle document push writes one document.push', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => ({
+      id: '207', read: ['public', 'staff', 'sysadmin'], isPublished: true
+    }));
+    t.mock.method(documents, 'getById', async () => null);
+    t.mock.method(documents, 'upsert', async (item) => item);
+
+    const written = await rowsFrom(() => documentController.upsertFromEagle({
+      params: { eagleId: 'eagdoc-1' }, query: {},
+      body: { doc: { _id: 'eagdoc-1', project: '207', displayName: 'Application', read: ['public'] } },
+      user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(written.length, 1);
+    assert.strictEqual(written[0].Action, 'document.push');
+    assert.strictEqual(written[0].TargetId, 'eagdoc-1');
+    assert.strictEqual(written[0].ProjectId, '207');
+    assert.strictEqual(written[0].Detail.isPublishedFrom, null, 'the row is new');
+  });
+
   await t.test('api key create and revoke write one row each, carrying no secret', async () => {
     t.mock.method(apiKeys, 'upsert', async (record) => record);
 
