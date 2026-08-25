@@ -578,9 +578,23 @@ async function seed(argv = [], deps = {}) {
     // dropped document has no resolved partition to match on. Enumerated once and reused by the
     // documents reconcile below; skipped entirely when an unverified fetch already refuses.
     const documentRows = unverified.length ? [] : await repos.documents.listSeededIds(access);
+    const projectRows = unverified.length ? [] : await repos.projects.listEagleOnlyIds(access);
     const inCosmos = new Set(documentRows.map(row => String(row.id)));
     const dropped = (documentFetch || {}).droppedIds || [];
     const droppedInCosmos = dropped.filter(id => inCosmos.has(id));
+
+    // A truncated enumeration is indistinguishable from a container that shrank: every row it
+    // missed computes as surplus. COUNT of the same predicate is the only check that catches it.
+    const truncated = [];
+    for (const [label, rows, countOf] of unverified.length ? [] : [
+      ['documents', documentRows, repos.documents.countSeededIds],
+      ['projects', projectRows, repos.projects.countEagleOnlyIds]
+    ]) {
+      const expected = await countOf(access);
+      if (rows.length !== expected) {
+        truncated.push(`${label} enumerated ${rows.length} rows but the container holds ${expected}`);
+      }
+    }
 
     if (unverified.length) {
       summary.failures.push('--reconcile refused before any delete — nothing removed from either ' +
@@ -591,13 +605,16 @@ async function seed(argv = [], deps = {}) {
         `container: ${droppedInCosmos.length} of the ${dropped.length} document(s) that resolved ` +
         'to neither a project nor a ProjectNotification are in Cosmos, so they are absent from ' +
         'the fetch and would be deleted as surplus');
+    } else if (truncated.length) {
+      summary.failures.push('--reconcile refused before any delete — nothing removed from either ' +
+        `container: ${truncated.join('; ')}`);
     } else {
       // Documents first: a project whose documents are already gone cannot orphan any.
       const containers = [
         ['documents', documentRows,
           row => `${row.projectId}|${row.id}`, documentFetch.keys,
           row => purge.purgeDocument(row)],
-        ['projects', await repos.projects.listEagleOnlyIds(access),
+        ['projects', projectRows,
           row => String(row.eagleId), new Set(eagleProjects.map(p => String(p._id))),
           row => purge.purgeProject(row)]
       ];

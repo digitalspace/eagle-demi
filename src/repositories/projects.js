@@ -161,21 +161,33 @@ function publicView(project) {
   return Object.keys(allowed).length ? { ...view, sources: allowed } : view;
 }
 
+/** The reconcile predicate, shared so the enumeration and its COUNT cannot drift apart. */
+const eagleOnlyCriteria = () => [eq('sourceSystem', 'eagle', '@sourceSystem')];
+
 /**
  * `{id, eagleId}` for every Eagle-only project row — the seeder's reconcile set.
  *
  * Track-sourced rows are excluded by the `sourceSystem` filter: they exist whether or not Eagle
  * still carries a counterpart, so computing them as surplus would delete the master registry.
+ *
+ * NO ORDER BY: a cross-partition sort takes the SDK's query-plan path, whose mergeHeaders never
+ * copies `x-ms-continuation`, so fetchAll saw no token and stopped at the first 1,000 rows.
  */
 async function listEagleOnlyIds(access) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [eq('sourceSystem', 'eagle', '@sourceSystem')],
-    select: 'c.id, c.eagleId',
-    orderBy: 'c.id ASC'
+    criteria: eagleOnlyCriteria(),
+    select: 'c.id, c.eagleId'
   });
   return fetchAll(CONTAINER, spec);
+}
+
+/** COUNT of exactly what listEagleOnlyIds reads — the reconcile's proof that it ran to the end. */
+async function countEagleOnlyIds(access) {
+  const spec = countWhere({ access, partitionField: PARTITION_FIELD, criteria: eagleOnlyCriteria() });
+  const value = await cosmos.queryValue(CONTAINER, spec);
+  return value || 0;
 }
 
 /**
@@ -217,6 +229,7 @@ module.exports = {
   listWithCentroid,
   publicView,
   listEagleOnlyIds,
+  countEagleOnlyIds,
   upsert,
   patchWildfireStats,
   patchBoundaries,
