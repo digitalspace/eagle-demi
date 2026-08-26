@@ -29,6 +29,12 @@ param readerPrincipalId string = ''
 @description('Resource id of the demi-audit-<env> workspace. Empty skips control-plane auditing rather than failing the deployment.')
 param auditWorkspaceId string = ''
 
+// The boundaries and wildfires containers exist only to serve `sources.*` enrichment. Prod
+// publishes none (ENRICHMENT_SOURCES empty), so declaring them there would create two containers
+// nothing ever reads or writes.
+@description('Declare the enrichment containers (boundaries, wildfires). False leaves prod with projects/documents/chunks/apikeys/config only.')
+param deployEnrichment bool = true
+
 var accountName = 'demi-cosmos-${environmentName}'
 var databaseName = 'demi'
 var privateEndpointName = 'pe-cosmos-nosql-${environmentName}'
@@ -281,7 +287,7 @@ resource chunksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
 // 244 reference items. /type is only three values — normally an anti-pattern, correct here:
 // the sole list query filters on it, and the whole container is a few MB once raw geometry
 // is dropped (full-resolution GeoJSON is a build artifact served as a static asset).
-resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = if (deployEnrichment) {
   parent: database
   name: 'boundaries'
   properties: {
@@ -337,7 +343,7 @@ resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases
 // feed, refreshing _ts. Anything
 // that drops out of the feed expires itself — that deletes the stale-fire purge problem
 // rather than solving it. Spatial index supports ST_DISTANCE proximity search.
-resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = if (deployEnrichment) {
   parent: database
   name: 'wildfires'
   properties: {

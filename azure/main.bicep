@@ -123,6 +123,15 @@ param frontendHostNames array = []
 @description('Principal id of the CI identity (demi-cicd-<env>) that publishes the frontend bundle into $web. Empty skips the role assignment, and the publish step then gets a 403.')
 param frontendUploaderPrincipalId string = ''
 
+// The `$web` origin for DEMI's own Angular frontend. Prod does not have one — eagle-public is the
+// consumer there — so a prod deploy would otherwise create a storage account nothing ever publishes to.
+@description('Deploy the frontend static-site storage account.')
+param deployStaticSite bool = true
+
+// Empty creates demi-plan-<env>. Prod joins an existing plan instead; see the param file.
+@description('App Service plan to join instead of creating one. Must be a Linux plan.')
+param existingServerFarmId string = ''
+
 // Phase 3b. The module is written and the argument for it is per-environment isolation rather than
 // cost, but nothing is deployed and nothing is copied — and turning it on needs `Storage Blob
 // Delegator` on the identity or every download link fails to sign, which is NOT implied by
@@ -132,6 +141,27 @@ param deployDocumentStorage bool = false
 
 @description('Comma-separated `sources` keys a project may publish over HTTP. Empty publishes none.')
 param enrichmentSources string = ''
+
+// Containers, not app behaviour: `enrichmentSources` above decides what the API publishes, this
+// decides whether the containers behind it are declared at all. Prod has neither.
+@description('Declare the Cosmos enrichment containers (boundaries, wildfires).')
+param deployEnrichment bool = true
+
+// Prod's AI Search service was stood up ahead of the rest of the estate, from
+// azure/ai-search.prod.bicepparam, and it also serves eagle-search-api-prod. Re-PUTting it from
+// here would re-assert `semanticSearch` and the identity list against a live service this template
+// is not the owner of. False points the API at the existing endpoint instead and grants only the
+// one role the API needs on it.
+@description('Deploy the AI Search service. False consumes `existingSearchEndpoint` and grants Search Index Data Contributor on the service already standing.')
+param deploySearch bool = true
+
+@description('Endpoint of an already-deployed search service, used when `deploySearch` is false.')
+param existingSearchEndpoint string = ''
+
+// Unlike `summaryEnabled`, which is the app-side switch, this decides whether the Foundry ACCOUNT
+// is created. Prod runs no summariser, so it should have no model resource to attribute or secure.
+@description('Deploy the Foundry account and model deployment. False leaves FOUNDRY_ENDPOINT empty, which is the same state summaryEnabled=false already produces.')
+param deployFoundry bool = true
 
 // The kill switch for the summariser, and the only one that costs nothing to leave on. The Foundry
 // account below bills PER TOKEN rather than per hour, so an idle deployment is free; what scales
@@ -192,6 +222,7 @@ module cosmos './modules/cosmos-nosql.bicep' = {
     peSubnetId: privateEndpointSubnetId
     apiPrincipalId: identity.outputs.principalId
     readerPrincipalId: readerPrincipalId
+    deployEnrichment: deployEnrichment
     // Control-plane auditing. This reverses the usual reading order — cosmos is module 2 and
     // auditLogs is module 6 — but Bicep orders on output references, not declaration, and
     // auditLogs depends only on identity and observability, so there is no cycle.
@@ -200,7 +231,7 @@ module cosmos './modules/cosmos-nosql.bicep' = {
 }
 
 // 3. Azure AI Search — the Deep Search query layer. Basic tier, one replica, one partition.
-module search './modules/ai-search.bicep' = {
+module search './modules/ai-search.bicep' = if (deploySearch) {
   name: 'deploy-ai-search'
   params: {
     location: location
@@ -212,6 +243,19 @@ module search './modules/ai-search.bicep' = {
     apiPrincipalId: identity.outputs.principalId
     cosmosAccountId: cosmos.outputs.cosmosAccountId
     peSubnetId: privateEndpointSubnetId
+  }
+}
+
+// 3b. The one grant the API needs when the search service is not ours to deploy. Nothing else about
+// the service is touched: no identity, no `semanticSearch`, no private endpoint — a re-PUT of any of
+// those would fight whoever does own it.
+module existingSearchRole './modules/search-role.bicep' = if (!deploySearch) {
+  name: 'grant-existing-search'
+  params: {
+    searchName: empty(existingSearchEndpoint)
+      ? 'demi-search-${environmentName}'
+      : first(split(replace(existingSearchEndpoint, 'https://', ''), '.'))
+    apiPrincipalId: identity.outputs.principalId
   }
 }
 
@@ -261,7 +305,7 @@ module auditLogs './modules/audit-logs.bicep' = {
 
 // 6. Microsoft Foundry — the summariser behind `GET /api/search/summary`, and the only resource
 // here that touches a model. Retrieval stays lexical BM25 in `demi-search-dev`.
-module foundry './modules/foundry.bicep' = {
+module foundry './modules/foundry.bicep' = if (deployFoundry) {
   name: 'deploy-foundry'
   params: {
     // `location` is deliberately NOT passed: the module defaults to canadaeast, the only Canadian
@@ -295,15 +339,16 @@ module apiWebApp './modules/api-web-app.bicep' = {
     doclingApiKey: doclingApiKey
     eagleApiBase: eagleApiBase
     apiSubnetId: appServiceSubnetId
+    existingServerFarmId: existingServerFarmId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId
     cosmosEndpoint: cosmos.outputs.cosmosEndpoint
-    searchEndpoint: search.outputs.searchEndpoint
+    searchEndpoint: deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
     appInsightsConnectionString: observability.outputs.connectionString
     enrichmentSources: enrichmentSources
     summaryEnabled: summaryEnabled
-    foundryEndpoint: foundry.outputs.foundryEndpoint
-    foundryDeployment: foundry.outputs.deploymentName
+    foundryEndpoint: deployFoundry ? foundry!.outputs.foundryEndpoint : ''
+    foundryDeployment: deployFoundry ? foundry!.outputs.deploymentName : ''
     auditDcrEndpoint: auditLogs.outputs.dcrEndpoint
     auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
     // Deploy-access auditing: who signed in to Kudu/SCM and published.
@@ -318,7 +363,7 @@ module apiWebApp './modules/api-web-app.bicep' = {
 // the security headers and the routing rules are supplied by the Front Door profile in
 // eagle-search; this template owns only the origin. See modules/static-site.bicep for the one
 // data-plane command ARM cannot express.
-module staticSite './modules/static-site.bicep' = {
+module staticSite './modules/static-site.bicep' = if (deployStaticSite) {
   name: 'deploy-static-site'
   params: {
     location: location
@@ -344,11 +389,11 @@ module costBudget './modules/cost-budget.bicep' = {
 output apiWebAppHostName string = apiWebApp.outputs.apiWebAppHostName
 // COPY THIS INTO eagle-search's Front Door parameters. The profile owns the DEMI route but not the
 // origin, so it needs this hostname to add one; it is stable for the life of the storage account.
-output frontendStaticSiteHostName string = staticSite.outputs.staticSiteHostName
+output frontendStaticSiteHostName string = deployStaticSite ? staticSite!.outputs.staticSiteHostName : ''
 // The publish target for `scripts/deploy-azure.sh frontend` — carries a uniqueString suffix, so it
 // goes into the repository variable AZURE_FRONTEND_STORAGE_ACCOUNT rather than a literal in CI.
-output frontendStorageAccountName string = staticSite.outputs.storageAccountName
-output searchEndpoint string = search.outputs.searchEndpoint
+output frontendStorageAccountName string = deployStaticSite ? staticSite!.outputs.storageAccountName : ''
+output searchEndpoint string = deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
 output cosmosEndpoint string = cosmos.outputs.cosmosEndpoint
 output identityClientId string = identity.outputs.clientId
 output logAnalyticsWorkspaceName string = observability.outputs.workspaceName

@@ -133,6 +133,11 @@ param keycloakUrl string = environmentName == 'prod'
 @description('Keycloak realm')
 param keycloakRealm string = 'eao-epic'
 
+// src/config.js defaults this to 'eagle-admin-console' too, so setting it changes nothing today —
+// the point is that prod stops depending on a code default for which client's tokens it accepts.
+@description('Keycloak client whose tokens this API accepts.')
+param keycloakClientId string = 'eagle-admin-console'
+
 @description('Application Insights connection string. Empty disables telemetry, which is the local-development case.')
 param appInsightsConnectionString string = ''
 
@@ -150,6 +155,11 @@ param frontendHostNames array = []
 
 @description('Upstream eagle-api the seed loader reads. Must match the environment — the code default in src/seed/sources.js is the DEV instance, so a wrong or missing value reads dev data.')
 param eagleApiBase string
+
+// Empty creates the B1 plan below. Set, the app joins a plan that already exists and this template
+// creates none — so it must already be a LINUX plan; a Windows one cannot host `functionapp,linux`.
+@description('Resource id of an App Service plan to join instead of creating demi-plan-<env>.')
+param existingServerFarmId string = ''
 
 var apiAppName = 'demi-api-${environmentName}'
 var appServicePlanName = 'demi-plan-${environmentName}'
@@ -172,7 +182,7 @@ resource apiStorage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
 }
 
 // App Service Plan (Consumption Y1 Serverless Plan for auto-scaling & $0 idle cost)
-resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
+resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = if (empty(existingServerFarmId)) {
   name: appServicePlanName
   location: location
   tags: tags
@@ -207,7 +217,7 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
     }
   }
   properties: {
-    serverFarmId: appServicePlan.id
+    serverFarmId: empty(existingServerFarmId) ? appServicePlan!.id : existingServerFarmId
     virtualNetworkSubnetId: !empty(apiSubnetId) ? apiSubnetId : null
     siteConfig: {
       linuxFxVersion: 'NODE|22'
@@ -429,6 +439,10 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'KEYCLOAK_REALM'
           value: keycloakRealm
+        }
+        {
+          name: 'KEYCLOAK_CLIENT_ID'
+          value: keycloakClientId
         }
         {
           name: 'KEYCLOAK_ENABLED'
