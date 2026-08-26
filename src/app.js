@@ -17,6 +17,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const cosmos = require('./db/cosmos-nosql');
+const config = require('./config');
 const { logger } = require('./utils/logger');
 
 const apiRoutes = require('./routes/api');
@@ -140,18 +141,25 @@ app.get('/api/health/db', async (req, res) => {
 // drop `swaggerUi.serve` — /api-docs 404s on its own init script without it.
 // Buffered res.send() is the one response shape the adapter handles, so the dist assets are
 // read whole and sent whole. They total ~1.5 MB and are served a handful of times a day.
-try {
-  const swaggerDocument = YAML.load(path.join(__dirname, 'swagger/swagger.yaml'));
-  const swaggerDistPath = require('swagger-ui-dist').getAbsoluteFSPath();
-  app.use('/api-docs', (req, res, next) => {
-    const file = path.basename(req.path); // basename: no traversal
-    const full = path.join(swaggerDistPath, file);
-    if (file === '' || !fs.existsSync(full) || !fs.statSync(full).isFile()) return next();
-    res.type(path.extname(file)).send(fs.readFileSync(full));
-  });
-  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
-} catch (err) {
-  logger.error('Failed to load Swagger specification:', { error: err.message, stack: err.stack });
+//
+// NOT MOUNTED IN PROD. The UI is unauthenticated and the spec it renders names every route,
+// parameter and role in the system, so prod 404s the path like any other unknown route.
+// `config.environmentName` is the ENVIRONMENT app setting — see src/config.js. An allowlist, not
+// `!== 'prod'`: a deployment that forgets the setting must 404 the UI, not publish it.
+if (['dev', 'test'].includes(config.environmentName)) {
+  try {
+    const swaggerDocument = YAML.load(path.join(__dirname, 'swagger/swagger.yaml'));
+    const swaggerDistPath = require('swagger-ui-dist').getAbsoluteFSPath();
+    app.use('/api-docs', (req, res, next) => {
+      const file = path.basename(req.path); // basename: no traversal
+      const full = path.join(swaggerDistPath, file);
+      if (file === '' || !fs.existsSync(full) || !fs.statSync(full).isFile()) return next();
+      res.type(path.extname(file)).send(fs.readFileSync(full));
+    });
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+  } catch (err) {
+    logger.error('Failed to load Swagger specification:', { error: err.message, stack: err.stack });
+  }
 }
 
 // Mount Central API Routes (supports both /api prefix and direct routes)

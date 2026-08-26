@@ -10,7 +10,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { visibilityFor, andClauses } = require('../helpers/access-sql');
+const { visibilityFor, andClauses, MAX_PAGE_SIZE } = require('../helpers/access-sql');
 
 /**
  * A criterion is a SQL fragment plus its parameters — the same shape as readClause/scopeClause,
@@ -95,7 +95,7 @@ function pageOptions({ pageSize, continuationToken, partitionKey } = {}) {
   const options = {};
   // A junk, zero or negative pageSize must NOT drop maxItemCount: cosmos.query then takes the
   // fetchAll() branch and drains the whole container cross-partition on an anonymous request.
-  if (pageSize !== undefined) options.maxItemCount = Math.min(Math.max(Number(pageSize) || 1000, 1), 1000);
+  if (pageSize !== undefined) options.maxItemCount = Math.min(Math.max(Number(pageSize) || MAX_PAGE_SIZE, 1), MAX_PAGE_SIZE);
   if (continuationToken) options.continuationToken = continuationToken;
   if (partitionKey !== undefined) options.partitionKey = partitionKey;
   return options;
@@ -113,7 +113,7 @@ async function fetchAll(container, spec, opts = {}) {
   let continuationToken;
   do {
     const page = await cosmos.query(container, spec,
-      pageOptions({ ...opts, pageSize: 1000, continuationToken }));
+      pageOptions({ ...opts, pageSize: MAX_PAGE_SIZE, continuationToken }));
     rows.push(...page.items);
     continuationToken = page.continuationToken;
   } while (continuationToken);

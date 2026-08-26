@@ -18,7 +18,7 @@ const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const chunks = require('../../repositories/chunks');
 const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
-const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+const { resolveAccess, systemAccess, pageSizeFor, SECURE_ROLES } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeDocument } = require('../../helpers/purge');
@@ -103,12 +103,14 @@ exports.getDocuments = async (req, res) => {
     if (req.query.extracted === 'false') extracted = false;
     if (req.query.extracted === 'true') extracted = true;
 
+    // Anonymous callers cap at ANON_MAX_PAGE_SIZE; authenticated ones keep the full ceiling.
+    const { pageSize, error } = pageSizeFor(access, req.query.pageSize);
+    if (error) return res.status(400).json({ error });
+
     const { items, continuationToken } = await documents.listVisible(access, {
       projectId: req.query.project,
       extracted,
-      // 1000 is the real ceiling — pageOptions clamps to it, so a larger number here
-      // only looked like it did something.
-      pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 1000),
+      pageSize,
       continuationToken: req.query.continuationToken
     });
 

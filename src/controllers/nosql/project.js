@@ -12,7 +12,7 @@
 
 const projects = require('../../repositories/projects');
 const documents = require('../../repositories/documents');
-const { resolveAccess, systemAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+const { resolveAccess, systemAccess, pageSizeFor, SECURE_ROLES } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeProject } = require('../../helpers/purge');
@@ -72,14 +72,16 @@ exports.getProjects = async (req, res) => {
     // Provenance filter, orthogonal to visibility. Default is Track-sourced projects only.
     const allowNonTrack = includeSeeded === 'true';
 
+    // Anonymous callers cap at ANON_MAX_PAGE_SIZE; authenticated ones keep the full ceiling.
+    const { pageSize, error } = pageSizeFor(access, req.query.pageSize);
+    if (error) return res.status(400).json({ error });
+
     const { items, continuationToken } = await projects.listVisible(access, {
       trackOnly: !allowNonTrack,
       regionalDistrict,
       municipality,
       electoralDistrict,
-      // 1000 is the real ceiling — pageOptions clamps to it, so a larger number here
-      // only looked like it did something.
-      pageSize: Math.min(parseInt(req.query.pageSize || '1000', 10), 1000),
+      pageSize,
       continuationToken: req.query.continuationToken
     });
 
