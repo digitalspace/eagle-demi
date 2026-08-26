@@ -182,26 +182,37 @@ test('deployEnrichment gates the wildfires container and only that one', () => {
     'boundaries must NOT be gated — every environment serves it, empty in prod');
 });
 
-// Two params, one feature, and each is useless alone: the hour is what writes the drift line, the
-// bool is what watches for it. An environment with the alert and no run has an alarm that can never
-// fire; one with the run and no alert writes a line nobody reads. Nothing in `az bicep build` or in
-// a what-if diff would say either.
-for (const [env, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
-  test(`${env} runs the nightly reconcile and alerts on its drift`, () => {
-    const cron = /^param reconcileSchedule = '([^']+)'$/m.exec(params);
-    assert.ok(cron, `${env} must set reconcileSchedule, or no timer is registered at all`);
-    // SIX fields. NCRONTAB leads with seconds, and a five-field crontab pasted in here is accepted
-    // by bicep, deployed, and then read by the host as `minute hour day month weekday` shifted one
-    // place — `0 9 * * *` is 09:00 every minute of the hour, not once a day.
-    const fields = cron[1].trim().split(/\s+/);
-    assert.strictEqual(fields.length, 6,
-      `${cron[1]} is not NCRONTAB — six fields, seconds first`);
-    assert.match(cron[1], /^0 0 ([01]?\d|2[0-3]) \* \* \*$/,
-      'once a night on the hour is the only shape this job is written for');
-    assert.match(params, /^param deployReconcileDriftAlert = true$/m,
-      'the run without the alert is a log line nobody reads');
-  });
-}
+// Two params, one feature, and each is useless alone: the schedule is what writes the drift line,
+// the bool is what watches for it. An environment with the alert and no run has an alarm that can
+// never fire; one with the run and no alert writes a line nobody reads. Nothing in `az bicep build`
+// or in a what-if diff would say either.
+test('prod runs the nightly reconcile and alerts on its drift', () => {
+  const cron = /^param reconcileSchedule = '([^']+)'$/m.exec(PROD_PARAMS);
+  assert.ok(cron, 'prod must set reconcileSchedule, or no timer is registered at all');
+  // SIX fields. NCRONTAB leads with seconds, and a five-field crontab pasted in here is accepted
+  // by bicep, deployed, and then read by the host as `minute hour day month weekday` shifted one
+  // place — `0 9 * * *` is 09:00 every minute of the hour, not once a day.
+  assert.strictEqual(cron[1].trim().split(/\s+/).length, 6,
+    `${cron[1]} is not NCRONTAB — six fields, seconds first`);
+  assert.match(cron[1], /^0 0 ([01]?\d|2[0-3]) \* \* \*$/,
+    'once a night on the hour is the only shape this job is written for');
+  assert.match(PROD_PARAMS, /^param deployReconcileDriftAlert = true$/m,
+    'the run without the alert is a log line nobody reads');
+});
+
+// TEST IS OFF ON PURPOSE, and it is the pair that has to stay off: `eagleApiBase` there is
+// eagle-test while the test corpus was seeded from PROD Eagle, so a nightly diff compares two
+// unrelated corpora and alerts every night on the difference. Turning either half on is only
+// correct in the same edit that repoints eagleApiBase — which this fails on, since nothing else
+// would.
+test('test schedules no reconcile and deploys no drift alert', () => {
+  assert.match(TEST_PARAMS, /^param reconcileSchedule = ''$/m,
+    'a schedule here diffs the test corpus against an upstream it did not come from');
+  assert.match(TEST_PARAMS, /^param deployReconcileDriftAlert = false$/m,
+    'and the alert on that diff would fire every night');
+  assert.match(TEST_PARAMS, /^param eagleApiBase = 'https:\/\/eagle-test\./m,
+    'this is the reason for both — turn them on in the edit that changes this line, not before');
+});
 
 // The alert reads a number out of a log line this repo formats. Both halves are strings in
 // different languages in different files, and every way of getting it wrong is silent: `traces` is

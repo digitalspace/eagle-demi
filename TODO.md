@@ -93,14 +93,15 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
       index path — that filter scans. Add the path (Bicep) or drop the filter; found 2026-08-26.
 - [ ] Nightly reconcile + drift alarm for the Eagle push: the only thing that catches a
       hard-deleted document (`findOneAndDelete`, no tombstone). Script #171, seed's own admission
-      rule #175, nightly run + alert on `feat/reconcile-nightly` — `RECONCILE_SCHEDULE` (`0 0 9 * * *`
-      test, `0 0 10 * * *` prod) registers a Functions timer in the API app, and
-      `demi-reconcile-drift-<env>` mails the DEMI action group when `drift=` is over 0.
+      rule #175, nightly run + alert on `feat/reconcile-nightly` — `RECONCILE_SCHEDULE`
+      (`0 0 10 * * *`, PROD ONLY: test's corpus came from prod Eagle but its `EAGLE_API_BASE` is
+      eagle-test, so a nightly diff there is meaningless) registers a Functions timer in the API
+      app, and `demi-reconcile-drift-prod` mails the DEMI action group when `drift=` is over 0.
       Prod's one-row gap was closed and the report read drift=0 on `demi-api-prod` 2026-08-26.
-      **The one thing left: watch the first SCHEDULED run in each environment.** Deploy the code,
-      `deploy-infra.sh <env> --live`, then read the next 09:00 UTC (test) / 10:00 UTC (prod) line in
-      demi-logs-<env>: `AppTraces | where Message contains "[reconcile] projects"`. One line a night
-      with `drift=0` is clean; NO line means the schedule never fired, and nothing alerts on that.
+      **The one thing left: watch the first SCHEDULED run in prod.** Deploy the code,
+      `deploy-infra.sh prod --live`, then read the next 10:00 UTC line in demi-logs-prod:
+      `AppTraces | where Message contains "[reconcile] projects"`. One line a night with `drift=0`
+      is clean; NO line means the timer never fired, and nothing alerts on that.
 - [x] ~~Unused Cosmos index paths (`wildfires` spatial, projects composite, five scalars): verified
       removable; only with a Bicep deploy that happens for another reason.~~ Done in PR: dropped
       `projects` `/trackProjectId/?` + `/updatedAt/?` + the `[isPublished, name]` composite,

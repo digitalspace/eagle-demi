@@ -47,15 +47,12 @@ param enrichmentSources = 'wildfire'
 // dev data with nothing logged.
 param eagleApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api/public'
 
-// The nightly Eagle drift report and the alert that reads its one output line. Both, or neither:
-// the schedule is what writes the line, the bool is what watches for it. NCRONTAB, six fields —
-// the leading 0 is SECONDS, which is what separates it from a five-field crontab.
-//
-// 09:00 UTC is the middle of the night in Pacific time (02:00 PDT, 01:00 PST) and an hour ahead of
-// prod, so the two environments never run the same report against the same upstream at once — test
-// reads PROD eagle-api, because its corpus was seeded from prod.
-param reconcileSchedule = '0 0 9 * * *'
-param deployReconcileDriftAlert = true
+// OFF IN TEST, both halves. `eagleApiBase` above is eagle-TEST while this environment's corpus was
+// seeded from PROD Eagle, so a nightly diff would report the difference between two unrelated
+// corpora and alert every night on it. Run it by hand here with EAGLE_API_BASE overridden — see
+// README "Reconcile". Prod runs both, where the two sides are the same Eagle.
+param reconcileSchedule = ''
+param deployReconcileDriftAlert = false
 
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //

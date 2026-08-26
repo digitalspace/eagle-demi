@@ -175,19 +175,9 @@ resource reconcileDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
     criteria: {
       allOf: [
         {
-          // `AppTraces`, not `traces`: this workspace holds workspace-based Application Insights,
-          // where the classic table name does not exist. Same reason, same trap, as the audit-drop
-          // rule in audit-logs.bicep.
-          //
-          // `contains`, not `has`, for the same reason as that rule: `has` matches whole terms and
-          // the tokeniser splits on brackets, so the exact behaviour of `has "[reconcile]"` depends
-          // on how the term sequence is cut. A rule that silently never matches is worse than none.
-          //
-          // Reading the count off the message rather than counting rows: every night writes this
-          // line, so a row count only says the job ran. `drift` is the number that matters, and a
-          // non-numeric message yields null, which fails `> 0` — clean is `drift=0`, absent is not
-          // an alert. test/azure/main-bicep-wiring.test.js checks this query against the real
-          // summary line, because nothing else here would notice the format moving.
+          // `AppTraces` (workspace-based App Insights has no `traces` table) and `contains` (`has`
+          // tokenises on brackets), both as in audit-logs.bicep. Every night writes this line, so
+          // the count comes from `drift=` in the message rather than from the number of rows.
           query: 'AppTraces | where Message contains "[reconcile] projects" | extend drift = toint(extract("drift=([0-9]+)", 1, Message)) | where drift > 0'
           timeAggregation: 'Count'
           operator: 'GreaterThan'

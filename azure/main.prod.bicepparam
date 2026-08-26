@@ -114,8 +114,10 @@ param availabilityUrl = 'https://projects.eao.gov.bc.ca/demi-search/search?datas
 // output line. It is the only thing that notices a hard-deleted Eagle document — that delete
 // carries no tombstone, so the push cannot report it and nothing else looks.
 //
-// NCRONTAB: the leading 0 is SECONDS. 10:00 UTC (03:00 PDT, 02:00 PST), an hour after test, so the
-// two never read eagle-api at once.
+// PROD IS THE ONLY ENVIRONMENT THAT RUNS THIS. Test's corpus came from prod Eagle and its
+// `eagleApiBase` is eagle-test, so a nightly diff there compares two unrelated corpora.
+//
+// NCRONTAB: the leading 0 is SECONDS. 10:00 UTC is 03:00 PDT, 02:00 PST.
 param reconcileSchedule = '0 0 10 * * *'
 param deployReconcileDriftAlert = true
 
