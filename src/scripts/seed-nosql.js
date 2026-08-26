@@ -135,6 +135,42 @@ async function truncatedReads(access, pairs) {
 }
 
 /**
+ * The one rule deciding whether an Eagle document has a home, and under which parent.
+ *
+ * A parent is USUALLY a project, but ~80 documents hang off a ProjectNotification instead — a
+ * different entity type in the same Eagle collection, with its own _id space, resolving to nothing
+ * in the project registry. Measured 2026-08-24: all 17 notifications and all 80 documents carry
+ * `public` in read[], and prod serves 2-13 documents under each one. They are carried under the
+ * NOTIFICATION's own _id as the partition key, because eagle-public sends that _id as its
+ * `project` filter and `associatedProjectId` is "" on all 17 — the source data holds no link to a
+ * real project. Admitted by KNOWN notification id, never by "the ref resolved to nothing": a
+ * parent in neither list is a document with no home, and its caller drops it.
+ *
+ * Shared with `reconcile-eagle.js`, which decides the same question. Its own copy tested the
+ * currently-published Eagle project set instead of the registry, so a document under a Track row's
+ * dangling epic_guid — which the registry resolves and this admits — read as unresolvable there.
+ *
+ * The notification list is read through the generic pager because sources.js has no named loader,
+ * and its total is captured for the same reason the Project fetch captures one: an unverified read
+ * leaves every notification-parented document unresolvable and computed as surplus.
+ *
+ * @returns {Promise<{admit: function, notificationIds: Set, fetch: object}>} `admit(ref)` gives the
+ *   canonical parent id, or null when the document has no home
+ */
+async function documentAdmission(src, projectIndex) {
+  let total = null;
+  const notifications = await src.fetchAllPages(src.EAGLE_API_BASE, 'ProjectNotification',
+    { onPage: (_items, _count, t) => { total = t; } });
+  const notificationIds = new Set(notifications.map(n => String(n._id)));
+  return {
+    notificationIds,
+    fetch: { total, fetched: notifications.length },
+    admit: ref => projectIndex.resolve(ref) ||
+      (notificationIds.has(String(ref)) ? String(ref) : null)
+  };
+}
+
+/**
  * Most surplus one container may lose before `--reconcile` refuses.
  *
  * An upstream answering `searchResults: [], searchResultsTotal: 0` is internally consistent and
@@ -380,18 +416,9 @@ async function seed(argv = [], deps = {}) {
     const listLookup = await src.fetchListLookup();
     log(`  ${listLookup.size} List items`);
 
-    // The OTHER thing a document can hang off. Read through the generic pager rather than a named
-    // loader because sources.js has none — nothing but this one carve-out needs the dataset, and
-    // the ids are all it needs: 17 rows, held as a Set to test membership per document.
     log('Fetching Project Notifications (the other document parent)...');
-    // The total is captured for the same reason the Project fetch captures one: this list decides
-    // whether a document has a home, so an unverified one leaves every notification-parented
-    // document unresolvable, absent from `fetchedKeys`, and computed as surplus.
-    let notificationsTotal = null;
-    const notifications = await src.fetchAllPages(src.EAGLE_API_BASE, 'ProjectNotification',
-      { onPage: (_items, _count, total) => { notificationsTotal = total; } });
-    const notificationIds = new Set(notifications.map(n => String(n._id)));
-    notificationFetch = { total: notificationsTotal, fetched: notifications.length };
+    const { admit, notificationIds, fetch } = await documentAdmission(src, projectIndex);
+    notificationFetch = fetch;
     log(`  ${notificationIds.size} notifications`);
 
     log('Streaming Eagle documents (60k+, paged at 100)...');
@@ -465,29 +492,9 @@ async function seed(argv = [], deps = {}) {
       for (const doc of page) {
         if (stats.built + stats.unresolved >= args.limitDocuments) break;
 
-        // A document's parent is USUALLY a project, but 80 of them hang off a ProjectNotification
-        // instead — a different entity type in the same Eagle collection, with its own _id space.
-        // Those resolve to nothing in the project registry, and used to be dropped on the reasoning
-        // that an unresolvable parent meant "recently created and presumably unpublished".
-        // Measured 2026-08-24, that reasoning was wrong on every count: all 17 notifications and
-        // all 80 documents carry `public` in read[], and prod serves 2-13 documents under each one
-        // (63 of the 80 once eagle-public's own `documentSource: PROJECT-NOTIFICATION` filter is
-        // applied — the number the Project Notifications tab shows).
-        //
-        // They are carried under the NOTIFICATION's own _id as the partition key. Nothing else
-        // could work: eagle-public sends that _id as its `project` filter
-        // (project-notification-documents-table.component.ts:110) and there is nothing to translate
-        // it into — `associatedProjectId` is "" on all 17, so the source data holds no link to a
-        // real project. `documentSource` already distinguishes these rows, so this needs no new
-        // field, no new container, and no change to the documents model.
-        //
-        // Admitted by KNOWN notification id, never by "the ref resolved to nothing": a parent that
-        // is in neither list is still a document with no home, and still gets dropped below.
-        let projectId = projectIndex.resolve(doc.project);
-        if (!projectId && notificationIds.has(String(doc.project))) {
-          projectId = String(doc.project);
-          stats.notificationParented++;
-        }
+        // `documentAdmission` above holds the rule and why it admits a notification id.
+        const projectId = admit(doc.project);
+        if (projectId && notificationIds.has(projectId)) stats.notificationParented++;
 
         if (!projectId) {
           // Neither a project nor a notification. Dropped rather than filed under an invented
@@ -700,6 +707,7 @@ module.exports = {
   parseArgs,
   surplusOf,
   truncatedReads,
+  documentAdmission,
   reconcileContainer,
   verifyProjects,
   verifyItems,

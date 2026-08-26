@@ -13,16 +13,17 @@
  * Runs inside the app container over the SSH tunnel — same recipe as the other database scripts,
  * see README "Running anything against the database". Alert on the one `drift=` line, clean is 0.
  *
- * A document only counts as `eagleOnly` when it resolves a parent the way seed-nosql resolves
- * one: a published Eagle project, OR a known ProjectNotification (~80 documents hang off one of
- * those instead of a project — see seed-nosql.js). The rest report separately under
- * `unresolvedParent`, since seed-nosql drops them too and they are not push drift.
+ * A document only counts as `eagleOnly` when seed-nosql would seed it. That is not a rule
+ * restated here: `documentAdmission` IS seed-nosql's own function, run over the same merged
+ * project registry. The rest report separately under `unresolvedParent`, since seed-nosql drops
+ * them too and they are not push drift.
  */
 
 const sources = require('../seed/sources');
 const projects = require('../repositories/projects');
 const documents = require('../repositories/documents');
-const { surplusOf, truncatedReads } = require('./seed-nosql');
+const { buildRegistry, buildProjectIndex } = require('../merge/project');
+const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql');
 const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 
@@ -91,11 +92,12 @@ async function reconcile(argv = [], deps = {}) {
 
   // Eagle first: `fetchAllPages` throws when a fetch falls short of the reported
   // `searchResultsTotal`, so a truncated read can never be mistaken for a shrunken corpus.
-  const eagleProjectIds = new Set((await src.fetchEagleProjects()).map(p => String(p._id)));
-  // The other entity a document can be parented under — same dataset seed-nosql resolves against,
-  // so the two admission rules cannot drift apart.
-  const notificationIds = new Set(
-    (await src.fetchAllPages(src.EAGLE_API_BASE, 'ProjectNotification')).map(n => String(n._id)));
+  const eagleProjects = await src.fetchEagleProjects();
+  const eagleProjectIds = new Set(eagleProjects.map(p => String(p._id)));
+  // The document gate, over the registry seed-nosql builds — a Track row's dangling epic_guid
+  // resolves here exactly as it does there, so a document under one is drift, not unresolvable.
+  const { admit } = await documentAdmission(src,
+    buildProjectIndex(buildRegistry(src.loadTrackProjects(), eagleProjects).projects));
   const eagleDocumentIds = new Set();
   const eagleDocumentProject = new Map(); // doc id -> its Eagle project id
   await src.streamEagleDocuments(page => {
@@ -116,13 +118,8 @@ async function reconcile(argv = [], deps = {}) {
 
   const projectDiff = diff(projectRows, row => String(row.eagleId), eagleProjectIds,
     row => row.sourceSystem === 'eagle');
-  // Mirrors seed-nosql's admission rule exactly: a project OR a known notification, never an
-  // invented parent.
   const documentDiff = diff(documentRows, row => String(row.id), eagleDocumentIds, undefined,
-    id => {
-      const project = eagleDocumentProject.get(id);
-      return eagleProjectIds.has(project) || notificationIds.has(project);
-    });
+    id => admit(eagleDocumentProject.get(id)) !== null);
 
   summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size, ...projectDiff };
   summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff };

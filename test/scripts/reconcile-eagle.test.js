@@ -8,6 +8,8 @@ const assert = require('node:assert');
 const {
   parseArgs, diff, summaryLine, reconcile, report
 } = require('../../src/scripts/reconcile-eagle');
+const { documentAdmission } = require('../../src/scripts/seed-nosql');
+const { buildRegistry, buildProjectIndex } = require('../../src/merge/project');
 
 const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
 
@@ -25,11 +27,21 @@ const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
  * D4 hangs off N1, a ProjectNotification rather than a project — seed-nosql admits these (~80 in
  * prod, see seed-nosql.js). Eagle publishes it, DEMI never mirrored it: real push drift, so it
  * must be `eagleOnly`, not `unresolvedParent`.
+ *
+ * D5 is the plainest miss the flip gate exists to catch: published project P2, published document,
+ * never mirrored. D6 is the class the old hand-copied rule got wrong — its parent is the Track row
+ * 354, whose epic_guid no longer resolves to a published Eagle project, but the registry still
+ * indexes that guid, so seed-nosql seeds the document and this is drift too.
  */
 const EAGLE_PROJECTS = [{ _id: 'P1' }, { _id: 'P2' }];
 const NOTIFICATIONS = [{ _id: 'N1' }];
+const TRACK_PROJECTS = [
+  { track_project_id: 207, name: 'P1', epic_guid: 'P1' },
+  { track_project_id: 354, name: 'Dangling', epic_guid: 'track-dangling' }
+];
 const EAGLE_DOCS = [{ _id: 'D1', project: 'P1' }, { _id: 'D2', project: 'P2' },
-  { _id: 'D3', project: 'gone' }, { _id: 'D4', project: 'N1' }];
+  { _id: 'D3', project: 'gone' }, { _id: 'D4', project: 'N1' },
+  { _id: 'D5', project: 'P2' }, { _id: 'D6', project: 'track-dangling' }];
 
 const PROJECT_ROWS = [
   { id: '207', eagleId: 'P1', sourceSystem: 'track' },
@@ -46,6 +58,7 @@ const DOCUMENT_ROWS = [
 function stubSources(over = {}) {
   return {
     EAGLE_API_BASE,
+    loadTrackProjects: () => TRACK_PROJECTS,
     fetchEagleProjects: async () => EAGLE_PROJECTS,
     // Same generic pager seed-nosql calls for ProjectNotification — asserted so a divergent
     // dataset name would fail here rather than silently reading the wrong collection.
@@ -134,13 +147,14 @@ test('reconcile', async (t) => {
     assert.deepStrictEqual(summary.documents.unpublishedOrDeleted.map(r => r.id), ['D-gone']);
     // P1 is mirrored on a Track-sourced row; reading only the Eagle-sourced rows reported it here.
     assert.deepStrictEqual(summary.projects.eagleOnly, []);
-    // D4 hangs off notification N1 — seed-nosql admits it, so it is real push drift.
-    assert.deepStrictEqual(summary.documents.eagleOnly, ['D4']);
+    // D4 hangs off notification N1, D5 off published P2, D6 off a Track row's dangling
+    // epic_guid — seed-nosql seeds all three, so all three are real push drift.
+    assert.deepStrictEqual(summary.documents.eagleOnly, ['D4', 'D5', 'D6']);
     // The Track row gone from Eagle: reported apart, and not the push's drift.
     assert.deepStrictEqual(summary.projects.trackOnly.map(r => r.id), ['354']);
     // D3's project ('gone') is unpublished — excluded from eagleOnly, reported apart, not drift.
     assert.deepStrictEqual(summary.documents.unresolvedParent, ['D3']);
-    assert.strictEqual(summary.drift, 3);
+    assert.strictEqual(summary.drift, 5);
     assert.deepStrictEqual(summary.failures, []);
   });
 
@@ -149,7 +163,7 @@ test('reconcile', async (t) => {
       sources: stubSources({ fetchEagleProjects: async () => [...EAGLE_PROJECTS, { _id: 'P3' }] })
     }));
     assert.deepStrictEqual(summary.projects.eagleOnly, ['P3']);
-    assert.strictEqual(summary.drift, 4);
+    assert.strictEqual(summary.drift, 6);
   });
 
   await t.test('a truncated enumeration is reported', async () => {
@@ -181,12 +195,29 @@ test('reconcile', async (t) => {
   });
 });
 
+test('the admission rule is seed-nosql\'s own', async (t) => {
+  await t.test('every document is classified the way seed-nosql would seed it', async () => {
+    const src = stubSources();
+    const { projects: registry } = buildRegistry(src.loadTrackProjects(), EAGLE_PROJECTS);
+    // seed-nosql's own exported rule, over the registry seed-nosql builds. A copied rule in
+    // reconcile-eagle.js disagreed with it on D6 and nothing caught it.
+    const { admit } = await documentAdmission(src, buildProjectIndex(registry));
+    const summary = await reconcile([], makeDeps());
+
+    assert.strictEqual(admit('track-dangling'), '354', 'the dangling-guid class must resolve');
+    for (const doc of EAGLE_DOCS) {
+      assert.strictEqual(!summary.documents.unresolvedParent.includes(doc._id),
+        admit(doc.project) !== null, `${doc._id} classified differently from seed-nosql`);
+    }
+  });
+});
+
 test('summaryLine is the alert contract', async (t) => {
   await t.test('carries every count and a drift total', async () => {
     const summary = await reconcile([], makeDeps());
     assert.strictEqual(summaryLine(summary),
       '[reconcile] projects: unpublishedOrDeleted=1 eagleOnly=0 ' +
-      'documents: unpublishedOrDeleted=1 eagleOnly=1 unresolvedParent=1 drift=3');
+      'documents: unpublishedOrDeleted=1 eagleOnly=3 unresolvedParent=1 drift=5');
   });
 
   await t.test('a clean run says drift=0', () => {
