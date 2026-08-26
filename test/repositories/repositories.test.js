@@ -419,6 +419,33 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     assert.doesNotMatch(spec.query, /ORDER BY/, 'same continuation-token drop as listSeededIds');
   });
 
+  await t.test('listWithEagleId spans every source system, not just eagle', async () => {
+    // WIDER than listEagleOnlyIds on purpose: the merge writes `eagleId` onto Track-sourced rows
+    // too, so a membership test over the Eagle-sourced rows alone reports every matched project
+    // as missing from DEMI. `sourceSystem` is projected because only the Eagle-sourced rows are
+    // the push's to answer for.
+    const calls = paged(t, [{ items: [], continuationToken: undefined }]);
+    await projects.listWithEagleId(SYSTEM);
+
+    const { spec } = calls[0];
+    assert.match(spec.query, /^SELECT c\.id, c\.eagleId, c\.sourceSystem FROM c/);
+    assert.match(spec.query, /IS_DEFINED\(c\.eagleId\) AND NOT IS_NULL\(c\.eagleId\)/);
+    assert.doesNotMatch(spec.query, /c\.sourceSystem = /,
+      'filtering by sourceSystem here reports ~350 matched projects as missing from DEMI');
+    assert.doesNotMatch(spec.query, /ORDER BY/, 'same continuation-token drop as listSeededIds');
+  });
+
+  await t.test('countWithEagleId shares the listWithEagleId predicate exactly', async () => {
+    const calls = captureQuery(t);
+    await projects.listWithEagleId(SYSTEM);
+    await projects.countWithEagleId(SYSTEM);
+
+    const where = q => q.split(' WHERE ')[1];
+    assert.strictEqual(where(calls[1].spec.query), where(calls[0].spec.query));
+    assert.match(calls[1].spec.query, /^SELECT VALUE COUNT\(1\) FROM c/);
+    assert.deepStrictEqual(calls[1].spec.parameters, calls[0].spec.parameters);
+  });
+
   await t.test('the reconcile COUNTs share the enumeration predicate exactly', async () => {
     // The seeder's truncation guard is only meaningful if the COUNT and the read filter
     // identically: a wider COUNT refuses every run, a narrower one never catches a short read.

@@ -159,6 +159,25 @@ stops **both** containers before any delete, in a dry run too. `--max-surplus <n
 ceiling to `n` for the run — the operator asserting the loss really is that big. It requires
 `--reconcile` and a positive integer.
 
+### Reconcile
+
+```bash
+node src/scripts/reconcile-eagle.js            # --json for the full id sets
+```
+
+The drift check for the Eagle push, without a re-seed: DEMI rows gone from Eagle's public search
+(a hard delete carries no tombstone) and Eagle ids the push never landed. **It reports and changes
+nothing.** `unpublishedOrDeleted` is not a delete list: eagle-api answers `200 []` on
+`/api/public/{document,project}/{id}` both for a deleted row and for one that merely lost `public`
+from its `read[]`, so an anonymous caller cannot tell the two apart, and purging on that set would
+destroy an unpublished row along with its chunks and index entries. A purge needs a probe that
+separates them — a tombstone, or a credential that reads unpublished rows. One line is what a log
+alert matches:
+
+```
+[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 documents: unpublishedOrDeleted=0 eagleOnly=0 drift=0
+```
+
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the
 exception — the high-water mark cannot see them, so the application removes index entries explicitly.

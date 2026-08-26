@@ -111,8 +111,28 @@ function parseArgs(argv) {
   return args;
 }
 
-/** Rows in `rows` that this fetch did not produce. */
+/** Rows in `rows` that this fetch did not produce. Shared with `reconcile-eagle.js`. */
 const surplusOf = (rows, keyOf, fetched) => rows.filter(row => !fetched.has(keyOf(row)));
+
+/**
+ * The containers whose enumeration stopped short of a COUNT of the same predicate.
+ *
+ * A truncated read is indistinguishable from a container that shrank: every row it missed
+ * computes as surplus. Shared with `reconcile-eagle.js`, which diffs the same two containers and
+ * would otherwise carry a second copy of the guard.
+ *
+ * @param {Array} pairs  `[label, rows, countOf]`, `countOf` being the COUNT of the same predicate
+ */
+async function truncatedReads(access, pairs) {
+  const short = [];
+  for (const [label, rows, countOf] of pairs) {
+    const expected = await countOf(access);
+    if (rows.length !== expected) {
+      short.push(`${label} enumerated ${rows.length} rows but the container holds ${expected}`);
+    }
+  }
+  return short;
+}
 
 /**
  * Most surplus one container may lose before `--reconcile` refuses.
@@ -602,18 +622,10 @@ async function seed(argv = [], deps = {}) {
     const dropped = (documentFetch || {}).droppedIds || [];
     const droppedInCosmos = dropped.filter(id => inCosmos.has(id));
 
-    // A truncated enumeration is indistinguishable from a container that shrank: every row it
-    // missed computes as surplus. COUNT of the same predicate is the only check that catches it.
-    const truncated = [];
-    for (const [label, rows, countOf] of unverified.length ? [] : [
+    const truncated = await truncatedReads(access, unverified.length ? [] : [
       ['documents', documentRows, repos.documents.countSeededIds],
       ['projects', projectRows, repos.projects.countEagleOnlyIds]
-    ]) {
-      const expected = await countOf(access);
-      if (rows.length !== expected) {
-        truncated.push(`${label} enumerated ${rows.length} rows but the container holds ${expected}`);
-      }
-    }
+    ]);
 
     if (unverified.length) {
       summary.failures.push('--reconcile refused before any delete — nothing removed from either ' +
@@ -686,6 +698,8 @@ module.exports = {
   FLUSH_THRESHOLD,
   RECONCILED_STAGES,
   parseArgs,
+  surplusOf,
+  truncatedReads,
   reconcileContainer,
   verifyProjects,
   verifyItems,
