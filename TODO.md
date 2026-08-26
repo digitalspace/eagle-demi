@@ -229,7 +229,14 @@ value, eagle-public `v2.7.29` (has #803, #805) to test.
       the B3 plan is shared with eagle-search (already paid), Cosmos serverless by use (~3.95 GB
       stored), AI Search Basic already paid, LAW/App Insights small. Expect well under test's
       212 CAD/month (no Foundry, no static site, no enrichment). Sign off or adjust the budget.
-- [ ] **4.8 Flip and soak.** PREREQ (2026-08-26): prod DEMI is 1 document behind prod Eagle
+- [ ] **4.8 Flip and soak.** FLIPPED 2026-08-26 21:30:47 UTC (rehearsal 21:28:01–21:29:40, both
+      directions, `/api/config` byte-identical after revert). `SEARCH_API_PATH: /demi-search` in prod
+      Mongo; `/api/config` served it 1 s later; browser: search calls go to `/demi-search`, none to
+      `/eagle-search`, lists still eagle-api. Rollback = `updateOne` back to `/eagle-search` (proven
+      19 s). Watch: `demi-search-availability-prod` webtest, `demi-reconcile-drift-prod`, App
+      Insights 5xx on demi-api-prod; 1-h canary after the flip in the session log. Soak length is
+      Daniel's call; it gates only 4.9.
+      Was: PREREQ (2026-08-26): prod DEMI is 1 document behind prod Eagle
       (24 more sit under unpublished parents and are not drift) (reconcile report, §3). Close it
       first: in the `demi-api-prod` container, `seed-nosql.js` dry run then `--live` (additive
       upsert, carries extraction state; NO `--reconcile`), then the reconcile report against prod
