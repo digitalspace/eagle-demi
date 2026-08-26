@@ -4,7 +4,7 @@ One Mongo field decides which backend eagle-public calls for Project and Documen
 eagle-api serves it from `/api/config`; the browser reads it once per page load. Propagation
 measured 2026-08-21: 19–38 s. Nothing deploys in either direction.
 
-Daniel runs the Mongo statements (prod write). Claude runs the checks.
+The operator runs the Mongo statements (prod write); the checks are run from this repo's scripts and a browser.
 
 ## Preconditions (all verified 2026-08-26)
 
@@ -12,7 +12,7 @@ Daniel runs the Mongo statements (prod write). Claude runs the checks.
   (rproxy `v2.7.17`).
 - `demi-search-prod` indexes `chunks`/`projects`/`documents` populated; chunk count equals the
   `chunks` container count (check after the copy).
-- eagle-public bundle `main-KVREIOJN.js` (`v2.7.29`) served on `projects.eao.gov.bc.ca`.
+- eagle-public bundle `main-BTVKQ45Y.js` (`v2.7.31`) served on `projects.eao.gov.bc.ca`.
 - `probe-acl.js` 26/26 against `demi-api-prod`; `search-diff.js` shows only the known DIFFs.
 
 ## Statements
@@ -37,8 +37,8 @@ db.epic.updateOne({ _schemaName: 'Config' }, { $set: { SEARCH_API_PATH: '' } })
 
 1. Baseline: `curl -s https://projects.eao.gov.bc.ca/api/config | grep -o '"SEARCH_API_PATH":"[^"]*"'`
    → `/eagle-search`. Save the full body to compare after revert.
-2. Daniel: flip.
-3. Claude: poll `/api/config` until it says `/demi-search` (≤ 60 s), then:
+2. Operator: flip.
+3. Checks: poll `/api/config` until it says `/demi-search` (≤ 60 s), then:
    - `/demi-search/search?dataset=Project&pageSize=1` and `dataset=Document&keywords=assessment&pageSize=1`
      → 200 with `searchResultsTotal` > 0.
    - Browser (playwright, real bundle): `/projects` list renders, a document search returns rows, the
@@ -47,12 +47,11 @@ db.epic.updateOne({ _schemaName: 'Config' }, { $set: { SEARCH_API_PATH: '' } })
    - ACL: an anonymous document search returns no item whose parent project is unpublished
      (`probe-acl.js` anonymous cells).
    - `/api/config` 200, `/admin/` 200.
-4. Daniel: revert. Claude: `/api/config` byte-identical to step 1.
+4. Operator: revert. Check: `/api/config` byte-identical to step 1.
 
 ## Real flip
 
 Same as rehearsal without step 4. Then watch 24 h: App Insights 5xx on `demi-api-prod`,
 `demi-search-availability-prod` webtest, eagle-api pod logs. Rollback at any sign: revert statement.
 
-Soak: 14 days, zero 5xx on `/demi-search`, webtests green, weekly `search-diff.js` green. Record
-daily in `TODO.md` §4.8.
+Soak criterion and daily record: `TODO.md` §4.8 (single source).

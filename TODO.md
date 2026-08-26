@@ -162,10 +162,6 @@ Phase 5 next: rehearsal per `docs/prod-flip-runbook.md` (Daniel runs the two `up
 `demi-search-availability-prod` enabled, every 300 s, on the public `/demi-search/search`
 Document query (plan 3.2 done). Its results are meaningful only once semantic search is enabled
 (the probe is a Document query, not a chunk query, so it is green already).
-
-(was) HOLD until the copy finishes: merging eagle-demi PR #166 (prod availability webtest, review PASS,
-one accepted minor) — then `CONFIRM_PROD=yes scripts/deploy-infra.sh prod --live` (2 creates).
-
 Done this session, not yet recorded elsewhere: 2.4 checks on demi-api-prod — `/api-docs` 404,
 `pageSize=1000` 400, nonsense keyword 0, `probe-acl.js` 26/26 (prod admin key from `6cdc9e-prod`
 `demi-app-secrets`); canary 114/114 all 200 across the eao-nginx + eagle-public prod deploys.
