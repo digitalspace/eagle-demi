@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const app = require('./app');
 const { logger } = require('./utils/logger');
+const { startReconcileSchedule } = require('./reconcile-schedule');
 
 const PORT = process.env.PORT || 3000;
 
@@ -33,3 +34,7 @@ const shutdown = () => {
 
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+// Off unless RECONCILE_HOUR_UTC is set. Azure runs api/index.js, not this file, so the same call
+// is made there too — this one is for `yarn start`.
+startReconcileSchedule();

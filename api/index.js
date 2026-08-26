@@ -265,3 +265,11 @@ app.http('expressApiRoot', {
 // for a nightly job to push. Registration survived the deletion because the require was lazy and
 // wrapped in a catch — it failed silently once a night instead of at boot.
 
+// The Eagle drift report, nightly and in-process. HERE, not only in src/server.js: this file is
+// what Azure loads (package.json `main`), and src/server.js never runs there — a schedule wired
+// only into that file would be off in every deployed environment and green in every test.
+//
+// Off unless RECONCILE_HOUR_UTC names an hour, so requiring this module from the test suite and
+// from `func start` schedules nothing.
+require('../src/reconcile-schedule').startReconcileSchedule();
+

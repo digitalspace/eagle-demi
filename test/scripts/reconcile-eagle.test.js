@@ -6,8 +6,9 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  parseArgs, diff, summaryLine, reconcile, report
+  parseArgs, diff, summaryLine, reconcile, report, run
 } = require('../../src/scripts/reconcile-eagle');
+const { logger } = require('../../src/utils/logger');
 const { documentAdmission } = require('../../src/scripts/seed-nosql');
 const { buildRegistry, buildProjectIndex } = require('../../src/merge/project');
 
@@ -227,4 +228,36 @@ test('summaryLine is the alert contract', async (t) => {
       '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 drift=0');
   });
+});
+
+// `run` is what BOTH callers go through — the CLI entry below `require.main` and the nightly
+// schedule in src/reconcile-schedule.js. The alert reads one line out of the application log, so a
+// run that reported to its caller and logged nothing would leave the alarm permanently silent with
+// every test still green.
+test('run reports to its caller and to the log', async (t) => {
+  const lines = [];
+  t.mock.method(logger, 'info', (message) => { lines.push(message); });
+
+  const summary = await run({ deps: makeDeps() });
+
+  assert.strictEqual(summary.drift, 5, 'the summary is returned, not just printed');
+  assert.deepStrictEqual(summary, await reconcile([], makeDeps()),
+    'and it is the same object reconcile() computes — run() adds logging and nothing else');
+
+  assert.ok(lines.includes(summaryLine(summary)),
+    'the alert line must be logged AS ITS OWN RECORD: the rule extracts drift= from one message, ' +
+    'so folding it into the report body would leave nothing for it to match');
+  assert.ok(lines.some(line => line.startsWith('[reconcile] eagle=')), 'the report body too');
+  assert.ok(!lines.some(line => line.includes('"eagleOnly"')),
+    'and no id dump unless --json asked for one');
+});
+
+test('run passes --json through to the report', async (t) => {
+  const lines = [];
+  t.mock.method(logger, 'info', (message) => { lines.push(message); });
+
+  await run({ json: true, deps: makeDeps() });
+
+  assert.ok(lines.some(line => line.includes('"eagleOnly"')),
+    '--json is the only way to get the full id sets, and the CLI still passes it');
 });

@@ -47,6 +47,15 @@ param enrichmentSources = 'wildfire'
 // dev data with nothing logged.
 param eagleApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api/public'
 
+// The nightly Eagle drift report and the alert that reads its one output line. Both, or neither:
+// the hour is what writes the line, the bool is what watches for it.
+//
+// 09:00 UTC is the middle of the night in Pacific time (02:00 PDT, 01:00 PST) and an hour ahead of
+// prod, so the two environments never run the same report against the same upstream at once — test
+// reads PROD eagle-api, because its corpus was seeded from prod.
+param reconcileHourUtc = '09'
+param deployReconcileDriftAlert = true
+
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //
 // The browser origins allowed to call the API.

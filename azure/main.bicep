@@ -195,6 +195,16 @@ param summaryEnabled bool = true
 @description('Create the Foundry private endpoint. Set false when it already exists — re-PUTting it races the account PUT and fails the whole deployment.')
 param deployFoundryPrivateEndpoint bool = true
 
+// The nightly Eagle drift report, run in the API process (src/reconcile-schedule.js). Two halves
+// of one feature and both default off: the hour is what makes the job run, the bool is what makes
+// the alert exist. Set both together — an alert with no run is silent, a run with no alert is a log
+// line nobody reads.
+@description('Hour of the day, UTC, at which the API runs the Eagle reconcile. Empty runs it never.')
+param reconcileHourUtc string = ''
+
+@description('Deploy the log alert that fires when that run reports drift.')
+param deployReconcileDriftAlert bool = false
+
 // THE PUBLIC URL, not this API's own hostname. rproxy resolves the Front Door address once at
 // config load, so a probe aimed straight at the app stays green through a moved edge — the failure
 // this exists to catch. Not composable here for the same reason `frontendHostNames` is not.
@@ -301,6 +311,7 @@ module observability './modules/observability.bicep' = {
     tags: defaultTags
     // Same list the budget alerts use — one place to change who gets told.
     contactEmails: contactEmails
+    deployReconcileDriftAlert: deployReconcileDriftAlert
   }
 }
 
@@ -357,6 +368,7 @@ module apiWebApp './modules/api-web-app.bicep' = {
     adminApiKey: adminApiKey
     doclingApiKey: doclingApiKey
     eagleApiBase: eagleApiBase
+    reconcileHourUtc: reconcileHourUtc
     keycloakClientId: keycloakClientId
     apiSubnetId: appServiceSubnetId
     existingServerFarmId: existingServerFarmId

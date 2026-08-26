@@ -156,6 +156,9 @@ param frontendHostNames array = []
 @description('Upstream eagle-api the seed loader reads. Must match the environment — the code default in src/seed/sources.js is the DEV instance, so a wrong or missing value reads dev data.')
 param eagleApiBase string
 
+@description('Hour of the day, UTC, at which this app runs the Eagle reconcile in-process. Empty runs it never, which is the default in every environment that has not opted in.')
+param reconcileHourUtc string = ''
+
 // Empty creates the B1 plan below. Set, the app joins a plan that already exists and this template
 // creates none — so it must already be a LINUX plan; a Windows one cannot host `functionapp,linux`.
 @description('Resource id of an App Service plan to join instead of creating demi-plan-<env>.')
@@ -358,6 +361,13 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'EAGLE_API_BASE'
           value: eagleApiBase
+        }
+        // The nightly drift report's only switch (src/reconcile-schedule.js). Empty is off, and
+        // it has to be declared here even when empty for the whole-collection-PUT reason above:
+        // a value set by hand on the live app is deleted by the next infra deploy.
+        {
+          name: 'RECONCILE_HOUR_UTC'
+          value: reconcileHourUtc
         }
         // Credentials for the write paths. Supplied per-environment from the live app settings and
         // never committed — a template carrying real values would put them in deployment history.
