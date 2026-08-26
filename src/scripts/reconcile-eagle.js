@@ -12,6 +12,10 @@
  *
  * Runs inside the app container over the SSH tunnel — same recipe as the other database scripts,
  * see README "Running anything against the database". Alert on the one `drift=` line, clean is 0.
+ *
+ * A document only counts as `eagleOnly` when its own project is one seed-nosql would also resolve
+ * (published in Eagle) — the same gate `projectIndex.resolve` applies; the rest report separately
+ * under `unresolvedParent`, since seed-nosql drops them too and they are not push drift.
  */
 
 const sources = require('../seed/sources');
@@ -38,18 +42,21 @@ function parseArgs(argv) {
  * Eagle-sourced rows would compute ~350 matched projects as missing from DEMI. It is in the
  * membership test and out of the push's own drift.
  *
- * @param {Array}    rows       DEMI rows
- * @param {function} keyOf      row -> the Eagle id it mirrors
- * @param {Set}      eagleIds   ids Eagle currently publishes
- * @param {function} pushOwned  row -> is this row the Eagle push's to keep in step
+ * @param {Array}    rows             DEMI rows
+ * @param {function} keyOf            row -> the Eagle id it mirrors
+ * @param {Set}      eagleIds         ids Eagle currently publishes
+ * @param {function} pushOwned        row -> is this row the Eagle push's to keep in step
+ * @param {function} parentPublished  eagleId -> is the id's parent project published (default: yes)
  */
-function diff(rows, keyOf, eagleIds, pushOwned = () => true) {
+function diff(rows, keyOf, eagleIds, pushOwned = () => true, parentPublished = () => true) {
   const inDemi = new Set(rows.map(keyOf));
   const absent = surplusOf(rows, keyOf, eagleIds);
+  const missing = [...eagleIds].filter(id => !inDemi.has(id));
   return {
     unpublishedOrDeleted: absent.filter(pushOwned),
     trackOnly: absent.filter(row => !pushOwned(row)),
-    eagleOnly: [...eagleIds].filter(id => !inDemi.has(id))
+    eagleOnly: missing.filter(parentPublished),
+    unresolvedParent: missing.filter(id => !parentPublished(id))
   };
 }
 
@@ -59,6 +66,7 @@ function summaryLine(summary) {
   return '[reconcile] ' +
     `projects: unpublishedOrDeleted=${p.unpublishedOrDeleted.length} eagleOnly=${p.eagleOnly.length} ` +
     `documents: unpublishedOrDeleted=${d.unpublishedOrDeleted.length} eagleOnly=${d.eagleOnly.length} ` +
+    `unresolvedParent=${d.unresolvedParent.length} ` +
     `drift=${summary.drift}`;
 }
 
@@ -84,8 +92,13 @@ async function reconcile(argv = [], deps = {}) {
   // `searchResultsTotal`, so a truncated read can never be mistaken for a shrunken corpus.
   const eagleProjectIds = new Set((await src.fetchEagleProjects()).map(p => String(p._id)));
   const eagleDocumentIds = new Set();
+  const eagleDocumentProject = new Map(); // doc id -> its Eagle project id
   await src.streamEagleDocuments(page => {
-    for (const doc of page) eagleDocumentIds.add(String(doc._id));
+    for (const doc of page) {
+      const id = String(doc._id);
+      eagleDocumentIds.add(id);
+      eagleDocumentProject.set(id, doc.project != null ? String(doc.project) : null);
+    }
   });
 
   const projectRows = await projectsRepo.listWithEagleId(access);
@@ -98,7 +111,8 @@ async function reconcile(argv = [], deps = {}) {
 
   const projectDiff = diff(projectRows, row => String(row.eagleId), eagleProjectIds,
     row => row.sourceSystem === 'eagle');
-  const documentDiff = diff(documentRows, row => String(row.id), eagleDocumentIds);
+  const documentDiff = diff(documentRows, row => String(row.id), eagleDocumentIds, undefined,
+    id => eagleProjectIds.has(eagleDocumentProject.get(id)));
 
   summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size, ...projectDiff };
   summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff };
@@ -128,6 +142,10 @@ function report(summary, { json } = {}) {
     line('unpublishedOrDeleted (gone from Eagle\'s public search, NOT purged)',
       s.unpublishedOrDeleted.map(r => r.id));
     line('eagleOnly (the push missed these)', s.eagleOnly);
+    if (s.unresolvedParent.length) {
+      line('unresolvedParent (Eagle-only, but its own project is unpublished/gone — seed-nosql ' +
+        'drops these too, not counted as drift)', s.unresolvedParent);
+    }
     if (s.trackOnly.length) {
       lines.push(`  ${s.trackOnly.length} Track-sourced project(s) are also gone from Eagle's ` +
         'public search — that is close-unpublished-track-projects.js, not the push');
@@ -136,7 +154,8 @@ function report(summary, { json } = {}) {
   for (const f of summary.failures) lines.push(`  ✗ ${f}`);
   if (json) {
     const ids = s => ({
-      unpublishedOrDeleted: s.unpublishedOrDeleted.map(r => r.id), eagleOnly: s.eagleOnly
+      unpublishedOrDeleted: s.unpublishedOrDeleted.map(r => r.id), eagleOnly: s.eagleOnly,
+      unresolvedParent: s.unresolvedParent
     });
     lines.push(JSON.stringify(
       { projects: ids(summary.projects), documents: ids(summary.documents) }, null, 2));

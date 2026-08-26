@@ -171,11 +171,12 @@ nothing.** `unpublishedOrDeleted` is not a delete list: eagle-api answers `200 [
 `/api/public/{document,project}/{id}` both for a deleted row and for one that merely lost `public`
 from its `read[]`, so an anonymous caller cannot tell the two apart, and purging on that set would
 destroy an unpublished row along with its chunks and index entries. A purge needs a probe that
-separates them — a tombstone, or a credential that reads unpublished rows. One line is what a log
-alert matches:
+separates them — a tombstone, or a credential that reads unpublished rows. A document whose own
+project is unpublished/gone is not counted as `eagleOnly` drift either — seed-nosql drops it the
+same way — it reports separately as `unresolvedParent`. One line is what a log alert matches:
 
 ```
-[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 documents: unpublishedOrDeleted=0 eagleOnly=0 drift=0
+[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 drift=0
 ```
 
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a

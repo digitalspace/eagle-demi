@@ -12,14 +12,19 @@ const {
 const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
 
 /**
- * Eagle publishes projects P1/P2 and documents D1/D2.
+ * Eagle publishes projects P1/P2 and documents D1/D2/D3.
  *
  * DEMI mirrors: P1 under a Track-sourced row (the shape that made a naive diff report every
  * matched project as missing), P2 Eagle-sourced, plus `gone` — Eagle-sourced and absent from
  * Eagle's public search. `track-dangling` is the same absence on a Track row.
+ *
+ * D3 is the document-side counterpart of `gone`: Eagle publishes it, DEMI never mirrored it, and
+ * its own project ('gone') is not in EAGLE_PROJECTS — seed-nosql would drop it as unresolvable, so
+ * the reconcile must report it as `unresolvedParent`, not `eagleOnly`.
  */
 const EAGLE_PROJECTS = [{ _id: 'P1' }, { _id: 'P2' }];
-const EAGLE_DOCS = [{ _id: 'D1' }, { _id: 'D2' }];
+const EAGLE_DOCS = [{ _id: 'D1', project: 'P1' }, { _id: 'D2', project: 'P2' },
+  { _id: 'D3', project: 'gone' }];
 
 const PROJECT_ROWS = [
   { id: '207', eagleId: 'P1', sourceSystem: 'track' },
@@ -100,6 +105,13 @@ test('diff', async (t) => {
     // And its Eagle id is still membership: a matched Track row must not read as Eagle-only.
     assert.deepStrictEqual(diff(rows, row => row.eagleId, new Set(['x']), owned).eagleOnly, []);
   });
+
+  await t.test('an id whose parent is unpublished is unresolvedParent, not eagleOnly', () => {
+    const parentPublished = id => id !== 'unresolved';
+    const result = diff([], row => row.id, new Set(['ok', 'unresolved']), undefined, parentPublished);
+    assert.deepStrictEqual(result.eagleOnly, ['ok']);
+    assert.deepStrictEqual(result.unresolvedParent, ['unresolved']);
+  });
 });
 
 test('reconcile', async (t) => {
@@ -113,8 +125,18 @@ test('reconcile', async (t) => {
     assert.deepStrictEqual(summary.documents.eagleOnly, []);
     // The Track row gone from Eagle: reported apart, and not the push's drift.
     assert.deepStrictEqual(summary.projects.trackOnly.map(r => r.id), ['354']);
+    // D3's project ('gone') is unpublished — excluded from eagleOnly, reported apart, not drift.
+    assert.deepStrictEqual(summary.documents.unresolvedParent, ['D3']);
     assert.strictEqual(summary.drift, 2);
     assert.deepStrictEqual(summary.failures, []);
+  });
+
+  await t.test('a document whose project is unpublished is not counted as eagleOnly', async () => {
+    const summary = await reconcile([], makeDeps());
+    assert.deepStrictEqual(summary.documents.eagleOnly, []);
+    assert.deepStrictEqual(summary.documents.unresolvedParent, ['D3']);
+    // Reported separately, not added into drift — the gate this whole change exists for.
+    assert.strictEqual(summary.drift, 2);
   });
 
   await t.test('an id Eagle publishes and DEMI never mirrored is reported', async () => {
@@ -151,14 +173,14 @@ test('summaryLine is the alert contract', async (t) => {
     const summary = await reconcile([], makeDeps());
     assert.strictEqual(summaryLine(summary),
       '[reconcile] projects: unpublishedOrDeleted=1 eagleOnly=0 ' +
-      'documents: unpublishedOrDeleted=1 eagleOnly=0 drift=2');
+      'documents: unpublishedOrDeleted=1 eagleOnly=0 unresolvedParent=1 drift=2');
   });
 
   await t.test('a clean run says drift=0', () => {
     assert.strictEqual(
       summaryLine({ projects: { unpublishedOrDeleted: [], eagleOnly: [] },
-        documents: { unpublishedOrDeleted: [], eagleOnly: [] }, drift: 0 }),
+        documents: { unpublishedOrDeleted: [], eagleOnly: [], unresolvedParent: [] }, drift: 0 }),
       '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 ' +
-      'documents: unpublishedOrDeleted=0 eagleOnly=0 drift=0');
+      'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 drift=0');
   });
 });
