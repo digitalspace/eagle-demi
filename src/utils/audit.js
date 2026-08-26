@@ -226,9 +226,13 @@ function auditEvent(req, event) {
  * @param {object} event  { eventName, projectId, documentId, searchTerm, resultCount, detail }
  */
 function analyticsEvent(req, event) {
+  const headers = (req && req.headers) || {};
+  // The availability web test searches every 5 minutes from 5 probe locations — 1,440 synthetic
+  // searches a day, which would read as usage. Caller-supplied and so spoofable: this suppresses a
+  // usage COUNTER only. auditEvent's trail is untouched and no access decision reads it.
+  if (headers['x-synthetic-probe']) return;
   // Same guard, same reason — see auditEvent.
   try {
-  const headers = (req && req.headers) || {};
   const actor = actorFor(req);
 
   enqueue(EVENTS_STREAM, {

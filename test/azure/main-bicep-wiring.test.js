@@ -46,6 +46,29 @@ test('the prod environment raises the ceiling above the proxy-collapsed default'
     `${match[1]}/min is ${(Number(match[1]) / 60).toFixed(1)} r/s for every visitor combined`);
 });
 
+// The availability probe has two ways to be green through a real outage, and `az bicep build`
+// catches neither — it is a URL string either way. Both are text-structural, with the same honest
+// limits as the guards above.
+test('the prod availability probe goes through rproxy and reaches AI Search', () => {
+  const match = /^param availabilityUrl = '([^']+)'$/m.exec(PROD_PARAMS);
+  assert.ok(match, 'prod must set availabilityUrl, or the module gate deploys no test at all');
+  const url = new URL(match[1]);
+
+  // rproxy resolves the Front Door address ONCE at config load, so a moved edge breaks the public
+  // path while demi-api-prod.azurewebsites.net keeps answering. Probing the app directly would
+  // stay green through exactly the outage this test exists to catch (TODO 4.6).
+  assert.strictEqual(url.hostname, 'projects.eao.gov.bc.ca',
+    'the probe must take the public path visitors take, not the app hostname behind it');
+  assert.ok(url.pathname.startsWith('/demi-search/'),
+    'that public path is what rproxy routes to demi-api-prod');
+
+  // `hasCriteria` is FALSE for a bare project list, and src/controllers/search.js then answers it
+  // from Cosmos — an AI Search outage would not move a `dataset=Project&pageSize=1` probe. Every
+  // document read goes to the index, so this is the parameter that makes the probe meaningful.
+  assert.strictEqual(url.searchParams.get('dataset'), 'Document',
+    'only a document read is guaranteed to reach aiSearch.searchDocuments');
+});
+
 // The prod parameters turn features OFF through switches, and every one of them has the same blind
 // spot as `rateLimitMaxRequests` above: delete the line that wires it and `az bicep build` still
 // exits 0 with only a `no-unused-params` warning, so the param file reads one thing and the
@@ -68,7 +91,10 @@ const WIRED = [
   ['existingServerFarmId', /^\s+existingServerFarmId: existingServerFarmId$/m,
     'the API module call — without it prod creates demi-plan-prod instead of joining the shared plan'],
   ['keycloakClientId', /^\s+keycloakClientId: keycloakClientId$/m,
-    'the API module call — without it no param file can set which client the API trusts']
+    'the API module call — without it no param file can set which client the API trusts'],
+  ['availabilityUrl',
+    /^module availability '\.\/modules\/availability\.bicep' = if \(!empty\(availabilityUrl\)\) \{$/m,
+    'the availability module gate — without it every environment gets a prod-only web test']
 ];
 
 for (const [name, wiring, why] of WIRED) {

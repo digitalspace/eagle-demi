@@ -172,11 +172,14 @@ value, eagle-public `v2.7.29` (has #803, #805) to test.
       tag yet; prod runs v2.7.28 = `65b1a1a`). Cut from `develop`, verify on test (pod + AFD, same
       tag), deploy to both the pod chart and the AFD bundle. Without it a malformed envelope bounces
       visitors off `/projects`.
-- [ ] **4.6 Prod observability for demi-api.** `rg-demi-prod` has no LAW/App Insights; the template
-      wires `APPLICATIONINSIGHTS_CONNECTION_STRING` from the observability module, so 4.1 covers the
-      resource. Add a webtest on a real search URL (`/demi-search/search?…` via
-      `projects.eao.gov.bc.ca`) modelled on `eagle-public-availability-prod` — the only check that
-      sees a moved Front Door address (rproxy resolves DNS once at config load).
+- [x] ~~**4.6 Prod observability for demi-api.**~~ `rg-demi-prod` has no LAW/App Insights; the
+      template wires `APPLICATIONINSIGHTS_CONNECTION_STRING` from the observability module, so 4.1
+      covers the resource. Webtest `demi-search-availability-prod` added in
+      `azure/modules/availability.bicep`, modelled on `eagle-public-availability-prod`, probing
+      `https://projects.eao.gov.bc.ca/demi-search/search?dataset=Document&keywords=assessment&pageSize=1`
+      — the public path through rproxy, so it sees a moved Front Door address, and `dataset=Document`
+      so every probe goes through AI Search rather than the Cosmos project list. Deploys only where
+      `availabilityUrl` is set; probes carry `X-Synthetic-Probe` and are not counted as usage.
 - [ ] **4.7 Cost sign-off.** Prod plan + Cosmos + PEs + observability + a temporary second index set.
       Create a `rg-demi-prod` budget before 4.1 (test RG projects ~237 CAD/month, fact 7).
 - [ ] **4.8 Flip and soak.** Set prod `SEARCH_API_PATH` to `/demi-search` (one Mongo field, no

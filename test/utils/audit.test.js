@@ -101,6 +101,25 @@ test('audit writer', async (t) => {
     assert.notStrictEqual(sent[0].rows[0].AnonId, first);
   });
 
+  await t.test('the availability probe is not counted as usage', async () => {
+    // The web test in azure/modules/availability.bicep searches every 5 minutes from 5 locations.
+    // Counted, that is 1,440 synthetic searches a day sitting in the usage table as real traffic.
+    audit.analyticsEvent(
+      fakeReq({ headers: { 'user-agent': 'curl/8', 'x-synthetic-probe': 'availability' } }),
+      { eventName: 'search', searchTerm: 'assessment', resultCount: 1 });
+    await audit.flush();
+    assert.strictEqual(sent.length, 0, 'a probe must enqueue nothing at all');
+
+    // The audit trail is deliberately NOT suppressed — a spoofable header must never be able to
+    // erase an access record.
+    audit.auditEvent(
+      fakeReq({ headers: { 'x-synthetic-probe': 'availability' } }),
+      { action: 'document.read', targetType: 'document', targetId: 'd1' });
+    await audit.flush();
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].stream, audit.AUDIT_STREAM);
+  });
+
   await t.test('anonymous callers stay anonymous, signed-in callers are traceable', async () => {
     // The distinction the whole table design turns on. Public traffic must not be re-identifiable
     // after the salt rotates; staff activity must be attributable, because "which of our people

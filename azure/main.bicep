@@ -195,6 +195,12 @@ param summaryEnabled bool = true
 @description('Create the Foundry private endpoint. Set false when it already exists — re-PUTting it races the account PUT and fails the whole deployment.')
 param deployFoundryPrivateEndpoint bool = true
 
+// THE PUBLIC URL, not this API's own hostname. rproxy resolves the Front Door address once at
+// config load, so a probe aimed straight at the app stays green through a moved edge — the failure
+// this exists to catch. Not composable here for the same reason `frontendHostNames` is not.
+@description('Absolute URL the availability web test GETs. Empty deploys no test.')
+param availabilityUrl string = ''
+
 // Mandatory Cost Management Tags applied across ALL resources
 var defaultTags = {
   Project: 'DEMI'
@@ -370,6 +376,20 @@ module apiWebApp './modules/api-web-app.bicep' = {
     // The browser origins that call this API. See the parameter for why they are not derivable.
     frontendHostNames: frontendHostNames
     rateLimitMaxRequests: rateLimitMaxRequests
+  }
+}
+
+// 7b. Synthetic availability probe. Separate from observability.bicep because that module is
+// unconditional and this one is a per-environment opt-in.
+module availability './modules/availability.bicep' = if (!empty(availabilityUrl)) {
+  name: 'deploy-availability'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    targetUrl: availabilityUrl
+    appInsightsId: observability.outputs.appInsightsId
+    actionGroupId: observability.outputs.actionGroupId
   }
 }
 

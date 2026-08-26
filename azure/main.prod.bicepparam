@@ -99,6 +99,16 @@ param existingServerFarmId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd
 param privateEndpointSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/c4b0a8-prod-cond-ext-pe-subnet'
 param appServiceSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/snet-app-service'
 
+// ── Monitoring ────────────────────────────────────────────────────────────────────────────────
+// THE PUBLIC PATH THROUGH rproxy, which is what eagle-public calls and the only address that fails
+// when the Front Door address moves — rproxy resolves it once at config load. Aiming this at
+// demi-api-prod.azurewebsites.net instead would stay green through exactly that outage.
+//
+// `dataset=Document` is what forces the request through AI Search: `hasCriteria` is false for a
+// bare project list, and the Project branch then answers from Cosmos, so an AI Search outage would
+// not move this test. See src/controllers/search.js — every document read goes to the index.
+param availabilityUrl = 'https://projects.eao.gov.bc.ca/demi-search/search?dataset=Document&keywords=assessment&pageSize=1'
+
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────
 // rg-demi-prod has no budget at all today. 400 CAD matches the test guard; prod carries no Foundry
 // account and no second search service, but does carry a plan, Cosmos and the private endpoints.

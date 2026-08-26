@@ -4,6 +4,8 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
 
 const searchController = require('../../src/controllers/search');
 const aiSearch = require('../../src/search/ai-search');
@@ -1944,5 +1946,43 @@ test('the answer matches the request that was made', async (t) => {
     const [row] = out.body[0].searchResults;
     assert.strictEqual(row.projectId, '207');
     assert.strictEqual(row.project._id, '588511c4aaecd9001b826192');
+  });
+
+  // THE PROBE URL ITSELF, run through this controller. The availability web test asserts only an
+  // HTTP 200, so a query the app can answer without AI Search leaves the alert green through a
+  // total index outage — which is what `dataset=Project&pageSize=1` did: `hasCriteria` is false
+  // without keywords or a filter, and the Project branch answers that from Cosmos.
+  //
+  // Reading the URL out of the param file rather than restating it is the point: editing that
+  // line back to a Cosmos-served query turns this red.
+  await t.test('the deployed prod availability probe fails when AI Search does', async () => {
+    const params = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'azure', 'main.prod.bicepparam'), 'utf8');
+    const match = /^param availabilityUrl = '([^']+)'$/m.exec(params);
+    assert.ok(match, 'prod must set availabilityUrl');
+    const query = Object.fromEntries(new URL(match[1]).searchParams);
+
+    t.mock.method(aiSearch, 'searchDocuments', async () => {
+      throw new Error('AI Search is down');
+    });
+
+    // Cosmos answers NORMALLY here, and that is deliberate. Throwing from these stubs would be
+    // caught by the controller and returned as the very 502 this asserts — a green test for a
+    // probe served entirely by Cosmos. They have to succeed for the assertion to mean anything.
+    let servedByCosmos = false;
+    t.mock.method(projectsRepo, 'listVisible', async () => {
+      servedByCosmos = true;
+      return { items: [] };
+    });
+    t.mock.method(projectsRepo, 'countVisible', async () => 0);
+    t.mock.method(logger, 'error', () => {});
+
+    const { out, res } = capture();
+    await searchController.search({ query, header: () => null }, res);
+
+    assert.strictEqual(servedByCosmos, false,
+      'a query Cosmos can answer stays 200 through a total AI Search outage');
+    assert.strictEqual(out.status, 502,
+      'an AI Search outage must show up as a non-200 on the probe URL');
   });
 });
