@@ -161,18 +161,13 @@ value, eagle-public `v2.7.29` (has #803, #805) to test.
       06:28 UTC: projects 393 / documents 61,587 indexed, 0 failed; chunks indexer trailing the copy.
       Anonymous `demi-api-prod` totals Project 348 / Document 61,587 = `demi-api-test` exactly;
       prod eagle-search 358 / 61,588 (delta = the known DIFFs, quantify with `search-diff.js` in 4.4).
-      three settings in the same change. Apply the widened definitions (`fileNameTokens` needs
-      `allowIndexDowntime=true`; `stored:false` rejected). Order: index PUT → datasource PUT by hand
-      → indexer run → app last.
-- [ ] **4.4 eao-nginx prod tag with the demi block AND `nginx.epic.proxy.demi` — ONLY after 4.1
-      creates `demi-api-prod`.** Reviewer proved 2026-08-26: nginx refuses to start on an
-      unresolvable `proxy_pass` host (CrashLoopBackOff), so the value must not exist in
-      `values-prod.yaml` until the hostname resolves; PR #45 (merged) keeps it commented with that rule. The block is in
-      v2.7.15/v2.7.16; prod runs v2.7.14 (same image as v2.7.13). `values-prod.yaml` has no `demi:`
-      key and prod rproxy has no `NGINX__EPIC__PROXY__DEMI` — a chart-only deploy renders the
-      `localhost:9999` sentinel. One PR (`demi:` value), one tag, one deploy; human approval gate;
-      stale-`waiting`-run concurrency trap. Verify: `/demi-search/search?dataset=Project&pageSize=1`
-      200 on `projects.eao.gov.bc.ca`.
+- [x] ~~**4.4 eao-nginx prod tag with the demi block AND `nginx.epic.proxy.demi`**~~ DONE
+      2026-08-26 07:00 UTC: PR #46 (`9ed9e1f`, review PASS) → tag `v2.7.17` cut by Deploy to Test
+      (first run failed on a runner→OpenShift API timeout, rerun green) → Deploy to Prod succeeded,
+      rproxy 2/2 on the test-verified image. Canary every 20 s on `/`, `/api/config`,
+      `/eagle-search/search`, `/admin/`: all 200 throughout. `projects.eao.gov.bc.ca/demi-search/search`
+      answers from `demi-api-prod` (Project 348 / Document 61,587). Site still on `/eagle-search`.
+      Rollback: redeploy `v2.7.14`, or `oc set env deploy/rproxy NGINX__EPIC__PROXY__DEMI=http://localhost:9999 -n 6cdc9e-prod`.
 - [ ] **4.5 eagle-public prod tag containing #803** (`e3f3c3c4`, three envelope null guards; in no
       tag yet; prod runs v2.7.28 = `65b1a1a`). Cut from `develop`, verify on test (pod + AFD, same
       tag), deploy to both the pod chart and the AFD bundle. Without it a malformed envelope bounces
