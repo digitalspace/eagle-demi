@@ -162,18 +162,20 @@ ceiling to `n` for the run — the operator asserting the loss really is that bi
 ### Reconcile
 
 ```bash
-node src/scripts/reconcile-eagle.js            # report only; --live to purge, --json for the ids
+node src/scripts/reconcile-eagle.js            # --json for the full id sets
 ```
 
-The drift check for the Eagle push, without a re-seed: DEMI rows Eagle no longer publishes (a hard
-delete carries no tombstone) and Eagle ids the push never landed. `--live` purges only the first
-set, documents before projects, through the same helpers the DELETE routes use; it refuses —
-nothing removed from either container — above `--max-purge` (default 100), when an enumeration is
-shorter than a `COUNT` of the same predicate, or when `SEARCH_ENDPOINT` is unset. Eagle-only ids
-are reported and never acted on. One line is what a log alert matches:
+The drift check for the Eagle push, without a re-seed: DEMI rows gone from Eagle's public search
+(a hard delete carries no tombstone) and Eagle ids the push never landed. **It reports and changes
+nothing.** `unpublishedOrDeleted` is not a delete list: eagle-api answers `200 []` on
+`/api/public/{document,project}/{id}` both for a deleted row and for one that merely lost `public`
+from its `read[]`, so an anonymous caller cannot tell the two apart, and purging on that set would
+destroy an unpublished row along with its chunks and index entries. A purge needs a probe that
+separates them — a tombstone, or a credential that reads unpublished rows. One line is what a log
+alert matches:
 
 ```
-[reconcile] projects: demiOnly=0 eagleOnly=0 documents: demiOnly=0 eagleOnly=0 drift=0
+[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 documents: unpublishedOrDeleted=0 eagleOnly=0 drift=0
 ```
 
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a

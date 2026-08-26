@@ -92,7 +92,9 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 - [ ] Nightly reconcile + drift alarm for the Eagle push: the only thing that catches a
       hard-deleted document (`findOneAndDelete`, no tombstone).
       Script landed (PR): run in test first (`node src/scripts/reconcile-eagle.js`), then WebJob +
-      log alert on `drift=`.
+      log alert on `drift=`. It reports only — eagle-api's public GET answers `200 []` for a
+      deleted row and an unpublished one alike, so acting on the drift needs a tombstone or a
+      credential that reads unpublished rows.
 - [ ] Unused Cosmos index paths (`wildfires` spatial, projects composite, five scalars): verified
       removable; only with a Bicep deploy that happens for another reason.
 - [x] ~~eao-nginx `values-prod.yaml` stale pre-cutover prose~~ Done: PR #45 (default-branch
