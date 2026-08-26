@@ -150,6 +150,9 @@ output connectionString string = appInsights.properties.ConnectionString
 @description('Action group shared with audit-logs.bicep, which deploys after this module')
 output actionGroupId string = alertGroup.id
 
+@description('Application Insights resource ID, for availability.bicep to link its web test to')
+output appInsightsId string = appInsights.id
+
 @description('Resource ID of the Log Analytics workspace backing Application Insights')
 output workspaceId string = workspace.id
 
