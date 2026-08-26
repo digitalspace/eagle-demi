@@ -90,13 +90,9 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 - [x] ~~Review minors still real~~ Done in PR #169.
 - [x] ~~`_sql.fetchAll` still passes `maxItemCount`,~~ Done in PR #169: `maxItemCount` dropped; rows appended without spread.
 - [ ] Nightly reconcile + drift alarm for the Eagle push: the only thing that catches a
-      hard-deleted document (`findOneAndDelete`, no tombstone). Model on
-      `eagle-search/worker/full-sync.js:120-164` (archived, readable locally). Test first.
-      Plan (2026-08-26): `src/scripts/reconcile-eagle.js` = id-set diff Eagle `/api/search`
-      (public ids) vs DEMI `projects`/`documents` per env; report-only first, `--live` purges
-      DEMI-only rows via `purgeDocument`/`purgeProject`; run as an App Service WebJob on a daily
-      cron (no extra resource); alert = App Insights log alert on `[reconcile] drift=` > 0. Needs
-      the prod push key (1.3) to be meaningful in prod; build and run in test first.
+      hard-deleted document (`findOneAndDelete`, no tombstone).
+      Script landed (PR): run in test first (`node src/scripts/reconcile-eagle.js`), then WebJob +
+      log alert on `drift=`.
 - [ ] Unused Cosmos index paths (`wildfires` spatial, projects composite, five scalars): verified
       removable; only with a Bicep deploy that happens for another reason.
 - [x] ~~eao-nginx `values-prod.yaml` stale pre-cutover prose~~ Done: PR #45 (default-branch

@@ -190,6 +190,37 @@ async function countEagleOnlyIds(access) {
   return value || 0;
 }
 
+/** Every row carrying an Eagle identity, whatever wrote it. Shared so its COUNT cannot drift. */
+const eagleIdCriteria = () => [isDefinedAndNotNull('eagleId')];
+
+/**
+ * `{id, eagleId, sourceSystem}` for every project mirroring an Eagle record — the reconcile's
+ * membership set.
+ *
+ * WIDER than `listEagleOnlyIds` on purpose. A Track-sourced row also carries an `eagleId` when the
+ * merge matched one, so a diff computed off the Eagle-sourced rows alone reads every matched
+ * project as missing from DEMI. `sourceSystem` rides along because only the Eagle-sourced rows may
+ * be purged when Eagle drops one.
+ *
+ * NO ORDER BY, for the reason `listEagleOnlyIds` gives.
+ */
+async function listWithEagleId(access) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: eagleIdCriteria(),
+    select: 'c.id, c.eagleId, c.sourceSystem'
+  });
+  return fetchAll(CONTAINER, spec);
+}
+
+/** COUNT of exactly what listWithEagleId reads — the reconcile's proof that it ran to the end. */
+async function countWithEagleId(access) {
+  const spec = countWhere({ access, partitionField: PARTITION_FIELD, criteria: eagleIdCriteria() });
+  const value = await cosmos.queryValue(CONTAINER, spec);
+  return value || 0;
+}
+
 /**
  * Whole-item write. Safe only because nothing is folded into the project as an embedded array
  * any more — a replace from the Track sync would silently discard it. Use the patch helpers
@@ -230,6 +261,8 @@ module.exports = {
   publicView,
   listEagleOnlyIds,
   countEagleOnlyIds,
+  listWithEagleId,
+  countWithEagleId,
   upsert,
   patchWildfireStats,
   patchBoundaries,

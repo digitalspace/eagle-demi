@@ -159,6 +159,23 @@ stops **both** containers before any delete, in a dry run too. `--max-surplus <n
 ceiling to `n` for the run — the operator asserting the loss really is that big. It requires
 `--reconcile` and a positive integer.
 
+### Reconcile
+
+```bash
+node src/scripts/reconcile-eagle.js            # report only; --live to purge, --json for the ids
+```
+
+The drift check for the Eagle push, without a re-seed: DEMI rows Eagle no longer publishes (a hard
+delete carries no tombstone) and Eagle ids the push never landed. `--live` purges only the first
+set, documents before projects, through the same helpers the DELETE routes use; it refuses —
+nothing removed from either container — above `--max-purge` (default 100), when an enumeration is
+shorter than a `COUNT` of the same predicate, or when `SEARCH_ENDPOINT` is unset. Eagle-only ids
+are reported and never acted on. One line is what a log alert matches:
+
+```
+[reconcile] projects: demiOnly=0 eagleOnly=0 documents: demiOnly=0 eagleOnly=0 drift=0
+```
+
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the
 exception — the high-water mark cannot see them, so the application removes index entries explicitly.
