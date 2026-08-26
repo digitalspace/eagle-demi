@@ -89,6 +89,8 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 - [x] ~~#162 minors~~ Done in PR #169 (`2136e39`).
 - [x] ~~Review minors still real~~ Done in PR #169.
 - [x] ~~`_sql.fetchAll` still passes `maxItemCount`,~~ Done in PR #169: `maxItemCount` dropped; rows appended without spread.
+- [ ] `projects.js:128` filters `isDefinedAndNotNull('centroid')` but `/centroid/?` is not an included
+      index path — that filter scans. Add the path (Bicep) or drop the filter; found 2026-08-26.
 - [ ] Nightly reconcile + drift alarm for the Eagle push: the only thing that catches a
       hard-deleted document (`findOneAndDelete`, no tombstone).
       Script landed (#171). First runs 2026-08-26 (test container): vs eagle-TEST is meaningless
