@@ -20,3 +20,13 @@ Not scheduled. Kept out of `TODO.md` so open work stays short. Added 2026-08-26.
   boundaries (checked-in GeoJSON → `boundaries`), the map's live DataBC layer. Same engine as
   above, geo-flavoured: bbox/centroid validation, `[lon, lat]` invariant, staleness shown on `/map`
   (`lastCalculatedAt` already rendered). Test-only until prod wants any enrichment.
+- **Key manager / rotator.** Today rotation is a hand sequence across holders that nothing
+  records together: `ADMIN_API_KEY` lives in OpenShift `demi-app-secrets` (source of truth),
+  the App Service setting, and the GPU box env file; the Eagle push key in `demi-push-secret`;
+  eagle-api's `SMOKE_API_KEY`; MinIO and OpenShift tokens rotate at their issuers. The 2026-08-25
+  rotation showed the failure modes: a holder skipped is a silent revert on the next infra
+  deploy, App Service needs stop/start before the new value serves, and single-key auth means a
+  window. Target: one place that knows every credential, its holders, age and expiry (registry
+  keys already carry `expiresAt`), can mint the next value, write it to every holder in the safe
+  order, verify with a real call, and alert before expiry. Dual-key acceptance (`*_NEXT`) on the
+  readers would remove the window. Same admin surface as the API-key/role manager above.
