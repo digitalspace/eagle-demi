@@ -117,7 +117,7 @@ async function fetchAll(container, spec, opts = {}) {
     // rows. Unset takes the SDK's own fetchAll(), which drains the result set itself.
     const page = await cosmos.query(container, spec,
       pageOptions({ ...opts, continuationToken }));
-    rows.push(...page.items);
+    for (const item of page.items) rows.push(item); // spread caps at ~125k args
     continuationToken = page.continuationToken;
   } while (continuationToken);
   return rows;
