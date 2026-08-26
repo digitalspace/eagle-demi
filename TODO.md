@@ -99,7 +99,11 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
       `seed-nosql.js --live` from prod Eagle inside the prod container (additive upsert; never
       `--reconcile`, which deletes), then rerun this report against prod (`demi-api-prod`
       container, same env) and require drift=0 (`trackOnly` is reported separately and is not
-      in the sum). Next: WebJob + log alert on `drift=`. It reports only — eagle-api's public GET answers `200 []` for a
+      in the sum). Next: WebJob + log alert on `drift=`.
+      #173 review minors (open, PR in progress): reconcile's parent rule is narrower than seed's
+      `buildProjectIndex` (Track rows with a dangling `epic_guid` admit documents in seed, not here);
+      no fixture for a missing document under a PUBLISHED project; ProjectNotification fetch +
+      admission predicate copied from seed instead of extracted. It reports only — eagle-api's public GET answers `200 []` for a
       deleted row and an unpublished one alike, so acting on the drift needs a tombstone or a
       credential that reads unpublished rows.
 - [ ] Unused Cosmos index paths (`wildfires` spatial, projects composite, five scalars): verified
@@ -230,7 +234,8 @@ value, eagle-public `v2.7.29` (has #803, #805) to test.
       Dry run in prod 2026-08-26 19:10 UTC: fetched 61,612, built 61,588, `droppedUnresolvable` 24
       (parents unpublished in Eagle — the double gate hides them anyway), preserved 61,587 → 1
       genuinely new document; projects built 392. `--live --only projects,documents` (boundaries
-      never in prod) run by Daniel 2026-08-26 ~19:30 UTC; gate = reconcile `drift=0`.
+      never in prod) run by Daniel 2026-08-26 ~19:30 UTC; gate = reconcile `drift=0` — PASSED 19:41 UTC on `demi-api-prod` (`v0.17.2-192020`):
+      projects 0/0, documents 0/0, `unresolvedParent=24`. PREREQ DONE; the flip is now yours.
       Set prod `SEARCH_API_PATH` to `/demi-search` (one Mongo field, no
       deploy); keep `/eagle-search` answering. Define the soak criterion here before flipping
       (proposed: 14 days, zero 5xx on `/demi-search`, differ green against the frozen eagle-search).
