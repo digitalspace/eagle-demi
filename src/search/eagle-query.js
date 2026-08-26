@@ -10,7 +10,7 @@
  * Field metadata is read from `azure/search/indexes/*.json` at load, never from a table here, and a
  * key the indexes cannot express is DROPPED and logged rather than emitted — an unknown field name
  * is an OData 400, which eagle-public renders as an empty table. See
- * wiki Search-and-Retrieval#field-metadata-comes-from-the-committed-index-definitions and
+ * wiki Search-Index-Reference#field-metadata-comes-from-the-committed-index-definitions and
  * #what-demis-indexes-cannot-express.
  */
 
@@ -76,7 +76,7 @@ const ALIASES = {
  * `proponent` is the whole reason this exists: it passes every gate in `buildFilter` and emits
  * `proponent eq '<ObjectId>'` against a field holding a NAME, matching 0 of 382 rows under a 200.
  * NOT a general deny list — a key naming no field, or an unfilterable one, is already dropped
- * below. See wiki Search-and-Retrieval#what-demis-indexes-cannot-express.
+ * below. See wiki Search-Index-Reference#what-demis-indexes-cannot-express.
  */
 const EMPTY_SET = new Set();
 
@@ -87,7 +87,7 @@ const UNMAPPED_KEYS = {
 /**
  * Wire VALUE -> the OTHER spelling the corpus may hold it under. Both are matched, never swapped,
  * because both are stored. An unlisted value is matched as sent: Track can add a type without
- * asking us. See wiki Search-and-Retrieval#project-type-spellings.
+ * asking us. See wiki Search-Index-Reference#project-type-spellings.
  */
 const VALUE_ALIASES = {
   Project: {
@@ -103,7 +103,7 @@ const VALUE_ALIASES = {
  * Order applied when the caller asks for none AND there are no keywords: `search: '*'` has no stable
  * order, so without this page 2 repeats and omits rows from page 1. No entry for DocumentChunk —
  * every field in `chunks` is `sortable: false`. See
- * wiki Search-and-Retrieval#default-order-and-relevance.
+ * wiki Search-Query-Construction#default-order-and-relevance.
  */
 const DEFAULT_ORDER = {
   Project: 'name asc',
@@ -112,7 +112,7 @@ const DEFAULT_ORDER = {
 
 /**
  * Query parameters this endpoint understands. Anything else is a 400 rather than a silent no-op —
- * see wiki Search-and-Retrieval#unsupported-parameters-400-inexpressible-filter-keys-drop.
+ * see wiki Search-Query-Construction#unsupported-parameters-400-inexpressible-filter-keys-drop.
  */
 const KNOWN_PARAMS = new Set([
   // this API's own
@@ -162,7 +162,7 @@ function fieldsFor(dataset) {
 
 /**
  * Yield `[key, value]` for every `and[...]` parameter, whichever shape the query parser produced.
- * BOTH SHAPES, on purpose — see wiki Search-and-Retrieval#query-parser-shapes.
+ * BOTH SHAPES, on purpose — see wiki Search-Query-Construction#query-parser-shapes.
  */
 function* andParams(query) {
   for (const [rawKey, rawValue] of Object.entries(query)) {
@@ -183,7 +183,7 @@ function quote(value) {
 /**
  * The Edm types `term()` has a case for — and THE GATE FOR A FILTER KEY, not `filterable`. A type
  * this cannot express is an UNSUPPORTED KEY, reported through the same `dropped` path as a key the
- * index does not carry. See wiki Search-and-Retrieval#type-gates-not-filterable-and-sortable-flags.
+ * index does not carry. See wiki Search-Index-Reference#type-gates-not-filterable-and-sortable-flags.
  *
  * `Collection(Edm.String)` only: the collection branch quotes its value, so a `Collection(Edm.Int32)`
  * would emit quoted integers and 400 the same way.
@@ -419,7 +419,7 @@ function sortEntries(sortBy) {
  * carrying either would be answered with the whole corpus under a 200.
  *
  * `project` IS DELIBERATELY NOT CRITERIA, and this is a PROJECT-dataset test only — the `Document`
- * branch no longer consults it. See wiki Search-and-Retrieval#every-document-read-goes-to-the-index.
+ * branch no longer consults it. See wiki Search-Query-Construction#every-document-read-goes-to-the-index.
  */
 function hasCriteria(query) {
   if (filterKeysIn(query).some(key => key !== 'project')) return true;
@@ -435,7 +435,7 @@ function hasCriteria(query) {
  * ties in whatever order the service computed, which `$skip` paging then loses and repeats. The gate
  * for a sort key is the field's TYPE, not `sortable`. `$orderby` also overrides semantic reranking,
  * which costs nothing while `chunks` is both the only semantic index and the one that can carry no
- * order at all. See wiki Search-and-Retrieval#default-order-and-relevance and
+ * order at all. See wiki Search-Query-Construction#default-order-and-relevance and
  * #type-gates-not-filterable-and-sortable-flags.
  */
 function buildOrderBy(sortBy, dataset, hasKeywords = false) {

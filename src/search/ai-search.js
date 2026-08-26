@@ -346,7 +346,7 @@ const MIN_FUZZY_LENGTH = 4;
  *
  * Honest limit: 2 discordant pairs is not statistically significant (one SE ~ 0.059 on this label
  * set; the move is half of that). The case rests on the direction being consistent across all three
- * metrics with zero regressions, not on the aggregate. Full account on the wiki's Search-and-Retrieval page.
+ * metrics with zero regressions, not on the aggregate. Full account on the wiki's Search-Measurements page.
  */
 const FUZZY_BOOST = 0.5;
 
@@ -399,7 +399,7 @@ const ANALYZER_STOPWORDS = new Set([
  *
  * The outer ` AND ` was tested as the recall suspect and CLEARED: an ` OR ` arm moved pooled
  * recall@10 0.549 → 0.577 at n=71, half a standard error, with recall@1 and MRR worse and the
- * discriminating `text` stratum flat. See the wiki's Search-and-Retrieval page — the knob is not carried in the code
+ * discriminating `text` stratum flat. See the wiki's Search-Measurements page — the knob is not carried in the code
  * because the question it answered is closed.
  */
 function buildQuery(terms, fuzzy, prefix = false) {

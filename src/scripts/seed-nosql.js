@@ -11,7 +11,7 @@
  * id that only the merged registry can supply.
  *
  *   1. Track (382) merged with Eagle (359)   -> projects       393
- *   2. Eagle documents                       -> documents      60,578
+ *   2. Eagle documents                       -> documents      61,587
  *   3. Static boundary exports               -> boundaries     281
  *
  * **DRY RUN BY DEFAULT.** `--live` is required to write anything. Verification gates run in both
