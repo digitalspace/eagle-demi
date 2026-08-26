@@ -2,7 +2,11 @@
 set -euo pipefail
 
 # Bicep infrastructure deployment for DEMI.
-# Usage: ./scripts/deploy-infra.sh [test|dev] [--what-if]
+# Usage: ./scripts/deploy-infra.sh [test|dev|prod] [--what-if|--live]
+#
+# WHAT-IF IS THE DEFAULT. Nothing is applied without `--live`, and prod additionally refuses to
+# apply unless CONFIRM_PROD=yes is exported. The old default was the deployment itself, which put
+# the whole-collection appSettings PUT one typo away from every invocation.
 #
 # Separate from `deploy-azure.sh` on purpose. That script is zipdeploy-and-poll for application
 # code and CI runs it on every push to main. Infrastructure is a different lifecycle, a different
@@ -39,7 +43,7 @@ set -euo pipefail
 # no other copy. The guard is stricter now; the habit still matters more than the guard.
 
 ENVIRONMENT="${1:-test}"
-MODE="${2:-deploy}"
+MODE="${2:---what-if}"
 export REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 GREEN='\033[0;32m'
@@ -57,16 +61,54 @@ case "$ENVIRONMENT" in
     SUBSCRIPTION='d2f8d048-2af3-44fd-81cc-858c040001f2'
     RESOURCE_GROUP='c4b0a8-dev-rg'
     ;;
+  prod)
+    SUBSCRIPTION='be5924ac-1083-4a1b-be92-7b444882cfd9'
+    RESOURCE_GROUP='rg-demi-prod'
+    # This box has NO prod write context. The name below is the read-only ServiceAccount context
+    # from the workspace CLAUDE.md, used here only to fetch the MinIO values out of 6cdc9e-prod;
+    # ADMIN_API_KEY and DOCLING_API_KEY have no prod copy at all and must be exported by hand.
+    OC_CONTEXT='6cdc9e-prod/api-silver-devops-gov-bc-ca:6443/system:serviceaccount:6cdc9e-tools:github-cicd'
+    ;;
   *)
-    echo -e "${RED}✗ unknown environment '${ENVIRONMENT}'. Use: test | dev${NC}" >&2
-    echo "  prod is deliberately absent — it has no params file and no approved first apply." >&2
+    echo -e "${RED}✗ unknown environment '${ENVIRONMENT}'. Use: test | dev | prod${NC}" >&2
     exit 2
     ;;
 esac
 
+# One name per environment because prod's is not "epic-prod" — there is no prod write context on
+# this machine, only the read-only ServiceAccount one set above.
+OC_CONTEXT="${OC_CONTEXT:-epic-${ENVIRONMENT}}"
+
+# The object-store credential is in a DIFFERENT secret with DIFFERENT keys in prod. Same values,
+# same exported names — only where they are read from changes.
+if [ "$ENVIRONMENT" = 'prod' ]; then
+  MINIO_SECRET_NAME='nr-object-store-credential'
+  MINIO_ACCESS_KEY_FIELD='user_account'
+  MINIO_SECRET_KEY_FIELD='password'
+else
+  MINIO_SECRET_NAME='eagle-api-minio-keys'
+  MINIO_ACCESS_KEY_FIELD='MINIO_ACCESS_KEY'
+  MINIO_SECRET_KEY_FIELD='MINIO_SECRET_KEY'
+fi
+
+case "$MODE" in
+  --what-if|--live) ;;
+  *)
+    echo -e "${RED}✗ unknown mode '${MODE}'. Use: --what-if (default) | --live${NC}" >&2
+    exit 2
+    ;;
+esac
+
+# The applied-in-prod guard. Deliberately an environment variable rather than a prompt: it survives
+# a terminal with no TTY, and it cannot be answered by a stray keystroke.
+if [ "$ENVIRONMENT" = 'prod' ] && [ "$MODE" = '--live' ] && [ "${CONFIRM_PROD:-}" != 'yes' ]; then
+  echo -e "${RED}✗ refusing to apply to prod. Export CONFIRM_PROD=yes if that is what you mean.${NC}" >&2
+  exit 2
+fi
+
 API_APP="demi-api-${ENVIRONMENT}"
 PARAM_FILE="${REPO_ROOT}/azure/main.${ENVIRONMENT}.bicepparam"
-# test uses main.test.bicepparam; dev is the unsuffixed one, matching the repo's existing naming.
+# test and prod use main.<env>.bicepparam; dev is the unsuffixed one, matching the repo's naming.
 [ "$ENVIRONMENT" = 'dev' ] && PARAM_FILE="${REPO_ROOT}/azure/main.bicepparam"
 
 # Read one key out of an OpenShift secret. OpenShift is the source of truth for every credential
@@ -83,7 +125,7 @@ PARAM_FILE="${REPO_ROOT}/azure/main.${ENVIRONMENT}.bicepparam"
 # `|| true` so a missing secret is reported by the length check below with a useful message, rather
 # than killing the script under `set -e` with an oc error.
 os_secret() {
-  oc --context "epic-${ENVIRONMENT}" get secret "$1" -n "6cdc9e-${ENVIRONMENT}" \
+  oc --context "$OC_CONTEXT" get secret "$1" -n "6cdc9e-${ENVIRONMENT}" \
     -o "jsonpath={.data.${2}}" 2>/dev/null | base64 -d 2>/dev/null || true
 }
 
@@ -93,8 +135,8 @@ os_secret() {
 require_secrets() {
   echo -e "${BLUE}[1/4] Sourcing secrets from OpenShift (6cdc9e-${ENVIRONMENT})…${NC}"
 
-  MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-$(os_secret eagle-api-minio-keys MINIO_ACCESS_KEY)}"
-  MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-$(os_secret eagle-api-minio-keys MINIO_SECRET_KEY)}"
+  MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY:-$(os_secret "$MINIO_SECRET_NAME" "$MINIO_ACCESS_KEY_FIELD")}"
+  MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-$(os_secret "$MINIO_SECRET_NAME" "$MINIO_SECRET_KEY_FIELD")}"
   ADMIN_API_KEY="${ADMIN_API_KEY:-$(os_secret demi-app-secrets ADMIN_API_KEY)}"
   DOCLING_API_KEY="${DOCLING_API_KEY:-$(os_secret demi-app-secrets DOCLING_API_KEY)}"
 
@@ -131,10 +173,13 @@ require_secrets() {
 Refusing to deploy. Deploying an empty or junk value would overwrite the live credential, and
 there is no rollback — ARM does not retain @secure() parameter values.
 
-  MINIO_ACCESS_KEY / MINIO_SECRET_KEY  OpenShift secret eagle-api-minio-keys in 6cdc9e-${ENVIRONMENT}
+  MINIO_ACCESS_KEY / MINIO_SECRET_KEY  OpenShift secret ${MINIO_SECRET_NAME} in 6cdc9e-${ENVIRONMENT}
+                                       (keys ${MINIO_ACCESS_KEY_FIELD} / ${MINIO_SECRET_KEY_FIELD})
   ADMIN_API_KEY / DOCLING_API_KEY      OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
 
-Check 'oc --context epic-${ENVIRONMENT}' works, or export the missing value and re-run.
+There is no demi-app-secrets in 6cdc9e-prod — export those two by hand for a prod run.
+
+Check 'oc --context ${OC_CONTEXT}' works, or export the missing value and re-run.
 EOF
     exit 3
   fi

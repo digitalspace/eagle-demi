@@ -153,8 +153,17 @@ jobs:
           DOCLING_API_KEY: ci-placeholder-not-a-real-key
         run: az bicep build-params --file ./azure/main.test.bicepparam --outfile /dev/null
 
+      # Same placeholders, same reason: main.prod.bicepparam reads the same four credentials.
+      - name: Validate Prod Parameters
+        env:
+          MINIO_ACCESS_KEY: ci-placeholder-not-a-real-key
+          MINIO_SECRET_KEY: ci-placeholder-not-a-real-key
+          ADMIN_API_KEY: ci-placeholder-not-a-real-key
+          DOCLING_API_KEY: ci-placeholder-not-a-real-key
+        run: az bicep build-params --file ./azure/main.prod.bicepparam --outfile /dev/null
+
       - name: Report Validation Failure to Job Summary
         if: failure()
         run: |
           echo "### ❌ Bicep template failed to compile" >> $GITHUB_STEP_SUMMARY
-          echo "Fix \`azure/main.bicep\`, \`azure/modules/extractor.bicep\` or \`azure/main.test.bicepparam\`." >> $GITHUB_STEP_SUMMARY
+          echo "Fix \`azure/main.bicep\`, \`azure/modules/extractor.bicep\`, \`azure/main.test.bicepparam\` or \`azure/main.prod.bicepparam\`." >> $GITHUB_STEP_SUMMARY

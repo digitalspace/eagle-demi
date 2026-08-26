@@ -407,6 +407,51 @@ FRONTEND_STORAGE_ACCOUNT=$(az deployment group show -g c4b0a8-test-rg -n main \
 Build the package from a checkout that already has `node_modules` installed — `ENABLE_ORYX_BUILD` is
 `false`, so nothing installs dependencies on the Azure side.
 
+### Prod infrastructure
+
+`rg-demi-prod` in `c4b0a8-prod`, from `azure/main.prod.bicepparam`. It deploys no search service —
+`demi-search-prod` already exists and also serves `eagle-search-api-prod`, so the template only
+grants the DEMI identity Search Index Data Contributor on it and adds the shared private link it
+needs to reach the new Cosmos account — and no Foundry account, no `wildfires` container and no
+static site. The `boundaries` container IS deployed everywhere, empty in prod: it is reference data
+that `GET /boundaries` and `GET /db/stats` read unconditionally.
+
+That shared private link is created in `Pending`. **Approve it once after the apply** or every
+indexer fails with a connectivity error, because `demi-cosmos-prod` is `publicNetworkAccess:
+Disabled`:
+
+```bash
+az cosmosdb private-endpoint-connection list -g rg-demi-prod --account-name demi-cosmos-prod
+az cosmosdb private-endpoint-connection approve --id <connection-id>
+```
+
+Approval opens the route but grants nothing: `demi-search-prod` runs its indexers as
+`eagle-search-identity-prod`, so the template also gives that principal
+(`existingSearchIndexerPrincipalId`) the Cosmos SQL Data Reader role. Without both, indexers get a
+403 instead of a connection error.
+
+The App Service plan is `plan-eagle-search-prod` in `rg-eagle-search-prod`, shared with
+`eagle-search-api-prod` until that app retires. **Scale it to B3 first**: the apply puts a second
+Node app on it, and B1 is one worker with 1 vCPU and 1.75 GB.
+
+Object-store credentials come from the `nr-object-store-credential` secret in `6cdc9e-prod`
+(`user_account` / `password`), not `eagle-api-minio-keys`. `demi-app-secrets` does not exist in
+`6cdc9e-prod` yet — create it, or export `ADMIN_API_KEY` and `DOCLING_API_KEY` by hand.
+
+```bash
+# 1. scale the shared plan
+az appservice plan update -g rg-eagle-search-prod -n plan-eagle-search-prod --sku B3
+
+# 2. what-if — the default, nothing is applied
+./scripts/deploy-infra.sh prod
+
+# 3. apply
+CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live
+```
+
+`--live` is required to apply in every environment; prod additionally refuses without
+`CONFIRM_PROD=yes`.
+
 ### `demi-frontend-test` is gone — decommissioned 2026-08-15
 
 The App Service and the B1 plan it shared with eagle-public's preview were deleted once the Front

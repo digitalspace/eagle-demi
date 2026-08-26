@@ -29,6 +29,16 @@ param readerPrincipalId string = ''
 @description('Resource id of the demi-audit-<env> workspace. Empty skips control-plane auditing rather than failing the deployment.')
 param auditWorkspaceId string = ''
 
+// The wildfires container exists only to serve `sources.wildfires` enrichment. Prod publishes none
+// (ENRICHMENT_SOURCES empty), so declaring it there would create a container nothing reads or writes.
+//
+// `boundaries` is deliberately NOT gated on this. It is reference data, not enrichment output:
+// `GET /boundaries` and `GET /db/stats` query it unconditionally in every environment, and an empty
+// container answers those with `[]` and `0`. A missing one answers both with a Cosmos 404 → HTTP 500,
+// and /db/stats is the deploy-verification endpoint.
+@description('Declare the Cosmos wildfires container. False leaves the environment without `sources.wildfires`.')
+param deployEnrichment bool = true
+
 var accountName = 'demi-cosmos-${environmentName}'
 var databaseName = 'demi'
 var privateEndpointName = 'pe-cosmos-nosql-${environmentName}'
@@ -337,7 +347,7 @@ resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases
 // feed, refreshing _ts. Anything
 // that drops out of the feed expires itself — that deletes the stale-fire purge problem
 // rather than solving it. Spatial index supports ST_DISTANCE proximity search.
-resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = if (deployEnrichment) {
   parent: database
   name: 'wildfires'
   properties: {
