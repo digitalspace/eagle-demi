@@ -87,6 +87,19 @@ test('/api-docs is mounted outside prod', async () => {
   });
 });
 
+test('the continuation token is exposed to cross-origin callers', async () => {
+  // `x-continuation-token` is how a client asks for the next page, and without this header the
+  // browser strips it from the response before the frontend ever sees it — paging stops at page
+  // one with a 200 and nothing to show for it.
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/config`, { headers: { Origin: 'http://localhost:4200' } });
+    const exposed = (res.headers.get('access-control-expose-headers') || '')
+      .split(',').map(h => h.trim().toLowerCase());
+    assert.ok(exposed.includes('x-continuation-token'),
+      `expected x-continuation-token to be exposed, got: ${exposed.join(', ') || '(none)'}`);
+  });
+});
+
 test('an unset CORS_ORIGIN allows no deployed origin', async () => {
   // The default allowlist used to name the three demi-frontend App Services. Those are gone: the
   // frontend is a Storage static website behind Front Door, and an AFD endpoint hostname carries a

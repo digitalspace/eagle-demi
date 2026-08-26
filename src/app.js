@@ -91,7 +91,10 @@ app.use(cors({
     if (!origin) return callback(null, true);
     if (allowAnyOrigin) return callback(null, true);
     return callback(null, allowedOrigins.includes(origin));
-  }
+  },
+  // Browsers hide every response header from cross-origin JS except a six-name safelist, so the
+  // paging token the API hands out was unreadable by the client it is meant for.
+  exposedHeaders: ['x-continuation-token']
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));

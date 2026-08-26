@@ -102,7 +102,7 @@ function pageOptions({ pageSize, continuationToken, partitionKey } = {}) {
 }
 
 /**
- * Every row a query matches, following continuation tokens past the 1000-row page cap.
+ * Every row a query matches, at the SDK's own page size and following any continuation token.
  *
  * For bounded whole-container reads only (the seeder's reconcile and per-project extraction
  * state). No request path may call this — an unbounded read is what `pageOptions` exists to
@@ -112,8 +112,11 @@ async function fetchAll(container, spec, opts = {}) {
   const rows = [];
   let continuationToken;
   do {
+    // No maxItemCount, deliberately: it is what makes cosmos.query page by hand, and the SDK drops
+    // `x-ms-continuation` on a cross-partition query, so a paged read here stops silently at 1,000
+    // rows. Unset takes the SDK's own fetchAll(), which drains the result set itself.
     const page = await cosmos.query(container, spec,
-      pageOptions({ ...opts, pageSize: MAX_PAGE_SIZE, continuationToken }));
+      pageOptions({ ...opts, continuationToken }));
     rows.push(...page.items);
     continuationToken = page.continuationToken;
   } while (continuationToken);

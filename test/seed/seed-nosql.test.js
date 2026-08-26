@@ -927,6 +927,35 @@ test('seed --reconcile end to end', async (t) => {
     assert.strictEqual(summary.failures.length ? 1 : 0, 1, 'a refused reconcile must exit 1');
   });
 
+  // The `deps.searchReady` override above is a test seam. What a real `yarn db:seed-nosql` run
+  // takes is the DEFAULT beside it, and that is the branch that decides whether a live reconcile
+  // is allowed to delete — so it needs its own cover, in both directions.
+  await t.test('searchReady defaults to whether AI Search is configured', async (tt) => {
+    const aiSearch = require('../../src/search/ai-search');
+
+    const runWithoutOverride = async () => {
+      const { purged, deps } = makeDeps();
+      delete deps.searchReady;
+      const summary = await seed(['--live', '--reconcile', '--only', 'projects,documents'],
+        { ...deps, sources: stubSources() });
+      return { purged, summary };
+    };
+
+    tt.mock.method(aiSearch, 'config', () => ({ configured: false }));
+    const unconfigured = await runWithoutOverride();
+    assert.match(unconfigured.summary.failures.join(' '), /refused before any delete/,
+      'an unconfigured search must refuse the reconcile with no override in sight');
+    assert.deepStrictEqual(unconfigured.purged, { documents: [], projects: [] });
+
+    tt.mock.restoreAll();
+    tt.mock.method(aiSearch, 'config', () => ({ configured: true }));
+    const configured = await runWithoutOverride();
+    assert.deepStrictEqual(configured.summary.failures, [],
+      'a configured search must NOT refuse — a default of false would stop every live reconcile');
+    assert.strictEqual(configured.summary.reconcile.documents.deleted, 1);
+    tt.mock.restoreAll();
+  });
+
   await t.test('a dry run with no AI Search reports what a live run would refuse', async () => {
     const { purged, deps } = makeDeps({ searchReady: false });
     const summary = await seed(['--reconcile', '--only', 'projects,documents'],

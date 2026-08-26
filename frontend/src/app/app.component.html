@@ -28,9 +28,12 @@
         <i class="fa-solid fa-cloud-arrow-up"></i> Document Intake
       </button>
     }
-    <button class="nav-tab" (click)="openSwagger()">
-      <i class="fa-solid fa-code"></i> Swagger API Docs
-    </button>
+    <!-- The API only mounts /api-docs in dev and test, so anywhere else this link is a 404. -->
+    @if (apiDocsAvailable) {
+      <button class="nav-tab" (click)="openSwagger()">
+        <i class="fa-solid fa-code"></i> Swagger API Docs
+      </button>
+    }
   </div>
 
   <!--
