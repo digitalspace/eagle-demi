@@ -21,7 +21,7 @@ const aiSearch = require('../../../src/search/ai-search');
 const projectController = require('../../../src/controllers/nosql/project');
 const documentController = require('../../../src/controllers/nosql/document');
 const authMiddleware = require('../../../src/middleware/auth');
-const { requireWrite } = require('../../../src/middleware/require-roles');
+const { requireWrite, requireAdmin } = require('../../../src/middleware/require-roles');
 const { routeChains } = require('../../helpers/router-source');
 
 function mockRes() {
@@ -571,5 +571,54 @@ test('the mirror routes are behind authMiddleware + requireWrite', async (t) => 
     );
     assert.strictEqual(res.statusCode, 403);
     assert.strictEqual(nexted, false);
+  });
+});
+
+test('a demi-service-write credential is what the push should hold', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const SERVICE_WRITER = {
+    preferred_username: 'key:eagle-push',
+    realm_access: { roles: ['demi-service-write'] }
+  };
+
+  await t.test('it passes the mirror gate and the push lands', async () => {
+    // The gate is RUN, not asserted about, and the handler runs behind it — a chain assertion
+    // alone would pass while `demi-service-write` was missing from WRITE_ROLES entirely.
+    let gated = false;
+    requireWrite({ user: SERVICE_WRITER }, mockRes(), () => { gated = true; });
+    assert.strictEqual(gated, true, 'requireWrite must admit the machine writer');
+
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    const res = mockRes();
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: eagleProject({ name: 'Pushed by the service writer' }) }, user: SERVICE_WRITER
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(res.body, { id: '207', action: 'upsert' });
+    assert.strictEqual(written.sources.eagle.name, 'Pushed by the service writer',
+      'the upsert actually ran — a 200 with no write would prove nothing');
+  });
+
+  await t.test('and it cannot mint itself a wider key', () => {
+    // The other half. Without this, granting the push `demi-admin` under a new name would satisfy
+    // the test above exactly as well as the real thing does.
+    const res = mockRes();
+    let nexted = false;
+    requireAdmin({ user: SERVICE_WRITER }, res, () => { nexted = true; });
+    assert.strictEqual(res.statusCode, 403);
+    assert.strictEqual(nexted, false);
+
+    const keyRoutes = routeChains().filter(r => r.path.startsWith('/admin/api-keys'));
+    assert.strictEqual(keyRoutes.length, 3);
+    for (const r of keyRoutes) {
+      assert.match(r.chain, /\brequireAdmin\b/);
+      assert.doesNotMatch(r.chain, /\brequireWrite\b/);
+    }
   });
 });

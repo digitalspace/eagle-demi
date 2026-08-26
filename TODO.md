@@ -66,10 +66,11 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 - [ ] **1.2 Rotate `RPROXY_EGUIDE_PASSWORD`** (bcgov/eao-nginx secret, last set 2026-02-20, used in
       `deploy-to-prod.yaml:139`); keep the `/eguide` route. Daniel: new value into the repo secret,
       then `deploy-to-prod` (any tag ≥ v2.7.17). `TYPESENSE_SEARCH_KEY` deleted 2026-08-26.
-- [ ] **1.3 Eagle push key**: registry id `b319b93a1bf35206`, `demi-admin`, 90-day expiry
-      (~2026-11-23), in `demi-push-secret` (`6cdc9e-test`). Prod needs its own, and a
-      `demi-service-write` role so a machine writer stops holding `demi-admin` (ADR-007: Keycloak
-      client before prod).
+- [ ] **1.3 Eagle push key**: `demi-service-write` role landed (PR); prod key + secret +
+      eagle-api tag remain. The role reads like staff, writes every data route, and is refused on
+      `/api/admin/*` (`requireAdmin`), so a machine writer stops holding `demi-admin`. The test key
+      (registry id `b319b93a1bf35206`, `demi-admin`, expires ~2026-11-23, in `demi-push-secret` in
+      `6cdc9e-test`) still needs reissuing on the new role. ADR-007: Keycloak client before prod.
 
 ## 2. Decisions — Daniel
 

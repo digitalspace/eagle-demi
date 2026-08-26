@@ -3,8 +3,9 @@
 /**
  * API key administration.
  *
- * Every route here is behind `authMiddleware` + `requireWrite`, so reaching this file already
- * means a privileged, write-capable caller. Nothing here re-checks that.
+ * Every route here is behind `authMiddleware` + `requireAdmin`, so reaching this file already
+ * means a privileged caller that may administer the service — NOT merely one that may write data.
+ * `demi-service-write` is refused at the route. Nothing here re-checks that.
  *
  * There is deliberately no update endpoint. Rotation is issue-new-then-revoke-old, which is what
  * makes it possible to rotate without a window where the consumer has no working credential — and
@@ -20,8 +21,15 @@ const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
 const config = require('../../config');
 
-/** Roles a key may be granted. A key can never be given a role DEMI does not recognise. */
+/**
+ * Roles a key may be granted. A key can never be given a role DEMI does not recognise.
+ *
+ * Derived from SECURE_ROLES rather than listed, so a new tier is grantable the moment it exists.
+ * Exported for the test that asserts the derivation still reaches `demi-service-write` — a role
+ * the mint route rejects as unknown is a role nobody can hold.
+ */
 const GRANTABLE_ROLES = Array.from(new Set([...SECURE_ROLES, 'compliance', 'public']));
+exports.GRANTABLE_ROLES = GRANTABLE_ROLES;
 
 exports.createApiKey = async (req, res) => {
   try {
@@ -50,7 +58,8 @@ exports.createApiKey = async (req, res) => {
     if (grantsWrite && req.body.allowWrite !== true) {
       return res.status(400).json({
         error: `Roles ${roles.filter(r => WRITE_ROLES.includes(r)).join(', ')} can mutate data. ` +
-               'Pass allowWrite: true to confirm, or use demi-service-read for a read-only consumer.'
+               'Pass allowWrite: true to confirm, or use demi-service-read for a read-only ' +
+               'consumer. A machine writer wants demi-service-write, not demi-admin.'
       });
     }
 

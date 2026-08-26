@@ -21,23 +21,39 @@ const PUBLIC_ROLES = ['public'];
 /**
  * Roles that grant PRIVILEGED visibility — i.e. read everything, ACL predicate collapses to `true`.
  *
- * `demi-service-read` is the least-privilege tier for machine consumers. It reads like staff and
- * writes nothing: it is deliberately absent from WRITE_ROLES below. Adding it here rather than
- * inventing a parallel mechanism means no row's `read[]` array has to change — existing documents
- * carry ['public','sysadmin','staff','demi-admin'] and a service reader sees them because
- * readClause short-circuits for any privileged caller.
+ * `demi-service-read` and `demi-service-write` are the machine tiers. Both read like staff; only
+ * the second is in WRITE_ROLES. Adding them here rather than inventing a parallel mechanism means
+ * no row's `read[]` array has to change — existing documents carry
+ * ['public','sysadmin','staff','demi-admin'] and a service caller sees them because readClause
+ * short-circuits for any privileged caller.
  */
-const SECURE_ROLES = ['sysadmin', 'staff', 'demi-admin', 'demi-service-read'];
+const SECURE_ROLES = [
+  'sysadmin', 'staff', 'demi-admin', 'demi-service-read', 'demi-service-write'
+];
 
 /**
- * Roles permitted to MUTATE. Exactly the pre-existing SECURE_ROLES set, so no caller that could
- * write yesterday loses the ability today — the only thing this adds is a tier that cannot.
+ * Roles permitted to administer the SERVICE ITSELF — mint and revoke registry keys, run an
+ * operator sync. Exactly the pre-existing WRITE_ROLES set, so nothing a human role could do
+ * yesterday is refused today.
  *
- * Read privilege and write privilege were the same check until now (`authMiddleware` guarded
- * `GET /db/stats` and `DELETE /projects/:id` identically), which made "read-only consumer"
+ * This is the set `/admin/*` is gated on, and it is why `demi-service-write` exists: a machine
+ * writer must be able to mirror data without being able to mint itself a wider credential.
+ */
+const ADMIN_ROLES = ['sysadmin', 'staff', 'demi-admin'];
+
+/**
+ * Roles permitted to MUTATE APPLICATION DATA — projects, documents, chunks, boundaries and the
+ * Eagle mirror. A superset of ADMIN_ROLES, so no caller that could write yesterday loses the
+ * ability today.
+ *
+ * `demi-service-write` is here and NOT in ADMIN_ROLES. That difference is the whole point: it is
+ * what eagle-api's push and the extractor hold instead of `demi-admin`.
+ *
+ * Read privilege and write privilege were the same check until `requireWrite` (`authMiddleware`
+ * guarded `GET /db/stats` and `DELETE /projects/:id` identically), which made "read-only consumer"
  * inexpressible. See middleware/require-roles.js.
  */
-const WRITE_ROLES = ['sysadmin', 'staff', 'demi-admin'];
+const WRITE_ROLES = [...ADMIN_ROLES, 'demi-service-write'];
 
 /**
  * Access tiers. 'scoped' is built now although no project-scoped role exists yet — the point
@@ -76,6 +92,11 @@ function isPrivileged(roles) {
 /** Privileged for READS does not imply permitted to WRITE — see WRITE_ROLES. */
 function canWrite(roles) {
   return roles.some(r => WRITE_ROLES.includes(r));
+}
+
+/** Permitted to WRITE DATA does not imply permitted to administer the service — see ADMIN_ROLES. */
+function canAdmin(roles) {
+  return roles.some(r => ADMIN_ROLES.includes(r));
 }
 
 /**
@@ -385,6 +406,7 @@ function canRead(doc, access, partitionField = 'projectId', opts = {}) {
 module.exports = {
   PUBLIC_ROLES,
   SECURE_ROLES,
+  ADMIN_ROLES,
   WRITE_ROLES,
   TIER,
   PROJECT_ROLE_PREFIX,
@@ -394,6 +416,7 @@ module.exports = {
   rolesFor,
   isPrivileged,
   canWrite,
+  canAdmin,
   resolveAccess,
   systemAccess,
   projectScopeFor,

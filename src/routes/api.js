@@ -5,9 +5,11 @@ const router = express.Router();
 
 const authMiddleware = require('../middleware/auth');
 const passiveAuthMiddleware = require('../middleware/passiveAuth');
-// Layered on top of authMiddleware for anything that mutates, so a read-only credential
-// (demi-service-read) can be issued without also granting the ability to delete.
-const { requireWrite } = require('../middleware/require-roles');
+// Layered on top of authMiddleware. `requireWrite` gates application data, so a read-only
+// credential (demi-service-read) can be issued without also granting the ability to delete.
+// `requireAdmin` is the narrower gate on /admin/*, so a machine writer (demi-service-write) can
+// mirror data without being able to mint itself a wider credential.
+const { requireWrite, requireAdmin } = require('../middleware/require-roles');
 
 // One data layer. The `USE_COSMOS_NOSQL` switch and the MongoDB-API controllers behind it are
 // gone — the flag was the rollback path during the Cosmos cutover, and the account it fell back
@@ -56,7 +58,7 @@ router.get('/search/summary', authMiddleware, searchController.summarize);
 // Wildfire Routes
 // GET /wildfires removed — no consumer. The frontend reads the DataBC WFS directly, and the
 // project-level aggregate this sync writes is served with the project.
-router.post('/admin/sync/wildfires', authMiddleware, requireWrite, wildfireController.syncWildfiresAdmin);
+router.post('/admin/sync/wildfires', authMiddleware, requireAdmin, wildfireController.syncWildfiresAdmin);
 
 // Projects Routes
 router.get('/projects', passiveAuthMiddleware, projectController.getProjects);
@@ -109,14 +111,14 @@ router.post('/boundaries', authMiddleware, requireWrite, boundaryController.crea
 router.put('/boundaries/:id', authMiddleware, requireWrite, boundaryController.updateBoundary);
 router.delete('/boundaries/:id', authMiddleware, requireWrite, boundaryController.deleteBoundary);
 
-// API key administration. Write-gated because issuing a credential is the most consequential
-// mutation in the service — a read-only consumer must never be able to mint itself a writer.
-// The plaintext key is returned by POST once and is unrecoverable afterwards.
-router.post('/admin/api-keys', authMiddleware, requireWrite, apiKeyController.createApiKey);
-// Write-gated too, though it only reads: the credential registry is not application data. A
-// read-only consumer holding demi-service-read is privileged enough for authMiddleware, and
-// without this it could enumerate every consumer, role set and expiry in the deployment.
-router.get('/admin/api-keys', authMiddleware, requireWrite, apiKeyController.listApiKeys);
-router.delete('/admin/api-keys/:id', authMiddleware, requireWrite, apiKeyController.revokeApiKey);
+// API key administration. requireAdmin, NOT requireWrite: issuing a credential is the most
+// consequential mutation in the service, so neither a read-only consumer nor a machine writer may
+// mint itself a wider one. The plaintext key is returned by POST once and is unrecoverable after.
+router.post('/admin/api-keys', authMiddleware, requireAdmin, apiKeyController.createApiKey);
+// Admin-gated too, though it only reads: the credential registry is not application data. Any
+// service role is privileged enough for authMiddleware, and without this it could enumerate every
+// consumer, role set and expiry in the deployment.
+router.get('/admin/api-keys', authMiddleware, requireAdmin, apiKeyController.listApiKeys);
+router.delete('/admin/api-keys/:id', authMiddleware, requireAdmin, apiKeyController.revokeApiKey);
 
 module.exports = router;

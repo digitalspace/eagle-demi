@@ -5,19 +5,24 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { requireWrite } = require('../../src/middleware/require-roles');
-const { isPrivileged, canWrite, SECURE_ROLES, WRITE_ROLES } = require('../../src/helpers/access-sql');
+const { requireWrite, requireAdmin } = require('../../src/middleware/require-roles');
+const {
+  isPrivileged, canWrite, canAdmin, SECURE_ROLES, ADMIN_ROLES, WRITE_ROLES
+} = require('../../src/helpers/access-sql');
 
-function runGate(roles) {
+function run(gate, roles) {
   const req = { user: { realm_access: { roles } } };
   const result = { status: null, body: null, nexted: false };
   const res = {
     status(code) { result.status = code; return this; },
     json(body) { result.body = body; return this; }
   };
-  requireWrite(req, res, () => { result.nexted = true; });
+  gate(req, res, () => { result.nexted = true; });
   return result;
 }
+
+const runGate = roles => run(requireWrite, roles);
+const runAdminGate = roles => run(requireAdmin, roles);
 
 // The pair below is the point of this file. A read-only tier that is merely *declared* would pass
 // a test that only checks it can read. It has to be shown BOTH reading and being refused a write —
@@ -46,8 +51,13 @@ test('requireWrite admits every role that could write before this existed', asyn
     });
   }
 
-  await t.test('WRITE_ROLES is exactly the historical privileged set', () => {
-    assert.deepStrictEqual([...WRITE_ROLES].sort(), ['demi-admin', 'staff', 'sysadmin']);
+  await t.test('WRITE_ROLES is the historical privileged set plus the machine writer', () => {
+    assert.deepStrictEqual([...WRITE_ROLES].sort(),
+      ['demi-admin', 'demi-service-write', 'staff', 'sysadmin']);
+  });
+
+  await t.test('ADMIN_ROLES is exactly the historical privileged set', () => {
+    assert.deepStrictEqual([...ADMIN_ROLES].sort(), ['demi-admin', 'staff', 'sysadmin']);
   });
 
   await t.test('and demi-service-read is a read tier only — never in WRITE_ROLES', () => {
@@ -68,6 +78,66 @@ test('requireWrite refuses anything unprivileged', async (t) => {
     const result = { status: null, nexted: false };
     const res = { status(c) { result.status = c; return this; }, json() { return this; } };
     requireWrite({}, res, () => { result.nexted = true; });
+    assert.strictEqual(result.nexted, false);
+    assert.strictEqual(result.status, 403);
+  });
+});
+
+// The mirror of the demi-service-read pair above, and the same reason it is written as a pair: a
+// write tier that is merely *declared* would pass a test that only checks it can write. It has to
+// be shown BOTH writing data and being refused the admin surface — otherwise granting it
+// `demi-admin` in all but name would look identical to this working.
+test('demi-service-write writes data and administers nothing', async (t) => {
+  await t.test('it reads like staff, so the ACL predicate does not restrict it', () => {
+    assert.strictEqual(isPrivileged(['public', 'demi-service-write']), true);
+    assert.ok(SECURE_ROLES.includes('demi-service-write'));
+  });
+
+  await t.test('the write gate admits it', () => {
+    const r = runGate(['public', 'demi-service-write']);
+    assert.strictEqual(r.nexted, true, 'the Eagle push and the extractor need this');
+    assert.strictEqual(r.status, null);
+    assert.strictEqual(canWrite(['demi-service-write']), true);
+  });
+
+  await t.test('the admin gate refuses it, so it cannot mint itself a key', () => {
+    const r = runAdminGate(['public', 'demi-service-write']);
+    assert.strictEqual(r.nexted, false, 'must not reach the api-key controller');
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(canAdmin(['demi-service-write']), false);
+    assert.ok(!ADMIN_ROLES.includes('demi-service-write'));
+  });
+
+  await t.test('a key may be granted it', () => {
+    // The role is useless if the mint route rejects it as unknown. GRANTABLE_ROLES derives from
+    // SECURE_ROLES, so this asserts the derivation still reaches the new tier.
+    const { GRANTABLE_ROLES } = require('../../src/controllers/nosql/api-key');
+    assert.ok(GRANTABLE_ROLES.includes('demi-service-write'));
+    assert.ok(GRANTABLE_ROLES.includes('demi-service-read'));
+  });
+});
+
+test('requireAdmin admits every role that could administer before the split', async (t) => {
+  // Regression guard, same shape as the requireWrite one: splitting the gate was meant to take
+  // privilege away from the machine tier only, never from a human role.
+  for (const role of ['sysadmin', 'staff', 'demi-admin']) {
+    await t.test(`${role} still administers`, () => {
+      const r = runAdminGate(['public', role]);
+      assert.strictEqual(r.nexted, true, `${role} must retain admin access`);
+      assert.strictEqual(r.status, null);
+    });
+  }
+
+  await t.test('and refuses the read tier and anything unprivileged', () => {
+    for (const roles of [[], ['public'], ['compliance'], ['demi-service-read']]) {
+      assert.strictEqual(runAdminGate(roles).nexted, false, JSON.stringify(roles));
+    }
+  });
+
+  await t.test('a missing req.user fails closed rather than throwing', () => {
+    const result = { status: null, nexted: false };
+    const res = { status(c) { result.status = c; return this; }, json() { return this; } };
+    requireAdmin({}, res, () => { result.nexted = true; });
     assert.strictEqual(result.nexted, false);
     assert.strictEqual(result.status, 403);
   });
