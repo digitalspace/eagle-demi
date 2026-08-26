@@ -12,7 +12,7 @@ Open work only. Facts and history live in the [wiki](https://github.com/digitals
 served to eagle-public, so a test regression is user-facing. Append newly discovered work here
 before doing it; strike a wrong line with a one-line reason. Reviewer takes a positional sha
 (`review.sh --repo eagle-demi <sha>`). Condensed 2026-08-24 (twice); pre-condense narrative is
-gone — nothing below points at an archive.
+gone — nothing below points at an archive. Unscheduled ideas live in `docs/FUTURE.md`, not here.
 
 ## Facts that supersede anything found elsewhere
 
@@ -59,11 +59,10 @@ gone — nothing below points at an archive.
 
 | Gate | Items |
 |---|---|
-| Nothing — do it | 2.1 re-seed phases 0-2 (decided, in progress); 3.6 small items; 5.6 disable the two eagle-public test workflows |
+| Nothing — do it | 3.6 small items (review minors #155-#161); 3.7(d) reconcile |
 | Daniel decides | 2.2 budget; 2.3 proponentId; 2.4 anonymous surface; 5.6 retire dev whole or keep pod, and when the eagle-public AFD rollback pod can go; 5.7 `eagle-search-prod` search service delete (~100 CAD/mo, condition already met) |
 | Needs SSH tunnel | nothing open |
 | Someone else / long-lead | 1.1, 1.2 rotations at source; 4.1 prod role assignments; 4.4/4.5 eao-nginx + eagle-public prod tags; `demi.eao.gov.bc.ca` DNS; Track feed credential |
-| Unblocked by 2.1 | — |
 
 ---
 
