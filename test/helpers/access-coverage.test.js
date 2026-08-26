@@ -42,7 +42,7 @@ const REPO_DIR = path.join(__dirname, '..', '..', 'src', 'repositories');
  * to gate. The reason is prose; the ROUTER is the evidence, and it is asserted below rather than
  * cited — line-number citations rot. They already did: these entries pointed at routes/api.js:106
  * and :115 until a route removal shifted every line, and the suite kept passing while the
- * evidence silently stopped matching. `requireWritePrefixes` is the executable replacement.
+ * evidence silently stopped matching. `gatedPrefixes` is the executable replacement.
  *
  * `boundaries.js` used to be listed here as "public reference data, deliberately unrestricted".
  * That described the corpus, not the requirement — a staff-only shapefile could not be expressed
@@ -51,7 +51,7 @@ const REPO_DIR = path.join(__dirname, '..', '..', 'src', 'repositories');
 const UNGATED = {
   'api-keys.js':
     'The registry is the credential store itself — there is no caller tier that may read part of ' +
-    'it, so every route is write-gated rather than ACL-filtered.',
+    'it, so every route is admin-gated rather than ACL-filtered.',
   'wildfires.js':
     'No read path at all. GET /wildfires was removed for having no consumer — the frontend reads ' +
     'the DataBC WFS directly — leaving only the admin sync.',
@@ -66,12 +66,23 @@ const UNGATED = {
 };
 
 /**
- * Path prefixes that must be behind `requireWrite` on EVERY method, checked against the router.
- * The first two are what the allowlist reasons above assert, expressed as something that can fail;
- * `/eagle/` is here because those handlers read and write through `systemAccess()`, so the write
- * gate is the only thing standing between a read-only credential and the mirror.
+ * Path prefixes that must carry a named gate on EVERY method, checked against the router.
+ *
+ * The `/admin/*` entries are what the allowlist reasons above assert, expressed as something that
+ * can fail. They demand `requireAdmin`, the NARROWER gate: `requireWrite` there would let a
+ * machine writer holding `demi-service-write` mint itself a `demi-admin` key, which is the one
+ * escalation the two-gate split exists to prevent.
+ *
+ * `/eagle/` demands `requireWrite` because those handlers read and write through `systemAccess()`,
+ * so the write gate is the only thing standing between a read-only credential and the mirror. It
+ * is deliberately NOT `requireAdmin` — the Eagle push is exactly the consumer that should hold
+ * `demi-service-write` and nothing more.
  */
-const requireWritePrefixes = ['/admin/api-keys', '/admin/sync/', '/eagle/'];
+const gatedPrefixes = {
+  '/admin/api-keys': 'requireAdmin',
+  '/admin/sync/': 'requireAdmin',
+  '/eagle/': 'requireWrite'
+};
 
 /** @returns {{name: string, source: string}[]} every repository module, allowlisted or not. */
 function repositories() {
@@ -141,7 +152,7 @@ test('access gate coverage', async (t) => {
     }
   });
 
-  await t.test('the allowlisted routes really are write-gated', () => {
+  await t.test('the allowlisted routes really are gate-guarded', () => {
     // The executable half of the reasons above. An allowlist entry says "no ACL needed because
     // nothing unprivileged can reach it" — this reads the router and checks that is still true,
     // so moving a route out from behind requireWrite fails here instead of rotting a comment.
@@ -152,16 +163,27 @@ test('access gate coverage', async (t) => {
 
     assert.ok(routes.length >= 20, `expected the router, parsed ${routes.length} routes`);
 
-    for (const prefix of requireWritePrefixes) {
+    for (const [prefix, gate] of Object.entries(gatedPrefixes)) {
       const matching = routes.filter(r => r.path.startsWith(prefix));
       assert.ok(matching.length > 0, `no route matches ${prefix} — the allowlist reason is stale`);
       for (const r of matching) {
         assert.ok(
-          /\bauthMiddleware\b/.test(r.chain) && /\brequireWrite\b/.test(r.chain),
-          `${r.method.toUpperCase()} ${r.path} is not behind authMiddleware + requireWrite, ` +
+          /\bauthMiddleware\b/.test(r.chain) && new RegExp(`\\b${gate}\\b`).test(r.chain),
+          `${r.method.toUpperCase()} ${r.path} is not behind authMiddleware + ${gate}, ` +
           'so the repository it reaches can no longer be allowlisted out of the ACL gate.'
         );
       }
+    }
+
+    // The escalation the split exists to block, asserted as an ABSENCE rather than left implied:
+    // requireAdmin is not a synonym for requireWrite, and a mount that swapped one for the other
+    // on the key routes would satisfy every other assertion in this file.
+    for (const r of routes.filter(route => route.path.startsWith('/admin/api-keys'))) {
+      assert.ok(
+        !/\brequireWrite\b/.test(r.chain),
+        `${r.method.toUpperCase()} ${r.path} is behind requireWrite, so a demi-service-write ` +
+        'credential can mint itself a demi-admin key.'
+      );
     }
 
     // wildfires is allowlisted specifically for having NO read path. Assert the absence.

@@ -318,8 +318,20 @@ issued through `POST /admin/api-keys` with its own roles, expiry and revocation.
 now **break-glass only**: one shared secret with no identity, kept so the first registry key can be
 minted and as a way in if the registry is unreachable.
 
-Ask for the least privilege that works. `demi-service-read` reads everything the ACL allows and
-cannot write — mutating routes are gated separately by `requireWrite`. See
+Ask for the least privilege that works.
+
+| Role | Reads | Writes data | `/api/admin/*` |
+|---|---|---|---|
+| `public` | published rows only | no | no |
+| `compliance` | rows whose `read[]` names it | no | no |
+| `demi-service-read` | everything the ACL allows | no | no |
+| `demi-service-write` | everything the ACL allows | yes | **no** |
+| `staff`, `sysadmin`, `demi-admin` | everything the ACL allows | yes | yes |
+
+Two gates do this, both on top of `authMiddleware`: `requireWrite` (`WRITE_ROLES`) guards data
+mutations, `requireAdmin` (`ADMIN_ROLES`) guards `/api/admin/*`. `demi-service-write` is what a
+machine writer holds — eagle-api's push, the extractor — so mirroring data never carries the
+ability to mint a wider key. See
 [ADR-007](https://github.com/digitalspace/eagle-demi/wiki/ADR-007-Service-to-Service-Credentials)
 and [Connecting an Application to DEMI](https://github.com/digitalspace/eagle-demi/wiki/Connecting-an-Application-to-DEMI).
 
