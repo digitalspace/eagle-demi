@@ -112,8 +112,10 @@ def package_api(repo_root, zip_path):
     # `public` is a local build output, untracked by git, and nothing serves it any more — the
     # express.static mounts and the SPA sendFile routes that read it were deleted from src/app.js
     # (they answered 404 or hung; see the comment there). It is excluded rather than merely unused
-    # because zipdeploy MERGES into wwwroot: packaging a stale bundle once leaves it on the box for
-    # good, and this packager runs from whatever working tree the operator happens to have.
+    # because this packager runs from whatever working tree the operator happens to have, and a
+    # stale local bundle would ship as dead weight. It does not outlive the deploy: the apps run
+    # WEBSITE_RUN_FROM_PACKAGE=1 (azure/modules/api-web-app.bicep:262), so the zip is mounted AS
+    # wwwroot read-only and each deploy replaces the whole tree rather than merging into it.
     root_exclude_dirs = {".git", ".claude", "frontend", "extraction-host", "extractor", ".angular",
                          "dist", "coverage", ".deploy_archives", "tmp", "__pycache__",
                          "test", "azure", ".github", ".vscode", "scripts", "public"}

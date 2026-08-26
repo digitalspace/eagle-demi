@@ -1,7 +1,7 @@
 'use strict';
 
 // Searches go to Azure AI Search. A KEYWORDLESS project list is a read, not a search, and comes
-// from the Cosmos NoSQL repositories — see wiki Search-and-Retrieval#project-reads-split-between-cosmos-and-the-index.
+// from the Cosmos NoSQL repositories — see wiki Search-Query-Construction#project-reads-split-between-cosmos-and-the-index.
 const { resolveAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 const { filterFor } = require('../helpers/access-odata');
@@ -44,7 +44,7 @@ async function labelWithProjectNames(access, docs) {
     const parent = byId.get(String(doc.project));
     doc.projectName = (parent && parent.name) || 'Associated Project';
     // The DEMI project id, kept separately: `project._id` below is the EAGLE ObjectId and neither
-    // is derived from the other. See wiki Search-and-Retrieval#project-id-spaces.
+    // is derived from the other. See wiki Search-Query-Construction#project-id-spaces.
     doc.projectId = String(doc.project);
     doc.project = eagleQuery.ref((parent && parent.eagleId) || doc.project, doc.projectName);
   }
@@ -58,7 +58,7 @@ const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
  *
  * Done here and not in `buildFilter` because the translation is a read. An unresolved ObjectId is
  * passed through as a literal rather than refused — see
- * wiki Search-and-Retrieval#unresolved-project-ids-pass-through-as-literals.
+ * wiki Search-Query-Construction#unresolved-project-ids-pass-through-as-literals.
  *
  * @returns {object} the query with every project id in DEMI's id space.
  */
@@ -84,7 +84,7 @@ async function resolveProjectFilter(access, query) {
 /**
  * Recover the chunk filters the `chunks` index cannot express, by resolving them against `documents`.
  *
- * See wiki Search-and-Retrieval#chunk-filters-resolved-through-documents.
+ * See wiki Search-Query-Construction#chunk-filters-resolved-through-documents.
  *
  * @returns {{scope: ?string, recovered: string[]}} `scope` is an OData clause to AND into the chunk
  *   filter, or null. `recovered` are the keys to REMOVE from the dropped report — everything else
@@ -102,7 +102,7 @@ async function recoverChunkFilters(query, dropped, acl) {
   // project-scoped set is a handful. `project` is never in `dropped` here, so nothing offered it.
   if (query.project !== undefined) narrowed.project = query.project;
   // Read through `andParams`, the generator `buildFilter` also reads with, so both wire shapes are
-  // handled — see wiki Search-and-Retrieval#query-parser-shapes.
+  // handled — see wiki Search-Query-Construction#query-parser-shapes.
   const wanted = new Set(dropped);
   for (const [key, value] of eagleQuery.andParams(query)) {
     if (wanted.has(key)) narrowed[`and[${key}]`] = value;
@@ -140,19 +140,19 @@ exports.search = async (req, res) => {
     const dataset = req.query.dataset;
     const keywords = req.query.keywords || req.query.q || '';
     // FORCED ON, and the wire value is deliberately ignored — see
-    // wiki Search-and-Retrieval#why-the-fuzzy-parameter-is-ignored. Still an ACCEPTED parameter,
+    // wiki Search-Query-Construction#why-the-fuzzy-parameter-is-ignored. Still an ACCEPTED parameter,
     // because dropping it from unknownParams would 400 every saved URL.
     const fuzzy = true;
     // `>= 1` and NOT `Math.max(1, ... || 10)`: NaN, 0 and negatives all land on the one default
     // this endpoint documents, where the `Math.max` form would clamp -1 to a one-row page instead.
-    // See wiki Search-and-Retrieval#page-size-clamping.
+    // See wiki Search-Query-Construction#page-size-clamping.
     const parsedPageSize = parseInt(req.query.pageSize, 10);
     const requestedPageSize = parsedPageSize >= 1 ? parsedPageSize : 10;
     const pageSize = Math.min(requestedPageSize, 5000);
 
     // A parameter this endpoint does not read is REFUSED; a filter key the INDEX cannot express is
     // dropped and reported instead. See
-    // wiki Search-and-Retrieval#unsupported-parameters-400-inexpressible-filter-keys-drop.
+    // wiki Search-Query-Construction#unsupported-parameters-400-inexpressible-filter-keys-drop.
     const unknown = eagleQuery.unknownParams(req.query);
     if (unknown.length > 0) {
       return res.status(400).json({ error: `Unsupported query parameter: ${unknown.join(', ')}` });
@@ -164,7 +164,7 @@ exports.search = async (req, res) => {
 
     // An INDEXED page larger than the search layer will assemble is REFUSED, not truncated. All
     // three conditions are load-bearing, the `keywords` test especially — see
-    // wiki Search-and-Retrieval#why-large-pages-are-refused-not-truncated.
+    // wiki Search-Query-Construction#why-large-pages-are-refused-not-truncated.
     if ((keywords || criteria || dataset === 'Document') &&
         requestedPageSize > aiSearch.MAX_PAGE_ROWS) {
       return res.status(400).json({
@@ -188,7 +188,7 @@ exports.search = async (req, res) => {
     const skip = pageNum * pageSize;
 
     // EVERY KEY THIS REQUEST COULD NOT EXPRESS, told to the caller and not only to the log — see
-    // wiki Search-and-Retrieval#the-dropped-keys-report. Accumulated through `noteDropped` so the
+    // wiki Search-Query-Construction#the-dropped-keys-report. Accumulated through `noteDropped` so the
     // log line and the response fact cannot drift apart.
     const droppedKeys = { filter: [], sort: [] };
     const noteDropped = (kind, keys) => {
@@ -199,7 +199,7 @@ exports.search = async (req, res) => {
 
     // The eagle envelope AND the usage event, applied once by wrapping the response rather than at
     // each of a dozen exits. `meta` is additive, and `searchResultsTotal` is emitted only where a
-    // total was MEASURED — see wiki Search-and-Retrieval#totals-are-measured-never-the-page-length.
+    // total was MEASURED — see wiki Search-Query-Construction#totals-are-measured-never-the-page-length.
     const sendJson = res.json.bind(res);
     res.json = (payload) => {
       const first = Array.isArray(payload) ? payload[0] : null;
@@ -231,7 +231,7 @@ exports.search = async (req, res) => {
             ? { countsPassages: true, documentsOnPage: first.searchResults.length }
             : {}),
           // OMITTED when nothing was dropped, and carrying BOTH `.filter` and `.sort` when present
-          // — see wiki Search-and-Retrieval#the-dropped-keys-report.
+          // — see wiki Search-Query-Construction#the-dropped-keys-report.
           ...(droppedKeys.filter.length || droppedKeys.sort.length ? { dropped: droppedKeys } : {})
         }];
       }
@@ -258,7 +258,7 @@ exports.search = async (req, res) => {
       const allowNonTrack = req.query.includeSeeded === 'true';
 
       // Keywords or criteria go to AI Search; a BARE list still comes from Cosmos below. See
-      // wiki Search-and-Retrieval#project-reads-split-between-cosmos-and-the-index.
+      // wiki Search-Query-Construction#project-reads-split-between-cosmos-and-the-index.
       if (keywords || criteria) {
         try {
           // 'id', not 'projectId' — a project IS its own scope, and scoping on a field the index
@@ -275,7 +275,7 @@ exports.search = async (req, res) => {
             // it is appended rather than passed through `buildFilter`. The ternary is because
             // `filter` is UNDEFINED for an unscoped privileged caller, and interpolating that emits
             // `(undefined) and …` — a 400 this route answers as 502. See
-            // wiki Search-and-Retrieval#project-reads-split-between-cosmos-and-the-index.
+            // wiki Search-Query-Construction#project-reads-split-between-cosmos-and-the-index.
             const TRACK_ONLY = "sourceSystem eq 'track'";
             const scopedFilter = allowNonTrack
               ? filter
@@ -304,13 +304,13 @@ exports.search = async (req, res) => {
               const searchResults = items.map(doc => ({
                 // THE EAGLE ObjectId — eagle-public re-fetches the project from eagle-api by it.
                 // Falls back to the DEMI id for a Track-only project. See
-                // wiki Search-and-Retrieval#project-id-spaces.
+                // wiki Search-Query-Construction#project-id-spaces.
                 _id: doc.legacyEagleId || String(doc.id),
                 _schemaName: 'Project',
                 id: String(doc.id),
                 // NULL when there is no Track counterpart, never the DEMI id. Told apart by the
                 // `eagle-` id prefix the merge writes, NOT by `sourceSystem`, which is not in
-                // PROJECT_SELECT. See wiki Search-and-Retrieval#project-id-spaces.
+                // PROJECT_SELECT. See wiki Search-Query-Construction#project-id-spaces.
                 trackProjectId: String(doc.id).startsWith('eagle-') ? null : String(doc.id),
                 legacyEagleId: doc.legacyEagleId || '',
                 name: doc.name || doc.displayName || 'Unnamed Project',
@@ -354,7 +354,7 @@ exports.search = async (req, res) => {
           return res.json([{ searchResults: [], count: 0 }]);
         } catch (err) {
           // A FAILED search is not an empty one, and it must not become the keywordless list
-          // either — see wiki Search-and-Retrieval#a-failed-search-is-never-an-empty-one. The
+          // either — see wiki Search-Query-Construction#a-failed-search-is-never-an-empty-one. The
           // status stays 502 whatever eagle-public does with it.
           logger.error(`[search] project search failed: ${err.message}`);
           return res.status(502).json({ error: 'Project search is unavailable' });
@@ -395,11 +395,11 @@ exports.search = async (req, res) => {
           id: String(p.id),
           // NULL when absent, NOT the DEMI id, and a String to match the index branch. `== null`
           // and not `||`, because Track id 0 is falsy. See
-          // wiki Search-and-Retrieval#project-id-spaces.
+          // wiki Search-Query-Construction#project-id-spaces.
           trackProjectId: p.trackProjectId == null ? null : String(p.trackProjectId),
           // COSMOS FIELD NAMES, not the indexer's aliases. Reading `p.status` here was always
           // undefined, so `|| 'Active'` fired on every row and asserted that every project in the
-          // registry is Active. See wiki Search-and-Retrieval#cosmos-and-index-field-names-differ.
+          // registry is Active. See wiki Search-Index-Reference#cosmos-and-index-field-names-differ.
           legacyEagleId: p.eagleId || '',
           name: p.name || 'Unnamed Project',
           sector: p.sector || 'Other',
@@ -441,7 +441,7 @@ exports.search = async (req, res) => {
     } else if (dataset === 'Document') {
       // EVERY document read is answered by the index — NOT the Project rule, and the difference is
       // paging: the Cosmos read could not page past its 1000-row clamp, and there is no fallback
-      // under this. See wiki Search-and-Retrieval#every-document-read-goes-to-the-index.
+      // under this. See wiki Search-Query-Construction#every-document-read-goes-to-the-index.
       try {
         const acl = filterFor(access);
         // Projects are scoped on their own id; the same caller, a different index.
@@ -562,7 +562,7 @@ exports.search = async (req, res) => {
 
         // A PAGE OF DOCUMENTS COSTS A WINDOW OF CHUNKS, so the window is the paging unit too and
         // `pageSize` is a fetch knob for this dataset, not a row count. See
-        // wiki Search-and-Retrieval#chunk-paging-is-a-window.
+        // wiki Search-Query-Construction#chunk-paging-is-a-window.
         const chunkWindow = groupChunks.windowFor(pageSize, aiSearch.SERVICE_MAX_TOP);
         const { items, count } = await aiSearch.searchChunks({
           filter: scopedFilter,
@@ -594,7 +594,7 @@ exports.search = async (req, res) => {
 
         // THE GATE, not a label lookup: a caller who cannot see the document cannot see its text.
         // `listByIds` is ACL-enforcing and unbounded, so a miss means DENIED, not truncated. See
-        // wiki Search-and-Retrieval#the-parent-document-is-the-chunk-gate.
+        // wiki Search-Query-Construction#the-parent-document-is-the-chunk-gate.
         const visible = items.filter(chunk => docById.has(String(chunk.documentId)));
         if (visible.length !== items.length) {
           logger.warn('[search] withheld chunks whose parent document is not visible', {
@@ -640,7 +640,7 @@ exports.search = async (req, res) => {
           };
         });
         // The index-wide total for this query, reported net of what this page withheld — see
-        // wiki Search-and-Retrieval#the-parent-document-is-the-chunk-gate. Added only to the success
+        // wiki Search-Query-Construction#the-parent-document-is-the-chunk-gate. Added only to the success
         // path: absent means "not measured", where a 0 would be a claim about the index.
         // GROUPED AFTER THE GATE, never before: a withheld chunk must not contribute a snippet or a
         // match to a document row.
@@ -673,7 +673,7 @@ exports.search = async (req, res) => {
 
 /**
  * `GET /api/search/summary?keywords=…` — step 5 of the pipeline. See wiki ADR-006 and
- * Search-and-Retrieval#the-summary-endpoints-gates.
+ * Search-Query-Construction#the-summary-endpoints-gates.
  *
  * PRIVILEGED ONLY: mounted on `authMiddleware`, so anonymous callers get a 401 and never reach here.
  * Retrieval is the SAME BM25 call the results columns already made; this adds a step after it.
@@ -710,7 +710,7 @@ exports.summarize = async (req, res) => {
     // The second and third of THREE load-bearing gates: `getById` re-applies the ACL at the
     // database, and the parent-document read is the same gate the chunk search path applies — a
     // chunk's own `read[]` is an ingest-time snapshot and can outlive its parent's visibility. See
-    // wiki Search-and-Retrieval#the-summary-endpoints-gates.
+    // wiki Search-Query-Construction#the-summary-endpoints-gates.
     //
     // `listByIds` is the read the citations were already hydrated from, moved ahead of the model
     // call and widened, so this costs no latency.

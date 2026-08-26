@@ -83,23 +83,12 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
       exists in `rg-eagle-public-prod`, but `digitalspace/eagle-edge` has only `main.test.bicepparam`
       and bcgov/eagle-public carries the prod Bicep. Move it into eagle-edge (decided 2026-08-25 for
       test) before any prod edge change, or accept two owners.
-- [ ] **2.5 CORS in prod.** `src/app.js:70-80` falls back to `localhost:4200` when `CORS_ORIGIN` is
-      unset; `api-web-app.bicep:455` derives it from `frontendHostNames`, which prod lacks (no demo
-      frontend). Same-origin via rproxy `/demi-search` makes it moot — say so in the prod params, or
-      set the AFD host.
-
+- [x] ~~**2.5 CORS in prod.~~ Done: `main.prod.bicepparam` already states it (`frontendHostNames` empty, same-origin via rproxy, fail closed).
 ## 3. Small, do opportunistically
 
-- [ ] #162 minors: `x-continuation-token` is not in `Access-Control-Expose-Headers`, so a
-      cross-origin anonymous caller capped at 100 cannot page; the demo frontend still links
-      `/api-docs` (`app.component.html:~31`) — hide when the route is absent.
-- [ ] Review minors still real: Document response fields `isFeatured`/`documentSource`
-      (`search.js:~487`) untested; `searchReady` production default (`seed-nosql.js:~284`) untested;
-      `merge/project.js:83-86` nested ternary, and the refusal checks that the legislation key
-      resolves, not that the block has content; swagger 400 wording for that refusal.
-- [ ] `_sql.fetchAll` still passes `maxItemCount`, so a future cross-partition + ORDER BY caller
-      truncates at 1,000 silently (SDK drops `x-ms-continuation`); only the reconcile sites carry a
-      COUNT guard. Decide: drop `maxItemCount` in `fetchAll` vs keep the unbounded-read protection.
+- [x] ~~#162 minors~~ Done in PR #169 (`2136e39`).
+- [x] ~~Review minors still real~~ Done in PR #169.
+- [x] ~~`_sql.fetchAll` still passes `maxItemCount`,~~ Done in PR #169: `maxItemCount` dropped; rows appended without spread.
 - [ ] Nightly reconcile + drift alarm for the Eagle push: the only thing that catches a
       hard-deleted document (`findOneAndDelete`, no tombstone). Model on
       `eagle-search/worker/full-sync.js:120-164` (archived, readable locally). Test first.

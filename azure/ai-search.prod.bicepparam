@@ -22,10 +22,11 @@ param tags = {
   CostCenter: 'c4b0a8'
 }
 
-// Both take eagle-search's identity. There is no DEMI identity in c4b0a8-prod, and there does not
-// need to be: `identityId` exists for the Cosmos indexer, and prod runs no indexer — nothing pulls
-// from Cosmos there. `apiPrincipalId` is the one that matters, and it is what the module grants
-// Search Index Data Contributor: eagle-search-api-prod queries this service as that identity.
+// Both take eagle-search's identity. `identityId` is what the Cosmos indexer authenticates as, and
+// demi-search-prod runs its indexers as eagle-search-identity-prod — main.prod.bicepparam passes the
+// same principal as `existingSearchIndexerPrincipalId` so it gets Cosmos Data Reader on
+// demi-cosmos-prod. `apiPrincipalId` is what the module grants Search Index Data Contributor:
+// eagle-search-api-prod queries this service as that identity.
 param identityId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-search-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/eagle-search-identity-prod'
 param apiPrincipalId = '20211fb1-1d7c-43ab-ae57-fbcd6a5034e7'
 
@@ -34,7 +35,9 @@ param apiPrincipalId = '20211fb1-1d7c-43ab-ae57-fbcd6a5034e7'
 // DNS is managed by the landing zone, not by this template.
 param peSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/c4b0a8-prod-cond-ext-pe-subnet'
 
-// Empty: no indexer, so no shared private link to any Cosmos account.
+// Empty: the shared private link to demi-cosmos-prod is declared by modules/search-existing.bicep,
+// which main.bicep runs because main.prod.bicepparam sets `deploySearch = false`. Same name
+// (`demi-cosmos-prod-link`), so filling this in would mint the link from two templates.
 param cosmosAccountId = ''
 
 // NOT 'free'. The free tier latches off after a 402 and silently drops that worker to BM25, and
