@@ -1,13 +1,10 @@
-// Synthetic availability monitoring for the API's public search endpoint.
+// Synthetic availability monitoring for the public search path. The Application Insights component
+// and the action group are passed in, not created.
 //
-// WHY A SEPARATE MODULE: the URL it probes is api-web-app.bicep's default hostname, and that module
-// consumes observability.bicep's connection string — so putting this in observability.bicep is a
-// cycle. The Application Insights component and the action group are passed in, not created.
-//
-// WHAT IT PROVES: one HTTP GET against a real query path, so a 200 means the app reached Cosmos and
-// AI Search. Nothing else notices the API being down — Application Insights records requests only
-// while the app is there to record them, and eagle-public reaches DEMI through rproxy, which stays
-// healthy when its upstream is gone.
+// WHAT IT PROVES: one HTTP GET along the whole chain a visitor uses — Front Door, rproxy, the app,
+// AI Search — so a 200 means every hop answered. Nothing else notices the API being down:
+// Application Insights records requests only while the app is there to record them, and rproxy
+// keeps answering healthily when its upstream is gone.
 
 @description('Region for the web test. Must match the Application Insights component it links to.')
 param location string
@@ -61,6 +58,11 @@ resource webTest 'Microsoft.Insights/webtests@2022-06-15' = {
       RequestUrl: targetUrl
       HttpVerb: 'GET'
       ParseDependentRequests: false
+      // Keeps 1,440 synthetic searches a day out of the usage analytics — src/utils/audit.js skips
+      // the `search` event when it sees this.
+      Headers: [
+        { key: 'X-Synthetic-Probe', value: 'availability' }
+      ]
     }
     // Status only. The response body is JSON whose contents move with the corpus, so a content match
     // would be a second thing to keep true.
@@ -111,5 +113,3 @@ resource availabilityAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
     actions: [ { actionGroupId: actionGroupId } ]
   }
 }
-
-output webTestName string = webTest.name

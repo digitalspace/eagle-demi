@@ -195,10 +195,11 @@ param summaryEnabled bool = true
 @description('Create the Foundry private endpoint. Set false when it already exists — re-PUTting it races the account PUT and fails the whole deployment.')
 param deployFoundryPrivateEndpoint bool = true
 
-// Off by default: only prod has users to notice an outage, and only prod is reached through rproxy,
-// which answers healthily while its upstream is gone.
-@description('Deploy the Application Insights availability web test against the API search endpoint.')
-param deployAvailabilityTest bool = false
+// THE PUBLIC URL, not this API's own hostname. rproxy resolves the Front Door address once at
+// config load, so a probe aimed straight at the app stays green through a moved edge — the failure
+// this exists to catch. Not composable here for the same reason `frontendHostNames` is not.
+@description('Absolute URL the availability web test GETs. Empty deploys no test.')
+param availabilityUrl string = ''
 
 // Mandatory Cost Management Tags applied across ALL resources
 var defaultTags = {
@@ -378,16 +379,15 @@ module apiWebApp './modules/api-web-app.bicep' = {
   }
 }
 
-// 7b. Synthetic availability probe against the API's public search endpoint. Deployed after the app
-// because it addresses the app by the hostname that module outputs.
-module availability './modules/availability.bicep' = if (deployAvailabilityTest) {
+// 7b. Synthetic availability probe. Separate from observability.bicep because that module is
+// unconditional and this one is a per-environment opt-in.
+module availability './modules/availability.bicep' = if (!empty(availabilityUrl)) {
   name: 'deploy-availability'
   params: {
     location: location
     environmentName: environmentName
     tags: defaultTags
-    // A real query rather than a health route: this path answers only if Cosmos and AI Search do.
-    targetUrl: 'https://${apiWebApp.outputs.apiWebAppHostName}/api/search?dataset=Project&pageSize=1'
+    targetUrl: availabilityUrl
     appInsightsId: observability.outputs.appInsightsId
     actionGroupId: observability.outputs.actionGroupId
   }
