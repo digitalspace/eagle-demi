@@ -231,7 +231,7 @@ test('summaryLine is the alert contract', async (t) => {
 });
 
 // `run` is what BOTH callers go through — the CLI entry below `require.main` and the nightly
-// schedule in src/reconcile-schedule.js. The alert reads one line out of the application log, so a
+// timer trigger in api/index.js. The alert reads one line out of the application log, so a
 // run that reported to its caller and logged nothing would leave the alarm permanently silent with
 // every test still green.
 test('run reports to its caller and to the log', async (t) => {

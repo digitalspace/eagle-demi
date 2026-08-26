@@ -98,8 +98,9 @@ const WIRED = [
   ['availabilityUrl',
     /^module availability '\.\/modules\/availability\.bicep' = if \(!empty\(availabilityUrl\)\) \{$/m,
     'the availability module gate — without it every environment gets a prod-only web test'],
-  ['reconcileHourUtc', /^\s+reconcileHourUtc: reconcileHourUtc$/m,
-    'the API module call — without it RECONCILE_HOUR_UTC is empty and the nightly run never fires'],
+  ['reconcileSchedule', /^\s+reconcileSchedule: reconcileSchedule$/m,
+    'the API module call — without it RECONCILE_SCHEDULE is empty, no timer is registered and the ' +
+    'nightly run never fires'],
   ['deployReconcileDriftAlert', /^\s+deployReconcileDriftAlert: deployReconcileDriftAlert$/m,
     'the observability module call — without it the drift alert is never created']
 ];
@@ -187,9 +188,16 @@ test('deployEnrichment gates the wildfires container and only that one', () => {
 // a what-if diff would say either.
 for (const [env, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
   test(`${env} runs the nightly reconcile and alerts on its drift`, () => {
-    const hour = /^param reconcileHourUtc = '(\d{1,2})'$/m.exec(params);
-    assert.ok(hour, `${env} must set reconcileHourUtc, or the nightly drift report never runs`);
-    assert.ok(Number(hour[1]) >= 0 && Number(hour[1]) <= 23, `${hour[1]} is not an hour`);
+    const cron = /^param reconcileSchedule = '([^']+)'$/m.exec(params);
+    assert.ok(cron, `${env} must set reconcileSchedule, or no timer is registered at all`);
+    // SIX fields. NCRONTAB leads with seconds, and a five-field crontab pasted in here is accepted
+    // by bicep, deployed, and then read by the host as `minute hour day month weekday` shifted one
+    // place — `0 9 * * *` is 09:00 every minute of the hour, not once a day.
+    const fields = cron[1].trim().split(/\s+/);
+    assert.strictEqual(fields.length, 6,
+      `${cron[1]} is not NCRONTAB — six fields, seconds first`);
+    assert.match(cron[1], /^0 0 ([01]?\d|2[0-3]) \* \* \*$/,
+      'once a night on the hour is the only shape this job is written for');
     assert.match(params, /^param deployReconcileDriftAlert = true$/m,
       'the run without the alert is a log line nobody reads');
   });

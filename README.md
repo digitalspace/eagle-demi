@@ -179,10 +179,12 @@ same way — it reports separately as `unresolvedParent`. One line is what a log
 [reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 drift=0
 ```
 
-Set `RECONCILE_HOUR_UTC` to an hour (0-23) and the API runs the same check itself once a night and
-logs that line — 09:00 UTC on test, 10:00 on prod, unset and so off everywhere else. The alert
-`demi-reconcile-drift-<env>` reads the line out of `AppTraces` hourly and mails the DEMI action
-group whenever `drift=` is over 0; a night the job never runs writes no line and raises nothing.
+Set `RECONCILE_SCHEDULE` to an NCRONTAB expression (`0 0 9 * * *` on test, `0 0 10 * * *` on prod;
+six fields, seconds first) and the API app registers a Functions timer that runs the same check
+nightly and logs that line. Unset, no timer is registered at all, which is every other environment.
+The alert `demi-reconcile-drift-<env>` reads the line out of `AppTraces` hourly and mails the DEMI
+action group whenever `drift=` is over 0; a night the job never runs writes no line and raises
+nothing.
 
 There is no search sync command. Azure AI Search indexers pull from Cosmos every five minutes on a
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the

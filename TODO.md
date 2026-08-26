@@ -93,8 +93,9 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
       index path — that filter scans. Add the path (Bicep) or drop the filter; found 2026-08-26.
 - [ ] Nightly reconcile + drift alarm for the Eagle push: the only thing that catches a
       hard-deleted document (`findOneAndDelete`, no tombstone). Script #171, seed's own admission
-      rule #175, nightly run + alert on `feat/reconcile-nightly` — `RECONCILE_HOUR_UTC` (test 09, prod 10) runs it in the
-      API process, `demi-reconcile-drift-<env>` mails the DEMI action group when `drift=` is over 0.
+      rule #175, nightly run + alert on `feat/reconcile-nightly` — `RECONCILE_SCHEDULE` (`0 0 9 * * *`
+      test, `0 0 10 * * *` prod) registers a Functions timer in the API app, and
+      `demi-reconcile-drift-<env>` mails the DEMI action group when `drift=` is over 0.
       Prod's one-row gap was closed and the report read drift=0 on `demi-api-prod` 2026-08-26.
       **The one thing left: watch the first SCHEDULED run in each environment.** Deploy the code,
       `deploy-infra.sh <env> --live`, then read the next 09:00 UTC (test) / 10:00 UTC (prod) line in

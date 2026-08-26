@@ -12,8 +12,8 @@
  *
  * Runs inside the app container over the SSH tunnel — same recipe as the other database scripts,
  * see README "Running anything against the database". Alert on the one `drift=` line, clean is 0.
- * The API also runs `run()` nightly on its own when RECONCILE_HOUR_UTC is set — see
- * src/reconcile-schedule.js, and azure/modules/observability.bicep for the alert that reads it.
+ * The API app also runs `run()` nightly on a Functions timer when RECONCILE_SCHEDULE is set — see
+ * api/index.js, and azure/modules/observability.bicep for the alert that reads the line.
  *
  * A document only counts as `eagleOnly` when seed-nosql would seed it. That is not a rule
  * restated here: `documentAdmission` IS seed-nosql's own function, run over the same merged

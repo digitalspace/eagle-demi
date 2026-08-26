@@ -19,7 +19,7 @@ param environmentName string
 @description('Default resource tags')
 param tags object
 
-@description('Alert when the nightly reconcile reports drift. Off by default — an environment that does not set RECONCILE_HOUR_UTC never writes the line this rule reads, and a rule that can only ever be silent is one more thing to keep.')
+@description('Alert when the nightly reconcile reports drift. Off by default — an environment that does not set RECONCILE_SCHEDULE never writes the line this rule reads, and a rule that can only ever be silent is one more thing to keep.')
 param deployReconcileDriftAlert bool = false
 
 @description('Who to tell when ingestion approaches the daily cap. Also reused by audit-logs.bicep, which cannot own the action group itself: main.bicep deploys this module first, so a shared group has to live on this side of the dependency.')

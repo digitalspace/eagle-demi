@@ -195,12 +195,12 @@ param summaryEnabled bool = true
 @description('Create the Foundry private endpoint. Set false when it already exists — re-PUTting it races the account PUT and fails the whole deployment.')
 param deployFoundryPrivateEndpoint bool = true
 
-// The nightly Eagle drift report, run in the API process (src/reconcile-schedule.js). Two halves
-// of one feature and both default off: the hour is what makes the job run, the bool is what makes
-// the alert exist. Set both together — an alert with no run is silent, a run with no alert is a log
-// line nobody reads.
-@description('Hour of the day, UTC, at which the API runs the Eagle reconcile. Empty runs it never.')
-param reconcileHourUtc string = ''
+// The nightly Eagle drift report, a Functions timer trigger in the API app (api/index.js). Two
+// halves of one feature and both default off: the schedule is what makes the job run, the bool is
+// what makes the alert exist. Set both together — an alert with no run is silent, a run with no
+// alert is a log line nobody reads.
+@description('NCRONTAB schedule for the Eagle reconcile timer, e.g. `0 0 9 * * *`. Empty runs it never.')
+param reconcileSchedule string = ''
 
 @description('Deploy the log alert that fires when that run reports drift.')
 param deployReconcileDriftAlert bool = false
@@ -368,7 +368,7 @@ module apiWebApp './modules/api-web-app.bicep' = {
     adminApiKey: adminApiKey
     doclingApiKey: doclingApiKey
     eagleApiBase: eagleApiBase
-    reconcileHourUtc: reconcileHourUtc
+    reconcileSchedule: reconcileSchedule
     keycloakClientId: keycloakClientId
     apiSubnetId: appServiceSubnetId
     existingServerFarmId: existingServerFarmId
