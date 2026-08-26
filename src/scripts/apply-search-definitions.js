@@ -289,7 +289,7 @@ async function run({ endpoint, live, only, liveNames }) {
     // A dry run has not read the live schema, so it cannot say whether the diff is additive — it
     // says the index is live and leaves the verdict to the --live run, which does read it.
     const added = additive.get(body.name);
-    const servingNote = !serving.has(body.name) ? ''
+    const servingNote = !serving.has(body.name) || state === 'absent' ? ''
       : added === undefined ? '  ** SERVING TRAFFIC — --live refuses a non-additive change **'
         : `  ** SERVING TRAFFIC — additive, +${added} field(s) **`;
     console.log(`index    ${body.name.padEnd(24)} ${state}   <- ${path.basename(file)}${servingNote}`);

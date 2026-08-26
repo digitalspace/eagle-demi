@@ -255,7 +255,11 @@ test('apply-search-definitions', async (t) => {
     // the live ones, the first command an operator reaches for during an incident exited 1 without
     // printing anything. A dry run touches nothing — it must work in every state, and say which
     // indexes are serving.
-    const calls = stub(tt, ok);
+    // The live names exist on the service (a 404 would be a fresh service, which is not "serving").
+    const calls = stub(tt, (url, init) =>
+      (init.method === 'GET' && /\/indexes\/[a-z]+\?/.test(url))
+        ? { status: 200, text: async () => JSON.stringify({ fields: [] }) }
+        : ok(url, init));
     const lines = [];
     const realLog = console.log;
     console.log = (...a) => lines.push(a.join(' '));

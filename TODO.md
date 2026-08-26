@@ -112,7 +112,6 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 
 ## 4. Prod promotion — ordered gates
 
-Execution plan (phases 0-6, decisions 2026-08-26): `/root/.claude/plans/curried-chasing-eich.md`.
 Each step: verified on test first, deployed from a tag, measured after, rollback named.
 Phase 0 (test-only PRs) started 2026-08-26: prod IaC + `deploy-infra.sh prod`, app hardening
 (`/api-docs` off in prod, anonymous `pageSize` ≤ 100), eagle-edge prod params, eao-nginx `demi:`
@@ -162,10 +161,6 @@ value, eagle-public `v2.7.29` (has #803, #805) to test.
       06:28 UTC: projects 393 / documents 61,587 indexed, 0 failed; chunks indexer trailing the copy.
       Anonymous `demi-api-prod` totals Project 348 / Document 61,587 = `demi-api-test` exactly;
       prod eagle-search 358 / 61,588 (delta = the known DIFFs, quantify with `search-diff.js` in 4.4).
- It holds `eagle-*` (served by
-      `eagle-search-api-prod`); demi wants `chunks`/`projects`/`documents`. Basic = 15 GB, one
-      partition; two sets ≈ 8.5 GB measured on test — verify used storage over the tunnel before
-      creating the second set. Either hold both through the soak or repoint `eagle-search-api-prod`'s
       three settings in the same change. Apply the widened definitions (`fileNameTokens` needs
       `allowIndexDowntime=true`; `stored:false` rejected). Order: index PUT → datasource PUT by hand
       → indexer run → app last.

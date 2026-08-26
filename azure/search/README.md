@@ -118,13 +118,17 @@ order takes the live search down for anonymous callers.
    JSON at require time, so an app deployed ahead of the index emits `$orderby datePosted desc`
    against a service with no such field. That is a 400, 400 is not retried, and the controller
    answers 502.
-2. **PUT the data source, by hand.** On a service whose indexers run as a user-assigned identity
-   (both environments), the body carries an `identity` block
-   (`#Microsoft.Azure.Search.DataUserAssignedIdentity`) — accepted only on a preview api-version
-   (`2024-05-01-preview`); `2024-07-01` answers 400 "Cannot find nested property 'identity'". That
+2. **PUT the data source with `src/scripts/put-search-datasources.js`** (packaged; the datasource
+   files are not — upload `azure/search/datasources/` to the container and point `DS_DIR` at it;
+   run under `with-search-admin.sh`). The committed files carry no credential and no identity; the
+   script adds both at PUT time: a `ResourceId=…;IdentityAuthType=AccessToken` connection string
+   for the Cosmos account in `COSMOS_ENDPOINT`, and an `identity` block
+   (`#Microsoft.Azure.Search.DataUserAssignedIdentity`, `DS_IDENTITY_ID`) because both services run
+   their indexers as a user-assigned identity. The block is accepted only on
+   `2024-05-01-preview`; `2024-07-01` answers 400 "Cannot find nested property 'identity'". That
    identity needs Cosmos data reader (`…0001`) AND control-plane `Cosmos DB Account Reader Role`
    on the account, or the indexer PUT fails with "Unable to retrieve account endpoint".
-   Otherwise: `apply-search-definitions.js` deliberately never writes one
+   Hand recipe, if the script is unavailable: `apply-search-definitions.js` deliberately never writes one
    (`connectionString` is redacted on export), so the new columns are NOT projected until someone
    sends the file. Until then the indexer keeps its old `SELECT`, the new fields stay `null`, and
    **nothing reports an error** — the apply run says success.
