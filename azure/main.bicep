@@ -128,6 +128,9 @@ param frontendUploaderPrincipalId string = ''
 @description('Deploy the frontend static-site storage account.')
 param deployStaticSite bool = true
 
+@description('Keycloak client whose tokens the API accepts.')
+param keycloakClientId string = 'eagle-admin-console'
+
 // Empty creates demi-plan-<env>. Prod joins an existing plan instead; see the param file.
 @description('App Service plan to join instead of creating one. Must be a Linux plan.')
 param existingServerFarmId string = ''
@@ -143,8 +146,9 @@ param deployDocumentStorage bool = false
 param enrichmentSources string = ''
 
 // Containers, not app behaviour: `enrichmentSources` above decides what the API publishes, this
-// decides whether the containers behind it are declared at all. Prod has neither.
-@description('Declare the Cosmos enrichment containers (boundaries, wildfires).')
+// decides whether the container behind it is declared at all. Prod publishes none.
+// `boundaries` is reference data and is declared everywhere — see cosmos-nosql.bicep.
+@description('Declare the Cosmos wildfires container.')
 param deployEnrichment bool = true
 
 // Prod's AI Search service was stood up ahead of the rest of the estate, from
@@ -246,16 +250,19 @@ module search './modules/ai-search.bicep' = if (deploySearch) {
   }
 }
 
-// 3b. The one grant the API needs when the search service is not ours to deploy. Nothing else about
-// the service is touched: no identity, no `semanticSearch`, no private endpoint — a re-PUT of any of
-// those would fight whoever does own it.
-module existingSearchRole './modules/search-role.bicep' = if (!deploySearch) {
+// 3b. What the API needs when the search service is not ours to deploy: the data-plane grant, and
+// the shared private link to OUR Cosmos account — the indexer has no other route to it, since the
+// account is publicNetworkAccess: Disabled. Nothing else about the service is touched: no identity,
+// no `semanticSearch`, no private endpoint — a re-PUT of any of those would fight whoever owns it.
+module existingSearchRole './modules/search-existing.bicep' = if (!deploySearch) {
   name: 'grant-existing-search'
   params: {
     searchName: empty(existingSearchEndpoint)
       ? 'demi-search-${environmentName}'
       : first(split(replace(existingSearchEndpoint, 'https://', ''), '.'))
     apiPrincipalId: identity.outputs.principalId
+    environmentName: environmentName
+    cosmosAccountId: cosmos.outputs.cosmosAccountId
   }
 }
 
@@ -338,6 +345,7 @@ module apiWebApp './modules/api-web-app.bicep' = {
     adminApiKey: adminApiKey
     doclingApiKey: doclingApiKey
     eagleApiBase: eagleApiBase
+    keycloakClientId: keycloakClientId
     apiSubnetId: appServiceSubnetId
     existingServerFarmId: existingServerFarmId
     identityId: identity.outputs.identityId

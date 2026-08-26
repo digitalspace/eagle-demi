@@ -29,10 +29,14 @@ param readerPrincipalId string = ''
 @description('Resource id of the demi-audit-<env> workspace. Empty skips control-plane auditing rather than failing the deployment.')
 param auditWorkspaceId string = ''
 
-// The boundaries and wildfires containers exist only to serve `sources.*` enrichment. Prod
-// publishes none (ENRICHMENT_SOURCES empty), so declaring them there would create two containers
-// nothing ever reads or writes.
-@description('Declare the enrichment containers (boundaries, wildfires). False leaves prod with projects/documents/chunks/apikeys/config only.')
+// The wildfires container exists only to serve `sources.wildfires` enrichment. Prod publishes none
+// (ENRICHMENT_SOURCES empty), so declaring it there would create a container nothing reads or writes.
+//
+// `boundaries` is deliberately NOT gated on this. It is reference data, not enrichment output:
+// `GET /boundaries` and `GET /db/stats` query it unconditionally in every environment, and an empty
+// container answers those with `[]` and `0`. A missing one answers both with a Cosmos 404 → HTTP 500,
+// and /db/stats is the deploy-verification endpoint.
+@description('Declare the Cosmos wildfires container. False leaves the environment without `sources.wildfires`.')
 param deployEnrichment bool = true
 
 var accountName = 'demi-cosmos-${environmentName}'
@@ -287,7 +291,7 @@ resource chunksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
 // 244 reference items. /type is only three values — normally an anti-pattern, correct here:
 // the sole list query filters on it, and the whole container is a few MB once raw geometry
 // is dropped (full-resolution GeoJSON is a build artifact served as a static asset).
-resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = if (deployEnrichment) {
+resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
   parent: database
   name: 'boundaries'
   properties: {

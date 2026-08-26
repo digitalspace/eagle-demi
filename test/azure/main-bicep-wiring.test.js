@@ -9,6 +9,8 @@ const ROOT = path.join(__dirname, '..', '..');
 const MAIN = fs.readFileSync(path.join(ROOT, 'azure', 'main.bicep'), 'utf8');
 const API_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'api-web-app.bicep'), 'utf8');
 const TEST_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.test.bicepparam'), 'utf8');
+const PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.prod.bicepparam'), 'utf8');
+const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'search-existing.bicep'), 'utf8');
 
 // A STRUCTURAL GUARD, and it exists because everything else caught nothing. Deleting the one line
 // that passes `rateLimitMaxRequests` into the module leaves the suite green AND `az bicep build`
@@ -33,6 +35,62 @@ test('the test environment raises the ceiling above the proxy-collapsed default'
   assert.ok(match, 'test must set the ceiling explicitly, not inherit the direct-traffic default');
   assert.ok(Number(match[1]) >= 1000,
     `${match[1]}/min is ${(Number(match[1]) / 60).toFixed(1)} r/s for every visitor combined`);
+});
+
+// Prod reaches this API the same way test does — through rproxy, one bucket for everyone.
+test('the prod environment raises the ceiling above the proxy-collapsed default', () => {
+  const match = /^param rateLimitMaxRequests = (\d+)$/m.exec(PROD_PARAMS);
+  assert.ok(match, 'prod must set the ceiling explicitly, not inherit the direct-traffic default');
+  assert.ok(Number(match[1]) >= 1000,
+    `${match[1]}/min is ${(Number(match[1]) / 60).toFixed(1)} r/s for every visitor combined`);
+});
+
+// The prod parameters turn features OFF through switches, and every one of them has the same blind
+// spot as `rateLimitMaxRequests` above: delete the line that wires it and `az bicep build` still
+// exits 0 with only a `no-unused-params` warning, so the param file reads one thing and the
+// deployment does another — silently reverting to the module default, which is ON in every case.
+// Text-structural, with the same honest limits as the guard above.
+const WIRED = [
+  ['deployEnrichment', /^\s+deployEnrichment: deployEnrichment$/m,
+    'the cosmos module call — without it prod declares the wildfires container'],
+  ['deploySearch', /^module search '\.\/modules\/ai-search\.bicep' = if \(deploySearch\) \{$/m,
+    'the ai-search module gate — without it prod re-PUTs a service it does not own'],
+  ['deploySearch', /^module existingSearchRole '\.\/modules\/search-existing\.bicep' = if \(!deploySearch\) \{$/m,
+    'the search-existing module gate — without it prod gets no grant and no Cosmos link'],
+  ['existingSearchEndpoint',
+    /^\s+searchEndpoint: deploySearch \? search!\.outputs\.searchEndpoint : existingSearchEndpoint$/m,
+    'the SEARCH_ENDPOINT fallback — a different fallback leaves prod pointing at nothing'],
+  ['deployFoundry', /^module foundry '\.\/modules\/foundry\.bicep' = if \(deployFoundry\) \{$/m,
+    'the foundry module gate — without it prod creates a model account it never queries'],
+  ['deployStaticSite', /^module staticSite '\.\/modules\/static-site\.bicep' = if \(deployStaticSite\) \{$/m,
+    'the static-site module gate — without it prod creates a $web nothing publishes to'],
+  ['existingServerFarmId', /^\s+existingServerFarmId: existingServerFarmId$/m,
+    'the API module call — without it prod creates demi-plan-prod instead of joining the shared plan'],
+  ['keycloakClientId', /^\s+keycloakClientId: keycloakClientId$/m,
+    'the API module call — without it no param file can set which client the API trusts']
+];
+
+for (const [name, wiring, why] of WIRED) {
+  test(`main.bicep declares and wires ${name} (${why.split(' —')[0]})`, () => {
+    assert.match(MAIN, new RegExp(`^param ${name} `, 'm'),
+      `${name} must be a main.bicep parameter, or no param file can set it`);
+    assert.match(MAIN, wiring, `${name} is declared but not wired into ${why}`);
+  });
+}
+
+// deploySearch=false means ai-search.bicep never runs, so the ONE thing that gives the indexer a
+// route to a publicNetworkAccess: Disabled Cosmos account has to come from search-existing.bicep
+// instead. Missing, the deployment succeeds and every indexer then fails with a connection error.
+test('the not-ours search path still creates the shared private link to Cosmos', () => {
+  assert.match(SEARCH_EXISTING, /sharedPrivateLinkResources@/,
+    'search-existing.bicep must declare the shared private link');
+  assert.match(SEARCH_EXISTING, /groupId: 'Sql'/,
+    "groupId must be 'Sql' — the NoSQL API, not the legacy MongoDB account");
+
+  const block = MAIN.split(/^module /m).find(b => b.includes("'./modules/search-existing.bicep'"));
+  assert.ok(block, 'main.bicep must call the search-existing module');
+  assert.match(block, /^\s+cosmosAccountId: cosmos\.outputs\.cosmosAccountId$/m,
+    'without cosmosAccountId the module\'s own !empty() gate skips the link silently');
 });
 
 // SCM basic auth is a public credential-guessing path onto the box holding the corpus, and this is

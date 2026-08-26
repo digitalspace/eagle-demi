@@ -411,8 +411,19 @@ Build the package from a checkout that already has `node_modules` installed — 
 
 `rg-demi-prod` in `c4b0a8-prod`, from `azure/main.prod.bicepparam`. It deploys no search service —
 `demi-search-prod` already exists and also serves `eagle-search-api-prod`, so the template only
-grants the DEMI identity Search Index Data Contributor on it — and no Foundry account, no
-enrichment containers and no static site.
+grants the DEMI identity Search Index Data Contributor on it and adds the shared private link it
+needs to reach the new Cosmos account — and no Foundry account, no `wildfires` container and no
+static site. The `boundaries` container IS deployed everywhere, empty in prod: it is reference data
+that `GET /boundaries` and `GET /db/stats` read unconditionally.
+
+That shared private link is created in `Pending`. **Approve it once after the apply** or every
+indexer fails with a connectivity error, because `demi-cosmos-prod` is `publicNetworkAccess:
+Disabled`:
+
+```bash
+az cosmosdb private-endpoint-connection list -g rg-demi-prod --account-name demi-cosmos-prod
+az cosmosdb private-endpoint-connection approve --id <connection-id>
+```
 
 The App Service plan is `plan-eagle-search-prod` in `rg-eagle-search-prod`, shared with
 `eagle-search-api-prod` until that app retires. **Scale it to B3 first**: the apply puts a second
