@@ -64,18 +64,21 @@ async function api(path, { key, method = 'GET', body } = {}) {
 /**
  * How many of the planted ids this caller can see on a live Cosmos list.
  *
- * PAGED, not one request: the controller clamps `pageSize` to 1000 and the repository orders by
- * `c.id ASC`, so a planted UUID lands at a random depth. In a project with more than one page of
- * documents, a single request makes "0 rows" mean "beyond the window" just as readily as "the ACL
- * withheld it" — and every zero in this matrix is supposed to mean only the second.
+ * PAGED, not one request: the repository orders by `c.id ASC`, so a planted UUID lands at a random
+ * depth. In a project with more than one page of documents, a single request makes "0 rows" mean
+ * "beyond the window" just as readily as "the ACL withheld it" — and every zero in this matrix is
+ * supposed to mean only the second.
+ *
+ * 100 rows a page, not 1000: the anonymous legs present no credential at all, and the list routes
+ * refuse a larger page from such a caller with a 400.
  */
 async function listSees(key, projectId, ids) {
   let seen = 0;
   let token;
-  // A bound, not a limit: 60 pages is 60,000 rows, well past the largest project in the corpus.
-  // If it ever binds, the caller gets a loud string rather than a silently short count.
-  for (let page = 0; page < 60; page++) {
-    const q = `/api/documents?project=${encodeURIComponent(projectId)}&pageSize=1000` +
+  // A bound, not a limit: 600 pages of 100 is 60,000 rows, well past the largest project in the
+  // corpus. If it ever binds, the caller gets a loud string rather than a silently short count.
+  for (let page = 0; page < 600; page++) {
+    const q = `/api/documents?project=${encodeURIComponent(projectId)}&pageSize=100` +
       (token ? `&continuationToken=${encodeURIComponent(token)}` : '');
     const r = await api(q, { key });
     if (r.status !== 200 || !Array.isArray(r.json)) return `HTTP ${r.status}`;
@@ -83,7 +86,7 @@ async function listSees(key, projectId, ids) {
     token = r.continuation;
     if (!token) return seen;
   }
-  return 'unpaged: more than 60 pages';
+  return 'unpaged: more than 600 pages';
 }
 
 /** How many of the planted ids this caller can find by the nonsense term. */

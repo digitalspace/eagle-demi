@@ -3,8 +3,9 @@
 // The anonymous page cap on the two unauthenticated list routes.
 //
 // `GET /projects` and `GET /documents` are reachable with no credential, and every row they
-// return is a cross-partition Cosmos read. An anonymous caller therefore gets 100 rows a page;
-// an authenticated one keeps the 1000-row ceiling `repositories/_sql.pageOptions` clamps to.
+// return is a cross-partition Cosmos read. A caller that presents none therefore gets 100 rows a
+// page; any verified credential keeps the 1000-row ceiling `repositories/_sql.pageOptions` clamps
+// to, privileged or not.
 //
 // Over the cap is REFUSED, not truncated, so a caller cannot mistake a short page for the
 // end of the data.
@@ -18,7 +19,7 @@ const projects = require('../../../src/repositories/projects');
 const documents = require('../../../src/repositories/documents');
 const projectController = require('../../../src/controllers/nosql/project');
 const documentController = require('../../../src/controllers/nosql/document');
-const { ANON_MAX_PAGE_SIZE, MAX_PAGE_SIZE } = require('../../../src/helpers/access-sql');
+const { ANON_MAX_PAGE_SIZE, MAX_PAGE_SIZE, TIER, resolveAccess } = require('../../../src/helpers/access-sql');
 
 function mockRes() {
   return {
@@ -32,6 +33,9 @@ function mockRes() {
 }
 
 const STAFF = { realm_access: { roles: ['staff'] } };
+// The one grantable role that is NOT privileged, so this credential resolves to TIER.PUBLIC —
+// authenticated without being able to see any more than an anonymous caller.
+const COMPLIANCE_KEY = { keyId: 'probe-key', realm_access: { roles: ['compliance'] } };
 
 // Both routes take the same shape: a repository `listVisible(access, opts)` behind a controller
 // that decides `opts.pageSize`. One table drives both so neither can be hardened alone.
@@ -88,6 +92,19 @@ for (const route of ROUTES) {
 
       assert.strictEqual(res.statusCode, 200);
       assert.strictEqual(opts().pageSize, 500, 'authenticated callers keep the existing ceiling');
+    });
+
+    await t.test('a compliance key 500 is served in full', async () => {
+      assert.strictEqual(resolveAccess({ user: COMPLIANCE_KEY }).tier, TIER.PUBLIC,
+        'or this case stopped covering the authenticated-but-unprivileged caller');
+
+      const opts = stub();
+      const res = mockRes();
+      await route.handler({ query: { pageSize: '500' }, params: {}, user: COMPLIANCE_KEY }, res);
+
+      assert.strictEqual(res.statusCode, 200);
+      assert.strictEqual(opts().pageSize, 500,
+        'the cap keys off presenting a credential, not off the tier');
     });
 
     await t.test(`staff above ${MAX_PAGE_SIZE} still clamps rather than 400s`, async () => {

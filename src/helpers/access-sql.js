@@ -88,6 +88,10 @@ function canWrite(roles) {
 function resolveAccess(req) {
   const roles = rolesFor(req);
   const projectScope = projectScopeFor(req);
+  // Whether a credential was PRESENTED, which is not the same question as the tier: `req.user` is
+  // set only by verified auth (an API key or a Keycloak token), and a `compliance` key resolves to
+  // TIER.PUBLIC while still being an identified caller.
+  const authenticated = Boolean(req && req.user);
 
   // Scope is resolved BEFORE the privilege check, and the order is the whole point. The reverse
   // returned PRIVILEGED with `projectScope: null` and threw the scope away, so a key minted as
@@ -99,14 +103,14 @@ function resolveAccess(req) {
   // `canRead` both key privilege off the ROLES, never off the tier, so a SCOPED tier still lifts
   // the role predicate for a privileged role set.
   if (Array.isArray(projectScope)) {
-    return { tier: TIER.SCOPED, roles, projectScope };
+    return { tier: TIER.SCOPED, roles, projectScope, authenticated };
   }
 
   if (isPrivileged(roles)) {
-    return { tier: TIER.PRIVILEGED, roles, projectScope: null };
+    return { tier: TIER.PRIVILEGED, roles, projectScope: null, authenticated };
   }
 
-  return { tier: TIER.PUBLIC, roles, projectScope: null };
+  return { tier: TIER.PUBLIC, roles, projectScope: null, authenticated };
 }
 
 /**
@@ -174,28 +178,30 @@ function projectScopeFor(req) {
  * NEVER derive this from a request. It takes no arguments for that reason.
  */
 function systemAccess() {
-  return { tier: TIER.PRIVILEGED, roles: [...PUBLIC_ROLES, ...SECURE_ROLES], projectScope: null };
+  return { tier: TIER.PRIVILEGED, roles: [...PUBLIC_ROLES, ...SECURE_ROLES], projectScope: null, authenticated: true };
 }
 
 /**
  * Rows one list page may return. MAX_PAGE_SIZE is also what `repositories/_sql.pageOptions`
  * clamps `maxItemCount` to, and is imported from here so the two cannot drift.
  *
- * An anonymous caller gets a tenth of it. The list routes are reachable with no credential at
- * all, and a 1000-row cross-partition page is the cheapest way for one to cost real RU.
+ * A caller that presented no credential gets a tenth of it. The list routes are reachable with no
+ * credential at all, and a 1000-row cross-partition page is the cheapest way for one to cost real
+ * RU. Any verified credential keeps the full ceiling, privileged or not: the cap is about whether
+ * the spend can be attributed to someone, not about what the caller may see.
  */
 const MAX_PAGE_SIZE = 1000;
 const ANON_MAX_PAGE_SIZE = 100;
 
 /**
- * Page size for a list read: `{ pageSize }`, or `{ error }` when an anonymous caller asked for
- * more than its cap.
+ * Page size for a list read: `{ pageSize }`, or `{ error }` when a caller that presented no
+ * credential asked for more than its cap.
  *
  * Refused, not truncated — quietly returning 100 of the 500 rows asked for answers a different
  * question than the one asked, and the caller has no way to tell. Same rule as controllers/search.js.
  */
 function pageSizeFor(access, raw) {
-  const anonymous = !access || access.tier === TIER.PUBLIC;
+  const anonymous = !access || !access.authenticated;
   const max = anonymous ? ANON_MAX_PAGE_SIZE : MAX_PAGE_SIZE;
 
   // `>= 1`, so absent, junk, zero and negative all land on the default rather than on a one-row
@@ -204,7 +210,7 @@ function pageSizeFor(access, raw) {
   if (!(requested >= 1)) return { pageSize: max };
 
   if (anonymous && requested > max) {
-    return { error: `pageSize above ${ANON_MAX_PAGE_SIZE} is not supported for an unauthenticated request` };
+    return { error: `pageSize above ${ANON_MAX_PAGE_SIZE} requires an authenticated request` };
   }
   return { pageSize: Math.min(requested, max) };
 }

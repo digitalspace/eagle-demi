@@ -144,8 +144,9 @@ app.get('/api/health/db', async (req, res) => {
 //
 // NOT MOUNTED IN PROD. The UI is unauthenticated and the spec it renders names every route,
 // parameter and role in the system, so prod 404s the path like any other unknown route.
-// `config.environmentName` is the ENVIRONMENT app setting — see src/config.js.
-if (config.environmentName !== 'prod') {
+// `config.environmentName` is the ENVIRONMENT app setting — see src/config.js. An allowlist, not
+// `!== 'prod'`: a deployment that forgets the setting must 404 the UI, not publish it.
+if (['dev', 'test'].includes(config.environmentName)) {
   try {
     const swaggerDocument = YAML.load(path.join(__dirname, 'swagger/swagger.yaml'));
     const swaggerDistPath = require('swagger-ui-dist').getAbsoluteFSPath();
