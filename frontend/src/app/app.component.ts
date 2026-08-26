@@ -18,6 +18,11 @@ export class AppComponent {
     this.service.loginKeycloak();
   }
 
+  /** Mirrors the server's own gate (src/app.js: `['dev', 'test'].includes(config.environmentName)`). */
+  get apiDocsAvailable(): boolean {
+    return ['dev', 'test'].includes(this.service.config.ENVIRONMENT ?? '');
+  }
+
   openSwagger() {
     const basePath = this.service.config.API_PATH || '/api';
     const url = basePath === '/api' ? '/api-docs' : basePath.replace(/\/api$/, '/api-docs');

@@ -370,7 +370,10 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     assert.strictEqual(calls[0].options.continuationToken, undefined);
     assert.strictEqual(calls[1].options.continuationToken, 'page2',
       'the second request must carry the token the first returned');
-    assert.ok(calls.every(c => c.options.maxItemCount === 1000));
+    // maxItemCount must stay ABSENT: setting it makes cosmos.query page by hand, and the SDK
+    // drops `x-ms-continuation` on a cross-partition query, which is how the 2026-08-25 run read
+    // 1,000 of 60,578 documents and computed the rest as surplus.
+    assert.ok(calls.every(c => c.options.maxItemCount === undefined));
   });
 
   await t.test('extractionRowsForProject pins the partition and selects only the state', async () => {

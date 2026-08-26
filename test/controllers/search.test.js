@@ -564,6 +564,36 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(hit.documentType, 'Application', 'the label stays, for DEMI\'s own frontend');
   });
 
+  // search-diff compares DEMI's document rows against eagle-search's and no longer tolerates
+  // `isFeatured` / `documentSource` as eagle-only columns, so dropping either mapping turns every
+  // document row into a diff — silently, because the search itself still answers 200.
+  await t.test('a document row carries isFeatured and documentSource', async () => {
+    t.mock.method(aiSearch, 'searchDocuments', async () => ({
+      count: 2,
+      items: [
+        {
+          id: 'doc1', displayName: 'Featured', documentFileName: 'a.pdf',
+          isFeatured: true, documentSource: 'PROJECT', projectId: '207', read: ['public']
+        },
+        // The row that pins the DEFAULTS: neither field is stored on every document, and both
+        // have to be present in the response regardless, with the type eagle-search sends.
+        { id: 'doc2', displayName: 'Plain', documentFileName: 'b.pdf', projectId: '207', read: ['public'] }
+      ]
+    }));
+    t.mock.method(projectsRepo, 'listByIds', async () => [{ id: '207', name: 'Site C' }]);
+
+    const req = { query: { dataset: 'Document', keywords: 'Ajax' }, header: () => null };
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(req, res);
+
+    const [featured, plain] = jsonResponse[0].searchResults;
+    assert.strictEqual(featured.isFeatured, true);
+    assert.strictEqual(featured.documentSource, 'PROJECT');
+    assert.strictEqual(plain.isFeatured, false, 'absent means false, not undefined');
+    assert.strictEqual(plain.documentSource, '', 'absent means an empty string, not undefined');
+  });
+
   await t.test('a bare document list is served by the index, not by Cosmos', async () => {
     // The request shape that used to take the deleted Cosmos read: no keywords, no sort, and a
     // `project` — which `hasCriteria` excludes on purpose. It paged by overfetch-and-slice against

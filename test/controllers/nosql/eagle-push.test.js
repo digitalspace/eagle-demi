@@ -320,8 +320,12 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
       name: '', currentLegislationYear: undefined, legislation_2002: { name: 'Older' }
     });
     const empty = rawMongoProject({}, { name: '', legislation_2018: null });
+    // The key RESOLVES here — `currentLegislationYear` names a block that is present and is an
+    // object. It just holds nothing, so flattening it produces the same nameless row as the two
+    // above, which is why the check is on content rather than on the key.
+    const contentless = rawMongoProject({}, { name: '', legislation_2018: {} });
 
-    for (const doc of [ambiguous, empty]) {
+    for (const doc of [ambiguous, empty, contentless]) {
       const res = mockRes();
       await projectController.upsertFromEagle({
         params: { eagleId: PROJECT_EAGLE_ID }, query: {}, body: { doc }, user: STAFF

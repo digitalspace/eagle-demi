@@ -77,16 +77,20 @@ const LEGISLATION_KEYS = ['legislation_1996', 'legislation_2002', 'legislation_2
 function flattenEagleProject(doc) {
   if (!doc) return doc;
 
-  const isBlock = k => k && doc[k] && typeof doc[k] === 'object' && !Array.isArray(doc[k]);
+  // An EMPTY object is not a block: flattening it yields nothing, so a doc whose named year holds
+  // `{}` lands as nameless as one that names no year at all.
+  const isBlock = k => k && doc[k] && typeof doc[k] === 'object' && !Array.isArray(doc[k]) &&
+    Object.keys(doc[k]).length > 0;
   const present = LEGISLATION_KEYS.filter(isBlock);
-  const key = isBlock(doc.currentLegislationYear) ? doc.currentLegislationYear
-    : present.length === 1 ? present[0]
-      : null;
+
+  let key = null;
+  if (isBlock(doc.currentLegislationYear)) key = doc.currentLegislationYear;
+  else if (present.length === 1) key = present[0];
 
   if (!key) {
-    // A doc that carries legislation keys but names none of them is a raw Mongo doc we failed to
-    // read. With no top-level name to fall back on it would land nameless and published, so reject
-    // rather than guess which block is current.
+    // A doc that carries legislation keys but resolves none of them to content is a raw Mongo doc
+    // we failed to read. With no top-level name to fall back on it would land nameless and
+    // published, so reject rather than guess which block is current.
     if (hasValue(doc.name) || !LEGISLATION_KEYS.some(k => k in doc)) return doc;
     const err = new Error('Eagle project has no resolvable legislation block');
     err.status = 400;
