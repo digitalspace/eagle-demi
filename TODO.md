@@ -96,9 +96,10 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
       projects unpublishedOrDeleted=1 (the test-only project), documents eagleOnly=25 — rows
       published in prod Eagle after the 2026-08-25 seed, which only a PROD push (1.3) would carry.
       Prod DEMI (a copy of test) has the same 25-row gap: close it before the flip with
-      `seed-nosql.js --reconcile` from prod Eagle inside the prod container (additive), then rerun
-      this report against prod (`demi-api-prod` container, same env) and expect drift=0 except
-      Track-only rows. Next: WebJob + log alert on `drift=`. It reports only — eagle-api's public GET answers `200 []` for a
+      `seed-nosql.js --live` from prod Eagle inside the prod container (additive upsert; never
+      `--reconcile`, which deletes), then rerun this report against prod (`demi-api-prod`
+      container, same env) and require drift=0 (`trackOnly` is reported separately and is not
+      in the sum). Next: WebJob + log alert on `drift=`. It reports only — eagle-api's public GET answers `200 []` for a
       deleted row and an unpublished one alike, so acting on the drift needs a tombstone or a
       credential that reads unpublished rows.
 - [ ] Unused Cosmos index paths (`wildfires` spatial, projects composite, five scalars): verified
