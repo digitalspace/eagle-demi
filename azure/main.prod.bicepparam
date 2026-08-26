@@ -99,6 +99,11 @@ param existingServerFarmId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd
 param privateEndpointSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/c4b0a8-prod-cond-ext-pe-subnet'
 param appServiceSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/snet-app-service'
 
+// ── Monitoring ────────────────────────────────────────────────────────────────────────────────
+// Prod only. eagle-public reaches this API through rproxy's /demi-search, and rproxy answers
+// healthily whether or not its upstream does, so nothing outside Azure reports the API being down.
+param deployAvailabilityTest = true
+
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────
 // rg-demi-prod has no budget at all today. 400 CAD matches the test guard; prod carries no Foundry
 // account and no second search service, but does carry a plan, Cosmos and the private endpoints.
