@@ -13,9 +13,10 @@
  * Runs inside the app container over the SSH tunnel — same recipe as the other database scripts,
  * see README "Running anything against the database". Alert on the one `drift=` line, clean is 0.
  *
- * A document only counts as `eagleOnly` when its own project is one seed-nosql would also resolve
- * (published in Eagle) — the same gate `projectIndex.resolve` applies; the rest report separately
- * under `unresolvedParent`, since seed-nosql drops them too and they are not push drift.
+ * A document only counts as `eagleOnly` when it resolves a parent the way seed-nosql resolves
+ * one: a published Eagle project, OR a known ProjectNotification (~80 documents hang off one of
+ * those instead of a project — see seed-nosql.js). The rest report separately under
+ * `unresolvedParent`, since seed-nosql drops them too and they are not push drift.
  */
 
 const sources = require('../seed/sources');
@@ -91,6 +92,10 @@ async function reconcile(argv = [], deps = {}) {
   // Eagle first: `fetchAllPages` throws when a fetch falls short of the reported
   // `searchResultsTotal`, so a truncated read can never be mistaken for a shrunken corpus.
   const eagleProjectIds = new Set((await src.fetchEagleProjects()).map(p => String(p._id)));
+  // The other entity a document can be parented under — same dataset seed-nosql resolves against,
+  // so the two admission rules cannot drift apart.
+  const notificationIds = new Set(
+    (await src.fetchAllPages(src.EAGLE_API_BASE, 'ProjectNotification')).map(n => String(n._id)));
   const eagleDocumentIds = new Set();
   const eagleDocumentProject = new Map(); // doc id -> its Eagle project id
   await src.streamEagleDocuments(page => {
@@ -111,8 +116,13 @@ async function reconcile(argv = [], deps = {}) {
 
   const projectDiff = diff(projectRows, row => String(row.eagleId), eagleProjectIds,
     row => row.sourceSystem === 'eagle');
+  // Mirrors seed-nosql's admission rule exactly: a project OR a known notification, never an
+  // invented parent.
   const documentDiff = diff(documentRows, row => String(row.id), eagleDocumentIds, undefined,
-    id => eagleProjectIds.has(eagleDocumentProject.get(id)));
+    id => {
+      const project = eagleDocumentProject.get(id);
+      return eagleProjectIds.has(project) || notificationIds.has(project);
+    });
 
   summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size, ...projectDiff };
   summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff };

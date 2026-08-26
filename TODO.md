@@ -93,9 +93,9 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
       hard-deleted document (`findOneAndDelete`, no tombstone).
       Script landed (#171). First runs 2026-08-26 (test container): vs eagle-TEST is meaningless
       (test corpus is sourced from prod Eagle); vs PROD Eagle (`EAGLE_API_BASE=https://projects.eao.gov.bc.ca/api/public`):
-      projects unpublishedOrDeleted=1 (the test-only project), documents eagleOnly=25 — rows
-      published in prod Eagle after the 2026-08-25 seed, which only a PROD push (1.3) would carry.
-      Prod DEMI (a copy of test) has the same 25-row gap: close it before the flip with
+      projects unpublishedOrDeleted=1 (the test-only project), documents eagleOnly=1 (one row
+      published after the 2026-08-25 seed); 24 more have unpublished parents (`unresolvedParent`,
+      outside drift). Prod DEMI (a copy of test) has the same 1-row gap: close it before the flip with
       `seed-nosql.js --live` from prod Eagle inside the prod container (additive upsert; never
       `--reconcile`, which deletes), then rerun this report against prod (`demi-api-prod`
       container, same env) and require drift=0 (`trackOnly` is reported separately and is not
@@ -222,12 +222,16 @@ value, eagle-public `v2.7.29` (has #803, #805) to test.
       the B3 plan is shared with eagle-search (already paid), Cosmos serverless by use (~3.95 GB
       stored), AI Search Basic already paid, LAW/App Insights small. Expect well under test's
       212 CAD/month (no Foundry, no static site, no enrichment). Sign off or adjust the budget.
-- [ ] **4.8 Flip and soak.** PREREQ (2026-08-26): prod DEMI is 25 documents behind prod Eagle
-      (reconcile report, §3). Close it first: in the `demi-api-prod` container, `seed-nosql.js`
-      dry run then `--live` (additive upsert, carries extraction state; NO `--reconcile`), then the
-      reconcile report against prod must show documents eagleOnly=0. Daniel's go, then rehearsal per
-      `docs/prod-flip-runbook.md`.
-      Was: Set prod `SEARCH_API_PATH` to `/demi-search` (one Mongo field, no
+- [ ] **4.8 Flip and soak.** PREREQ (2026-08-26): prod DEMI is 1 document behind prod Eagle
+      (24 more sit under unpublished parents and are not drift) (reconcile report, §3). Close it
+      first: in the `demi-api-prod` container, `seed-nosql.js` dry run then `--live` (additive
+      upsert, carries extraction state; NO `--reconcile`), then the reconcile report against prod
+      must show documents eagleOnly=0. Daniel's go, then rehearsal per `docs/prod-flip-runbook.md`.
+      Dry run in prod 2026-08-26 19:10 UTC: fetched 61,612, built 61,588, `droppedUnresolvable` 24
+      (parents unpublished in Eagle — the double gate hides them anyway), preserved 61,587 → 1
+      genuinely new document; projects built 392. `--live --only projects,documents` (boundaries
+      never in prod) run by Daniel 2026-08-26 ~19:30 UTC; gate = reconcile `drift=0`.
+      Set prod `SEARCH_API_PATH` to `/demi-search` (one Mongo field, no
       deploy); keep `/eagle-search` answering. Define the soak criterion here before flipping
       (proposed: 14 days, zero 5xx on `/demi-search`, differ green against the frozen eagle-search).
       Soak with the browser console open (`EventService.getError()` has no subscribers — defects are

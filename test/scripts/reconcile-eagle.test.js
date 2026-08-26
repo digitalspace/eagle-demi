@@ -12,7 +12,7 @@ const {
 const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
 
 /**
- * Eagle publishes projects P1/P2 and documents D1/D2/D3.
+ * Eagle publishes projects P1/P2, one ProjectNotification N1, and documents D1-D4.
  *
  * DEMI mirrors: P1 under a Track-sourced row (the shape that made a naive diff report every
  * matched project as missing), P2 Eagle-sourced, plus `gone` — Eagle-sourced and absent from
@@ -21,10 +21,15 @@ const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
  * D3 is the document-side counterpart of `gone`: Eagle publishes it, DEMI never mirrored it, and
  * its own project ('gone') is not in EAGLE_PROJECTS — seed-nosql would drop it as unresolvable, so
  * the reconcile must report it as `unresolvedParent`, not `eagleOnly`.
+ *
+ * D4 hangs off N1, a ProjectNotification rather than a project — seed-nosql admits these (~80 in
+ * prod, see seed-nosql.js). Eagle publishes it, DEMI never mirrored it: real push drift, so it
+ * must be `eagleOnly`, not `unresolvedParent`.
  */
 const EAGLE_PROJECTS = [{ _id: 'P1' }, { _id: 'P2' }];
+const NOTIFICATIONS = [{ _id: 'N1' }];
 const EAGLE_DOCS = [{ _id: 'D1', project: 'P1' }, { _id: 'D2', project: 'P2' },
-  { _id: 'D3', project: 'gone' }];
+  { _id: 'D3', project: 'gone' }, { _id: 'D4', project: 'N1' }];
 
 const PROJECT_ROWS = [
   { id: '207', eagleId: 'P1', sourceSystem: 'track' },
@@ -42,6 +47,13 @@ function stubSources(over = {}) {
   return {
     EAGLE_API_BASE,
     fetchEagleProjects: async () => EAGLE_PROJECTS,
+    // Same generic pager seed-nosql calls for ProjectNotification — asserted so a divergent
+    // dataset name would fail here rather than silently reading the wrong collection.
+    fetchAllPages: async (base, dataset) => {
+      assert.strictEqual(base, EAGLE_API_BASE);
+      assert.strictEqual(dataset, 'ProjectNotification');
+      return NOTIFICATIONS;
+    },
     streamEagleDocuments: async (onPage) => {
       await onPage(EAGLE_DOCS);
       return { count: EAGLE_DOCS.length, total: EAGLE_DOCS.length };
@@ -122,21 +134,14 @@ test('reconcile', async (t) => {
     assert.deepStrictEqual(summary.documents.unpublishedOrDeleted.map(r => r.id), ['D-gone']);
     // P1 is mirrored on a Track-sourced row; reading only the Eagle-sourced rows reported it here.
     assert.deepStrictEqual(summary.projects.eagleOnly, []);
-    assert.deepStrictEqual(summary.documents.eagleOnly, []);
+    // D4 hangs off notification N1 — seed-nosql admits it, so it is real push drift.
+    assert.deepStrictEqual(summary.documents.eagleOnly, ['D4']);
     // The Track row gone from Eagle: reported apart, and not the push's drift.
     assert.deepStrictEqual(summary.projects.trackOnly.map(r => r.id), ['354']);
     // D3's project ('gone') is unpublished — excluded from eagleOnly, reported apart, not drift.
     assert.deepStrictEqual(summary.documents.unresolvedParent, ['D3']);
-    assert.strictEqual(summary.drift, 2);
+    assert.strictEqual(summary.drift, 3);
     assert.deepStrictEqual(summary.failures, []);
-  });
-
-  await t.test('a document whose project is unpublished is not counted as eagleOnly', async () => {
-    const summary = await reconcile([], makeDeps());
-    assert.deepStrictEqual(summary.documents.eagleOnly, []);
-    assert.deepStrictEqual(summary.documents.unresolvedParent, ['D3']);
-    // Reported separately, not added into drift — the gate this whole change exists for.
-    assert.strictEqual(summary.drift, 2);
   });
 
   await t.test('an id Eagle publishes and DEMI never mirrored is reported', async () => {
@@ -144,7 +149,7 @@ test('reconcile', async (t) => {
       sources: stubSources({ fetchEagleProjects: async () => [...EAGLE_PROJECTS, { _id: 'P3' }] })
     }));
     assert.deepStrictEqual(summary.projects.eagleOnly, ['P3']);
-    assert.strictEqual(summary.drift, 3);
+    assert.strictEqual(summary.drift, 4);
   });
 
   await t.test('a truncated enumeration is reported', async () => {
@@ -166,6 +171,14 @@ test('reconcile', async (t) => {
     const mod = require('../../src/scripts/reconcile-eagle');
     assert.deepStrictEqual(Object.keys(mod).filter(k => /purge|live/i.test(k)), []);
   });
+
+  await t.test('unresolvedParent renders in the text report and the --json block', async () => {
+    const summary = await reconcile([], makeDeps());
+    const rendered = report(summary, { json: true });
+    assert.match(rendered, /unresolvedParent \(Eagle-only, but its own project is unpublished\/gone.*\): 1 — D3/);
+    const parsed = JSON.parse(rendered.slice(rendered.indexOf('{')));
+    assert.deepStrictEqual(parsed.documents.unresolvedParent, ['D3']);
+  });
 });
 
 test('summaryLine is the alert contract', async (t) => {
@@ -173,7 +186,7 @@ test('summaryLine is the alert contract', async (t) => {
     const summary = await reconcile([], makeDeps());
     assert.strictEqual(summaryLine(summary),
       '[reconcile] projects: unpublishedOrDeleted=1 eagleOnly=0 ' +
-      'documents: unpublishedOrDeleted=1 eagleOnly=0 unresolvedParent=1 drift=2');
+      'documents: unpublishedOrDeleted=1 eagleOnly=1 unresolvedParent=1 drift=3');
   });
 
   await t.test('a clean run says drift=0', () => {
