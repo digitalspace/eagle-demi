@@ -12,6 +12,8 @@
  *
  * Runs inside the app container over the SSH tunnel — same recipe as the other database scripts,
  * see README "Running anything against the database". Alert on the one `drift=` line, clean is 0.
+ * The API app also runs `run()` nightly on a Functions timer when RECONCILE_SCHEDULE is set — see
+ * api/index.js, and azure/modules/observability.bicep for the alert that reads the line.
  *
  * A document only counts as `eagleOnly` when seed-nosql would seed it. That is not a rule
  * restated here: `documentAdmission` IS seed-nosql's own function, run over the same merged
@@ -170,7 +172,23 @@ function report(summary, { json } = {}) {
   return lines.join('\n');
 }
 
-module.exports = { parseArgs, diff, summaryLine, reconcile, report };
+/**
+ * One run, logging exactly what the CLI logs — the nightly schedule and the CLI must not be able
+ * to produce different output, because the log alert matches only one of the two lines.
+ *
+ * No `live` option: this script changes nothing in any mode. See the header.
+ *
+ * @param {object} [opts] {json} full id sets, {deps} the same test seam `reconcile` takes
+ */
+async function run({ json = false, deps } = {}) {
+  const summary = await reconcile([], deps);
+  logger.info(report(summary, { json }));
+  // Its own record, so a log alert matches this line and not the report body around it.
+  logger.info(summaryLine(summary));
+  return summary;
+}
+
+module.exports = { parseArgs, diff, summaryLine, reconcile, report, run };
 
 if (require.main === module) {
   const { initCosmosClient } = require('../db/cosmos-nosql');
@@ -184,12 +202,7 @@ if (require.main === module) {
   }
   initCosmosClient();
 
-  reconcile(process.argv.slice(2))
-    .then(summary => {
-      logger.info(report(summary, { json: args.json }));
-      // Its own record, so a log alert matches this line and not the report body around it.
-      logger.info(summaryLine(summary));
-    })
+  run({ json: args.json })
     .catch(err => {
       logger.error(`[reconcile] ${err.stack || err.message}`);
       process.exit(1);

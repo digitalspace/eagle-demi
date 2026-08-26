@@ -92,22 +92,16 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 - [ ] `projects.js:128` filters `isDefinedAndNotNull('centroid')` but `/centroid/?` is not an included
       index path — that filter scans. Add the path (Bicep) or drop the filter; found 2026-08-26.
 - [ ] Nightly reconcile + drift alarm for the Eagle push: the only thing that catches a
-      hard-deleted document (`findOneAndDelete`, no tombstone).
-      Script landed (#171). First runs 2026-08-26 (test container): vs eagle-TEST is meaningless
-      (test corpus is sourced from prod Eagle); vs PROD Eagle (`EAGLE_API_BASE=https://projects.eao.gov.bc.ca/api/public`):
-      projects unpublishedOrDeleted=1 (the test-only project), documents eagleOnly=1 (one row
-      published after the 2026-08-25 seed); 24 more have unpublished parents (`unresolvedParent`,
-      outside drift). Prod DEMI (a copy of test) has the same 1-row gap: close it before the flip with
-      `seed-nosql.js --live` from prod Eagle inside the prod container (additive upsert; never
-      `--reconcile`, which deletes), then rerun this report against prod (`demi-api-prod`
-      container, same env) and require drift=0 (`trackOnly` is reported separately and is not
-      in the sum). Next: WebJob + log alert on `drift=`.
-      #173 review minors (open, PR in progress): reconcile's parent rule is narrower than seed's
-      `buildProjectIndex` (Track rows with a dangling `epic_guid` admit documents in seed, not here);
-      no fixture for a missing document under a PUBLISHED project; ProjectNotification fetch +
-      admission predicate copied from seed instead of extracted. It reports only — eagle-api's public GET answers `200 []` for a
-      deleted row and an unpublished one alike, so acting on the drift needs a tombstone or a
-      credential that reads unpublished rows.
+      hard-deleted document (`findOneAndDelete`, no tombstone). Script #171, seed's own admission
+      rule #175, nightly run + alert on `feat/reconcile-nightly` — `RECONCILE_SCHEDULE`
+      (`0 0 10 * * *`, PROD ONLY: test's corpus came from prod Eagle but its `EAGLE_API_BASE` is
+      eagle-test, so a nightly diff there is meaningless) registers a Functions timer in the API
+      app, and `demi-reconcile-drift-prod` mails the DEMI action group when `drift=` is over 0.
+      Prod's one-row gap was closed and the report read drift=0 on `demi-api-prod` 2026-08-26.
+      **The one thing left: watch the first SCHEDULED run in prod.** Deploy the code,
+      `deploy-infra.sh prod --live`, then read the next 10:00 UTC line in demi-logs-prod:
+      `AppTraces | where Message contains "[reconcile] projects"`. One line a night with `drift=0`
+      is clean; NO line means the timer never fired, and nothing alerts on that.
 - [x] ~~Unused Cosmos index paths (`wildfires` spatial, projects composite, five scalars): verified
       removable; only with a Bicep deploy that happens for another reason.~~ Done in PR: dropped
       `projects` `/trackProjectId/?` + `/updatedAt/?` + the `[isPublished, name]` composite,

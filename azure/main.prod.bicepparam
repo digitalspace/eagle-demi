@@ -109,6 +109,18 @@ param appServiceSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/
 // not move this test. See src/controllers/search.js — every document read goes to the index.
 param availabilityUrl = 'https://projects.eao.gov.bc.ca/demi-search/search?dataset=Document&keywords=assessment&pageSize=1'
 
+// ── Reconcile ─────────────────────────────────────────────────────────────────────────────────
+// The nightly Eagle drift report, a Functions timer in the API app, plus the alert on its one
+// output line. It is the only thing that notices a hard-deleted Eagle document — that delete
+// carries no tombstone, so the push cannot report it and nothing else looks.
+//
+// PROD IS THE ONLY ENVIRONMENT THAT RUNS THIS. Test's corpus came from prod Eagle and its
+// `eagleApiBase` is eagle-test, so a nightly diff there compares two unrelated corpora.
+//
+// NCRONTAB: the leading 0 is SECONDS. 10:00 UTC is 03:00 PDT, 02:00 PST.
+param reconcileSchedule = '0 0 10 * * *'
+param deployReconcileDriftAlert = true
+
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────
 // rg-demi-prod has no budget at all today. 400 CAD matches the test guard; prod carries no Foundry
 // account and no second search service, but does carry a plan, Cosmos and the private endpoints.

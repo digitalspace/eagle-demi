@@ -12,6 +12,9 @@ const TEST_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.test.biceppar
 const PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.prod.bicepparam'), 'utf8');
 const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'search-existing.bicep'), 'utf8');
 const COSMOS_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
+const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'observability.bicep'), 'utf8');
+
+const { summaryLine } = require('../../src/scripts/reconcile-eagle');
 
 // A STRUCTURAL GUARD, and it exists because everything else caught nothing. Deleting the one line
 // that passes `rateLimitMaxRequests` into the module leaves the suite green AND `az bicep build`
@@ -94,7 +97,12 @@ const WIRED = [
     'the API module call — without it no param file can set which client the API trusts'],
   ['availabilityUrl',
     /^module availability '\.\/modules\/availability\.bicep' = if \(!empty\(availabilityUrl\)\) \{$/m,
-    'the availability module gate — without it every environment gets a prod-only web test']
+    'the availability module gate — without it every environment gets a prod-only web test'],
+  ['reconcileSchedule', /^\s+reconcileSchedule: reconcileSchedule$/m,
+    'the API module call — without it RECONCILE_SCHEDULE is empty, no timer is registered and the ' +
+    'nightly run never fires'],
+  ['deployReconcileDriftAlert', /^\s+deployReconcileDriftAlert: deployReconcileDriftAlert$/m,
+    'the observability module call — without it the drift alert is never created']
 ];
 
 for (const [name, wiring, why] of WIRED) {
@@ -172,4 +180,79 @@ test('deployEnrichment gates the wildfires container and only that one', () => {
   assert.ok(boundaries, 'no boundaries container declared in cosmos-nosql.bicep');
   assert.doesNotMatch(boundaries.split('\n')[0], /= if \(/,
     'boundaries must NOT be gated — every environment serves it, empty in prod');
+});
+
+// Two params, one feature, and each is useless alone: the schedule is what writes the drift line,
+// the bool is what watches for it. An environment with the alert and no run has an alarm that can
+// never fire; one with the run and no alert writes a line nobody reads. Nothing in `az bicep build`
+// or in a what-if diff would say either.
+test('prod runs the nightly reconcile and alerts on its drift', () => {
+  const cron = /^param reconcileSchedule = '([^']+)'$/m.exec(PROD_PARAMS);
+  assert.ok(cron, 'prod must set reconcileSchedule, or no timer is registered at all');
+  // SIX fields. NCRONTAB leads with seconds, and a five-field crontab pasted in here is accepted
+  // by bicep, deployed, and then read by the host as `minute hour day month weekday` shifted one
+  // place — `0 9 * * *` is 09:00 every minute of the hour, not once a day.
+  assert.strictEqual(cron[1].trim().split(/\s+/).length, 6,
+    `${cron[1]} is not NCRONTAB — six fields, seconds first`);
+  assert.match(cron[1], /^0 0 ([01]?\d|2[0-3]) \* \* \*$/,
+    'once a night on the hour is the only shape this job is written for');
+  assert.match(PROD_PARAMS, /^param deployReconcileDriftAlert = true$/m,
+    'the run without the alert is a log line nobody reads');
+});
+
+// TEST IS OFF ON PURPOSE, and it is the pair that has to stay off: `eagleApiBase` there is
+// eagle-test while the test corpus was seeded from PROD Eagle, so a nightly diff compares two
+// unrelated corpora and alerts every night on the difference. Turning either half on is only
+// correct in the same edit that repoints eagleApiBase — which this fails on, since nothing else
+// would.
+test('test schedules no reconcile and deploys no drift alert', () => {
+  assert.match(TEST_PARAMS, /^param reconcileSchedule = ''$/m,
+    'a schedule here diffs the test corpus against an upstream it did not come from');
+  assert.match(TEST_PARAMS, /^param deployReconcileDriftAlert = false$/m,
+    'and the alert on that diff would fire every night');
+  assert.match(TEST_PARAMS, /^param eagleApiBase = 'https:\/\/eagle-test\./m,
+    'this is the reason for both — turn them on in the edit that changes this line, not before');
+});
+
+// The alert reads a number out of a log line this repo formats. Both halves are strings in
+// different languages in different files, and every way of getting it wrong is silent: `traces` is
+// the classic-schema table name and does not exist in a workspace-based component, `has` tokenises
+// on brackets, and any change to summaryLine's wording stops the match. The rule would keep
+// evaluating and keep finding nothing, which reads exactly like no drift.
+test('the drift alert query matches the line the reconcile actually logs', () => {
+  const block = OBSERVABILITY
+    .split(/^resource /m)
+    .find(b => b.includes("name: 'demi-reconcile-drift-${environmentName}'"));
+  assert.ok(block, 'no demi-reconcile-drift rule in observability.bicep');
+
+  const query = /query: '([^']+)'/.exec(block);
+  assert.ok(query, 'the rule declares no query');
+
+  assert.match(query[1], /^AppTraces \|/,
+    'AppTraces, not traces — the classic table does not exist in this workspace, and a rule ' +
+    'against it returns no rows rather than an error');
+
+  const drifting = summaryLine({
+    projects: { unpublishedOrDeleted: [{ id: 'p1' }], eagleOnly: [] },
+    documents: { unpublishedOrDeleted: [], eagleOnly: ['d1', 'd2'], unresolvedParent: [] },
+    drift: 3
+  });
+
+  const needle = /contains "([^"]+)"/.exec(query[1]);
+  assert.ok(needle, 'the rule filters on no literal at all');
+  assert.ok(drifting.includes(needle[1]),
+    `the rule looks for ${JSON.stringify(needle[1])}, which is not in ${JSON.stringify(drifting)}`);
+
+  const extract = /extract\("([^"]+)", 1, Message\)/.exec(query[1]);
+  assert.ok(extract, 'the rule extracts no drift count');
+  assert.strictEqual(new RegExp(extract[1]).exec(drifting)[1], '3',
+    'the extracted group must be the drift total itself, or the > 0 test reads the wrong number');
+
+  const clean = summaryLine({
+    projects: { unpublishedOrDeleted: [], eagleOnly: [] },
+    documents: { unpublishedOrDeleted: [], eagleOnly: [], unresolvedParent: [] },
+    drift: 0
+  });
+  assert.strictEqual(new RegExp(extract[1]).exec(clean)[1], '0', 'a clean night must read 0');
+  assert.match(query[1], /where drift > 0/, 'and 0 must not alert');
 });

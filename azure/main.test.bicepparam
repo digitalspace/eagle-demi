@@ -47,6 +47,13 @@ param enrichmentSources = 'wildfire'
 // dev data with nothing logged.
 param eagleApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api/public'
 
+// OFF IN TEST, both halves. `eagleApiBase` above is eagle-TEST while this environment's corpus was
+// seeded from PROD Eagle, so a nightly diff would report the difference between two unrelated
+// corpora and alert every night on it. Run it by hand here with EAGLE_API_BASE overridden — see
+// README "Reconcile". Prod runs both, where the two sides are the same Eagle.
+param reconcileSchedule = ''
+param deployReconcileDriftAlert = false
+
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //
 // The browser origins allowed to call the API.

@@ -223,7 +223,7 @@ async function handleExpress(request, context) {
 // Exported for test/functions-adapter.test.js, which drives this the way the host does. The
 // adapter is the one piece of this app that only ever runs in Azure, so it is also the one piece
 // nothing else can exercise — hence a test that calls it directly.
-module.exports = { handleExpress, queryFrom };
+module.exports = { handleExpress, queryFrom, reconcileEagle };
 
 // Drain buffered audit events before the worker goes away.
 //
@@ -264,4 +264,41 @@ app.http('expressApiRoot', {
 // Mongo data layer, and the AI Search indexers pull every five minutes, so there is nothing left
 // for a nightly job to push. Registration survived the deletion because the require was lazy and
 // wrapped in a catch — it failed silently once a night instead of at boot.
+
+// The Eagle drift report, nightly. Same shape as that timer, and for the reason it worked: the
+// host owns the clock, holds the singleton lease in AzureWebJobsStorage and survives a worker
+// recycle, none of which an in-process setTimeout can do. The Timer extension comes from the
+// extensionBundle in host.json and the storage connection is already an app setting — this needs
+// no resource that does not exist.
+//
+// REGISTERED ONLY WHEN RECONCILE_SCHEDULE IS SET, and that is a guard on the app setting rather
+// than on the binding: `%RECONCILE_SCHEDULE%` is resolved by the HOST, and an unresolvable name is
+// a startup error that takes the HTTP functions down with it. Local development, `yarn start` and
+// the test suite set nothing and so register nothing.
+if (process.env.RECONCILE_SCHEDULE) {
+  app.timer('reconcileEagle', {
+    // The setting's name, not its value: the host reads the schedule at startup, so changing the
+    // app setting reschedules the job without a code deploy. NCRONTAB, six fields, seconds first.
+    schedule: '%RECONCILE_SCHEDULE%',
+    // A restart is not a reason to re-read the whole Eagle corpus, and deploys restart this app.
+    runOnStartup: false,
+    handler: reconcileEagle
+  });
+}
+
+/**
+ * Exported for test/reconcile-timer.test.js — the host is the only other caller.
+ *
+ * Swallows the failure deliberately: `run()` reports drift through the log line the alert reads,
+ * and there is nothing for the host to retry — the next night is the retry. Required lazily so the
+ * seed loader and both repositories stay out of an HTTP worker that will never run this.
+ */
+async function reconcileEagle() {
+  const { logger } = require('../src/utils/logger');
+  try {
+    await require('../src/scripts/reconcile-eagle').run();
+  } catch (err) {
+    logger.error('[reconcile] nightly run failed', { error: err.message, stack: err.stack });
+  }
+}
 

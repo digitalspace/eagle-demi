@@ -1,6 +1,7 @@
 {
   "version": "2.0",
-  "functionTimeout": "00:10:00",
+  "_comment_functionTimeout": "For the nightly reconcileEagle timer: a full run measured ~5 minutes against test, too close to the old 00:10:00. A dedicated (Basic) plan allows a longer ceiling than Consumption's 10-minute maximum. The HTTP routes are unaffected — they are bounded by the ~230 s App Service gateway timeout, not by this.",
+  "functionTimeout": "00:30:00",
   "logging": {
     "logLevel": {
       "default": "Warning",
