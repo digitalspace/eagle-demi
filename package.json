@@ -22,7 +22,7 @@
   "dependencies": {
     "@azure/cosmos": "^4.10.0",
     "@azure/functions": "^4.5.0",
-    "@azure/identity": "^4.13.1",
+    "@azure/identity": "^4.13.2",
     "@azure/monitor-opentelemetry": "^1.19.0",
     "@azure/storage-blob": "^12.33.0",
     "compression": "^1.8.1",
@@ -42,7 +42,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.8.1",
+    "eslint": "^10.9.0",
     "globals": "^17.11.0"
   }
 }
