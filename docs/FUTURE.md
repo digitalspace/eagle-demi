@@ -30,3 +30,13 @@ Not scheduled. Kept out of `TODO.md` so open work stays short. Added 2026-08-26.
   keys already carry `expiresAt`), can mint the next value, write it to every holder in the safe
   order, verify with a real call, and alert before expiry. Dual-key acceptance (`*_NEXT`) on the
   readers would remove the window. Same admin surface as the API-key/role manager above.
+- **Stop re-logging in (`az`, `oc`).** `oc`: dev/test already use ServiceAccount tokens in the
+  kube contexts (`eagle-automation`, no expiry); only prod still needs Daniel's own login, by
+  choice. `az`: a user login cannot be auto-renewed — `AADSTS50173` is the tenant revoking the
+  refresh token under its sign-in-frequency/MFA policy, and nothing scripted can answer MFA.
+  Fix = a non-human identity for this box: a service principal (client secret or certificate)
+  with the same RG roles as today's user, `az login --service-principal` from a shell hook or a
+  systemd timer that re-logs before expiry. Candidate: app registration `acb4198f…` (already has
+  a GitHub federated credential; a secret can be added) if the landing zone permits, else a new
+  one. Caveats: ABAC/role assignment writes need a human; the SP must never get prod write
+  without a separate decision; secret lifetime ≤ 2 years and belongs in the key manager above.
