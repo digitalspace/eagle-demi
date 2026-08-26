@@ -425,6 +425,11 @@ az cosmosdb private-endpoint-connection list -g rg-demi-prod --account-name demi
 az cosmosdb private-endpoint-connection approve --id <connection-id>
 ```
 
+Approval opens the route but grants nothing: `demi-search-prod` runs its indexers as
+`eagle-search-identity-prod`, so the template also gives that principal
+(`existingSearchIndexerPrincipalId`) the Cosmos SQL Data Reader role. Without both, indexers get a
+403 instead of a connection error.
+
 The App Service plan is `plan-eagle-search-prod` in `rg-eagle-search-prod`, shared with
 `eagle-search-api-prod` until that app retires. **Scale it to B3 first**: the apply puts a second
 Node app on it, and B1 is one worker with 1 vCPU and 1.75 GB.

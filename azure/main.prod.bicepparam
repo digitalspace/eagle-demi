@@ -44,6 +44,12 @@ param deployEnrichment = false
 param deploySearch = false
 param existingSearchEndpoint = 'https://demi-search-prod.search.windows.net'
 
+// demi-search-prod runs its indexers as eagle-search-identity-prod (azure/ai-search.prod.bicepparam),
+// not the DEMI identity, so the shared private link alone leaves them at 403 on demi-cosmos-prod.
+// This grants that principal Cosmos Data Reader. `az identity show -g rg-eagle-search-prod
+// -n eagle-search-identity-prod --query principalId`.
+param existingSearchIndexerPrincipalId = '20211fb1-1d7c-43ab-ae57-fbcd6a5034e7'
+
 // ── Off in prod ───────────────────────────────────────────────────────────────────────────────
 // The summariser is demo-only. deployFoundry=false is the resource, summaryEnabled=false is the
 // app; deployFoundryPrivateEndpoint is then moot but stated so a future flip of deployFoundry does

@@ -162,6 +162,11 @@ param deploySearch bool = true
 @description('Endpoint of an already-deployed search service, used when `deploySearch` is false.')
 param existingSearchEndpoint string = ''
 
+// An already-standing service runs its indexers as its own identity, not ours, so the Cosmos grant
+// the ai-search path gets for free (same UAMI as the API) has to be made explicitly here.
+@description('Principal of the identity the existing search service runs its indexers as. Used only when `deploySearch` is false; grants it Cosmos Data Reader.')
+param existingSearchIndexerPrincipalId string = ''
+
 // Unlike `summaryEnabled`, which is the app-side switch, this decides whether the Foundry ACCOUNT
 // is created. Prod runs no summariser, so it should have no model resource to attribute or secure.
 @description('Deploy the Foundry account and model deployment. False leaves FOUNDRY_ENDPOINT empty, which is the same state summaryEnabled=false already produces.')
@@ -263,6 +268,7 @@ module existingSearchRole './modules/search-existing.bicep' = if (!deploySearch)
     apiPrincipalId: identity.outputs.principalId
     environmentName: environmentName
     cosmosAccountId: cosmos.outputs.cosmosAccountId
+    indexerPrincipalId: existingSearchIndexerPrincipalId
   }
 }
 

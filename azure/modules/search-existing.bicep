@@ -23,12 +23,18 @@ param environmentName string
 @description('Resource id of the Cosmos account the indexer reads. Empty skips the shared private link.')
 param cosmosAccountId string = ''
 
+@description('Principal of the identity the existing service runs its indexers as. Empty skips the Cosmos data-plane grant.')
+param indexerPrincipalId string = ''
+
 var searchIndexDataContributor = '8ebe5a00-799e-43f5-93ac-243d3dce84a7'
+var cosmosDataReaderRoleId = '00000000-0000-0000-0000-000000000001'
 
 resource search 'Microsoft.Search/searchServices@2025-05-01' existing = {
   name: searchName
 }
 
+// ponytail: service scope, so this also covers eagle-search's eagle-* indexes on the same service.
+// Accepted for the soak; narrow or remove at TODO 4.9, when those indexes are retired.
 resource searchDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: search
   name: guid(search.id, apiPrincipalId, searchIndexDataContributor)
@@ -60,5 +66,26 @@ resource cosmosLink 'Microsoft.Search/searchServices/sharedPrivateLinkResources@
     privateLinkResourceId: cosmosAccountId
     groupId: 'Sql'
     requestMessage: 'DEMI AI Search indexer reads the chunks container.'
+  }
+}
+
+// The existing service runs its indexers as its OWN identity, not the DEMI one — prod's
+// `demi-search-prod` uses `eagle-search-identity-prod` (azure/ai-search.prod.bicepparam). The
+// shared private link above only opens the route; without this the indexer still gets 403 from a
+// `disableLocalAuth` Cosmos account. Data Reader, not Contributor: an indexer only reads.
+//
+// Shape copied from modules/cosmos-nosql.bicep's apiDataContributor — the same account, the same
+// built-in definition ids, and the same guid(account, principal, role) name.
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-11-15' existing = {
+  name: last(split(cosmosAccountId, '/'))
+}
+
+resource indexerCosmosReader 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-11-15' = if (!empty(cosmosAccountId) && !empty(indexerPrincipalId)) {
+  parent: cosmosAccount
+  name: guid(cosmosAccount.id, indexerPrincipalId, cosmosDataReaderRoleId)
+  properties: {
+    roleDefinitionId: '${cosmosAccount.id}/sqlRoleDefinitions/${cosmosDataReaderRoleId}'
+    principalId: indexerPrincipalId
+    scope: cosmosAccount.id
   }
 }

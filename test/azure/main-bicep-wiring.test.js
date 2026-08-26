@@ -11,6 +11,7 @@ const API_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'api-web-
 const TEST_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.test.bicepparam'), 'utf8');
 const PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.prod.bicepparam'), 'utf8');
 const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'search-existing.bicep'), 'utf8');
+const COSMOS_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
 
 // A STRUCTURAL GUARD, and it exists because everything else caught nothing. Deleting the one line
 // that passes `rateLimitMaxRequests` into the module leaves the suite green AND `az bicep build`
@@ -121,4 +122,28 @@ test('the API app refuses basic publishing credentials on both scm and ftp', () 
     assert.match(block, /allow: false/,
       `the '${name}' policy must set allow: false`);
   }
+});
+
+// `deployEnrichment` decides ONE container. Prod skips `wildfires` and keeps `boundaries`, which is
+// reference data `GET /boundaries` and `GET /db/stats` read unconditionally — gate it too and prod
+// answers those from a container that does not exist. Nothing else in the suite reads this module,
+// so both halves of the switch were mutable with the whole suite staying green.
+//
+// Text-structural, same honest limits as the guards above: it fails on the gate moving and proves
+// nothing about what Azure applied.
+test('deployEnrichment gates the wildfires container and only that one', () => {
+  const container = (name) => COSMOS_MODULE
+    .split(/^resource /m)
+    .find(b => new RegExp(`^\\w+ 'Microsoft\\.DocumentDB/databaseAccounts/sqlDatabases/containers@`).test(b)
+      && new RegExp(`\\n\\s+name: '${name}'`).test(b));
+
+  const wildfires = container('wildfires');
+  assert.ok(wildfires, 'no wildfires container declared in cosmos-nosql.bicep');
+  assert.match(wildfires.split('\n')[0], /= if \(deployEnrichment\)/,
+    'wildfires must be gated on deployEnrichment — prod publishes no enrichment');
+
+  const boundaries = container('boundaries');
+  assert.ok(boundaries, 'no boundaries container declared in cosmos-nosql.bicep');
+  assert.doesNotMatch(boundaries.split('\n')[0], /= if \(/,
+    'boundaries must NOT be gated — every environment serves it, empty in prod');
 });
