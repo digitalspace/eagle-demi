@@ -178,6 +178,38 @@ function systemAccess() {
 }
 
 /**
+ * Rows one list page may return. MAX_PAGE_SIZE is also what `repositories/_sql.pageOptions`
+ * clamps `maxItemCount` to, and is imported from here so the two cannot drift.
+ *
+ * An anonymous caller gets a tenth of it. The list routes are reachable with no credential at
+ * all, and a 1000-row cross-partition page is the cheapest way for one to cost real RU.
+ */
+const MAX_PAGE_SIZE = 1000;
+const ANON_MAX_PAGE_SIZE = 100;
+
+/**
+ * Page size for a list read: `{ pageSize }`, or `{ error }` when an anonymous caller asked for
+ * more than its cap.
+ *
+ * Refused, not truncated — quietly returning 100 of the 500 rows asked for answers a different
+ * question than the one asked, and the caller has no way to tell. Same rule as controllers/search.js.
+ */
+function pageSizeFor(access, raw) {
+  const anonymous = !access || access.tier === TIER.PUBLIC;
+  const max = anonymous ? ANON_MAX_PAGE_SIZE : MAX_PAGE_SIZE;
+
+  // `>= 1`, so absent, junk, zero and negative all land on the default rather than on a one-row
+  // page — the same idiom the search controller documents.
+  const requested = parseInt(raw, 10);
+  if (!(requested >= 1)) return { pageSize: max };
+
+  if (anonymous && requested > max) {
+    return { error: `pageSize above ${ANON_MAX_PAGE_SIZE} is not supported for an unauthenticated request` };
+  }
+  return { pageSize: Math.min(requested, max) };
+}
+
+/**
  * The visibility predicate for these roles, as a SQL fragment plus bound parameters.
  *
  * Privileged callers short-circuit to `true` — the same code path returning a wider filter,
@@ -350,6 +382,9 @@ module.exports = {
   WRITE_ROLES,
   TIER,
   PROJECT_ROLE_PREFIX,
+  MAX_PAGE_SIZE,
+  ANON_MAX_PAGE_SIZE,
+  pageSizeFor,
   rolesFor,
   isPrivileged,
   canWrite,

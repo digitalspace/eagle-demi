@@ -75,6 +75,18 @@ test('the old SPA paths 404 rather than hanging', async () => {
   });
 });
 
+test('/api-docs is mounted outside prod', async () => {
+  // ENVIRONMENT is unset here, so config.environmentName is 'dev' and the UI mounts. The prod
+  // half of this gate needs the variable set before src/config.js loads, which is a different
+  // process — test/app.api-docs-prod.test.js.
+  assert.notStrictEqual(process.env.ENVIRONMENT, 'prod', 'this test is only meaningful outside prod');
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api-docs/`, { signal: AbortSignal.timeout(10000) });
+    assert.strictEqual(res.status, 200);
+    assert.match(await res.text(), /swagger/i);
+  });
+});
+
 test('an unset CORS_ORIGIN allows no deployed origin', async () => {
   // The default allowlist used to name the three demi-frontend App Services. Those are gone: the
   // frontend is a Storage static website behind Front Door, and an AFD endpoint hostname carries a
