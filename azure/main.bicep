@@ -86,8 +86,6 @@ param minioKeyPrefix string = ''
 @description('Monthly anomaly guard in CAD — the subscription\'s billing currency. Sized above the measured run rate of ~350 CAD/month (Cost Management, 2026-08-17); the old 150 came from a 12-day average taken before the resource group had finished billing. The absolute annual ceiling is a separate parameter; see cost-budget.bicep for why one number cannot be both.')
 param budgetAmount int = 400
 
-@description('Absolute annual ceiling in CAD. Not a target — see cost-budget.bicep.')
-param annualCeiling int = 50000
 
 @description('Notification Email Addresses for Cost Alerts')
 param contactEmails array = [
@@ -426,7 +424,6 @@ module costBudget './modules/cost-budget.bicep' = {
   params: {
     environmentName: environmentName
     budgetAmount: budgetAmount
-    annualCeiling: annualCeiling
     contactEmails: contactEmails
   }
 }

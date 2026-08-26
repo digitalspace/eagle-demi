@@ -2,11 +2,9 @@
 @description('Environment name (e.g. dev, test, prod)')
 param environmentName string
 
-// TWO budgets, because "keep costs down" and "never exceed the ceiling" are different controls and
-// a single number cannot serve both. The monthly one is an anomaly detector sized to the observed
-// run rate; the annual one is the actual limit. A budget set at the ceiling would let a tenfold
-// overspend run for months without a word, and a budget set at the run rate would be permanently
-// in alert — an alert that always fires is not a control.
+// ONE budget here: the monthly anomaly guard. The absolute annual ceiling for everything EPIC owns
+// lives at the c4b0a8 management group (digitalspace/eagle-edge `azure/budget-mg.bicep`).
+// The monthly guard is an anomaly detector sized to the run rate, not a limit.
 //
 // RE-MEASURED 2026-08-17, and the previous figure here was wrong by 7x. It read 18.71 CAD over
 // "the first 12 days of August" and inferred ~47 CAD/month — but c4b0a8-test-rg did not exist
@@ -31,8 +29,6 @@ param environmentName string
 @description('Monthly anomaly guard in CAD. Set above the measured run rate (~350 CAD/month as of 2026-08-17), not a multiple of it: this estate is mostly standing charges, so the headroom that matters is for a runaway indexer or a left-on resource, not for normal variance.')
 param budgetAmount int = 400
 
-@description('The absolute annual ceiling in CAD. Not a target - spending anywhere near it should be a decision somebody made on purpose, which is why the alerts below start at half.')
-param annualCeiling int = 50000
 
 @description('Email addresses to receive budget threshold alerts')
 param contactEmails array = [
@@ -86,56 +82,4 @@ resource costBudget 'Microsoft.Consumption/budgets@2021-10-01' = {
   }
 }
 
-// The ceiling. Deliberately separate from the monthly guard: a single overspending month is a
-// question, a year-to-date trajectory toward 50k is a decision, and they should not share a
-// threshold or an inbox subject line.
-//
-// SCOPE CAVEAT: main.bicep targets a resource group, so this budget sees c4b0a8-<env>-rg only -
-// which also holds eagle-search and eagle-extractor, but NOT any other resource group or
-// subscription. If 50k is meant to cover the whole EPIC.AI account, the ceiling belongs in a
-// subscription-scope deployment; this one is an honest lower bound on spend, not a total.
-resource annualBudget 'Microsoft.Consumption/budgets@2021-10-01' = {
-  name: 'demi-ceiling-${environmentName}'
-  properties: {
-    category: 'Cost'
-    amount: annualCeiling
-    timeGrain: 'Annually'
-    timePeriod: {
-      startDate: '${startDate}T00:00:00Z'
-    }
-    // Starting at 50%: at the measured run rate the year lands near 1% of this, so anything that
-    // reaches half the ceiling has changed by two orders of magnitude and is worth knowing about
-    // long before it is urgent.
-    notifications: {
-      Actual_50_Percent: {
-        enabled: true
-        operator: 'GreaterThanOrEqualTo'
-        threshold: 50
-        contactEmails: contactEmails
-      }
-      Actual_80_Percent: {
-        enabled: true
-        operator: 'GreaterThanOrEqualTo'
-        threshold: 80
-        contactEmails: contactEmails
-      }
-      Forecasted_90_Percent: {
-        enabled: true
-        operator: 'GreaterThanOrEqualTo'
-        threshold: 90
-        contactEmails: contactEmails
-        thresholdType: 'Forecasted'
-      }
-      // The ceiling is absolute: say so when it is actually crossed, not only when forecast.
-      Actual_100_Percent: {
-        enabled: true
-        operator: 'GreaterThanOrEqualTo'
-        threshold: 100
-        contactEmails: contactEmails
-      }
-    }
-  }
-}
-
 output budgetName string = costBudget.name
-output annualBudgetName string = annualBudget.name

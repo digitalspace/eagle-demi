@@ -226,8 +226,10 @@ value, eagle-public `v2.7.29` (has #803, #805) to test.
       `availabilityUrl` is set; probes carry `X-Synthetic-Probe` and are not counted as usage.
 - [x] ~~**4.7 Cost sign-off.**~~ Signed off by Daniel 2026-08-26. Billing currency CAD (verified on
       the subscription's usage details). `demi-budget-prod` 400 CAD/month (80 %, 100 %, forecast
-      100 %); `demi-ceiling-prod` 50,000 CAD/year is the absolute cap (50 %, 80 %, forecast 90 %,
-      actual 100 %). Azure budgets notify; they do not stop spend — a hard stop would need an
+      100 %); the absolute cap is ONE budget for everything EPIC owns: `epic-ceiling` 50,000 CAD/year at
+      management group `c4b0a8` (dev, test, tools, prod subscriptions; 50 %, 80 %, forecast 90 %,
+      actual 100 %; Bicep in `digitalspace/eagle-edge` `azure/budget-mg.bicep`). The two RG-scoped
+      `demi-ceiling-*` budgets are deleted. Azure budgets notify; they do not stop spend — a hard stop would need an
       automation on the action group (`docs/FUTURE.md` if ever wanted). Spend 24 CAD by 2026-08-26.
 - [ ] **4.8 Flip and soak.** FLIPPED 2026-08-26 21:30:47 UTC (rehearsal 21:28:01–21:29:40, both
       directions, `/api/config` byte-identical after revert). `SEARCH_API_PATH: /demi-search` in prod
