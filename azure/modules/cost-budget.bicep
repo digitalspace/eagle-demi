@@ -126,6 +126,13 @@ resource annualBudget 'Microsoft.Consumption/budgets@2021-10-01' = {
         contactEmails: contactEmails
         thresholdType: 'Forecasted'
       }
+      // The ceiling is absolute: say so when it is actually crossed, not only when forecast.
+      Actual_100_Percent: {
+        enabled: true
+        operator: 'GreaterThanOrEqualTo'
+        threshold: 100
+        contactEmails: contactEmails
+      }
     }
   }
 }
