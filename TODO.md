@@ -66,10 +66,9 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 
 ## 2. Decisions — Daniel
 
-- [ ] **2.1 Anonymous surface before prod.** 13 anonymous GETs; `GET /projects` (786 KB) and
-      `/documents` allow `pageSize` 1000 and have no consumer (eagle-public uses `/api/search` only).
-      Narrow, auth, or accept. `/api-docs` is mounted unconditionally (`src/app.js:146-152`) — gate
-      it off in prod. Choose; nothing has to close.
+- [ ] **2.1 Anonymous surface — decided 2026-08-26, PR #162 in review.** `/api-docs` off in
+      prod; anonymous `GET /projects`/`/documents` capped at `pageSize` 100 (credentials keep
+      1000); 13 anonymous GETs otherwise unchanged (eagle-public uses `/api/search` only).
 - [ ] **2.2 `proponentId`.** Prod `/eagle-search` returns it; demi does not hold it (no org id in
       Cosmos), so the cutover loses the facet until the Eagle push carries `proponentId` + label.
       Wait for that, or backfill ~392 rows. Never the name-valued shortcut (497 of 778 options match
@@ -79,7 +78,9 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
       `eagle-admin-console`; test serves those defaults. A prod deploy without explicit values
       validates staff tokens against dev. Decide the prod client (existing `eagle-admin-console` on
       `loginproxy.gov.bc.ca`, or a DEMI client) and add `KEYCLOAK_CLIENT_ID` to the template.
-- [ ] **2.4 Home for `eagle-edge-prod`.** The prod Front Door (profile, endpoint, origin groups
+- [x] ~~**2.4 Home for `eagle-edge-prod`.**~~ Done 2026-08-26: eagle-edge #1 — prod what-if zero
+      create/delete, test identical; codified `og-eagle-backend` + `api-passthrough`. Follow-up:
+      delete the prod Bicep copy from bcgov/eagle-public. Was: The prod Front Door (profile, endpoint, origin groups
       `og-eagle-public` + `og-eagle-backend`, routes `default` + `api-passthrough`, UAMI, storage)
       exists in `rg-eagle-public-prod`, but `digitalspace/eagle-edge` has only `main.test.bicepparam`
       and bcgov/eagle-public carries the prod Bicep. Move it into eagle-edge (decided 2026-08-25 for
@@ -91,6 +92,9 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 
 ## 3. Small, do opportunistically
 
+- [ ] #162 minors: `x-continuation-token` is not in `Access-Control-Expose-Headers`, so a
+      cross-origin anonymous caller capped at 100 cannot page; the demo frontend still links
+      `/api-docs` (`app.component.html:~31`) — hide when the route is absent.
 - [ ] Review minors still real: Document response fields `isFeatured`/`documentSource`
       (`search.js:~487`) untested; `searchReady` production default (`seed-nosql.js:~284`) untested;
       `merge/project.js:83-86` nested ternary, and the refusal checks that the legislation key
@@ -109,37 +113,61 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 ## 4. Prod promotion — ordered gates
 
 Each step: verified on test first, deployed from a tag, measured after, rollback named.
+Phase 0 (test-only PRs) started 2026-08-26: prod IaC + `deploy-infra.sh prod`, app hardening
+(`/api-docs` off in prod, anonymous `pageSize` ≤ 100), eagle-edge prod params, eao-nginx `demi:`
+value, eagle-public `v2.7.29` (has #803, #805) to test.
 
-- [ ] **4.1 Stand up the prod estate in `rg-demi-prod` (`c4b0a8-prod`).** Needed: `main.prod.bicepparam`
-      (none exists; `deploy-infra.sh` exits 2 on prod by design — extend it, never fork), plan,
-      Function App, UAMI, VNet integration + PEs (`snet-app-service` exists in
-      `c4b0a8-prod-networking`), Cosmos account, observability (LAW + App Insights — none in
-      `rg-demi-prod`). Foundry/summariser is demo-only: skip. **Template change first:**
-      `cosmos-nosql.bicep` declares all 8 containers unconditionally — prod must declare
-      `projects`, `documents`, `chunks`, `config`, `apikeys` only, so add a `deployEnrichment`
-      switch. `ENRICHMENT_SOURCES` empty. `rateLimitMaxRequests` per transport (test 6000, default
-      300). Role assignments need a deploying principal with `roleAssignments/write` (fact 5); a
-      `prod` GitHub environment + `demi-cicd-prod` federated credential do not exist — hand deploy
-      with Daniel's login, or create them. Blob delegator only if downloads sign from prod.
-- [ ] **4.2 Copy the corpus into prod Cosmos BEFORE demi-api answers a prod query.** Cosmos is in
+- [x] ~~**4.1 Stand up the prod estate in `rg-demi-prod`.**~~ DONE 2026-08-26 04:42-05:05 UTC.
+      `deploy-infra.sh prod --live` (deployment `infra-ef4379f-044256`, Succeeded): what-if 33 create /
+      0 modify / 0 delete; created `demi-cosmos-prod` (+ `projects documents chunks config apikeys
+      boundaries`), `demi-api-prod` on `plan-eagle-search-prod` (scaled B1→B3 first, no observed
+      `/eagle-search` downtime), `demi-identity-prod`, `pe-cosmos-nosql-prod`, `demi-logs/insights/
+      audit-prod`, action group + 2 query rules, budgets 400 CAD + 50k ceiling, role assignments,
+      shared private link `demi-cosmos-prod-link` (approved on the Cosmos side by hand). All five
+      secrets verified live. Canary on `projects.eao.gov.bc.ca/` + `/eagle-search` every 20 s during the apply
+      (40 min): 116/116 samples 200/200. `demi-api-prod` has no code yet (404) — Phase 3.
+- [ ] **4.2 Copy the corpus into prod Cosmos — IN PROGRESS 2026-08-26 05:16 UTC.** Test counts
+      reconciled (chunks container 1,128,576 = index; documents 61,587; projects 393).
+      `copy-to-env.js --containers projects,documents,chunks --live` running detached in the TEST
+      app container (pid file `/home/copy-prod.pid`, log `/home/copy-prod.log`, checkpoint
+      `/home/copy-prod-checkpoint.json`, resumable). NOT copied: `apikeys` (test credentials),
+      `boundaries`, `config` (0 rows). Temporary plumbing to tear down after: private endpoint
+      `pe-demi-cosmos-prod-copy` in `c4b0a8-test-rg` (10.46.52.43) and Cosmos Data Contributor for
+      `demi-identity-test` (388ed601-…) on `demi-cosmos-prod`. After copy: purge `eagle-6a5920eaf0b65c54e12eb20a`
+      on prod (eagle-TEST project pushed 2026-08-25), verify counts, revoke, delete PE. Was: Cosmos is in
       the chunk path — no prod Cosmos = every chunk result withheld (empty 200). Reconcile counts
       over the tunnel first (index 1,128,576 vs container 1,128,733, unverified since 2026-08-24).
       Copy the five 4.1 containers; the seed (`seed-nosql.js --reconcile`, prod source) can rebuild
       `projects`/`documents` but nothing rebuilds `chunks` except `export-chunks-to-eagle.js` +
       re-import. `ENRICHMENT_SOURCES` empty strips any copied wildfire stats at read.
-- [ ] **4.3 Index names vs rollback on `demi-search-prod`.** It holds `eagle-*` (served by
-      `eagle-search-api-prod`); demi wants `chunks`/`projects`/`documents`. Basic = 15 GB, one
-      partition; two sets ≈ 8.5 GB measured on test — verify used storage over the tunnel before
-      creating the second set. Either hold both through the soak or repoint `eagle-search-api-prod`'s
-      three settings in the same change. Apply the widened definitions (`fileNameTokens` needs
-      `allowIndexDowntime=true`; `stored:false` rejected). Order: index PUT → datasource PUT by hand
-      → indexer run → app last.
-- [ ] **4.4 eao-nginx prod tag with the demi block AND `nginx.epic.proxy.demi`.** The block is in
-      v2.7.15/v2.7.16; prod runs v2.7.14 (same image as v2.7.13). `values-prod.yaml` has no `demi:`
-      key and prod rproxy has no `NGINX__EPIC__PROXY__DEMI` — a chart-only deploy renders the
-      `localhost:9999` sentinel. One PR (`demi:` value), one tag, one deploy; human approval gate;
-      stale-`waiting`-run concurrency trap. Verify: `/demi-search/search?dataset=Project&pageSize=1`
-      200 on `projects.eao.gov.bc.ca`.
+- [ ] **4.1b eao-nginx prod `demi:` value** — PR #46 merged `9ed9e1f` 2026-08-26 (review PASS, one
+      minor fixed). `demi-api-prod` resolves (20.48.204.15) and answers `/api/search`. Next: tag,
+      verify on test, `deploy-to-prod` (ask first), canary as plan Phase 4.1.
+- [x] ~~**3.1 App code on `demi-api-prod`**~~ (plan Phase 3.1, moved before the index work because
+      the prod container is where index PUTs run): hand zipdeploy 2026-08-26 05:16 UTC of `main`
+      `ef4379f`, `BUILD_ID v0.15.0-dirty-051600` ("dirty" = local TODO.md edits, not code),
+      `/api/config` → `ENVIRONMENT prod`, `KEYCLOAK_URL loginproxy.gov.bc.ca`, client
+      `eagle-admin-console`. Unrouted; nothing points at it.
+- [ ] **4.3 Index names vs rollback on `demi-search-prod`.** IN PROGRESS 2026-08-26: headroom 4.32 GB
+      of 15 GB (3 `eagle-*` indexes, second set fits). Datasources `demi-{chunks,documents,projects}-ds`
+      created (201) pointed at `demi-cosmos-prod`, identity `eagle-search-identity-prod`; the `identity`
+      block needs api-version `2024-05-01-preview` (GA 2024-07-01 rejects it). Index/indexer PUT via
+      `apply-search-definitions.js --live` blocked twice: (1) script refused absent live-named
+      indexes — fixed, 404 = greenfield create, test added; (2) indexer PUT 400 "Unable to retrieve
+      account endpoint … using your managed identity" — indexer identity had Cosmos DATA reader only;
+      `Cosmos DB Account Reader Role` added to `search-existing.bicep`, applied (`infra-ef4379f-060107`
+      Succeeded, 1 create). Indexes `chunks`/`projects`/`documents` + 3 indexers applied 06:15 UTC,
+      grant revoked. Indexers PT5M against a Cosmos still being filled — they catch up by `_ts`.
+      06:28 UTC: projects 393 / documents 61,587 indexed, 0 failed; chunks indexer trailing the copy.
+      Anonymous `demi-api-prod` totals Project 348 / Document 61,587 = `demi-api-test` exactly;
+      prod eagle-search 358 / 61,588 (delta = the known DIFFs, quantify with `search-diff.js` in 4.4).
+- [x] ~~**4.4 eao-nginx prod tag with the demi block AND `nginx.epic.proxy.demi`**~~ DONE
+      2026-08-26 07:00 UTC: PR #46 (`9ed9e1f`, review PASS) → tag `v2.7.17` cut by Deploy to Test
+      (first run failed on a runner→OpenShift API timeout, rerun green) → Deploy to Prod succeeded,
+      rproxy 2/2 on the test-verified image. Canary every 20 s on `/`, `/api/config`,
+      `/eagle-search/search`, `/admin/`: all 200 throughout. `projects.eao.gov.bc.ca/demi-search/search`
+      answers from `demi-api-prod` (Project 348 / Document 61,587). Site still on `/eagle-search`.
+      Rollback: redeploy `v2.7.14`, or `oc set env deploy/rproxy NGINX__EPIC__PROXY__DEMI=http://localhost:9999 -n 6cdc9e-prod`.
 - [ ] **4.5 eagle-public prod tag containing #803** (`e3f3c3c4`, three envelope null guards; in no
       tag yet; prod runs v2.7.28 = `65b1a1a`). Cut from `develop`, verify on test (pod + AFD, same
       tag), deploy to both the pod chart and the AFD bundle. Without it a malformed envelope bounces

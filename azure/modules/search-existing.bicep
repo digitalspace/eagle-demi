@@ -89,3 +89,19 @@ resource indexerCosmosReader 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssig
     scope: cosmosAccount.id
   }
 }
+
+// Control-plane read as well: with a `ResourceId=` connection string the indexer resolves the
+// account endpoint through ARM first, and without this the PUT fails with "Unable to retrieve
+// account endpoint for account ... using your managed identity" (prod, 2026-08-26). Test gets the
+// same role at RG scope from its deploy identity; here it is scoped to the one account.
+var cosmosAccountReader = 'fbdf93bf-df7d-467e-a4d2-9458aa1360c8'
+
+resource indexerCosmosAccountReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(cosmosAccountId) && !empty(indexerPrincipalId)) {
+  scope: cosmosAccount
+  name: guid(cosmosAccount.id, indexerPrincipalId, cosmosAccountReader)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cosmosAccountReader)
+    principalId: indexerPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}

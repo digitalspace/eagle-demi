@@ -239,12 +239,27 @@ test('apply-search-definitions', async (t) => {
     assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0);
   });
 
+  // A fresh service (prod, 2026-08-26): the app already points at the plain names, but nothing
+  // exists yet. Absent is not "cannot see" — nothing serves from it, so creating it is additive.
+  await t.test('run() creates a serving-named index that is absent (greenfield service)', async (tt) => {
+    const calls = stub(tt, (url, init) =>
+      (init.method === 'GET' && /\/indexes\/projects\?/.test(url))
+        ? { status: 404, text: async () => '{"error":{"message":"No index with the name"}}' }
+        : ok(url, init));
+    await script.run({ endpoint: ENDPOINT, live: true, only: 'projects', liveNames: ['projects'] });
+    assert.strictEqual(calls.filter(c => c.method === 'PUT' && /\/indexes\/projects\?/.test(c.url)).length, 1);
+  });
+
   await t.test('a DRY RUN is never refused, even when the names are the live ones', async (tt) => {
     // The guard used to run before the dry-run split, so once the rename made the committed names
     // the live ones, the first command an operator reaches for during an incident exited 1 without
     // printing anything. A dry run touches nothing — it must work in every state, and say which
     // indexes are serving.
-    const calls = stub(tt, ok);
+    // The live names exist on the service (a 404 would be a fresh service, which is not "serving").
+    const calls = stub(tt, (url, init) =>
+      (init.method === 'GET' && /\/indexes\/[a-z]+\?/.test(url))
+        ? { status: 200, text: async () => JSON.stringify({ fields: [] }) }
+        : ok(url, init));
     const lines = [];
     const realLog = console.log;
     console.log = (...a) => lines.push(a.join(' '));

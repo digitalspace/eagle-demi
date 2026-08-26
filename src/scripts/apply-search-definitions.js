@@ -258,6 +258,8 @@ async function run({ endpoint, live, only, liveNames }) {
     if (!serving.has(body.name) || !args.live) continue;
     const live = await call(endpoint, 'GET', `/indexes/${body.name}?api-version=${API_VERSION}`);
     assertNotForbidden(live.status, live.text, `index ${body.name}`);
+    // Absent = greenfield (a fresh service): nothing serves from it yet, so creating it is additive.
+    if (live.status === 404) continue;
     if (live.status !== 200) {
       throw new Error(
         `index "${body.name}" is what the app is serving from, and reading it back returned ` +
@@ -287,7 +289,7 @@ async function run({ endpoint, live, only, liveNames }) {
     // A dry run has not read the live schema, so it cannot say whether the diff is additive — it
     // says the index is live and leaves the verdict to the --live run, which does read it.
     const added = additive.get(body.name);
-    const servingNote = !serving.has(body.name) ? ''
+    const servingNote = !serving.has(body.name) || state === 'absent' ? ''
       : added === undefined ? '  ** SERVING TRAFFIC — --live refuses a non-additive change **'
         : `  ** SERVING TRAFFIC — additive, +${added} field(s) **`;
     console.log(`index    ${body.name.padEnd(24)} ${state}   <- ${path.basename(file)}${servingNote}`);
