@@ -159,9 +159,6 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
             path: '/sourceSystem/?'
           }
           {
-            path: '/trackProjectId/?'
-          }
-          {
             path: '/eagleId/?'
           }
           {
@@ -173,23 +170,8 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
           {
             path: '/electoralDistrict/?'
           }
-          {
-            path: '/updatedAt/?'
-          }
         ]
         excludedPaths: noIndex
-        compositeIndexes: [
-          [
-            {
-              path: '/isPublished'
-              order: 'ascending'
-            }
-            {
-              path: '/name'
-              order: 'ascending'
-            }
-          ]
-        ]
       }
     }
   }
@@ -231,16 +213,7 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
           // cross-partition fallback documents.getById uses when no ?project is supplied — the
           // frontend's path on every document open — is already served.
           {
-            path: '/fileExt/?'
-          }
-          {
-            path: '/displayName/?'
-          }
-          {
             path: '/sourceSystem/?'
-          }
-          {
-            path: '/updatedAt/?'
           }
         ]
         excludedPaths: noIndex
@@ -313,9 +286,6 @@ resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases
           {
             path: '/name/?'
           }
-          {
-            path: '/code/?'
-          }
           // The read predicate. Boundaries are ACL-gated like every other container now, and an
           // unindexed ACL term would scan on every anonymous map load.
           {
@@ -346,7 +316,8 @@ resource boundariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases
 // The sync (manual: POST /admin/sync/wildfires) re-upserts every fire still in the DataBC
 // feed, refreshing _ts. Anything
 // that drops out of the feed expires itself — that deletes the stale-fire purge problem
-// rather than solving it. Spatial index supports ST_DISTANCE proximity search.
+// rather than solving it. No spatial index on /location: nothing reads this container — the
+// proximity endpoint is gone, and the frontend's fire layer reads the DataBC WFS directly.
 resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = if (deployEnrichment) {
   parent: database
   name: 'wildfires'
@@ -383,14 +354,6 @@ resource wildfiresContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
           }
           {
             path: '/_etag/?'
-          }
-        ]
-        spatialIndexes: [
-          {
-            path: '/location/*'
-            types: [
-              'Point'
-            ]
           }
         ]
       }

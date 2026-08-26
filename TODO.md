@@ -106,8 +106,14 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
       admission predicate copied from seed instead of extracted. It reports only — eagle-api's public GET answers `200 []` for a
       deleted row and an unpublished one alike, so acting on the drift needs a tombstone or a
       credential that reads unpublished rows.
-- [ ] Unused Cosmos index paths (`wildfires` spatial, projects composite, five scalars): verified
-      removable; only with a Bicep deploy that happens for another reason.
+- [x] ~~Unused Cosmos index paths (`wildfires` spatial, projects composite, five scalars): verified
+      removable; only with a Bicep deploy that happens for another reason.~~ Done in PR: dropped
+      `projects` `/trackProjectId/?` + `/updatedAt/?` + the `[isPublished, name]` composite,
+      `documents` `/fileExt/?` + `/displayName/?` + `/updatedAt/?`, `boundaries` `/code/?`, and the
+      `wildfires` `/location/*` spatial index. **NOT applied yet** — it takes effect on the next
+      hand-run `deploy-infra.sh --live`. What-if against both environments shows `~ Modify` on
+      `indexingPolicy` for `boundaries`, `documents` and `projects` (plus `wildfires` in test only,
+      which prod does not declare) and nothing else beyond the pre-existing baseline noise.
 - [x] ~~eao-nginx `values-prod.yaml` stale pre-cutover prose~~ Done: PR #45 (default-branch
       warning) and #47 (gate narrative), comments only, helm render identical.
 
