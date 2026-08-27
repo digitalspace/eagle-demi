@@ -63,9 +63,9 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 - [ ] **1.1 Rotate the MinIO key and OpenShift token at source.** `eagle-api-minio-keys` in
       `6cdc9e-test` created 2021-02-25, never rotated; repo secrets already deleted. Needs the
       owners of `nrs.objectstore.gov.bc.ca` and the token issuer.
-- [ ] **1.2 Rotate `RPROXY_EGUIDE_PASSWORD`** (bcgov/eao-nginx secret, last set 2026-02-20, used in
-      `deploy-to-prod.yaml:139`); keep the `/eguide` route. Daniel: new value into the repo secret,
-      then `deploy-to-prod` (any tag ≥ v2.7.17). `TYPESENSE_SEARCH_KEY` deleted 2026-08-26.
+- [x] ~~**1.2 Rotate `RPROXY_EGUIDE_PASSWORD`**~~ Decided 2026-08-26 (Daniel): not rotated — it is the
+      front-facing basic-auth password on `/eguide`, issued to users; changing it is a business
+      re-issue, not hygiene. `TYPESENSE_SEARCH_KEY` deleted 2026-08-26.
 - [ ] **1.3 Eagle push key**: `demi-service-write` role landed (PR); prod key + secret +
       eagle-api tag remain. The role reads like staff, writes every data route, and is refused on
       `/api/admin/*` (`requireAdmin`), so a machine writer stops holding `demi-admin`. The test key
