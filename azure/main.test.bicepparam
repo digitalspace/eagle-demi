@@ -71,6 +71,8 @@ param deployReconcileDriftAlert = false
 // composed.
 param frontendHostNames = [
   'demi-frontend-test-eaa9cyfydsb0ejet.a02.azurefd.net'
+  // eagle-demi-admin's Front Door endpoint, read from eagle-edge's edgeEndpointHostNames output.
+  'demi-admin-test-hbf7cfh7ggfhf4gf.a02.azurefd.net'
 ]
 //
 // Object id (not app id) of the demi-cicd-test user-assigned identity. Without it the identity gets
