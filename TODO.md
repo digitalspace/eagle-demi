@@ -41,15 +41,7 @@ claim to a measurement with a date; reviewer takes a positional sha (`review.sh 
 
 - [x] ~~#162 minors, review minors, `_sql.fetchAll` `maxItemCount`~~ done in PR #169 (`2136e39`).
 - [x] ~~`projects.js:128` filters on `centroid` without an index path~~ done 2026-08-27 (test + prod infra applied).
-- [ ] **Watch the first scheduled prod reconcile run (2026-08-27 10:00 UTC).** `reconcileEagle`
-      Manual invoke via the Functions admin API (`POST /admin/functions/reconcileEagle`, master key)
-      ran 2026-08-27 05:07 UTC and logged `drift=0` — the timer wiring is proven; the 10:00 UTC line
-      proves the schedule. Query with `contains "[reconcile]"` (`has` splits on the brackets).
-      (Functions timer, `RECONCILE_SCHEDULE` `0 0 10 * * *`, prod only) is deployed and registered;
-      one prior manual run read `drift=0` on `demi-api-prod`. Check `demi-logs-prod`:
-      `AppTraces | where Message contains "[reconcile] projects"`. One line a night with `drift=0`
-      is clean; no line means the timer never fired, and nothing else alerts on that. Alert on
-      `drift>0`: `demi-reconcile-drift-prod`.
+- [x] ~~Watch the first scheduled prod reconcile run~~ Fired 2026-08-27 10:04:54 UTC (timer status blob + `AppTraces` line `drift=0`, `unresolvedParent=24`). Read it in the workspace (`demi-logs-prod`, `AppTraces | where Message contains "[reconcile]"`); the classic `traces` view lags by an hour or more.
 - [x] ~~Unused Cosmos index paths; eao-nginx `values-prod.yaml` stale prose~~ done 2026-08-27: `infra-38f2905-*` dropped unused paths on `projects`/`documents`/`boundaries`/`wildfires`; PR #45/#47 (comments only).
 - [x] ~~eagle-api serves `CONTENT_SEARCH` from `/api/config`~~ Done in code: eagle-api #853 (merged 2026-08-27). Tag v2.10.69 is burned (dev build failed, stale `ci-latest`). The dev build fails on the Trivy gate: Alpine `libcrypto3`/`libssl3` 3.5.7-r0 (HIGH ×2, fixed 3.5.8-r0) — fixed by eagle-api #854 (BuildKit cached the `apk upgrade` layer; `CACHEBUST` build-arg). v2.10.70 on test and prod 2026-08-27 (pods verified; canary 14/14). Turning the tab on = `db.epic.updateOne({_schemaName:'Config'},{$set:{CONTENT_SEARCH:true}})` on that env's Mongo, nothing to deploy.
 ## 4. Prod promotion — done 2026-08-26/27
