@@ -150,6 +150,10 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
             path: '/name/?'
           }
           {
+            // projects.js filters isDefinedAndNotNull('centroid'); unindexed that predicate scans.
+            path: '/centroid/?'
+          }
+          {
             path: '/read/[]/?'
           }
           {
