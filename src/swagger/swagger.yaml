@@ -672,7 +672,7 @@ components:
           maxLength: 200
         code:
           type: string
-          pattern: '^[a-z0-9_-]{3,64}$'
+          pattern: '^[A-Za-z0-9_-]{3,64}$'
           description: >-
             Vanity alias: lowercase letters, digits, `_`, `-`, 3-64 characters. Case-insensitive
             on lookup — an uppercase value is lowercased before validation and storage. Omit for a

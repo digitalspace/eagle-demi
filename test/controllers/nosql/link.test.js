@@ -196,6 +196,27 @@ test('short link controller', async (t) => {
     assert.strictEqual(bad.statusCode, 400);
   });
 
+  await t.test('an uppercase code repoints the lowercased stored code', async () => {
+    let read, written;
+    t.mock.method(links, 'getById', async (code) => {
+      read = code;
+      return { id: 'site-c-eac', url: 'https://projects.eao.gov.bc.ca/p/1' };
+    });
+    t.mock.method(links, 'repoint', async (code, url) => {
+      written = code;
+      return { id: code, url, createdAt: '2026-08-01T00:00:00.000Z', createdBy: 'staff.person',
+        updatedAt: '2026-08-27T00:00:00.000Z' };
+    });
+
+    const res = mockRes();
+    await linkController.updateLink(
+      { params: { code: 'SITE-C-EAC' }, body: { url: DEST }, query: {}, user: STAFF }, res);
+
+    assert.strictEqual(read, 'site-c-eac');
+    assert.strictEqual(written, 'site-c-eac');
+    assert.strictEqual(res.statusCode, 200);
+  });
+
   await t.test('a repoint of a code that is not there is 404', async () => {
     t.mock.method(links, 'getById', async () => null);
     let repointed = false;
@@ -230,6 +251,22 @@ test('short link controller', async (t) => {
 
     assert.strictEqual(res.statusCode, 200);
     assert.deepStrictEqual(res.body, { message: 'Short link deleted' });
+  });
+
+  await t.test('an uppercase code deletes the lowercased stored code', async () => {
+    let read, removed;
+    t.mock.method(links, 'getById', async (code) => {
+      read = code;
+      return { id: 'site-c-eac', url: DEST, note: null };
+    });
+    t.mock.method(links, 'remove', async (code) => { removed = code; return true; });
+
+    const res = mockRes();
+    await linkController.deleteLink({ params: { code: 'SITE-C-EAC' }, query: {}, user: STAFF }, res);
+
+    assert.strictEqual(read, 'site-c-eac');
+    assert.strictEqual(removed, 'site-c-eac');
+    assert.strictEqual(res.statusCode, 200);
   });
 
   await t.test('a hit redirects 302 with no-store, never 301', async () => {
