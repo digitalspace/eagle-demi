@@ -244,7 +244,10 @@ paths:
   /api/documents/{id}:
     get:
       summary: Get document by ID
-      description: Retrieve details of a single document.
+      description: >-
+        Retrieve details of a single document. Which FIELDS the response carries depends on the
+        caller's visibility level, so a privileged caller sees a superset of the anonymous
+        response.
       parameters:
         - name: id
           in: path
@@ -277,6 +280,8 @@ paths:
       responses:
         '200':
           description: Document successfully updated.
+        '400':
+          description: Body contains a field the caller cannot see, or a vis key.
         '401':
           description: Unauthorized.
     delete:

@@ -246,6 +246,31 @@ test('access gate coverage', async (t) => {
       'the mapper reads fields off the redacted row, never off the raw repository row');
   });
 
+  /**
+   * The same ratchet over the document controller. Five of its `res.json` sites are hand-built
+   * payloads — the download URL, the Eagle push ack and the three ingest acks — and they read only
+   * scalars off a row, so the dotted-name lookahead is what tells them apart from a site that
+   * emits the row itself.
+   */
+  await t.test('every document response site redacts', () => {
+    const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'document.js'), 'utf8');
+    const emissions = jsonEmissions(controller);
+    // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
+    assert.strictEqual(emissions.length, 34,
+      `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
+
+    const ROW_SOURCES = /\b(saved|updated|existing|doc|items)\b(?!\s*\.)/;
+    const unredacted = emissions.filter(e => ROW_SOURCES.test(e) &&
+      !/redact(All)?ForAccess/.test(e));
+    assert.deepStrictEqual(unredacted, [],
+      'these emit a stored document row without redactForAccess — each ships read[], s3Key and _etag');
+
+    // Proves the filter above is not vacuous: the hand-built sites really are in the scan, so a new
+    // one that DID name a row bare would be caught rather than silently skipped.
+    assert.ok(emissions.some(e => /expiresIn/.test(e)), 'the download URL site is in the scan');
+    assert.ok(emissions.some(e => /action: 'upsert'/.test(e)), 'the Eagle push ack is in the scan');
+  });
+
   await t.test('each /links route carries the gate its verb requires', () => {
     const routes = routeChains();
 

@@ -65,4 +65,19 @@ test('selectFor projects by level', async (t) => {
   await t.test('an unknown entity throws rather than projecting everything', () => {
     assert.throws(() => selectFor('widgets', { level: 4 }, 'id'), /no field catalog/);
   });
+
+  await t.test('an anonymous document projection omits s3Key and both ACLs', () => {
+    const select = selectFor('documents', { level: 4 }, 'projectId');
+
+    assert.ok(!select.includes('c.s3Key'), 'the object key has maxVis 0');
+    assert.ok(!select.includes('c.ownRead'), 'the pre-cascade ACL has maxVis 0');
+    assert.ok(!select.includes('c._etag'));
+    assert.ok(select.includes('c.displayName'));
+    assert.ok(select.includes('c.projectId'), 'the partition field is row-plane, always projected');
+    assert.ok(select.includes('c.read'), 'the ACL feeds the derived isPublished');
+  });
+
+  await t.test('level 0 reads the whole document row', () => {
+    assert.strictEqual(selectFor('documents', { level: 0 }, 'projectId'), '*');
+  });
 });

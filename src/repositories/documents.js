@@ -10,7 +10,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, selectWhere, countWhere, pageOptions, fetchAll } = require('./_sql');
+const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'documents';
 const PARTITION_FIELD = 'projectId';
@@ -83,6 +83,9 @@ async function listVisible(access, opts = {}) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: buildCriteria(opts),
+    // getById keeps the raw point read: canRead needs the whole row, downloadDocument reads
+    // `s3Key` off it, and the controllers upsert what they read.
+    select: selectFor('documents', access, PARTITION_FIELD),
     orderBy: 'c.id ASC'
   });
 

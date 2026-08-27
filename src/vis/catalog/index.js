@@ -1,9 +1,10 @@
 'use strict';
 
 const projects = require('./projects');
+const documents = require('./documents');
 
 /** Every entity with a field catalog. An entity absent here has no policy, so it has no response. */
-const CATALOGS = { projects };
+const CATALOGS = { projects, documents };
 
 /** Throws rather than returning an empty catalog: no policy must never read as "nothing hidden". */
 function catalogFor(entity) {

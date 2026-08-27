@@ -11,9 +11,11 @@ const {
   mergeTrackProject,
   mergeEagleOnlyProject
 } = require('../../src/merge/project');
+const { transformDocument } = require('../../src/seed/transform');
 const { catalogFor } = require('../../src/vis/catalog');
 
 const catalog = catalogFor('projects');
+const documentCatalog = catalogFor('documents');
 
 // Both fixtures are written out by hand rather than generated from TRACK_PRECEDENCE and
 // EAGLE_ONLY_FIELDS: a fixture derived from the constants would grow a new field at the same
@@ -154,5 +156,80 @@ test('the projects catalog covers every field the merge emits', async (t) => {
   await t.test('catalogFor throws on an unknown entity', () => {
     assert.throws(() => catalogFor('widgets'), /no field catalog/);
     assert.throws(() => catalogFor(undefined), /no field catalog/);
+  });
+});
+
+// Hand-written for the same reason as the project fixtures above: derived from the transform, it
+// would grow a field at the same moment the transform does and never fail.
+const EAGLE_DOCUMENT_FIXTURE = {
+  _id: '5850d1b4652f7e0019b52c1f',
+  read: ['public', 'sysadmin', 'staff'],
+  displayName: 'Application Part A',
+  documentFileName: 'part-a.pdf',
+  description: 'Application, part A',
+  internalURL: 'etl/site-c/1389817063122_20d7490a.pdf',
+  internalExt: '.PDF',
+  internalSize: '104857',
+  internalMime: 'application/pdf',
+  type: '5cf00c03a266b7e1877504ca',
+  milestone: '5cf00c03a266b7e1877504db',
+  projectPhase: '5cf00c03a266b7e1877504ee',
+  documentAuthorType: '5cf00c03a266b7e1877504f9',
+  datePosted: '2018-04-02T00:00:00.000Z',
+  dateUploaded: '2018-04-01T00:00:00.000Z',
+  documentAuthor: 'Proponent Ltd',
+  documentSource: 'PROJECT',
+  isFeatured: true,
+  region: 'Vancouver Island',
+  eaoStatus: 'Published',
+  orcsClassification: '85100-25',
+  edrmsRecordNumber: 'EDRMS-1234',
+  legislation: 2002
+};
+
+test('the documents catalog covers every field the seed and the controller write', async (t) => {
+  await t.test('documents catalog covers every transformDocument key', () => {
+    const out = transformDocument(EAGLE_DOCUMENT_FIXTURE, '207', new Map());
+    assert.deepStrictEqual(Object.keys(out).filter(k => !(k in documentCatalog)), []);
+  });
+
+  await t.test('the controller-written fields are catalogued', () => {
+    // createDocument adds the first four; patchExtraction the next two; upsertFromEagle and the
+    // project ACL cascade write `ownRead`.
+    for (const key of ['createdAt', 'isDeleted', 'sourceSystem', 'read',
+      'extractionMethod', 'extraction', 'ownRead']) {
+      assert.ok(key in documentCatalog, `${key} is not catalogued`);
+    }
+  });
+
+  await t.test('s3Key never exceeds maxVis 0', () => {
+    assert.strictEqual(documentCatalog.s3Key.maxVis, 0);
+    assert.strictEqual(documentCatalog.s3Key.defaultVis, 0);
+  });
+
+  await t.test('the two ACL fields and the dial map can never be seen', () => {
+    assert.strictEqual(documentCatalog.read.maxVis, 0);
+    assert.strictEqual(documentCatalog.ownRead.maxVis, 0);
+    assert.strictEqual(documentCatalog.vis.maxVis, 0);
+  });
+
+  await t.test('_etag is writer-visible only', () => {
+    assert.strictEqual(documentCatalog._etag.defaultVis, 2);
+    assert.strictEqual(documentCatalog._etag.maxVis, 2);
+  });
+
+  await t.test('the records-management ids stay public until the EAO signs off', () => {
+    assert.strictEqual(documentCatalog.orcsClassification.defaultVis, 4);
+    assert.strictEqual(documentCatalog.edrmsRecordNumber.defaultVis, 4);
+  });
+
+  await t.test('every entry has both bounds and defaultVis <= maxVis', () => {
+    for (const [key, entry] of Object.entries(documentCatalog)) {
+      assert.strictEqual(typeof entry.defaultVis, 'number', `${key}.defaultVis`);
+      assert.strictEqual(typeof entry.maxVis, 'number', `${key}.maxVis`);
+      assert.ok(entry.defaultVis >= 0 && entry.defaultVis <= 4, `${key}.defaultVis out of range`);
+      assert.ok(entry.maxVis >= 0 && entry.maxVis <= 4, `${key}.maxVis out of range`);
+      assert.ok(entry.defaultVis <= entry.maxVis, `${key} defaults above its ceiling`);
+    }
   });
 });
