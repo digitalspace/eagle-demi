@@ -24,13 +24,8 @@ const PARTITION_FIELD = 'id';
  * Criteria shared by list and count so the two can never diverge — a count built from a
  * different predicate would leak the size of a set the caller cannot read.
  */
-function buildCriteria({ trackOnly, regionalDistrict, municipality, electoralDistrict }) {
+function buildCriteria({ regionalDistrict, municipality, electoralDistrict }) {
   const criteria = [];
-
-  // Provenance, not visibility. `sourceSystem` replaces the old
-  // `sources.track EXISTS AND != null` test with an indexed equality — and sidesteps the
-  // Mongo/SQL disagreement over whether a missing field matches $ne.
-  if (trackOnly) criteria.push(eq('sourceSystem', 'track', '@sourceSystem'));
 
   if (regionalDistrict) criteria.push(eq('regionalDistrict', regionalDistrict, '@rd'));
   if (municipality) criteria.push(eq('municipality', municipality, '@muni'));

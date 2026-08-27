@@ -253,10 +253,6 @@ exports.search = async (req, res) => {
     }
 
     if (dataset === 'Project') {
-      // ONE definition, read by BOTH branches below. They must never disagree about which corpus
-      // they serve, and they did — the escape hatch existed only on the Cosmos side.
-      const allowNonTrack = req.query.includeSeeded === 'true';
-
       // Keywords or criteria go to AI Search; a BARE list still comes from Cosmos below. See
       // wiki Search-Query-Construction#project-reads-split-between-cosmos-and-the-index.
       if (keywords || criteria) {
@@ -271,15 +267,6 @@ exports.search = async (req, res) => {
             const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
             noteDropped('filter', dropped);
 
-            // PROVENANCE: the route deciding which corpus it serves, not the caller's filter, so
-            // it is appended rather than passed through `buildFilter`. The ternary is because
-            // `filter` is UNDEFINED for an unscoped privileged caller, and interpolating that emits
-            // `(undefined) and …` — a 400 this route answers as 502. See
-            // wiki Search-Query-Construction#project-reads-split-between-cosmos-and-the-index.
-            const TRACK_ONLY = "sourceSystem eq 'track'";
-            const scopedFilter = allowNonTrack
-              ? filter
-              : (filter ? `(${filter}) and ${TRACK_ONLY}` : TRACK_ONLY);
             // `Boolean(keywords)`, not `true`: with no keywords there is no relevance to order by,
             // and DEFAULT_ORDER is what keeps `$skip` paging from repeating and omitting rows.
             const { orderby, dropped: sortDropped } =
@@ -289,7 +276,7 @@ exports.search = async (req, res) => {
             // `count` is the index-wide total, not the page — eagle-public pages against it and the
             // column header shows it.
             const { items, count } = await aiSearch.searchProjects({
-              filter: scopedFilter,
+              filter,
               orderby,
               skip,
               keywords,
@@ -363,9 +350,6 @@ exports.search = async (req, res) => {
 
       // Bare list: a read, in the repository's own order.
       try {
-        // Provenance filter — orthogonal to visibility, never a substitute for it, and the same
-        // predicate the index branch applies above.
-        //
         // PAGED BY OVERFETCH-AND-SLICE, a real ceiling: Cosmos pages with continuation tokens, not
         // offsets, so a page is reachable only while `skip + pageSize` stays inside the repository's
         // 1000-row clamp. Every project fits one page. Upgrade path: return the token in `meta`.
@@ -376,7 +360,6 @@ exports.search = async (req, res) => {
 
         const cosmosSkip = pageNum * pageSize;
         const { items: page } = await projectsRepo.listVisible(access, {
-          trackOnly: !allowNonTrack,
           pageSize: cosmosSkip + pageSize
         });
         const projects = cosmosSkip > 0 ? page.slice(cosmosSkip) : page;
@@ -384,7 +367,7 @@ exports.search = async (req, res) => {
         // Counted on EVERY request. Running it only when `pageNum` was present let the response
         // wrapper fill the gap with the page length, so `pageSize=500` with no `pageNum` — DEMI's
         // own frontend — reported 500 for a registry of any size.
-        const count = await projectsRepo.countVisible(access, { trackOnly: !allowNonTrack });
+        const count = await projectsRepo.countVisible(access);
 
         // A NoSQL row has `id` and no `_id`. `_id` is kept in the RESPONSE because the frontend
         // still keys on it — dropping it would empty the project list without any error.

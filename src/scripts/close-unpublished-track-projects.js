@@ -170,7 +170,6 @@ async function closeUnpublished(argv = [], opts = {}) {
     names: []
   };
 
-  // No `trackOnly`: the point is to see every project, including the ones that clause hides.
   const { items } = await projectsRepo.listVisible(access, {});
 
   for (const project of items) {

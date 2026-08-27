@@ -116,7 +116,7 @@ const DEFAULT_ORDER = {
  */
 const KNOWN_PARAMS = new Set([
   // this API's own
-  'dataset', 'keywords', 'q', 'fuzzy', 'pageSize', 'includeSeeded',
+  'dataset', 'keywords', 'q', 'fuzzy', 'pageSize',
   // eagle-public's (api.ts:160-206). The last four are read by nobody here.
   'pageNum', 'sortBy', 'project', 'categorized', 'projectLegislation', 'populate', 'fields'
 ]);

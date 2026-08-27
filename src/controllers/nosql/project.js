@@ -67,17 +67,13 @@ async function cascadeProjectVisibility(projectId, acl) {
 exports.getProjects = async (req, res) => {
   try {
     const access = resolveAccess(req);
-    const { regionalDistrict, municipality, electoralDistrict, includeSeeded } = req.query;
-
-    // Provenance filter, orthogonal to visibility. Default is Track-sourced projects only.
-    const allowNonTrack = includeSeeded === 'true';
+    const { regionalDistrict, municipality, electoralDistrict } = req.query;
 
     // Anonymous callers cap at ANON_MAX_PAGE_SIZE; authenticated ones keep the full ceiling.
     const { pageSize, error } = pageSizeFor(access, req.query.pageSize);
     if (error) return res.status(400).json({ error });
 
     const { items, continuationToken } = await projects.listVisible(access, {
-      trackOnly: !allowNonTrack,
       regionalDistrict,
       municipality,
       electoralDistrict,

@@ -85,16 +85,11 @@ async function getDbStats(req, res) {
   try {
     const access = systemAccess();
 
-    // `trackProjects` is the same count under the provenance predicate the public search applies,
-    // so `projects - trackProjects` is the number of rows Eagle holds that Track has no counterpart
-    // for. Those are retained and flagged by decision, never dropped (TODO F17), which makes them
-    // an arithmetic residue nobody can see unless the number is reported. Derived from the two
-    // counts rather than stored as a second flag: `sourceSystem` already IS the flag
-    // (`merge/project.js:237`), and a second field for one fact is how the last audit's errors
-    // happened.
-    const [projects, trackProjects, documents, boundaries] = await Promise.all([
+    // Eagle rows Track has no counterpart for are retained and flagged (TODO F17), so the only
+    // place their number is visible is here. Counted off `sourceSystem`, the flag itself.
+    const [projects, eagleOnlyProjects, documents, boundaries] = await Promise.all([
       projectsRepo.countVisible(access),
-      projectsRepo.countVisible(access, { trackOnly: true }),
+      projectsRepo.countEagleOnlyIds(access),
       documentsRepo.countVisible(access),
       boundariesRepo.countVisible(access)
     ]);
@@ -108,8 +103,8 @@ async function getDbStats(req, res) {
       driver: 'azure-cosmos-nosql',
       stats: {
         projects,
-        trackProjects,
-        unlinkedProjects: projects - trackProjects,
+        trackProjects: projects - eagleOnlyProjects,
+        unlinkedProjects: eagleOnlyProjects,
         documents,
         boundaries
       },

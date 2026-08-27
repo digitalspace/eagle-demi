@@ -23,10 +23,9 @@ function mockRes() {
 test('GET /db/stats', async (t) => {
   await t.test('reports the unlinked project count', async () => {
     // An Eagle project with no Track counterpart is RETAINED and FLAGGED by decision (TODO F17),
-    // never dropped — which makes it an arithmetic residue between two counts that nobody can see
-    // unless it is reported. Measured 2026-08-23: 393 total, 382 Track-sourced.
-    t.mock.method(projectsRepo, 'countVisible', async (access, opts) =>
-      (opts && opts.trackOnly ? 382 : 393));
+    // so the only place its number surfaces is here. Measured 2026-08-23: 393 total, 382 Track.
+    t.mock.method(projectsRepo, 'countVisible', async () => 393);
+    t.mock.method(projectsRepo, 'countEagleOnlyIds', async () => 11);
     t.mock.method(documentsRepo, 'countVisible', async () => 60578);
     t.mock.method(boundariesRepo, 'countVisible', async () => 281);
 
@@ -38,29 +37,28 @@ test('GET /db/stats', async (t) => {
     assert.strictEqual(res.body.stats.unlinkedProjects, 11);
   });
 
-  await t.test('the two project counts come from the SAME repository predicate', async () => {
-    // The delta is only meaningful if `trackProjects` is the predicate the public search applies.
-    // Counting it some other way would produce a number that looks right and means nothing.
-    const seen = [];
+  await t.test('the unlinked count is measured, not derived from a filtered list read', async () => {
+    // `sourceSystem` IS the flag, so the number comes off the same predicate the reconcile uses.
+    // The total must stay unfiltered, or the delta compares two different corpora.
+    let countVisibleOpts = 'not called';
     t.mock.method(projectsRepo, 'countVisible', async (access, opts) => {
-      // Boolean(), because the unfiltered call passes no opts at all — `opts && …` is undefined
-      // there, and [undefined, true] would compare unequal to [false, true] for the wrong reason.
-      seen.push(Boolean(opts && opts.trackOnly === true));
-      return opts && opts.trackOnly ? 382 : 393;
+      countVisibleOpts = opts;
+      return 393;
     });
+    t.mock.method(projectsRepo, 'countEagleOnlyIds', async () => 11);
     t.mock.method(documentsRepo, 'countVisible', async () => 0);
     t.mock.method(boundariesRepo, 'countVisible', async () => 0);
 
     await dbController.getDbStats({}, mockRes());
 
-    assert.deepStrictEqual(seen.sort(), [false, true],
-      'exactly one unfiltered count and one trackOnly count');
+    assert.strictEqual(countVisibleOpts, undefined, 'the total is an unfiltered count');
   });
 
   await t.test('zero unlinked projects is reported, not omitted', async () => {
     // The healthy state. Omitting the key on 0 would make "none" and "not measured" identical —
     // the same distinction the search envelope draws with `total: null`.
     t.mock.method(projectsRepo, 'countVisible', async () => 382);
+    t.mock.method(projectsRepo, 'countEagleOnlyIds', async () => 0);
     t.mock.method(documentsRepo, 'countVisible', async () => 0);
     t.mock.method(boundariesRepo, 'countVisible', async () => 0);
 
@@ -75,6 +73,7 @@ test('GET /db/stats', async (t) => {
     // Anything reading this endpoint keys on these; the discriminator pair in particular is how a
     // deploy is told apart from the legacy Mongo build (eagle-demi/CLAUDE.md).
     t.mock.method(projectsRepo, 'countVisible', async () => 1);
+    t.mock.method(projectsRepo, 'countEagleOnlyIds', async () => 0);
     t.mock.method(documentsRepo, 'countVisible', async () => 2);
     t.mock.method(boundariesRepo, 'countVisible', async () => 3);
 

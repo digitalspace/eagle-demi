@@ -71,14 +71,14 @@ test('projects repository', async (t) => {
     assert.ok(spec.parameters.some(p => p.value === '207'));
   });
 
-  await t.test('trackOnly uses an indexed equality, not an EXISTS/!=null test', async () => {
+  await t.test('list criteria carry no provenance predicate', async () => {
     const calls = captureQuery(t);
-    await projects.listVisible(PUBLIC, { trackOnly: true });
+    await projects.listVisible(PUBLIC, { trackOnly: true, municipality: 'Vancouver' });
 
     const { spec } = calls[0];
-    assert.match(spec.query, /c\.sourceSystem = @sourceSystem/);
-    assert.ok(!spec.query.includes('sources.track'),
-      'the old $exists/$ne provenance test should be gone');
+    assert.ok(!spec.query.includes('sourceSystem'),
+      'a public project read is scoped by the ACL, never by which system wrote the row');
+    assert.match(spec.query, /c\.municipality = @muni/, 'the real criteria still build');
   });
 
   await t.test('filter values are bound, never interpolated', async () => {
@@ -92,8 +92,8 @@ test('projects repository', async (t) => {
 
   await t.test('count uses the IDENTICAL predicate as the list', async () => {
     const calls = captureQuery(t);
-    await projects.listVisible(PUBLIC, { trackOnly: true, municipality: 'Vancouver' });
-    await projects.countVisible(PUBLIC, { trackOnly: true, municipality: 'Vancouver' });
+    await projects.listVisible(PUBLIC, { municipality: 'Vancouver' });
+    await projects.countVisible(PUBLIC, { municipality: 'Vancouver' });
 
     const listWhere = calls[0].spec.query.split(' WHERE ')[1].split(' ORDER BY ')[0];
     const countWhere = calls[1].spec.query.split(' WHERE ')[1];

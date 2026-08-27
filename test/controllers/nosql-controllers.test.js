@@ -35,7 +35,7 @@ const ADMIN_USER = { realm_access: { roles: ['sysadmin'] } };
 test('nosql project controller', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('anonymous list resolves the public tier and defaults to Track-only', async () => {
+  await t.test('anonymous list resolves the public tier and scopes on the ACL alone', async () => {
     let seenAccess, seenOpts;
     t.mock.method(projects, 'listVisible', async (access, opts) => {
       seenAccess = access; seenOpts = opts;
@@ -45,7 +45,8 @@ test('nosql project controller', async (t) => {
     await projectController.getProjects({ ...ANON }, mockRes());
 
     assert.strictEqual(seenAccess.tier, TIER.PUBLIC);
-    assert.strictEqual(seenOpts.trackOnly, true, 'non-Track provenance excluded by default');
+    assert.ok(!('trackOnly' in seenOpts),
+      'an Eagle-only project is retained and flagged, never filtered out of a public list');
   });
 
   await t.test('a token promotes the tier; a header cannot', async () => {
