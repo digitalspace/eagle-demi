@@ -31,6 +31,8 @@ function mockRes() {
 
 const ANON = { query: {}, params: {}, body: {} };
 const ADMIN_USER = { realm_access: { roles: ['sysadmin'] } };
+// `demi-service-write` is level 2 — the tier every WRITE_ROLES holder maps to.
+const WRITER_USER = { realm_access: { roles: ['demi-service-write'] } };
 
 test('nosql project controller', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -218,6 +220,80 @@ test('nosql project controller', async (t) => {
       { params: { id: '207' }, query: {}, body: { status: 'Withdrawn', projectState: 'Completed' } },
       mockRes());
     assert.strictEqual(saved.projectState, 'Completed', 'the stored name is the specific one');
+  });
+
+  /**
+   * Redaction-safe update: the response is narrowed by level, so a body key the caller was never
+   * shown would overwrite a value they cannot see (docs/rbac-architecture.md §2 item 1).
+   */
+  await t.test('PUT rejects a body key the caller cannot see', async () => {
+    t.mock.method(projects, 'getById', async () => ({ id: '207', trackProjectId: 207, name: 'P' }));
+    let upserted = false;
+    t.mock.method(projects, 'upsert', async (doc) => { upserted = true; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, body: { complianceLead: 'x' } }, res);
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.match(res.body.error, /complianceLead/, 'the message names the offending key');
+    assert.strictEqual(upserted, false, 'nothing is written on a refused body');
+  });
+
+  await t.test('PUT rejects vis for every caller', async () => {
+    t.mock.method(projects, 'getById', async () => ({ id: '207', trackProjectId: 207, name: 'P' }));
+    let upserted = false;
+    t.mock.method(projects, 'upsert', async (doc) => { upserted = true; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, user: ADMIN_USER, body: { vis: { name: 0 } } }, res);
+
+    // A sysadmin is level 0 and sees every field, so a level-gated guard would let this through.
+    assert.strictEqual(res.statusCode, 400);
+    assert.match(res.body.error, /vis/);
+    assert.strictEqual(upserted, false);
+  });
+
+  await t.test('PUT still accepts an ordinary edit', async () => {
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', description: 'old',
+      read: ['public', ...SECURE_ROLES], isPublished: true,
+      sources: { track: { track_project_id: 207 } }, _etag: '"0x8DF00728"'
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, user: WRITER_USER, body: { description: 'new' } }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.description, 'new');
+    // The guard narrows what a body may SET; it must not narrow what the row already holds.
+    assert.deepStrictEqual(saved.read, stored.read, 'stored ACL intact');
+    assert.deepStrictEqual(saved.sources, stored.sources, 'stored payloads intact');
+    assert.strictEqual(saved._etag, stored._etag, 'concurrency token intact');
+  });
+
+  await t.test('POST silently drops unknown keys, as before', async () => {
+    // createProject allowlists its body by destructuring, so `vis` cannot arrive — no guard needed
+    // there, and this is the assertion that keeps it true.
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.createProject({
+      body: {
+        trackProjectId: 5, name: 'V', centroid: { coordinates: [0, 0] },
+        vis: { name: 0 }, complianceLead: 'x'
+      }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 201);
+    assert.strictEqual(saved.vis, undefined);
+    assert.strictEqual(saved.complianceLead, undefined);
   });
 });
 
