@@ -62,7 +62,12 @@ const UNGATED = {
     'One document, served verbatim to anonymous callers by GET /api/config, so there is no tier ' +
     'that may read only part of it and nothing to filter. What bounds the payload is the ' +
     "controller's explicit OVERRIDABLE_KEYS allowlist, not a permission field — a key added to " +
-    'the document is not published until it is added there too.'
+    'the document is not published until it is added there too.',
+  'links.js':
+    'Rows carry no per-document ACL. GET /api/links is route-gated (authMiddleware only, no ' +
+    'ACL predicate needed since every row is staff-visible); create/repoint/delete are ' +
+    'admin/write-gated; and /s/:code is a deliberately PUBLIC point read with no caller tier to ' +
+    'filter for — the destination itself, not the row, is what gets validated.'
 };
 
 /**
@@ -83,6 +88,18 @@ const gatedPrefixes = {
   '/admin/sync/': 'requireAdmin',
   '/eagle/': 'requireWrite'
 };
+
+/**
+ * Per-verb gates on /links: GET is authMiddleware only (every row is staff-visible), but the three
+ * mutating verbs also need requireWrite — one gate per prefix (gatedPrefixes, above) cannot express
+ * a route whose gate depends on its verb, so this is checked as an explicit list instead.
+ */
+const gatedRoutes = [
+  { method: 'get', path: '/links', gate: null },
+  { method: 'post', path: '/links', gate: 'requireWrite' },
+  { method: 'put', path: '/links/:code', gate: 'requireWrite' },
+  { method: 'delete', path: '/links/:code', gate: 'requireWrite' }
+];
 
 /** @returns {{name: string, source: string}[]} every repository module, allowlisted or not. */
 function repositories() {
@@ -191,5 +208,26 @@ test('access gate coverage', async (t) => {
       routes.filter(r => r.method === 'get' && r.path.startsWith('/wildfires')).length, 0,
       'a GET /wildfires route exists again — wildfires.js now needs a real ACL gate'
     );
+  });
+
+  await t.test('each /links route carries the gate its verb requires', () => {
+    const routes = routeChains();
+
+    for (const { method, path, gate } of gatedRoutes) {
+      const matching = routes.filter(r => r.method === method && r.path === path);
+      assert.ok(matching.length > 0, `no route matches ${method.toUpperCase()} ${path}`);
+      for (const r of matching) {
+        assert.ok(
+          /\bauthMiddleware\b/.test(r.chain),
+          `${method.toUpperCase()} ${path} is not behind authMiddleware`
+        );
+        if (gate) {
+          assert.ok(
+            new RegExp(`\\b${gate}\\b`).test(r.chain),
+            `${method.toUpperCase()} ${path} is not behind ${gate}`
+          );
+        }
+      }
+    }
   });
 });

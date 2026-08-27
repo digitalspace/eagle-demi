@@ -111,6 +111,9 @@ param storageBackend string = 'minio'
 @description('Requests per minute per rate-limit bucket. 300 suits direct browser traffic, where one caller is one bucket; behind a reverse proxy every visitor shares a single bucket and this must be raised.')
 param rateLimitMaxRequests int = 300
 
+@description('Public origin short links redirect from, e.g. https://projects.eao.gov.bc.ca. Per-environment: test must not hand back the prod host.')
+param linkBaseUrl string = ''
+
 @description('MinIO bucket holding the document corpus')
 param minioBucketName string = 'eagle-demi'
 
@@ -347,6 +350,12 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'RATE_LIMIT_MAX_REQUESTS'
           value: string(rateLimitMaxRequests)
+        }
+        // Same whole-collection-PUT reason as RATE_LIMIT_MAX_REQUESTS: a hand-set value dies on the
+        // next infra deploy. Per environment — test must hand back the test host, not prod's.
+        {
+          name: 'LINK_BASE_URL'
+          value: linkBaseUrl
         }
         // Which object store the API reads. Flipping this to 'azure' is the Phase 3b cutover and
         // needs the blob account deployed and the corpus copied first.

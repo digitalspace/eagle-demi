@@ -440,6 +440,41 @@ resource configContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
   }
 }
 
+// Partitioned on /id (the code itself): redirect point read and code-clash create are single-
+// partition. No TTL — print/QR links are permanent by design.
+resource linksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'links'
+  properties: {
+    resource: {
+      id: 'links'
+      partitionKey: {
+        paths: [
+          '/id'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/createdAt/?'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/*'
+          }
+          {
+            path: '/_etag/?'
+          }
+        ]
+      }
+    }
+  }
+}
+
 // ── Data-plane RBAC ──────────────────────────────────────────────────────────
 // Cosmos NoSQL data-plane role assignments cannot be managed in the Azure portal, so they
 // have to live here. Built-in definitions are used rather than a custom role — a custom

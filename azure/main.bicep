@@ -75,6 +75,9 @@ param eagleApiBase string
 @description('Requests per minute per rate-limit bucket. Raise it wherever a proxy collapses every visitor into one bucket.')
 param rateLimitMaxRequests int = 300
 
+@description('Public origin short links redirect from, e.g. https://projects.eao.gov.bc.ca. Per environment: test must not hand back the prod host.')
+param linkBaseUrl string = ''
+
 // Bucket and prefix were previously set out of band, so every template deploy silently reset them
 // to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
 @description('Object-store bucket name (dev: asnpnn, test: zdspnb).')
@@ -386,6 +389,7 @@ module apiWebApp './modules/api-web-app.bicep' = {
     // The browser origins that call this API. See the parameter for why they are not derivable.
     frontendHostNames: frontendHostNames
     rateLimitMaxRequests: rateLimitMaxRequests
+    linkBaseUrl: linkBaseUrl
   }
 }
 

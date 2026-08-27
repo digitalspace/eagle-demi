@@ -23,6 +23,7 @@ const projectController = require('../controllers/nosql/project');
 const documentController = require('../controllers/nosql/document');
 const boundaryController = require('../controllers/nosql/boundary');
 const apiKeyController = require('../controllers/nosql/api-key');
+const linkController = require('../controllers/nosql/link');
 
 const wildfireController = require('../controllers/wildfire');
 const searchController = require('../controllers/search');
@@ -120,5 +121,13 @@ router.post('/admin/api-keys', authMiddleware, requireAdmin, apiKeyController.cr
 // consumer, role set and expiry in the deployment.
 router.get('/admin/api-keys', authMiddleware, requireAdmin, apiKeyController.listApiKeys);
 router.delete('/admin/api-keys/:id', authMiddleware, requireAdmin, apiKeyController.revokeApiKey);
+
+// /s/:code has no auth: it's a public poster/email link, so anonymous browsing is the only caller.
+// Mutations require requireWrite: they decide where a gov.bc.ca URL sends the public.
+router.get('/links', authMiddleware, linkController.listLinks);
+router.post('/links', authMiddleware, requireWrite, linkController.createLink);
+router.put('/links/:code', authMiddleware, requireWrite, linkController.updateLink);
+router.delete('/links/:code', authMiddleware, requireWrite, linkController.deleteLink);
+router.get('/s/:code', linkController.resolveLink);
 
 module.exports = router;

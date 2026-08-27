@@ -132,3 +132,5 @@ param contactEmails = [
 // The variant that works needs `X-Real-IP $remote_addr` from the proxy AND the direct path closed —
 // and the direct path cannot be closed while DEMI's frontend calls this host from the browser.
 param rateLimitMaxRequests = 6000
+
+param linkBaseUrl = 'https://test.projects.eao.gov.bc.ca'

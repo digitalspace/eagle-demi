@@ -75,6 +75,8 @@ param deployStaticSite = false
 // deployment; revert here when `demi.eao.gov.bc.ca` replaces the proxy hop.
 param rateLimitMaxRequests = 6000
 
+param linkBaseUrl = 'https://projects.eao.gov.bc.ca'
+
 // Empty, deliberately. There is no DEMI frontend in prod — eagle-public is the consumer and it
 // reaches this API same-origin through rproxy, so no browser origin needs allowing. Empty leaves
 // CORS_ORIGIN unset and src/app.js falls back to localhost only: fail closed, not open.

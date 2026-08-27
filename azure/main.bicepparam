@@ -27,3 +27,6 @@ param contactEmails = [
   'daniel@digitalspace.ca'
   'Daniel.T.Truong@gov.bc.ca'
 ]
+
+// Dev has no rproxy host in front of it, so the app's own Azure host is the only reachable base.
+param linkBaseUrl = 'https://demi-api-dev.azurewebsites.net'
