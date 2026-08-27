@@ -39,9 +39,7 @@ claim to a measurement with a date; reviewer takes a positional sha (`review.sh 
       `github-cicd` SA token from `6cdc9e-tools` — reissue via `oc create token`/secret, paste into
       the three repos. Nothing in DEMI blocks on this.
 - [x] ~~Rotate `RPROXY_EGUIDE_PASSWORD`; Eagle push key~~ done: not rotated 2026-08-26 (business-issued password; `TYPESENSE_SEARCH_KEY` deleted); push key issued 2026-08-27 in `demi-push-secret`.
-- [ ] **Reissue the TEST push key `b319b93a1bf35206`** on the `demi-service-write` role — it still
-      holds `demi-admin`.
-
+- [x] ~~Reissue the TEST push key on `demi-service-write`~~ Done 2026-08-27: key `f607628b36733722` (expires 2026-11-25) in `demi-push-secret` (`6cdc9e-test`), eagle-api test restarted, old `b319b93a1bf35206` revoked.
 ## 2. Decisions — Daniel
 
 - [x] ~~Anonymous surface, `proponentId`, Keycloak client~~ done 2026-08-26: PR #162 (`d676664`); `proponentId` moot (eagle-public search UI never reads it); prod demi-api reuses `eagle-admin-console`.
@@ -58,10 +56,7 @@ claim to a measurement with a date; reviewer takes a positional sha (`review.sh 
       is clean; no line means the timer never fired, and nothing else alerts on that. Alert on
       `drift>0`: `demi-reconcile-drift-prod`.
 - [x] ~~Unused Cosmos index paths; eao-nginx `values-prod.yaml` stale prose~~ done 2026-08-27: `infra-38f2905-*` dropped unused paths on `projects`/`documents`/`boundaries`/`wildfires`; PR #45/#47 (comments only).
-- [ ] **eagle-api doesn't serve `CONTENT_SEARCH` in `/api/config` yet** (whitelist in
-      `api/helpers/models/config.js` + `api/controllers/config.js`) — needed before the Document
-      Content tab can ever be turned on.
-
+- [x] ~~eagle-api serves `CONTENT_SEARCH` from `/api/config`~~ Done: eagle-api #853 (merged 2026-08-27), tag v2.10.69 on test; prod gets it with the next eagle-api tag. Turning the tab on = `db.epic.updateOne({_schemaName:'Config'},{$set:{CONTENT_SEARCH:true}})` on that env's Mongo, nothing to deploy.
 ## 4. Prod promotion — done 2026-08-26/27
 
 - [x] ~~Stand up prod estate, copy the corpus, ship app code~~ done 2026-08-26: `deploy-infra.sh prod --live`; corpus 393 / 61,587 / 1,128,576 both sides; zipdeploy `main` `ef4379f`.
