@@ -60,9 +60,15 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 
 ## 1. Credentials
 
-- [ ] **1.1 Rotate the MinIO key and OpenShift token at source.** `eagle-api-minio-keys` in
-      `6cdc9e-test` created 2021-02-25, never rotated; repo secrets already deleted. Needs the
-      owners of `nrs.objectstore.gov.bc.ca` and the token issuer.
+- [ ] **1.1 Rotate the object-store keys and the OpenShift token at source — other owners.**
+      Handoff: (a) `nrs.objectstore.gov.bc.ca` access/secret keys: dev + test share secret
+      `eagle-api-minio-keys` (`6cdc9e-dev` 2020-11-24, `6cdc9e-test` 2021-02-25, never rotated; bucket
+      `asnpnn`), prod uses `nr-object-store-credential` (bucket `ozwdez`). Rotation = NRS object-store
+      owners issue new keys → update those secrets → `oc rollout restart deploy/eagle-api` per ns →
+      rerun `scripts/deploy-infra.sh <env> --live` for DEMI (its `MINIO_*` app settings come from the
+      same secrets). (b) `OPENSHIFT_TOKEN` repo secrets (eagle-api, eagle-public, eao-nginx) are the
+      `github-cicd` SA token from `6cdc9e-tools` — reissue via `oc create token`/secret, paste into
+      the three repos. Nothing in DEMI blocks on this.
 - [x] ~~**1.2 Rotate `RPROXY_EGUIDE_PASSWORD`**~~ Decided 2026-08-26 (Daniel): not rotated — it is the
       front-facing basic-auth password on `/eguide`, issued to users; changing it is a business
       re-issue, not hygiene. `TYPESENSE_SEARCH_KEY` deleted 2026-08-26.
