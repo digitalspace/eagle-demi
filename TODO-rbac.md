@@ -575,33 +575,61 @@ The behaviour change. Keep the diff to the projects entity.
 
 Branch: `feat/vis-documents-catalog`
 
-- [ ] Add `src/vis/catalog/documents.js`, authored from `transformDocument` (`src/seed/transform.js:97`, return block `:111-166`), plus the four keys `createDocument` adds (`src/controllers/nosql/document.js:213-227`: `createdAt`, `isDeleted`, and the `sourceSystem: 'demi'` and `read` it writes) and the two `patchExtraction` adds (`src/controllers/nosql/document.js:781-787`: `extractionMethod`, `extraction`).
-- [ ] `defaultVis: 4, maxVis: 4` for every key today's `publicView` lets through: `id`, `projectId`, `eagleId`, `sourceSystem`, `displayName`, `documentFileName`, `description`, `fileExt`, `fileSize`, `mimeType`, `type`, `typeId`, `milestone`, `milestoneId`, `projectPhase`, `projectPhaseId`, `documentAuthorType`, `documentAuthorTypeId`, `datePosted`, `dateUploaded`, `documentAuthor`, `documentSource`, `isFeatured`, `region`, `eaoStatus`, `orcsClassification`, `edrmsRecordNumber`, `legislation`, `isPublished`, `contentExtracted`, `contentExtractedAt`, `contentPageCount`, `contentExtractionError`, `extractionMethod`, `extraction`, `isDeleted`, `createdAt`, `updatedAt`.
-- [ ] `s3Key: { defaultVis: 0, maxVis: 0 }` — `publicView` strips it today (`src/controllers/nosql/document.js:90`), and `downloadDocument` reads `doc.s3Key` off the RAW repository row (`:151-157`), not off a redacted one, so the ceiling costs nothing.
-- [ ] `read: { maxVis: 0 }`, `vis: { maxVis: 0 }`; `_etag: { defaultVis: 2, maxVis: 2 }`.
-- [ ] `isPublished` derived in the redactor from `read.includes('public')` — same derivation `publicView` does at `src/controllers/nosql/document.js:90-92`, so it must not be copied from the stored field.
-- [ ] Record `orcsClassification` and `edrmsRecordNumber` in the doc as candidates for a later tightening to `defaultVis: 2`; they stay 4 without EAO sign-off (question 2 mechanism).
-- [ ] Register `documents` in `src/vis/catalog/index.js` so `catalogFor('documents')` resolves.
-- [ ] Replace `publicView` at the six document call sites that emit a stored row with `redactForAccess('documents', doc, access)` / `redactAllForAccess`: `src/controllers/nosql/document.js:118` (list), `:132` (get), `:236` (create 201), `:360` (update), `:447` (setPublished), `:579` (delete `deleted:` body). Sites `:182` (download URL), `:541` (eagle upsert ack), `:800`, `:871`, `:931` (ingest acks) are hand-built payloads with no stored field except `displayName` at `:185` — leave them and list them in the coverage test as hand-built.
-- [ ] Delete `publicView` from `src/controllers/nosql/document.js:84-93` and its 40-line header.
-- [ ] `documents.listVisible` gains `select: selectFor('documents', access)` (`src/repositories/documents.js`, the `selectWhere` call in `listVisible`), level 0 keeps `*`. Do NOT touch the `EXTRACTION_FIELDS` projection at `src/repositories/documents.js:307` — it runs under `systemAccess()`.
-- [ ] PUT `/documents/:id` returns 400 on any body key the caller cannot see and on `vis` (`src/controllers/nosql/document.js:326-334`, where the body is destructured).
+- [x] Add `src/vis/catalog/documents.js`, authored from `transformDocument` (`src/seed/transform.js:97`, return block `:111-166`), plus the four keys `createDocument` adds (`src/controllers/nosql/document.js:213-227`: `createdAt`, `isDeleted`, and the `sourceSystem: 'demi'` and `read` it writes) and the two `patchExtraction` adds (`src/controllers/nosql/document.js:781-787`: `extractionMethod`, `extraction`).
+- [x] `defaultVis: 4, maxVis: 4` for every key today's `publicView` lets through: `id`, `projectId`, `eagleId`, `sourceSystem`, `displayName`, `documentFileName`, `description`, `fileExt`, `fileSize`, `mimeType`, `type`, `typeId`, `milestone`, `milestoneId`, `projectPhase`, `projectPhaseId`, `documentAuthorType`, `documentAuthorTypeId`, `datePosted`, `dateUploaded`, `documentAuthor`, `documentSource`, `isFeatured`, `region`, `eaoStatus`, `orcsClassification`, `edrmsRecordNumber`, `legislation`, `isPublished`, `contentExtracted`, `contentExtractedAt`, `contentPageCount`, `contentExtractionError`, `extractionMethod`, `extraction`, `isDeleted`, `createdAt`, `updatedAt`.
+- [x] `s3Key: { defaultVis: 0, maxVis: 0 }` — `publicView` strips it today (`src/controllers/nosql/document.js:90`), and `downloadDocument` reads `doc.s3Key` off the RAW repository row (`:151-157`), not off a redacted one, so the ceiling costs nothing.
+- [x] `read: { maxVis: 0 }`, `vis: { maxVis: 0 }`; `_etag: { defaultVis: 2, maxVis: 2 }`.
+- [x] `isPublished` derived in the redactor from `read.includes('public')` — same derivation `publicView` does at `src/controllers/nosql/document.js:90-92`, so it must not be copied from the stored field.
+- [x] Record `orcsClassification` and `edrmsRecordNumber` in the doc as candidates for a later tightening to `defaultVis: 2`; they stay 4 without EAO sign-off (question 2 mechanism).
+- [x] Register `documents` in `src/vis/catalog/index.js` so `catalogFor('documents')` resolves.
+- [x] Replace `publicView` at the six document call sites that emit a stored row with `redactForAccess('documents', doc, access)` / `redactAllForAccess`: `src/controllers/nosql/document.js:118` (list), `:132` (get), `:236` (create 201), `:360` (update), `:447` (setPublished), `:579` (delete `deleted:` body). Sites `:182` (download URL), `:541` (eagle upsert ack), `:800`, `:871`, `:931` (ingest acks) are hand-built payloads with no stored field except `displayName` at `:185` — leave them and list them in the coverage test as hand-built.
+- [x] Delete `publicView` from `src/controllers/nosql/document.js:84-93` and its 40-line header.
+- [x] `documents.listVisible` gains `select: selectFor('documents', access)` (`src/repositories/documents.js`, the `selectWhere` call in `listVisible`), level 0 keeps `*`. Do NOT touch the `EXTRACTION_FIELDS` projection at `src/repositories/documents.js:307` — it runs under `systemAccess()`.
+- [x] PUT `/documents/:id` returns 400 on any body key the caller cannot see and on `vis` (`src/controllers/nosql/document.js:326-334`, where the body is destructured).
 
 Tests
 
-- [ ] `test/vis/catalog-completeness.test.js` — extend the existing Phase 1 file: case `'documents catalog covers every transformDocument key'` calls `transformDocument` on a fixture Eagle doc and asserts `Object.keys(result)` is a subset of the catalog keys. Fails when someone adds a field to `src/seed/transform.js:111` without classifying it.
-- [ ] Same file, case `'s3Key never exceeds maxVis 0'` asserts `catalog.s3Key.maxVis === 0`. Fails on any widening.
-- [ ] `test/controllers/nosql/document-redaction.test.js` — case `'anonymous GET /api/documents/:id omits s3Key, read, _etag'` drives the controller with a stub repo row carrying all three and asserts they are absent from `res.json`. Fails if a call site is missed.
-- [ ] Same file, case `'level 0 GET /api/documents/:id returns s3Key'` — asserts the level-0 caller still sees it, proving the redactor is level-driven and not a strip.
-- [ ] Same file, case `'PUT /api/documents/:id rejects a hidden body key'` posts `{ s3Key: 'x' }` as an anonymous-level caller and asserts 400. Fails if the guard is missing.
-- [ ] `test/helpers/access-coverage.test.js` — add `src/controllers/nosql/document.js` per-`res.json` to the scan, with `:182`, `:541`, `:800`, `:871`, `:931` on the hand-built allowlist. Fails when a new `res.json` of a stored row appears without a redactor.
+- [x] `test/vis/catalog-completeness.test.js` — extend the existing Phase 1 file: case `'documents catalog covers every transformDocument key'` calls `transformDocument` on a fixture Eagle doc and asserts `Object.keys(result)` is a subset of the catalog keys. Fails when someone adds a field to `src/seed/transform.js:111` without classifying it.
+- [x] Same file, case `'s3Key never exceeds maxVis 0'` asserts `catalog.s3Key.maxVis === 0`. Fails on any widening.
+- [x] `test/controllers/nosql/document-redaction.test.js` — case `'anonymous GET /api/documents/:id omits s3Key, read, _etag'` drives the controller with a stub repo row carrying all three and asserts they are absent from `res.json`. Fails if a call site is missed.
+- [x] Same file, case `'level 0 GET /api/documents/:id returns s3Key'` — asserts the level-0 caller still sees it, proving the redactor is level-driven and not a strip.
+- [x] Same file, case `'PUT /api/documents/:id rejects a hidden body key'` posts `{ s3Key: 'x' }` as an anonymous-level caller and asserts 400. Fails if the guard is missing.
+- [x] `test/helpers/access-coverage.test.js` — add `src/controllers/nosql/document.js` per-`res.json` to the scan, with `:182`, `:541`, `:800`, `:871`, `:931` on the hand-built allowlist. Fails when a new `res.json` of a stored row appears without a redactor.
 
 Acceptance
 
-- [ ] `yarn test` — all green.
-- [ ] `node --test test/vis/catalog-completeness.test.js test/controllers/nosql/document-redaction.test.js` — 0 fail.
+- [x] `yarn test` — all green.
+- [x] `node --test test/vis/catalog-completeness.test.js test/controllers/nosql/document-redaction.test.js` — 0 fail.
 - [ ] `curl -s $API/api/documents/<id> | jq 'has("s3Key"), has("read"), has("_etag")'` on test → `false false false`; same output as before the PR.
 - [ ] `curl -s $API/api/documents/<id> | jq -S 'keys'` before and after are identical.
+
+### P2-1 recorded deviations
+
+- `ownRead` is a THIRD document field the unit list does not name and `publicView` did not strip, so
+  it is in the anonymous response today. It is the pre-cascade ACL (`documents.setAclForProject`
+  captures it lazily, `upsertFromEagle` writes it), so it is the same role vocabulary as `read`:
+  catalogued at `0/0`, and stripped from PUT bodies beside `read` — setting it by hand widens the
+  document the next time the cascade re-derives `read` from it. Removes one key from the anonymous
+  document response.
+- `_rid`, `_self`, `_attachments`, `_ts` at `maxVis: 0` remove four more keys, the same deviation
+  U7 recorded for projects and for the same reason. They are unavoidable here regardless of the
+  catalog: `selectFor` projects named fields, so a list read no longer fetches them at all.
+- Both bullets above mean the two `jq -S 'keys'` acceptance lines will differ by those five names.
+  The `has("s3Key"), has("read"), has("_etag")` line is unaffected.
+- Level 0 now sees `s3Key`, `read`, `ownRead` and the Cosmos system fields on a document response.
+  `publicView` stripped them from every caller. Doc §2 item 4 holding, not a regression.
+- The coverage ratchet identifies hand-built payloads by the dotted-name lookahead the projects
+  subtest already uses, NOT by the line-number allowlist the unit names: the same file records that
+  line citations rot, and `:182`/`:541`/`:800`/`:871`/`:931` had already drifted by one commit.
+  Two emissions are asserted present so the filter cannot pass vacuously.
+- `test/controllers/nosql/document-projection.test.js` loses two subtests rather than gaining an
+  updated copy: `a privileged caller gets the same projection` asserted the opposite of the level
+  model, and `narrowing the response does not narrow what is stored` moved to
+  `document-redaction.test.js`, next to the PUT guard that depends on it. Its `publicView` source
+  scan moved to `access-coverage.test.js` per the unit.
+- `documents.listVisible` also gains the `selectFor` coverage U10 gave projects
+  (`test/vis/select-for.test.js`, `test/repositories/repositories.test.js`); the unit named no test
+  for the projection it adds.
 
 ## P2-2 search parity: index-name catalogs and the drift ratchet
 
