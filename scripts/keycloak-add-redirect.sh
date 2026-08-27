@@ -31,25 +31,22 @@ case "$ENV" in
   prod) KC_BASE="https://loginproxy.gov.bc.ca/auth"; NS="6cdc9e-prod" ;;
   *) echo "ENV must be test or prod" >&2; exit 1 ;;
 esac
+# The user login context expires; the github-cicd service-account context does not.
+OC_CONTEXT="${OC_CONTEXT:-$NS/api-silver-devops-gov-bc-ca:6443/system:serviceaccount:6cdc9e-tools:github-cicd}"
 
-# Export every key of the secret as a shell variable named after it, so the script does not
-# need to know the key names in advance. Missing ones are reported by name below.
-secret_json=$(oc get secret demi-keycloak-admin -n "$NS" -o json)
-while IFS='=' read -r k v; do
-  export "$k=$(printf '%s' "$v" | base64 -d)"
-done < <(jq -r '.data | to_entries[] | "\(.key)=\(.value)"' <<<"$secret_json")
+# The secret holds an admin USERNAME/PASSWORD plus the KEYCLOAK_URL and KEYCLOAK_REALM to
+# authenticate against (a realm admin user, password grant on admin-cli).
+eval "$(oc --context "$OC_CONTEXT" get secret demi-keycloak-admin -n "$NS" -o json \
+  | jq -r '.data | to_entries[] | "export \(.key)=\(.value|@base64d|@sh)"')"
+for v in USERNAME PASSWORD KEYCLOAK_URL KEYCLOAK_REALM; do
+  [[ -n "${!v:-}" ]] || { echo "secret is missing $v" >&2; exit 1; }
+done
 
-admin_client="${KEYCLOAK_ADMIN_CLIENT_ID:-${CLIENT_ID_ADMIN:-${client_id:-}}}"
-admin_secret="${KEYCLOAK_ADMIN_CLIENT_SECRET:-${CLIENT_SECRET_ADMIN:-${client_secret:-}}}"
-if [[ -z "$admin_client" || -z "$admin_secret" ]]; then
-  echo "could not find admin client id/secret in the secret; keys present:" >&2
-  jq -r '.data | keys[]' <<<"$secret_json" >&2
-  exit 1
-fi
-
-token=$(curl -fsS -X POST "$KC_BASE/realms/$REALM/protocol/openid-connect/token" \
-  -d grant_type=client_credentials -d "client_id=$admin_client" -d "client_secret=$admin_secret" \
+token=$(curl -fsS -X POST "$KEYCLOAK_URL/realms/$KEYCLOAK_REALM/protocol/openid-connect/token" \
+  -d grant_type=password -d client_id=admin-cli \
+  --data-urlencode "username=$USERNAME" --data-urlencode "password=$PASSWORD" \
   | jq -r .access_token)
+[[ -n "$token" && "$token" != "null" ]] || { echo "token request failed" >&2; exit 1; }
 auth=(-H "Authorization: Bearer $token")
 api="$KC_BASE/admin/realms/$REALM"
 
