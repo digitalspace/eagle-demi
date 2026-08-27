@@ -16,6 +16,8 @@
  * Nothing here interpolates a caller value into SQL. Every value is a bound parameter.
  */
 
+const { levelFromRoles } = require('../vis/level');
+
 const PUBLIC_ROLES = Object.freeze(['public']);
 
 /**
@@ -113,6 +115,9 @@ function resolveAccess(req) {
   // set only by verified auth (an API key or a Keycloak token), and a `compliance` key resolves to
   // TIER.PUBLIC while still being an identified caller.
   const authenticated = Boolean(req && req.user);
+  // Field visibility is a THIRD dimension: rows and partitions say which records, level says which
+  // attributes of one. Carried here so every response boundary has it without re-deriving.
+  const level = levelFromRoles(roles);
 
   // Scope is resolved BEFORE the privilege check, and the order is the whole point. The reverse
   // returned PRIVILEGED with `projectScope: null` and threw the scope away, so a key minted as
@@ -124,14 +129,14 @@ function resolveAccess(req) {
   // `canRead` both key privilege off the ROLES, never off the tier, so a SCOPED tier still lifts
   // the role predicate for a privileged role set.
   if (Array.isArray(projectScope)) {
-    return { tier: TIER.SCOPED, roles, projectScope, authenticated };
+    return { tier: TIER.SCOPED, roles, projectScope, authenticated, level };
   }
 
   if (isPrivileged(roles)) {
-    return { tier: TIER.PRIVILEGED, roles, projectScope: null, authenticated };
+    return { tier: TIER.PRIVILEGED, roles, projectScope: null, authenticated, level };
   }
 
-  return { tier: TIER.PUBLIC, roles, projectScope: null, authenticated };
+  return { tier: TIER.PUBLIC, roles, projectScope: null, authenticated, level };
 }
 
 /**
@@ -199,7 +204,7 @@ function projectScopeFor(req) {
  * NEVER derive this from a request. It takes no arguments for that reason.
  */
 function systemAccess() {
-  return { tier: TIER.PRIVILEGED, roles: [...PUBLIC_ROLES, ...SECURE_ROLES], projectScope: null, authenticated: true };
+  return { tier: TIER.PRIVILEGED, roles: [...PUBLIC_ROLES, ...SECURE_ROLES], projectScope: null, authenticated: true, level: 0 };
 }
 
 /**

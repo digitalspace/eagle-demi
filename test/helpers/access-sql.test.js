@@ -252,6 +252,17 @@ test('project scope arrives as Keycloak roles', async (t) => {
     assert.strictEqual(visibilityFor(access, 'projectId').clause, 'true');
   });
 
+  await t.test('systemAccess is level 0', () => {
+    assert.strictEqual(systemAccess().level, 0);
+  });
+
+  await t.test('resolveAccess carries a level', () => {
+    assert.strictEqual(resolveAccess({}).level, 4);
+    assert.strictEqual(resolveAccess({ user: { realm_access: { roles: ['sysadmin'] } } }).level, 0);
+    assert.strictEqual(resolveAccess(withRoles('staff')).level, 2);
+    assert.strictEqual(resolveAccess(withRoles('staff', 'project:207')).level, 2);
+  });
+
   await t.test('a bare role name is never treated as a project id', () => {
     // The requested example was a role literally named `ajax`. Classifying bare names as scopes
     // would silently turn every role type into a project restriction.
