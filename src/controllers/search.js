@@ -3,6 +3,7 @@
 // Searches go to Azure AI Search. A KEYWORDLESS project list is a read, not a search, and comes
 // from the Cosmos NoSQL repositories — see wiki Search-Query-Construction#project-reads-split-between-cosmos-and-the-index.
 const { resolveAccess } = require('../helpers/access-sql');
+const { redactForAccess } = require('../vis/redact');
 const { logger } = require('../utils/logger');
 const { filterFor } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
@@ -371,48 +372,53 @@ exports.search = async (req, res) => {
 
         // A NoSQL row has `id` and no `_id`. `_id` is kept in the RESPONSE because the frontend
         // still keys on it — dropping it would empty the project list without any error.
-        const mapped = projects.map(p => ({
-          // The Eagle id, for the same reason as the AI Search branch above.
-          _id: p.eagleId || String(p.id),
-          _schemaName: 'Project',
-          id: String(p.id),
-          // NULL when absent, NOT the DEMI id, and a String to match the index branch. `== null`
-          // and not `||`, because Track id 0 is falsy. See
-          // wiki Search-Query-Construction#project-id-spaces.
-          trackProjectId: p.trackProjectId == null ? null : String(p.trackProjectId),
-          // COSMOS FIELD NAMES, not the indexer's aliases. Reading `p.status` here was always
-          // undefined, so `|| 'Active'` fired on every row and asserted that every project in the
-          // registry is Active. See wiki Search-Index-Reference#cosmos-and-index-field-names-differ.
-          legacyEagleId: p.eagleId || '',
-          name: p.name || 'Unnamed Project',
-          sector: p.sector || 'Other',
-          // ONE stored name: the writers now rename at the edge (`controllers/nosql/project.js`),
-          // so `status` is a wire name only and no row can carry it.
-          status: p.projectState || 'Active',
-          // Same helper as the AI Search branch — one definition of the fallback centroid.
-          centroid: geoPoint(p.centroid),
-          region: p.region || 'British Columbia',
-          // `location` on the wire, `address` at rest: the merge renames Eagle's `location` on the
-          // way in, and nothing read it back. THE COSMOS BRANCH ONLY — `address` is not a column of
-          // the `projects` index, so the two mappers disagree about this one field until it is.
-          location: p.address || '',
-          description: p.description || 'No project description provided.',
-          proponent: { name: p.proponent?.name || p.proponentName || 'Proponent Organization' },
-          // Cosmos field names again: `p.type` would be undefined on every row of the DEFAULT
-          // view, the one a visitor lands on before typing a keyword.
-          type: p.projectType || '',
-          currentPhaseName: eagleQuery.ref(p.currentPhaseName?._id, p.currentPhaseName?.name),
-          eacDecision: eagleQuery.ref(p.eacDecision?._id, p.eacDecision?.name),
-          decisionDate: p.decisionDate || null,
-          // 'public' in the read ACL is what makes a record public; isPublished mirrors it.
-          // The frontend derives its staged/admitted badge from this field.
-          isPublished: Array.isArray(p.read) && p.read.length > 0
-            ? p.read.includes('public')
-            : p.isPublished === true,
-          // Only DEMI's own wildfire aggregate. The raw Track and Eagle payloads sharing this
-          // field are traceability, not API surface — same rule as projectsRepo.publicView.
-          sources: projectsRepo.publicView(p).sources || {}
-        }));
+        const mapped = projects.map(p => {
+          // Redact the repository ROW, then map. The mapper below emits eagle-search wire names
+          // (`_id`, `proponent.name`, `location`), so the catalog must never run over its output
+          // (docs/rbac-architecture.md §2 item 9).
+          const row = redactForAccess('projects', p, access);
+          return {
+            // The Eagle id, for the same reason as the AI Search branch above.
+            _id: row.eagleId || String(row.id),
+            _schemaName: 'Project',
+            id: String(row.id),
+            // NULL when absent, NOT the DEMI id, and a String to match the index branch. `== null`
+            // and not `||`, because Track id 0 is falsy. See
+            // wiki Search-Query-Construction#project-id-spaces.
+            trackProjectId: row.trackProjectId == null ? null : String(row.trackProjectId),
+            // COSMOS FIELD NAMES, not the indexer's aliases. Reading `p.status` here was always
+            // undefined, so `|| 'Active'` fired on every row and asserted that every project in the
+            // registry is Active. See wiki Search-Index-Reference#cosmos-and-index-field-names-differ.
+            legacyEagleId: row.eagleId || '',
+            name: row.name || 'Unnamed Project',
+            sector: row.sector || 'Other',
+            // ONE stored name: the writers now rename at the edge (`controllers/nosql/project.js`),
+            // so `status` is a wire name only and no row can carry it.
+            status: row.projectState || 'Active',
+            // Same helper as the AI Search branch — one definition of the fallback centroid.
+            centroid: geoPoint(row.centroid),
+            region: row.region || 'British Columbia',
+            // `location` on the wire, `address` at rest: the merge renames Eagle's `location` on the
+            // way in, and nothing read it back. THE COSMOS BRANCH ONLY — `address` is not a column of
+            // the `projects` index, so the two mappers disagree about this one field until it is.
+            location: row.address || '',
+            description: row.description || 'No project description provided.',
+            proponent: { name: row.proponentName || 'Proponent Organization' },
+            // Cosmos field names again: `p.type` would be undefined on every row of the DEFAULT
+            // view, the one a visitor lands on before typing a keyword.
+            type: row.projectType || '',
+            currentPhaseName: eagleQuery.ref(row.currentPhaseName?._id, row.currentPhaseName?.name),
+            eacDecision: eagleQuery.ref(row.eacDecision?._id, row.eacDecision?.name),
+            decisionDate: row.decisionDate || null,
+            // 'public' in the read ACL is what makes a record public; isPublished mirrors it, and
+            // the redactor derives it. The frontend derives its staged/admitted badge from this.
+            isPublished: row.isPublished,
+            // Only DEMI's own wildfire aggregate. The raw Track and Eagle payloads sharing this
+            // field are traceability, not API surface — the catalog publishes `sources.wildfire`
+            // and nothing else.
+            sources: row.sources || {}
+          };
+        });
 
         return res.json([{ searchResults: mapped, count }]);
       } catch (cosmosErr) {

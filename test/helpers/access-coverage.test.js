@@ -31,9 +31,10 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { code, routeChains } = require('./router-source');
+const { code, routeChains, balancedArgs, jsonEmissions } = require('./router-source');
 
 const REPO_DIR = path.join(__dirname, '..', '..', 'src', 'repositories');
+const CONTROLLER_DIR = path.join(__dirname, '..', '..', 'src', 'controllers');
 
 /**
  * Repositories that legitimately hold no ACL gate, each with the reason it does not need one.
@@ -208,6 +209,39 @@ test('access gate coverage', async (t) => {
       routes.filter(r => r.method === 'get' && r.path.startsWith('/wildfires')).length, 0,
       'a GET /wildfires route exists again — wildfires.js now needs a real ACL gate'
     );
+  });
+
+  /**
+   * The ROW gate says which records; the field catalog says which attributes of one. This is the
+   * second half, checked per CALL SITE rather than per file (docs/rbac-architecture.md §2 item 1):
+   * a response that emits a stored project without `redactForAccess` ships `read[]`, `vis`, the
+   * raw `sources` payloads and the Cosmos system fields to whoever asked.
+   */
+  await t.test('every project response site redacts', () => {
+    const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
+    const emissions = jsonEmissions(controller);
+    assert.ok(emissions.length >= 15, `expected the project response sites, found ${emissions.length}`);
+
+    // A site emitting a stored row names it BARE (`redactForAccess('projects', saved, access)`) or
+    // maps over the page. The negative lookahead for a dot is what separates that from a literal
+    // that merely reads a scalar off one: `{ id: saved.id, action: 'upsert' }` carries no ACL, and
+    // counting it would fail this test against correct code — which is how a source invariant gets
+    // deleted by the next person instead of fixed.
+    const ROW_SOURCES = /\b(saved|existing|items|page|project)\b(?!\s*\.)|\b(items|page)\.map\(/;
+    const unredacted = emissions.filter(e => ROW_SOURCES.test(e) && !/redactForAccess/.test(e));
+    assert.deepStrictEqual(unredacted, [],
+      'these emit a stored project row without redactForAccess — each ships read[], vis and sources');
+
+    // The search fallback redacts one step EARLIER, inside the mapper, because the mapper emits
+    // eagle-search wire names and the catalog must never run over its output (§2 item 9). Its
+    // `res.json` argument therefore says nothing, so the mapper body is what gets asserted.
+    const search = fs.readFileSync(path.join(CONTROLLER_DIR, 'search.js'), 'utf8');
+    const mappers = balancedArgs(search, /\bprojects\.map\(/g);
+    assert.strictEqual(mappers.length, 1, 'expected one Cosmos project mapper in search.js');
+    assert.match(mappers[0], /redactForAccess\('projects'/,
+      'the Cosmos project fallback maps a raw repository row');
+    assert.ok(!/\bp\.[A-Za-z]/.test(mappers[0]),
+      'the mapper reads fields off the redacted row, never off the raw repository row');
   });
 
   await t.test('each /links route carries the gate its verb requires', () => {

@@ -43,4 +43,31 @@ function routeChains(source) {
     .map(m => ({ method: m[1], path: m[2], chain: m[3] }));
 }
 
-module.exports = { code, routeChains, ROUTER_PATH };
+/**
+ * The ARGUMENT text of every call `opener` matches, read to its MATCHING paren rather than to the
+ * end of the line — a call that spans lines is most of them in these controllers, and a
+ * line-bounded scan silently misses `deleted: <row>` three lines below its `res.json(`.
+ *
+ * Comments are stripped first, so a call site named only in prose cannot satisfy an assertion.
+ */
+function balancedArgs(source, opener) {
+  const body = code(source);
+  const args = [];
+  for (let m = opener.exec(body); m; m = opener.exec(body)) {
+    let depth = 1;
+    let i = m.index + m[0].length;
+    for (; i < body.length && depth > 0; i++) {
+      if (body[i] === '(') depth++;
+      else if (body[i] === ')') depth--;
+    }
+    args.push(body.slice(m.index + m[0].length, i - 1).trim());
+  }
+  return args;
+}
+
+/** Every `res.json(...)` / `res.status(n).json(...)` argument in a controller. */
+function jsonEmissions(source) {
+  return balancedArgs(source, /res(?:\.status\(\d+\))?\.json\(/g);
+}
+
+module.exports = { code, routeChains, balancedArgs, jsonEmissions, ROUTER_PATH };

@@ -19,6 +19,7 @@ const { purgeProject } = require('../../helpers/purge');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
+const { redactForAccess } = require('../../vis/redact');
 
 /**
  * A project's visibility change, carried to its index row and re-derived onto its documents.
@@ -84,7 +85,7 @@ exports.getProjects = async (req, res) => {
     // Continuation token is returned in a header so the body stays a plain array — the
     // frontend consumes it as one today and paging is opt-in.
     if (continuationToken) res.setHeader('x-continuation-token', continuationToken);
-    return res.json(items.map(projects.publicView));
+    return res.json(items.map(p => redactForAccess('projects', p, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -100,7 +101,7 @@ exports.getProject = async (req, res) => {
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    return res.json(projects.publicView(project));
+    return res.json(redactForAccess('projects', project, access));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -108,6 +109,7 @@ exports.getProject = async (req, res) => {
 
 exports.createProject = async (req, res) => {
   try {
+    const access = resolveAccess(req);
     const {
       trackProjectId, name, description, sector, region, status, projectState,
       centroid, isPublished
@@ -141,7 +143,7 @@ exports.createProject = async (req, res) => {
       // route since the drift appeared.
       //
       // BOTH INPUT NAMES, and the same precedence PUT uses. Accepting only the wire name made a
-      // GET-then-POST round trip lose the state silently: `publicView` returns the stored name, so
+      // GET-then-POST round trip lose the state silently: a GET returns the stored name, so
       // the body a caller sends back carries `projectState`, which this route dropped on the floor
       // while its sibling honoured it.
       projectState: projectState || status || '',
@@ -164,7 +166,7 @@ exports.createProject = async (req, res) => {
       detail: { name: saved.name, isPublished: saved.isPublished }
     });
 
-    return res.status(201).json(projects.publicView(saved));
+    return res.status(201).json(redactForAccess('projects', saved, access));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -244,7 +246,7 @@ exports.updateProject = async (req, res) => {
 
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
     // narrowed.
-    return res.json(projects.publicView(saved));
+    return res.json(redactForAccess('projects', saved, access));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -329,7 +331,7 @@ exports.deleteProject = async (req, res) => {
 
     return res.json({
       message: 'Project deleted successfully',
-      deleted: projects.publicView(existing),
+      deleted: redactForAccess('projects', existing, access),
       removedFromSearch
     });
   } catch (err) {

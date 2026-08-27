@@ -8,6 +8,7 @@
 
 const { catalogFor, CATALOGS } = require('./catalog');
 const { ANONYMOUS_LEVEL } = require('./level');
+const config = require('../config');
 
 /** The levels a dial may name. A dial outside this set is invalid, not clamped. */
 const LEVELS = [0, 1, 2, 3, 4];
@@ -52,6 +53,9 @@ function visibleChildren(catalog, dials, level, key, value) {
     if (!catalogKey.startsWith(prefix)) continue;
     const child = catalogKey.slice(prefix.length);
     if (!(child in value)) continue;
+    // `sources.*` leaves the API only for the keys ENRICHMENT_SOURCES names (empty in prod) — the
+    // allowlist publicView held before this replaced it.
+    if (key === 'sources' && !config.enrichmentSources.includes(child)) continue;
     if (visible(level, effectiveVis(catalog[catalogKey], dials[catalogKey]))) out[child] = value[child];
   }
 

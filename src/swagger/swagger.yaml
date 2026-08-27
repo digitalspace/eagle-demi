@@ -94,7 +94,10 @@ paths:
   /api/projects/{id}:
     get:
       summary: Get project by ID
-      description: Get details of a single project. Returns 404 to unauthenticated users if unpublished.
+      description: >-
+        Get details of a single project. Returns 404 to unauthenticated users if unpublished.
+        Which FIELDS the response carries depends on the caller's visibility level, so a
+        privileged caller sees a superset of the anonymous response.
       parameters:
         - name: id
           in: path

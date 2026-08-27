@@ -264,8 +264,9 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   //
   // Storage only. This used to claim the API never read it, which was not true: the project
   // controller and the search fallback both returned it verbatim on anonymous routes. What keeps
-  // it off the wire is `publicView` in repositories/projects.js, applied at res.json — not this
-  // comment, and not the read ACL, which gates rows rather than fields.
+  // it off the wire is the field catalog (`src/vis/catalog/projects.js`, `sources` at maxVis 0),
+  // applied at res.json — not this comment, and not the read ACL, which gates rows rather than
+  // fields.
   merged.sources = {
     track,
     eagle: eagle || null

@@ -407,44 +407,44 @@ Engine only; still no call sites.
 
 The behaviour change. Keep the diff to the projects entity.
 
-- [ ] `src/controllers/nosql/project.js:87` — `items.map(p => redactForAccess('projects', p, access))`.
-- [ ] `:103` — `redactForAccess('projects', project, access)`.
-- [ ] `:167` — createProject has no `access` in scope; add `const access = resolveAccess(req);` at
+- [x] `src/controllers/nosql/project.js:87` — `items.map(p => redactForAccess('projects', p, access))`.
+- [x] `:103` — `redactForAccess('projects', project, access)`.
+- [x] `:167` — createProject has no `access` in scope; add `const access = resolveAccess(req);` at
       the top of the handler (`:109`) and use it.
-- [ ] `:247` — updateProject already has `access` (`:175`).
-- [ ] `:332` — deleteProject already has `access` (`:314`).
-- [ ] `src/controllers/search.js:414` — replace `projectsRepo.publicView(p).sources || {}` with the
+- [x] `:247` — updateProject already has `access` (`:175`).
+- [x] `:332` — deleteProject already has `access` (`:314`).
+- [x] `src/controllers/search.js:414` — replace `projectsRepo.publicView(p).sources || {}` with the
       redacted row: hoist `const row = redactForAccess('projects', p, access);` above the mapper
       literal (`:374`) and read `row.sources || {}`, `row.isPublished` (replacing `:408-411`), and
       every other `p.<field>` in `:374-415`. Doc §2 item 9: redact the repository row, then map —
       the mapper emits eagle-search wire names, so the redactor must never run on its output.
-- [ ] `src/repositories/projects.js:141-158`: delete `publicView` and its export (`:257`); remove
+- [x] `src/repositories/projects.js:141-158`: delete `publicView` and its export (`:257`); remove
       the now-unused `config` import if nothing else uses it (`projects.js:16`).
-- [ ] Update the comment at `src/merge/project.js:262-265` which names `publicView`.
-- [ ] `src/swagger/swagger.yaml:94-107`: note on `GET /api/projects/{id}` that the response fields
+- [x] Update the comment at `src/merge/project.js:262-265` which names `publicView`.
+- [x] `src/swagger/swagger.yaml:94-107`: note on `GET /api/projects/{id}` that the response fields
       depend on the caller's level. No new endpoint this phase.
 - Tests:
-  - [ ] `test/controllers/nosql/document-projection.test.js` — the projects half
+  - [x] `test/controllers/nosql/document-projection.test.js` — the projects half
         (`:191-275`) is rewritten against `redactForAccess`: same assertions (`read`, `_etag`,
         `sources.track` absent; `sources.wildfire` present when `ENRICHMENT_SOURCES` names it;
         `isPublished` derived) so the old guarantees are re-proved, not deleted.
-  - [ ] Extend `test/helpers/access-coverage.test.js` — new subtest
+  - [x] Extend `test/helpers/access-coverage.test.js` — new subtest
         `every project response site redacts`: reuse the balanced-paren `res.json(` scanner from
         `test/controllers/nosql/document-projection.test.js:143-188` over
         `src/controllers/nosql/project.js` and `src/controllers/search.js`, per CALL SITE not per
         file (doc §2 item 1); a site naming a bare repository row (`saved|existing|items|p|page`)
         without `redactForAccess` fails. Falsifiable: reverting any one of the six sites fails it.
-  - [ ] New `test/vis/tripwire.test.js` — boot the app the way `test/app.boot.test.js:20-29` does,
+  - [x] New `test/vis/tripwire.test.js` — boot the app the way `test/app.boot.test.js:20-29` does,
         stub the projects repository to return a row carrying every restricted name, then
         `GET /api/projects/:id`, `GET /api/projects` and `GET /api/search?dataset=Project`
         anonymously and assert the raw response TEXT contains none of
         `['"read"','"_rid"','"_self"','"_attachments"','"_etag"','"sources":{"track"','"vis"']`.
-  - [ ] Same file: `an error response carries no raw document` — force the handler into its
+  - [x] Same file: `an error response carries no raw document` — force the handler into its
         `serverError` path (`src/helpers/response.js`) and assert the same absence, plus that the
         logger line carries `error`/`stack` only (doc §2 item 1: raw docs now flow through error and
         log paths).
 - Acceptance:
-  - [ ] `node --test test/vis/tripwire.test.js test/helpers/access-coverage.test.js test/controllers/nosql/document-projection.test.js`, then `yarn test`.
+  - [x] `node --test test/vis/tripwire.test.js test/helpers/access-coverage.test.js test/controllers/nosql/document-projection.test.js`, then `yarn test`.
   - [ ] Before/after on test, anonymous:
         `curl -s https://demi-api-test.azurewebsites.net/api/projects?pageSize=100 | jq -S . > /tmp/before.json`
         (run before merging), same after the deploy, `diff` → only the Cosmos system fields and any
@@ -452,6 +452,26 @@ The behaviour change. Keep the diff to the projects entity.
   - [ ] `DEMI_DIFF_URL=https://demi-api-test.azurewebsites.net/api/search node src/scripts/search-diff.js --json`
         before and after: 0 NEW DIFF cases (pre-existing `IGNORED`/`proponent` cases stay). Date the
         result in `TODO-rbac.md`.
+
+### U9 deviations from the unit spec
+
+- The `ENRICHMENT_SOURCES` gate U8 flagged lives in `visibleChildren` (`src/vis/redact.js`), the one
+  place dotted children are built, rather than in `redactForAccess` after the loop. Same effect, no
+  second pass over the output.
+- Level 0 now sees `sources.track`/`sources.eagle`, `read[]`, `vis` and the Cosmos system fields on
+  a project response. `publicView` stripped those from every caller. This is doc §2 item 4 ("level 0
+  sees every field") holding, not a regression — anonymous output is unchanged.
+- `src/controllers/search.js` no longer reads `p.proponent?.name`. The merge emits `proponentName`
+  and never `proponent`, so the key is uncatalogued and the redactor removes it; the fallback could
+  only ever have fired on a row no writer produces.
+- The balanced-paren `res.json(` scanner moved from `document-projection.test.js` into
+  `test/helpers/router-source.js` (`balancedArgs`, `jsonEmissions`) so both suites share one copy,
+  and `withServer` moved from `test/app.boot.test.js` into `test/helpers/with-server.js`.
+- `access-coverage.test.js` asserts the search mapper BODY, not its `res.json` argument: search
+  redacts one step earlier (doc §2 item 9), so the emission text names no row. All six sites were
+  mutation-checked — reverting any one fails the subtest.
+- The two acceptance steps left unticked need the deployed app: the anonymous `/api/projects` diff
+  and `search-diff.js`. Run both against test after this merges.
 
 ---
 

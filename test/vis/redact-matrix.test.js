@@ -8,7 +8,11 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { visible, effectiveVis, redactForAccess, redactAllForAccess } = require('../../src/vis/redact');
+const config = require('../../src/config');
 const { code } = require('../helpers/router-source');
+
+// The redactor allowlists `sources.*` by ENRICHMENT_SOURCES; test deploys name wildfire.
+config.enrichmentSources = ['wildfire'];
 
 const REDACT_PATH = path.join(__dirname, '..', '..', 'src', 'vis', 'redact.js');
 
