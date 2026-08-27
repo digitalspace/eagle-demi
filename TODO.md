@@ -67,7 +67,7 @@ claim to a measurement with a date; reviewer takes a positional sha (`review.sh 
 
 ## 5. OpenShift retirement — Daniel says when (costs nothing)
 
-- [x] ~~eagle-public dev/test pods, DEMI OpenShift stack~~ spun down 2026-08-26 (scale, not delete; worker cronjob suspended).
+- [x] ~~eagle-public pods (dev, test, prod), DEMI OpenShift stack~~ all scaled to 0 by 2026-08-27 (scale, not delete; worker cronjob suspended; AFD serves test+prod, dev site has no root until repointed). Deletion on a later go.
 
 ## 6. Standing rules — do not re-derive
 
