@@ -32,12 +32,14 @@ const projects = require('../../src/repositories/projects');
 const boundaries = require('../../src/repositories/boundaries');
 const chunksRepo = require('../../src/repositories/chunks');
 const apiKeys = require('../../src/repositories/api-keys');
+const links = require('../../src/repositories/links');
 const aiSearch = require('../../src/search/ai-search');
 const wildfiresRepo = require('../../src/repositories/wildfires');
 const documentController = require('../../src/controllers/nosql/document');
 const boundaryController = require('../../src/controllers/nosql/boundary');
 const projectController = require('../../src/controllers/nosql/project');
 const apiKeyController = require('../../src/controllers/nosql/api-key');
+const linkController = require('../../src/controllers/nosql/link');
 const wildfireController = require('../../src/controllers/wildfire');
 
 function mockRes() {
@@ -314,6 +316,48 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(revoked.length, 1);
     assert.strictEqual(revoked[0].Action, 'apikey.revoke');
     assert.strictEqual(revoked[0].TargetId, res.body.id);
+  });
+
+  await t.test('short link create, repoint and delete write one row each', async () => {
+    // Links are hard-deleted, so these rows are the only surviving record that a code existed and
+    // where it pointed — which is the whole reason the repoint row carries both urls.
+    t.mock.method(links, 'create', async (record) => record);
+
+    const res = mockRes();
+    const created = await rowsFrom(() => linkController.createLink({
+      body: { url: 'https://projects.eao.gov.bc.ca/p/207', note: 'poster' },
+      query: {}, params: {}, user: STAFF
+    }, res));
+
+    assert.strictEqual(res.statusCode, 201);
+    assert.strictEqual(created.length, 1);
+    assert.strictEqual(created[0].Action, 'link.create');
+    assert.strictEqual(created[0].TargetId, res.body.code);
+    assert.strictEqual(created[0].Detail.custom, false);
+
+    t.mock.method(links, 'getById', async () => ({
+      id: res.body.code, url: 'https://projects.eao.gov.bc.ca/p/207', note: 'poster'
+    }));
+    t.mock.method(links, 'repoint', async (code, url) => ({ id: code, url }));
+
+    const updated = await rowsFrom(() => linkController.updateLink({
+      params: { code: res.body.code }, body: { url: 'https://projects.eao.gov.bc.ca/p/311' },
+      query: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(updated.length, 1);
+    assert.strictEqual(updated[0].Action, 'link.update');
+    assert.strictEqual(updated[0].Detail.from, 'https://projects.eao.gov.bc.ca/p/207');
+    assert.strictEqual(updated[0].Detail.to, 'https://projects.eao.gov.bc.ca/p/311');
+
+    t.mock.method(links, 'remove', async () => true);
+    const removed = await rowsFrom(() => linkController.deleteLink({
+      params: { code: res.body.code }, query: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(removed.length, 1);
+    assert.strictEqual(removed[0].Action, 'link.delete');
+    assert.strictEqual(removed[0].TargetId, res.body.code);
   });
 
   await t.test('the wildfire sync writes one row, not one per project', async () => {

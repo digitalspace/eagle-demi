@@ -172,6 +172,11 @@ const config = {
   // frontend and eagle-admin staff users share this realm, so defaulting to ON would lock out real
   // users. Set it once every service account is registered. See helpers/auth.applyClientAllowlist.
   allowedClients:        (process.env.DEMI_ALLOWED_CLIENTS || '').split(',').map(s => s.trim()).filter(Boolean),
+  // Short links: destinations are allowlisted by hostname suffix at write time (helpers/link-url).
+  // linkBaseUrl is a Bicep app setting per environment so test hands back the test host, not prod's.
+  linkAllowedHosts:      (process.env.LINK_ALLOWED_HOSTS || 'gov.bc.ca').split(',').map(s => s.trim()).filter(Boolean),
+  linkBaseUrl:           process.env.LINK_BASE_URL || 'https://projects.eao.gov.bc.ca',
+
   ssoJwksUri:            process.env.SSO_JWKSURI || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}/protocol/openid-connect/certs`,
   ssoIssuer:             process.env.SSO_ISSUER || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}`,
 };
