@@ -39,6 +39,15 @@ db.epic.updateOne({ _schemaName: 'Config' }, { $set: { SEARCH_API_PATH: '<value>
 
 ## After a change
 
-Watch for 1 h: the App Insights 5xx rate on `demi-api-prod`, the `demi-search-availability-prod`
-webtest, and run `probe-acl.js` (26 cells) against `demi-api-prod`. Use the kill switch (`''`) if
-search answers 5xx or the ACL probe fails. The kill switch is reversible the same way.
+Watch for 1 h: the App Insights 5xx rate on `demi-api-prod` and the `demi-search-availability-prod`
+webtest. Run the ACL probe against prod explicitly (the script defaults to test):
+
+```
+DEMI_API_BASE=https://demi-api-prod.azurewebsites.net ADMIN_API_KEY=<ADMIN_API_KEY from secret demi-app-secrets in 6cdc9e-prod> \
+  node src/scripts/probe-acl.js
+```
+
+It writes to prod: it plants hidden/control rows, mints two short-lived API keys, exercises 26
+cells, then deletes the rows and revokes the keys (the tail of its output confirms the cleanup).
+Expect `26 passed, 0 failed`. Use the kill switch (`''`) if search answers 5xx or the probe fails;
+the kill switch is reversed the same way.
