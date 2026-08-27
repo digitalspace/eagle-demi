@@ -125,7 +125,8 @@ async function listWithCentroid(access) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: [isDefinedAndNotNull('centroid')],
+    // The leaf, not the object: only scalar paths are indexed (Bicep includes /centroid/type/?).
+    criteria: [isDefinedAndNotNull('centroid.type')],
     select: 'c.id, c.name, c.centroid'
   });
   return cosmos.query(CONTAINER, spec);

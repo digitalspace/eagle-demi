@@ -150,8 +150,9 @@ resource projectsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
             path: '/name/?'
           }
           {
-            // projects.js filters isDefinedAndNotNull('centroid'); unindexed that predicate scans.
-            path: '/centroid/?'
+            // Scalar leaf of the GeoJSON object: projects.js filters on centroid.type (an object path
+            // is never in the inverted index).
+            path: '/centroid/type/?'
           }
           {
             path: '/read/[]/?'
