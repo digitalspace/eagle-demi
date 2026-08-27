@@ -50,6 +50,9 @@ claim to a measurement with a date; reviewer takes a positional sha (`review.sh 
 - [x] ~~#162 minors, review minors, `_sql.fetchAll` `maxItemCount`~~ done in PR #169 (`2136e39`).
 - [x] ~~`projects.js:128` filters on `centroid` without an index path~~ done 2026-08-27 (test + prod infra applied).
 - [ ] **Watch the first scheduled prod reconcile run (2026-08-27 10:00 UTC).** `reconcileEagle`
+      Manual invoke via the Functions admin API (`POST /admin/functions/reconcileEagle`, master key)
+      ran 2026-08-27 05:07 UTC and logged `drift=0` — the timer wiring is proven; the 10:00 UTC line
+      proves the schedule. Query with `contains "[reconcile]"` (`has` splits on the brackets).
       (Functions timer, `RECONCILE_SCHEDULE` `0 0 10 * * *`, prod only) is deployed and registered;
       one prior manual run read `drift=0` on `demi-api-prod`. Check `demi-logs-prod`:
       `AppTraces | where Message contains "[reconcile] projects"`. One line a night with `drift=0`
