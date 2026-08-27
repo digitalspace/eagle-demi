@@ -29,15 +29,7 @@ claim to a measurement with a date; reviewer takes a positional sha (`review.sh 
 
 ## 1. Credentials
 
-- [ ] **1.1 Rotate the object-store keys and the OpenShift token at source — other owners.**
-      Handoff: (a) `nrs.objectstore.gov.bc.ca` access/secret keys: dev + test share secret
-      `eagle-api-minio-keys` (`6cdc9e-dev` 2020-11-24, `6cdc9e-test` 2021-02-25, never rotated; bucket
-      `asnpnn`), prod uses `nr-object-store-credential` (bucket `ozwdez`). Rotation = NRS object-store
-      owners issue new keys → update those secrets → `oc rollout restart deploy/eagle-api` per ns →
-      rerun `scripts/deploy-infra.sh <env> --live` for DEMI (its `MINIO_*` app settings come from the
-      same secrets). (b) `OPENSHIFT_TOKEN` repo secrets (eagle-api, eagle-public, eao-nginx) are the
-      `github-cicd` SA token from `6cdc9e-tools` — reissue via `oc create token`/secret, paste into
-      the three repos. Nothing in DEMI blocks on this.
+- [x] ~~**1.1 Rotate the object-store keys and the OpenShift token at source**~~ Dropped 2026-08-27 (Daniel): both belong to other owners — NRS object-storage service issues the bucket keys; a new `github-cicd` token needs write in `6cdc9e-tools` (our SA cannot; token last rotated 2026-06-09).
 - [x] ~~Rotate `RPROXY_EGUIDE_PASSWORD`; Eagle push key~~ done: not rotated 2026-08-26 (business-issued password; `TYPESENSE_SEARCH_KEY` deleted); push key issued 2026-08-27 in `demi-push-secret`.
 - [x] ~~Reissue the TEST push key on `demi-service-write`~~ Done 2026-08-27: key `f607628b36733722` (expires 2026-11-25) in `demi-push-secret` (`6cdc9e-test`), eagle-api test restarted, old `b319b93a1bf35206` revoked.
 ## 2. Decisions — Daniel
