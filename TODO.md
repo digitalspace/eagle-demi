@@ -62,7 +62,7 @@ claim to a measurement with a date; reviewer takes a positional sha (`review.sh 
 
 ## 5. OpenShift retirement — Daniel says when (costs nothing)
 
-- [x] ~~eagle-public pods (dev, test, prod), DEMI OpenShift stack~~ all scaled to 0 by 2026-08-27 (scale, not delete; worker cronjob suspended; AFD serves test+prod, dev site has no root until repointed). Deletion on a later go.
+- [x] ~~eagle-public pods (dev, test, prod), DEMI OpenShift stack~~ dev + test deleted 2026-08-27 (Daniel's go): every eagle-demi object in `6cdc9e-dev` (deployments, StatefulSet + PVC, cronjob, job, services, routes, secrets, imagestreams) and eagle-public deployments/services/imagestream in dev and test incl. the feature-branch route. Kept: `Route/eagle-public` in dev and test (Keycloak hosts, point at rproxy). Prod `eagle-public` stays 0/0, not deleted.
 
 ## 6. Standing rules — do not re-derive
 
