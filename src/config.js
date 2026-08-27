@@ -113,7 +113,7 @@ const config = {
   // read.
   //
   // CAD, not USD, because this subscription is billed in CAD — `az consumption budget list` reports
-  // `demi-budget-dev` in CAD, and every other cost figure in TODO.md and the wiki is CAD. A per-query
+  // `demi-budget-dev` in CAD, and every other cost figure in the wiki is CAD. A per-query
   // number in a second currency is one someone has to convert before it can be compared to the
   // budget it draws down.
   //
