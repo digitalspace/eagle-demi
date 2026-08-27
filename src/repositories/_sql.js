@@ -13,7 +13,7 @@ const cosmos = require('../db/cosmos-nosql');
 const { visibilityFor, andClauses, MAX_PAGE_SIZE } = require('../helpers/access-sql');
 const { catalogFor } = require('../vis/catalog');
 const { visible } = require('../vis/redact');
-const { ANONYMOUS_LEVEL } = require('../vis/level');
+const { ANONYMOUS_LEVEL, LEVELS } = require('../vis/level');
 
 /**
  * A criterion is a SQL fragment plus its parameters — the same shape as readClause/scopeClause,
@@ -94,10 +94,15 @@ function selectWhere({ access, partitionField, criteria = [], select = '*', orde
  *
  * @param {string} entity          a key of src/vis/catalog
  * @param {object} access          from resolveAccess()
- * @param {string} partitionField  'id' on projects, 'projectId' elsewhere
+ * @param {string} partitionField  'id' on projects, 'projectId' elsewhere. Required: a default
+ *   would give the next entity a projection missing its own partition key.
  */
-function selectFor(entity, access, partitionField = 'id') {
-  const level = access && access.level !== undefined ? access.level : ANONYMOUS_LEVEL;
+function selectFor(entity, access, partitionField) {
+  if (!partitionField) throw new Error('[vis] selectFor needs the entity partition field');
+
+  // Same fail-closed resolution as redact.js: `null <= maxVis` is true for every ceiling, so an
+  // unrecognised level must land on 4 rather than reach Cosmos as a comparison that always passes.
+  const level = LEVELS.includes(access && access.level) ? access.level : ANONYMOUS_LEVEL;
   if (level === 0) return '*';
 
   const fields = new Set(['id', partitionField, 'read', 'isPublished', 'vis']);

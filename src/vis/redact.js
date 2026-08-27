@@ -7,11 +7,8 @@
  */
 
 const { catalogFor, CATALOGS } = require('./catalog');
-const { ANONYMOUS_LEVEL } = require('./level');
+const { ANONYMOUS_LEVEL, LEVELS } = require('./level');
 const config = require('../config');
-
-/** The levels a dial may name. A dial outside this set is invalid, not clamped. */
-const LEVELS = [0, 1, 2, 3, 4];
 
 // Predicates are Phase 3 (docs/rbac-architecture.md §2 item 7). Throwing at load rather than
 // ignoring `when` stops a half-shipped predicate from silently reading as "always visible".

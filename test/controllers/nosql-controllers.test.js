@@ -33,6 +33,7 @@ const ANON = { query: {}, params: {}, body: {} };
 const ADMIN_USER = { realm_access: { roles: ['sysadmin'] } };
 // `demi-service-write` is level 2 — the tier every WRITE_ROLES holder maps to.
 const WRITER_USER = { realm_access: { roles: ['demi-service-write'] } };
+const STAFF_USER = { realm_access: { roles: ['staff'] } };
 
 test('nosql project controller', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -227,17 +228,46 @@ test('nosql project controller', async (t) => {
    * shown would overwrite a value they cannot see (docs/rbac-architecture.md §2 item 1).
    */
   await t.test('PUT rejects a body key the caller cannot see', async () => {
-    t.mock.method(projects, 'getById', async () => ({ id: '207', trackProjectId: 207, name: 'P' }));
+    // `staff` is level 2 — a caller `requireWrite` actually admits. The per-record dial is what
+    // hides `description` from them, so the refusal cannot come from the level alone.
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207', trackProjectId: 207, name: 'P', description: 'old', vis: { description: 1 }
+    }));
     let upserted = false;
     t.mock.method(projects, 'upsert', async (doc) => { upserted = true; return doc; });
 
     const res = mockRes();
     await projectController.updateProject(
-      { params: { id: '207' }, query: {}, body: { complianceLead: 'x' } }, res);
+      { params: { id: '207' }, query: {}, user: STAFF_USER, body: { description: 'x' } }, res);
 
     assert.strictEqual(res.statusCode, 400);
-    assert.match(res.body.error, /complianceLead/, 'the message names the offending key');
+    assert.match(res.body.error, /description/, 'the message names the offending key');
     assert.strictEqual(upserted, false, 'nothing is written on a refused body');
+  });
+
+  await t.test('PUT ignores Cosmos system keys in the body', async () => {
+    // A caller who GETs a project and PUTs the response back sends these. They are catalogued at
+    // maxVis 0, so refusing them would 400 a round trip that changes nothing.
+    const stored = { id: '207', trackProjectId: 207, name: 'P', _etag: '"0x8DF00728"' };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, user: WRITER_USER,
+      body: {
+        name: 'P2', _rid: 'r', _self: 'dbs/x/colls/y/docs/z', _attachments: 'attachments/',
+        _ts: 1756000000, _etag: '"stale"'
+      }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.name, 'P2');
+    for (const key of ['_rid', '_self', '_attachments', '_ts']) {
+      assert.ok(!(key in saved), `${key} must not be written from a request body`);
+    }
+    assert.strictEqual(saved._etag, stored._etag, 'the stored concurrency token wins over the body');
   });
 
   await t.test('PUT rejects vis for every caller', async () => {

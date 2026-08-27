@@ -187,10 +187,17 @@ exports.updateProject = async (req, res) => {
     // `read` is derived from `isPublished` rather than taken verbatim, so the two cannot disagree:
     // read[] is authoritative and isPublished mirrors it. Spreading the body straight in let a
     // writer hand-craft an ACL that no gate had ever seen.
+    //
+    // The Cosmos bookkeeping keys are dropped for a different reason: a caller who GETs a project
+    // and PUTs the response back sends them, and they are catalogued at maxVis 0 (or 2 for
+    // `_etag`), so the guard below would 400 an otherwise ordinary edit. `...existing` supplies
+    // the real values.
     const {
       id: _ignoredId, trackProjectId: _ignoredTrackId,
       read: _ignoredRead, isPublished,
       status: wireStatus,
+      _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
+      _ts: _ignoredTs, _etag: _ignoredEtag,
       ...changes
     } = req.body;
 

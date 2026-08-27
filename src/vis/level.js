@@ -20,6 +20,9 @@ const ROLE_LEVELS = {
 /** No recognised role — the fail-closed level (docs/rbac-architecture.md §1, "Fail closed"). */
 const ANONYMOUS_LEVEL = 4;
 
+/** Every level that exists. Anything else — `null`, a string, 7 — is invalid, not clamped. */
+const LEVELS = [0, 1, 2, 3, 4];
+
 /** Lowest level of any recognised role; an unknown role grants nothing. */
 function levelFromRoles(roles) {
   if (!Array.isArray(roles)) return ANONYMOUS_LEVEL;
@@ -32,4 +35,4 @@ function levelFromRoles(roles) {
   return level;
 }
 
-module.exports = { ROLE_LEVELS, ANONYMOUS_LEVEL, levelFromRoles };
+module.exports = { ROLE_LEVELS, ANONYMOUS_LEVEL, LEVELS, levelFromRoles };

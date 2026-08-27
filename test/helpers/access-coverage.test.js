@@ -220,7 +220,9 @@ test('access gate coverage', async (t) => {
   await t.test('every project response site redacts', () => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);
-    assert.ok(emissions.length >= 15, `expected the project response sites, found ${emissions.length}`);
+    // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
+    assert.strictEqual(emissions.length, 16,
+      `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // A site emitting a stored row names it BARE (`redactForAccess('projects', saved, access)`) or
     // maps over the page. The negative lookahead for a dot is what separates that from a literal

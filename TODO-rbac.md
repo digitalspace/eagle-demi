@@ -502,9 +502,9 @@ The behaviour change. Keep the diff to the projects entity.
 
 ### U10 deviations from the unit spec
 
-- `selectFor(entity, access, partitionField = 'id')` takes the partition field as an argument.
-  `_sql.js` cannot import a repository to look one up without a cycle, and defaulting it silently
-  would give the next entity a projection missing its own partition key.
+- `selectFor(entity, access, partitionField)` takes the partition field as a REQUIRED argument.
+  `_sql.js` cannot import a repository to look one up without a cycle, and defaulting it would give
+  the next entity a projection missing its own partition key.
 - The comparison is `visible(level, entry.maxVis)`, not an inline `maxVis >= level`, so doc §2 item
   11 still holds: the level order is assumed in exactly one function.
 - `repositories.test.js` "list criteria carry no provenance predicate" now reads the WHERE clause
