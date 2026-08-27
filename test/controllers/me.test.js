@@ -1,9 +1,12 @@
 'use strict';
 
+process.env.NODE_ENV = 'test';
+
 const test = require('node:test');
 const assert = require('node:assert');
 
-const meController = require('../../src/controllers/nosql/me');
+const meController = require('../../src/controllers/me');
+const { withServer } = require('../helpers/with-server');
 
 function mockRes() {
   return {
@@ -28,5 +31,13 @@ test('me controller', async (t) => {
     meController.getMe(req, res);
 
     assert.deepStrictEqual(Object.keys(res.body).sort(), ['level', 'roles', 'tier']);
+  });
+
+  await t.test('the mounted route answers an anonymous request with 200', async () => {
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/api/me`);
+      assert.strictEqual(res.status, 200);
+      assert.deepStrictEqual(await res.json(), { roles: ['public'], level: 4, tier: 'public' });
+    });
   });
 });

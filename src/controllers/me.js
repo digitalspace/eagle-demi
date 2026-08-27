@@ -5,7 +5,7 @@
  * (src/routes/api.js), so an anonymous caller gets 200 with the public tier rather than a 401.
  */
 
-const { resolveAccess } = require('../../helpers/access-sql');
+const { resolveAccess } = require('../helpers/access-sql');
 
 exports.getMe = (req, res) => {
   const access = resolveAccess(req);

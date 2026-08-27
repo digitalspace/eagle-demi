@@ -652,7 +652,7 @@ Acceptance
 
 Branch: `feat/vis-me-endpoint`
 
-- [x] New `exports.getMe` in `src/controllers/nosql/me.js` (new file, ~15 lines): `resolveAccess(req)` then `res.json({ roles: access.roles, level: access.level, tier: access.tier })`. No Cosmos read.
+- [x] New `exports.getMe` in `src/controllers/me.js` (no Cosmos read, so beside `config.js`, not under `nosql/`) (new file, ~15 lines): `resolveAccess(req)` then `res.json({ roles: access.roles, level: access.level, tier: access.tier })`. No Cosmos read.
 - [x] Route `router.get('/me', passiveAuthMiddleware, meController.getMe)` in `src/routes/api.js`, beside `/config` at `:38`. Passive, not `authMiddleware`: an anonymous caller must get `{ roles: ['public'], level: 4, tier: 'public' }` rather than a 401.
 - [x] `src/swagger/swagger.yaml`: add `/api/me` under `paths:` (`:15`), before `/api/projects` (`:39`); response schema in `components:` (`:499`).
 

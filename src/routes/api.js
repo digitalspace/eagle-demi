@@ -33,7 +33,7 @@ const searchController = require('../controllers/search');
 
 const dbController = require('../controllers/db');
 const configController = require('../controllers/config');
-const meController = require('../controllers/nosql/me');
+const meController = require('../controllers/me');
 
 // Config Route
 router.get('/config', configController.getConfig);
