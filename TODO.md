@@ -86,7 +86,7 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 - [x] ~~Review minors still real~~ Done in PR #169.
 - [x] ~~`_sql.fetchAll` still passes `maxItemCount`,~~ Done in PR #169: `maxItemCount` dropped; rows appended without spread.
 - [x] ~~`projects.js:128` filters on `centroid` without an index path~~ Done: filter moved to the scalar leaf
-      `centroid.type` and `/centroid/type/?` indexed (Bicep, PR); applied with the next infra deploy.
+      `centroid.type` and `/centroid/type/?` indexed; applied 2026-08-27 (`infra-38f2905-002451` test, `infra-38f2905-002943` prod).
 - [ ] Nightly reconcile + drift alarm for the Eagle push: the only thing that catches a
       hard-deleted document (`findOneAndDelete`, no tombstone). Script #171, seed's own admission
       rule #175, nightly run + alert #177 (deployed: infra `infra-bdca13b-211420`, app `v0.18.0-211917`,
@@ -100,7 +100,7 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
       `AppTraces | where Message contains "[reconcile] projects"`. One line a night with `drift=0`
       is clean; NO line means the timer never fired, and nothing alerts on that.
 - [x] ~~Unused Cosmos index paths (`wildfires` spatial, projects composite, five scalars): verified
-      removable; only with a Bicep deploy that happens for another reason.~~ Done in PR: dropped
+      removable; only with a Bicep deploy that happens for another reason.~~ Done (applied 2026-08-27 with `infra-38f2905-*`): dropped
       `projects` `/trackProjectId/?` + `/updatedAt/?` + the `[isPublished, name]` composite,
       `documents` `/fileExt/?` + `/displayName/?` + `/updatedAt/?`, `boundaries` `/code/?`, and the
       `wildfires` `/location/*` spatial index. **NOT applied yet** — it takes effect on the next
