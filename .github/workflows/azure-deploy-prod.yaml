@@ -16,11 +16,9 @@
 # published only after every deploy job has gone green, which makes a published release mean "this
 # version is in production" rather than "somebody intended to ship it". Nothing else publishes.
 #
-# ONE REAL TARGET TODAY: the extractor Function App. Everything else in the prod cutover is
-# either ARM — which DEMI's posture bars from CI, see the credential note below — or VNet-bound,
-# and a GitHub runner has no route into the VNet. `demi-api-prod` is the second target and wants
-# the identical shape, so it is a second job here rather than a second workflow; it is gated on
-# the app existing and does nothing until `demi.eao.gov.bc.ca` is stood up.
+# TWO TARGETS, each gated on the app existing: `demi-api-prod` (live) and the extractor Function
+# App (not stood up in prod). Everything else in prod is ARM — which DEMI's posture bars from CI,
+# see the credential note below — or VNet-bound, and a GitHub runner has no route into the VNet.
 #
 # ── PREREQUISITES, none of which this workflow creates ───────────────────────────────────────
 # Created by hand, once:
@@ -29,11 +27,10 @@
 #     - the extractor, deployed from `azure/modules/extractor.bicep` — see its header for the
 #       standalone `az deployment group create` and the traps around it. THIS WORKFLOW SHIPS
 #       CODE ONLY; it never runs an ARM deployment.
-#     - UAMI `demi-cicd-prod`, holding **Website Contributor on the extractor Function App
-#       ALONE**. Nothing at resource-group scope, nothing on `demi-search-prod`, no Storage
-#       roles. That is what makes "CI cannot run an ARM deployment" a fact rather than a
-#       convention. The role assignment cannot be created until the Function App exists, because
-#       it is scoped to that resource.
+#     - UAMI `demi-cicd-prod`, holding **Website Contributor on `demi-api-prod` ALONE** (add the
+#       same on the extractor once it exists). Nothing at resource-group scope, nothing on
+#       `demi-search-prod`, no Storage roles. That is what makes "CI cannot run an ARM deployment"
+#       a fact rather than a convention.
 #     - a federated credential `gh-env-prod` on `demi-cicd-prod`. Subject
 #       `repo:digitalspace/eagle-demi:environment:prod` — READ from
 #       `gh api repos/digitalspace/eagle-demi/actions/oidc/customization/sub` (the repository uses
@@ -122,10 +119,23 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # No extractor in prod yet. Skip rather than fail, so the API job behind `needs:` still runs.
+      - name: Does the extractor exist yet?
+        id: probe
+        run: |
+          if az functionapp show -g ${{ vars.AZURE_RESOURCE_GROUP }} -n ${{ env.EXTRACTOR_APP_NAME }} \
+               --query name -o tsv >/dev/null 2>&1; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "⏭️  ${{ env.EXTRACTOR_APP_NAME }} not present — skipping the extractor deploy." >> $GITHUB_STEP_SUMMARY
+          fi
+
       # `extractor/` zipped AT THE ROOT: function_app.py, extract.py, ocr.py, requirements.txt,
       # host.json. Nothing else — `test_extract.py` and `__pycache__` are developer files and the
       # remote build would carry them into the app.
       - name: Package the extractor
+        if: steps.probe.outputs.found == 'true'
         run: |
           cd extractor
           zip -r /tmp/extractor.zip function_app.py extract.py ocr.py requirements.txt host.json
@@ -137,6 +147,7 @@ jobs:
       # the deployment blob container declared in `azure/modules/extractor.bicep`, and the remote
       # build is what installs pypdfium2 and rapidocr-onnxruntime from `requirements.txt`.
       - name: Deploy the extractor
+        if: steps.probe.outputs.found == 'true'
         run: |
           az functionapp deployment source config-zip \
             -g ${{ vars.AZURE_RESOURCE_GROUP }} \
@@ -150,6 +161,7 @@ jobs:
       #
       # Trigger sync is asynchronous after a Flex publish, so poll rather than read once.
       - name: Verify the queue trigger is registered
+        if: steps.probe.outputs.found == 'true'
         run: |
           for i in {1..10}; do
             if az functionapp function list -g ${{ vars.AZURE_RESOURCE_GROUP }} \
@@ -209,13 +221,8 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # `demi-api-prod` does not exist yet — it activates with `demi.eao.gov.bc.ca`, an App
-      # Service plan and a Cosmos account, all created by hand. Until then the rest of this job
-      # skips rather than failing the workflow, so a green extractor deploy is not buried under a
-      # red job for an app nobody has stood up.
-      #
-      # The probe cannot tell "does not exist" from "the CI identity holds no role on it", and it
-      # does not need to: today both mean there is nothing here to deploy.
+      # The probe cannot tell "does not exist" from "the CI identity holds no role on it"; both
+      # mean there is nothing here to deploy.
       - name: Does demi-api-prod exist yet?
         id: probe
         run: |
