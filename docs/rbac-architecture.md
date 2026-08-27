@@ -143,8 +143,10 @@ Each item below overrides the corresponding section of the source document.
     the only place the scalar order is assumed, so switching to a clearance set (Section 3,
     question 1) changes one file plus `levelFromRoles`.
 12. **Roles.** `compliance` (grantable, ACL-bearing, `src/controllers/nosql/api-key.js:24`) is
-    added to `ROLE_LEVELS`. The duplicate `SECURE_ROLES` in `src/merge/project.js:22` (missing
-    `demi-service-read`) is removed in favour of the one in `access-sql.js`. `demi-vis-0..3` and
+    added to `ROLE_LEVELS`. The 3-role lists named `SECURE_ROLES` in `src/merge/project.js:22` and
+    `src/seed/transform.js:16` equal `ADMIN_ROLES` in `access-sql.js:42`, not `SECURE_ROLES`;
+    they build stored `read[]`, so they import `ADMIN_ROLES` and are never widened to the 5-role
+    list (that would rewrite every ACL). `demi-vis-0..3` and
     `demi-classify` are realm roles DEMI does not own; creating them in `eao-epic` is an external
     dependency with a named owner. `demi-service-write` (wiki `ADR-007-Service-to-Service-Credentials`) lands before `demi-classify`.
 13. **Dropped.** `visLevelCap` on API keys (keys already carry roles and scope), a separate
