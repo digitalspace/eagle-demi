@@ -102,7 +102,9 @@ const WIRED = [
     'the API module call — without it RECONCILE_SCHEDULE is empty, no timer is registered and the ' +
     'nightly run never fires'],
   ['deployReconcileDriftAlert', /^\s+deployReconcileDriftAlert: deployReconcileDriftAlert$/m,
-    'the observability module call — without it the drift alert is never created']
+    'the observability module call — without it the drift alert is never created'],
+  ['linkBaseUrl', /^\s+linkBaseUrl: linkBaseUrl$/m,
+    'the API module call — without it LINK_BASE_URL is empty and short links resolve nowhere']
 ];
 
 for (const [name, wiring, why] of WIRED) {
