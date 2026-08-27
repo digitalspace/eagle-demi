@@ -50,9 +50,24 @@ test('projects repository', async (t) => {
     await projects.listVisible(PUBLIC, {});
 
     const { spec } = calls[0];
-    assert.match(spec.query, /^SELECT \* FROM c WHERE /);
+    // A catalog projection, not `*` — PUBLIC carries no level, which is the anonymous one.
+    assert.match(spec.query, /^SELECT c\.\w+(, c\.\w+)* FROM c WHERE /);
     assert.match(spec.query, /EXISTS\(SELECT VALUE r FROM r IN c\.read/);
     assert.ok(spec.parameters.some(p => p.value === 'public'));
+  });
+
+  await t.test('listVisible projects through selectFor', async () => {
+    // The projection is level-driven: a sysadmin reads the whole row, and every other caller gets
+    // the catalog's ceiling for their level. Asserted on the SPEC because the narrowing happens in
+    // Cosmos, where no response assertion can see it.
+    const calls = captureQuery(t);
+    await projects.listVisible({ ...PUBLIC, level: 4 }, {});
+    await projects.listVisible(systemAccess(), {});
+
+    assert.match(calls[0].spec.query, /^SELECT c\./, 'an anonymous read projects named fields');
+    assert.ok(!calls[0].spec.query.includes('c._etag'),
+      'the concurrency token has maxVis 2 and must not leave Cosmos for an anonymous caller');
+    assert.match(calls[1].spec.query, /^SELECT \* FROM c WHERE /, 'level 0 reads the whole row');
   });
 
   await t.test('privileged list is unrestricted but still well-formed', async () => {
@@ -75,9 +90,12 @@ test('projects repository', async (t) => {
     const calls = captureQuery(t);
     await projects.listVisible(PUBLIC, { trackOnly: true, municipality: 'Vancouver' });
 
-    const { spec } = calls[0];
-    assert.ok(!spec.query.includes('sourceSystem'),
+    // The PREDICATE, not the whole statement: `c.sourceSystem` is a catalogued field, so the
+    // level projection names it in the SELECT list without filtering on it.
+    const where = calls[0].spec.query.split(' WHERE ')[1];
+    assert.ok(!where.includes('sourceSystem'),
       'a public project read is scoped by the ACL, never by which system wrote the row');
+    const { spec } = calls[0];
     assert.match(spec.query, /c\.municipality = @muni/, 'the real criteria still build');
   });
 

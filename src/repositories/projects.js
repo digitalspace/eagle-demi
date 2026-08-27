@@ -14,7 +14,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, isDefinedAndNotNull, selectWhere, countWhere, pageOptions, fetchAll } = require('./_sql');
+const { eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'projects';
 const PARTITION_FIELD = 'id';
@@ -43,6 +43,9 @@ async function listVisible(access, opts = {}) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: buildCriteria(opts),
+    // getById keeps the raw point read: canRead needs the whole row, and the controllers upsert
+    // what they read.
+    select: selectFor('projects', access, PARTITION_FIELD),
     orderBy: 'c.name ASC'
   });
 

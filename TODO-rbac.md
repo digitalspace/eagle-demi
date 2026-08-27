@@ -477,29 +477,41 @@ The behaviour change. Keep the diff to the projects entity.
 
 ## U10 — feat/vis-select-projection
 
-- [ ] New `selectFor(entity, access)` in `src/repositories/_sql.js` (beside `selectWhere`, `:68`):
+- [x] New `selectFor(entity, access)` in `src/repositories/_sql.js` (beside `selectWhere`, `:68`):
       returns `'*'` when `access.level === 0`; otherwise `c.<field>` for every catalog field with
       `maxVis >= level`, PLUS the row-plane fields the gates need — `id`, `read`, `isPublished`,
       the partition field, and `vis` (the dial must be readable to be applied). Dotted keys project
       their parent (`c.sources`) — the redactor still narrows it.
-- [ ] `src/repositories/projects.js:42-51` `listVisible`: pass `select: selectFor('projects', access)`.
+- [x] `src/repositories/projects.js:42-51` `listVisible`: pass `select: selectFor('projects', access)`.
       Leave `getById` (`:70-74`) on the raw point read — `canRead` needs the whole row and the
       controllers upsert what they read (doc §2 item 1).
-- [ ] Do NOT touch `listByIds` (`:103-116`), `listWithCentroid` (`:119-128`), `listEagleOnlyIds`,
+- [x] Do NOT touch `listByIds` (`:103-116`), `listWithCentroid` (`:119-128`), `listEagleOnlyIds`,
       `listWithEagleId` — they already project explicitly.
 - Tests: new `test/vis/select-for.test.js`
-  - [ ] `level 0 projects everything` — `selectFor('projects', {level:0}) === '*'`.
-  - [ ] `an anonymous projection omits the writer-only fields` — the string does not contain
+  - [x] `level 0 projects everything` — `selectFor('projects', {level:0}) === '*'`.
+  - [x] `an anonymous projection omits the writer-only fields` — the string does not contain
         `c._etag`; it does contain `c.name`, `c.read`, `c.id`, `c.sources` (the dotted child's
         parent).
-  - [ ] `a level 2 projection contains _etag` — literal.
-  - [ ] `the projection always carries the ACL` — `c.read` present at every level 1..4. Fails if a
+  - [x] `a level 2 projection contains _etag` — literal.
+  - [x] `the projection always carries the ACL` — `c.read` present at every level 1..4. Fails if a
         refactor drops the row-plane fields, which would blank `isPublished` for every caller.
-  - [ ] In `test/repositories/repositories.test.js`: `listVisible projects through selectFor` —
+  - [x] In `test/repositories/repositories.test.js`: `listVisible projects through selectFor` —
         capture the spec passed to `cosmos.query` (stub pattern already in that file) and assert
         `spec.query` starts with `SELECT c.` for an anonymous access and `SELECT *` for level 0.
 - Acceptance: `node --test test/vis/select-for.test.js test/repositories/repositories.test.js`,
   `yarn test`; then the same anonymous `/api/projects` diff as U9 → empty.
+
+### U10 deviations from the unit spec
+
+- `selectFor(entity, access, partitionField = 'id')` takes the partition field as an argument.
+  `_sql.js` cannot import a repository to look one up without a cycle, and defaulting it silently
+  would give the next entity a projection missing its own partition key.
+- The comparison is `visible(level, entry.maxVis)`, not an inline `maxVis >= level`, so doc §2 item
+  11 still holds: the level order is assumed in exactly one function.
+- `repositories.test.js` "list criteria carry no provenance predicate" now reads the WHERE clause
+  rather than the whole statement — `c.sourceSystem` is a catalogued field, so it appears in the
+  projection without being filtered on.
+- The anonymous `/api/projects` diff needs the deployed app; it is the same run U9 left pending.
 
 ---
 

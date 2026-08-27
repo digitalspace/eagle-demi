@@ -1,0 +1,55 @@
+'use strict';
+
+/**
+ * `selectFor` is defence in depth, not the policy: `redactForAccess` at the response boundary is
+ * what enforces visibility, and a per-record dial can restrict below `maxVis` in ways a projection
+ * cannot anticipate. What this buys is that a value the caller could never see does not leave
+ * Cosmos (docs/rbac-architecture.md §2 item 1).
+ */
+
+process.env.NODE_ENV = 'test';
+
+const test = require('node:test');
+const assert = require('node:assert');
+
+const { selectFor } = require('../../src/repositories/_sql');
+
+test('selectFor projects by level', async (t) => {
+  await t.test('level 0 projects everything', () => {
+    assert.strictEqual(selectFor('projects', { level: 0 }), '*');
+  });
+
+  await t.test('an anonymous projection omits the writer-only fields', () => {
+    const select = selectFor('projects', { level: 4 });
+
+    assert.ok(!select.includes('c._etag'), '_etag has maxVis 2 and never reaches an anonymous read');
+    assert.ok(select.includes('c.name'));
+    assert.ok(select.includes('c.read'));
+    assert.ok(select.includes('c.id'));
+    // The dotted `sources.wildfire` projects its PARENT — the redactor narrows it back down.
+    assert.ok(select.includes('c.sources'));
+  });
+
+  await t.test('a level 2 projection contains _etag', () => {
+    assert.ok(selectFor('projects', { level: 2 }).includes('c._etag'));
+  });
+
+  await t.test('the projection always carries the ACL', () => {
+    // Fails if a refactor drops the row-plane fields, which would blank `isPublished` for every
+    // caller: the redactor derives it from `read[]`, so an unprojected ACL reads as "not published".
+    for (const level of [1, 2, 3, 4]) {
+      const select = selectFor('projects', { level });
+      assert.ok(select.includes('c.read'), `level ${level} must project the ACL`);
+      assert.ok(select.includes('c.isPublished'), `level ${level} must project the mirror`);
+      assert.ok(select.includes('c.vis'), `level ${level} must project the dial map`);
+    }
+  });
+
+  await t.test('a missing level is treated as anonymous', () => {
+    assert.strictEqual(selectFor('projects', {}), selectFor('projects', { level: 4 }));
+  });
+
+  await t.test('an unknown entity throws rather than projecting everything', () => {
+    assert.throws(() => selectFor('widgets', { level: 4 }), /no field catalog/);
+  });
+});
