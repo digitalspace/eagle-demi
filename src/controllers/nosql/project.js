@@ -197,7 +197,7 @@ exports.updateProject = async (req, res) => {
       read: _ignoredRead, isPublished,
       status: wireStatus,
       _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
-      _ts: _ignoredTs, _etag: _ignoredEtag,
+      _ts: _ignoredTs, _etag: _ignoredEtag, sources: _ignoredSources,
       ...changes
     } = req.body;
 

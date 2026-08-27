@@ -14,7 +14,7 @@ const chunksRepo = require('../../src/repositories/chunks');
 const { TIER, SECURE_ROLES } = require('../../src/helpers/access-sql');
 const config = require('../../src/config');
 
-// publicView allowlists by ENRICHMENT_SOURCES; test deploys name wildfire.
+// The redactor allowlists `sources.*` by ENRICHMENT_SOURCES; test deploys name wildfire.
 config.enrichmentSources = ['wildfire'];
 
 function mockRes() {
@@ -248,7 +248,10 @@ test('nosql project controller', async (t) => {
   await t.test('PUT ignores Cosmos system keys in the body', async () => {
     // A caller who GETs a project and PUTs the response back sends these. They are catalogued at
     // maxVis 0, so refusing them would 400 a round trip that changes nothing.
-    const stored = { id: '207', trackProjectId: 207, name: 'P', _etag: '"0x8DF00728"' };
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', _etag: '"0x8DF00728"',
+      sources: { track: { id: 207 }, wildfire: { fires: 2 } }
+    };
     t.mock.method(projects, 'getById', async () => structuredClone(stored));
     let saved;
     t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
@@ -258,7 +261,7 @@ test('nosql project controller', async (t) => {
       params: { id: '207' }, query: {}, user: WRITER_USER,
       body: {
         name: 'P2', _rid: 'r', _self: 'dbs/x/colls/y/docs/z', _attachments: 'attachments/',
-        _ts: 1756000000, _etag: '"stale"'
+        _ts: 1756000000, _etag: '"stale"', sources: { wildfire: { fires: 9 } }
       }
     }, res);
 
@@ -268,6 +271,7 @@ test('nosql project controller', async (t) => {
       assert.ok(!(key in saved), `${key} must not be written from a request body`);
     }
     assert.strictEqual(saved._etag, stored._etag, 'the stored concurrency token wins over the body');
+    assert.deepStrictEqual(saved.sources, stored.sources, 'sources comes from the stored row, never the body');
   });
 
   await t.test('PUT rejects vis for every caller', async () => {
