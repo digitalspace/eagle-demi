@@ -30,3 +30,9 @@ param contactEmails = [
 
 // Dev has no rproxy host in front of it, so the app's own Azure host is the only reachable base.
 param linkBaseUrl = 'https://demi-api-dev.azurewebsites.net'
+
+// Empty on purpose: dev is a permissive sandbox, and src/config.js only requires a non-empty
+// allowlist outside dev and local. allowedClients has no default in main.bicep, so the deployment
+// will not submit without this line.
+param allowedClients = ''
+param ssoAudience = ''

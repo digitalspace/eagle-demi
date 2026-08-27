@@ -220,8 +220,9 @@ function authenticate(req, onSuccess, onFailure) {
 
     jwt.verify(token, getKey, options, (err, decoded) => {
       if (err) {
-        logger.error(`[demi-api] JWT verification error: ${err.message}`);
-        return onFailure(401, `Unauthorized. JWT verification failed: ${err.message}`);
+        // The reason stays in the log: the body is read by unauthenticated callers.
+        logger.warn(`[demi-api] JWT verification error: ${err.message}`);
+        return onFailure(401, 'Unauthorized. JWT verification failed.');
       }
 
       // AUTHENTICATION ONLY. A verified token is a verified token — whether its bearer may reach

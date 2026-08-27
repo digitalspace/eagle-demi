@@ -54,6 +54,11 @@ test('DEMI_ALLOWED_CLIENTS is required in the deployed environments', async (t) 
     assert.deepStrictEqual(config.allowedClients, ['eagle-admin-console']);
   });
 
+  await t.test('an unrecognised ENVIRONMENT with no DEMI_ALLOWED_CLIENTS refuses to boot', () => {
+    // The guard is deny-unless-dev: a new environment name must not admit the whole realm.
+    assert.throws(() => loadConfig('staging', undefined), /DEMI_ALLOWED_CLIENTS/);
+  });
+
   await t.test('ENVIRONMENT=dev boots with none', () => {
     const config = loadConfig('dev', undefined);
     assert.deepStrictEqual(config.allowedClients, []);

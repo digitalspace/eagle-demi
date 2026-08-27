@@ -184,8 +184,9 @@ const config = {
 };
 
 // Fail to boot rather than run a deployed environment with an allowlist that admits every client
-// in the realm. Dev and local keep the permissive default so a checkout runs with no app settings.
-if ((config.environmentName === 'test' || config.environmentName === 'prod') &&
+// in the realm. Only dev and local keep the permissive default, so a new ENVIRONMENT name is
+// treated as deployed rather than silently admitting the whole realm.
+if (config.environmentName !== 'dev' && config.environmentName !== 'local' &&
     config.allowedClients.length === 0) {
   throw new Error(
     `DEMI_ALLOWED_CLIENTS must name at least one Keycloak client in ${config.environmentName}.`

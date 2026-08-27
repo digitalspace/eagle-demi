@@ -170,7 +170,8 @@ test('Auth Middleware Tests', async (t) => {
     authMiddleware(req, res, next);
 
     assert.strictEqual(statusVal, 401);
-    assert.ok(jsonVal.error.includes('JWT verification failed: invalid signature'));
+    // Fixed string: the verification reason goes to the log, not to an unauthenticated caller.
+    assert.strictEqual(jsonVal.error, 'Unauthorized. JWT verification failed.');
   });
 });
 
@@ -179,6 +180,7 @@ test('JWT verification options', async (t) => {
   // 403s a roleless user — and it does not need to be: the assertion is on what was asked for.
   function optionsFor(audience) {
     const previous = config.ssoAudience;
+    const previousKeycloak = config.keycloakEnabled;
     config.ssoAudience = audience;
     config.keycloakEnabled = true;
 
@@ -194,6 +196,7 @@ test('JWT verification options', async (t) => {
       return captured;
     } finally {
       config.ssoAudience = previous;
+      config.keycloakEnabled = previousKeycloak;
       t.mock.restoreAll();
     }
   }

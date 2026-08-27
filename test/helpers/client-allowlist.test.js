@@ -53,29 +53,31 @@ test('client allowlist', async (t) => {
 });
 
 test('an unlisted client gets 401, not a demoted identity', async (t) => {
-  t.afterEach(() => {
-    t.mock.restoreAll();
-    config.keycloakEnabled = true;
-  });
-
+  const previousKeycloak = config.keycloakEnabled;
   config.keycloakEnabled = true;
-  t.mock.method(jwt, 'decode', () => ({ header: { kid: 'key-id' } }));
-  t.mock.method(jwt, 'verify', (token, getKey, options, callback) => {
-    callback(null, tokenFrom('some-other-app', ['sysadmin', 'staff', 'public']));
-  });
-
-  const req = { header: (name) => (name === 'Authorization' ? 'Bearer mock-token' : null) };
 
   let failure = null;
   let successRan = false;
 
-  withAllowlist(['eagle-admin-console'], () => {
-    authenticate(
-      req,
-      () => { successRan = true; },
-      (status, message) => { failure = { status, message }; }
-    );
-  });
+  try {
+    t.mock.method(jwt, 'decode', () => ({ header: { kid: 'key-id' } }));
+    t.mock.method(jwt, 'verify', (token, getKey, options, callback) => {
+      callback(null, tokenFrom('some-other-app', ['sysadmin', 'staff', 'public']));
+    });
+
+    const req = { header: (name) => (name === 'Authorization' ? 'Bearer mock-token' : null) };
+
+    withAllowlist(['eagle-admin-console'], () => {
+      authenticate(
+        req,
+        () => { successRan = true; },
+        (status, message) => { failure = { status, message }; }
+      );
+    });
+  } finally {
+    config.keycloakEnabled = previousKeycloak;
+    t.mock.restoreAll();
+  }
 
   assert.strictEqual(successRan, false, 'a refused client must never reach onSuccess');
   assert.strictEqual(failure.status, 401);
