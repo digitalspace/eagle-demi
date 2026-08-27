@@ -423,7 +423,7 @@ paths:
         '400':
           description: |-
             The destination failed validation, `note` is over 200 characters, or a supplied `code`
-            is not 3-64 characters of `A-Za-z0-9_-`. The body says which.
+            is not 3-64 characters of `a-z0-9_-` (case-insensitive). The body says which.
         '401':
           description: Unauthorized.
         '403':
@@ -673,4 +673,7 @@ components:
         code:
           type: string
           pattern: '^[A-Za-z0-9_-]{3,64}$'
-          description: Vanity alias. Omit for a generated 8-character code.
+          description: >-
+            Vanity alias: lowercase letters, digits, `_`, `-`, 3-64 characters. Case-insensitive
+            on lookup — an uppercase value is lowercased before validation and storage. Omit for a
+            generated 8-character code.
