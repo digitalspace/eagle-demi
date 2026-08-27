@@ -135,14 +135,18 @@ Doc §2 item 10. Code and app setting ship together.
   then `yarn test`. After deploy: `curl -s -o /dev/null -w '%{http_code}' https://demi-api-test.azurewebsites.net/api/projects` → `200`
   (anonymous path untouched); a Bearer token from an unlisted client → `401`.
 - Deployment (test first, prod after a week):
-  - [ ] App setting and code in ONE deploy is not possible across two pipelines — so **infra first**:
+  - [x] (test 2026-08-27, `infra-f688bd7-224457` Succeeded) App setting and code in ONE deploy is not possible across two pipelines — so **infra first**:
         `MINIO_ACCESS_KEY=… MINIO_SECRET_KEY=… ADMIN_API_KEY=… DOCLING_API_KEY=… az deployment group create -g c4b0a8-test-rg --subscription 7897ceb1-9a86-4639-87d7-7f9ff67142b3 -f azure/main.bicep -p azure/main.test.bicepparam`
         (or `./scripts/deploy-infra.sh test --live`). The setting is inert for the running build.
-  - [ ] Then merge, which is deploying on test (CI `azure-deploy-staging-api`). Boot guard sees the
+  - [x] (test 2026-08-27, #199 merged `3707bee`) Then merge, which is deploying on test (CI `azure-deploy-staging-api`). Boot guard sees the
         setting already present.
   - [ ] Prod: `MINIO_*=… ADMIN_API_KEY=… DOCLING_API_KEY=… ./scripts/deploy-infra.sh prod --what-if`,
         review, then `CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live`.
-  - [ ] Verify: `GET /api/deployments/latest` status 4, then the two curls above.
+  - [ ] Verify: `GET /api/deployments/latest` status 4, then the two curls above. Test 2026-08-27:
+        anonymous `/api/projects` 200 and byte-identical. The unlisted-client 401 is NOT shown live —
+        a malformed Bearer 401s at `jwt.verify` before the allowlist runs. It needs a signed token
+        from a client other than `eagle-admin-console` (e.g. `epic-admin` client credentials);
+        until then the guard is proved only by `test/helpers/client-allowlist.test.js`.
   - [ ] Rollback: revert the code commit and redeploy the API. The app setting alone is harmless —
         the old build ignores `DEMI_ALLOWED_CLIENTS` only if it is empty, so leave the setting in
         place and revert code, never the reverse. An empty setting on the new build is not a boot
@@ -449,9 +453,10 @@ The behaviour change. Keep the diff to the projects entity.
         0 rows carry `complianceLead`, 0 carry `execProjectDirector`, 0 uncatalogued keys. The
         output is JSON-equal, NOT byte-identical — `isPublished` is derived now, so its key position
         moves; the `jq -S` diff is clean, a raw byte diff is not.
-  - [ ] `DEMI_DIFF_URL=https://demi-api-test.azurewebsites.net/api/search node src/scripts/search-diff.js --json`
-        before and after: 0 NEW DIFF cases (pre-existing `IGNORED`/`proponent` cases stay). Date the
-        result in `TODO-rbac.md`.
+  - [x] `search-diff.js` is moot: its baseline is retired eagle-search, which returns the 502 sentinel
+        for every case (run 2026-08-27). Replaced by the raw response diff: anonymous
+        `GET /api/projects?pageSize=100` and `GET /api/search?dataset=Project&pageSize=5` on test,
+        `jq -S` before (`e9f97b1`) and after (`6711d45`), 0 lines of diff for both (2026-08-27).
 
 ### U9 deviations from the unit spec
 
@@ -470,7 +475,7 @@ The behaviour change. Keep the diff to the projects entity.
 - `access-coverage.test.js` asserts the search mapper BODY, not its `res.json` argument: search
   redacts one step earlier (doc §2 item 9), so the emission text names no row. All six sites were
   mutation-checked — reverting any one fails the subtest.
-- `search-diff.js` still needs the deployed app. Run it against test after this merges.
+- `search-diff.js` diffs against retired eagle-search (502 sentinel); superseded by the raw response diff above.
 
 ---
 
@@ -537,7 +542,7 @@ The behaviour change. Keep the diff to the projects entity.
   - [x] `POST silently drops unknown keys, as before` — `{ vis: {...} }` in a create body → 201 and
         `saved.vis === undefined`. Locks in `project.js:111-114`.
 - Acceptance: `node --test test/controllers/nosql-controllers.test.js`, `yarn test`;
-  `curl -X PUT -H "X-Api-Key: $ADMIN_API_KEY" -H 'Content-Type: application/json' -d '{"vis":{"name":0}}' https://demi-api-test.azurewebsites.net/api/projects/207`
+  (400 confirmed on test 2026-08-27) `curl -X PUT -H "X-Api-Key: $ADMIN_API_KEY" -H 'Content-Type: application/json' -d '{"vis":{"name":0}}' https://demi-api-test.azurewebsites.net/api/projects/207`
   → 400.
 
 ### U11 deviations from the unit spec
@@ -557,7 +562,10 @@ The behaviour change. Keep the diff to the projects entity.
   (no continuation token returned; 100 rows = full anonymous set): 0 rows carry `complianceLead`,
   0 carry `execProjectDirector`, 0 uncatalogued keys. JSON-equal, not byte-identical — the
   `isPublished` key position moves, `jq -S` diff clean.
-- [ ] `search-diff.js` before/after on test — needs the deployed app, run after this merges.
+- [x] Deployed to test 2026-08-27 (#199 `3707bee`, #200 `6711d45`). Anonymous `/api/projects` and
+      `/api/search?dataset=Project` `jq -S` diff before/after: 0 lines. `PUT /api/projects/207`
+      with `{"vis":{"name":0}}` as ADMIN_API_KEY: 400. Level 0 `GET /api/projects/207` carries
+      `read`, `_etag`, `sources.track` and no `vis` (none dialled yet). `search-diff.js` moot, see U9.
 
 ---
 
@@ -616,7 +624,7 @@ Tests
 Acceptance
 
 - [ ] `node --test test/vis/search-drift.test.js test/controllers/search.test.js` — 0 fail.
-- [ ] `node src/scripts/search-diff.js` against test before and after: 0 NEW DIFF, key delta still a subset of `EXPECTED_KEY_DELTA`. Date the run here: ______
+- [ ] Anonymous `GET /api/search?dataset=Project&pageSize=5` and `dataset=Document&pageSize=5` on test, `jq -S` before and after: 0 lines (`search-diff.js` is moot, its baseline is retired eagle-search). Date the run here: ______
 - [ ] `curl -s "$API/api/search?dataset=Project&pageSize=5" | jq -S '.[0].searchResults[0] | keys'` identical before and after.
 
 ## P2-3 query parameters gated by the catalog
@@ -638,7 +646,7 @@ Acceptance
 
 - [ ] `node --test test/search/eagle-query.test.js test/controllers/search.test.js test/repositories/projects.test.js` — 0 fail.
 - [ ] `curl -s "$API/api/search?dataset=Project&complianceLead=x"` → 400 (unknown param, unchanged).
-- [ ] `node src/scripts/search-diff.js` — 0 new DIFF. Date: ______
+- [ ] Same anonymous `/api/search` `jq -S` diff as P2-2: 0 lines. Date: ______
 
 ## P2-4 GET /api/me
 
