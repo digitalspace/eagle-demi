@@ -332,6 +332,20 @@ Writer-visible only:
   - [ ] `catalogFor throws on an unknown entity` — `assert.throws(() => catalogFor('widgets'))`.
 - Acceptance: `node --test test/vis/catalog-completeness.test.js`, `yarn test`. No runtime change.
 
+### U7 recorded deviations from byte-identical
+
+- `_rid`, `_self`, `_attachments`, `_ts` at `maxVis: 0` remove four keys from the anonymous project
+  response. No consumer:
+  `grep -rEn "\b_rid\b|\b_attachments\b|\b_ts\b|\._self\b" eagle-public/src/app eagle-demi/frontend/src`
+  returns nothing.
+- `complianceLead` and `execProjectDirector` at `defaultVis: 2` drop those keys for anonymous
+  callers on any row that carries a value. Row count NOT taken — the catalog change has no call
+  site until U9, and this worktree has no Cosmos tunnel. Run
+  `SELECT VALUE COUNT(1) FROM c WHERE IS_DEFINED(c.complianceLead)` (and the same for
+  `execProjectDirector`) over `projects` before merging U9, and record the counts here.
+- `_etag` at `defaultVis: 2` is a WIDENING for level 2 and below: `publicView` strips it from every
+  caller today. Also has no call site until U9.
+
 ---
 
 ## U8 — feat/vis-redact
