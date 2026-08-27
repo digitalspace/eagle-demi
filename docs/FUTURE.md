@@ -5,6 +5,7 @@ Not scheduled. Kept out of `TODO.md` so open work stays short. Added 2026-08-26.
 - **One place for API keys, roles and permissions.** Today: keys minted by `POST /admin/api-keys`
   (registry, `GRANTABLE_ROLES`, `projectScope`, 90-day expiry), roles from Keycloak realm roles,
   `project:<id>` roles for scope, `SECURE_ROLES`/`WRITE_ROLES` hardcoded in `helpers/access-sql.js`.
+  Field-level roles and levels are designed in `docs/rbac-architecture.md` (work in `TODO-rbac.md`).
   No UI, no single view of who holds what; eagle-api has its own separate `INTERNAL_API_KEY`
   mechanism that skips scope checks. Target: one admin surface (likely in the demo frontend's
   auth-guarded area) listing keys, roles, scopes, expiry, last use; revoke; mint. Precondition:
