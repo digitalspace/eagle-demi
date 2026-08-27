@@ -387,6 +387,20 @@ Engine only; still no call sites.
         Falsifiable: inlining a second comparison fails it.
 - Acceptance: `node --test test/vis/redact-matrix.test.js`, `yarn test`. No runtime change.
 
+### U8 deviations from the unit spec
+
+- `level 0 runs the same loop` does NOT assert that `read` is dropped. `visible(0, 0)` is true, so
+  level 0 sees every field — doc §2 item 4 states exactly that, and the unit spec contradicts it.
+  Making level 0 drop `maxVis: 0` fields needs a second comparison, which correction 11 forbids.
+  The test keeps its ratchet against an `if (level === 0) return record` shortcut by asserting the
+  uncatalogued key is still removed and `isPublished` is still derived at level 0.
+- The dial map is withheld at levels 1-4 rather than at every level, for the same reason.
+- An out-of-range integer dial (`-3`, `9`) falls back to `defaultVis` instead of clamping, per the
+  unit's own `an invalid dial falls back to defaultVis` test. Only `0..4` are valid dial values.
+- `sources.wildfire` is NOT gated on `ENRICHMENT_SOURCES` in the redactor; `publicView` gates it
+  (`src/config.js:61`, empty in prod). U9 replaces `publicView`, so U9 must carry that gate or
+  prod starts publishing `sources.wildfire` the moment the container holds one.
+
 ---
 
 ## U9 — feat/vis-redact-projects
