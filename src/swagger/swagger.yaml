@@ -530,6 +530,9 @@ components:
         `DEMI_ALLOWED_CLIENTS` is rejected with 401. The setting is required in test and prod; an
         empty list is permissive and only reachable in local development.
 
+        When `SSO_AUDIENCE` is set, a token whose `aud` does not match it fails verification with
+        401. Empty, which is what every environment ships today, means the claim is not checked.
+
   schemas:
     Project:
       type: object

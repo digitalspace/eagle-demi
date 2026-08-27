@@ -174,3 +174,43 @@ test('Auth Middleware Tests', async (t) => {
   });
 });
 
+test('JWT verification options', async (t) => {
+  // Capture the options object handed to jwt.verify. `verified` is never reached — the middleware
+  // 403s a roleless user — and it does not need to be: the assertion is on what was asked for.
+  function optionsFor(audience) {
+    const previous = config.ssoAudience;
+    config.ssoAudience = audience;
+    config.keycloakEnabled = true;
+
+    let captured = null;
+    t.mock.method(jwt, 'decode', () => ({ header: { kid: 'key-id' } }));
+    t.mock.method(jwt, 'verify', (token, getKey, opts) => { captured = opts; });
+
+    const req = { header: (name) => (name === 'Authorization' ? 'Bearer mock-token' : null) };
+    const res = { status: () => ({ json: () => {} }) };
+
+    try {
+      authMiddleware(req, res, () => {});
+      return captured;
+    } finally {
+      config.ssoAudience = previous;
+      t.mock.restoreAll();
+    }
+  }
+
+  await t.test('jwt.verify is given the configured audience', () => {
+    assert.strictEqual(optionsFor('demi-test-aud').audience, 'demi-test-aud');
+  });
+
+  await t.test('no audience configured means no audience option', () => {
+    // Not `audience: ''` — jsonwebtoken would read that as a claim to match and reject everything.
+    assert.strictEqual('audience' in optionsFor(''), false);
+  });
+
+  await t.test('issuer and algorithms are still pinned', () => {
+    const options = optionsFor('demi-test-aud');
+    assert.deepStrictEqual(options.algorithms, ['RS256']);
+    assert.strictEqual(options.issuer, config.ssoIssuer);
+  });
+});
+

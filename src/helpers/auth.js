@@ -212,7 +212,10 @@ function authenticate(req, onSuccess, onFailure) {
 
     const options = {
       algorithms: ['RS256'],
-      issuer: config.ssoIssuer
+      issuer: config.ssoIssuer,
+      // Absent rather than empty: jsonwebtoken treats a falsy `audience` as a claim to match, so
+      // passing '' would reject every token instead of skipping the check.
+      ...(config.ssoAudience ? { audience: config.ssoAudience } : {})
     };
 
     jwt.verify(token, getKey, options, (err, decoded) => {

@@ -106,7 +106,9 @@ const WIRED = [
   ['linkBaseUrl', /^\s+linkBaseUrl: linkBaseUrl$/m,
     'the API module call — without it LINK_BASE_URL is empty and short links resolve nowhere'],
   ['allowedClients', /^\s+allowedClients: allowedClients$/m,
-    'the API module call — without it DEMI_ALLOWED_CLIENTS is empty and the app refuses to boot']
+    'the API module call — without it DEMI_ALLOWED_CLIENTS is empty and the app refuses to boot'],
+  ['ssoAudience', /^\s+ssoAudience: ssoAudience$/m,
+    'the API module call — without it SSO_AUDIENCE cannot be set once the aud claim is measured']
 ];
 
 for (const [name, wiring, why] of WIRED) {
@@ -125,6 +127,16 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
     const match = /^param allowedClients = '([^']+)'$/m.exec(params);
     assert.ok(match, `${envName} must name at least one client, or the app refuses to start`);
     assert.ok(match[1].length > 0, 'an empty allowlist admits every client in the realm');
+  });
+}
+
+// Declared, not non-empty. The value is unmeasured — nobody has read `aud` off a live token per
+// realm — and a guessed one rejects every caller, so both files ship '' (verification off) and this
+// only guards the line itself: delete it and the environment silently takes the module default.
+for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+  test(`the ${envName} param file declares ssoAudience`, () => {
+    assert.match(params, /^param ssoAudience = '[^']*'$/m,
+      `${envName} must state the audience explicitly, empty or otherwise`);
   });
 }
 

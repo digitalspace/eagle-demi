@@ -146,6 +146,11 @@ param keycloakClientId string = 'eagle-admin-console'
 @description('Comma-separated Keycloak client ids (token azp) permitted to call this API.')
 param allowedClients string = ''
 
+// Empty, not 'account': the audience Keycloak actually mints is unmeasured, and a wrong value
+// rejects every token. Empty means the check is not enforced.
+@description('Expected JWT aud claim. Empty disables audience verification.')
+param ssoAudience string = ''
+
 @description('Application Insights connection string. Empty disables telemetry, which is the local-development case.')
 param appInsightsConnectionString string = ''
 
@@ -484,6 +489,10 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SSO_JWKSURI'
           value: '${keycloakUrl}/realms/${keycloakRealm}/protocol/openid-connect/certs'
+        }
+        {
+          name: 'SSO_AUDIENCE'
+          value: ssoAudience
         }
         // Browser CORS allowlist — unset previously meant "reflect any origin".
         //
