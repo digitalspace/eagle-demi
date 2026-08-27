@@ -66,12 +66,7 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 - [x] ~~**1.2 Rotate `RPROXY_EGUIDE_PASSWORD`**~~ Decided 2026-08-26 (Daniel): not rotated — it is the
       front-facing basic-auth password on `/eguide`, issued to users; changing it is a business
       re-issue, not hygiene. `TYPESENSE_SEARCH_KEY` deleted 2026-08-26.
-- [ ] **1.3 Eagle push key**: `demi-service-write` role landed (PR); prod key + secret +
-      eagle-api tag remain. The role reads like staff, writes every data route, and is refused on
-      `/api/admin/*` (`requireAdmin`), so a machine writer stops holding `demi-admin`. The test key
-      (registry id `b319b93a1bf35206`, `demi-admin`, expires ~2026-11-23, in `demi-push-secret` in
-      `6cdc9e-test`) still needs reissuing on the new role. ADR-007: Keycloak client before prod.
-
+- [x] ~~**1.3 Eagle push key**~~ Done 2026-08-27: role #181; prod key `1ae60c5a3da9476a` (`demi-service-write`, expires 2026-11-24) in `demi-push-secret` (`6cdc9e-prod`); eagle-api v2.10.68 on prod with `DEMI_API_BASE` (pod verified). Test key `b319b93a1bf35206` still `demi-admin` — reissue on the new role when convenient.
 ## 2. Decisions — Daniel
 
 - [x] ~~**2.1 Anonymous surface — decided 2026-08-26, PR #162 in review.**~~ Done: #162 merged `d676664`; verified on prod 2026-08-26 (`/api-docs` 404, `pageSize=1000` 400).
@@ -90,8 +85,8 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 - [x] ~~#162 minors~~ Done in PR #169 (`2136e39`).
 - [x] ~~Review minors still real~~ Done in PR #169.
 - [x] ~~`_sql.fetchAll` still passes `maxItemCount`,~~ Done in PR #169: `maxItemCount` dropped; rows appended without spread.
-- [ ] `projects.js:128` filters `isDefinedAndNotNull('centroid')` but `/centroid/?` is not an included
-      index path — that filter scans. Add the path (Bicep) or drop the filter; found 2026-08-26.
+- [x] ~~`projects.js:128` filters on `centroid` without an index path~~ Done: filter moved to the scalar leaf
+      `centroid.type` and `/centroid/type/?` indexed (Bicep, PR); applied with the next infra deploy.
 - [ ] Nightly reconcile + drift alarm for the Eagle push: the only thing that catches a
       hard-deleted document (`findOneAndDelete`, no tombstone). Script #171, seed's own admission
       rule #175, nightly run + alert #177 (deployed: infra `infra-bdca13b-211420`, app `v0.18.0-211917`,
@@ -232,45 +227,12 @@ value, eagle-public `v2.7.29` (has #803, #805) to test.
       actual 100 %; Bicep in `digitalspace/eagle-edge` `azure/budget-mg.bicep`). The two RG-scoped
       `demi-ceiling-*` budgets are deleted. Azure budgets notify; they do not stop spend — a hard stop would need an
       automation on the action group (`docs/FUTURE.md` if ever wanted). Spend 24 CAD by 2026-08-26.
-- [ ] **4.8 Flip and soak.** FLIPPED 2026-08-26 21:30:47 UTC (rehearsal 21:28:01–21:29:40, both
-      directions, `/api/config` byte-identical after revert). `SEARCH_API_PATH: /demi-search` in prod
-      Mongo; `/api/config` served it 1 s later; browser: search calls go to `/demi-search`, none to
-      `/eagle-search`, lists still eagle-api. Rollback = `updateOne` back to `/eagle-search` (proven
-      19 s). Watch: `demi-search-availability-prod` webtest, `demi-reconcile-drift-prod`, App
-      Insights 5xx on demi-api-prod; 1-h canary after the flip in the session log. Soak length is
-      Daniel's call; it gates only 4.9.
-      Was: PREREQ (2026-08-26): prod DEMI is 1 document behind prod Eagle
-      (24 more sit under unpublished parents and are not drift) (reconcile report, §3). Close it
-      first: in the `demi-api-prod` container, `seed-nosql.js` dry run then `--live` (additive
-      upsert, carries extraction state; NO `--reconcile`), then the reconcile report against prod
-      must show documents eagleOnly=0. Daniel's go, then rehearsal per `docs/prod-flip-runbook.md`.
-      Dry run in prod 2026-08-26 19:10 UTC: fetched 61,612, built 61,588, `droppedUnresolvable` 24
-      (parents unpublished in Eagle — the double gate hides them anyway), preserved 61,587 → 1
-      genuinely new document; projects built 392. `--live --only projects,documents` (boundaries
-      never in prod) run by Daniel 2026-08-26 ~19:30 UTC; gate = reconcile `drift=0` — PASSED 19:41 UTC on `demi-api-prod` (`v0.17.2-192020`):
-      projects 0/0, documents 0/0, `unresolvedParent=24`. PREREQ DONE; the flip is now yours.
-      Set prod `SEARCH_API_PATH` to `/demi-search` (one Mongo field, no
-      deploy); keep `/eagle-search` answering. Define the soak criterion here before flipping
-      (proposed: 14 days, zero 5xx on `/demi-search`, differ green against the frozen eagle-search).
-      Soak with the browser console open (`EventService.getError()` has no subscribers — defects are
-      an empty table + console line); chunk search has no public UI, exercise the endpoint.
-      Rollback = set the field back.
-- [ ] **4.9 After the soak.** Retire `eagle-search-prod` search service (idle, ~100 CAD/mo),
-      `eagle-search-api-prod`, the `eagle-*` indexes on `demi-search-prod`, `deploy/eagle-search-sync`
-      + `cronjob/eagle-search-reindex` in `6cdc9e-prod`, `deploy-prod-worker.yaml` (repo archived).
-      Then the eagle-public prod pods once the AFD rollback is no longer wanted.
-
+- [x] ~~**4.8 Flip and soak.**~~ Done: flipped 2026-08-26 21:30:47 UTC (rehearsal 21:28–21:29, config byte-identical after revert); canary 115/115 over the first hour; Daniel closed the soak the same day. Fallback is the Mongo kill switch `''` only.
+- [x] ~~**4.9 After the soak.**~~ Done 2026-08-27 00:05 UTC: eao-nginx v2.7.18 dropped the `/eagle-search` upstream (sentinel); deleted `eagle-search-api-prod`, `eagle-search-prod` + PE, its Log Analytics/App Insights/smart detector, the `eagle-*` indexes on `demi-search-prod`, OpenShift `eagle-search-sync` + `eagle-search-reindex`. Kept `plan-eagle-search-prod` (hosts demi-api-prod) and `eagle-search-identity-prod` (search indexer identity).
 ## 5. OpenShift retirement — Daniel says when (costs nothing)
 
-- [ ] **5.1 eagle-public dev/test pods.** Test: `deploy/eagle-public` 2/2 (AFD rollback target),
-      `eagle-public-feat-azure-hosting-mainline` 1/1 (branch preview). Dev: site IS the pod
-      (`ROOT=http://eagle-public:8080`), plus the orphan `eagle-{admin,api,public}-dev` trio
-      (ArgoCD ids, no Application). Retire dev whole or repoint `ROOT` at the test AFD host.
-      Keep `Route/eagle-public` (Keycloak host).
-- [ ] **5.2 DEMI OpenShift stack in `6cdc9e-dev`** — `eagle-demi`, `eagle-demi-api`,
-      `eagle-demi-frontend`, `eagle-demi-redis`, `eagle-demi-worker` (34-82 days old). Nothing
-      routes to them; DEMI is Azure-only. Delete on go.
-
+- [x] ~~**5.1 eagle-public dev/test pods.**~~ Spun down 2026-08-26 (Daniel: scale, don't delete): test `eagle-public` 0/0 and branch preview 0/0; dev orphan `eagle-public-dev` 0/0; prod `eagle-public` 0/0 (AFD serves all three). Dev `eagle-public` stays (dev site root is the pod). Deletion on a later go.
+- [x] ~~**5.2 DEMI OpenShift stack in `6cdc9e-dev`**~~ Spun down 2026-08-26: all five deployments 0/0, worker cronjob suspended. Deletion on a later go.
 ## 6. Standing rules — do not re-derive
 
 - **A probe that cannot fail proves nothing.** Take a BEFORE reading; nonsense terms detect
