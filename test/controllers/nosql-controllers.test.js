@@ -14,7 +14,7 @@ const chunksRepo = require('../../src/repositories/chunks');
 const { TIER, SECURE_ROLES } = require('../../src/helpers/access-sql');
 const config = require('../../src/config');
 
-// publicView allowlists by ENRICHMENT_SOURCES; test deploys name wildfire.
+// The redactor allowlists `sources.*` by ENRICHMENT_SOURCES; test deploys name wildfire.
 config.enrichmentSources = ['wildfire'];
 
 function mockRes() {
@@ -31,6 +31,9 @@ function mockRes() {
 
 const ANON = { query: {}, params: {}, body: {} };
 const ADMIN_USER = { realm_access: { roles: ['sysadmin'] } };
+// `demi-service-write` is level 2 — the tier every WRITE_ROLES holder maps to.
+const WRITER_USER = { realm_access: { roles: ['demi-service-write'] } };
+const STAFF_USER = { realm_access: { roles: ['staff'] } };
 
 test('nosql project controller', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -218,6 +221,113 @@ test('nosql project controller', async (t) => {
       { params: { id: '207' }, query: {}, body: { status: 'Withdrawn', projectState: 'Completed' } },
       mockRes());
     assert.strictEqual(saved.projectState, 'Completed', 'the stored name is the specific one');
+  });
+
+  /**
+   * Redaction-safe update: the response is narrowed by level, so a body key the caller was never
+   * shown would overwrite a value they cannot see (docs/rbac-architecture.md §2 item 1).
+   */
+  await t.test('PUT rejects a body key the caller cannot see', async () => {
+    // `staff` is level 2 — a caller `requireWrite` actually admits. The per-record dial is what
+    // hides `description` from them, so the refusal cannot come from the level alone.
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207', trackProjectId: 207, name: 'P', description: 'old', vis: { description: 1 }
+    }));
+    let upserted = false;
+    t.mock.method(projects, 'upsert', async (doc) => { upserted = true; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, user: STAFF_USER, body: { description: 'x' } }, res);
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.match(res.body.error, /description/, 'the message names the offending key');
+    assert.strictEqual(upserted, false, 'nothing is written on a refused body');
+  });
+
+  await t.test('PUT ignores Cosmos system keys in the body', async () => {
+    // A caller who GETs a project and PUTs the response back sends these. They are catalogued at
+    // maxVis 0, so refusing them would 400 a round trip that changes nothing.
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', _etag: '"0x8DF00728"',
+      sources: { track: { id: 207 }, wildfire: { fires: 2 } }
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, user: WRITER_USER,
+      body: {
+        name: 'P2', _rid: 'r', _self: 'dbs/x/colls/y/docs/z', _attachments: 'attachments/',
+        _ts: 1756000000, _etag: '"stale"', sources: { wildfire: { fires: 9 } }
+      }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.name, 'P2');
+    for (const key of ['_rid', '_self', '_attachments', '_ts']) {
+      assert.ok(!(key in saved), `${key} must not be written from a request body`);
+    }
+    assert.strictEqual(saved._etag, stored._etag, 'the stored concurrency token wins over the body');
+    assert.deepStrictEqual(saved.sources, stored.sources, 'sources comes from the stored row, never the body');
+  });
+
+  await t.test('PUT rejects vis for every caller', async () => {
+    t.mock.method(projects, 'getById', async () => ({ id: '207', trackProjectId: 207, name: 'P' }));
+    let upserted = false;
+    t.mock.method(projects, 'upsert', async (doc) => { upserted = true; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, user: ADMIN_USER, body: { vis: { name: 0 } } }, res);
+
+    // A sysadmin is level 0 and sees every field, so a level-gated guard would let this through.
+    assert.strictEqual(res.statusCode, 400);
+    assert.match(res.body.error, /vis/);
+    assert.strictEqual(upserted, false);
+  });
+
+  await t.test('PUT still accepts an ordinary edit', async () => {
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', description: 'old',
+      read: ['public', ...SECURE_ROLES], isPublished: true,
+      sources: { track: { track_project_id: 207 } }, _etag: '"0x8DF00728"'
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject(
+      { params: { id: '207' }, query: {}, user: WRITER_USER, body: { description: 'new' } }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.description, 'new');
+    // The guard narrows what a body may SET; it must not narrow what the row already holds.
+    assert.deepStrictEqual(saved.read, stored.read, 'stored ACL intact');
+    assert.deepStrictEqual(saved.sources, stored.sources, 'stored payloads intact');
+    assert.strictEqual(saved._etag, stored._etag, 'concurrency token intact');
+  });
+
+  await t.test('POST silently drops unknown keys, as before', async () => {
+    // createProject allowlists its body by destructuring, so `vis` cannot arrive — no guard needed
+    // there, and this is the assertion that keeps it true.
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.createProject({
+      body: {
+        trackProjectId: 5, name: 'V', centroid: { coordinates: [0, 0] },
+        vis: { name: 0 }, complianceLead: 'x'
+      }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 201);
+    assert.strictEqual(saved.vis, undefined);
+    assert.strictEqual(saved.complianceLead, undefined);
   });
 });
 

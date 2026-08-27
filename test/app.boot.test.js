@@ -10,23 +10,12 @@
 //
 // So this asserts three things a router change breaks and a unit test cannot see:
 // mounting `src/app.js` does not throw, a real request reaches a real handler, and the
-// 404 fallback still runs. It deliberately uses `node:http` and global `fetch` rather
-// than supertest — no new dependency for what fifteen lines already do.
+// 404 fallback still runs.
 
 const test = require('node:test');
 const assert = require('node:assert');
-const http = require('node:http');
 
-async function withServer(fn) {
-  const app = require('../src/app');
-  const server = http.createServer(app);
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  try {
-    await fn(`http://127.0.0.1:${server.address().port}`);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-}
+const { withServer } = require('./helpers/with-server');
 
 test('src/app.js mounts without throwing', () => {
   // A path-to-regexp rejection surfaces here, on require, not on the request.

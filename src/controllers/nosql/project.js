@@ -19,6 +19,8 @@ const { purgeProject } = require('../../helpers/purge');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
+const { redactForAccess, visible, effectiveVis } = require('../../vis/redact');
+const { catalogFor } = require('../../vis/catalog');
 
 /**
  * A project's visibility change, carried to its index row and re-derived onto its documents.
@@ -84,7 +86,7 @@ exports.getProjects = async (req, res) => {
     // Continuation token is returned in a header so the body stays a plain array — the
     // frontend consumes it as one today and paging is opt-in.
     if (continuationToken) res.setHeader('x-continuation-token', continuationToken);
-    return res.json(items.map(projects.publicView));
+    return res.json(items.map(p => redactForAccess('projects', p, access)));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -100,7 +102,7 @@ exports.getProject = async (req, res) => {
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    return res.json(projects.publicView(project));
+    return res.json(redactForAccess('projects', project, access));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -108,6 +110,7 @@ exports.getProject = async (req, res) => {
 
 exports.createProject = async (req, res) => {
   try {
+    const access = resolveAccess(req);
     const {
       trackProjectId, name, description, sector, region, status, projectState,
       centroid, isPublished
@@ -141,7 +144,7 @@ exports.createProject = async (req, res) => {
       // route since the drift appeared.
       //
       // BOTH INPUT NAMES, and the same precedence PUT uses. Accepting only the wire name made a
-      // GET-then-POST round trip lose the state silently: `publicView` returns the stored name, so
+      // GET-then-POST round trip lose the state silently: a GET returns the stored name, so
       // the body a caller sends back carries `projectState`, which this route dropped on the floor
       // while its sibling honoured it.
       projectState: projectState || status || '',
@@ -164,7 +167,7 @@ exports.createProject = async (req, res) => {
       detail: { name: saved.name, isPublished: saved.isPublished }
     });
 
-    return res.status(201).json(projects.publicView(saved));
+    return res.status(201).json(redactForAccess('projects', saved, access));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -184,10 +187,17 @@ exports.updateProject = async (req, res) => {
     // `read` is derived from `isPublished` rather than taken verbatim, so the two cannot disagree:
     // read[] is authoritative and isPublished mirrors it. Spreading the body straight in let a
     // writer hand-craft an ACL that no gate had ever seen.
+    //
+    // The Cosmos bookkeeping keys are dropped for a different reason: a caller who GETs a project
+    // and PUTs the response back sends them, and they are catalogued at maxVis 0 (or 2 for
+    // `_etag`), so the guard below would 400 an otherwise ordinary edit. `...existing` supplies
+    // the real values.
     const {
       id: _ignoredId, trackProjectId: _ignoredTrackId,
       read: _ignoredRead, isPublished,
       status: wireStatus,
+      _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
+      _ts: _ignoredTs, _etag: _ignoredEtag, sources: _ignoredSources,
       ...changes
     } = req.body;
 
@@ -197,6 +207,21 @@ exports.updateProject = async (req, res) => {
     // the stored name is the specific one, so honour it over the alias.
     if (wireStatus !== undefined && changes.projectState === undefined) {
       changes.projectState = wireStatus;
+    }
+
+    // A field the caller cannot SEE is a field they cannot set. The response is redacted, so a
+    // level 4 caller never received `complianceLead` — accepting it back would overwrite a value
+    // they were never shown, which is the hole the redaction-safe update rule closes
+    // (docs/rbac-architecture.md §2 item 1). `vis` is refused at EVERY level: the dial map is
+    // policy rather than content, and no route sets it yet.
+    const catalog = catalogFor('projects');
+    const dials = existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
+    const refused = Object.keys(changes).filter(key => key === 'vis' || !catalog[key] ||
+      !visible(access.level, effectiveVis(catalog[key], dials[key])));
+    if (refused.length) {
+      return res.status(400).json({
+        error: `Fields not writable by this caller: ${refused.join(', ')}`
+      });
     }
 
     const acl = isPublished === undefined
@@ -244,7 +269,7 @@ exports.updateProject = async (req, res) => {
 
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
     // narrowed.
-    return res.json(projects.publicView(saved));
+    return res.json(redactForAccess('projects', saved, access));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }
@@ -329,7 +354,7 @@ exports.deleteProject = async (req, res) => {
 
     return res.json({
       message: 'Project deleted successfully',
-      deleted: projects.publicView(existing),
+      deleted: redactForAccess('projects', existing, access),
       removedFromSearch
     });
   } catch (err) {

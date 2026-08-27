@@ -8,12 +8,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const documents = require('../../../src/repositories/documents');
-const projects = require('../../../src/repositories/projects');
 const documentController = require('../../../src/controllers/nosql/document');
+const { redactForAccess } = require('../../../src/vis/redact');
 const config = require('../../../src/config');
 
-// publicView allowlists by ENRICHMENT_SOURCES; test deploys name wildfire.
+// The redactor allowlists `sources.*` by ENRICHMENT_SOURCES; test deploys name wildfire.
 config.enrichmentSources = ['wildfire'];
+
+/** The fail-closed level every unauthenticated caller resolves to. */
+const ANON_ACCESS = { level: 4 };
 
 function mockRes() {
   return {
@@ -150,30 +153,16 @@ test('EVERY response that emits a document row goes through publicView', async (
   // year — and "somebody added a return path and forgot the strip" is precisely how this defect
   // arrived. A source invariant fails on the new site, before anyone has to think of testing it.
   //
-  // Comments are stripped first, reusing `test/helpers/router-source.js`'s `code()` — the same
-  // helper the auth-coverage test uses, and for the same reason it exists: a bare regex over source
-  // text counts `// return res.json(saved)` as a real call site, so a matcher that reads comments
-  // can be satisfied by prose. That lesson cost a review round once already.
-  const { code } = require('../../helpers/router-source');
-  const source = code(fs.readFileSync(
+  // Comments are stripped first, reusing `test/helpers/router-source.js` — the same helper the
+  // auth-coverage test uses, and for the same reason it exists: a bare regex over source text
+  // counts `// return res.json(saved)` as a real call site, so a matcher that reads comments can be
+  // satisfied by prose. That lesson cost a review round once already. `jsonEmissions` reads each
+  // argument to its MATCHING paren: the line-bounded version of this missed the delete route
+  // outright, whose `deleted: publicView(existing)` sits three lines below its `res.json(`.
+  const { jsonEmissions } = require('../../helpers/router-source');
+  const emissions = jsonEmissions(fs.readFileSync(
     path.join(__dirname, '../../../src/controllers/nosql/document.js'), 'utf8'));
 
-  // Every `res.json(...)` / `res.status(n).json(...)` argument, read to its MATCHING paren rather
-  // than to the end of the line. The line-bounded version of this missed the delete route outright:
-  // it returns a multi-line object literal and `deleted: publicView(existing)` sits three lines
-  // below the `res.json(`, so removing the strip there left this test green. A response body that
-  // spans lines is not an edge case in this file, it is most of them.
-  const emissions = [];
-  const opener = /res(?:\.status\(\d+\))?\.json\(/g;
-  for (let m = opener.exec(source); m; m = opener.exec(source)) {
-    let depth = 1;
-    let i = m.index + m[0].length;
-    for (; i < source.length && depth > 0; i++) {
-      if (source[i] === '(') depth++;
-      else if (source[i] === ')') depth--;
-    }
-    emissions.push(source.slice(m.index + m[0].length, i - 1).trim());
-  }
   assert.ok(emissions.length >= 6, `expected the known response sites, found ${emissions.length}`);
 
   // A row-emitting site names a repository row BARE — `publicView(saved)`, `items.map(publicView)`.
@@ -188,7 +177,7 @@ test('EVERY response that emits a document row goes through publicView', async (
     'these emit a repository row without publicView — each one ships read[], s3Key and _etag');
 });
 
-test('projects.publicView withholds the ACL as well as the upstream payloads', async (t) => {
+test('the projects redactor withholds the ACL as well as the upstream payloads', async (t) => {
   const STORED_PROJECT = {
     id: '207',
     name: 'Nicomen Wind Energy',
@@ -207,7 +196,7 @@ test('projects.publicView withholds the ACL as well as the upstream payloads', a
   };
 
   await t.test('read[] and _etag are stripped; the allowlisted aggregate survives', () => {
-    const view = projects.publicView(structuredClone(STORED_PROJECT));
+    const view = redactForAccess('projects', structuredClone(STORED_PROJECT), ANON_ACCESS);
 
     assert.strictEqual(view.read, undefined, 'the role vocabulary is withheld');
     assert.strictEqual(view._etag, undefined, 'the concurrency token is withheld');
@@ -219,7 +208,8 @@ test('projects.publicView withholds the ACL as well as the upstream payloads', a
   });
 
   await t.test('a project with no wildfire aggregate still loses read[]', () => {
-    const view = projects.publicView({ id: '208', name: 'P', read: ['sysadmin'], isPublished: false });
+    const view = redactForAccess('projects',
+      { id: '208', name: 'P', read: ['sysadmin'], isPublished: false }, ANON_ACCESS);
 
     assert.strictEqual(view.read, undefined);
     assert.strictEqual(view.isPublished, false, 'derived from the ACL: not public');
@@ -232,17 +222,19 @@ test('projects.publicView withholds the ACL as well as the upstream payloads', a
     // `read[]`), which is exactly why it needs an assertion rather than trust: nothing else would
     // notice it changing.
     assert.strictEqual(
-      projects.publicView({ id: '209', name: 'Q', isPublished: false }).isPublished, false,
+      redactForAccess('projects', { id: '209', name: 'Q', isPublished: false }, ANON_ACCESS)
+        .isPublished, false,
       'no ACL: the stored flag is the fallback, never a default-true');
     assert.strictEqual(
-      projects.publicView({ id: '210', name: 'R', isPublished: true }).isPublished, true,
+      redactForAccess('projects', { id: '210', name: 'R', isPublished: true }, ANON_ACCESS)
+        .isPublished, true,
       'and the fallback is the stored flag, not a constant');
     // NEITHER field: the row says nothing about its own visibility, so the answer is NOT PUBLIC.
-    // `rest.isPublished === true` and `rest.isPublished !== false` agree on every row that carries
-    // the flag and disagree only here — where the second one publishes a row that never claimed to
-    // be public. That is the whole reason the comparison is written the strict way round.
+    // `isPublished === true` and `isPublished !== false` agree on every row that carries the flag
+    // and disagree only here — where the second one publishes a row that never claimed to be
+    // public. That is the whole reason the comparison is written the strict way round.
     assert.strictEqual(
-      projects.publicView({ id: '211', name: 'S' }).isPublished, false,
+      redactForAccess('projects', { id: '211', name: 'S' }, ANON_ACCESS).isPublished, false,
       'a row that asserts neither an ACL nor a flag is not published by default');
   });
 });
@@ -259,18 +251,18 @@ test('the `sources` allowlist is ENRICHMENT_SOURCES, not a hardcoded key', async
 
   await t.test('empty list: no enrichment leaves at all — the prod setting', () => {
     config.enrichmentSources = [];
-    assert.strictEqual(projects.publicView(stored()).sources, undefined);
+    assert.strictEqual(redactForAccess('projects', stored(), ANON_ACCESS).sources, undefined);
   });
 
   await t.test('a named key passes, and nothing else does', () => {
     config.enrichmentSources = ['wildfire'];
-    const view = projects.publicView(stored());
+    const view = redactForAccess('projects', stored(), ANON_ACCESS);
     assert.deepStrictEqual(view.sources, { wildfire: { activeCountWithin50km: 2 } });
   });
 
   await t.test('a listed key the row does not carry is never invented', () => {
     config.enrichmentSources = ['wildfire', 'nowhere'];
     assert.deepStrictEqual(
-      Object.keys(projects.publicView(stored()).sources), ['wildfire']);
+      Object.keys(redactForAccess('projects', stored(), ANON_ACCESS).sources), ['wildfire']);
   });
 });

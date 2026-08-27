@@ -92,7 +92,7 @@ Each item below overrides the corresponding section of the source document.
    `legislation`, `legislationYear`, `review180Start`, `review45Start`, `reviewExtensions`,
    `reviewSuspensions`, `substitution`, `CEAAInvolvement`, `eaoMember`, `sector`, `commodity`,
    `fedElecDist`, `provElecDist`, `projectCAC`, `projectCACPublished`, `overallProgress`, `code`,
-   `nameSearchTerms`, `proponent`, `regionalDistrict`, `municipality`, `electoralDistrict`).
+   `nameSearchTerms`, `regionalDistrict`, `municipality`, `electoralDistrict`).
    The completeness test diffs the catalog against the emitters, so the list above is enforced,
    not maintained by hand. Catalog keys may be dotted one level (`sources.wildfire`) and the
    redactor descends only for listed dotted keys.

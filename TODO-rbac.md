@@ -221,23 +221,23 @@ creates one; it is the largest Phase 0 item and merges alone.
 
 ## U6 — feat/vis-level
 
-- [ ] New `src/vis/level.js`: `ROLE_LEVELS` map and `levelFromRoles(roles) => 0..4`, lowest wins,
+- [x] New `src/vis/level.js`: `ROLE_LEVELS` map and `levelFromRoles(roles) => 0..4`, lowest wins,
       unknown role contributes nothing, empty/absent gives 4. Include `compliance`
       (`src/controllers/nosql/api-key.js:31` makes it grantable). Initial map per the source design:
       `sysadmin` 0, `demi-admin` 0, `staff` 2, `demi-service-read` 2, `demi-service-write` 2,
       `compliance` 2 `?`, `public` 4. Levels 1 and 3 have no role until EAO question 1 (doc §3) is
       answered; do not invent `demi-vis-*` names here.
-- [ ] `src/helpers/access-sql.js:109-135` `resolveAccess`: add `level: levelFromRoles(roles)` to all
+- [x] `src/helpers/access-sql.js:109-135` `resolveAccess`: add `level: levelFromRoles(roles)` to all
       three returned objects.
-- [ ] `src/helpers/access-sql.js:201-203` `systemAccess`: add `level: 0`.
-- [ ] Export `levelFromRoles`, `ROLE_LEVELS` from `src/vis/level.js`; no change to any caller.
+- [x] `src/helpers/access-sql.js:201-203` `systemAccess`: add `level: 0`.
+- [x] Export `levelFromRoles`, `ROLE_LEVELS` from `src/vis/level.js`; no change to any caller.
 - Tests: new `test/vis/level.test.js`
-  - [ ] `a role table entry maps to its level` — literal pairs, e.g. `levelFromRoles(['staff'])===1`.
-  - [ ] `the lowest level of several roles wins` — `['public','sysadmin'] === 0`.
-  - [ ] `an unknown role does not grant a level` — `['not-a-role'] === 4`.
-  - [ ] `no roles at all is anonymous` — `[] === 4`, `undefined === 4`.
-  - [ ] `compliance is in the table` — `ROLE_LEVELS.compliance !== undefined`; doc §2 item 12.
-  - [ ] In `test/helpers/access-sql.test.js`: `resolveAccess carries a level` (anonymous req → 4;
+  - [x] `a role table entry maps to its level` — literal pairs, e.g. `levelFromRoles(['staff'])===1`.
+  - [x] `the lowest level of several roles wins` — `['public','sysadmin'] === 0`.
+  - [x] `an unknown role does not grant a level` — `['not-a-role'] === 4`.
+  - [x] `no roles at all is anonymous` — `[] === 4`, `undefined === 4`.
+  - [x] `compliance is in the table` — `ROLE_LEVELS.compliance !== undefined`; doc §2 item 12.
+  - [x] In `test/helpers/access-sql.test.js`: `resolveAccess carries a level` (anonymous req → 4;
         `{user:{realm_access:{roles:['sysadmin']}}}` → 0) and `systemAccess is level 0`.
         All expectations are literals, never `levelFromRoles(...)` re-run.
 - Acceptance: `node --test test/vis/level.test.js test/helpers/access-sql.test.js`, `yarn test`.
@@ -257,80 +257,93 @@ Confirmation source used: `eagle-public/src/app/services/api.ts:263-320` (the fi
 eagle-public asks eagle-api for) and `src/controllers/search.js:374-415` (what DEMI itself already
 returns anonymously to eagle-public through `/api/search`).
 
-- [ ] New `src/vis/catalog/projects.js`: `module.exports = { <key>: { defaultVis, maxVis } }`,
+- [x] New `src/vis/catalog/projects.js`: `module.exports = { <key>: { defaultVis, maxVis } }`,
       dotted keys allowed one level, no predicates this phase (doc §2 item 7).
 
 Structural / identity — `defaultVis: 4, maxVis: 4`:
-- [ ] `id` · `trackProjectId` · `eagleId` · `sourceSystem` · `isPublished` · `updatedAt`
-- [ ] `createdAt` (`src/controllers/nosql/project.js:155`) `?` — only rows created through POST
+- [x] `id` · `trackProjectId` · `eagleId` · `sourceSystem` · `isPublished` · `updatedAt`
+- [x] `createdAt` (`src/controllers/nosql/project.js:155`) `?` — only rows created through POST
       carry it
-- [ ] `centroid` (`merge/project.js:257`)
+- [x] `centroid` (`merge/project.js:257`)
 
 Track-precedence targets (`merge/project.js:32-42`) — `defaultVis: 4, maxVis: 4`:
-- [ ] `name` · `description` · `projectType` · `proponentName` · `projectState` · `abbreviation` ·
+- [x] `name` · `description` · `projectType` · `proponentName` · `projectState` · `abbreviation` ·
       `address`
-- [ ] `projectSubType` `?` (Track-only; not in eagle-public's field list)
-- [ ] `isActive` `?` (Track record flag; not rendered)
+- [x] `projectSubType` `?` (Track-only; not in eagle-public's field list)
+- [x] `isActive` `?` (Track record flag; not rendered)
 
 Eagle-only fields (`merge/project.js:48-57`, 31 entries) — `defaultVis: 4, maxVis: 4` unless marked:
-- [ ] `eacDecision` · `decisionDate` · `currentPhaseName` · `legislation` · `substitution` ·
+- [x] `eacDecision` · `decisionDate` · `currentPhaseName` · `legislation` · `substitution` ·
       `CEAAInvolvement` · `projectLead` · `responsibleEPD` · `eaoMember` · `sector` · `commodity` ·
       `region` · `fedElecDist` · `provElecDist` · `projectCAC` · `projectCACPublished` ·
       `overallProgress` · `code`
-- [ ] `projectLeadEmail` · `responsibleEPDEmail` · `cacEmail` — `defaultVis: 4, maxVis: 4` today.
+- [x] `projectLeadEmail` · `responsibleEPDEmail` · `cacEmail` — `defaultVis: 4, maxVis: 4` today.
       Move to `defaultVis: 2` ONLY with EAO sign-off (doc §2 item 3, §3 question 2). Without
       sign-off they stay at 4; leave a one-line comment naming the question.
-- [ ] `complianceLead`, `execProjectDirector` — `defaultVis: 2, maxVis: 4` per doc §2 item 3.
+- [x] `complianceLead`, `execProjectDirector` — `defaultVis: 2, maxVis: 4` per doc §2 item 3.
       **This is a byte change** on any row that carries a value. Before merging, count rows:
       `SELECT VALUE COUNT(1) FROM c WHERE IS_DEFINED(c.complianceLead)` over `projects` (via the
       container tunnel, README). If the count is 0 the change is byte-identical; if not, record the
       count and the deviation in `TODO-rbac.md`.
-- [ ] `eaStatus` `?` · `phaseHistory` `?` (on eagle-public's model at
+- [x] `eaStatus` `?` · `phaseHistory` `?` (on eagle-public's model at
       `eagle-public/src/app/models/project.ts:37` but NOT in its request field list) ·
       `legislationYear` `?` · `review180Start` `?` · `review45Start` `?` · `reviewExtensions` `?` ·
       `reviewSuspensions` `?` · `nameSearchTerms` `?` — all `defaultVis: 4, maxVis: 4` to keep
       today's bytes; the `?` is about whether they SHOULD be 4.
 
 Written by jobs, not by the merge — `defaultVis: 4, maxVis: 4`:
-- [ ] `regionalDistrict` · `municipality` · `electoralDistrict`
+- [x] `regionalDistrict` · `municipality` · `electoralDistrict`
       (`src/repositories/projects.js:235-241`; also query params, `projects.js:27-35`)
-- [ ] `sources.wildfire` — dotted key, `defaultVis: 4, maxVis: 4`, still gated by
+- [x] `sources.wildfire` — dotted key, `defaultVis: 4, maxVis: 4`, still gated by
       `ENRICHMENT_SOURCES` (`src/config.js:61`; prod empty)
 
 Never public — `defaultVis: 0, maxVis: 0`:
-- [ ] `read` (doc §2 item 8; `isPublished` is derived from it in the redactor)
-- [ ] `sources` (the parent object; only the dotted child above is publishable)
-- [ ] `vis` (does not exist yet; catalogued so it can never leak — doc §2 item 8)
-- [ ] `_rid`, `_self`, `_attachments`, `_ts` — Cosmos system fields. **These are in the anonymous
+- [x] `read` (doc §2 item 8; `isPublished` is derived from it in the redactor)
+- [x] `sources` (the parent object; only the dotted child above is publishable)
+- [x] `vis` (does not exist yet; catalogued so it can never leak — doc §2 item 8)
+- [x] `_rid`, `_self`, `_attachments`, `_ts` — Cosmos system fields. **These are in the anonymous
       response today** (`publicView` does not strip them). Setting them to 0 removes them; no
       consumer found in `eagle-public/src/app` or `frontend/src`. Stated deviation from
       byte-identical; record it in `TODO-rbac.md` with the grep that found no consumer.
 
 Writer-visible only:
-- [ ] `_etag` — `defaultVis: 2, maxVis: 2` (doc §2 item 8). Today `publicView` strips it entirely,
+- [x] `_etag` — `defaultVis: 2, maxVis: 2` (doc §2 item 8). Today `publicView` strips it entirely,
       so level 2 gaining it is a widening for writers only; note it in the PR.
 
-- [ ] `src/vis/catalog/index.js`: `catalogFor(entity)` — throws `Error` on an unknown entity
+- [x] `src/vis/catalog/index.js`: `catalogFor(entity)` — throws `Error` on an unknown entity
       (doc §2 item 4). One entity registered: `projects`.
 - Tests: new `test/vis/catalog-completeness.test.js`
-  - [ ] `every key mergeTrackProject emits is catalogued` — build a hand-written Track fixture with
+  - [x] `every key mergeTrackProject emits is catalogued` — build a hand-written Track fixture with
         every `TRACK_PRECEDENCE` source field populated and a hand-written Eagle fixture with every
         `EAGLE_ONLY_FIELDS` name populated (literal objects in the test, not derived from the
         constants), call `mergeTrackProject`, assert
         `Object.keys(out).filter(k => !(k in catalog))` is `[]`. Fails when a field is added to the
         merge without a catalog entry.
-  - [ ] `every key mergeEagleOnlyProject emits is catalogued` — same, via
+  - [x] `every key mergeEagleOnlyProject emits is catalogued` — same, via
         `mergeEagleOnlyProject`.
-  - [ ] `the fixtures actually populate every merge constant` — assert every name in
+  - [x] `the fixtures actually populate every merge constant` — assert every name in
         `EAGLE_ONLY_FIELDS` and every `TRACK_PRECEDENCE[1]` appears as a key of the fixture. Without
         this the test above can pass vacuously.
-  - [ ] `the job-written fields are catalogued` — literal list
+  - [x] `the job-written fields are catalogued` — literal list
         `['regionalDistrict','municipality','electoralDistrict','createdAt','sources.wildfire']`.
-  - [ ] `no upstream field is named vis` — assert `'vis' not in` either merge output.
-  - [ ] `every entry has both bounds and defaultVis <= maxVis` — over `Object.entries(catalog)`.
-  - [ ] `read, sources and vis can never be seen` — literal `maxVis === 0` for the three names.
-  - [ ] `catalogFor throws on an unknown entity` — `assert.throws(() => catalogFor('widgets'))`.
+  - [x] `no upstream field is named vis` — assert `'vis' not in` either merge output.
+  - [x] `every entry has both bounds and defaultVis <= maxVis` — over `Object.entries(catalog)`.
+  - [x] `read, sources and vis can never be seen` — literal `maxVis === 0` for the three names.
+  - [x] `catalogFor throws on an unknown entity` — `assert.throws(() => catalogFor('widgets'))`.
 - Acceptance: `node --test test/vis/catalog-completeness.test.js`, `yarn test`. No runtime change.
+
+### U7 recorded deviations from byte-identical
+
+- `_rid`, `_self`, `_attachments`, `_ts` at `maxVis: 0` remove four keys from the anonymous project
+  response. No consumer:
+  `grep -rEn "\b_rid\b|\b_attachments\b|\b_ts\b|\._self\b" eagle-public/src/app eagle-demi/frontend/src`
+  returns nothing.
+- `complianceLead` and `execProjectDirector` at `defaultVis: 2` drop those keys for anonymous
+  callers on any row that carries a value. No row does: measured 2026-08-27 on test, anonymous
+  `GET /api/projects?pageSize=100` (no continuation token returned; 100 rows = full anonymous set):
+  0 rows carry `complianceLead`, 0 carry `execProjectDirector`, 0 uncatalogued keys.
+- `_etag` at `defaultVis: 2` is a WIDENING for level 2 and below: `publicView` strips it from every
+  caller today. Also has no call site until U9.
 
 ---
 
@@ -338,7 +351,7 @@ Writer-visible only:
 
 Engine only; still no call sites.
 
-- [ ] New `src/vis/redact.js`:
+- [x] New `src/vis/redact.js`:
       `visible(level, effVis)` — the ONLY scalar comparison (doc §2 item 11), `level <= effVis`;
       `effectiveVis(entry, dial)` — `clamp(dial, 0, entry.maxVis)` when the dial is an integer in
       range after clamping, else `entry.defaultVis` (invalid dial → `defaultVis`, doc §1);
@@ -351,27 +364,41 @@ Engine only; still no call sites.
       No predicates this phase (doc §2 item 7) — but `entry.when` present must throw at module load
       so a half-shipped predicate cannot silently pass.
 - Tests: new `test/vis/redact-matrix.test.js` — all expectations literal.
-  - [ ] `a level 4 caller sees the public fields and not the ACL` — hand-built stored row, assert
+  - [x] `a level 4 caller sees the public fields and not the ACL` — hand-built stored row, assert
         `name` present, `read`/`sources`/`_rid` absent.
-  - [ ] `level 0 runs the same loop` — assert `redactForAccess('projects', row, {level:0})` still
+  - [x] `level 0 runs the same loop` — assert `redactForAccess('projects', row, {level:0})` still
         drops `read` (maxVis 0). Fails on an `if (level === 0) return record` shortcut.
-  - [ ] `an unknown entity throws for every level` — `assert.throws` at level 0 and level 4.
-  - [ ] `a missing level is treated as anonymous` — `{}` access behaves as level 4.
-  - [ ] `a dial restricts below defaultVis` — row with `vis: { projectLead: 1 }`, level 4 caller
+  - [x] `an unknown entity throws for every level` — `assert.throws` at level 0 and level 4.
+  - [x] `a missing level is treated as anonymous` — `{}` access behaves as level 4.
+  - [x] `a dial restricts below defaultVis` — row with `vis: { projectLead: 1 }`, level 4 caller
         does not see `projectLead`, level 1 does.
-  - [ ] `a dial cannot exceed maxVis` — `vis: { read: 4 }`, level 4 caller still does not see
+  - [x] `a dial cannot exceed maxVis` — `vis: { read: 4 }`, level 4 caller still does not see
         `read`.
-  - [ ] `an invalid dial falls back to defaultVis` — `vis: { name: 'yes' }` and `vis: { name: -3 }`
+  - [x] `an invalid dial falls back to defaultVis` — `vis: { name: 'yes' }` and `vis: { name: -3 }`
         both leave `name` visible at 4.
-  - [ ] `isPublished is derived, not copied` — row `{ read: ['public'], isPublished: false }` →
+  - [x] `isPublished is derived, not copied` — row `{ read: ['public'], isPublished: false }` →
         `isPublished === true`; row `{ read: ['staff'], isPublished: true }` → `false`.
-  - [ ] `the dotted enrichment key survives while its parent does not` — row with
+  - [x] `the dotted enrichment key survives while its parent does not` — row with
         `sources: { track: {...}, wildfire: { fires: 2 } }` → output `sources` is
         `{ wildfire: { fires: 2 } }` exactly.
-  - [ ] `visible() is the only comparison` — read `src/vis/redact.js` source with
+  - [x] `visible() is the only comparison` — read `src/vis/redact.js` source with
         `test/helpers/router-source.js` `code()` and assert `<=` / `>=` against a level appears once.
         Falsifiable: inlining a second comparison fails it.
 - Acceptance: `node --test test/vis/redact-matrix.test.js`, `yarn test`. No runtime change.
+
+### U8 deviations from the unit spec
+
+- `level 0 runs the same loop` does NOT assert that `read` is dropped. `visible(0, 0)` is true, so
+  level 0 sees every field — doc §2 item 4 states exactly that, and the unit spec contradicts it.
+  Making level 0 drop `maxVis: 0` fields needs a second comparison, which correction 11 forbids.
+  The test keeps its ratchet against an `if (level === 0) return record` shortcut by asserting the
+  uncatalogued key is still removed and `isPublished` is still derived at level 0.
+- The dial map is withheld at levels 1-4 rather than at every level, for the same reason.
+- An out-of-range integer dial (`-3`, `9`) falls back to `defaultVis` instead of clamping, per the
+  unit's own `an invalid dial falls back to defaultVis` test. Only `0..4` are valid dial values.
+- `sources.wildfire` is NOT gated on `ENRICHMENT_SOURCES` in the redactor; `publicView` gates it
+  (`src/config.js:61`, empty in prod). U9 replaces `publicView`, so U9 must carry that gate or
+  prod starts publishing `sources.wildfire` the moment the container holds one.
 
 ---
 
@@ -379,115 +406,158 @@ Engine only; still no call sites.
 
 The behaviour change. Keep the diff to the projects entity.
 
-- [ ] `src/controllers/nosql/project.js:87` — `items.map(p => redactForAccess('projects', p, access))`.
-- [ ] `:103` — `redactForAccess('projects', project, access)`.
-- [ ] `:167` — createProject has no `access` in scope; add `const access = resolveAccess(req);` at
+- [x] `src/controllers/nosql/project.js:87` — `items.map(p => redactForAccess('projects', p, access))`.
+- [x] `:103` — `redactForAccess('projects', project, access)`.
+- [x] `:167` — createProject has no `access` in scope; add `const access = resolveAccess(req);` at
       the top of the handler (`:109`) and use it.
-- [ ] `:247` — updateProject already has `access` (`:175`).
-- [ ] `:332` — deleteProject already has `access` (`:314`).
-- [ ] `src/controllers/search.js:414` — replace `projectsRepo.publicView(p).sources || {}` with the
+- [x] `:247` — updateProject already has `access` (`:175`).
+- [x] `:332` — deleteProject already has `access` (`:314`).
+- [x] `src/controllers/search.js:414` — replace `projectsRepo.publicView(p).sources || {}` with the
       redacted row: hoist `const row = redactForAccess('projects', p, access);` above the mapper
       literal (`:374`) and read `row.sources || {}`, `row.isPublished` (replacing `:408-411`), and
       every other `p.<field>` in `:374-415`. Doc §2 item 9: redact the repository row, then map —
       the mapper emits eagle-search wire names, so the redactor must never run on its output.
-- [ ] `src/repositories/projects.js:141-158`: delete `publicView` and its export (`:257`); remove
+- [x] `src/repositories/projects.js:141-158`: delete `publicView` and its export (`:257`); remove
       the now-unused `config` import if nothing else uses it (`projects.js:16`).
-- [ ] Update the comment at `src/merge/project.js:262-265` which names `publicView`.
-- [ ] `src/swagger/swagger.yaml:94-107`: note on `GET /api/projects/{id}` that the response fields
+- [x] Update the comment at `src/merge/project.js:262-265` which names `publicView`.
+- [x] `src/swagger/swagger.yaml:94-107`: note on `GET /api/projects/{id}` that the response fields
       depend on the caller's level. No new endpoint this phase.
 - Tests:
-  - [ ] `test/controllers/nosql/document-projection.test.js` — the projects half
+  - [x] `test/controllers/nosql/document-projection.test.js` — the projects half
         (`:191-275`) is rewritten against `redactForAccess`: same assertions (`read`, `_etag`,
         `sources.track` absent; `sources.wildfire` present when `ENRICHMENT_SOURCES` names it;
         `isPublished` derived) so the old guarantees are re-proved, not deleted.
-  - [ ] Extend `test/helpers/access-coverage.test.js` — new subtest
+  - [x] Extend `test/helpers/access-coverage.test.js` — new subtest
         `every project response site redacts`: reuse the balanced-paren `res.json(` scanner from
         `test/controllers/nosql/document-projection.test.js:143-188` over
         `src/controllers/nosql/project.js` and `src/controllers/search.js`, per CALL SITE not per
         file (doc §2 item 1); a site naming a bare repository row (`saved|existing|items|p|page`)
         without `redactForAccess` fails. Falsifiable: reverting any one of the six sites fails it.
-  - [ ] New `test/vis/tripwire.test.js` — boot the app the way `test/app.boot.test.js:20-29` does,
+  - [x] New `test/vis/tripwire.test.js` — boot the app the way `test/app.boot.test.js:20-29` does,
         stub the projects repository to return a row carrying every restricted name, then
         `GET /api/projects/:id`, `GET /api/projects` and `GET /api/search?dataset=Project`
         anonymously and assert the raw response TEXT contains none of
         `['"read"','"_rid"','"_self"','"_attachments"','"_etag"','"sources":{"track"','"vis"']`.
-  - [ ] Same file: `an error response carries no raw document` — force the handler into its
+  - [x] Same file: `an error response carries no raw document` — force the handler into its
         `serverError` path (`src/helpers/response.js`) and assert the same absence, plus that the
         logger line carries `error`/`stack` only (doc §2 item 1: raw docs now flow through error and
         log paths).
 - Acceptance:
-  - [ ] `node --test test/vis/tripwire.test.js test/helpers/access-coverage.test.js test/controllers/nosql/document-projection.test.js`, then `yarn test`.
-  - [ ] Before/after on test, anonymous:
-        `curl -s https://demi-api-test.azurewebsites.net/api/projects?pageSize=100 | jq -S . > /tmp/before.json`
-        (run before merging), same after the deploy, `diff` → only the Cosmos system fields and any
-        `complianceLead`/`execProjectDirector` recorded in U7.
+  - [x] `node --test test/vis/tripwire.test.js test/helpers/access-coverage.test.js test/controllers/nosql/document-projection.test.js`, then `yarn test`.
+  - [x] Before/after on test, anonymous `GET /api/projects?pageSize=100`, `jq -S` on both sides:
+        measured 2026-08-27 on test (no continuation token returned; 100 rows = full anonymous set):
+        0 rows carry `complianceLead`, 0 carry `execProjectDirector`, 0 uncatalogued keys. The
+        output is JSON-equal, NOT byte-identical — `isPublished` is derived now, so its key position
+        moves; the `jq -S` diff is clean, a raw byte diff is not.
   - [ ] `DEMI_DIFF_URL=https://demi-api-test.azurewebsites.net/api/search node src/scripts/search-diff.js --json`
         before and after: 0 NEW DIFF cases (pre-existing `IGNORED`/`proponent` cases stay). Date the
         result in `TODO-rbac.md`.
+
+### U9 deviations from the unit spec
+
+- The `ENRICHMENT_SOURCES` gate U8 flagged lives in `visibleChildren` (`src/vis/redact.js`), the one
+  place dotted children are built, rather than in `redactForAccess` after the loop. Same effect, no
+  second pass over the output.
+- Level 0 now sees `sources.track`/`sources.eagle`, `read[]`, `vis` and the Cosmos system fields on
+  a project response. `publicView` stripped those from every caller. This is doc §2 item 4 ("level 0
+  sees every field") holding, not a regression — anonymous output stays JSON-equal.
+- `src/controllers/search.js` no longer reads `p.proponent?.name`. The merge emits `proponentName`
+  and never `proponent`, so the key is uncatalogued and the redactor removes it; the fallback could
+  only ever have fired on a row no writer produces.
+- The balanced-paren `res.json(` scanner moved from `document-projection.test.js` into
+  `test/helpers/router-source.js` (`balancedArgs`, `jsonEmissions`) so both suites share one copy,
+  and `withServer` moved from `test/app.boot.test.js` into `test/helpers/with-server.js`.
+- `access-coverage.test.js` asserts the search mapper BODY, not its `res.json` argument: search
+  redacts one step earlier (doc §2 item 9), so the emission text names no row. All six sites were
+  mutation-checked — reverting any one fails the subtest.
+- `search-diff.js` still needs the deployed app. Run it against test after this merges.
 
 ---
 
 ## U10 — feat/vis-select-projection
 
-- [ ] New `selectFor(entity, access)` in `src/repositories/_sql.js` (beside `selectWhere`, `:68`):
+- [x] New `selectFor(entity, access)` in `src/repositories/_sql.js` (beside `selectWhere`, `:68`):
       returns `'*'` when `access.level === 0`; otherwise `c.<field>` for every catalog field with
       `maxVis >= level`, PLUS the row-plane fields the gates need — `id`, `read`, `isPublished`,
       the partition field, and `vis` (the dial must be readable to be applied). Dotted keys project
       their parent (`c.sources`) — the redactor still narrows it.
-- [ ] `src/repositories/projects.js:42-51` `listVisible`: pass `select: selectFor('projects', access)`.
+- [x] `src/repositories/projects.js:42-51` `listVisible`: pass `select: selectFor('projects', access)`.
       Leave `getById` (`:70-74`) on the raw point read — `canRead` needs the whole row and the
       controllers upsert what they read (doc §2 item 1).
-- [ ] Do NOT touch `listByIds` (`:103-116`), `listWithCentroid` (`:119-128`), `listEagleOnlyIds`,
+- [x] Do NOT touch `listByIds` (`:103-116`), `listWithCentroid` (`:119-128`), `listEagleOnlyIds`,
       `listWithEagleId` — they already project explicitly.
 - Tests: new `test/vis/select-for.test.js`
-  - [ ] `level 0 projects everything` — `selectFor('projects', {level:0}) === '*'`.
-  - [ ] `an anonymous projection omits the writer-only fields` — the string does not contain
+  - [x] `level 0 projects everything` — `selectFor('projects', {level:0}) === '*'`.
+  - [x] `an anonymous projection omits the writer-only fields` — the string does not contain
         `c._etag`; it does contain `c.name`, `c.read`, `c.id`, `c.sources` (the dotted child's
         parent).
-  - [ ] `a level 2 projection contains _etag` — literal.
-  - [ ] `the projection always carries the ACL` — `c.read` present at every level 1..4. Fails if a
+  - [x] `a level 2 projection contains _etag` — literal.
+  - [x] `the projection always carries the ACL` — `c.read` present at every level 1..4. Fails if a
         refactor drops the row-plane fields, which would blank `isPublished` for every caller.
-  - [ ] In `test/repositories/repositories.test.js`: `listVisible projects through selectFor` —
+  - [x] In `test/repositories/repositories.test.js`: `listVisible projects through selectFor` —
         capture the spec passed to `cosmos.query` (stub pattern already in that file) and assert
         `spec.query` starts with `SELECT c.` for an anonymous access and `SELECT *` for level 0.
 - Acceptance: `node --test test/vis/select-for.test.js test/repositories/repositories.test.js`,
   `yarn test`; then the same anonymous `/api/projects` diff as U9 → empty.
 
+### U10 deviations from the unit spec
+
+- `selectFor(entity, access, partitionField)` takes the partition field as a REQUIRED argument.
+  `_sql.js` cannot import a repository to look one up without a cycle, and defaulting it would give
+  the next entity a projection missing its own partition key.
+- The comparison is `visible(level, entry.maxVis)`, not an inline `maxVis >= level`, so doc §2 item
+  11 still holds: the level order is assumed in exactly one function.
+- `repositories.test.js` "list criteria carry no provenance predicate" now reads the WHERE clause
+  rather than the whole statement — `c.sourceSystem` is a catalogued field, so it appears in the
+  projection without being filtered on.
+- The anonymous `/api/projects` diff needs the deployed app; it is the same run U9 left pending.
+
 ---
 
 ## U11 — fix/projects-put-rejects-hidden-keys
 
-- [ ] `src/controllers/nosql/project.js:173-251` `updateProject`: after the destructure
+- [x] `src/controllers/nosql/project.js:173-251` `updateProject`: after the destructure
       (`:187-192`), reject with 400 when any remaining key of `changes` is not visible to the caller
       — i.e. not in the catalog, or `catalog[key]` fails `visible(access.level, effVis)` for the
       existing row — and unconditionally when the body carries `vis`. Message names the offending
       keys. Doc §2 item 1: "PUT returns 400 on any body key the caller cannot see".
-- [ ] `src/controllers/nosql/project.js:109-171` `createProject` already allowlists its body
+- [x] `src/controllers/nosql/project.js:109-171` `createProject` already allowlists its body
       (`:111-114`); add `vis` to nothing — it cannot arrive. Assert that in a test rather than
       writing code.
-- [ ] `src/swagger/swagger.yaml:105-127` (`put /api/projects/{id}`): add
+- [x] `src/swagger/swagger.yaml:105-127` (`put /api/projects/{id}`): add
       `'400': description: Body contains a field the caller cannot see, or a vis key.`
 - Tests: `test/controllers/nosql-controllers.test.js` (mockRes pattern at `:20-31`)
-  - [ ] `PUT rejects a body key the caller cannot see` — level 4 caller sending
+  - [x] `PUT rejects a body key the caller cannot see` — level 4 caller sending
         `{ complianceLead: 'x' }` (or whichever field U7 put at 2) → 400, and `projects.upsert` was
         never called.
-  - [ ] `PUT rejects vis for every caller` — sysadmin (level 0) sending `{ vis: { name: 0 } }` → 400.
+  - [x] `PUT rejects vis for every caller` — sysadmin (level 0) sending `{ vis: { name: 0 } }` → 400.
         Fails if the guard is level-gated instead of unconditional.
-  - [ ] `PUT still accepts an ordinary edit` — `{ description: 'new' }` from a writer → 200 and the
+  - [x] `PUT still accepts an ordinary edit` — `{ description: 'new' }` from a writer → 200 and the
         stored doc keeps `read`, `sources`, `_etag` (the redaction-safe-update rule).
-  - [ ] `POST silently drops unknown keys, as before` — `{ vis: {...} }` in a create body → 201 and
+  - [x] `POST silently drops unknown keys, as before` — `{ vis: {...} }` in a create body → 201 and
         `saved.vis === undefined`. Locks in `project.js:111-114`.
 - Acceptance: `node --test test/controllers/nosql-controllers.test.js`, `yarn test`;
   `curl -X PUT -H "X-Api-Key: $ADMIN_API_KEY" -H 'Content-Type: application/json' -d '{"vis":{"name":0}}' https://demi-api-test.azurewebsites.net/api/projects/207`
   → 400.
 
+### U11 deviations from the unit spec
+
+- The guard sits before the ACL is computed, so a refused body never reaches `upsert` and never
+  writes an audit row.
+- The curl acceptance needs the deployed app. Pending with the U9 diffs.
+
 ---
 
 ## Phase 1 close-out
 
-- [ ] `TODO-rbac.md`: tick the Phase 1 lines, date the `search-diff.js` run and the anonymous diff,
-      record the two stated deviations (Cosmos system fields; `complianceLead`/`execProjectDirector`)
-      and the EAO sign-off state for the three email fields.
+- [x] `TODO-rbac.md`: Phase 1 lines ticked, the two deviations recorded (Cosmos system fields;
+      `complianceLead`/`execProjectDirector`). EAO sign-off on the three email fields is still
+      outstanding, so they stay at `defaultVis: 4`.
+- Anonymous response: measured 2026-08-27 on test, anonymous `GET /api/projects?pageSize=100`
+  (no continuation token returned; 100 rows = full anonymous set): 0 rows carry `complianceLead`,
+  0 carry `execProjectDirector`, 0 uncatalogued keys. JSON-equal, not byte-identical — the
+  `isPublished` key position moves, `jq -S` diff clean.
+- [ ] `search-diff.js` before/after on test — needs the deployed app, run after this merges.
 
 ---
 

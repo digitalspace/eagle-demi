@@ -11,6 +11,9 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { visibilityFor, andClauses, MAX_PAGE_SIZE } = require('../helpers/access-sql');
+const { catalogFor } = require('../vis/catalog');
+const { visible } = require('../vis/redact');
+const { ANONYMOUS_LEVEL, LEVELS } = require('../vis/level');
 
 /**
  * A criterion is a SQL fragment plus its parameters — the same shape as readClause/scopeClause,
@@ -78,6 +81,40 @@ function selectWhere({ access, partitionField, criteria = [], select = '*', orde
 }
 
 /**
+ * The `select` projection for this caller: the catalog fields whose ceiling reaches their level, so
+ * a value they could never see does not leave Cosmos at all.
+ *
+ * Defence in depth only — `redactForAccess` at the response boundary is what enforces the policy,
+ * because a per-record dial can restrict below `maxVis` and a projection cannot read one it has not
+ * fetched yet. Level 0 takes `*`: every field is visible to it.
+ *
+ * The row-plane fields are unconditional. `read` and the partition field feed `canRead` and the
+ * derived `isPublished`, and the dial map has to be readable to be applied — dropping them would
+ * blank `isPublished` for every caller.
+ *
+ * @param {string} entity          a key of src/vis/catalog
+ * @param {object} access          from resolveAccess()
+ * @param {string} partitionField  'id' on projects, 'projectId' elsewhere. Required: a default
+ *   would give the next entity a projection missing its own partition key.
+ */
+function selectFor(entity, access, partitionField) {
+  if (!partitionField) throw new Error('[vis] selectFor needs the entity partition field');
+
+  // Same fail-closed resolution as redact.js: `null <= maxVis` is true for every ceiling, so an
+  // unrecognised level must land on 4 rather than reach Cosmos as a comparison that always passes.
+  const level = LEVELS.includes(access && access.level) ? access.level : ANONYMOUS_LEVEL;
+  if (level === 0) return '*';
+
+  const fields = new Set(['id', partitionField, 'read', 'isPublished', 'vis']);
+  for (const [key, entry] of Object.entries(catalogFor(entity))) {
+    // A dotted key projects its PARENT; the redactor narrows it back to the listed children.
+    if (visible(level, entry.maxVis)) fields.add(key.split('.')[0]);
+  }
+
+  return [...fields].map(field => `c.${field}`).join(', ');
+}
+
+/**
  * COUNT using the IDENTICAL predicate as the read.
  * A count built from a different filter leaks the true size of a collection the caller
  * cannot see, which is why this shares selectWhere rather than rebuilding the predicate.
@@ -128,6 +165,7 @@ module.exports = {
   inList,
   isDefinedAndNotNull,
   selectWhere,
+  selectFor,
   countWhere,
   pageOptions,
   fetchAll

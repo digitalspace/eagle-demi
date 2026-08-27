@@ -56,7 +56,7 @@ const config = {
   doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
   doclingKey:   process.env.DOCLING_API_KEY  || '',
 
-  // Keys under a project's `sources` that may leave over HTTP (repositories/projects.publicView).
+  // Keys under a project's `sources` that may leave over HTTP (src/vis/redact.js).
   // Empty = no enrichment is published, which is what prod runs.
   enrichmentSources: (process.env.ENRICHMENT_SOURCES || '').split(',').map(s => s.trim()).filter(Boolean),
 

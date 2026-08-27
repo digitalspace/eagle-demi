@@ -13,9 +13,8 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const config = require('../config');
 const { canRead } = require('../helpers/access-sql');
-const { eq, inList, isDefinedAndNotNull, selectWhere, countWhere, pageOptions, fetchAll } = require('./_sql');
+const { eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'projects';
 const PARTITION_FIELD = 'id';
@@ -44,6 +43,9 @@ async function listVisible(access, opts = {}) {
     access,
     partitionField: PARTITION_FIELD,
     criteria: buildCriteria(opts),
+    // getById keeps the raw point read: canRead needs the whole row, and the controllers upsert
+    // what they read.
+    select: selectFor('projects', access, PARTITION_FIELD),
     orderBy: 'c.name ASC'
   });
 
@@ -125,36 +127,6 @@ async function listWithCentroid(access) {
     select: 'c.id, c.name, c.centroid'
   });
   return cosmos.query(CONTAINER, spec);
-}
-
-/**
- * A stored project as it may leave over HTTP.
- *
- * `sources` holds raw upstream payloads for re-merge traceability, not API surface, so only the
- * enrichment keys named in ENRICHMENT_SOURCES pass — an allowlist, so a new upstream field is
- * never published by default. `read[]` is the caller's own ACL restated and would publish internal
- * role names; `isPublished` is derived from it. `_etag` has no round-tripping caller.
- *
- * Applied at res.json and nowhere else: updateProject reads, spreads and upserts, so stripping in
- * the data layer would erase these from the stored document on the next edit.
- */
-function publicView(project) {
-  if (!project) return project;
-
-  const { sources, read, _etag, ...rest } = project;
-  const view = {
-    ...rest,
-    isPublished: Array.isArray(read) && read.length > 0
-      ? read.includes('public')
-      : rest.isPublished === true
-  };
-
-  const allowed = {};
-  for (const key of config.enrichmentSources) {
-    if (sources && sources[key] !== undefined) allowed[key] = sources[key];
-  }
-
-  return Object.keys(allowed).length ? { ...view, sources: allowed } : view;
 }
 
 /** The reconcile predicate, shared so the enumeration and its COUNT cannot drift apart. */
@@ -254,7 +226,6 @@ module.exports = {
   getByEagleId,
   listByIds,
   listWithCentroid,
-  publicView,
   listEagleOnlyIds,
   countEagleOnlyIds,
   listWithEagleId,
