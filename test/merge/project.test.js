@@ -16,6 +16,7 @@ const {
   BC_BBOX,
   SECURE_ROLES
 } = require('../../src/merge/project');
+const { ADMIN_ROLES } = require('../../src/helpers/access-sql');
 
 const inBC = (lng, lat) =>
   lng >= BC_BBOX.minLng && lng <= BC_BBOX.maxLng &&
@@ -172,6 +173,16 @@ test('centroid normalisation', async (t) => {
 });
 
 test('ACL — the merge never widens visibility', async (t) => {
+  await t.test('merge ACL constant is the same object access-sql exports', () => {
+    assert.strictEqual(SECURE_ROLES, ADMIN_ROLES);
+  });
+
+  await t.test('an unpublished merge writes exactly three roles', () => {
+    // Literal, not read off either constant: importing access-sql's 5-entry SECURE_ROLES instead
+    // would rewrite every stored read[] and this is what catches it.
+    assert.deepStrictEqual(resolveProjectAcl(null), ['sysadmin', 'staff', 'demi-admin']);
+  });
+
   await t.test('an existing Eagle read[] is preserved verbatim', () => {
     const acl = resolveProjectAcl({ read: ['sysadmin', 'compliance'] });
     assert.deepStrictEqual(acl, ['sysadmin', 'compliance']);

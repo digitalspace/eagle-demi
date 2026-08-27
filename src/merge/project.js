@@ -19,7 +19,10 @@
  * instead of erroring — so every rule here is data, and tested as data.
  */
 
-const SECURE_ROLES = ['sysadmin', 'staff', 'demi-admin'];
+// Named SECURE_ROLES here for historical reasons; the value is access-sql's ADMIN_ROLES.
+// Widening it to access-sql's 5-entry SECURE_ROLES is an ACL data change, not a refactor.
+const { ADMIN_ROLES } = require('../helpers/access-sql');
+const SECURE_ROLES = ADMIN_ROLES;
 
 /**
  * Fields Track owns. Track wins for these, but ONLY when it actually supplies a value:
