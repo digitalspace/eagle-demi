@@ -652,19 +652,19 @@ Acceptance
 
 Branch: `feat/vis-me-endpoint`
 
-- [ ] New `exports.getMe` in `src/controllers/nosql/me.js` (new file, ~15 lines): `resolveAccess(req)` then `res.json({ roles: access.roles, level: access.level, tier: access.tier })`. No Cosmos read.
-- [ ] Route `router.get('/me', passiveAuthMiddleware, meController.getMe)` in `src/routes/api.js`, beside `/config` at `:38`. Passive, not `authMiddleware`: an anonymous caller must get `{ roles: ['public'], level: 4, tier: 'public' }` rather than a 401.
-- [ ] `src/swagger/swagger.yaml`: add `/api/me` under `paths:` (`:15`), before `/api/projects` (`:39`); response schema in `components:` (`:499`).
+- [x] New `exports.getMe` in `src/controllers/nosql/me.js` (new file, ~15 lines): `resolveAccess(req)` then `res.json({ roles: access.roles, level: access.level, tier: access.tier })`. No Cosmos read.
+- [x] Route `router.get('/me', passiveAuthMiddleware, meController.getMe)` in `src/routes/api.js`, beside `/config` at `:38`. Passive, not `authMiddleware`: an anonymous caller must get `{ roles: ['public'], level: 4, tier: 'public' }` rather than a 401.
+- [x] `src/swagger/swagger.yaml`: add `/api/me` under `paths:` (`:15`), before `/api/projects` (`:39`); response schema in `components:` (`:499`).
 
 Tests
 
-- [ ] `test/controllers/me.test.js` — case `'anonymous /api/me returns level 4'` asserts `{ level: 4, tier: 'public' }` and `roles` contains only `public`. Fails if the route is mounted behind `authMiddleware` (401 instead of 200).
-- [ ] Same file, case `'/api/me never returns a token or a key id'` asserts the response has exactly the keys `roles`, `level`, `tier`. Fails if someone spreads `req.user` in.
-- [ ] `test/app.api-docs-prod.test.js` already asserts swagger parses; confirm `/api/me` appears.
+- [x] `test/controllers/me.test.js` — case `'anonymous /api/me returns level 4'` asserts `{ level: 4, tier: 'public' }` and `roles` contains only `public`. Fails if the route is mounted behind `authMiddleware` (401 instead of 200).
+- [x] Same file, case `'/api/me never returns a token or a key id'` asserts the response has exactly the keys `roles`, `level`, `tier`. Fails if someone spreads `req.user` in.
+- [x] `test/app.api-docs-prod.test.js` already asserts swagger parses; confirm `/api/me` appears.
 
 Acceptance
 
-- [ ] `node --test test/controllers/me.test.js` — 0 fail.
+- [x] `node --test test/controllers/me.test.js` — 0 fail.
 - [ ] `curl -s $API/api/me` → `{"roles":["public"],"level":4,"tier":"public"}`.
 - [ ] `curl -s -H "X-Api-Key: $KEY" $API/api/me | jq .level` → the level of that key's roles.
 
