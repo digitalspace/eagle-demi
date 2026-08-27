@@ -14,12 +14,19 @@ const { auditEvent } = require('../../utils/audit');
 const config = require('../../config');
 
 /** Vanity codes. Anything outside this alphabet cannot be a Cosmos id or a clean URL segment. */
-const CUSTOM_CODE = /^[A-Za-z0-9_-]{3,64}$/;
+const CUSTOM_CODE = /^[a-z0-9_-]{3,64}$/;
 const MAX_NOTE_LENGTH = 200;
 
-/** 6 bytes → 8 base64url characters, same idiom as helpers/api-key.js. */
+/** No `0 O 1 l I` — a printed poster must not force a reader to guess which glyph they're looking at. */
+const CODE_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+const GENERATED_CODE_LENGTH = 8;
+
 function generateCode() {
-  return crypto.randomBytes(6).toString('base64url');
+  let code = '';
+  for (let i = 0; i < GENERATED_CODE_LENGTH; i++) {
+    code += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
+  }
+  return code;
 }
 
 /**
@@ -76,12 +83,13 @@ exports.createLink = async (req, res) => {
       return res.status(400).json({ error: `note must be a string of at most ${MAX_NOTE_LENGTH} characters` });
     }
     const custom = code !== undefined && code !== null && code !== '';
-    if (custom && !CUSTOM_CODE.test(String(code))) {
-      return res.status(400).json({ error: 'code must be 3-64 characters of A-Z a-z 0-9 _ -' });
+    const customCode = custom ? String(code).toLowerCase() : null;
+    if (custom && !CUSTOM_CODE.test(customCode)) {
+      return res.status(400).json({ error: 'code must be 3-64 characters of a-z 0-9 _ - (case-insensitive)' });
     }
 
     const record = {
-      id: custom ? String(code) : generateCode(),
+      id: custom ? customCode : generateCode(),
       url: destination.url,
       note: note || null,
       createdAt: new Date().toISOString(),
@@ -116,7 +124,7 @@ exports.createLink = async (req, res) => {
 
 exports.updateLink = async (req, res) => {
   try {
-    const code = String(req.params.code);
+    const code = String(req.params.code).toLowerCase();
     if (!CUSTOM_CODE.test(code)) {
       return res.status(404).json({ error: 'Short link not found' });
     }
@@ -149,7 +157,7 @@ exports.updateLink = async (req, res) => {
 
 exports.deleteLink = async (req, res) => {
   try {
-    const code = String(req.params.code);
+    const code = String(req.params.code).toLowerCase();
     if (!CUSTOM_CODE.test(code)) {
       return res.status(404).json({ error: 'Short link not found' });
     }
@@ -179,7 +187,7 @@ exports.deleteLink = async (req, res) => {
  * poster can never be corrected.
  */
 exports.resolveLink = async (req, res) => {
-  const code = String(req.params.code);
+  const code = String(req.params.code).toLowerCase();
   try {
     const record = CUSTOM_CODE.test(code) ? await links.getById(code) : null;
     logger.info(`[demi-api] short link ${code} hit=${Boolean(record)}`);
