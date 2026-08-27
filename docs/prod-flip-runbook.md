@@ -2,7 +2,8 @@
 
 One Mongo field decides which backend eagle-public calls for Project and Document search.
 eagle-api serves it from `/api/config`; the browser reads it once per page load.
-Propagation: seconds.
+`/api/config` serves the new value within 19–38 s (measured 2026-08-21); poll up to 60 s before
+concluding the change did not land.
 
 ## The field
 
@@ -35,4 +36,9 @@ db.epic.updateOne({ _schemaName: 'Config' }, { $set: { SEARCH_API_PATH: '<value>
   calls to the backend the field currently names.
 - `dataset=List` is still answered by eagle-api regardless of `SEARCH_API_PATH`.
 - `/api/config` 200, `/admin/` 200.
-</content>
+
+## After a change
+
+Watch for 1 h: the App Insights 5xx rate on `demi-api-prod`, the `demi-search-availability-prod`
+webtest, and run `probe-acl.js` (26 cells) against `demi-api-prod`. Use the kill switch (`''`) if
+search answers 5xx or the ACL probe fails. The kill switch is reversible the same way.
