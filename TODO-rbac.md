@@ -142,7 +142,11 @@ Doc §2 item 10. Code and app setting ship together.
         setting already present.
   - [ ] Prod: `MINIO_*=… ADMIN_API_KEY=… DOCLING_API_KEY=… ./scripts/deploy-infra.sh prod --what-if`,
         review, then `CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live`.
-  - [x] (test 2026-08-27: anonymous `/api/projects` 200 and byte-identical; bogus Bearer on `/api/db/stats` 401) Verify: `GET /api/deployments/latest` status 4, then the two curls above.
+  - [ ] Verify: `GET /api/deployments/latest` status 4, then the two curls above. Test 2026-08-27:
+        anonymous `/api/projects` 200 and byte-identical. The unlisted-client 401 is NOT shown live —
+        a malformed Bearer 401s at `jwt.verify` before the allowlist runs. It needs a signed token
+        from a client other than `eagle-admin-console` (e.g. `epic-admin` client credentials);
+        until then the guard is proved only by `test/helpers/client-allowlist.test.js`.
   - [ ] Rollback: revert the code commit and redeploy the API. The app setting alone is harmless —
         the old build ignores `DEMI_ALLOWED_CLIENTS` only if it is empty, so leave the setting in
         place and revert code, never the reverse. An empty setting on the new build is not a boot
@@ -620,7 +624,7 @@ Tests
 Acceptance
 
 - [ ] `node --test test/vis/search-drift.test.js test/controllers/search.test.js` — 0 fail.
-- [ ] `node src/scripts/search-diff.js` against test before and after: 0 NEW DIFF, key delta still a subset of `EXPECTED_KEY_DELTA`. Date the run here: ______
+- [ ] Anonymous `GET /api/search?dataset=Project&pageSize=5` and `dataset=Document&pageSize=5` on test, `jq -S` before and after: 0 lines (`search-diff.js` is moot, its baseline is retired eagle-search). Date the run here: ______
 - [ ] `curl -s "$API/api/search?dataset=Project&pageSize=5" | jq -S '.[0].searchResults[0] | keys'` identical before and after.
 
 ## P2-3 query parameters gated by the catalog
@@ -642,7 +646,7 @@ Acceptance
 
 - [ ] `node --test test/search/eagle-query.test.js test/controllers/search.test.js test/repositories/projects.test.js` — 0 fail.
 - [ ] `curl -s "$API/api/search?dataset=Project&complianceLead=x"` → 400 (unknown param, unchanged).
-- [ ] `node src/scripts/search-diff.js` — 0 new DIFF. Date: ______
+- [ ] Same anonymous `/api/search` `jq -S` diff as P2-2: 0 lines. Date: ______
 
 ## P2-4 GET /api/me
 
