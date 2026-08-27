@@ -60,9 +60,15 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 
 ## 1. Credentials
 
-- [ ] **1.1 Rotate the MinIO key and OpenShift token at source.** `eagle-api-minio-keys` in
-      `6cdc9e-test` created 2021-02-25, never rotated; repo secrets already deleted. Needs the
-      owners of `nrs.objectstore.gov.bc.ca` and the token issuer.
+- [ ] **1.1 Rotate the object-store keys and the OpenShift token at source — other owners.**
+      Handoff: (a) `nrs.objectstore.gov.bc.ca` access/secret keys: dev + test share secret
+      `eagle-api-minio-keys` (`6cdc9e-dev` 2020-11-24, `6cdc9e-test` 2021-02-25, never rotated; bucket
+      `asnpnn`), prod uses `nr-object-store-credential` (bucket `ozwdez`). Rotation = NRS object-store
+      owners issue new keys → update those secrets → `oc rollout restart deploy/eagle-api` per ns →
+      rerun `scripts/deploy-infra.sh <env> --live` for DEMI (its `MINIO_*` app settings come from the
+      same secrets). (b) `OPENSHIFT_TOKEN` repo secrets (eagle-api, eagle-public, eao-nginx) are the
+      `github-cicd` SA token from `6cdc9e-tools` — reissue via `oc create token`/secret, paste into
+      the three repos. Nothing in DEMI blocks on this.
 - [x] ~~**1.2 Rotate `RPROXY_EGUIDE_PASSWORD`**~~ Decided 2026-08-26 (Daniel): not rotated — it is the
       front-facing basic-auth password on `/eguide`, issued to users; changing it is a business
       re-issue, not hygiene. `TYPESENSE_SEARCH_KEY` deleted 2026-08-26.
@@ -86,7 +92,7 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
 - [x] ~~Review minors still real~~ Done in PR #169.
 - [x] ~~`_sql.fetchAll` still passes `maxItemCount`,~~ Done in PR #169: `maxItemCount` dropped; rows appended without spread.
 - [x] ~~`projects.js:128` filters on `centroid` without an index path~~ Done: filter moved to the scalar leaf
-      `centroid.type` and `/centroid/type/?` indexed (Bicep, PR); applied with the next infra deploy.
+      `centroid.type` and `/centroid/type/?` indexed; applied 2026-08-27 (`infra-38f2905-002451` test, `infra-38f2905-002943` prod).
 - [ ] Nightly reconcile + drift alarm for the Eagle push: the only thing that catches a
       hard-deleted document (`findOneAndDelete`, no tombstone). Script #171, seed's own admission
       rule #175, nightly run + alert #177 (deployed: infra `infra-bdca13b-211420`, app `v0.18.0-211917`,
@@ -100,7 +106,7 @@ pin every claim to a measurement with a date; reviewer takes a positional sha
       `AppTraces | where Message contains "[reconcile] projects"`. One line a night with `drift=0`
       is clean; NO line means the timer never fired, and nothing alerts on that.
 - [x] ~~Unused Cosmos index paths (`wildfires` spatial, projects composite, five scalars): verified
-      removable; only with a Bicep deploy that happens for another reason.~~ Done in PR: dropped
+      removable; only with a Bicep deploy that happens for another reason.~~ Done (applied 2026-08-27 with `infra-38f2905-*`): dropped
       `projects` `/trackProjectId/?` + `/updatedAt/?` + the `[isPublished, name]` composite,
       `documents` `/fileExt/?` + `/displayName/?` + `/updatedAt/?`, `boundaries` `/code/?`, and the
       `wildfires` `/location/*` spatial index. **NOT applied yet** — it takes effect on the next
