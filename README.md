@@ -11,15 +11,14 @@ This repository houses:
    container of a Storage static website and served through the Front Door profile that lives in
    `eagle-search`.
 
-> **Status: staging** (`c4b0a8-test`, resources `demi-*-test`) is the live environment — CI
-> deploys it on every push to `main`. Dev is an empty sandbox shell (redeploy from Bicep on
-> demand; the dev estate was torn down 2026-08-11). Prod comes later, from a tag verified on
-> staging.
+> **Status: live in staging and prod.** Staging (`c4b0a8-test`, resources `demi-*-test`) redeploys
+> on every push to `main`. Dev is an empty sandbox shell (redeploy from Bicep on demand; the dev
+> estate was torn down 2026-08-11). Prod (`c4b0a8-prod`, resources `demi-*-prod`) deploys from a
+> tag verified on staging and has served EPIC's search since 2026-08-26.
 >
 > This file covers what you need at the keyboard. Architecture, measured facts, Azure environment
 > detail and the traps live in the [wiki](https://github.com/digitalspace/eagle-demi/wiki) — start at
 > [Environment Reality & Operational Gotchas](https://github.com/digitalspace/eagle-demi/wiki/Environment-Reality-and-Operational-Gotchas).
-> `TODO.md` holds what is left to do.
 
 ---
 
@@ -831,7 +830,7 @@ gh api "repos/digitalspace/eagle-demi/dependabot/alerts?state=open&per_page=100"
 Grouping and routine version updates come from `.github/dependabot.yml`. Angular is no longer
 ignored there — the freeze was lifted on 2026-08-06 with the move to Angular 22 — but it is still
 grouped, because the framework and its toolchain are version-locked and a half-bumped pair does not
-build. See the Angular entry in `TODO.md`.
+build.
 
 **GitHub Code Quality is not enabled.** It went GA on 2026-07-20 and bills $10 per active committer
 per month, counted org-wide, and it is not in the free public-repo set. It is also UI-only, with no

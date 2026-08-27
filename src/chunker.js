@@ -19,7 +19,7 @@
  * before posting (`extract_text` joins them and drops the index; the OCR path is 25-page batch
  * granular), and the ingest payload carries paragraphs, not pages. It exists because the schema
  * has the field, and the UI labels it "Passage" for that reason. Real page numbers are a citation
- * feature and need host, protocol and API changes — see TODO.md.
+ * feature and need host, protocol and API changes.
  */
 
 const {

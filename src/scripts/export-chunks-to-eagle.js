@@ -51,10 +51,9 @@
  *
  * WHY --dump EXISTS. The header above is not reassurance, it is a hazard notice: this corpus is the
  * only extracted copy of the text, and `demi-cosmos-test`'s backup is Periodic on an 8-hour
- * retention — measured 2026-08-19 (`backupIntervalInMinutes: 240`, `backupRetentionIntervalInHours: 8`),
- * not the Continuous7Days that TODO.md claims (that reading was taken on `demi-cosmos-dev`, which no
- * longer exists). An 8-hour undo on an irreplaceable corpus is the real exposure, and a readable
- * second copy is the cheap fix.
+ * retention — measured 2026-08-19 (`backupIntervalInMinutes: 240`, `backupRetentionIntervalInHours: 8`).
+ * An 8-hour undo on an irreplaceable corpus is the real exposure, and a readable second copy is the
+ * cheap fix.
  *
  * `--dump` needs neither `--target` nor `--live`, so a backup run is a pure read: Cosmos in, a file
  * out, nothing sent anywhere. It composes with `--resume` and `--limit`, and appends rather than

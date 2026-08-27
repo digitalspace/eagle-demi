@@ -47,8 +47,7 @@ what makes it CI-runnable.
 
 **Be accurate about what it covers.** It is **8 assertions in one function**, all on `decide()`, the
 text-versus-OCR routing rule — the one piece of logic here that can be wrong without failing loudly.
-(An earlier note in `TODO.md` claimed "~45 self-checks"; that was never true.) `test_poolfix.py` is
-separate and is not wired into this mode.
+`test_poolfix.py` is separate and is not wired into this mode.
 
 ## Keeping it in step
 

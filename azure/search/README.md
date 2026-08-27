@@ -295,7 +295,7 @@ Ten hits came back with ten distinct `@search.rerankerScore` values under the ap
 ## What it contradicted
 
 **`sector`, `region` and `status` are already `facetable: true`** — as is every other field in
-`projects` and `documents`. `TODO.md` recorded facets as blocked behind a full reindex on
-the grounds that `facetable` is not a mutable field property. That is true in general, but moot
-here: the fields were created facetable. Facets are a query-side change costing nothing but the
-`facets` parameter and some UI. The blocker does not exist.
+`projects` and `documents`. Facets were once thought blocked behind a full reindex, on the grounds
+that `facetable` is not a mutable field property. That is true in general, but moot here: the
+fields were created facetable. Facets are a query-side change costing nothing but the `facets`
+parameter and some UI. The blocker does not exist.

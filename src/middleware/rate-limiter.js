@@ -58,13 +58,10 @@ const WINDOW_MS = 60 * 1000;
  * outrun the global ceiling on its own and 429 everyone else.
  *
  * So on a proxied path this stops being a per-caller limit and becomes a global circuit breaker,
- * and the number should be raised to suit that job — the real per-IP control there is rproxy's
- * `limit_req`, which keys on `$binary_remote_addr` and is not fooled by any of this. The default
- * stays 300 because it is right for the direct path, which is the only one live today. It is NOT
- * right for the proxied one: eao-nginx now carries `location = /demi-search/search` proxying to
- * demi-api-test, so the moment that release ships and SEARCH_API_PATH points at it, every visitor
- * to test shares this single bucket. Raise RATE_LIMIT_MAX_REQUESTS in the same change that turns
- * that path on — see the eagle-search fold in TODO.md.
+ * and the number has to suit that job — the real per-IP control there is rproxy's `limit_req`,
+ * which keys on `$binary_remote_addr` and is not fooled by any of this. The code default (300) is
+ * only the fallback for a direct caller; test and prod both override it to 6000 in their
+ * `azure/main.*.bicepparam` now that `/demi-search/search` routes through eao-nginx.
  *
  * RATE_LIMIT_MAX_REQUESTS has a home in `azure/modules/api-web-app.bicep` and is therefore safe to
  * change there. It must NOT be set by hand: that module's appSettings is a whole-collection PUT,

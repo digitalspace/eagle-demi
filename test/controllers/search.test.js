@@ -696,10 +696,6 @@ test('Search Controller Tests', async (t) => {
     assert.match(body.error, /pageSize above 500/);
   });
 
-  // The Cosmos full-text backend was ruled out and Azure AI Search is not built yet (TODO.md §B),
-  // so this branch answers empty WITHOUT reaching any data layer. Asserting "never queried" is the
-  // point: a stub that still hit Cosmos would burn RU per keystroke against a container with no
-  // full-text index, and the failure would show up as latency rather than as an error.
   await t.test('DocumentChunk search hydrates names and passes the ACL filter to the service',
     async () => {
       let sent = null;
