@@ -77,6 +77,14 @@ param rateLimitMaxRequests = 6000
 
 param linkBaseUrl = 'https://projects.eao.gov.bc.ca'
 
+// azp values: frontend client id + eagle-admin-console; measured against realm eao-epic.
+// One entry, because this file sets no keycloakClientId and takes main.bicep's default, which is
+// the same id. Prod's other callers are eagle-api's push (API key) and eagle-public (anonymous).
+param allowedClients = 'eagle-admin-console'
+
+// set after measuring aud on a live token
+param ssoAudience = ''
+
 // Empty, deliberately. There is no DEMI frontend in prod — eagle-public is the consumer and it
 // reaches this API same-origin through rproxy, so no browser origin needs allowing. Empty leaves
 // CORS_ORIGIN unset and src/app.js falls back to localhost only: fail closed, not open.

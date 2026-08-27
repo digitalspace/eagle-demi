@@ -132,6 +132,16 @@ param deployStaticSite bool = true
 @description('Keycloak client whose tokens the API accepts.')
 param keycloakClientId string = 'eagle-admin-console'
 
+// No default, same rule as adminApiKey above: an unset value must fail the build. An empty string
+// deployed to test or prod is an allowlist that admits every client in the realm.
+@description('Comma-separated Keycloak client ids (token azp) permitted to call this API.')
+param allowedClients string
+
+// Empty, not 'account': the audience Keycloak actually mints is unmeasured, and a wrong value
+// rejects every token. Empty means the check is not enforced.
+@description('Expected JWT aud claim. Empty disables audience verification.')
+param ssoAudience string = ''
+
 // Empty creates demi-plan-<env>. Prod joins an existing plan instead; see the param file.
 @description('App Service plan to join instead of creating one. Must be a Linux plan.')
 param existingServerFarmId string = ''
@@ -371,6 +381,8 @@ module apiWebApp './modules/api-web-app.bicep' = {
     eagleApiBase: eagleApiBase
     reconcileSchedule: reconcileSchedule
     keycloakClientId: keycloakClientId
+    allowedClients: allowedClients
+    ssoAudience: ssoAudience
     apiSubnetId: appServiceSubnetId
     existingServerFarmId: existingServerFarmId
     identityId: identity.outputs.identityId

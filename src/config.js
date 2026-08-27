@@ -168,9 +168,8 @@ const config = {
   // ENVIRONMENT_NAME is gone rather than kept as a fallback: a dead name at the head of the chain
   // reads as the primary and invites the same mistake again.
   environmentName:       process.env.ENVIRONMENT || 'dev',
-  // Keycloak clients (azp) permitted to act privileged. EMPTY = permissive, on purpose: the DEMI
-  // frontend and eagle-admin staff users share this realm, so defaulting to ON would lock out real
-  // users. Set it once every service account is registered. See helpers/auth.applyClientAllowlist.
+  // Keycloak clients (azp) permitted to call this API at all. Empty admits every client, which is
+  // why the guard below refuses to boot test or prod on an empty list. See helpers/auth.isAllowedClient.
   allowedClients:        (process.env.DEMI_ALLOWED_CLIENTS || '').split(',').map(s => s.trim()).filter(Boolean),
   // Short links: destinations are allowlisted by hostname suffix at write time (helpers/link-url).
   // linkBaseUrl is a Bicep app setting per environment so test hands back the test host, not prod's.
@@ -179,6 +178,19 @@ const config = {
 
   ssoJwksUri:            process.env.SSO_JWKSURI || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}/protocol/openid-connect/certs`,
   ssoIssuer:             process.env.SSO_ISSUER || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}`,
+  // Empty = not enforced. No default value: an unmeasured audience 401s every caller, so this
+  // stays off until someone reads `aud` off a live token per realm.
+  ssoAudience:           process.env.SSO_AUDIENCE || '',
 };
+
+// Fail to boot rather than run a deployed environment with an allowlist that admits every client
+// in the realm. Only dev and local keep the permissive default, so a new ENVIRONMENT name is
+// treated as deployed rather than silently admitting the whole realm.
+if (config.environmentName !== 'dev' && config.environmentName !== 'local' &&
+    config.allowedClients.length === 0) {
+  throw new Error(
+    `DEMI_ALLOWED_CLIENTS must name at least one Keycloak client in ${config.environmentName}.`
+  );
+}
 
 module.exports = config;

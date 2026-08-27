@@ -16,7 +16,7 @@
  * Nothing here interpolates a caller value into SQL. Every value is a bound parameter.
  */
 
-const PUBLIC_ROLES = ['public'];
+const PUBLIC_ROLES = Object.freeze(['public']);
 
 /**
  * Roles that grant PRIVILEGED visibility — i.e. read everything, ACL predicate collapses to `true`.
@@ -27,9 +27,9 @@ const PUBLIC_ROLES = ['public'];
  * ['public','sysadmin','staff','demi-admin'] and a service caller sees them because readClause
  * short-circuits for any privileged caller.
  */
-const SECURE_ROLES = [
+const SECURE_ROLES = Object.freeze([
   'sysadmin', 'staff', 'demi-admin', 'demi-service-read', 'demi-service-write'
-];
+]);
 
 /**
  * Roles permitted to administer the SERVICE ITSELF — mint and revoke registry keys, run an
@@ -39,7 +39,7 @@ const SECURE_ROLES = [
  * This is the set `/admin/*` is gated on, and it is why `demi-service-write` exists: a machine
  * writer must be able to mirror data without being able to mint itself a wider credential.
  */
-const ADMIN_ROLES = ['sysadmin', 'staff', 'demi-admin'];
+const ADMIN_ROLES = Object.freeze(['sysadmin', 'staff', 'demi-admin']);
 
 /**
  * Roles permitted to MUTATE APPLICATION DATA — projects, documents, chunks, boundaries and the
@@ -53,7 +53,7 @@ const ADMIN_ROLES = ['sysadmin', 'staff', 'demi-admin'];
  * guarded `GET /db/stats` and `DELETE /projects/:id` identically), which made "read-only consumer"
  * inexpressible. See middleware/require-roles.js.
  */
-const WRITE_ROLES = [...ADMIN_ROLES, 'demi-service-write'];
+const WRITE_ROLES = Object.freeze([...ADMIN_ROLES, 'demi-service-write']);
 
 /**
  * Access tiers. 'scoped' is built now although no project-scoped role exists yet — the point

@@ -4,9 +4,10 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const jwt = require('jsonwebtoken');
 
 const config = require('../../src/config');
-const { applyClientAllowlist } = require('../../src/helpers/auth');
+const { isAllowedClient, authenticate } = require('../../src/helpers/auth');
 
 function tokenFrom(azp, roles) {
   return { azp, preferred_username: 'service-account-' + azp, realm_access: { roles } };
@@ -19,51 +20,66 @@ function withAllowlist(list, fn) {
 }
 
 test('client allowlist', async (t) => {
-  await t.test('empty allowlist is permissive — the shipped default must not lock anyone out', () => {
-    // DEMI's own frontend and eagle-admin's staff users share this realm. Defaulting to ON would
-    // have logged real users out the moment this deployed, so "empty means permissive" is the
-    // behaviour under test, not an oversight.
-    const token = tokenFrom('demi-frontend', ['sysadmin']);
+  await t.test('empty allowlist admits any client', () => {
+    // The dev and local case only: src/config.js refuses to boot test or prod on an empty list.
     withAllowlist([], () => {
-      assert.deepStrictEqual(applyClientAllowlist(token).realm_access.roles, ['sysadmin']);
+      assert.strictEqual(isAllowedClient(tokenFrom('anything', ['sysadmin'])), true);
     });
   });
 
-  await t.test('a listed client keeps its privileges', () => {
+  await t.test('a listed azp is admitted', () => {
     withAllowlist(['eagle-admin-console'], () => {
-      const out = applyClientAllowlist(tokenFrom('eagle-admin-console', ['staff', 'public']));
-      assert.deepStrictEqual(out.realm_access.roles, ['staff', 'public']);
+      assert.strictEqual(isAllowedClient(tokenFrom('eagle-admin-console', ['staff'])), true);
     });
   });
 
-  await t.test('an unlisted client is DEMOTED, not rejected', () => {
-    // Demotion rather than 401 on purpose: a stray token should lose privileges, not break a page
-    // that only ever needed public reads.
+  await t.test('an unlisted azp is refused', () => {
     withAllowlist(['eagle-admin-console'], () => {
-      const out = applyClientAllowlist(tokenFrom('some-other-app', ['sysadmin', 'staff', 'public']));
-      assert.deepStrictEqual(out.realm_access.roles, ['public']);
-      assert.ok(out, 'must still return an identity');
-    });
-  });
-
-  await t.test('demotion strips every SECURE_ROLE including the new read tier', () => {
-    withAllowlist(['known'], () => {
-      const out = applyClientAllowlist(tokenFrom('unknown', ['demi-service-read', 'demi-admin', 'compliance']));
-      assert.deepStrictEqual(out.realm_access.roles, ['compliance']);
-    });
-  });
-
-  await t.test('a token with no azp is treated as unlisted when the allowlist is on', () => {
-    withAllowlist(['known'], () => {
-      const out = applyClientAllowlist({ realm_access: { roles: ['sysadmin'] } });
-      assert.deepStrictEqual(out.realm_access.roles, []);
+      assert.strictEqual(isAllowedClient(tokenFrom('some-other-app', ['sysadmin'])), false);
     });
   });
 
   await t.test('client_id is accepted as an alias for azp', () => {
     withAllowlist(['known'], () => {
-      const out = applyClientAllowlist({ client_id: 'known', realm_access: { roles: ['sysadmin'] } });
-      assert.deepStrictEqual(out.realm_access.roles, ['sysadmin']);
+      assert.strictEqual(isAllowedClient({ client_id: 'known', realm_access: { roles: ['sysadmin'] } }), true);
     });
   });
+
+  await t.test('a token with no azp is refused when the list is on', () => {
+    withAllowlist(['known'], () => {
+      assert.strictEqual(isAllowedClient({ realm_access: { roles: ['sysadmin'] } }), false);
+    });
+  });
+});
+
+test('an unlisted client gets 401, not a demoted identity', async (t) => {
+  const previousKeycloak = config.keycloakEnabled;
+  config.keycloakEnabled = true;
+
+  let failure = null;
+  let successRan = false;
+
+  try {
+    t.mock.method(jwt, 'decode', () => ({ header: { kid: 'key-id' } }));
+    t.mock.method(jwt, 'verify', (token, getKey, options, callback) => {
+      callback(null, tokenFrom('some-other-app', ['sysadmin', 'staff', 'public']));
+    });
+
+    const req = { header: (name) => (name === 'Authorization' ? 'Bearer mock-token' : null) };
+
+    withAllowlist(['eagle-admin-console'], () => {
+      authenticate(
+        req,
+        () => { successRan = true; },
+        (status, message) => { failure = { status, message }; }
+      );
+    });
+  } finally {
+    config.keycloakEnabled = previousKeycloak;
+    t.mock.restoreAll();
+  }
+
+  assert.strictEqual(successRan, false, 'a refused client must never reach onSuccess');
+  assert.strictEqual(failure.status, 401);
+  assert.strictEqual(failure.message, 'Unauthorized. Client is not permitted to call this API.');
 });

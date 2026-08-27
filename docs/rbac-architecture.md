@@ -135,10 +135,10 @@ Each item below overrides the corresponding section of the source document.
    output would delete the row. AI Search hits get a second catalog keyed on index field names.
    For chunks the enforcement point is the `select` string in `src/search/ai-search.js`, not
    `retrievable` (semantic ranking needs `content` retrievable).
-10. **Token hardening is Phase 0 and includes deployment.** `DEMI_ALLOWED_CLIENTS` is set in no
-    bicep file or bicepparam, so both environments run with an empty, permissive allowlist. The
-    reject-when-unlisted code lands in the same change as the app setting for test and prod. The
-    demote arm, if kept, strips every role except `public`, not only `SECURE_ROLES`.
+10. **Token hardening is Phase 0 and includes deployment.** `isAllowedClient`
+    (`src/helpers/auth.js`) refuses a verified token whose `azp` is not in `DEMI_ALLOWED_CLIENTS`
+    with 401 — one behaviour, no demoted identity — and an empty list is permissive, which is why
+    `src/config.js` refuses to run outside dev and local without one.
 11. **The level comparison lives in one function.** `visible(level, effVis)` in `redact.js` is
     the only place the scalar order is assumed, so switching to a clearance set (Section 3,
     question 1) changes one file plus `levelFromRoles`.

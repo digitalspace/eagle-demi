@@ -134,3 +134,11 @@ param contactEmails = [
 param rateLimitMaxRequests = 6000
 
 param linkBaseUrl = 'https://test.projects.eao.gov.bc.ca'
+
+// azp values: frontend client id + eagle-admin-console; measured against realm eao-epic.
+// One entry, because both are the same client — this file sets no keycloakClientId, so the API
+// takes main.bicep's 'eagle-admin-console' default, and frontend/public/env.js names the same id.
+param allowedClients = 'eagle-admin-console'
+
+// set after measuring aud on a live token
+param ssoAudience = ''

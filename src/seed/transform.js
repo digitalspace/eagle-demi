@@ -13,7 +13,10 @@
  * record with no resolvable project is dropped instead of given a fabricated parent.
  */
 
-const SECURE_ROLES = ['sysadmin', 'staff', 'demi-admin'];
+// Named SECURE_ROLES here for historical reasons; the value is access-sql's ADMIN_ROLES.
+// Widening it to access-sql's 5-entry SECURE_ROLES is an ACL data change, not a refactor.
+const { ADMIN_ROLES } = require('../helpers/access-sql');
+const SECURE_ROLES = ADMIN_ROLES;
 
 /**
  * ACL for a seeded item.

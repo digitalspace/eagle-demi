@@ -7,7 +7,6 @@ const jwksClient = require('jwks-rsa');
 const config = require('../config');
 const apiKeys = require('../repositories/api-keys');
 const { parseKey, verify } = require('./api-key');
-const { SECURE_ROLES } = require('./access-sql');
 
 /**
  * Verified registry lookups, cached to keep a Cosmos point read off the hot path.
@@ -68,27 +67,16 @@ async function resolveRegistryKey(parsed) {
 /**
  * Client allowlist for verified Keycloak tokens.
  *
- * Empty (the default) means permissive, and that is deliberate: DEMI's own frontend and
- * eagle-admin's staff users authenticate against the same realm, so an allowlist defaulting to ON
- * would lock out real users the moment this shipped. When it IS set, an unlisted client is demoted
- * to the public tier rather than rejected — a stray token should lose its privileges, not break a
- * page that only needed public reads.
+ * Empty means permissive, which is the dev and local case only — `src/config.js` refuses to boot
+ * test or prod on an empty list. An unlisted client is rejected outright rather than demoted to
+ * the public tier: one behaviour, so no caller is ever half-admitted.
  */
-function applyClientAllowlist(decoded) {
+function isAllowedClient(decoded) {
   const allowed = config.allowedClients;
-  if (!Array.isArray(allowed) || allowed.length === 0) return decoded;
+  if (!Array.isArray(allowed) || allowed.length === 0) return true;
 
   const azp = decoded && (decoded.azp || decoded.client_id);
-  if (azp && allowed.includes(azp)) return decoded;
-
-  const roles = (decoded && decoded.realm_access && decoded.realm_access.roles) || [];
-  const demoted = roles.filter(r => !SECURE_ROLES.includes(r));
-
-  if (demoted.length !== roles.length) {
-    logger.warn(`[demi-api] Client '${azp || 'unknown'}' is not in DEMI_ALLOWED_CLIENTS; privileges stripped.`);
-  }
-
-  return { ...decoded, realm_access: { ...(decoded.realm_access || {}), roles: demoted } };
+  return Boolean(azp && allowed.includes(azp));
 }
 
 /**
@@ -224,13 +212,17 @@ function authenticate(req, onSuccess, onFailure) {
 
     const options = {
       algorithms: ['RS256'],
-      issuer: config.ssoIssuer
+      issuer: config.ssoIssuer,
+      // Absent rather than empty: jsonwebtoken treats a falsy `audience` as a claim to match, so
+      // passing '' would reject every token instead of skipping the check.
+      ...(config.ssoAudience ? { audience: config.ssoAudience } : {})
     };
 
     jwt.verify(token, getKey, options, (err, decoded) => {
       if (err) {
-        logger.error(`[demi-api] JWT verification error: ${err.message}`);
-        return onFailure(401, `Unauthorized. JWT verification failed: ${err.message}`);
+        // The reason stays in the log: the body is read by unauthenticated callers.
+        logger.warn(`[demi-api] JWT verification error: ${err.message}`);
+        return onFailure(401, 'Unauthorized. JWT verification failed.');
       }
 
       // AUTHENTICATION ONLY. A verified token is a verified token — whether its bearer may reach
@@ -242,9 +234,14 @@ function authenticate(req, onSuccess, onFailure) {
       // carrying `project:207` or any other role type was indistinguishable from a logged-out
       // visitor, `resolveAccess()` never returned TIER.SCOPED, and `projectScopeFor()` could never
       // fire — it reads roles off a `req.user` the 403 had already prevented from existing.
-      const user = applyClientAllowlist(decoded);
-      logger.info(`[demi-api] Authenticated ${user.preferred_username || 'token'} (client ${user.azp || 'unknown'})`);
-      return onSuccess(user);
+      const azp = decoded.azp || decoded.client_id;
+      if (!isAllowedClient(decoded)) {
+        logger.warn(`[demi-api] Client '${azp || 'unknown'}' is not in DEMI_ALLOWED_CLIENTS; refused.`);
+        return onFailure(401, 'Unauthorized. Client is not permitted to call this API.');
+      }
+
+      logger.info(`[demi-api] Authenticated ${decoded.preferred_username || 'token'} (client ${azp || 'unknown'})`);
+      return onSuccess(decoded);
     });
     return;
   }
@@ -254,7 +251,7 @@ function authenticate(req, onSuccess, onFailure) {
 
 module.exports = {
   authenticate,
-  applyClientAllowlist,
+  isAllowedClient,
   forgetCachedKey,
   KEY_CACHE_TTL_MS
 };

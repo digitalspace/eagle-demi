@@ -16,8 +16,11 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
    `responsibleEPDEmail`, `eaoMember`, `cacEmail`, plus Cosmos `_rid`, `_self`, `_ts`,
    `_attachments`. `eagle-public` renders the staff fields anonymously from eagle-api, so this is
    current product behaviour. Whether it is policy is EAO question 2.
-2. `DEMI_ALLOWED_CLIENTS` is set in no bicep or bicepparam; `applyClientAllowlist` is a no-op
-   when empty. JWT `aud` is not validated (`src/helpers/auth.js:225-228`).
+2. `DEMI_ALLOWED_CLIENTS` is set in every bicepparam and enforced by `isAllowedClient`
+   (`src/helpers/auth.js`): a verified token from an unlisted `azp` gets 401. `src/config.js`
+   throws unless `ENVIRONMENT` is `dev` or `local`. That throw does not boot-loop the app —
+   `api/index.js:205` requires `src/app` inside the request handler, so the Function App starts and
+   answers 500 on every request instead. `aud` is verified when `SSO_AUDIENCE` is non-empty.
 3. `demi-admin`, `demi-service-read` exist only in DEMI constants, not in realm `eao-epic`.
 4. `upsertFromEagle` (`src/controllers/nosql/project.js:280`) and `seed-nosql.js:403` replace
    whole items; only `sources` is carried.
@@ -58,21 +61,21 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 (`merge/project.js:192`), so importing the 5-entry list rewrites every project ACL on the next
 push/seed and breaks `test/scripts/close-unpublished-track-projects.test.js:181`.
 
-- [ ] `src/merge/project.js:22`: delete the literal; `const { ADMIN_ROLES } = require('../helpers/access-sql');`
+- [x] `src/merge/project.js:22`: delete the literal; `const { ADMIN_ROLES } = require('../helpers/access-sql');`
       and `const SECURE_ROLES = ADMIN_ROLES;`. Keep the export at `merge/project.js:405` (consumers:
       `test/scripts/close-unpublished-track-projects.test.js:14,80`).
-- [ ] Comment above it: naming it `SECURE_ROLES` here is historical; widening it to
+- [x] Comment above it: naming it `SECURE_ROLES` here is historical; widening it to
       `access-sql.SECURE_ROLES` is an ACL data change, not a refactor.
-- [ ] `src/seed/transform.js:16` holds a THIRD copy — same swap, same reason (`transform.js:33,199`,
+- [x] `src/seed/transform.js:16` holds a THIRD copy — same swap, same reason (`transform.js:33,199`,
       exported at `:215`).
-- [ ] `docs/rbac-architecture.md` §2 item 12 says "removed in favour of the one in access-sql.js" —
+- [x] `docs/rbac-architecture.md` §2 item 12 says "removed in favour of the one in access-sql.js" —
       amend to name `ADMIN_ROLES`, with the widening consequence, or leave §2 and record the
       deviation. Decide in this PR, do not leave both readings.
 - Tests: `test/merge/project.test.js`
-  - [ ] `merge ACL constant is the same object access-sql exports` — asserts
+  - [x] `merge ACL constant is the same object access-sql exports` — asserts
         `require('../../src/merge/project').SECURE_ROLES === require('../../src/helpers/access-sql').ADMIN_ROLES`.
         Fails if someone re-inlines a literal.
-  - [ ] `an unpublished merge writes exactly three roles` — literal
+  - [x] `an unpublished merge writes exactly three roles` — literal
         `deepStrictEqual(resolveProjectAcl(null), ['sysadmin','staff','demi-admin'])`. Fails if the
         import is switched to the 5-entry `SECURE_ROLES`. Expected value is written out, not read
         from either constant.
@@ -84,50 +87,50 @@ push/seed and breaks `test/scripts/close-unpublished-track-projects.test.js:181`
 
 Doc §2 item 10. Code and app setting ship together.
 
-- [ ] `src/config.js:174`: keep `allowedClients` parsing. Add at the end of the file, before
+- [x] `src/config.js:174`: keep `allowedClients` parsing. Add at the end of the file, before
       `module.exports`: throw when `environmentName` (`config.js:170`) is `test` or `prod` and
       `allowedClients.length === 0`. Message names `DEMI_ALLOWED_CLIENTS`. Dev/local unchanged.
-- [ ] `src/helpers/auth.js:77-92`: replace `applyClientAllowlist(decoded)` with
+- [x] `src/helpers/auth.js:77-92`: replace `applyClientAllowlist(decoded)` with
       `isAllowedClient(decoded) => boolean` — true when the list is empty (dev), true when
       `decoded.azp || decoded.client_id` is listed, false otherwise. Delete the demote arm
       (`auth.js:84-91`) and the now-unused `SECURE_ROLES` import (`auth.js:10`). One behaviour, not
       two. TODO-rbac line "Demote arm, if kept for dev" is answered: not kept.
-- [ ] `src/helpers/auth.js:245-247`: on false, `logger.warn` the azp and
+- [x] `src/helpers/auth.js:245-247`: on false, `logger.warn` the azp and
       `onFailure(401, 'Unauthorized. Client is not permitted to call this API.')`; on true keep the
       existing `logger.info` line and `onSuccess(decoded)`.
-- [ ] `src/helpers/auth.js:257`: export `isAllowedClient`, drop `applyClientAllowlist`.
-- [ ] `azure/modules/api-web-app.bicep`: new `param allowedClients string = ''` beside
+- [x] `src/helpers/auth.js:257`: export `isAllowedClient`, drop `applyClientAllowlist`.
+- [x] `azure/modules/api-web-app.bicep`: new `param allowedClients string = ''` beside
       `keycloakClientId` (`:142-143`); new entry `{ name: 'DEMI_ALLOWED_CLIENTS', value: allowedClients }`
       in the `appSettings` array (`:240`) inside the Keycloak block (`:456-478`).
-- [ ] `azure/main.bicep`: `param allowedClients string` (no default — unset must fail the build,
+- [x] `azure/main.bicep`: `param allowedClients string` (no default — unset must fail the build,
       same rule as `adminApiKey` at `:59-62`); pass `allowedClients: allowedClients` in the
       `apiWebApp` module params (`:358-393`, beside `keycloakClientId:` at `:373`).
-- [ ] `azure/main.test.bicepparam`: `param allowedClients = '<real azp list>'`. Measure first:
+- [x] `azure/main.test.bicepparam`: `param allowedClients = '<real azp list>'`. Measure first:
       decode one token from the DEMI frontend and one from eagle-admin-console against
       `test.loginproxy.gov.bc.ca` realm `eao-epic` and read `azp`. A guessed value 401s every staff
       user.
-- [ ] `azure/main.prod.bicepparam`: same, for `loginproxy.gov.bc.ca`. Prod's callers today are
+- [x] `azure/main.prod.bicepparam`: same, for `loginproxy.gov.bc.ca`. Prod's callers today are
       eagle-api's push (API key, unaffected) and eagle-public (anonymous, unaffected).
-- [ ] `src/swagger/swagger.yaml`: under `components.securitySchemes.BearerAuth`, add that a verified
+- [x] `src/swagger/swagger.yaml`: under `components.securitySchemes.BearerAuth`, add that a verified
       token whose `azp` is not in `DEMI_ALLOWED_CLIENTS` is rejected 401.
 - Tests: rename `test/helpers/client-allowlist.test.js` cases to the new function.
-  - [ ] `empty allowlist admits any client` — `isAllowedClient({azp:'anything'})` true with
+  - [x] `empty allowlist admits any client` — `isAllowedClient({azp:'anything'})` true with
         `config.allowedClients = []`. Fails if the default flips to deny.
-  - [ ] `a listed azp is admitted` / `an unlisted azp is refused` — literal true/false.
-  - [ ] `client_id is accepted as an alias for azp` — keeps `client-allowlist.test.js:64-69`.
-  - [ ] `a token with no azp is refused when the list is on` — false.
-  - [ ] `unlisted client gets 401, not a demoted identity` — drive `authenticate()` with a stubbed
+  - [x] `a listed azp is admitted` / `an unlisted azp is refused` — literal true/false.
+  - [x] `client_id is accepted as an alias for azp` — keeps `client-allowlist.test.js:64-69`.
+  - [x] `a token with no azp is refused when the list is on` — false.
+  - [x] `unlisted client gets 401, not a demoted identity` — drive `authenticate()` with a stubbed
         `jwt.verify` (pattern: `test/middleware/auth.test.js:96-110`), assert `onFailure` ran with
         401 and `onSuccess` did not. Fails if the demote arm is restored.
-  - [ ] `test/controllers/config.test.js` (or new `test/config-required.test.js`):
+  - [x] `test/controllers/config.test.js` (or new `test/config-required.test.js`):
         `ENVIRONMENT=test with no DEMI_ALLOWED_CLIENTS refuses to boot` — set env, `delete
         require.cache[require.resolve('../src/config')]`, `assert.throws(() => require('../src/config'))`.
         And `ENVIRONMENT=dev boots with none`. Fails if the guard is dropped or applied to dev.
-  - [ ] `test/azure/main-bicep-wiring.test.js`: `main.bicep passes allowedClients into the API
+  - [x] `test/azure/main-bicep-wiring.test.js`: `main.bicep passes allowedClients into the API
         module` (asserts both the `param` line and the `allowedClients: allowedClients` line, same
         shape as `:27-32`); `both param files set a non-empty allowlist` — regex
         `/^param allowedClients = '([^']+)'$/m` on each file, assert capture length > 0. Fails on the
-        deploy that would boot-loop the app.
+        deploy that would leave the app answering 500 on every request.
 - Acceptance: `node --test test/helpers/client-allowlist.test.js test/azure/main-bicep-wiring.test.js`,
   then `yarn test`. After deploy: `curl -s -o /dev/null -w '%{http_code}' https://demi-api-test.azurewebsites.net/api/projects` → `200`
   (anonymous path untouched); a Bearer token from an unlisted client → `401`.
@@ -142,7 +145,8 @@ Doc §2 item 10. Code and app setting ship together.
   - [ ] Verify: `GET /api/deployments/latest` status 4, then the two curls above.
   - [ ] Rollback: revert the code commit and redeploy the API. The app setting alone is harmless —
         the old build ignores `DEMI_ALLOWED_CLIENTS` only if it is empty, so leave the setting in
-        place and revert code, never the reverse (an empty setting boot-loops the new build).
+        place and revert code, never the reverse. An empty setting on the new build is not a boot
+        loop: `src/app` is required per request, so the app starts and 500s every call.
 
 ---
 
@@ -150,25 +154,25 @@ Doc §2 item 10. Code and app setting ship together.
 
 - [ ] Measure first, record in the PR: `aud` on a live token per realm. Keycloak public clients
       commonly emit `account`, not the client id. A wrong value 401s everyone.
-- [ ] `src/config.js`: add `ssoAudience: process.env.SSO_AUDIENCE || ''` beside `ssoIssuer`
+- [x] `src/config.js`: add `ssoAudience: process.env.SSO_AUDIENCE || ''` beside `ssoIssuer`
       (`config.js:181`). Empty = not enforced, so local and dev keep working.
-- [ ] `src/helpers/auth.js:225-228`: add `...(config.ssoAudience ? { audience: config.ssoAudience } : {})`
+- [x] `src/helpers/auth.js:225-228`: add `...(config.ssoAudience ? { audience: config.ssoAudience } : {})`
       to the `jwt.verify` options object (`algorithms`, `issuer` stay).
-- [ ] `azure/modules/api-web-app.bicep`: `param ssoAudience string = 'account'`; app setting
+- [x] `azure/modules/api-web-app.bicep`: `param ssoAudience string = ''`; app setting
       `{ name: 'SSO_AUDIENCE', value: ssoAudience }` next to `SSO_ISSUER` (`:472-478`).
-- [ ] `azure/main.bicep`: `param ssoAudience string = 'account'`, passed into the module.
+- [x] `azure/main.bicep`: `param ssoAudience string = ''`, passed into the module.
 - [ ] `azure/main.test.bicepparam` and `azure/main.prod.bicepparam`: `param ssoAudience = '<measured>'`.
-- [ ] `src/swagger/swagger.yaml`: `BearerAuth` description — token `aud` must match the configured
+- [x] `src/swagger/swagger.yaml`: `BearerAuth` description — token `aud` must match the configured
       audience.
 - Tests: `test/middleware/auth.test.js`
-  - [ ] `jwt.verify is given the configured audience` — stub `jwt.verify`, capture `options`, assert
+  - [x] `jwt.verify is given the configured audience` — stub `jwt.verify`, capture `options`, assert
         `options.audience === 'demi-test-aud'` after setting `config.ssoAudience`. Fails if the
         option is dropped.
-  - [ ] `no audience configured means no audience option` — assert `'audience' in options === false`.
+  - [x] `no audience configured means no audience option` — assert `'audience' in options === false`.
         Fails if someone hardcodes a default in `auth.js`.
-  - [ ] `issuer and algorithms are still pinned` — literal `['RS256']` and `config.ssoIssuer`.
-  - [ ] `test/azure/main-bicep-wiring.test.js`: `both param files pin ssoAudience` (regex capture
-        non-empty).
+  - [x] `issuer and algorithms are still pinned` — literal `['RS256']` and `config.ssoIssuer`.
+  - [x] `test/azure/main-bicep-wiring.test.js`: `both param files pin ssoAudience` (declaration
+        present; the value stays empty until `aud` is measured).
 - Acceptance: `node --test test/middleware/auth.test.js`, `yarn test`. After deploy, a real staff
   login through the DEMI frontend still reaches an authenticated route (401 here is the failure
   mode to watch). Same deploy ordering and rollback as U3.
