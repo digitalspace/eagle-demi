@@ -36,6 +36,20 @@ paths:
         '400':
           description: Missing search query parameter.
 
+  /api/me:
+    get:
+      summary: Caller's own access
+      description: >-
+        What the caller's credential (or lack of one) resolves to. Unauthenticated, like
+        /api/config — an anonymous caller gets the public tier, not a 401.
+      responses:
+        '200':
+          description: The caller's roles, visibility level and access tier.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+
   /api/projects:
     get:
       summary: Retrieve projects
@@ -539,6 +553,21 @@ components:
         401. Empty, which is what every environment ships today, means the claim is not checked.
 
   schemas:
+    Me:
+      type: object
+      properties:
+        roles:
+          type: array
+          items:
+            type: string
+        level:
+          type: integer
+          minimum: 0
+          maximum: 4
+        tier:
+          type: string
+          enum: [privileged, scoped, public]
+
     Project:
       type: object
       properties:

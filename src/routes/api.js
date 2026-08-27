@@ -33,9 +33,13 @@ const searchController = require('../controllers/search');
 
 const dbController = require('../controllers/db');
 const configController = require('../controllers/config');
+const meController = require('../controllers/me');
 
 // Config Route
 router.get('/config', configController.getConfig);
+
+// Passive, not authMiddleware: an anonymous caller gets the public tier, not a 401.
+router.get('/me', passiveAuthMiddleware, meController.getMe);
 
 // Database Management Routes
 // Removed: /db/import and /db/query (generic bulk-write and arbitrary-query endpoints over
