@@ -7,6 +7,8 @@
 // set before anything else loads — which is why the prod case lives in its own file. `node --test`
 // runs each file in its own process, and the non-prod half is in test/app.boot.test.js.
 process.env.ENVIRONMENT = 'prod';
+// src/config.js refuses to boot test or prod on an empty DEMI_ALLOWED_CLIENTS.
+process.env.DEMI_ALLOWED_CLIENTS = 'eagle-admin-console';
 
 const test = require('node:test');
 const assert = require('node:assert');

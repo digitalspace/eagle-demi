@@ -104,7 +104,9 @@ const WIRED = [
   ['deployReconcileDriftAlert', /^\s+deployReconcileDriftAlert: deployReconcileDriftAlert$/m,
     'the observability module call — without it the drift alert is never created'],
   ['linkBaseUrl', /^\s+linkBaseUrl: linkBaseUrl$/m,
-    'the API module call — without it LINK_BASE_URL is empty and short links resolve nowhere']
+    'the API module call — without it LINK_BASE_URL is empty and short links resolve nowhere'],
+  ['allowedClients', /^\s+allowedClients: allowedClients$/m,
+    'the API module call — without it DEMI_ALLOWED_CLIENTS is empty and the app refuses to boot']
 ];
 
 for (const [name, wiring, why] of WIRED) {
@@ -112,6 +114,17 @@ for (const [name, wiring, why] of WIRED) {
     assert.match(MAIN, new RegExp(`^param ${name} `, 'm'),
       `${name} must be a main.bicep parameter, or no param file can set it`);
     assert.match(MAIN, wiring, `${name} is declared but not wired into ${why}`);
+  });
+}
+
+// src/config.js throws on an empty allowlist in test and prod, so a param file that omits this
+// deploys an app that boot-loops. `az bicep build` says nothing: main.bicep's param has no default,
+// but a `param allowedClients = ''` line satisfies the compiler and fails at runtime.
+for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+  test(`the ${envName} param file sets a non-empty allowlist`, () => {
+    const match = /^param allowedClients = '([^']+)'$/m.exec(params);
+    assert.ok(match, `${envName} must name at least one client, or the app refuses to start`);
+    assert.ok(match[1].length > 0, 'an empty allowlist admits every client in the realm');
   });
 }
 

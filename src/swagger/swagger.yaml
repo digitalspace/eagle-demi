@@ -526,6 +526,10 @@ components:
         same meanings as the registry-key roles above. `project:<id>` roles are the orthogonal
         project-scope dimension and never enter the `read[]` predicate.
 
+        A token that verifies but whose `azp` (or `client_id`) is not listed in
+        `DEMI_ALLOWED_CLIENTS` is rejected with 401. The setting is required in test and prod; an
+        empty list is permissive and only reachable in local development.
+
   schemas:
     Project:
       type: object

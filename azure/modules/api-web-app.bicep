@@ -141,6 +141,11 @@ param keycloakRealm string = 'eao-epic'
 @description('Keycloak client whose tokens this API accepts.')
 param keycloakClientId string = 'eagle-admin-console'
 
+// Empty is permissive, and src/config.js refuses to boot test or prod on it — so an environment
+// that forgets this setting fails loudly at startup instead of admitting every client in the realm.
+@description('Comma-separated Keycloak client ids (token azp) permitted to call this API.')
+param allowedClients string = ''
+
 @description('Application Insights connection string. Empty disables telemetry, which is the local-development case.')
 param appInsightsConnectionString string = ''
 
@@ -467,6 +472,10 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'KEYCLOAK_ENABLED'
           value: 'true'
+        }
+        {
+          name: 'DEMI_ALLOWED_CLIENTS'
+          value: allowedClients
         }
         {
           name: 'SSO_ISSUER'
