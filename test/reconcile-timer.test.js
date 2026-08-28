@@ -27,6 +27,10 @@ function loadIndex(t, schedule) {
   const cachedFunctions = require.cache[FUNCTIONS];
   const cachedIndex = require.cache[INDEX];
   const cachedSchedule = process.env.RECONCILE_SCHEDULE;
+  // The sibling team-role timer registers off its own app setting, and a value left in the
+  // environment would land in `registered.timers` and break every count below.
+  const cachedTeams = process.env.SYNC_TEAMS_SCHEDULE;
+  delete process.env.SYNC_TEAMS_SCHEDULE;
 
   require.cache[FUNCTIONS] = {
     id: FUNCTIONS,
@@ -49,6 +53,8 @@ function loadIndex(t, schedule) {
     require.cache[INDEX] = cachedIndex;
     if (cachedSchedule === undefined) delete process.env.RECONCILE_SCHEDULE;
     else process.env.RECONCILE_SCHEDULE = cachedSchedule;
+    if (cachedTeams === undefined) delete process.env.SYNC_TEAMS_SCHEDULE;
+    else process.env.SYNC_TEAMS_SCHEDULE = cachedTeams;
   });
 
   return { registered, index: require('../api/index') };

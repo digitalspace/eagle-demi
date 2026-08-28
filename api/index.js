@@ -223,7 +223,7 @@ async function handleExpress(request, context) {
 // Exported for test/functions-adapter.test.js, which drives this the way the host does. The
 // adapter is the one piece of this app that only ever runs in Azure, so it is also the one piece
 // nothing else can exercise — hence a test that calls it directly.
-module.exports = { handleExpress, queryFrom, reconcileEagle };
+module.exports = { handleExpress, queryFrom, reconcileEagle, syncTrackTeams };
 
 // Drain buffered audit events before the worker goes away.
 //
@@ -286,6 +286,18 @@ if (process.env.RECONCILE_SCHEDULE) {
   });
 }
 
+// The Track team feed, on the same terms as the reconcile above and guarded the same way: an
+// unresolvable `%SYNC_TEAMS_SCHEDULE%` is a startup error that takes the HTTP functions with it,
+// so the guard is on the app setting. Stays empty until both realm clients exist in the
+// environment's realm — see TODO-rbac.md P3-0.
+if (process.env.SYNC_TEAMS_SCHEDULE) {
+  app.timer('syncTrackTeams', {
+    schedule: '%SYNC_TEAMS_SCHEDULE%',
+    runOnStartup: false,
+    handler: syncTrackTeams
+  });
+}
+
 /**
  * Exported for test/reconcile-timer.test.js — the host is the only other caller.
  *
@@ -299,6 +311,22 @@ async function reconcileEagle() {
     await require('../src/scripts/reconcile-eagle').run();
   } catch (err) {
     logger.error('[reconcile] nightly run failed', { error: err.message, stack: err.stack });
+  }
+}
+
+/**
+ * Exported for test/sync-teams-timer.test.js — the host is the only other caller.
+ *
+ * `live: true`: the timer exists to write the roles, and a scheduled dry run would report a plan
+ * nothing ever applies. Swallows the failure for the reason the reconcile does — the next night is
+ * the retry, and a throw here only makes the host log the same thing twice.
+ */
+async function syncTrackTeams() {
+  const { logger } = require('../src/utils/logger');
+  try {
+    await require('../src/scripts/sync-track-teams').run({ live: true });
+  } catch (err) {
+    logger.error('[track-teams] nightly run failed', { error: err.message, stack: err.stack });
   }
 }
 
