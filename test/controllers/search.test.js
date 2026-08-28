@@ -332,6 +332,59 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(body[0].searchResults[0].trackProjectId, '207');
   });
 
+  // The index hit is redacted BEFORE the mapper runs (docs/rbac-architecture.md §2 item 9), so a
+  // mapper that started spreading the raw row would publish the ACL. `isPublished` is the derived
+  // mirror, and an unpublished row proves it is derived rather than defaulted to true.
+  await t.test('anonymous Project hit carries no read[]', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: '207',
+        name: 'Nicomen Wind Energy',
+        read: ['sysadmin', 'staff'],
+        isPublished: true,
+        // Not an index field, so the redactor removes it: the catalog is an allowlist.
+        complianceLead: 'A Person'
+      }]
+    }));
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'nicomen' }, header: () => null }, res);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row.read, undefined, 'the row ACL must not be published to callers');
+    assert.strictEqual(row.complianceLead, undefined, 'an uncatalogued index field is dropped');
+    assert.strictEqual(row.isPublished, false, 'derived from read[], not copied from the index');
+  });
+
+  await t.test('anonymous Document hit carries no read[]', async () => {
+    t.mock.method(aiSearch, 'searchDocuments', async () => ({
+      count: 1,
+      items: [{
+        id: 'doc1',
+        displayName: 'Application',
+        documentFileName: 'app.pdf',
+        projectId: '207',
+        read: ['sysadmin', 'staff'],
+        isPublished: true,
+        orcsClassification: '85100-20'
+      }]
+    }));
+    t.mock.method(projectsRepo, 'listByIds', async () => [{ id: '207', name: 'Site C' }]);
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Document', keywords: 'application' }, header: () => null }, res);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row.read, undefined, 'the row ACL must not be published to callers');
+    assert.strictEqual(row.orcsClassification, undefined, 'an uncatalogued index field is dropped');
+    assert.strictEqual(row.isPublished, false, 'derived from read[], not copied from the index');
+  });
+
   await t.test('search projects queries AI Search when keywords are provided', async () => {
     let sent = null;
     t.mock.method(aiSearch, 'searchProjects', async (opts) => {
