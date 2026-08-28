@@ -1,16 +1,8 @@
 'use strict';
 
 /**
- * Field-visibility LEVEL: one integer per caller, 1 narrowest, 4 anonymous public. The table below
- * is the whole mapping; lowest wins.
- *
- * `sysadmin` and `demi-admin` are 1, the ladder's floor: 0 is not a caller level. It is the sealed
- * compartment on the row plane and the level `systemAccess()` carries, so a `maxVis: 0` field now
- * means visible to nobody through a response.
- *
- * `idir` is the "any IDIR login" claim, not a realm role. There is no `team` entry: team membership
- * is a row-plane fact resolved per record, not a level. DEMI reuses Eagle's realm roles and creates
- * none of its own.
+ * Field-visibility LEVEL: one integer per caller, 1 narrowest, 4 anonymous public; lowest wins.
+ * 0 is not a caller level — it's the sealed row-plane compartment `systemAccess()` carries.
  */
 const ROLE_LEVELS = {
   sysadmin: 1,

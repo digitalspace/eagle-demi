@@ -9,7 +9,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead, readForLevel } = require('../helpers/access-sql');
+const { canRead, readForLevel, levelOfRead } = require('../helpers/access-sql');
 const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'documents';
@@ -200,21 +200,16 @@ async function aclRowsForProject(access, projectId) {
 /**
  * The document's ACL narrowed by its project's — never widened by it.
  *
- * The rule is `eagle-search/worker/transform.js`'s `constrainToProject`, which is the intersecting
- * version of what this file used to do by assignment. Three fail-closed branches: no project ACL,
- * an empty one, or an empty intersection all collapse to level 2 rather than to the wider of the
- * two.
- *
- * Level 2 and not `['sysadmin']`: an admin role name is not a ladder token, so once `staff` left
- * SECURE_ROLES a row stamped that way stopped being readable by the staff callers that saw it
- * before. `readForLevel(2)` is what "as narrow as this cascade can say" already means to them.
+ * Fail-closed branches (no project ACL, no document ACL, empty intersection) cap at the PARENT's
+ * own level, never at a fixed level 2 — a level-1 project must not hand out a level-2 fallback.
  */
 function constrainToProject(ownRead, projectRead) {
-  if (!Array.isArray(projectRead) || projectRead.length === 0) return readForLevel(2);
-  if (!Array.isArray(ownRead) || ownRead.length === 0) return readForLevel(2);
+  const cap = readForLevel(Math.min(2, levelOfRead(projectRead)));
+  if (!Array.isArray(projectRead) || projectRead.length === 0) return cap;
+  if (!Array.isArray(ownRead) || ownRead.length === 0) return cap;
   const allowed = new Set(projectRead);
   const kept = ownRead.filter(role => allowed.has(role));
-  return kept.length > 0 ? kept : readForLevel(2);
+  return kept.length > 0 ? kept : cap;
 }
 
 /**

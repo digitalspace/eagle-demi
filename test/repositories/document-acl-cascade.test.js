@@ -44,21 +44,23 @@ test('constrainToProject — the intersection rule', async (t) => {
       documents.constrainToProject(['sysadmin'], PUBLIC_PROJECT), ['sysadmin']);
   });
 
-  await t.test('an empty intersection fails closed to level 2', () => {
+  await t.test('fail-closed under a level-2 project yields staff', () => {
     // Not `['sysadmin']`: an admin role name is no longer a ladder token, so stamping one would
     // hide the row from the staff callers that could read it before.
     assert.deepStrictEqual(
       documents.constrainToProject(['project-team'], PRIVATE_PROJECT), ['staff']);
   });
 
-  await t.test('a missing or empty project ACL fails closed', () => {
-    // Not "unrestricted" and not "unchanged" — an absent project ACL is the case where the least
-    // is known, so it collapses to the narrowest answer rather than to the wider of the two.
-    assert.deepStrictEqual(documents.constrainToProject(['public'], []), ['staff']);
-    assert.deepStrictEqual(documents.constrainToProject(['public'], undefined), ['staff']);
+  await t.test('fail-closed under a level-1 project yields team', () => {
+    // No project ACL is the case where the least is known — `levelOfRead([])` is 1, so the cap is
+    // level 1, not the fixed level 2 a wider parent would allow.
+    assert.deepStrictEqual(documents.constrainToProject(['public'], []), ['team']);
+    assert.deepStrictEqual(documents.constrainToProject(['public'], undefined), ['team']);
   });
 
-  await t.test('a missing or empty document ACL fails closed', () => {
+  await t.test('fail-closed under a public project yields staff', () => {
+    // Caps at the parent's level but never wider than 2 — a fail-closed document must not
+    // inherit its project's public reach.
     assert.deepStrictEqual(documents.constrainToProject([], PUBLIC_PROJECT), ['staff']);
     assert.deepStrictEqual(documents.constrainToProject(undefined, PUBLIC_PROJECT), ['staff']);
   });

@@ -58,18 +58,9 @@ function levelOfRead(read) {
 }
 
 /**
- * Roles that grant PRIVILEGED visibility — i.e. read everything, ACL predicate collapses to `true`.
- *
- * `staff` is NOT here, and that absence is what makes level 1 real: staff short-circuiting the
- * predicate meant no row could be narrower than "all of EAO". Staff's write and admin rights do not
- * move — see ADMIN_ROLES and WRITE_ROLES — and it still reads every level-2 row through the `staff`
- * token every legacy ACL already carries.
- *
- * `demi-service-read` and `demi-service-write` are the machine tiers. Both read everything; only
- * the second is in WRITE_ROLES.
- *
- * This set carries the ROW-plane short-circuit meaning and nothing else. Who may hold a session is
- * AUTHENTICATED_ROLES below.
+ * Roles that grant PRIVILEGED visibility — read everything, ACL predicate collapses to `true`.
+ * `staff` is deliberately NOT here: that's what makes level 1 real. Session eligibility is
+ * AUTHENTICATED_ROLES below, a separate question.
  */
 const SECURE_ROLES = Object.freeze([
   'sysadmin', 'demi-admin', 'demi-service-read', 'demi-service-write'
@@ -100,15 +91,9 @@ const ADMIN_ROLES = Object.freeze(['sysadmin', 'staff', 'demi-admin']);
 const WRITE_ROLES = Object.freeze([...ADMIN_ROLES, 'demi-service-write']);
 
 /**
- * Roles permitted to HOLD A SESSION on the routes behind `middleware/auth.js`.
- *
- * A separate set from SECURE_ROLES on purpose: privilege on the row plane and the right to reach an
- * authenticated route are different questions, and gating the second on the first would lock every
- * `staff` caller out of the API the moment `staff` left SECURE_ROLES. SECURE_ROLES is in the union
- * because `demi-service-read` is a read tier holding no write role.
- *
- * `compliance` is deliberately out: four routes sit behind that middleware with no second gate, and
- * a compartment credential has no business there. The sealed routes mount their own chain.
+ * Roles permitted to HOLD A SESSION on the routes behind `middleware/auth.js` — a separate set
+ * from SECURE_ROLES so `staff` isn't locked out once it left the privileged set. `compliance` is
+ * deliberately out: those four routes mount their own gate.
  */
 const AUTHENTICATED_ROLES = Object.freeze([...new Set([...SECURE_ROLES, ...WRITE_ROLES])]);
 
@@ -136,13 +121,9 @@ function rolesFor(req) {
     for (const r of tokenRoles) {
       if (!r) continue;
       const name = String(r);
-      // `project:*` roles are the OTHER dimension — they grant a team, not a role type. Leaving
-      // them in would put project ids into the read[] IN list, which is exactly the conflation of
-      // the two dimensions this module exists to prevent. Which projects is `teamsFor`'s job.
+      // `project:*` roles are the OTHER dimension — they grant a team, not a role type; see teamsFor.
       if (name.startsWith(PROJECT_ROLE_PREFIX)) continue;
-      // A realm role must not FORGE a ladder token. One literally named `team` would match the
-      // level-1 rows of every project; one named `idir` would claim level 3 with no IDIR login.
-      // Both enter only through the paths below them — the team arm and the identity claim.
+      // A realm role must not FORGE a ladder token; team/idir enter only through their own paths.
       if (name === LEVEL_TOKENS[1] || name === LEVEL_TOKENS[3]) continue;
       roles.add(r);
     }
@@ -231,13 +212,8 @@ function resolveAccess(req) {
 const PROJECT_ROLE_PREFIX = 'project:';
 
 /**
- * Project ids whose teams this caller belongs to, from its `project:<id>` realm roles. Empty when
- * it holds none.
- *
- * A GRANT, read in exactly one place: the team OR arm of `readClause`/`canRead`. It never becomes a
- * caller role and never narrows anything. ANDing it into every read instead — which is what
- * `projectScopeFor` used to do with these same roles — dropped a staff caller holding `project:207`
- * to that one project and hid every other level-2 row from it.
+ * Project ids whose teams this caller belongs to, from `project:<id>` realm roles. A GRANT read
+ * only by the team OR arm of `readClause`/`canRead` — it never narrows a read, unlike projectScope.
  */
 function teamsFor(req) {
   const tokenRoles = req && req.user && req.user.realm_access && req.user.realm_access.roles;

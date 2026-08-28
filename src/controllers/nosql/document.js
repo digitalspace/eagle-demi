@@ -48,9 +48,8 @@ function resolveDocumentAcl(parentProject, isPublished) {
   // level 1 rather than handed the level-2 default that would out-rank it.
   const read = readForLevel(Math.min(wanted ? 4 : 2, levelOfRead(parentProject.read)));
 
-  // `published` is READ OFF the capped read[], never off the request: a parent with `isPublished:
-  // true` and no read[] caps the document at level 1, and taking `wanted` here would have stamped
-  // `isPublished: true` on a row carrying only `team`. read[] is authoritative; isPublished mirrors it.
+  // `published` is READ OFF the capped read[], never off `wanted` — read[] is authoritative,
+  // isPublished only mirrors it.
   return { published: read.includes('public'), read };
 }
 

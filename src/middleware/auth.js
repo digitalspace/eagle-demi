@@ -4,16 +4,8 @@ const { authenticate } = require('../helpers/auth');
 const { isAuthenticatedRole } = require('../helpers/access-sql');
 
 /**
- * Hard auth for the authenticated routes: the request must carry a valid credential AND that
- * credential must hold a session role. Anything else gets a status, not a `next()`.
- *
- * Gated on AUTHENTICATED_ROLES, not on `isPrivileged`. Row-plane privilege is a different question
- * — `staff` is not privileged and still administers and writes exactly as before — and gating a
- * session on the short-circuit set would lock it out of every route this middleware fronts.
- * `compliance` is not in the set: see AUTHENTICATED_ROLES.
- *
- * The check lives HERE rather than inside `authenticate()`, which is shared with `passiveAuth`.
- * See the comment in `helpers/auth.js` for what that sharing cost.
+ * Hard auth for the authenticated routes: valid credential AND a session role (AUTHENTICATED_ROLES,
+ * not row-plane `isPrivileged`) — else a status, not `next()`.
  */
 module.exports = (req, res, next) => {
   authenticate(
