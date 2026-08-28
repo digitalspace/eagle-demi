@@ -11,6 +11,8 @@ const searchController = require('../../src/controllers/search');
 const aiSearch = require('../../src/search/ai-search');
 const documentsRepo = require('../../src/repositories/documents');
 const projectsRepo = require('../../src/repositories/projects');
+const chunksRepo = require('../../src/repositories/chunks');
+const summarizer = require('../../src/ai/summarize');
 const { logger } = require('../../src/utils/logger');
 const config = require('../../src/config');
 
@@ -1996,5 +1998,132 @@ test('the answer matches the request that was made', async (t) => {
       'a query Cosmos can answer stays 200 through a total AI Search outage');
     assert.strictEqual(out.status, 502,
       'an AI Search outage must show up as a non-200 on the probe URL');
+  });
+
+  // EVERY REPOSITORY ROW ON THIS ROUTE IS REDACTED BEFORE A LABEL IS READ OFF IT. Reverting any of
+  // the five `redactAllForAccess` calls in this controller to the raw rows left the suite green,
+  // so the three tests below pin each site through the one thing a caller can see: a field a
+  // per-record `vis` dial withholds from an anonymous caller must not reach the response, not even
+  // as a label. The dial is the mechanism the redactor exists for — day-one defaults are 4/4, so a
+  // catalogued field is otherwise indistinguishable from an unredacted one.
+  await t.test('a dialled-down project name never labels a document row', async () => {
+    t.mock.method(aiSearch, 'searchDocuments', async () => ({
+      count: 1,
+      items: [{ id: 'doc1', displayName: 'Application', projectId: '207', read: ['public'] }]
+    }));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{
+      id: '207',
+      name: 'Site C',
+      eagleId: '588511c4aaecd9001b826192',
+      // Level 2 and below only; an anonymous caller is level 4.
+      vis: { name: 2, eagleId: 2 },
+      read: ['staff'],
+      s3Key: 'x',
+      _etag: 'e'
+    }]));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Document', keywords: 'application' }, header: () => null }, res);
+
+    const [row] = out.body[0].searchResults;
+    assert.strictEqual(row.projectName, 'Associated Project');
+    assert.deepStrictEqual(row.project, { _id: '207', name: 'Associated Project' },
+      'the withheld Eagle id leaves the DEMI id in the pair');
+  });
+
+  await t.test('a chunk row is built from redacted parent rows', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      count: 1,
+      items: [{ chunkId: 'c1', documentId: 'd1', projectId: '207', pageNumber: 3, snippet: 'a river' }]
+    }));
+    t.mock.method(documentsRepo, 'listByIds', async () => ([{
+      id: 'd1',
+      displayName: 'First',
+      documentFileName: 'first.pdf',
+      vis: { displayName: 2, documentFileName: 2 },
+      // `type` carries no dial, so it proves the redactor is not simply emptying the row.
+      type: 'PDF Document',
+      milestone: 'Other',
+      milestoneId: 'm1',
+      datePosted: '2020-01-01T00:00:00.000Z',
+      read: ['staff'],
+      s3Key: 'x',
+      _etag: 'e'
+    }]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{
+      id: '207',
+      name: 'Site C',
+      eagleId: '588511c4aaecd9001b826192',
+      vis: { name: 2, eagleId: 2 },
+      read: ['staff'],
+      _etag: 'e'
+    }]));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'DocumentChunk', keywords: 'river' }, header: () => null }, res);
+
+    assert.deepStrictEqual(out.body[0].searchResults, [{
+      _id: 'd1',
+      _schemaName: 'DocumentChunk',
+      documentId: 'd1',
+      chunkId: 'c1',
+      projectId: '207',
+      project: { _id: '207', name: 'Associated Project' },
+      projectName: 'Associated Project',
+      documentName: 'Untitled Document',
+      documentType: 'PDF Document',
+      milestone: 'Other',
+      milestoneId: 'm1',
+      datePosted: '2020-01-01T00:00:00.000Z',
+      pageNumber: 3,
+      content: '',
+      snippet: 'a river',
+      snippets: ['a river'],
+      matchCount: 1
+    }], 'no s3Key, no read[], no _etag, no vis, and no withheld label');
+  });
+
+  await t.test('a summary citation is built from redacted parent rows', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      items: [{ chunkId: 'c1', documentId: 'd1', projectId: '207', pageNumber: 5 }]
+    }));
+    t.mock.method(chunksRepo, 'getById', async () => ({ id: 'c1', content: 'text of c1' }));
+    t.mock.method(documentsRepo, 'listByIds', async () => ([{
+      id: 'd1',
+      displayName: 'First',
+      documentFileName: 'first.pdf',
+      vis: { displayName: 2, documentFileName: 2 },
+      read: ['staff'],
+      s3Key: 'x',
+      _etag: 'e'
+    }]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{
+      id: '207',
+      name: 'Site C',
+      vis: { name: 2 },
+      read: ['staff'],
+      _etag: 'e'
+    }]));
+    t.mock.method(summarizer, 'summarize', async () => ({
+      summary: 'a grounded answer',
+      citations: [0],
+      usage: null,
+      estimatedCostCad: 0
+    }));
+
+    const { out, res } = capture();
+    await searchController.summarize({ query: { keywords: 'caribou' }, header: () => null }, res);
+
+    assert.deepStrictEqual(out.body.citations, [{
+      n: 1,
+      chunkId: 'c1',
+      documentId: 'd1',
+      projectId: '207',
+      pageNumber: 5,
+      documentName: 'Untitled Document',
+      projectName: 'Associated Project'
+    }]);
   });
 });
