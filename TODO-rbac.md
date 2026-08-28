@@ -855,7 +855,7 @@ source (doc §3 question 10).
 
 Branch: `fix/vis-carry-forward`  (unchanged from the previous plan — still needed, still first)
 
-- [ ] `src/controllers/nosql/project.js:280` — beside `merged.sources = {...}`, add
+- [ ] `src/controllers/nosql/project.js:301` — beside `merged.sources = {...}`, add
       `if (existing && existing.vis) merged.vis = existing.vis;` A Cosmos upsert replaces the item.
 - [ ] `src/scripts/seed-nosql.js:398-408` — the project stage upserts with no existing-row read;
       add a `projects.getById(systemAccess(), project.id)` lookup mirroring the document stage's
