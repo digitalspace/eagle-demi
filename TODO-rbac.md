@@ -156,7 +156,7 @@ Doc §2 item 10. Code and app setting ship together.
 
 ## U4 — fix/auth-verify-audience
 
-- [x] Measure first, record in the PR: `aud` on a live token per realm. Test realm, 2026-08-28, a
+- [ ] Measure first, record in the PR: `aud` on a live token per realm. Test done, prod open. Test realm, 2026-08-28, a
       staff login through the DEMI frontend (`azp=eagle-admin-console`): `aud` is the array
       `["epictrack-web","realm-management","epic-search","epic-engage","account"]`, so
       `SSO_AUDIENCE=account` verifies (jsonwebtoken matches any element). Prod realm not measured.
@@ -789,7 +789,7 @@ Tests
 Acceptance
 
 - [x] `cd frontend && yarn lint && yarn test && yarn build` — all green.
-- [x] Anonymous load of the deployed frontend shows no staff panel; DevTools Network shows `/api/me` returning `level: 4` (2026-08-28, Daniel's browser: pre-login `/api/me` with no bearer answered the 65-byte anonymous body).
+- [x] Anonymous load of the deployed frontend shows no staff panel; DevTools Network shows `/api/me` returning `level: 4` (2026-08-28, Daniel's browser: pre-login page showed no staff panel; the pre-login `/api/me` with no bearer answered the 65-byte anonymous body).
 - [x] Staff login shows the same panels as before the PR (2026-08-28, Daniel's browser: post-login `/api/me` sent the bearer, answered `privileged: true`, panels unchanged).
 
 ---
