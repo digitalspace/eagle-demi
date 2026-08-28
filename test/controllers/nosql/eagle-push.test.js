@@ -144,6 +144,20 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
       'Track keeps precedence over the pushed name');
   });
 
+  await t.test('upsertFromEagle preserves an existing vis map', async () => {
+    const existing = storedProject({ vis: { eacExpires: 3 } });
+    t.mock.method(projects, 'getByEagleId', async () => existing);
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: eagleProject() }, user: STAFF
+    }, mockRes());
+
+    assert.deepStrictEqual(written.vis, { eacExpires: 3 });
+  });
+
   await t.test('an unmatched project is keyed eagle-<eagleId>', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
     let written;
