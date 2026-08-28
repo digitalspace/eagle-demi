@@ -572,6 +572,11 @@ components:
         tier:
           type: string
           enum: [privileged, scoped, public]
+        privileged:
+          type: boolean
+          description: >-
+            Whether this caller holds a staff/admin role. Not derivable from `tier`: a staff
+            credential scoped to a project reports tier `scoped` and privileged `true`.
 
     Project:
       type: object

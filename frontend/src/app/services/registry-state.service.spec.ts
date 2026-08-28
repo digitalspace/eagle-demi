@@ -673,18 +673,23 @@ describe('RegistryStateService — loadSummary gating', () => {
  * sysadmin / staff / demi-admin off the token itself, which meant the two could disagree with the
  * API that actually redacts the data. Those roles survive as the fallback for an /api/me that
  * hangs or fails, so an unreachable API cannot lock a staffer out of the UI for the session.
+ *
+ * Privilege comes off the server's `privileged` field, never off `tier` — see the scoped-staff spec.
  */
 describe('RegistryStateService — /api/me gating', () => {
   // The /api/me answer. `undefined` hangs the request, honouring the abort signal the way a real
   // fetch does; `meStatus` other than 200 answers with that status. Every other URL gets the
   // ordinary loadData() stub. Closures, so one spec can answer twice without a second spyOn.
-  let meAnswer: { roles: string[]; level: number; tier: string } | undefined;
+  let meAnswer: { roles: string[]; level: number; tier: string; privileged: boolean } | undefined;
   let meStatus: number;
+  // Set to hold /me open until the spec resolves it, for the authReady ordering spec.
+  let mePending: Promise<Response> | null;
 
   function makeService(): RegistryStateService {
     sharedFetchSpy = spyOn(window, 'fetch').and.callFake((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : input.url);
       if (url.endsWith('/me')) {
+        if (mePending) return mePending;
         if (meStatus !== 200) return Promise.resolve(new Response('{}', { status: meStatus }));
         if (meAnswer === undefined) {
           return new Promise<Response>((_resolve, reject) => {
@@ -708,6 +713,7 @@ describe('RegistryStateService — /api/me gating', () => {
     localStorage.clear();
     meAnswer = undefined;
     meStatus = 200;
+    mePending = null;
   });
 
   afterEach(() => {
@@ -748,8 +754,8 @@ describe('RegistryStateService — /api/me gating', () => {
     expect(service.isUnauthorized()).toBe(true);
   });
 
-  it('the privileged tier clears isUnauthorized, and level alone does not', async () => {
-    meAnswer = { roles: ['staff'], level: 2, tier: 'privileged' };
+  it('the privileged flag clears isUnauthorized, and level alone does not', async () => {
+    meAnswer = { roles: ['staff'], level: 2, tier: 'privileged', privileged: true };
     const service = makeService();
     await service.authReady;
     service.isAuthenticated.set(true);
@@ -759,16 +765,49 @@ describe('RegistryStateService — /api/me gating', () => {
     expect(service.visLevel()).toBe(2);
     expect(service.isUnauthorized()).toBe(false);
 
-    // Same level, public tier: `compliance` reads redacted fields without being staff.
-    meAnswer = { roles: ['compliance'], level: 2, tier: 'public' };
+    // Same level, not privileged: `compliance` reads redacted fields without being staff.
+    meAnswer = { roles: ['compliance'], level: 2, tier: 'public', privileged: false };
     await (service as any).loadVisLevel();
 
     expect(service.visLevel()).toBe(2);
     expect(service.isUnauthorized()).toBe(true);
   });
 
+  // A staff key minted for one project. `tier` is `scoped`, so anything deriving privilege from
+  // the tier string locks a real staffer out of the staff UI.
+  it('scoped staff is privileged', async () => {
+    meAnswer = { roles: ['public', 'staff'], level: 2, tier: 'scoped', privileged: true };
+    const service = makeService();
+    await service.authReady;
+    service.isAuthenticated.set(true);
+
+    await (service as any).loadVisLevel();
+
+    expect(service.isUnauthorized()).toBe(false);
+  });
+
+  // authSettled() awaits loadVisLevel() before resolving authReady, and route guards read
+  // isStaff() the moment that gate opens. Drop the await and this spec fails.
+  it('authReady resolves only after /api/me has answered', async () => {
+    let answer!: (res: Response) => void;
+    mePending = new Promise<Response>(resolve => (answer = resolve));
+
+    const service = makeService();
+    let settled = false;
+    service.authReady.then(() => { settled = true; });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    answer(okResponse({ roles: ['staff'], level: 2, tier: 'privileged', privileged: true }));
+    await service.authReady;
+
+    expect(settled).toBe(true);
+    expect(service.visLevel()).toBe(2);
+  });
+
   it('a project row with no sector renders', async () => {
-    meAnswer = { roles: [], level: 4, tier: 'public' };
+    meAnswer = { roles: [], level: 4, tier: 'public', privileged: false };
     const service = makeService();
     await settleInitialLoad(service);
 

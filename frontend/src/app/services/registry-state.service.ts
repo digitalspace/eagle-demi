@@ -707,10 +707,13 @@ export class RegistryStateService {
       if (res.ok) {
         const me = await res.json();
         if (typeof me?.level === 'number') this.visLevel.set(me.level);
-        if (typeof me?.tier === 'string') privileged = me.tier === 'privileged';
+        // Read the server's answer; never re-derive it from `tier`. A staff credential scoped to
+        // one project reports tier `scoped`, so a `tier === 'privileged'` test called that staffer
+        // unauthorized.
+        if (typeof me?.privileged === 'boolean') privileged = me.privileged;
       }
-    } catch {
-      // fall through to the token roles below
+    } catch (err) {
+      console.warn('[Me] /api/me unavailable, falling back to token roles', err);
     }
     if (privileged === null) {
       // A hung or refusing /api/me must not lock a real staffer out for the session; redaction is
