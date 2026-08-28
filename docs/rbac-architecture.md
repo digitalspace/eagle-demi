@@ -110,12 +110,11 @@ replacement instead. A takedown is not finished when the row narrows: `docs/take
 covers purging the AI Search index, cleaning up chunks, invalidating caches, and the fact that
 copies already outside EPIC are unrecoverable.
 
-**Field dials refine WITHIN a level.** A dial is an integer 1-4 (0 = never), clamped to
-`[0, maxVis]`, else `defaultVis`. **Invariant: a field is never wider than its record** —
-`effVis = min(effVis, levelOfRead(doc.read))`, applied in `redactForAccess` where the dial is read,
-and validated again by `PATCH /api/projects/:id/visibility` (400 on a dial above the record's
-level). Narrowing a record therefore narrows its fields for free; widening a record never widens a
-field.
+**Field dials are independent of the record level.** A dial is an integer 1-4 (0 = never),
+clamped to `[0, maxVis]`, invalid → `defaultVis`. The row plane decides who may see a record, so a
+caller who passes it is a permitted audience and the field plane only refines by the caller's own
+level. Capping a field at the record's level would blank every field for a level-2 staff member
+reading a level-1 team row, and for every credential holder.
 
 **Level 0 — sealed compartment.** Outside the ladder, but on the same row plane as every other
 level: a sealed record carries `read: ['compliance']` (`readForLevel(0)`) and stays in its ordinary
@@ -249,15 +248,15 @@ Each item below overrides the corresponding section of the source document.
     with 401 — one behaviour, no demoted identity — and an empty list is permissive, which is why
     `src/config.js` refuses to run outside dev and local without one.
 11. **The level comparison lives in one function.** `visible(level, effVis)` in `redact.js` is
-    the only place the scalar order is assumed, so switching to a clearance set (Section 3,
-    question 1) changes one file plus `levelFromRoles`.
+    the only place the scalar order is assumed. Question 1 is answered (§5); a later switch to a
+    clearance set would change one file plus `levelFromRoles`.
 12. **Roles.** `compliance` (grantable, ACL-bearing, `src/controllers/nosql/api-key.js:24`) is
     added to `ROLE_LEVELS`. The 3-role lists named `SECURE_ROLES` in `src/merge/project.js:22` and
     `src/seed/transform.js:16` equal `ADMIN_ROLES` in `access-sql.js:42`, not `SECURE_ROLES`;
     they build stored `read[]`, so they import `ADMIN_ROLES` and are never widened to the 5-role
     list (that would rewrite every ACL). DEMI creates no realm roles of its own: it reuses Eagle's
-    (`sysadmin`, `staff`), classification is gated by `requireRole('sysadmin')`, and any level-1/3 role waits on
-    EAO question 1. `demi-admin` and `demi-service-*` exist only on API keys.
+    (`sysadmin`, `staff`), classification is gated by `requireRole('sysadmin')`, level 3 is the
+    `idir` claim and level 1 the team arm (§1). `demi-admin` and `demi-service-*` exist only on API keys.
 13. **Dropped.** `visLevelCap` on API keys (keys already carry roles and scope), a separate
     `audits` container (`auditEvent` exists), `GET /api/vis-catalog` (no admin UI yet), golden
     fixture files (a regenerated golden proves nothing). `/api/me` is kept but is its own change.
@@ -373,8 +372,7 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
 ### Still valid
 
 - §2 items 1, 2, 3, 6, 7, 8, 9, 10, 13, 14 stand as written.
-- §2 item 11 stands: `visible()` is the only scalar comparison. The record-level clamp is a
-  `Math.min`, not a second comparison.
+- §2 item 11 stands: `visible()` is the only scalar comparison.
 - Everything shipped in Phases 0-2 stands: catalogs, redactor, `selectFor`, PUT hidden-key guard,
   search drift ratchets, query-param gate, `/api/me`, frontend `visLevel`. Two consequences of
   item 1 above land with P3-2: `selectFor(entity, access)` then returns `'*'` only for

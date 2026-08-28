@@ -997,9 +997,10 @@ The whole ladder is this unit. No endpoint, no stored-data change.
   - [ ] Same file, `'a demi-service-read token still passes authMiddleware'` — `next()` runs. Fails
         if `AUTHENTICATED_ROLES` is spelled `[...WRITE_ROLES]`, which omits it
         (`test/middleware/require-roles.test.js:63-66`).
-  - [ ] `test/vis/level.test.js:48` — delete `'levels 1 and 3 have no role until EAO question 1 is
-        answered'`; add `'sysadmin is level 1, not 0'` (`levelFromRoles(['sysadmin']) === 1`) and
-        `'an IDIR login is level 3'` (`ROLE_LEVELS.idir === 3`).
+  - [ ] `test/vis/level.test.js:48` — rename `'no role maps to level 1 or 3 before Phase 3'` to
+        `'no role maps to level 1'` and add `'an IDIR login is level 3'`
+        (`ROLE_LEVELS.idir === 3`); add `'sysadmin is level 1, not 0'`
+        (`levelFromRoles(['sysadmin']) === 1`).
 - Acceptance
   - [ ] `node --test test/helpers/access-sql.test.js test/helpers/access-odata.test.js test/vis/level.test.js test/controllers/nosql/document-redaction.test.js`, then `yarn test`.
   - [ ] Anonymous `GET /api/projects?pageSize=100` and `GET /api/search?dataset=Project&pageSize=5`
@@ -1084,7 +1085,7 @@ Branch: `feat/ladder-widen-endpoint`
         and anonymous `GET /api/projects/207` → 200. `DemiAudit_CL | where Action == "record.widen"`
         returns the row with `Detail.from` and `Detail.to`.
 
-## P3-5 dials, the classify endpoint, and the record-level clamp
+## P3-5 dials and the classify endpoint
 
 Branch: `feat/vis-classify-endpoint`
 
@@ -1092,27 +1093,17 @@ Branch: `feat/vis-classify-endpoint`
       route `router.patch('/projects/:id/visibility', authMiddleware, requireWrite,
       requireRole('sysadmin'), projectController.setVisibility)` in `src/routes/api.js` after `:72`.
 - [ ] `exports.setVisibility` in `src/controllers/nosql/project.js` after `updateProject`: body
-      `{ vis: { field: level } }`; 400 on an uncatalogued field, on a level outside `0..maxVis`, on
-      a level above `levelOfRead(existing.read)` (the invariant, doc §1), and on more than 10 keys
+      `{ vis: { field: level } }`; 400 on an uncatalogued field, on a level outside `0..maxVis`,
+      and on more than 10 keys
       (`src/db/cosmos-nosql.js:262-265`). Writes with `patchVis` in
       `src/repositories/projects.js` via `cosmos.patch` — precedent
       `src/repositories/api-keys.js:78-86`; an upsert would clobber a concurrent content write.
       Audits `project.reclassify` with field names and levels only, never values.
-- [ ] `src/vis/redact.js:66-77` — clamp inside `redactForAccess` where the dial is read:
-      `const cap = levelOfRead(doc.read); ... visible(level, Math.min(effectiveVis(entry, dials[key]), cap))`,
-      and the same in `visibleChildren:44`. `Math.min` is not a comparison, so the
-      `visible() is the only comparison` ratchet still holds.
 - Tests
-  - [ ] `test/vis/redact-matrix.test.js` case `'a field is never wider than its record'` — a row
-        `read: ['staff']` with a `defaultVis: 4` field is absent for a level-3 and a level-4
-        caller and present at level 2. Fails without the clamp.
-  - [ ] Same file, `'widening a record does not widen a dial'` — `vis: { projectLead: 2 }` on a
-        `read: [...level 4]` row stays hidden at level 4.
   - [ ] `test/controllers/nosql/project-visibility.test.js`: `'403 without sysadmin'`,
-        `'400 on an uncatalogued field'`, `'400 on a dial above the record level'` (level 4 dial on
-        a level-2 record), `'patches, never upserts'`, `'audits before responding'`.
+        `'400 on an uncatalogued field'`, `'patches, never upserts'`, `'audits before responding'`.
 - Acceptance
-  - [ ] `node --test test/vis/redact-matrix.test.js test/controllers/nosql/project-visibility.test.js` — 0 fail.
+  - [ ] `node --test test/controllers/nosql/project-visibility.test.js` — 0 fail.
   - [ ] On test: a `staff` token PATCHing `/visibility` → 403; `sysadmin` → 200; a follow-up
         anonymous GET omits the dialled field. `DemiAudit_CL | where Action == "project.reclassify"`
         returns the row.
@@ -1173,8 +1164,7 @@ level, never changes anyone else's access, and never touches the field plane.
 
 ## P3-7 index the `vis` map
 
-Branch: `feat/vis-index-field`  (run the reindex block at the end of this file. The record-level
-clamp needs `read`, which the index already carries.)
+Branch: `feat/vis-index-field`  (run the reindex block at the end of this file.)
 
 - [ ] `azure/search/indexes/projects.json`: add `{ "name": "vis", "type": "Edm.String", "retrievable": true, "searchable": false, "filterable": false, "sortable": false, "facetable": false }` — a JSON string, because the index has no map type.
 - [ ] `azure/search/datasources/demi-projects-ds.json` `container.query`: append `, c.vis` to the SELECT before `, c._ts`.
