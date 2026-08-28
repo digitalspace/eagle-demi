@@ -63,8 +63,7 @@ module.exports = {
   responsibleEPD: { defaultVis: 4, maxVis: 4 },
   eaoMember: { defaultVis: 4, maxVis: 4 },
 
-  // Emails drop to defaultVis 2 only with EAO sign-off — §3 question 2, "are lead and EPD names
-  // and emails public by policy?". Unanswered, so today's public output is preserved.
+  // Public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2).
   projectLeadEmail: { defaultVis: 4, maxVis: 4 },
   responsibleEPDEmail: { defaultVis: 4, maxVis: 4 },
   cacEmail: { defaultVis: 4, maxVis: 4 },

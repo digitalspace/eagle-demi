@@ -147,7 +147,7 @@ test('the projects catalog covers every field the merge emits', async (t) => {
     assert.strictEqual(catalog.execProjectDirector.maxVis, 4);
   });
 
-  await t.test('the contact emails stay public until the EAO signs off', () => {
+  await t.test('the contact emails are public by policy', () => {
     assert.strictEqual(catalog.projectLeadEmail.defaultVis, 4);
     assert.strictEqual(catalog.responsibleEPDEmail.defaultVis, 4);
     assert.strictEqual(catalog.cacEmail.defaultVis, 4);
@@ -218,7 +218,7 @@ test('the documents catalog covers every field the seed and the controller write
     assert.strictEqual(documentCatalog._etag.maxVis, 2);
   });
 
-  await t.test('the records-management ids stay public until the EAO signs off', () => {
+  await t.test('the records-management ids are public by policy', () => {
     assert.strictEqual(documentCatalog.orcsClassification.defaultVis, 4);
     assert.strictEqual(documentCatalog.edrmsRecordNumber.defaultVis, 4);
   });

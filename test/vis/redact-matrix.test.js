@@ -175,8 +175,7 @@ test('effectiveVis and visible', async (t) => {
   });
 
   await t.test('visible() is the only comparison', () => {
-    // Inlining a second `level <= effVis` anywhere in the redactor fails this: the whole point of
-    // one comparison is that a lateral clearance set later changes one function.
+    // Inlining a second `level <= effVis` anywhere in the redactor fails this.
     const source = code(fs.readFileSync(REDACT_PATH, 'utf8'));
     assert.strictEqual(source.match(/<=|>=/g).length, 1);
   });

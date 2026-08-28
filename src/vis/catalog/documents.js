@@ -44,8 +44,7 @@ module.exports = {
   eaoStatus: { defaultVis: 4, maxVis: 4 },
   legislation: { defaultVis: 4, maxVis: 4 },
 
-  // Records-management identifiers. Candidates for a later tightening to defaultVis 2 — they need
-  // the same EAO sign-off as the project emails (docs/rbac-architecture.md §3 question 2).
+  // Records-management identifiers; public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2).
   orcsClassification: { defaultVis: 4, maxVis: 4 },
   edrmsRecordNumber: { defaultVis: 4, maxVis: 4 },
 

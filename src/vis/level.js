@@ -1,11 +1,11 @@
 'use strict';
 
 /**
- * Field-visibility LEVEL: one integer per caller, 0 most privileged, 4 anonymous public.
+ * Field-visibility LEVEL: one integer per caller, 0 most privileged, 4 anonymous public. The table
+ * below is the whole mapping; lowest wins.
  *
- * Levels 1 and 3 have no role yet — EAO question 1 (docs/rbac-architecture.md §3) decides whether
- * the internal groups are nested or lateral; DEMI reuses Eagle's realm roles and creates none of
- * its own, so no name is invented here.
+ * Adding `idir` and moving `sysadmin`/`demi-admin` and team membership is Phase 3 work, tracked in
+ * TODO-rbac.md. DEMI reuses Eagle's realm roles and creates none of its own.
  */
 const ROLE_LEVELS = {
   sysadmin: 0,

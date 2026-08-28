@@ -5,9 +5,11 @@
 Rules: append work here before doing it, strike wrong lines with a reason, date every
 measurement, `node --test` per new/changed endpoint, swagger same PR, `src/utils/logger.js` only,
 ask before commit. **Merging is deploying** on test: every unit leaves anonymous responses
-byte-identical unless its line says otherwise. Line cites are at `5c6ce05` (2026-08-27).
+byte-identical unless its line says otherwise. Line cites: Phases 0-2 at `5c6ce05` (2026-08-27); Phase 3 and later at `c71431a` (2026-08-28).
+Re-verify before editing.
 
-Merge order: U1-U5 (Phase 0) then U6-U11 (Phase 1) then P2-1..P2-5, P3-1..P3-5, P4-1..P4-5.
+Merge order: U1-U5 (Phase 0) then U6-U11 (Phase 1) then P2-1..P2-5, P3-0..P3-9, P4-1..P4-5,
+P5-1..P5-2. P5b is optional and unscheduled.
 U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 
 ## Facts — verified 2026-08-27 at `5c6ce05`
@@ -15,7 +17,7 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 1. Anonymous `GET /api/projects` on test returns `projectLead`, `projectLeadEmail`,
    `responsibleEPDEmail`, `eaoMember`, `cacEmail`. Cosmos `_rid`, `_self`, `_ts`, `_attachments`
    never leave: `src/db/cosmos-nosql.js` strips them on every read (corrected 2026-08-28). `eagle-public` renders the staff fields anonymously from eagle-api, so this is
-   current product behaviour. Whether it is policy is EAO question 2.
+   current product behaviour and, per 2026-08-28, policy.
 2. `DEMI_ALLOWED_CLIENTS` is set in every bicepparam and enforced by `isAllowedClient`
    (`src/helpers/auth.js`): a verified token from an unlisted `azp` gets 401. `src/config.js`
    throws unless `ENVIRONMENT` is `dev` or `local`. That throw does not boot-loop the app —
@@ -32,10 +34,19 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 - [ ] Realm roles: DEMI reuses Eagle's vocabulary, no `demi-*` realm roles (decided 2026-08-28). Test done; prod open.
       `eao-epic` test held only `sysadmin` of the names eagle-api checks; `staff` created there
       2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
-      Levels 1 and 3 get a role only when EAO question 1 is answered. Classifying (P3-2) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
-- [ ] EAO question 1 (nested vs lateral groups). Blocks all of Phase 3. Owner: Daniel. Asked: ______  Answered: ______
-- [ ] EAO question 2 (lead/EPD names and emails public by policy). Gates the P2-1 tightening list. Asked: ______  Answered: ______
-- [ ] EAO questions 3 and 4 (`forMAEE = Y` implies `maxVis >= 3`; `project_tracking_number` and `epic_guid` ceilings). Asked: ______  Answered: ______
+      Level 3 is the `identity_provider` claim and level 1 is project scope: neither is a new realm
+      role. Classifying (P3-5) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
+- [ ] Read access to Track's database or an export, covering `staff_work_roles` and `works`.
+      DEMI has no live Track feed: the only Track data here is the static
+      `src/data/track_projects_enriched.json` (382 rows, 2026-07-29), which carries no staff.
+      Blocks P3-0. Owner: Daniel. Delivered: ______
+- [ ] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
+      records. Minted by P3-0 once the line above carries a date; hand-granted until then.
+      Blocks P3-3. Owner: Daniel. Delivered: ______
+- [x] EAO question 1 (nested vs lateral groups). Answered 2026-08-28: ladder 1-4 on the row plane,
+      level 0 a sealed compartment, Selected Credentials a time-bound grant (doc §1, §5).
+- [x] EAO question 2: public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2). Emails stay `defaultVis: 4`; no tightening list.
+- [x] EAO questions 3 and 4: closed 2026-08-28. `forMAEE` is a spreadsheet column DEMI never reads; `trackProjectId` and `eagleId` are already public (`4/4`).
 - [ ] Entra app registration for DEMI API, app roles named exactly as the realm roles, issuer and audience recorded in the wiki. Blocks P4-3. Owner: ______  Requested: ______  Delivered: ______
 
 ---
@@ -44,8 +55,7 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 
 ## U1 — chore/rbac-adr-and-questions (docs + wiki only)
 
-- [ ] Send EAO the four questions in `docs/rbac-architecture.md:155-166`. Owner: Daniel. Answers
-      land in that doc (§3), not in `TODO-rbac.md`.
+- [x] The four questions in `docs/rbac-architecture.md` §3 are all closed 2026-08-28 (answers in §3).
 - [ ] Wiki `ADR-010-Attribute-Level-Access-Control.md` (ADR-009 is Track Feed): Status Accepted;
       Context / Decision / Consequences; links `docs/rbac-architecture.md`.
 - [ ] `TODO-rbac.md`: tick the ADR line, date it.
@@ -308,8 +318,7 @@ Eagle-only fields (`merge/project.js:48-57`, 31 entries) — `defaultVis: 4, max
       `region` · `fedElecDist` · `provElecDist` · `projectCAC` · `projectCACPublished` ·
       `overallProgress` · `code`
 - [x] `projectLeadEmail` · `responsibleEPDEmail` · `cacEmail` — `defaultVis: 4, maxVis: 4` today.
-      Move to `defaultVis: 2` ONLY with EAO sign-off (doc §2 item 3, §3 question 2). Without
-      sign-off they stay at 4; leave a one-line comment naming the question.
+      Stay at 4: public by policy (§3 question 2, 2026-08-28).
 - [x] `complianceLead`, `execProjectDirector` — `defaultVis: 2, maxVis: 4` per doc §2 item 3.
       **This is a byte change** on any row that carries a value. Before merging, count rows:
       `SELECT VALUE COUNT(1) FROM c WHERE IS_DEFINED(c.complianceLead)` over `projects` (via the
@@ -582,8 +591,8 @@ The behaviour change. Keep the diff to the projects entity.
 ## Phase 1 close-out
 
 - [x] `TODO-rbac.md`: Phase 1 lines ticked, the two deviations recorded (Cosmos system fields;
-      `complianceLead`/`execProjectDirector`). EAO sign-off on the three email fields is still
-      outstanding, so they stay at `defaultVis: 4`.
+      `complianceLead`/`execProjectDirector`). The three email fields stay at `defaultVis: 4`:
+      public by policy (2026-08-28).
 - Anonymous response: measured 2026-08-27 on test, anonymous `GET /api/projects?pageSize=100`
   (no continuation token returned; 100 rows = full anonymous set): 0 rows carry `complianceLead`,
   0 carry `execProjectDirector`, 0 uncatalogued keys. JSON-equal, not byte-identical — the
@@ -606,7 +615,7 @@ Branch: `feat/vis-documents-catalog`
 - [x] `s3Key: { defaultVis: 0, maxVis: 0 }` — `publicView` strips it today (`src/controllers/nosql/document.js:90`), and `downloadDocument` reads `doc.s3Key` off the RAW repository row (`:151-157`), not off a redacted one, so the ceiling costs nothing.
 - [x] `read: { maxVis: 0 }`, `vis: { maxVis: 0 }`; `_etag: { defaultVis: 2, maxVis: 2 }`.
 - [x] `isPublished` derived in the redactor from `read.includes('public')` — same derivation `publicView` does at `src/controllers/nosql/document.js:90-92`, so it must not be copied from the stored field.
-- [x] Record `orcsClassification` and `edrmsRecordNumber` in the doc as candidates for a later tightening to `defaultVis: 2`; they stay 4 without EAO sign-off (question 2 mechanism).
+- [x] `orcsClassification` and `edrmsRecordNumber` stay 4: public by policy (question 2, 2026-08-28).
 - [x] Register `documents` in `src/vis/catalog/index.js` so `catalogFor('documents')` resolves.
 - [x] Replace `publicView` at the six document call sites that emit a stored row with `redactForAccess('documents', doc, access)` / `redactAllForAccess`: `src/controllers/nosql/document.js:118` (list), `:132` (get), `:236` (create 201), `:360` (update), `:447` (setPublished), `:579` (delete `deleted:` body). Sites `:182` (download URL), `:541` (eagle upsert ack), `:800`, `:871`, `:931` (ingest acks) are hand-built payloads with no stored field except `displayName` at `:185` — leave them and list them in the coverage test as hand-built.
 - [x] Delete `publicView` from `src/controllers/nosql/document.js:84-93` and its 40-line header.
@@ -794,78 +803,387 @@ Acceptance
 
 ---
 
-# Phase 3 — per-record dials
+# Phase 3 — the ladder on the row plane
 
-Blocked on EAO question 1 and on the realm roles above. Nothing in Phase 3 merges before both lines
-carry a date.
+Phase 3 is the EAO sharing model's levels 1-4 (doc §1, §5). It merges in order. P3-2 changes no
+row's visibility — it converts every write site to the level that site already meant — so it can
+merge and deploy on its own. P3-3 is the behaviour change and waits on the roles below. External
+dependency, dated before P3-3 merges: `project:<id>` roles are issued in realm
+`eao-epic` to every EAO user who must see their own team's records. Owner: Daniel. Until that line
+carries a date, a level-1 record is visible to superusers only.
+
+## P3-0 Track team feed
+
+Branch: `feat/track-team-feed`
+
+Blocked on the Track dependency above. A project's team is the union of the staff on its works:
+Track `staff_work_roles` (`work_id`, `role_id`, `staff_id`) joined to `works` (`project_id`,
+`work_lead_id`, `responsible_epd_id`). The feed mints and revokes the existing `project:<id>` realm
+roles; it creates no new role vocabulary. Lead-managed member lists are a manual override, not a
+source (doc §3 question 10).
+
+- [ ] `src/track/team-feed.js` — pure functions over Track rows: `teamsFromWorks(works,
+      staffWorkRoles)` returns `Map<projectId, Set<staffId>>` as the union across the project's
+      works, including a work's `work_lead_id` and `responsible_epd_id`. A CLOSED work still
+      counts while `is_active` is true; that default is written in the header comment so a
+      reviewer can flip one predicate.
+      `ponytail: union over all works. Per-work roles only if the business ever needs them.`
+- [ ] Same module — `matchStaff(staff, idirUsers)` maps a Track staff row to an IDIR identity by
+      email, falling back to the IDIR GUID (`<guid>@idir`) the Track audit columns carry.
+      A staff row with `is_active: false`, or with no match, yields no role.
+- [ ] `src/scripts/sync-track-teams.js` — reads Track (connection or export path from config),
+      builds the desired `project:<id>` role set per user, and reconciles against Keycloak through
+      the admin API as `demi-user` (it holds `realm-management`): create missing realm roles,
+      assign, and REMOVE roles no longer in the union. `--dry-run` default, `--live` to write;
+      logs one summary line through `src/utils/logger.js`. Same shape as
+      `src/scripts/reconcile-eagle.js`.
+- Tests: `test/track/team-feed.test.js`, literals only
+  - [ ] `'a project team is the union of its works'` — project 1 with works A (staff 10, 11) and
+        B (staff 11, 12) → `['10','11','12']`.
+  - [ ] `'a departed staff member is removed'` — staff 11 `is_active: false` → `['10','12']`,
+        and the reconcile plan lists `project:1` under that user's removals.
+  - [ ] `'a closed work still counts while is_active'` — work B closed, `is_active` true → the
+        union still holds staff 12.
+  - [ ] `'an unmatched staff row mints nothing'` — no email, no IDIR GUID → no role.
+- Acceptance
+  - [ ] `node --test test/track/team-feed.test.js` — 0 fail.
+  - [ ] On test: `node src/scripts/sync-track-teams.js` (dry run) prints a plan; with `--live`, one
+        named test user gains `project:<id>` and Keycloak shows it. Date the external dependency
+        line the day this runs.
 
 ## P3-1 carry `vis` forward through the two whole-item writers
 
-Branch: `fix/vis-carry-forward`
+Branch: `fix/vis-carry-forward`  (unchanged from the previous plan — still needed, still first)
 
-- [ ] `src/controllers/nosql/project.js:280` — the line is `merged.sources = { ...(existing && existing.sources), ...merged.sources };`. Add beside it: `if (existing && existing.vis) merged.vis = existing.vis;` A Cosmos upsert replaces the item, so without this every eagle-api push wipes the dials.
-- [ ] `src/scripts/seed-nosql.js:398-408` — the project stage upserts at `:403` with NO existing-row read at all (unlike the document stage, which builds `existingFor` at `:444-450`). Add a `projects.getById(systemAccess(), project.id)` lookup mirroring `existingFor` and carry both `vis` and `sources` forward; count carried rows in `summary.stages.projects`.
-- [ ] Ordinary POST and PUT strip `vis` from bodies: `src/controllers/nosql/project.js:187-192` (destructure) and `:115-118` (create). PUT returns 400 on `vis` per the Phase 1 rule.
+- [ ] `src/controllers/nosql/project.js:301` — beside `merged.sources = {...}`, add
+      `if (existing && existing.vis) merged.vis = existing.vis;` A Cosmos upsert replaces the item.
+- [ ] `src/scripts/seed-nosql.js:398-408` — the project stage upserts with no existing-row read;
+      add a `projects.getById(systemAccess(), project.id)` lookup mirroring the document stage's
+      `existingFor` (`:444-450`) and carry `vis` and `sources`; count carried rows in
+      `summary.stages.projects`.
+- Tests: `test/controllers/nosql/nosql-controllers.test.js` case `'upsertFromEagle preserves an
+  existing vis map'` — existing row `vis: { eacExpires: 3 }`, push an Eagle doc, assert the
+  upserted item still carries `{ eacExpires: 3 }`. Fails on today's code.
+  `test/scripts/seed-nosql.test.js` case `'the project stage carries vis forward'`, same literal.
+- Acceptance: `node --test test/controllers/nosql/nosql-controllers.test.js test/scripts/seed-nosql.test.js` — 0 fail.
 
-Tests
+## P3-2 ladder vocabulary: `team`, `idir`, and `staff` off the short-circuit
 
-- [ ] `test/controllers/nosql/nosql-controllers.test.js` — case `'upsertFromEagle preserves an existing vis map'` stubs an existing row with `vis: { eacExpires: 3 }`, pushes an Eagle doc, asserts the upserted item still carries it. Fails on the current code, which drops it.
-- [ ] `test/scripts/seed-nosql.test.js` — case `'the project stage carries vis forward'`, same assertion against the seeder's dry-run item set. Fails on the current code.
-- [ ] `test/controllers/nosql/nosql-controllers.test.js` — case `'PUT /api/projects/:id rejects a vis body key'` asserts 400. Fails if the strip is a silent drop.
+Branch: `feat/ladder-read-vocabulary`
 
-Acceptance
+The whole ladder is this unit. No endpoint, no stored-data change.
 
-- [ ] `node --test test/controllers/nosql/nosql-controllers.test.js test/scripts/seed-nosql.test.js` — 0 fail.
-- [ ] `node src/scripts/seed-nosql.js --only projects` (dry run, in the app container) reports `vis carried forward on N rows` with N equal to the number of dialled rows.
+- [ ] `src/helpers/access-sql.js:32` — `SECURE_ROLES` loses `staff`:
+      `['sysadmin','demi-admin','demi-service-read','demi-service-write']`. `ADMIN_ROLES:44` and
+      `WRITE_ROLES:58` untouched. This is the one line that makes level 1 enforceable
+      (`readClause:261`, `canRead:399`, `access-odata.js:72` all key off `isPrivileged`).
+- [ ] `src/middleware/auth.js:21` — `authMiddleware` stops gating on `isPrivileged`. Add
+      `AUTHENTICATED_ROLES = Object.freeze([...new Set([...SECURE_ROLES, ...WRITE_ROLES])])` (no `compliance`:
+      `/db/stats`, `/admin/index-progress`, `/search/summary`, `/links` have no second gate)
+      and an
+      `isAuthenticatedRole(roles)` beside it in `access-sql.js`, export both, and 403 on that
+      instead. Without this line the constant change above locks `staff` out of every write and
+      admin route — `authMiddleware` fronts all of them — and keeps 403ing a `compliance`-only key.
+      `SECURE_ROLES` is in the union because `demi-service-read` is a read tier with no write role
+      (`test/middleware/require-roles.test.js:63-66` pins that split); `WRITE_ROLES` alone would
+      403 it.
+      `SECURE_ROLES`/`isPrivileged` keep the ROW-plane short-circuit meaning only (doc §1,
+      Superuser). `compliance` stays 403 here on purpose; the sealed routes (P5-2) mount their own
+      chain.
+- [ ] Every other `isPrivileged` consumer keeps its meaning and needs no edit. Full list
+      (`grep -rn isPrivileged src/`): `access-sql.js:90` (definition), `:135` (`resolveAccess`
+      tier), `:261` (`readClause` short-circuit), `:399` (`canRead`), `:422` (export),
+      `access-odata.js:14,72` (`filterFor`), `controllers/me.js:8,19` (the `privileged` flag
+      `/api/me` reports, which goes false for staff), `middleware/auth.js:4,21` (the only caller
+      that changes). The comment at `src/scripts/probe-acl.js:11` names `staff` as privileged and is
+      corrected in the same commit.
+- [ ] Same file, beside `PUBLIC_ROLES:21`: `LEVEL_TOKENS = { 1: 'team', 2: 'staff', 3: 'idir', 4: 'public' }`,
+      `readForLevel(level)` → `['team']`, `['staff']`, `['staff','idir']`, `['staff','idir','public']`.
+      NOT cumulative downwards: a level-2 row carrying `team` would be readable by a team-only
+      external caller. `levelOfRead(read)` → widest token present (`team` 1, `staff` 2, `idir` 3,
+      `public` 4), `1` when none. Export both.
+- [ ] `src/helpers/access-sql.js:76` `rolesFor` — add `'idir'` when
+      `req.user.identity_provider === 'idir'`. NEVER add `'team'` to the caller's roles: the role arm
+      would then match every level-1 row of every project. `project:*` stays stripped (`:84`); which
+      projects is `teamsFor`'s job, and only the team arm reads it. Confirm the claim name on a live loginproxy token before merging;
+      record the measurement in the PR.
+- [ ] Team membership becomes a per-row GRANT, separate from key scope (doc §1, "Teams grant, key
+      scope restricts"). Today `projectScopeFor:168` returns both the realm `project:` roles and an
+      API key's `projectScope` through one field, so a staff user holding `project:207` resolves to
+      tier `scoped` and sees only project 207 even at level 2. An API key minted
+      `roles: ['staff'], projectScope: ['207']` must keep behaving exactly as it does today — that
+      restriction is what its issuer asked for (`access-sql.js:122-130`). Five edits, one commit:
+  - [ ] `access-sql.js:168` — split. New `teamsFor(req)` returns the ids from the token's realm
+        `project:` roles, or `[]`. `projectScopeFor` keeps ONLY the explicit `user.projectScope`
+        (`:174`), which is set by API-key auth (`api-key.js:73`); it stops reading role names.
+        Export `teamsFor`.
+  - [ ] `resolveAccess:111` — add `teams: teamsFor(req)` to every returned context; `systemAccess`
+        returns `teams: []`. Tier logic at `:131` is untouched: `TIER.SCOPED` still keys off
+        `projectScope` alone, so a user token with `project:` roles is not scoped, and a scoped key
+        stays scoped whatever its roles.
+  - [ ] `readClause:257` — takes the caller's `teams` and, when non-empty, adds the OR arm
+        `ARRAY_CONTAINS(c.read, 'team') AND c.projectId IN (@team0…)`, `c.id` on `projects`. Same
+        bound-parameter rule as everything else in the file; take the partition field the way
+        `scopeClause` does. `scopeClause:317` is untouched.
+  - [ ] `canRead:391` — same predicate in JS: visible when `read[]` carries one of the caller's
+        ladder tokens, OR `read[]` carries `team` and `String(doc[partitionField])` is in
+        `access.teams`. The `TIER.SCOPED` pre-check at `:391` stays exactly as it is — a scoped key
+        is still confined to its scope, teams or not.
+  - [ ] `access-odata.js` `filterFor:63` — the OData twin:
+        `(read/any(r: search.in(r, '<roles>')) or (read/any(r: r eq 'team') and search.in(projectId, '<teams>')))`.
+        The scope `and` and the `empty` flag for a key scoped to nothing are unchanged.
+- [ ] `src/vis/level.js:10` — `sysadmin: 1`, `demi-admin: 1`, add `idir: 3`; `staff`,
+      `demi-service-*`, `compliance`, `public` unchanged. Rewrite the header comment `:6-8`.
+      No `team` entry: team is a row-plane fact (doc §5 item 1).
+- [ ] Every `[...SECURE_ROLES]` ACL literal becomes `readForLevel(n)` at the level it means TODAY,
+      so behaviour is unchanged: unpublished → `readForLevel(2)`, published → `readForLevel(4)`.
+      Sites: `document.js:47,364,380,635,852`, `project.js:124,227`, `boundary.js:32` (re-grep
+      `SECURE_ROLES src/` before merging; `seed/transform.js` and `merge/project.js` alias
+      `ADMIN_ROLES` and are unaffected). This lands here and not in P3-3 because `staff` leaves
+      `SECURE_ROLES` in this unit: leave one site behind and every row written between the two
+      merges carries no `staff` token and is invisible to all of EAO.
+- [ ] `src/controllers/nosql/api-key.js:31` `GRANTABLE_ROLES` derives from `SECURE_ROLES` and
+      becomes `[...AUTHENTICATED_ROLES, 'compliance', 'public']`; dropping `staff` or `compliance`
+      from it makes those keys unmintable (400 `Unknown role(s)`).
+      Test: `'staff and compliance API keys can still be minted'`.
+- [ ] `src/helpers/access-sql.js` — remove the `unsetIsPublic` arm and the empty-`read[]`
+      fallthrough, so a row with no ladder token matches only privileged callers. `readClause:283`
+      loses the `opts.unsetIsPublic` branch AND its `else` twin: the whole second OR arm goes, and
+      the clause is the role arm plus the team arm above. `canRead:404-408` loses
+      `if (opts.unsetIsPublic) return true;` and the `return doc.isPublished === true;` fallthrough
+      that follows the `Array.isArray(doc.read) && doc.read.length > 0` guard. `isPublished` stays a
+      MIRROR of `read.includes('public')`, never a grant. `access-odata.js` `filterFor:63` has no
+      `unsetIsPublic` arm and no `isPublished` term, so it needs no edit; re-grep before merging.
+      One caller passes the flag today (`grep -rn unsetIsPublic src/`):
+  - [ ] `src/repositories/boundaries.js:51` `VISIBILITY = { unsetIsPublic: true }`, passed at
+        `:73`, `:94`, `:101`, `:122`, `:140`. Delete the constant and the `visibility` argument at
+        each of the five sites; the file header (`:20-27`) explains the flag and goes with it.
+  - [ ] The 281 seeded `boundaries` rows carry neither `read[]` nor `isPublished`, which is why the
+        flag exists. Backfill them to `readForLevel(4)` in the SAME merge or the public map goes
+        blank; `boundary.js:32` `resolveBoundaryAcl` converts with the other write sites above
+        (`readForLevel(4)` published, `readForLevel(2)` not).
+- [ ] `src/helpers/access-odata.js` — the role half needs no change. `filterFor:72` already emits
+      `read/any(r: search.in(r, '<caller roles>'))`, so `team`/`idir` ride in for free.
+- Tests
+  - [ ] `test/helpers/access-sql.test.js` case `'staff is not privileged'` —
+        `isPrivileged(['staff']) === false`, `isPrivileged(['sysadmin']) === true`. Fails on a
+        revert of the constant.
+  - [ ] Same file, `'a project role never becomes a caller token'` — `rolesFor` with
+        `roles: ['staff','project:207']` returns `['public','staff']` (sorted, no `team`),
+        `teamsFor` returns `['207']`, and `projectScopeFor` returns `null`. Fails if `team` is
+        injected: a `['project:999']` caller would then read a level-1 row of project 207.
+  - [ ] Same file, `'the ladder tokens are not cumulative downwards'` — literal
+        `deepStrictEqual(readForLevel(3), ['staff','idir'])`, `readForLevel(1) === ['team']`,
+        `readForLevel(2) === ['staff']`, `readForLevel(4) === ['staff','idir','public']`.
+        `readForLevel(2)` carrying `team` would hand a team-only caller every All-EAO row of its
+        own project.
+  - [ ] Same file, `'a row with no read[] is not public'` — literal
+        `canRead({ isPublished: true }, anonymous) === false`, and `readClause(['public']).clause`
+        contains no `IS_DEFINED`. Fails if either fallthrough comes back.
+  - [ ] Same file, `'a legacy ACL reads as level 2'` — literal
+        `levelOfRead(['sysadmin','staff','demi-admin']) === 2`,
+        `levelOfRead(['public','sysadmin','staff','demi-admin']) === 4`, `levelOfRead(['team']) === 1`,
+        `levelOfRead([]) === 1`, `levelOfRead(['sysadmin']) === 1`. This is the whole back-compat
+        story; it must be literal.
+  - [ ] Same file, `'a staff caller with a project role still sees every level-2 row'` — row
+        `{ read: ['staff'], projectId: '300' }`, caller roles `['staff','project:207']` →
+        `canRead` true, and `visibilityFor(access).clause` carries no bare scope AND.
+  - [ ] Same file, `'a team-only row is visible to its team and to nobody else at level 2'` — row
+        `{ read: ['team'], projectId: '207' }`: `staff` + `project:207` → true; `staff` with no
+        project role → false; `sysadmin` → true.
+  - [ ] Same file, `'a staff user token with project roles is not scoped'` — token roles
+        `['staff','project:207']` → `resolveAccess` tier `privileged`/`public` per its other roles,
+        never `scoped`; `deepStrictEqual(access.teams, ['207'])` and `access.projectScope === null`.
+  - [ ] Same file, `'a staff API key with projectScope is still scoped'` — `req.user`
+        `{ roles: ['staff'], projectScope: ['207'] }` → tier `scoped`,
+        `visibilityFor(access).clause` contains the scope AND (`c.projectId IN`), and `canRead` is
+        false for a row with `projectId: '300'` whatever its `read[]`. Fails if the restriction is
+        turned into a grant.
+  - [ ] `test/helpers/access-odata.test.js` case `'filterFor emits the team arm'` — a staff caller
+        with `teams: ['207']` gets a filter containing `'team'` and `207`, joined by `or`; a caller
+        with `projectScope: ['207']` still gets the scope `and`.
+  - [ ] `test/controllers/nosql/document-redaction.test.js` case `'a new unpublished document still
+        reads as level 2 after P3-2'` — `deepStrictEqual(saved.read, ['staff'])`. P3-2 converts the
+        write sites without moving any behaviour; the default drops to level 1 in P3-3.
+  - [ ] `test/helpers/access-odata.test.js` case `'a staff caller now gets a filter'` — asserts
+        `filterFor({ roles: ['public','staff'] }).filter` contains `staff` and is not null. Fails if
+        `staff` is put back in `SECURE_ROLES`.
+  - [ ] `test/middleware/auth.test.js` case `'a staff-only token passes authMiddleware after the
+        SECURE_ROLES change'` — `next()` runs and nothing 403s. Fails if the gate is still
+        `isPrivileged`.
+  - [ ] Same file, `'a compliance-only token is still 403 at authMiddleware'` — the compartment
+        role never reaches the ladder routes; P5-2 mounts its own chain.
+  - [ ] Same file, `'a demi-service-read token still passes authMiddleware'` — `next()` runs. Fails
+        if `AUTHENTICATED_ROLES` is spelled `[...WRITE_ROLES]`, which omits it
+        (`test/middleware/require-roles.test.js:63-66`).
+  - [ ] `test/vis/level.test.js:48` — rename `'no role maps to level 1 or 3 before Phase 3'` to
+        `'no role maps to level 1'` and add `'an IDIR login is level 3'`
+        (`ROLE_LEVELS.idir === 3`); add `'sysadmin is level 1, not 0'`
+        (`levelFromRoles(['sysadmin']) === 1`).
+- Acceptance
+  - [ ] `node --test test/helpers/access-sql.test.js test/helpers/access-odata.test.js test/vis/level.test.js test/controllers/nosql/document-redaction.test.js`, then `yarn test`.
+  - [ ] Anonymous `GET /api/projects?pageSize=100` and `GET /api/search?dataset=Project&pageSize=5`
+        on test, `jq -S` before/after: 0 lines. Anonymous callers are unaffected by every line here.
+  - [ ] With a staff token: `GET /api/projects` returns the same ids as before the deploy (every
+        stored row carries `staff`), and `GET /api/me` reports `level: 2`, `privileged: false`.
+        `privileged` flipping is expected — see the frontend line in P3-3.
 
-## P3-2 PATCH /api/projects/:id/visibility
+## P3-3 default on admission is level 1
+
+Branch: `feat/ladder-default-level-1`
+
+Merges only after the `project:<id>` roles dependency above carries a date.
+
+- [ ] `src/controllers/nosql/document.js:36-49` `resolveDocumentAcl` — the unpublished arm drops
+      from `readForLevel(2)` (what P3-2 left) to `readForLevel(1)`; the published arm stays
+      `readForLevel(4)`. Same ceiling rule: a document cannot out-rank its parent, computed from
+      `levelOfRead(parentProject.read)`. Every other write site converted in P3-2 keeps the level
+      it has; this bullet is the only default that moves.
+- [ ] `src/controllers/nosql/project.js:123,152,223-228` — `createProject` ignores `isPublished`
+      from the body and admits at level 1; `updateProject`'s `isPublished` arm is deleted (widening
+      moves to P3-4) and the ACL is carried from `existing` unconditionally.
+- [ ] `frontend/src/app/services/registry-state.service.ts` — gate on `level <= 2` from `/api/me`,
+      not on `privileged`, which is now false for staff (doc §5, "Still valid").
+- [ ] `src/swagger/swagger.yaml` — `POST /api/documents` and `POST /api/projects`: new records are
+      admitted at level 1 and `isPublished` in a create body is ignored.
+- Tests
+  - [ ] `test/controllers/nosql/document-redaction.test.js` case `'a new document is admitted at
+        level 1'` — `deepStrictEqual(saved.read, ['team'])` and `saved.isPublished === false`, with
+        a PUBLISHED parent project. Fails on any inherited-publication shortcut.
+  - [ ] Same file, `'a create body cannot publish'` — `{ isPublished: true }` → `saved.read` is
+        `['team']`.
+  - [ ] `test/controllers/nosql/nosql-controllers.test.js` case `'PUT no longer changes a level'` —
+        `{ isPublished: true }` on a level-1 project → the stored `read` is unchanged.
+  - [ ] `frontend/.../registry-state.service.spec.ts` case `'level 2 with privileged false clears
+        isUnauthorized'`. Fails if the old `privileged` check survives.
+- Acceptance
+  - [ ] `node --test test/controllers/nosql/*.test.js`; `cd frontend && yarn lint && yarn test && yarn build`.
+  - [ ] On test: create a document as a staff user holding `project:207`, then `GET` it back as the
+        same user (200) and as a staff user with no project role (404). The second call is the
+        acceptance for the whole ladder.
+  - [ ] Anonymous `jq -S` diff on `/api/projects` and `/api/documents`: 0 lines.
+
+## P3-4 PUT /api/{projects,documents}/:id/level
+
+Branch: `feat/ladder-widen-endpoint`
+
+- [ ] `src/routes/api.js` — `router.put('/projects/:id/level', authMiddleware, requireWrite,
+      projectController.setLevel)` after `:72`, and `/documents/:id/level` beside `:90`. Keep
+      `PUT /documents/:id/published` (`:90`) as a thin alias for `{ level: 4, confirm }` /
+      `{ level: 2 }`, marked deprecated in swagger — eagle-admin-console still calls it.
+- [ ] `exports.setLevel` in each controller: body `{ level, confirm, reason }`; 400 on a level
+      outside `1..4`; 400 on `level === 4` without `confirm === true` (message names the
+      confirmation); 400 on `level === 4` without a non-empty `reason` (doc §3 question 15 —
+      optional on every other move); 400 on `level === 0`; 409 when a document would out-rank its
+      project. Writes `readForLevel(level)`, keeps the existing cascade (`project.js:31`
+      `cascadeProjectVisibility`, `document.js:378-400` index + chunk ACL patch) verbatim.
+- [ ] A move DOWN from level 4 (`level < levelOfRead(existing.read)` where the existing level is 4)
+      needs `requireRole('sysadmin')` — 403 for anyone else, `requireWrite` alone is not enough —
+      and audits `record.takedown` instead of `record.narrow`. Incident response, not a routine
+      correction; the response body points at `docs/takedown-runbook.md` (P3-9), because narrowing
+      the row leaves the AI Search index and every cache untouched.
+- [ ] `auditEvent(req, { action: level > from ? 'record.widen' : 'record.narrow', targetType,
+      targetId, projectId, detail: { from, to, confirmed: level === 4 } })` before responding —
+      signature `src/utils/audit.js:182`, pattern `project.js:247-257`.
+- [ ] `src/swagger/swagger.yaml` — both routes, 200/400/403/409, and the deprecation note.
+- Tests: `test/controllers/nosql/record-level.test.js`
+  - [ ] `'level 4 without a reason is 400'` and `'a reason is optional below level 4'`.
+  - [ ] `'only sysadmin may pull back from level 4'` — a `staff` caller narrowing a level-4 row
+        gets 403; `sysadmin` gets 200 and the buffer holds `record.takedown`.
+  - [ ] `'level 4 without confirm is 400'` and `'level 4 with confirm writes public'` —
+        `deepStrictEqual(saved.read, ['staff','idir','public'])`, `isPublished === true`.
+  - [ ] `'a widen is audited before the response'` — the buffer holds `record.widen` with
+        `detail.from === 1, detail.to === 3` when `res.json` runs.
+  - [ ] `'a document cannot pass its project'` — level 4 on a document under a level-2 project → 409.
+  - [ ] `'nothing widens implicitly'` — `upsertFromEagle` and `PUT /:id` on a level-1 row leave
+        `read` untouched.
+  - [ ] `test/controllers/audit-cud-coverage.test.js` — add both routes to the covered set.
+- Acceptance
+  - [ ] `node --test test/controllers/nosql/record-level.test.js test/controllers/audit-cud-coverage.test.js` — 0 fail.
+  - [ ] On test: `PUT /api/projects/207/level -d '{"level":4}'` → 400; with `"confirm":true` → 200
+        and anonymous `GET /api/projects/207` → 200. `DemiAudit_CL | where Action == "record.widen"`
+        returns the row with `Detail.from` and `Detail.to`.
+
+## P3-5 dials and the classify endpoint
 
 Branch: `feat/vis-classify-endpoint`
 
-- [ ] `requireRole(name)` factory in `src/middleware/require-roles.js`, next to `requireWrite` (`:24-31`) and `requireAdmin` (`:33-41`); same shape — read `req.user.realm_access.roles`, 403 with a message naming the missing role. Export it at `:43`.
-- [ ] Route: `router.patch('/projects/:id/visibility', authMiddleware, requireWrite, requireRole('sysadmin'), projectController.setVisibility)` in `src/routes/api.js`, after `:68`.
-- [ ] `exports.setVisibility` in `src/controllers/nosql/project.js`, after `updateProject` (ends `:250`). Body `{ vis: { field: level } }`. 400 on a field absent from `catalogFor('projects')`, 400 on a level outside `0..maxVis`, 400 on more than 10 keys (`src/db/cosmos-nosql.js:262-265` caps patch at 10 operations).
-- [ ] Write with `cosmos.patch(CONTAINER, id, id, ops)` — the precedent is `src/repositories/api-keys.js:78-86` `touchLastUsed`, and the reason is the same: an upsert writes the whole record and would race the content writers. Add `patchVis` to `src/repositories/projects.js` beside `patchWildfireStats` and export it at `:263`.
-- [ ] `auditEvent(req, { action: 'project.reclassify', targetType: 'project', targetId, projectId, detail: { fields, from, to } })` BEFORE responding — signature at `src/utils/audit.js:182`, an existing call to copy at `src/controllers/nosql/project.js:222-232`. Field names and levels only, never values.
-- [ ] `src/swagger/swagger.yaml`: `patch:` under `/api/projects/{id}` (`:94`), 200 / 400 / 403.
+- [ ] `requireRole(name)` factory in `src/middleware/require-roles.js` beside `requireWrite:24-31`;
+      route `router.patch('/projects/:id/visibility', authMiddleware, requireWrite,
+      requireRole('sysadmin'), projectController.setVisibility)` in `src/routes/api.js` after `:72`.
+- [ ] `exports.setVisibility` in `src/controllers/nosql/project.js` after `updateProject`: body
+      `{ vis: { field: level } }`; 400 on an uncatalogued field, on a level outside `0..maxVis`,
+      and on more than 10 keys
+      (`src/db/cosmos-nosql.js:262-265`). Writes with `patchVis` in
+      `src/repositories/projects.js` via `cosmos.patch` — precedent
+      `src/repositories/api-keys.js:78-86`; an upsert would clobber a concurrent content write.
+      Audits `project.reclassify` with field names and levels only, never values.
+- Tests
+  - [ ] `test/controllers/nosql/project-visibility.test.js`: `'403 without sysadmin'`,
+        `'400 on an uncatalogued field'`, `'patches, never upserts'`, `'audits before responding'`.
+- Acceptance
+  - [ ] `node --test test/controllers/nosql/project-visibility.test.js` — 0 fail.
+  - [ ] On test: a `staff` token PATCHing `/visibility` → 403; `sysadmin` → 200; a follow-up
+        anonymous GET omits the dialled field. `DemiAudit_CL | where Action == "project.reclassify"`
+        returns the row.
 
-Tests
+## P3-6 Selected Credentials
 
-- [ ] `test/controllers/nosql/project-visibility.test.js` — case `'403 without sysadmin'` drives the route with a `staff`-only token. Fails if the middleware is missing from the chain.
-- [ ] Same file, case `'400 on an uncatalogued field'` posts `{ vis: { notAField: 2 } }`.
-- [ ] Same file, case `'400 on a level above maxVis'` posts a level 4 dial for a `maxVis: 2` field.
-- [ ] Same file, case `'patches, never upserts'` asserts the stub repo saw `patch` and not `upsert` — an upsert here would clobber a concurrent content write.
-- [ ] Same file, case `'audits before responding'` asserts the audit buffer holds `project.reclassify` at the time `res.json` is called.
-- [ ] `test/controllers/audit-cud-coverage.test.js` — add the new mutating route to the covered set. Fails if a mutating route ships without an audit row.
+Branch: `feat/selected-credentials`
 
-Acceptance
+Replaces the deleted "groups on dials" unit. Row plane only: a credential never changes a record's
+level, never changes anyone else's access, and never touches the field plane.
 
-- [ ] `node --test test/controllers/nosql/project-visibility.test.js test/controllers/audit-cud-coverage.test.js` — 0 fail.
-- [ ] `curl -X PATCH -H "Authorization: Bearer $STAFF" -d '{"vis":{"cacEmail":2}}' $API/api/projects/207/visibility` → 403.
-- [ ] Same with a `sysadmin` token → 200; a follow-up anonymous `GET /api/projects/207` omits `cacEmail`.
-- [ ] `DemiAudit_CL | where Action == "project.reclassify"` returns the row.
+- [ ] New container `credentials`, partition `/party.id`, in `azure/modules/cosmos-nosql.bicep`
+      beside `apikeys`; new `src/repositories/credentials.js` (`listForParty`, `insert`,
+      `revokeBy`). Document shape per doc §1. `end` is REQUIRED (90 days is the default the UI
+      offers, not a cap); grant refuses a missing `end`, `levels` containing 0 or 4, an `end` in
+      the past, or more than 200 ids (`ponytail:` id-list ceiling — a project-scope grant covers a
+      whole assessment in one row instead). The human party is a BCeID Business login; a system
+      party is a registry API key. IDIR guest only for an external acting as staff.
+- [ ] New `src/middleware/credentials.js`: after auth, load the caller's live credentials by
+      `req.user.sub`, each entry of `req.user.groups`, and `req.user.keyId`
+      (`src/helpers/auth.js:61`), drop `revokedAt` and out-of-window rows in JS, attach
+      `access.credentials` in `resolveAccess` (`src/helpers/access-sql.js:111`). 60-second
+      in-process cache keyed by party, same shape as the API-key cache (`auth.js:30-37`) —
+      `ponytail: a revoke takes effect within the TTL; drop the TTL if that is ever too slow`.
+- [ ] `readClause:257`, `canRead:384`, `filterFor` (`access-odata.js:63`) each gain ONE extra OR
+      arm: the record's id or projectId is in a credential's `scope.ids` AND `levelOfRead(read)` is in
+      the credential's `levels` (doc §1: a credential names the levels it may see). No new SQL shape — the level check is the same
+      `EXISTS ... r IN (...)` / `read/any` the role arm already builds.
+- [ ] Auto-revoke on state change, not only on the clock: the P3-0 Track feed revokes every live
+      credential over a project when that project closes or its work completes, audited
+      `credential.revoke` with `detail.cause: 'project-closed' | 'work-complete'`. Renewal is the
+      norm on EA timelines, so the same job notifies the GRANTOR 7 days before an `end` passes.
+      Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer.
+- [ ] Endpoints `POST /api/credentials`, `GET /api/credentials?party=|projectId=`,
+      `POST /api/credentials/revoke` (body `{ id | batchId | party | projectId }`), all
+      `requireWrite` + `requireRole('sysadmin')`, audited `credential.grant` /
+      `credential.revoke` (one row per credential plus a summary row on a bulk revoke). Swagger in
+      the same PR.
+- Tests
+  - [ ] `test/helpers/credentials.test.js`: `'a grant without an end is refused'`,
+        `'an expired credential grants nothing'` (`end` yesterday → `canRead` false),
+        `'closing a project revokes its credentials'` (2 over the project, 1 over another → 2
+        revoked), `'a revoked credential grants nothing'`,
+        `'a credential at levels [3] does not reach a level-1 record'` (literal false),
+        `'a credential grants only its own ids'`.
+  - [ ] Same file, `'a credential changes no record'` — after `canRead` returns true the row's
+        `read` array is byte-identical.
+  - [ ] `test/controllers/credentials.test.js`: `'bulk revoke by batchId revokes exactly that
+        batch'` (3 granted, 2 in the batch → 2 revoked, 1 untouched) and `'every grant and revoke
+        audits'`.
+  - [ ] `test/vis/redact-matrix.test.js` case `'a credential does not widen the field plane'` — a
+        level-4 caller admitted by a credential still sees only `effVis 4` fields.
+- Acceptance
+  - [ ] `node --test test/helpers/credentials.test.js test/controllers/credentials.test.js` — 0 fail.
+  - [ ] On test: grant a credential over one level-2 document to a throwaway Keycloak user, confirm
+        that user reads it and reads no sibling document; revoke by `batchId`, confirm 404 within
+        the cache TTL. `DemiAudit_CL | where Action startswith "credential."` shows both rows.
 
-## P3-3 gate `projectCACPublished`, then ship the `cacPublished` predicate
+## P3-7 index the `vis` map
 
-Branch: `feat/vis-cac-predicate`
-
-- [ ] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:52`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only `PATCH /visibility` (P3-2) or the Eagle push may set it. Merges before the predicate, per doc section 2 item 7.
-- [ ] Only then: `cacPublished: (record) => record.projectCACPublished === true` in `src/vis/predicates.js`, and `when: 'cacPublished'` on `cacEmail` in `src/vis/catalog/projects.js` with `defaultVis: 2, maxVis: 4`.
-
-Tests
-
-- [ ] `test/controllers/nosql/nosql-controllers.test.js` — case `'PUT /api/projects/:id cannot set projectCACPublished'` asserts the stored row is unchanged. Fails today, where the body spreads in at `:211`.
-- [ ] `test/vis/redact-matrix.test.js` — case `'cacEmail is public only while the CAC is published'`: level 4 + `projectCACPublished: true` → present; level 4 + false → absent; level 2 → present in both. Fails if the predicate narrows instead of widening.
-- [ ] Same file, case `'a dial beats the predicate'`: `vis: { cacEmail: 0 }` with `projectCACPublished: true` → absent at level 4 and at level 2. Fails on the source design's AND semantics.
-
-Acceptance
-
-- [ ] `node --test test/vis/redact-matrix.test.js test/controllers/nosql/nosql-controllers.test.js` — 0 fail.
-- [ ] Anonymous `GET /api/projects/<published-CAC-project>` still returns `cacEmail` (today's behaviour, per doc section 2 item 3).
-
-## P3-4 index the `vis` map
-
-Branch: `feat/vis-index-field`
+Branch: `feat/vis-index-field`  (run the reindex block at the end of this file.)
 
 - [ ] `azure/search/indexes/projects.json`: add `{ "name": "vis", "type": "Edm.String", "retrievable": true, "searchable": false, "filterable": false, "sortable": false, "facetable": false }` — a JSON string, because the index has no map type.
 - [ ] `azure/search/datasources/demi-projects-ds.json` `container.query`: append `, c.vis` to the SELECT before `, c._ts`.
@@ -885,12 +1203,45 @@ Acceptance
 - [ ] Reindex block below, run in order.
 - [ ] After the indexer reset: `GET {endpoint}/indexers/projects-indexer/status` reports `393 processed, 0 failed` and a dialled project's search hit is redacted.
 
-## P3-5 lateral clearance sets — only if the EAO answers "lateral"
+## P3-8 gate `projectCACPublished`, then the `cacPublished` predicate
 
-Branch: `feat/vis-clearance-set`
+Branch: `feat/vis-cac-predicate`
 
-- [ ] Replace `visible(level, effVis)` in `src/vis/redact.js` and `levelFromRoles` in `src/vis/level.js` with set membership. Doc section 2 item 11 says these two are the only places the scalar order is assumed — hold that claim with a grep for `<=` under `src/vis/` in the completeness test before writing any dial.
-- [ ] Must land BEFORE any level-1/3 role is created or any dial is written.
+- [ ] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:58`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only `PATCH /visibility` (P3-5) or the Eagle push may set it. Merges before the predicate, per doc section 2 item 7.
+- [ ] Only then: `cacPublished: (record) => record.projectCACPublished === true` in `src/vis/predicates.js`, and `when: 'cacPublished'` on `cacEmail` in `src/vis/catalog/projects.js` with `defaultVis: 2, maxVis: 4`.
+
+Tests
+
+- [ ] `test/controllers/nosql/nosql-controllers.test.js` — case `'PUT /api/projects/:id cannot set projectCACPublished'` asserts the stored row is unchanged. Fails today, where the body spreads in at `:211`.
+- [ ] `test/vis/redact-matrix.test.js` — case `'cacEmail is public only while the CAC is published'`: level 4 + `projectCACPublished: true` → present; level 4 + false → absent; level 2 → present in both. Fails if the predicate narrows instead of widening.
+- [ ] Same file, case `'a dial beats the predicate'`: `vis: { cacEmail: 0 }` with `projectCACPublished: true` → absent at level 4 and at level 2. Fails on the source design's AND semantics.
+
+Acceptance
+
+- [ ] `node --test test/vis/redact-matrix.test.js test/controllers/nosql/nosql-controllers.test.js` — 0 fail.
+- [ ] Anonymous `GET /api/projects/<published-CAC-project>` still returns `cacEmail` (today's behaviour, per doc section 2 item 3).
+
+---
+
+## P3-9 takedown runbook
+
+Branch: `docs/takedown-runbook`
+
+Docs only. Written before P3-4 ships, because P3-4's 403 path points at it.
+
+- [ ] `docs/takedown-runbook.md`, how-to, numbered steps: narrow the record with
+      `PUT /api/{projects,documents}/:id/level` as `sysadmin`; purge the AI Search index with
+      `aiSearch.deleteFromIndex` (indexers are `_ts` high-water only and never see a delete, so a
+      narrowed row lingers in the index until this runs); delete the document's chunks with
+      `deleteChunksForDocument` and purge them from the chunks index the same way; invalidate the
+      Front Door and browser caches for any affected URL; confirm with an anonymous
+      `GET /api/search` that no hit remains.
+- [ ] The runbook states plainly that copies already outside EPIC — downloads, mirrors, search
+      engine caches — are unrecoverable, and that a takedown is incident response with a recorded
+      reason, never a routine correction.
+- [ ] Link it from `docs/rbac-architecture.md` §1 (done) and from `docs/prod-flip-runbook.md`.
+- Acceptance: `docs/takedown-runbook.md` exists and its AI Search step names the real helper —
+  `grep -n deleteFromIndex src/search/*.js` resolves.
 
 ---
 
@@ -990,7 +1341,107 @@ Acceptance
 
 ---
 
-# Reindex (P3-4 only)
+# Phase 5 — Level 0, the sealed compartment
+
+Later phase, after Phase 3 has carried test traffic for a week. Level 0 is a row-plane token, not a
+separate store: a sealed record carries `read: ['compliance']` and stays in its ordinary container
+(doc §1). No new container, no key, no encryption. The work is the EXCLUSION — every privileged
+system caller must stop seeing these rows — plus one release path.
+
+## P5-1 `readForLevel(0)` and the privileged exclusion
+
+Branch: `feat/level-zero-token`
+
+- [ ] `src/helpers/access-sql.js` (home of `readForLevel`/`levelOfRead` since P3-2) — `readForLevel(0)` returns `['compliance']`, and
+      `levelOfRead(['compliance'])` returns 0; the ladder tokens stay 1-4 and `0` is the only
+      non-ladder value `readForLevel` accepts.
+- [ ] `src/helpers/access-sql.js` — `readClause:257` stops returning bare `true` for a privileged
+      caller: when the caller's roles do not include `compliance` it returns
+      `NOT ARRAY_CONTAINS(c.read, 'compliance')` (alias-aware), for privileged and unprivileged
+      callers alike, ANDed onto the role arm in the unprivileged case. `canRead:384` gets the same
+      guard BEFORE the `isPrivileged` short-circuit at `:399` — that early `return true` is the
+      whole leak.
+- [ ] `systemAccess():206` keeps its role list unchanged (no `compliance`), so the exclusion applies
+      to it too: exports, seed, reconcile and the extraction worker never read a sealed row. Assert
+      it rather than rely on it.
+- [ ] `src/helpers/access-odata.js` `filterFor` — same exclusion as
+      `not read/any(r: r eq 'compliance')`, so AI Search cannot return one either.
+- [ ] `ADMIN_API_KEY` break-glass must not resolve `compliance` (`src/helpers/auth.js`): the
+      break-glass identity's role list is fixed and `compliance` is not in it. Doc §1 condition 1.
+- [ ] `src/controllers/nosql/api-key.js` create path — only a caller that already holds
+      `compliance` may mint a `compliance` key. After the unknown-role check (`:45-48`), when
+      `roles.includes('compliance')` and `(req.user.roles || [])` does not, return 400
+      `{ error: 'compliance is not grantable by this caller' }`. `compliance` stays in
+      `GRANTABLE_ROLES:31`; the gate is per caller. Without it the route's own gate is
+      `requireAdmin` (`api.js:122`), which every `staff`, `sysadmin` and `demi-admin` caller passes,
+      so any of them mints itself into the compartment. Doc §1 condition 3.
+- Tests: `test/helpers/access-sql.test.js` and `test/helpers/access-odata.test.js`
+  - [ ] `'sysadmin cannot read a compliance-only row'` — `canRead({ read: ['compliance'] },
+        access(['sysadmin'])) === false`, and `readClause(['sysadmin']).clause` contains
+        `NOT ARRAY_CONTAINS`.
+  - [ ] `'systemAccess excludes compliance-only rows'` — literal false on the same row.
+  - [ ] `'break-glass key has no compliance role'` — the admin-key identity's roles do not include
+        `compliance`.
+  - [ ] `'compliance reads it'` — `canRead` true for `['compliance']`, and a level-2 row is NOT
+        visible to a compliance-only caller.
+  - [ ] `test/controllers/nosql/api-key.test.js` (new file)
+        `'an admin without compliance cannot mint a compliance key'` — `req.user.roles`
+        `['sysadmin']`, body `roles: ['compliance']` → status 400 and body literal
+        `{ error: 'compliance is not grantable by this caller' }`, and nothing written to `apikeys`.
+  - [ ] Same file, `'a compliance holder can mint a compliance key'` — `req.user.roles`
+        `['sysadmin','compliance']`, same body → 201 and the saved record's `roles` is
+        `['compliance']`.
+- Acceptance: `node --test test/helpers/access-sql.test.js test/helpers/access-odata.test.js test/controllers/nosql/api-key.test.js`
+  — 0 fail.
+
+## P5-2 the compartment routes
+
+Branch: `feat/level-zero-routes`
+
+- [ ] `src/controllers/nosql/sealed.js`: `POST /api/sealed` (write a record at
+      `readForLevel(0)`), `GET /api/sealed/:id`, `GET /api/sealed` (ids, `sealedAt` and `title`
+      only), and the release route below.
+- [ ] ONE chain for all four routes, and it is not `authMiddleware` — that gate 403s `compliance`
+      and keeps doing so after P3-2. Mount `authenticate` (the raw verifier in
+      `src/helpers/auth.js`) then `requireRole('compliance')`.
+      Test: `'a compliance-only token reaches the sealed routes and nothing else'`.
+- [ ] `POST /api/sealed/:id/release` — same chain; body requires `caseNumber` and
+      `decision` (400 without either). Rewrites `read[]` to `readForLevel(1)`, audits
+      `sealed.release` with `{ targetId, caseNumber, decision }`, and notifies the C&E lead.
+      Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer; log the
+      intent through `src/utils/logger.js` until it exists. One holder is enough; two-person
+      release is a later policy toggle. This is the ONLY exit; `PUT /:id/level` (P3-4) 400s on
+      level 0.
+- [ ] `auditEvent` on every route including reads: `sealed.read`, `sealed.create`,
+      `sealed.release`. Reads are audited here and nowhere else in DEMI — that asymmetry is the
+      compartment's point.
+- [ ] Swagger, and one line in `docs/prod-flip-runbook.md`: doc §1 condition 2, exports and backups
+      stay locked down — no seed, export or reconcile script may add a `compliance` role to its
+      access context (`grep -n systemAccess src/scripts/*.js` must not grow).
+- Tests: `test/controllers/nosql/sealed.test.js`
+  - [ ] `'sysadmin gets 403 on every sealed route'` — literal, all four routes.
+  - [ ] `'a sealed row is never returned to the ladder'` — `GET /api/projects` and
+        `GET /api/search` with a sealed row present return nothing from it.
+  - [ ] `'release lands at level 1'` — `deepStrictEqual(saved.read, ['team'])`.
+  - [ ] `'release without a caseNumber is 400'` and `'release without a decision is 400'`.
+  - [ ] `'every sealed route audits, reads included'`.
+- Acceptance
+  - [ ] `node --test test/controllers/nosql/sealed.test.js` — 0 fail.
+  - [ ] On test, with a `compliance` API key: seal, read back, release; confirm the released record
+        answers 404 to a staff caller with no `project:` role and 200 to a team member, and that a
+        `sysadmin` key gets nothing while it is sealed. `DemiAudit_CL | where Action startswith
+        "sealed."` shows create, read and release.
+
+## P5b envelope encryption (optional, unscheduled)
+
+Row-plane level 0 keeps plaintext in Cosmos, so a data-plane operator or a backup still reaches it.
+Closing that means per-record envelope encryption under a Key Vault key in `demi-kv-<env>`. Take it
+only when the compartment holds real C&E material, and only with a second Function App whose own
+UAMI holds the sole Crypto User grant.
+
+---
+
+# Reindex (P3-7 only)
 
 Procedure from `azure/search/README.md:116-170`. Run inside the `demi-api-test` container over the
 App Service SSH tunnel — the search service is `publicNetworkAccess: Disabled` and a workstation
