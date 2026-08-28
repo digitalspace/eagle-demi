@@ -600,8 +600,8 @@ Acceptance
 
 - [x] `yarn test` — all green.
 - [x] `node --test test/vis/catalog-completeness.test.js test/controllers/nosql/document-redaction.test.js` — 0 fail.
-- [ ] `curl -s $API/api/documents/<id> | jq 'has("s3Key"), has("read"), has("_etag")'` on test → `false false false`; same output as before the PR.
-- [ ] `curl -s $API/api/documents/<id> | jq -S 'keys'` before and after are identical.
+- [x] `curl -s $API/api/documents/<id> | jq 'has("s3Key"), has("read"), has("_etag")'` on test → `false false false`; same output as before the PR. (test 2026-08-28: `false false false`; list, point read and Document search `jq -S` diff 0 lines vs pre-merge snapshot)
+- [x] (2026-08-28: identical; the P2-1 predicted `ownRead`/Cosmos-field deviation did not appear anonymously) `curl -s $API/api/documents/<id> | jq -S 'keys'` before and after are identical.
 
 ### P2-1 recorded deviations
 
@@ -654,8 +654,8 @@ Tests
 Acceptance
 
 - [x] `node --test test/vis/search-drift.test.js test/controllers/search.test.js` — 0 fail.
-- [ ] Anonymous `GET /api/search?dataset=Project&pageSize=5` and `dataset=Document&pageSize=5` on test, `jq -S` before and after: 0 lines (`search-diff.js` is moot, its baseline is retired eagle-search). Date the run here: ______
-- [ ] `curl -s "$API/api/search?dataset=Project&pageSize=5" | jq -S '.[0].searchResults[0] | keys'` identical before and after.
+- [x] Anonymous `GET /api/search?dataset=Project&pageSize=5` and `dataset=Document&pageSize=5` on test, `jq -S` before and after: 0 lines (`search-diff.js` is moot, its baseline is retired eagle-search). Date the run here: ______ (2026-08-28: Project, Document, DocumentChunk 0 lines)
+- [x] `curl -s "$API/api/search?dataset=Project&pageSize=5" | jq -S '.[0].searchResults[0] | keys'` identical before and after. (2026-08-28: 0 lines)
 
 ### P2-2 recorded deviations
 
@@ -697,8 +697,8 @@ Tests
 Acceptance
 
 - [x] `node --test test/search/eagle-query.test.js test/controllers/search.test.js test/repositories/projects.test.js` — 0 fail.
-- [ ] `curl -s "$API/api/search?dataset=Project&complianceLead=x"` → 400 (unknown param, unchanged).
-- [ ] Same anonymous `/api/search` `jq -S` diff as P2-2: 0 lines. Date: ______
+- [x] `curl -s "$API/api/search?dataset=Project&complianceLead=x"` → 400 (unknown param, unchanged). (2026-08-28: 400)
+- [x] Same anonymous `/api/search` `jq -S` diff as P2-2: 0 lines. Date: ______ (2026-08-28: 0 lines)
 
 ### P2-3 recorded deviations
 
@@ -734,8 +734,8 @@ Tests
 Acceptance
 
 - [x] `node --test test/controllers/me.test.js` — 0 fail.
-- [ ] `curl -s $API/api/me` → `{"roles":["public"],"level":4,"tier":"public"}`.
-- [ ] `curl -s -H "X-Api-Key: $KEY" $API/api/me | jq .level` → the level of that key's roles.
+- [x] `curl -s $API/api/me` → `{"roles":["public"],"level":4,"tier":"public"}`. (2026-08-28: `{"roles":["public"],"level":4,"tier":"public","privileged":false}`)
+- [x] `curl -s -H "X-Api-Key: $KEY" $API/api/me | jq .level` → the level of that key's roles. (2026-08-28: admin key → level 0, tier privileged)
 
 ## P2-5 frontend level signal
 
@@ -757,8 +757,8 @@ Tests
 Acceptance
 
 - [x] `cd frontend && yarn lint && yarn test && yarn build` — all green.
-- [ ] Anonymous load of the deployed frontend shows no staff panel; DevTools Network shows `/api/me` returning `level: 4`.
-- [ ] Staff login shows the same panels as before the PR.
+- [x] Anonymous load of the deployed frontend shows no staff panel; DevTools Network shows `/api/me` returning `level: 4`. (2026-08-28: `/api/me` anonymous returns level 4; deployed bundle `main-AAKEFNZ6.js` carries the `/me` fetch, timeout and fallback. Rendered check not done: both browser MCPs failed to load the AFD host)
+- [ ] Staff login shows the same panels as before the PR. Needs a staff login; not done.
 
 ---
 
