@@ -120,9 +120,8 @@ param minioBucketName string = 'eagle-demi'
 @description('Key prefix within that bucket')
 param minioKeyPrefix string = ''
 
-@description('Break-glass sysadmin credential, INBOUND. This is what the extraction host presents as X-Api-Key when posting chunks, and the only credential the admin endpoints accept while the key registry is empty.')
-@secure()
-param adminApiKey string = ''
+@description('Key Vault URI of the break-glass sysadmin credential, INBOUND. This is what the extraction host presents as X-Api-Key when posting chunks, and the only credential the admin endpoints accept while the key registry is empty. Not the value: the app resolves it through a Key Vault reference.')
+param adminApiKeySecretUri string
 
 @description('OUTBOUND credential DEMI presents to docling-serve as X-Api-Key. Nothing inbound validates it. Not the extraction host\'s credential — that is adminApiKey.')
 @secure()
@@ -235,6 +234,10 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
   properties: {
     serverFarmId: empty(existingServerFarmId) ? appServicePlan!.id : existingServerFarmId
     virtualNetworkSubnetId: !empty(apiSubnetId) ? apiSubnetId : null
+    // Key Vault references resolve as the SYSTEM-assigned identity unless told otherwise, and this
+    // app has none — the secrets-read grant is on the user-assigned identity, so without this line
+    // ADMIN_API_KEY stays an unresolved literal and every admin call 401s.
+    keyVaultReferenceIdentity: identityId
     siteConfig: {
       linuxFxVersion: 'NODE|22'
       vnetRouteAllEnabled: !empty(apiSubnetId)
@@ -392,9 +395,11 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         // Credentials for the write paths. Supplied per-environment from the live app settings and
         // never committed — a template carrying real values would put them in deployment history.
         // ADMIN_API_KEY -- not DOCLING_API_KEY -- is what the admin endpoints check.
+        //
+        // Resolves through the UAMI (keyVaultReferenceIdentity) over the vault private endpoint; see the PE note below.
         {
           name: 'ADMIN_API_KEY'
-          value: adminApiKey
+          value: '@Microsoft.KeyVault(SecretUri=${adminApiKeySecretUri})'
         }
         {
           name: 'DOCLING_API_KEY'
