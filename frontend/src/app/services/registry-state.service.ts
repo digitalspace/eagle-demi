@@ -53,6 +53,10 @@ export class RegistryStateService {
   isUnauthorized = signal<boolean>(false);
   userName = signal<string>('');
 
+  // Visibility level from `GET /api/me`: 0 most privileged, 4 anonymous. Defaults to 4 so nothing
+  // renders privileged UI while the request is in flight.
+  visLevel = signal<number>(4);
+
   /**
    * THE one answer to "may this person see staff-only things".
    *
@@ -247,7 +251,9 @@ export class RegistryStateService {
     let selectedRegionGeom: any = null;
     if (region !== 'all') {
       const geo = this.regionalBoundariesGeoJSON();
-      if (geo) {
+      // Shape-checked, not just truthy: a boundary answer that is not a FeatureCollection would
+      // otherwise throw out of the computed and blank the project list.
+      if (geo?.features) {
         const feature = geo.features.find((f: any) =>
           (f.properties?.regionName || '').toLowerCase() === region.toLowerCase()
         );
@@ -678,12 +684,30 @@ export class RegistryStateService {
   }
 
   // Resolve the authReady gate and kick off the initial data load exactly once
-  private authSettled() {
-    if (this.resolveAuthReady) {
-      this.resolveAuthReady();
-      this.resolveAuthReady = null as any;
-      this.loadData();
+  private async authSettled() {
+    const resolve = this.resolveAuthReady;
+    if (!resolve) return;
+    this.resolveAuthReady = null as any;
+    // Route guards read isStaff() the moment this gate opens, so the level has to land first.
+    await this.loadVisLevel();
+    resolve();
+    this.loadData();
+  }
+
+  /** Ask the API what this caller may see, and derive `isUnauthorized` from the answer. */
+  private async loadVisLevel(): Promise<void> {
+    try {
+      const res = await fetch(`${this.getBasePath()}/me`);
+      if (res.ok) {
+        const me = await res.json();
+        if (typeof me?.level === 'number') this.visLevel.set(me.level);
+      }
+    } catch {
+      // Unreachable or unparseable /api/me leaves level 4 in place, which denies rather than grants.
     }
+    // Anonymous is level 4 too, so this stays conjoined with isAuthenticated — otherwise every
+    // public visitor gets the "your account has no staff access" copy.
+    this.isUnauthorized.set(this.isAuthenticated() && this.visLevel() > 2);
   }
 
   // Keycloak initialization Flow
@@ -752,16 +776,6 @@ export class RegistryStateService {
           localStorage.setItem('isLoggedIn', 'true');
           this.isAuthenticated.set(true);
           this.userName.set(this.keycloak.tokenParsed?.preferred_username || this.keycloak.tokenParsed?.name || 'Staff User');
-          
-          const roles = this.keycloak.tokenParsed?.realm_access?.roles || [];
-          const hasPermission = roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
-          
-          if (hasPermission) {
-            this.isUnauthorized.set(false);
-          } else {
-            console.warn('[Keycloak] User authenticated but lacks required admin/staff roles:', roles);
-            this.isUnauthorized.set(true);
-          }
         } else {
           sessionStorage.removeItem('isLoggedIn');
           localStorage.removeItem('isLoggedIn');
@@ -1716,7 +1730,7 @@ export class RegistryStateService {
 
   private isProjectInRegion(p: Project, regionName: string): boolean {
     const geo = this.regionalBoundariesGeoJSON();
-    if (!geo || !p.centroid) return true;
+    if (!geo?.features || !p.centroid) return true;
     
     const feature = geo.features.find((f: any) => 
       (f.properties?.regionName || '').toLowerCase() === regionName.toLowerCase()
@@ -1770,11 +1784,13 @@ export class RegistryStateService {
    * analyzer in that path to ask — and neither do fields the frontend substituted its own text
    * into, so client marking stays the answer for both.
    */
-  highlightField(serverMarkup: string | undefined | null, text: string, query: string): string {
+  highlightField(serverMarkup: string | undefined | null, text: string | undefined, query: string): string {
     return serverMarkup || this.highlightText(text, query);
   }
 
-  highlightText(text: string, query: string): string {
+  // `text` is optional because a redacted field arrives undefined; the empty-string guard below
+  // already covered it at runtime.
+  highlightText(text: string | undefined, query: string): string {
     if (!text) return '';
     
     if (text.includes('<mark>') || text.includes('</mark>') || text.includes('<MARK>') || text.includes('</MARK>')) {
@@ -1862,6 +1878,7 @@ export class RegistryStateService {
 
     this.isAuthenticated.set(false);
     this.isUnauthorized.set(false);
+    this.visLevel.set(4);
     this.userName.set('');
     this.resetSelection();
   }

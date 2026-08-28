@@ -537,7 +537,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   selectProject(proj: Project) {
     this.service.selectProject(proj);
 
-    if (this.map) {
+    if (this.map && proj.centroid) {
       const [lng, lat] = proj.centroid;
       this.map.setView([lat, lng], 8, { animate: true });
 
@@ -844,7 +844,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     }, 200);
   }
 
-  highlightText(text: string, query: string): string {
+  highlightText(text: string | undefined, query: string): string {
     return this.service.highlightText(text, query);
   }
 

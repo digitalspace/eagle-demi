@@ -3,17 +3,18 @@ export interface Project {
   id: string | number;
   trackProjectId?: number | string;
   name: string;
-  sector: string;
-  status: string;
-  legacyEagleId: string;
-  centroid: [number, number]; // [longitude, latitude]
+  // Optional because the API redacts by caller level: only `id` and `name` survive every level.
+  sector?: string;
+  status?: string;
+  legacyEagleId?: string;
+  centroid?: [number, number]; // [longitude, latitude]
   gatingState: 'admitted' | 'staged';
-  region: string;
+  region?: string;
   regionalDistrict?: string;
   municipality?: string;
   electoralDistrict?: string;
-  description: string;
-  proponent: string;
+  description?: string;
+  proponent?: string;
   /**
    * Pre-escaped `<mark>` markup from AI Search, per field — what the index's own analyzer matched,
    * which is not the same as what a regex in the browser can find. Absent on the Cosmos fallback
@@ -38,10 +39,10 @@ export interface Document {
   id: string | number;
   displayName: string;
   documentFileName: string;
-  documentType: string;
-  orcsCode: string;
+  documentType?: string;
+  orcsCode?: string;
   projectId: string | number;
-  projectName: string;
+  projectName?: string;
   gatingState: 'admitted' | 'staged';
   textSnippet: string;
   /** See `Project.highlighted`. Empty when the frontend substituted its own text for the field. */

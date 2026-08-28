@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { RegistryStateService } from './registry-state.service';
+import { Project } from '../models/registry.models';
 
 // Any payload loadData() accepts. At module scope because the default stub below needs it before
 // any individual spec runs.
@@ -38,7 +39,9 @@ function stubFetch(): jasmine.Spy {
 // error banner it just asserted. It also keeps `expect(sharedFetchSpy).not.toHaveBeenCalled()`
 // meaning "this spec issued no request" rather than "nothing has ever fetched", which is the
 // claim those specs are actually making.
-async function settleInitialLoad(): Promise<void> {
+async function settleInitialLoad(service: RegistryStateService): Promise<void> {
+  // authReady opens only once /api/me has answered, which is what loadData() waits behind.
+  await service.authReady;
   await new Promise(resolve => setTimeout(resolve, 0));
   sharedFetchSpy.calls.reset();
 }
@@ -59,7 +62,7 @@ describe('RegistryStateService', () => {
       ]
     });
     service = TestBed.inject(RegistryStateService);
-    await settleInitialLoad();
+    await settleInitialLoad(service);
   });
 
   it('should be created', () => {
@@ -532,7 +535,7 @@ describe('RegistryStateService — isStaff', () => {
     });
     service = TestBed.inject(RegistryStateService);
     service.authEnabled.set(true);
-    await settleInitialLoad();
+    await settleInitialLoad(service);
   });
 
   it('is false for an anonymous visitor', () => {
@@ -597,7 +600,7 @@ describe('RegistryStateService — loadSummary gating', () => {
     });
     service = TestBed.inject(RegistryStateService);
     service.authEnabled.set(true);
-    await settleInitialLoad();
+    await settleInitialLoad(service);
   });
 
   it('issues NO request when the user is not staff', async () => {
@@ -662,5 +665,76 @@ describe('RegistryStateService — loadSummary gating', () => {
 
     await expectAsync(service.getDownloadUrl('doc1', 'proj1'))
       .toBeRejectedWithError('You do not have permission to download this document.');
+  });
+});
+
+/**
+ * `GET /api/me` is the only source of "what may this caller see". The browser used to read
+ * sysadmin / staff / demi-admin off the token itself, which meant the two could disagree with the
+ * API that actually redacts the data.
+ */
+describe('RegistryStateService — visLevel', () => {
+  // Answers /api/me with the current `meLevel`; every other URL gets the ordinary loadData() stub.
+  // `meLevel` is a closure so one spec can answer twice without a second spyOn.
+  let meLevel: number | undefined;
+
+  function makeService(): RegistryStateService {
+    sharedFetchSpy = spyOn(window, 'fetch').and.callFake((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : input.url);
+      if (url.endsWith('/me')) {
+        if (meLevel === undefined) return new Promise<Response>(() => { /* stays in flight */ });
+        return Promise.resolve(okResponse({ roles: [], level: meLevel, tier: 'public' }));
+      }
+      return Promise.resolve(okResponse());
+    });
+
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), RegistryStateService]
+    });
+    const service = TestBed.inject(RegistryStateService);
+    service.authEnabled.set(true);
+    return service;
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    meLevel = undefined;
+  });
+
+  it('visLevel defaults to 4 before /api/me answers', () => {
+    const service = makeService();
+
+    expect(service.visLevel()).toBe(4);
+  });
+
+  it('visLevel 2 clears isUnauthorized', async () => {
+    meLevel = 2;
+    const service = makeService();
+    service.isAuthenticated.set(true);
+
+    await (service as any).loadVisLevel();
+
+    expect(service.visLevel()).toBe(2);
+    expect(service.isUnauthorized()).toBe(false);
+
+    meLevel = 3;
+    await (service as any).loadVisLevel();
+
+    expect(service.visLevel()).toBe(3);
+    expect(service.isUnauthorized()).toBe(true);
+  });
+
+  it('a project row with no sector renders', async () => {
+    meLevel = 4;
+    const service = makeService();
+    await settleInitialLoad(service);
+
+    // What level 4 gets back: the two fields no redactor can remove.
+    const redacted = { id: 'p1', name: 'Redacted Project', gatingState: 'admitted' } as Project;
+    service.projects.set([redacted]);
+    service.debouncedSearchQuery.set('redacted');
+
+    expect(() => service.filteredProjects()).not.toThrow();
+    expect(service.filteredProjects()).toEqual([redacted]);
   });
 });
