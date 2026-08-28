@@ -6,86 +6,97 @@ on 2026-08-26. Audited here against `aea2a0c` on 2026-08-26. Work items: `TODO-r
 
 Section 1 is the model as accepted. Section 2 is what the audit changed and why. Section 3 lists
 questions only the EAO can answer. Section 4 records claims in the source document that were wrong
-at `aea2a0c`, so nobody re-verifies them.
+at `aea2a0c`, so nobody re-verifies them. Section 5 records what the EAO sharing model changes in
+sections 1-3.
 
 Reference page: `eagle-demi.wiki/Attribute-Level-Access.md` (level table, catalog format, registered entities, `/api/me`).
 
 ## 1. Model
 
-Three planes. Two exist and stay as they are; one is new.
+The EAO sharing model (business text 2026-08-28) maps onto the two planes DEMI already has.
 
-| Plane | Question | Mechanism | Status |
+| Plane | Question | Mechanism | Carries |
 |---|---|---|---|
-| Row visibility | which records | `read[]` + `readClause` / `canRead` / OData `filterFor` | unchanged |
-| Project scope | which partitions | `project:<id>` roles, `scopeClause` | unchanged |
-| Field visibility | which attributes of a visible record | level 0-4, field catalog, one redactor | new |
-| Write rights | can I mutate | `WRITE_ROLES` | unchanged |
+| Row | which records | `read[]` + `readClause` / `canRead` / `filterFor`, AND `project:<id>` scope | ladder 1-4 |
+| Field | which attributes of a visible record | catalog + dial + one redactor | dials 1-4 |
+| Write | may I mutate | `WRITE_ROLES`, unchanged | — |
 
-**Level.** Every caller gets one integer from their roles: 0 most privileged, 4 anonymous public.
-Derived in `src/vis/level.js` from a `ROLE_LEVELS` map. Unknown role gives 4. Roles are the
-portable contract; the IdP (Keycloak today, Entra later) only changes the claim path in `rolesFor()`.
-Levels are nested (a lower number sees everything a higher one sees) and named by the EAO
-(decided 2026-08-28):
+**One audience scale.** 1 narrowest, 4 widest, on both planes: "this field is public" and "this
+record is public" are the same integer. 0 is not a caller level. It is the sealed compartment
+below, and the level `systemAccess()` carries for internal jobs. `visible(level, effVis)` in
+`src/vis/redact.js` stays the only comparison.
 
-| Level | Name | Who | Source of the claim |
-|---|---|---|---|
-| 0 | Sensitive | `sysadmin` | realm role |
-| 1 | Team only | members of the record's project team | `project:<id>` role on the row's project |
-| 2 | All EAO | `staff` | realm role |
-| 3 | All IDIR | any IDIR login | `identity_provider` claim (`idir`) |
-| 4 | Public | anonymous | none |
+**Ladder (row plane).** `read[]` holds ladder tokens — role types, never ids — cumulative, so a
+record at level N carries the tokens of every level ≤ N.
 
-**Group (compartment).** Inside a level, a record field may additionally be cleared for named
-groups ("Special: Selected Credentials" on the EAO diagram; e.g. an Indigenous-relations group at
-level 0). A group is a lateral tag, not a level: a dial value is either an integer (`{ cacEmail: 2 }`)
-or `{ level, groups }` (`{ cacEmail: { level: 0, groups: ['indigenous'] } }`). The field is visible
-only when `caller.level <= level` AND (`groups` is empty OR the caller belongs to one of them).
-Membership comes from the IdP group claim (Keycloak groups now, Entra groups later), never from
-`read[]`. A caller at level 0 who is not in the group does not see the field: groups compartment,
-they do not rank. Groups are data (created in the IdP, referenced by name in dials); levels are
-code. Ships in Phase 3 with the dials.
+| Level | Name | `read[]` | Matched by | Claim |
+|---|---|---|---|---|
+| 1 | Team only | `['team']` | `team` AND the row's project in the caller's scope | any `project:<id>` role |
+| 2 | All EAO | `+ 'staff'` | `staff` | realm role |
+| 3 | All IDIR | `+ 'idir'` | `idir` | `identity_provider` claim |
+| 4 | Public | `+ 'public'` | anyone | none |
 
-**Catalog.** Every field of every entity is classified in code under `src/vis/catalog/<entity>.js`
-with `defaultVis` and `maxVis`. `maxVis` is the ceiling a field may ever reach. The catalog is
-security policy: reviewed in diffs, tested as data, never read from Cosmos.
+`rolesFor` (`access-sql.js:76`) injects `team` when the token carries any `project:` role and
+`idir` when `identity_provider === 'idir'`. It still strips `project:*` itself: which projects is
+the scope plane's job, and `scopeClause` / `canRead` already AND it in. Team membership is
+therefore resolved per row by the scope clause, never by `ROLE_LEVELS`. `isPublished` still
+mirrors `read.includes('public')`. A record's level is derived, not stored: `levelOfRead(read)` =
+widest token present, 1 when none.
 
-**Dial.** A record may carry a sparse `vis` map (`{ eacExpires: 3 }`). Effective visibility is the
-dial clamped to `[0, maxVis]`, else `defaultVis`. Dials may restrict below `defaultVis`. Invalid
-dial falls back to `defaultVis`. Dials ship in Phase 3; the engine that reads them ships in Phase 1.
+**Superuser.** `SECURE_ROLES` (the privileged short-circuit) is `sysadmin`, `demi-admin`,
+`demi-service-read`, `demi-service-write`. `staff` is NOT in it — that is what makes level 1 real.
+`sysadmin` is superuser on the ladder (levels 1-4) and has no access to level 0. `ADMIN_ROLES` and
+`WRITE_ROLES` are unchanged: staff writes and administers exactly as before.
 
-**Predicate.** Named pure functions `(record) => boolean` in `src/vis/predicates.js`,
-referenced by name from the catalog (`when: 'cacPublished'`). When no dial is set, a true predicate lifts the
-field's baseline from `defaultVis` to `maxVis`; false or missing leaves it at `defaultVis`. A set dial
-overrides the predicate either way, so a project dialled to 0 stays hidden while its CAC is published.
-So `cacEmail: { defaultVis: 2, maxVis: 4, when: 'cacPublished' }` is always visible at level 2
-and below, and public only while the CAC is published. Predicates never narrow; conditional restriction is the dial's job.
+**Back-compat.** Legacy `read[]` values (`['sysadmin','staff','demi-admin']`, with `'public'` when
+published) already contain `staff`, so they read as level 2 — today's meaning. Admin role names in
+`read[]` are ignored by `levelOfRead`; they only ever matched callers who short-circuit anyway. No
+stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` verbatim
+(`resolveProjectAcl`), so pushed records stay level 2 or 4.
 
-**Core rule.** Per field, per record: `effVis = clamp(dial) ?? (predicate true ? maxVis : defaultVis)`;
-`visible = level <= effVis`. A set dial always wins; a predicate only moves the absent-dial baseline. Only passing fields appear in the response.
+**Default on admission is level 1.** Every DEMI-native write site that used to default to
+`[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.
 
-**Fail closed.** Unknown role gives level 4. Missing `access.level` is treated as 4. Field not in
-catalog is removed. Unknown entity throws. Unknown or throwing predicate hides the field. Dial out
-of range clamps toward restriction. A merged field without a catalog entry fails CI.
+**Widening is an act.** `PUT /api/{projects,documents}/:id/level` with `{ level, confirm }`,
+`requireWrite`, audited as `record.widen` / `record.narrow` through `auditEvent`. Level 4 requires
+`confirm: true` and answers 400 without it. Nothing widens automatically — no job, no push, no
+merge raises a record's level. A document still cannot out-rank its project; a project's change
+cascades to its documents as it does today.
 
-**Write side.** Content writes stay `WRITE_ROLES`. Changing a dial needs `sysadmin` via
-`requireRole('sysadmin')` (`requireAdmin` admits `staff`; no separate classify role, decided
-2026-08-28), goes through one endpoint `PATCH /api/projects/:id/visibility`, is validated
-(400 on uncatalogued field or out-of-range level) and audited through the existing
-`src/utils/audit.js` `auditEvent`. Ordinary POST and PUT strip `vis` from bodies.
+**Field dials refine WITHIN a level.** A dial is an integer 1-4 (0 = never), clamped to
+`[0, maxVis]`, else `defaultVis`. **Invariant: a field is never wider than its record** —
+`effVis = min(effVis, levelOfRead(doc.read))`, applied in `redactForAccess` where the dial is read,
+and validated again by `PATCH /api/projects/:id/visibility` (400 on a dial above the record's
+level). Narrowing a record therefore narrows its fields for free; widening a record never widens a
+field.
 
-**Tests.** Four ratchets: coverage (every entity response site redacts), completeness (every field
-the merge and seed emit is in the catalog), search drift (index `select` lists and `retrievable`
-flags are a subset of catalog fields with `maxVis` 4), and a tripwire integration test asserting
-anonymous responses never contain named restricted fields.
+**Level 0 — sealed compartment.** Outside the ladder. Sealed records live in their own container
+`sealed`, client-side encrypted with a DEK wrapped by a Key Vault key in `demi-kv-<env>`; the
+plaintext never reaches Cosmos, so the data layer holds ciphertext only. `sysadmin` is excluded by
+role and by key: the compartment is readable only by `compliance`, and no dial, credential or
+widening endpoint reaches it. A record leaves level 0 only through `POST /api/sealed/:id/release`
+by `compliance` with `confirm: true`: it is decrypted, written to the ordinary container at level 1
+(`read: ['team']`), the sealed row is deleted, and `sealed.release` is audited. There is no path
+back in through the sharing interface.
 
-**Frontend.** `GET /api/me` returns `{ roles, level, tier, privileged }` from `resolveAccess`.
-`privileged` is answered server-side because it is not derivable from `tier`: a staff credential
-scoped to a project is tier `scoped`. One template per screen; sections render on field presence,
-never on role.
+**Selected Credentials.** A credential grants a named party sight of specified records at levels
+1-3 without changing any record's level and without changing anyone else's access. Stored in
+container `credentials`, partition `/party.id`:
+`{ id, party: { type: 'user'|'group'|'apikey', id }, scope: { type: 'document'|'project', ids[] },
+levels: [1..3], start, end, grantedBy, grantedAt, revokedAt, batchId, note }`.
+Loaded once per request by party (`sub`, a `groups` entry, or `req.user.keyId`), expired and
+revoked rows filtered in JS. Evaluated as one extra OR arm in `readClause`, `canRead` and
+`filterFor`: `id ∈ scope.ids AND read[] carries one of levels`. `levels` reuses the ladder tokens,
+so no new SQL. Grant, revoke and bulk revoke (by `batchId`, party or project) go through
+`auditEvent`. Credentials never touch the field plane — the holder's own level still governs which
+attributes they see — and level 4 needs none.
 
-**Identity.** Keycloak roles first. Entra later: app roles with the same names, second issuer in
-`src/helpers/auth.js` selected atomically as `{ issuer, jwks, audience }` from the token's `iss`
-before signature verification. The access model does not change.
+**Fail closed.** Unknown role → level 4. No ladder token → the record reads as level 1. Missing
+`access.level` → 4. Uncatalogued field removed. Unknown entity throws. Dial out of range →
+`defaultVis`.
+
+**Identity.** Keycloak now, Entra later; role names are the contract, the issuer only changes the
+claim path in `rolesFor` and `src/helpers/auth.js`. DEMI creates no realm roles of its own.
 
 ## 2. Corrections to the source design
 
@@ -134,7 +145,8 @@ Each item below overrides the corresponding section of the source document.
    called first so an unknown entity throws for every caller. This only holds because predicates
    widen rather than gate (Section 1): with the source semantics (predicate ANDed with level) a
    false `cacPublished` would hide `cacEmail` from level 0, and the identity property would need
-   a bypass branch. Level 0 sees every field because `0 <= effVis` for every field.
+   a bypass branch. No caller is level 0 — only `systemAccess()` carries it (§5 item 3) — so `maxVis: 0` fields
+   reach no response.
 5. **`read[]` does not carry levels.** The source design put `demi-vis-*` into `read[]` for
    whole-record restriction. `readClause` and `canRead` return `true` for any `SECURE_ROLES`
    holder before reading `read[]` (`src/helpers/access-sql.js:235,373`), `staff` is in
@@ -180,16 +192,25 @@ Each item below overrides the corresponding section of the source document.
 
 ## 3. Questions for the EAO
 
-1. Answered 2026-08-28 (Daniel, EAO diagram): levels are nested containers 0 Sensitive, 1 Team
-   only, 2 All EAO, 3 All IDIR, 4 Public; named groups inside a level are lateral compartments
-   ("Special: Selected Credentials"). Model in §1. Open detail: whether a level-0 caller outside a
-   group sees group-tagged fields; §1 says no (compartment) until told otherwise.
+1. Answered 2026-08-28: the EAO sharing model — ladder 1-4 on the row plane, level 0 a sealed
+   compartment, Selected Credentials a time-bound lane. Model in §1, deltas in §5.
 2. Answered 2026-08-28 (Daniel): project lead and EPD names and emails are public, because
    `eagle-public` already shows them. They stay `defaultVis: 4`; no exception list.
 3. Dropped 2026-08-28: `forMAEE` is a column of the source spreadsheet that nothing in DEMI
    reads. No catalog entry derives from it.
 4. Moot 2026-08-28: `project_tracking_number` (`trackProjectId`) and `epic_guid` (`eagleId`) are
    in today's anonymous response and catalogued `4/4`. They stay public.
+
+### 2026-08-28b — open questions
+
+1. **Level 1 for non-project records.** The text says "the project team… or the business unit that created the record". DEMI's only team axis is `project:<id>` (the partition key). What is a business unit's identifier, and does a record belong to exactly one? Without an answer, business-unit records can only be admitted at level 2.
+2. **Who issues `project:<id>` roles, and for which projects?** Level 1 is unenforceable until every EAO user carries them. Keycloak group mapper, Track project membership, or hand-granted? This blocks P3-3 merging.
+3. **Level 0 role holders.** DEMI creates no realm roles. Is the C&E compartment exactly the existing `compliance` role (today only grantable on an API key, `src/controllers/nosql/api-key.js:31`)? If so it must be created as a realm role and granted to named humans — by whom?
+4. **Who is "the accountable authority" for a level-0 release**, and does the release need two people, or is one `compliance` credential plus a recorded authority reference enough?
+5. **Do external credential parties get Keycloak identities?** First Nations, proponents and local governments must be `user`, `group` or `apikey` parties. If they log in, through which IdP (BCeID? IDIR guest?) — that also decides whether they land on level 3 by accident, since `identity_provider` is the level-3 test.
+6. **Credential defaults**: maximum `end` (90 days? one assessment?) and whether an expiring credential needs a notification or simply lapses.
+7. **Does a widening need a recorded reason?** The audit row carries actor, time, from and to. If policy needs the authority under which a record was published (an EA process gate, a records decision), it must be a required body field — say so before P3-4 ships, since backfilling it is a schema change.
+8. **May a record move DOWN the ladder after level 4?** The code can narrow, and the endpoint allows it today. Business must say whether unpublishing a published record is permitted and by whom.
 
 ## 4. Source-document claims that were wrong at `aea2a0c`
 
@@ -209,3 +230,60 @@ Each item below overrides the corresponding section of the source document.
 - ADR-004 is `eagle-demi.wiki/ADR-004-Read-ACL-Authorization-Model.md`.
 - `boundaries.js` was deliberately removed from the coverage test's `UNGATED` list; `config.js` is
   in it.
+
+## 5. Changes 2026-08-28 from the EAO sharing model
+
+The business text (levels 1-4 ladder, level 0 compartment, Selected Credentials) supersedes parts
+of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
+
+### Superseded
+
+1. **Levels are not one nested ladder that `sysadmin` tops.** §1's table put `sysadmin` at 0 and
+   called 0 "Sensitive". Level 0 is a compartment outside the ladder; `sysadmin` is superuser on
+   levels 1-4 only. `ROLE_LEVELS` (`src/vis/level.js:10`): `sysadmin: 0 → 1`, `demi-admin: 0 → 1`;
+   `staff: 2`, `demi-service-read/write: 2`, `compliance: 2`, `public: 4` unchanged; add `idir: 3`.
+   There is no `team` entry — team membership is a row-plane fact resolved per record by
+   `scopeClause`/`canRead`, not a role level. `systemAccess()` keeps `level: 0`; it is now the only
+   level-0 identity.
+2. **"Group (compartment)" and dial values of shape `{ level, groups }` are deleted.** The EAO
+   "Special: Selected Credentials" lane is not a tag on a field — it is a time-bound grant to a
+   named party over named records, on the ROW plane. See §1 and Phase 3 unit P3-6. Dials stay
+   integers; `src/vis/groups.js` is never created.
+3. **§2 item 4, "level 0 sees every field", no longer holds.** No caller is level 0, so `maxVis: 0`
+   now means what it says: `read`, `ownRead`, `vis`, `s3Key`, `sources` and the Cosmos bookkeeping
+   fields are visible to nobody through a response, `sysadmin` included. The redactor loop is
+   unchanged — still no `if (level === 0) return record`, still one comparison. The U9 and P2-1
+   deviation notes ("level 0 now sees `s3Key`/`read`/`sources.track`") are void.
+4. **§2 item 5 is narrowed, not dropped.** `read[]` still carries no FIELD levels (`demi-vis-*`
+   stays dead). It does now carry the four ladder tokens `team|staff|idir|public`, which is the row
+   plane it always encoded. The reason item 5 gave — `readClause` short-circuits for
+   `SECURE_ROLES`, of which `staff` was a member — is fixed rather than worked around: `staff`
+   leaves `SECURE_ROLES` (`src/helpers/access-sql.js:32`).
+5. **§2 item 12's role note.** `SECURE_ROLES` drops `staff` and becomes
+   `['sysadmin','demi-admin','demi-service-read','demi-service-write']`. `ADMIN_ROLES` (`:44`) and
+   `WRITE_ROLES` (`:58`) are untouched: staff's write and admin rights do not move. Every write
+   site that spelled an ACL as `[...SECURE_ROLES]` must convert to `readForLevel()` in the same
+   commit (`document.js:47,363,635,852`; `project.js:227-228`) or newly private rows would lose
+   their `staff` token and read as level 1.
+6. **§3 question 1's answer is replaced.** "Nested levels 0-4 with lateral groups inside a level" is
+   wrong on both halves. Model in §1.
+7. **Files still carrying the old reading, to update with the code:**
+   `TODO-rbac.md:35` ("Levels 1 and 3 get a role when EAO question 1 is answered") → level 3 is the
+   `idir` claim, level 1 is project scope, neither is a new realm role;
+   `src/vis/level.js:6-8` (header comment) → same;
+   `test/vis/level.test.js:48` case `levels 1 and 3 have no role until EAO question 1 is answered`
+   → replace with `sysadmin is level 1, not 0` and `an IDIR login is level 3`;
+   `test/vis/redact-matrix.test.js:179` comment "a lateral clearance set later changes one
+   function" → the ratchet stays, the justification becomes the record-level clamp.
+
+### Still valid
+
+- §2 items 1, 2, 3, 6, 7, 8, 9, 10, 13, 14 stand as written.
+- §2 item 11 stands: `visible()` is the only scalar comparison. The record-level clamp is a
+  `Math.min`, not a second comparison.
+- Everything shipped in Phases 0-2 stands: catalogs, redactor, `selectFor`, PUT hidden-key guard,
+  search drift ratchets, query-param gate, `/api/me`, frontend `visLevel`. Two consequences of
+  item 1 above: `selectFor(entity, access)` returns `'*'` only for `systemAccess()` now, and the
+  frontend must gate on `level <= 2` rather than on `privileged`, which goes false for staff
+  (`frontend/src/app/services/registry-state.service.ts`, P2-5).
+- §3 questions 2, 3, 4 stay closed. New questions are in §3 under 2026-08-28b.

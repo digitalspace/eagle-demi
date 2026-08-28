@@ -45,7 +45,7 @@ test('levelFromRoles', async (t) => {
     assert.strictEqual(ROLE_LEVELS.compliance, 2);
   });
 
-  await t.test('levels 1 and 3 have no role until EAO question 1 is answered', () => {
+  await t.test('no role maps to level 1 or 3 before Phase 3', () => {
     assert.deepStrictEqual(Object.values(ROLE_LEVELS).filter(l => l === 1), []);
     assert.deepStrictEqual(Object.values(ROLE_LEVELS).filter(l => l === 3), []);
   });
