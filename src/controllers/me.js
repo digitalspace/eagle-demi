@@ -9,9 +9,9 @@ const { resolveAccess, isPrivileged } = require('../helpers/access-sql');
 
 exports.getMe = (req, res) => {
   const access = resolveAccess(req);
-  // `privileged` is answered here rather than derived from `tier` by the caller: a staff key
-  // carrying `project:207` resolves to tier `scoped`, and every client that re-derived privilege
-  // from the tier string would call that staffer unauthorized.
+  // `privileged` is answered here rather than derived from `tier` by the caller: a key minted with
+  // a `projectScope` resolves to tier `scoped` whatever its roles, and a client re-deriving
+  // privilege from the tier string would call that caller unauthorized. It is false for `staff`.
   res.json({
     roles: access.roles,
     level: access.level,

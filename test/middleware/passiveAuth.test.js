@@ -121,8 +121,8 @@ test('Passive Auth Middleware Tests', async (t) => {
   });
 
   // The payoff, end to end: a populated req.user is only useful if it reaches the ACL. This is the
-  // seam that was dead — TIER.SCOPED was unreachable and `project:` roles did nothing.
-  await t.test('a non-privileged token reaches the ACL as TIER.SCOPED with a projectId clause', () => {
+  // seam that was dead — `project:` roles did nothing at all.
+  await t.test('a non-privileged token reaches the ACL as a team grant', () => {
     config.keycloakEnabled = true;
 
     t.mock.method(jwt, 'decode', () => ({ header: { kid: 'key-id' } }));
@@ -136,16 +136,18 @@ test('Passive Auth Middleware Tests', async (t) => {
     passiveAuthMiddleware(req, {}, () => {});
 
     const access = resolveAccess(req);
-    assert.strictEqual(access.tier, TIER.SCOPED);
-    assert.deepStrictEqual(access.projectScope, ['207']);
-    // `project:207` scopes the partition key; it must NOT leak into the role list.
+    // A realm project role GRANTS a team. It never restricts, so this caller is not scoped.
+    assert.strictEqual(access.tier, TIER.PUBLIC);
+    assert.strictEqual(access.projectScope, null);
+    assert.deepStrictEqual(access.teams, ['207']);
+    // `project:207` is the team dimension; it must NOT leak into the role list.
     assert.ok(access.roles.includes('compliance'));
     assert.ok(!access.roles.some(r => r.startsWith('project:')));
 
     const { filter, empty } = filterFor(access);
     assert.strictEqual(empty, false);
     assert.match(filter, /read\/any\(r: search\.in\(r, 'public,compliance', ','\)\)/);
-    assert.match(filter, /search\.in\(projectId, '207', ','\)/);
+    assert.match(filter, / or \(read\/any\(r: r eq 'team'\) and search\.in\(projectId, '207', ','\)\)/);
   });
 
   await t.test('calls next() without user when Bearer token decoding fails', () => {

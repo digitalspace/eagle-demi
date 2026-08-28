@@ -7,10 +7,12 @@ const assert = require('node:assert');
 
 const documents = require('../../src/repositories/documents');
 const cosmos = require('../../src/db/cosmos-nosql');
-const { systemAccess, SECURE_ROLES } = require('../../src/helpers/access-sql');
+const { systemAccess } = require('../../src/helpers/access-sql');
 
-const PUBLIC_PROJECT = ['public', ...SECURE_ROLES];
-const PRIVATE_PROJECT = [...SECURE_ROLES];
+// The stored legacy ACLs, spelled out. Building them from a constant would pass against any value
+// of that constant, including one that no longer contains `staff`.
+const PUBLIC_PROJECT = ['public', 'sysadmin', 'staff', 'demi-admin'];
+const PRIVATE_PROJECT = ['sysadmin', 'staff', 'demi-admin'];
 
 /** Mock the partition read, capture the bulk write. Returns the operations the cascade planned. */
 function harness(tt, rows) {
@@ -72,10 +74,10 @@ test('setAclForProject', async (t) => {
     assert.strictEqual(opValue(cap.ops[0], '/isPublished'), false);
   });
 
-  await t.test('a document Eagle restricted to a project team is not opened to SECURE_ROLES',
+  await t.test('a document Eagle restricted to a project team is not opened to the project ACL',
     async (tt) => {
       // `project-team` is a real role the seed preserves verbatim from Eagle
-      // (`seed/transform.js`), and it is in neither SECURE_ROLES nor PUBLIC_ROLES.
+      // (`seed/transform.js`), and it is in neither the project's ACL nor PUBLIC_ROLES.
       const cap = harness(tt, [{ id: 'd1', read: ['project-team'] }]);
 
       await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
@@ -196,7 +198,7 @@ test('setPublished moves ownRead with it', async (t) => {
       return {};
     });
 
-    await documents.setPublished('d1', '207', false, SECURE_ROLES);
+    await documents.setPublished('d1', '207', false, PRIVATE_PROJECT);
 
     const read = ops.find(o => o.path === '/read').value;
     const ownRead = ops.find(o => o.path === '/ownRead').value;
@@ -211,7 +213,7 @@ test('setPublished moves ownRead with it', async (t) => {
       return {};
     });
 
-    await documents.setPublished('d1', '207', true, SECURE_ROLES);
+    await documents.setPublished('d1', '207', true, PRIVATE_PROJECT);
 
     const ownRead = ops.find(o => o.path === '/ownRead').value;
     assert.ok(ownRead.includes('public'));

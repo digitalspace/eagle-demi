@@ -3,8 +3,7 @@
 /**
  * The document half of the field redactor: which attributes of a visible document leave, and which
  * body keys may come back in. The row gate (`read[]`) decides which documents; this decides which
- * fields of one, and it is level-driven rather than a fixed strip — `publicView` withheld `s3Key`
- * from every caller, including the sysadmin who may see it.
+ * fields of one, and it is level-driven rather than a fixed strip.
  */
 
 process.env.NODE_ENV = 'test';
@@ -57,7 +56,7 @@ test('document field redaction', async (t) => {
     assert.strictEqual(res.body.isPublished, true, 'the mirror survives');
   });
 
-  await t.test('level 0 GET /api/documents/:id returns s3Key', async () => {
+  await t.test('a sysadmin GET /api/documents/:id returns the level-2 fields', async () => {
     // Proves the redactor is level-driven and not a strip: the same row, a different caller.
     t.mock.method(documents, 'getById', async () => structuredClone(STORED));
 
@@ -65,9 +64,12 @@ test('document field redaction', async (t) => {
     await documentController.getDocument(
       { params: { id: 'd1' }, query: {}, user: SYSADMIN }, res);
 
-    assert.strictEqual(res.body.s3Key, STORED.s3Key);
-    assert.deepStrictEqual(res.body.read, STORED.read);
-    assert.strictEqual(res.body._etag, STORED._etag);
+    assert.strictEqual(res.body._etag, STORED._etag, 'maxVis 2, and sysadmin is level 1');
+
+    // `s3Key` and `read` are `maxVis: 0`, and 0 is no longer a caller level — sysadmin is 1. They
+    // reach nobody through a response now, sysadmin included.
+    assert.strictEqual(res.body.s3Key, undefined);
+    assert.strictEqual(res.body.read, undefined);
   });
 
   await t.test('PUT /api/documents/:id rejects a hidden body key', async () => {
@@ -118,16 +120,20 @@ test('document field redaction', async (t) => {
   });
 
   await t.test('a round-tripped Cosmos bookkeeping key is not a hidden key', async () => {
-    // A level 0 caller GETs the whole row and PUTs it back. Those keys are dropped rather than
-    // refused, so the guard cannot 400 an otherwise ordinary edit.
+    // A caller GETs a row and PUTs back what it was given. Bookkeeping keys are dropped rather
+    // than refused, so the guard cannot 400 an otherwise ordinary edit.
     t.mock.method(documents, 'getById', async () => structuredClone(STORED));
     let saved;
     t.mock.method(documents, 'upsert', async (doc) => { saved = doc; return doc; });
 
     const res = mockRes();
+    // What a GET hands back: the `maxVis: 0` fields are not in it, so they cannot come back either.
+    const asReturned = structuredClone(STORED);
+    for (const hidden of ['s3Key', 'read', 'ownRead']) delete asReturned[hidden];
+
     await documentController.updateDocument({
       params: { id: 'd1' }, query: {}, user: SYSADMIN,
-      body: { ...structuredClone(STORED), _rid: 'abc', _ts: 1, displayName: 'Renamed' }
+      body: { ...asReturned, _rid: 'abc', _ts: 1, displayName: 'Renamed' }
     }, res);
 
     assert.strictEqual(res.statusCode, 200);

@@ -42,23 +42,39 @@ test('me controller', async (t) => {
   // `privileged` is the whole reason this field exists: a client that re-derived it from `tier`
   // gets the scoped staff row wrong, and that is a real credential shape (a staff key minted for
   // one project).
-  await t.test('privileged answers staff/admin membership, not the tier', () => {
-    assert.strictEqual(meFor(['staff']).privileged, true);
-    assert.strictEqual(meFor(['staff', 'project:207']).privileged, true);
+  await t.test('privileged answers the row-plane short-circuit, not the tier', () => {
     assert.strictEqual(meFor(['sysadmin']).privileged, true);
     assert.strictEqual(meFor(['demi-admin']).privileged, true);
 
+    // False for staff since `staff` left SECURE_ROLES. The frontend gates on `level <= 2`.
+    assert.strictEqual(meFor(['staff']).privileged, false);
+    assert.strictEqual(meFor(['staff', 'project:207']).privileged, false);
     assert.strictEqual(meFor(['compliance']).privileged, false);
     assert.strictEqual(meFor(['public']).privileged, false);
     assert.strictEqual(meFor(['project:207']).privileged, false);
   });
 
-  await t.test('a project-scoped staff caller is scoped AND privileged', () => {
+  await t.test('a staff caller holding a project role is level 2 and not scoped', () => {
+    // Team membership grants; it does not restrict. Only a key's own projectScope makes a caller
+    // scoped, and that is the shape below.
     assert.deepStrictEqual(meFor(['staff', 'project:207']), {
       roles: ['public', 'staff'],
       level: 2,
+      tier: 'public',
+      privileged: false
+    });
+  });
+
+  await t.test('a key minted with a projectScope is still scoped', () => {
+    const res = mockRes();
+    meController.getMe(
+      { user: { realm_access: { roles: ['staff'] }, projectScope: ['207'] } }, res);
+
+    assert.deepStrictEqual(res.body, {
+      roles: ['public', 'staff'],
+      level: 2,
       tier: 'scoped',
-      privileged: true
+      privileged: false
     });
   });
 

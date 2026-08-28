@@ -5,8 +5,8 @@
  *
  * Two ORTHOGONAL dimensions — this is the scaling decision, see the wiki's Architecture page:
  *
- *   1. WHAT KIND of access  -> `read[]` holds role TYPES only ('public', 'sysadmin',
- *      'staff', 'project-team'…). Bounded (~6 values) and indexed at /read/[]/?.
+ *   1. WHAT KIND of access  -> `read[]` holds role TYPES only — the ladder tokens
+ *      'team', 'staff', 'idir', 'public'. Bounded and indexed at /read/[]/?.
  *   2. WHICH PROJECTS       -> the partition key (/id on projects, /projectId elsewhere).
  *
  * Putting project identity into read[] instead would mean a user in 50 projects carrying 150
@@ -21,16 +21,58 @@ const { levelFromRoles } = require('../vis/level');
 const PUBLIC_ROLES = Object.freeze(['public']);
 
 /**
+ * The ladder's `read[]` vocabulary, one token per level (docs/rbac-architecture.md §1, "Ladder").
+ * Role TYPES, never ids: which projects a `team` row belongs to is the partition key's job.
+ */
+const LEVEL_TOKENS = Object.freeze({ 1: 'team', 2: 'staff', 3: 'idir', 4: 'public' });
+
+/**
+ * The `read[]` a row carries at `level`.
+ *
+ * Levels 2-4 nest, so staff reads every row at level 2 or above with one token. Level 1 shares
+ * NOTHING with them and is reached only through the team arm: a level-2 row carrying `team` would
+ * hand a team-only caller every All-EAO row of its own project.
+ */
+function readForLevel(level) {
+  if (!Number.isInteger(level) || !LEVEL_TOKENS[level]) {
+    throw new RangeError(`[access] ${level} is not a ladder level`);
+  }
+  if (level === 1) return [LEVEL_TOKENS[1]];
+  return [2, 3, 4].filter(l => l <= level).map(l => LEVEL_TOKENS[l]);
+}
+
+/**
+ * A row's level: the widest ladder token in its `read[]`, 1 when it carries none.
+ *
+ * Legacy ACLs (`['sysadmin','staff','demi-admin']`, plus `'public'` when published) therefore read
+ * as level 2 and 4 — today's meaning. Admin role names are ignored: they only ever matched callers
+ * that short-circuit anyway. No stored ACL is rewritten.
+ */
+function levelOfRead(read) {
+  const tokens = Array.isArray(read) ? read : [];
+  let level = 1;
+  for (const [ladder, token] of Object.entries(LEVEL_TOKENS)) {
+    if (tokens.includes(token) && Number(ladder) > level) level = Number(ladder);
+  }
+  return level;
+}
+
+/**
  * Roles that grant PRIVILEGED visibility — i.e. read everything, ACL predicate collapses to `true`.
  *
- * `demi-service-read` and `demi-service-write` are the machine tiers. Both read like staff; only
- * the second is in WRITE_ROLES. Adding them here rather than inventing a parallel mechanism means
- * no row's `read[]` array has to change — existing documents carry
- * ['public','sysadmin','staff','demi-admin'] and a service caller sees them because readClause
- * short-circuits for any privileged caller.
+ * `staff` is NOT here, and that absence is what makes level 1 real: staff short-circuiting the
+ * predicate meant no row could be narrower than "all of EAO". Staff's write and admin rights do not
+ * move — see ADMIN_ROLES and WRITE_ROLES — and it still reads every level-2 row through the `staff`
+ * token every legacy ACL already carries.
+ *
+ * `demi-service-read` and `demi-service-write` are the machine tiers. Both read everything; only
+ * the second is in WRITE_ROLES.
+ *
+ * This set carries the ROW-plane short-circuit meaning and nothing else. Who may hold a session is
+ * AUTHENTICATED_ROLES below.
  */
 const SECURE_ROLES = Object.freeze([
-  'sysadmin', 'staff', 'demi-admin', 'demi-service-read', 'demi-service-write'
+  'sysadmin', 'demi-admin', 'demi-service-read', 'demi-service-write'
 ]);
 
 /**
@@ -58,8 +100,21 @@ const ADMIN_ROLES = Object.freeze(['sysadmin', 'staff', 'demi-admin']);
 const WRITE_ROLES = Object.freeze([...ADMIN_ROLES, 'demi-service-write']);
 
 /**
- * Access tiers. 'scoped' is built now although no project-scoped role exists yet — the point
- * is that introducing one later is data, not a redesign.
+ * Roles permitted to HOLD A SESSION on the routes behind `middleware/auth.js`.
+ *
+ * A separate set from SECURE_ROLES on purpose: privilege on the row plane and the right to reach an
+ * authenticated route are different questions, and gating the second on the first would lock every
+ * `staff` caller out of the API the moment `staff` left SECURE_ROLES. SECURE_ROLES is in the union
+ * because `demi-service-read` is a read tier holding no write role.
+ *
+ * `compliance` is deliberately out: four routes sit behind that middleware with no second gate, and
+ * a compartment credential has no business there. The sealed routes mount their own chain.
+ */
+const AUTHENTICATED_ROLES = Object.freeze([...new Set([...SECURE_ROLES, ...WRITE_ROLES])]);
+
+/**
+ * Access tiers. 'scoped' comes from an API key's own `projectScope` and from nothing else — a realm
+ * `project:<id>` role grants a team instead, which is a different question. See `teamsFor`.
  */
 const TIER = {
   PRIVILEGED: 'privileged',
@@ -75,20 +130,31 @@ const TIER = {
  */
 function rolesFor(req) {
   const roles = new Set(PUBLIC_ROLES);
-  const tokenRoles = req && req.user && req.user.realm_access && req.user.realm_access.roles;
+  const user = req && req.user;
+  const tokenRoles = user && user.realm_access && user.realm_access.roles;
   if (Array.isArray(tokenRoles)) {
     for (const r of tokenRoles) {
-      // `project:*` roles are the OTHER dimension — they scope the partition key, not read[].
-      // Leaving them in would put project ids into the read[] IN list, which is exactly the
-      // conflation of the two dimensions this module exists to prevent.
+      // `project:*` roles are the OTHER dimension — they grant a team, not a role type. Leaving
+      // them in would put project ids into the read[] IN list, which is exactly the conflation of
+      // the two dimensions this module exists to prevent. Which projects is `teamsFor`'s job.
       if (r && !String(r).startsWith(PROJECT_ROLE_PREFIX)) roles.add(r);
     }
   }
+
+  // Level 3 is "any IDIR login", which arrives as a token claim rather than as a realm role.
+  // `team` is never added here: a caller carrying it would match every level-1 row of every project.
+  if (user && user.identity_provider === 'idir') roles.add(LEVEL_TOKENS[3]);
+
   return Array.from(roles);
 }
 
 function isPrivileged(roles) {
   return roles.some(r => SECURE_ROLES.includes(r));
+}
+
+/** May this role set hold a session on an authenticated route? See AUTHENTICATED_ROLES. */
+function isAuthenticatedRole(roles) {
+  return (roles || []).some(r => AUTHENTICATED_ROLES.includes(r));
 }
 
 /** Privileged for READS does not imply permitted to WRITE — see WRITE_ROLES. */
@@ -104,13 +170,13 @@ function canAdmin(roles) {
 /**
  * Resolve the full access context for a request.
  *
- * `projectScope` is the seam for project-scoped access. It is null today; when project
- * membership lands (a Keycloak claim, a membership container, or Track), populate it here and
- * every query inherits the restriction without changing.
+ * `teams` GRANTS (the team OR arm) and `projectScope` RESTRICTS (an AND on every read). Two
+ * different project facts that must not be merged — see `teamsFor`.
  */
 function resolveAccess(req) {
   const roles = rolesFor(req);
   const projectScope = projectScopeFor(req);
+  const teams = teamsFor(req);
   // Whether a credential was PRESENTED, which is not the same question as the tier: `req.user` is
   // set only by verified auth (an API key or a Keycloak token), and a `compliance` key resolves to
   // TIER.PUBLIC while still being an identified caller.
@@ -129,14 +195,14 @@ function resolveAccess(req) {
   // `canRead` both key privilege off the ROLES, never off the tier, so a SCOPED tier still lifts
   // the role predicate for a privileged role set.
   if (Array.isArray(projectScope)) {
-    return { tier: TIER.SCOPED, roles, projectScope, authenticated, level };
+    return { tier: TIER.SCOPED, roles, projectScope, teams, authenticated, level };
   }
 
   if (isPrivileged(roles)) {
-    return { tier: TIER.PRIVILEGED, roles, projectScope: null, authenticated, level };
+    return { tier: TIER.PRIVILEGED, roles, projectScope: null, teams, authenticated, level };
   }
 
-  return { tier: TIER.PUBLIC, roles, projectScope: null, authenticated, level };
+  return { tier: TIER.PUBLIC, roles, projectScope: null, teams, authenticated, level };
 }
 
 /**
@@ -147,8 +213,8 @@ function resolveAccess(req) {
  * distinguishes "scoped to the Ajax project" from a role type like `staff` or `compliance`.
  * Guessing would be a security bug in whichever direction it guessed. So scope is explicit:
  *
- *   project:207        -> scoped to project 207
- *   project:eagle-abc  -> scoped to an Eagle-only project
+ *   project:207        -> member of project 207's team
+ *   project:eagle-abc  -> member of an Eagle-only project's team
  *   staff, compliance  -> role types, land in read[] matching
  *
  * The value after the prefix is a CANONICAL project id (the partition key), not a name. That
@@ -159,31 +225,40 @@ function resolveAccess(req) {
 const PROJECT_ROLE_PREFIX = 'project:';
 
 /**
- * Project ids this caller is scoped to, or null for "not project-scoped".
+ * Project ids whose teams this caller belongs to, from its `project:<id>` realm roles. Empty when
+ * it holds none.
  *
- * An empty array is meaningful and distinct from null: scoped to nothing, which `scopeClause`
- * renders as `false`. That only arises from an explicit `projectScope: []`, never from a token
- * that simply carries no project roles — that caller is not scoped at all.
+ * A GRANT, read in exactly one place: the team OR arm of `readClause`/`canRead`. It never becomes a
+ * caller role and never narrows anything. ANDing it into every read instead — which is what
+ * `projectScopeFor` used to do with these same roles — dropped a staff caller holding `project:207`
+ * to that one project and hid every other level-2 row from it.
  */
-function projectScopeFor(req) {
-  const user = req && req.user;
-  if (!user) return null;
+function teamsFor(req) {
+  const tokenRoles = req && req.user && req.user.realm_access && req.user.realm_access.roles;
+  if (!Array.isArray(tokenRoles)) return [];
 
-  // An explicit projectScope on the verified token wins — the seam for a future claim that
-  // carries ids directly rather than encoding them in role names.
-  if (Array.isArray(user.projectScope)) return user.projectScope.map(String);
-
-  const tokenRoles = user.realm_access && user.realm_access.roles;
-  if (!Array.isArray(tokenRoles)) return null;
-
-  const scope = [];
+  const teams = [];
   for (const role of tokenRoles) {
     if (typeof role !== 'string' || !role.startsWith(PROJECT_ROLE_PREFIX)) continue;
     const id = role.slice(PROJECT_ROLE_PREFIX.length).trim();
-    if (id && !scope.includes(id)) scope.push(id);
+    if (id && !teams.includes(id)) teams.push(id);
   }
+  return teams;
+}
 
-  return scope.length > 0 ? scope : null;
+/**
+ * Project ids this caller is RESTRICTED to, or null for "not project-scoped".
+ *
+ * Only the explicit `projectScope` an API key was minted with (`controllers/nosql/api-key.js`). It
+ * is the key issuer's restriction, so it is ANDed into every read and sets TIER.SCOPED.
+ *
+ * An empty array is meaningful and distinct from null: scoped to nothing, which `scopeClause`
+ * renders as `false`.
+ */
+function projectScopeFor(req) {
+  const user = req && req.user;
+  if (!user || !Array.isArray(user.projectScope)) return null;
+  return user.projectScope.map(String);
 }
 
 /**
@@ -204,7 +279,14 @@ function projectScopeFor(req) {
  * NEVER derive this from a request. It takes no arguments for that reason.
  */
 function systemAccess() {
-  return { tier: TIER.PRIVILEGED, roles: [...PUBLIC_ROLES, ...SECURE_ROLES], projectScope: null, authenticated: true, level: 0 };
+  return {
+    tier: TIER.PRIVILEGED,
+    roles: [...PUBLIC_ROLES, ...SECURE_ROLES],
+    projectScope: null,
+    teams: [],
+    authenticated: true,
+    level: 0
+  };
 }
 
 /**
@@ -252,6 +334,8 @@ function pageSizeFor(access, raw) {
  * @param {string}   [opts.alias='c']       table alias in the query
  * @param {string}   [opts.prefix='@role']  parameter-name prefix, so multiple clauses in one
  *                                          query cannot collide
+ * @param {string[]} [opts.teams]           caller's team project ids — the level-1 OR arm
+ * @param {string}   [opts.partitionField='projectId']  field the team arm compares, 'id' on projects
  * @returns {{clause: string, params: {name: string, value: any}[]}}
  */
 function readClause(roles, opts = {}) {
@@ -264,35 +348,33 @@ function readClause(roles, opts = {}) {
 
   const effective = Array.from(new Set([...roles, ...PUBLIC_ROLES]));
   const names = effective.map((_, i) => `${prefix}${i}`);
+  const params = names.map((name, i) => ({ name, value: effective[i] }));
 
   // EXISTS with a subquery, NOT ARRAY_CONTAINS_ANY: the latter does not use the index, which
   // on the security path turns every gated read into a full scan. This form is one clause
   // regardless of how many roles the caller has, and uses the /read/[]/? range index.
   //
-  // The second branch is the isPublished mirror for rows with no explicit ACL.
-  //
-  // `unsetIsPublic` drops the isPublished half of that branch, so a row carrying NEITHER `read[]`
-  // nor `isPublished` is visible. Exactly one container needs it: `boundaries`, whose 281 seeded
-  // rows predate having an ACL at all and carry neither field. Without it every one of them
-  // evaluates FALSE for an anonymous caller — `c.isPublished = true` against an undefined field is
-  // not true — and the map goes blank on deploy, silently and everywhere.
-  //
-  // It does not weaken the gate: a RESTRICTED boundary carries an explicit `read[]`, so the first
-  // branch governs it and this one cannot match. The rule it encodes is "reference geography with
-  // no ACL is public", which is a statement about that container, not a general fallback.
-  const unsetArm = opts.unsetIsPublic
-    ? `(NOT IS_DEFINED(${alias}.read) OR ARRAY_LENGTH(${alias}.read) = 0)`
-    : `((NOT IS_DEFINED(${alias}.read) OR ARRAY_LENGTH(${alias}.read) = 0)` +
-      ` AND ${alias}.isPublished = true)`;
+  // There is no third arm. A row carrying no ladder token is visible to privileged callers only —
+  // `isPublished` MIRRORS `read.includes('public')` and never grants on its own.
+  const arms = [
+    `EXISTS(SELECT VALUE r FROM r IN ${alias}.read WHERE r IN (${names.join(', ')}))`
+  ];
 
-  const clause =
-    `(EXISTS(SELECT VALUE r FROM r IN ${alias}.read WHERE r IN (${names.join(', ')}))` +
-    ` OR ${unsetArm})`;
+  // The team arm: level 1. An OR, never an AND — team membership GRANTS the caller its own
+  // project's narrowest rows; ANDing it would hide every other level-2 row from the same caller.
+  const teams = Array.isArray(opts.teams) ? opts.teams : [];
+  const field = opts.partitionField === undefined ? 'projectId' : opts.partitionField;
+  if (teams.length > 0 && field) {
+    // Named off the role prefix, so a second clause in the same query cannot collide here either.
+    const teamNames = teams.map((_, i) => `${prefix}Team${i}`);
+    arms.push(
+      `(ARRAY_CONTAINS(${alias}.read, '${LEVEL_TOKENS[1]}')` +
+      ` AND ${alias}.${field} IN (${teamNames.join(', ')}))`
+    );
+    params.push(...teamNames.map((name, i) => ({ name, value: String(teams[i]) })));
+  }
 
-  return {
-    clause,
-    params: names.map((name, i) => ({ name, value: effective[i] }))
-  };
+  return { clause: `(${arms.join(' OR ')})`, params };
 }
 
 /**
@@ -370,7 +452,7 @@ function andClauses(...fragments) {
  */
 function visibilityFor(access, partitionField = 'projectId', opts = {}) {
   return andClauses(
-    readClause(access.roles, opts),
+    readClause(access.roles, { ...opts, teams: access.teams, partitionField }),
     scopeClause(access, partitionField, opts)
   );
 }
@@ -381,7 +463,7 @@ function visibilityFor(access, partitionField = 'projectId', opts = {}) {
  * Required on every point read — `container.item(id, pk).read()` bypasses the query
  * predicate entirely, so without this a by-id fetch would leak what a list would not.
  */
-function canRead(doc, access, partitionField = 'projectId', opts = {}) {
+function canRead(doc, access, partitionField = 'projectId') {
   if (!doc || !access) return false;
 
   // Scope FIRST, and it narrows a privileged caller too — otherwise a scoped staff key would
@@ -398,14 +480,14 @@ function canRead(doc, access, partitionField = 'projectId', opts = {}) {
   // the tier would deny a scoped-but-privileged caller its own in-scope private rows.
   if (isPrivileged(access.roles || [])) return true;
 
-  if (Array.isArray(doc.read) && doc.read.length > 0) {
-    return doc.read.some(r => access.roles.includes(r));
-  }
-  // Same allowance as readClause's `unsetIsPublic` arm, for the same rows: a boundary seeded
-  // before the container had an ACL carries neither field, and a point read must not withhold
-  // what the list returns.
-  if (opts.unsetIsPublic) return true;
-  return doc.isPublished === true;
+  const read = Array.isArray(doc.read) ? doc.read : [];
+  if (read.some(r => (access.roles || []).includes(r))) return true;
+
+  // The team arm's JS twin — see readClause. A row with no ladder token at all reaches no
+  // unprivileged caller: `isPublished` mirrors `read`, it never grants.
+  return Boolean(partitionField) &&
+    read.includes(LEVEL_TOKENS[1]) &&
+    (access.teams || []).includes(String(doc[partitionField]));
 }
 
 module.exports = {
@@ -413,17 +495,23 @@ module.exports = {
   SECURE_ROLES,
   ADMIN_ROLES,
   WRITE_ROLES,
+  AUTHENTICATED_ROLES,
+  LEVEL_TOKENS,
   TIER,
   PROJECT_ROLE_PREFIX,
   MAX_PAGE_SIZE,
   ANON_MAX_PAGE_SIZE,
   pageSizeFor,
+  readForLevel,
+  levelOfRead,
   rolesFor,
   isPrivileged,
+  isAuthenticatedRole,
   canWrite,
   canAdmin,
   resolveAccess,
   systemAccess,
+  teamsFor,
   projectScopeFor,
   readClause,
   scopeClause,

@@ -11,7 +11,7 @@
  * rides `projectId`. See `access-sql.js` for why they must stay separate.
  */
 
-const { TIER, PUBLIC_ROLES, isPrivileged } = require('./access-sql');
+const { TIER, PUBLIC_ROLES, LEVEL_TOKENS, isPrivileged } = require('./access-sql');
 
 /**
  * OData string literals are single-quoted, and a literal quote is escaped by DOUBLING it.
@@ -73,7 +73,17 @@ function filterFor(access, partitionField = 'projectId') {
     const roles = Array.from(new Set([...(access.roles || []), ...PUBLIC_ROLES]));
     // `read/any(r: ...)` is the collection form. Without `any`, the filter compares the collection
     // itself and matches nothing — silently, which on this path would read as an empty corpus.
-    clauses.push(`read/any(r: ${inClause('r', roles)})`);
+    let arm = `read/any(r: ${inClause('r', roles)})`;
+
+    // The team arm: level 1, ORed with the role arm exactly as in `readClause`. A grant, so `or`;
+    // the scope `and` below is the restriction and stays separate.
+    const teams = access.teams || [];
+    if (teams.length > 0) {
+      arm = `(${arm} or (read/any(r: r eq ${quote(LEVEL_TOKENS[1])})` +
+        ` and ${inClause(partitionField, teams)}))`;
+    }
+
+    clauses.push(arm);
   }
 
   if (access.tier === TIER.SCOPED) {
