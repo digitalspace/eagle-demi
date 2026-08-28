@@ -176,6 +176,16 @@ const config = {
   linkAllowedHosts:      (process.env.LINK_ALLOWED_HOSTS || 'gov.bc.ca').split(',').map(s => s.trim()).filter(Boolean),
   linkBaseUrl:           process.env.LINK_BASE_URL || 'https://projects.eao.gov.bc.ca',
 
+  // Track team feed → `project:<id>` realm roles (src/scripts/sync-track-teams.js). Two
+  // client-credentials identities in the realm above: one reads Track, one holds
+  // `realm-management`. Empty everywhere the sync is not scheduled, which is every environment
+  // until SYNC_TEAMS_SCHEDULE is set.
+  trackApiBase:              process.env.TRACK_API_BASE || '',
+  trackClientId:             process.env.TRACK_CLIENT_ID || '',
+  trackClientSecret:         process.env.TRACK_CLIENT_SECRET || '',
+  keycloakAdminClientId:     process.env.KEYCLOAK_ADMIN_CLIENT_ID || '',
+  keycloakAdminClientSecret: process.env.KEYCLOAK_ADMIN_CLIENT_SECRET || '',
+
   ssoJwksUri:            process.env.SSO_JWKSURI || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}/protocol/openid-connect/certs`,
   ssoIssuer:             process.env.SSO_ISSUER || `${process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth'}/realms/${process.env.KEYCLOAK_REALM || 'eao-epic'}`,
   // Empty = not enforced. No default value: an unmeasured audience 401s every caller, so this

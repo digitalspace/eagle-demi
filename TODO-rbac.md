@@ -847,7 +847,7 @@ not a source (doc §3 question 10).
 
 ### B. DEMI — three PRs, in order
 
-- [ ] B1 script + tests. `src/scripts/sync-track-teams.js` (shape of
+- [x] B1 script + tests. `src/scripts/sync-track-teams.js` (shape of
       `src/scripts/reconcile-eagle.js`: `parseArgs`, pure `plan()`, `sync(argv, deps)`,
       `run({live, deps})`), `--dry-run` default. Deps `{ fetchJson, kc }`; extend `fetchJson`
       in `src/seed/sources.js` with an optional headers arg. Flow: client-credentials token
@@ -856,27 +856,27 @@ not a source (doc §3 question 10).
       `Map<username, Set<'project:<id>'>>`; Keycloak token for `demi-role-sync` → current holders
       via `GET /roles?search=project:` then `GET /roles/<name>/users`; match staff by
       `idir_user_id` (`<guid>@idir`, `exact=true`) then email; reconcile: create missing
-      `project:<id>` roles (409 ignored), grant, REVOKE stale, touching only names starting
-      `project:`. One summary line
+      `project:<id>` roles (409 ignored), grant, REVOKE stale, touching only the `project:<id>`
+      names Track's feed lists — a hand-granted scope like `project:eagle-abc` is never revoked. One summary line
       `[track-teams] mode=… projects=… users=… grants=… revokes=… unmatched=… failures=…`
       via `src/utils/logger.js`. `package.json` script `rbac:sync-teams`.
       `ponytail: union over all works. Per-work roles only if the business ever needs them.`
   - Tests: `test/scripts/sync-track-teams.test.js`, in-memory `kc` fake, literals only
-    - [ ] `'a project team is the union of its works'`
-    - [ ] `'a departed staff member is revoked'`
-    - [ ] `'an unmatched staff row mints nothing'`
-    - [ ] `'a dry run writes nothing'`
-    - [ ] `'a stale role is removed while staff and demi-admin are untouched'`
-    - [ ] `'a missing role is created before it is granted'`
+    - [x] `'a project team is the union of its works'`
+    - [x] `'a departed staff member is revoked'`
+    - [x] `'an unmatched staff row mints nothing'`
+    - [x] `'a dry run writes nothing'`
+    - [x] `'a stale role is removed while staff and demi-admin are untouched'`
+    - [x] `'a missing role is created before it is granted'`
   - Acceptance: `node --test test/scripts/sync-track-teams.test.js` — 0 fail.
-- [ ] B2 timer. `api/index.js`, beside `reconcileEagle`:
+- [x] B2 timer. `api/index.js`, beside `reconcileEagle`:
       `app.timer('syncTrackTeams', { schedule: '%SYNC_TEAMS_SCHEDULE%', runOnStartup: false })`,
       only registered when `SYNC_TEAMS_SCHEDULE` is set; handler lazily requires the script,
       `run({ live: true })`, logs failures. `host.json` timeout already 30 min.
   - Tests: `test/sync-teams-timer.test.js`, mirrors `test/reconcile-timer.test.js`; update
         `loadIndex` in the reconcile test to clear `SYNC_TEAMS_SCHEDULE`.
   - Acceptance: `node --test test/sync-teams-timer.test.js` — 0 fail.
-- [ ] B3 infra. `azure/modules/key-vault.bicep`: secrets `track-client-secret`,
+- [x] B3 infra (merged #216). `azure/modules/key-vault.bicep`: secrets `track-client-secret`,
       `role-sync-client-secret` (+ URI outputs). `azure/main.bicep`: params `trackApiBase`,
       `trackClientId`, `trackClientSecret`, `roleSyncClientId`, `roleSyncClientSecret`,
       `syncTeamsSchedule = ''`. `azure/modules/api-web-app.bicep` appSettings: `TRACK_API_BASE`,

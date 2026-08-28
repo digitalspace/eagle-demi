@@ -190,6 +190,16 @@ There is no search sync command. Azure AI Search indexers pull from Cosmos every
 `_ts` high-water mark, so nothing has to be pushed to keep the index current. Deletes are the
 exception — the high-water mark cannot see them, so the application removes index entries explicitly.
 
+### Track team sync
+
+Set `SYNC_TEAMS_SCHEDULE` to an NCRONTAB expression (six fields, seconds first) and the API app
+registers a nightly `syncTrackTeams` timer; unset, no timer is registered. It reads
+`GET /api/v1/projects/team-members` from Track (`TRACK_API_BASE`, client-credentials
+`TRACK_CLIENT_ID`/`TRACK_CLIENT_SECRET`) and reconciles `project:<id>` realm roles in Keycloak as
+client `KEYCLOAK_ADMIN_CLIENT_ID`/`_SECRET` — only roles for projects Track lists are touched, every
+other role is left alone. `--live` refuses until the P3-2 team-grant model lands. CLI:
+`yarn rbac:sync-teams` (dry run) / `-- --live`. One summary log line: `[track-teams] mode=… …`.
+
 ---
 
 ## Tests

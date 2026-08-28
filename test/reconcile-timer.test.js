@@ -2,9 +2,8 @@
 
 /**
  * The nightly reconcile is a Functions timer trigger, and nothing about it runs outside Azure —
- * the same blind spot test/functions-adapter.test.js exists for. So `@azure/functions` is replaced
- * in the require cache before `api/index.js` loads, and the assertions are on what the app was
- * asked to register.
+ * the same blind spot test/functions-adapter.test.js exists for. So the app is loaded against a
+ * recording `app` (test/helpers/load-index.js) and the assertions are on what it registered.
  *
  * The guard is the part worth testing. `%RECONCILE_SCHEDULE%` is resolved by the HOST at startup,
  * and an unresolvable name fails startup — taking the HTTP functions down with it. Registering the
@@ -18,44 +17,10 @@ const assert = require('node:assert');
 
 const { logger } = require('../src/utils/logger');
 
-const INDEX = require.resolve('../api/index');
-const FUNCTIONS = require.resolve('@azure/functions');
-
-/** Load api/index.js against a recording `app`, with RECONCILE_SCHEDULE set to `schedule`. */
-function loadIndex(t, schedule) {
-  const registered = { timers: [], https: [] };
-  const cachedFunctions = require.cache[FUNCTIONS];
-  const cachedIndex = require.cache[INDEX];
-  const cachedSchedule = process.env.RECONCILE_SCHEDULE;
-
-  require.cache[FUNCTIONS] = {
-    id: FUNCTIONS,
-    filename: FUNCTIONS,
-    loaded: true,
-    exports: {
-      app: {
-        timer: (name, options) => registered.timers.push({ name, options }),
-        http: (name, options) => registered.https.push({ name, options }),
-        hook: { appTerminate: () => {} }
-      }
-    }
-  };
-  delete require.cache[INDEX];
-  if (schedule === undefined) delete process.env.RECONCILE_SCHEDULE;
-  else process.env.RECONCILE_SCHEDULE = schedule;
-
-  t.after(() => {
-    require.cache[FUNCTIONS] = cachedFunctions;
-    require.cache[INDEX] = cachedIndex;
-    if (cachedSchedule === undefined) delete process.env.RECONCILE_SCHEDULE;
-    else process.env.RECONCILE_SCHEDULE = cachedSchedule;
-  });
-
-  return { registered, index: require('../api/index') };
-}
+const { loadIndex } = require('./helpers/load-index');
 
 test('no RECONCILE_SCHEDULE registers no timer, and leaves the API registered', (t) => {
-  const { registered } = loadIndex(t, undefined);
+  const { registered } = loadIndex(t, 'RECONCILE_SCHEDULE', undefined);
 
   assert.deepStrictEqual(registered.timers, [],
     'an app setting the environment never set must not become a startup failure');
@@ -64,14 +29,14 @@ test('no RECONCILE_SCHEDULE registers no timer, and leaves the API registered', 
 });
 
 test('an empty RECONCILE_SCHEDULE is off too', (t) => {
-  const { registered } = loadIndex(t, '');
+  const { registered } = loadIndex(t, 'RECONCILE_SCHEDULE', '');
   assert.deepStrictEqual(registered.timers, [],
     'the setting is declared empty in every environment that has not opted in — the whole ' +
     'appSettings collection is a PUT, so absent is not an option');
 });
 
 test('a schedule registers the timer against the app setting, not its value', (t) => {
-  const { registered } = loadIndex(t, '0 0 9 * * *');
+  const { registered } = loadIndex(t, 'RECONCILE_SCHEDULE', '0 0 9 * * *');
 
   assert.strictEqual(registered.timers.length, 1);
   const [{ name, options }] = registered.timers;
@@ -86,7 +51,7 @@ test('a schedule registers the timer against the app setting, not its value', (t
 });
 
 test('the handler runs the reconcile', async (t) => {
-  const { index } = loadIndex(t, '0 0 9 * * *');
+  const { index } = loadIndex(t, 'RECONCILE_SCHEDULE', '0 0 9 * * *');
 
   const script = require.resolve('../src/scripts/reconcile-eagle');
   const cached = require.cache[script];
@@ -104,7 +69,7 @@ test('the handler runs the reconcile', async (t) => {
 });
 
 test('a failing reconcile is logged and does not throw at the host', async (t) => {
-  const { index } = loadIndex(t, '0 0 9 * * *');
+  const { index } = loadIndex(t, 'RECONCILE_SCHEDULE', '0 0 9 * * *');
 
   const script = require.resolve('../src/scripts/reconcile-eagle');
   const cached = require.cache[script];
