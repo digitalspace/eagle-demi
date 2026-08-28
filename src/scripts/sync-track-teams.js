@@ -19,9 +19,12 @@
  * NARROWS its holder to that project (`access-sql.projectScopeFor`) instead of granting a team —
  * so `run({ live: true })` refuses while `access-sql` exports no `teamsFor`.
  *
- * ONLY ROLES NAMED `project:` ARE TOUCHED. `staff`, `demi-admin` and the rest are granted by hand
- * and no run of this script may take one away, so the prefix is re-checked after the Keycloak
- * search rather than trusted — `search=` is a substring match, not a prefix one.
+ * THE SYNC OWNS ONLY THE ROLES TRACK NAMES. The feed lists every non-deleted Track project, so
+ * `project:<id>` for an id it lists is this script's to create, grant and revoke; any other role
+ * is somebody else's. That covers `staff` and `demi-admin`, granted by hand, and also
+ * `project:eagle-abc` — a hand-granted scope for an Eagle-only project (access-sql.js), which has
+ * no Track team to sync it from and must survive every run. The `project:` prefix is re-checked
+ * after the Keycloak search rather than trusted, since `search=` is a substring match.
  *
  * Two client-credentials identities, both confidential clients in the same realm:
  * `TRACK_CLIENT_ID` reads Track, `KEYCLOAK_ADMIN_CLIENT_ID` (`demi-role-sync`) holds
@@ -73,9 +76,13 @@ function plan(trackTeams, keycloakState = {}) {
 
   const desired = new Map();
   const unmatched = new Set();
+  // The roles this sync owns: one per project in the feed, empty team or not. A `project:` role
+  // outside this set belongs to whoever granted it by hand.
+  const owned = new Set();
 
   for (const team of trackTeams) {
     const role = `${PROJECT_ROLE_PREFIX}${team.project_id}`;
+    owned.add(role);
     for (const staff of team.staff || []) {
       // A departed staff member earns no role here and so falls out under the revokes below.
       if (staff.is_active === false) continue;
@@ -101,7 +108,7 @@ function plan(trackTeams, keycloakState = {}) {
   const revokes = [];
   for (const [username, held] of current) {
     const roles = desired.get(username) || new Set();
-    const drop = [...held].filter(r => r.startsWith(PROJECT_ROLE_PREFIX) && !roles.has(r)).sort();
+    const drop = [...held].filter(r => owned.has(r) && !roles.has(r)).sort();
     if (drop.length) revokes.push({ username, roles: drop });
   }
 
@@ -133,11 +140,13 @@ function keycloakClient() {
     return (await res.json()).access_token;
   }
 
+  const mintAdminToken = async () => {
+    adminToken = await clientToken(config.keycloakAdminClientId, config.keycloakAdminClientSecret);
+  };
+
   async function admin(path, { method = 'GET', body, tolerate = [] } = {}) {
-    if (!adminToken) {
-      adminToken = await clientToken(config.keycloakAdminClientId, config.keycloakAdminClientSecret);
-    }
-    const res = await fetch(`${adminBase}${path}`, {
+    if (!adminToken) await mintAdminToken();
+    const call = () => fetch(`${adminBase}${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${adminToken}`,
@@ -145,6 +154,12 @@ function keycloakClient() {
       },
       body: body ? JSON.stringify(body) : undefined
     });
+    let res = await call();
+    // A run over a large realm outlives the token it started with; re-mint once, then a 401 is real.
+    if (res.status === 401) {
+      await mintAdminToken();
+      res = await call();
+    }
     if (!res.ok && !tolerate.includes(res.status)) {
       throw new Error(`[track-teams] ${method} ${path}: HTTP ${res.status}`);
     }

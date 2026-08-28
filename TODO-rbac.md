@@ -856,8 +856,8 @@ not a source (doc §3 question 10).
       `Map<username, Set<'project:<id>'>>`; Keycloak token for `demi-role-sync` → current holders
       via `GET /roles?search=project:` then `GET /roles/<name>/users`; match staff by
       `idir_user_id` (`<guid>@idir`, `exact=true`) then email; reconcile: create missing
-      `project:<id>` roles (409 ignored), grant, REVOKE stale, touching only names starting
-      `project:`. One summary line
+      `project:<id>` roles (409 ignored), grant, REVOKE stale, touching only the `project:<id>`
+      names Track's feed lists — a hand-granted scope like `project:eagle-abc` is never revoked. One summary line
       `[track-teams] mode=… projects=… users=… grants=… revokes=… unmatched=… failures=…`
       via `src/utils/logger.js`. `package.json` script `rbac:sync-teams`.
       `ponytail: union over all works. Per-work roles only if the business ever needs them.`

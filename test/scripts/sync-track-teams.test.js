@@ -43,14 +43,19 @@ function fakeKc({ roles = [], users = [] } = {}) {
   const byId = (id) => realmUsers.find(u => u.id === id);
   const log = [];
   const tokens = [];
+  const enumerated = [];
 
   return {
-    log, tokens, roleMap, users: realmUsers,
+    log, tokens, enumerated, roleMap, users: realmUsers,
     clientToken: async (clientId) => { tokens.push(clientId); return `token-${clientId}`; },
-    // Keycloak's `search` is a substring match, which is what this mimics.
-    listProjectRoles: async () => [...roleMap.values()].filter(r => r.name.includes('project:')),
-    roleUsers: async (name) => realmUsers.filter(u => u.roles.has(name))
-      .map(u => ({ id: u.id, username: u.username })),
+    // Every realm role, `staff` and `demi-admin` included: the script's own prefix filter is what
+    // has to keep them out, so the fake must not do that filtering for it.
+    listProjectRoles: async () => [...roleMap.values()],
+    roleUsers: async (name) => {
+      enumerated.push(name);
+      return realmUsers.filter(u => u.roles.has(name))
+        .map(u => ({ id: u.id, username: u.username }));
+    },
     findByUsername: async (username) => realmUsers.find(u => u.username === username) || null,
     findByEmail: async (email) => realmUsers.find(u => u.email === email) || null,
     createRole: async (name) => {
@@ -139,7 +144,7 @@ test('a dry run writes nothing and still reports the plan', async () => {
 });
 
 test('a stale project role is revoked and the hand-granted roles are left alone', async () => {
-  const teams = [{ project_id: 1, staff: [BO] }];
+  const teams = [{ project_id: 1, staff: [BO] }, { project_id: 2, staff: [] }];
   const kc = fakeKc({
     roles: ['project:1', 'project:2', 'staff', 'demi-admin'],
     users: [realmBo(['project:1', 'project:2', 'staff', 'demi-admin'])]
@@ -150,6 +155,34 @@ test('a stale project role is revoked and the hand-granted roles are left alone'
   assert.deepStrictEqual(kc.log, [['revoke', 'u-bo', ['project:2']]]);
   assert.deepStrictEqual([...kc.users[0].roles].sort(),
     ['demi-admin', 'project:1', 'staff']);
+  assert.deepStrictEqual(kc.enumerated, ['project:1', 'project:2'],
+    'a hand-granted role is not even read, let alone written');
+});
+
+test('a project role Track does not know is left alone', async () => {
+  const teams = [{ project_id: 1, staff: [ADA] }];
+  const kc = fakeKc({
+    roles: ['project:1', 'project:eagle-abc'],
+    users: [realmAda(['project:1', 'project:eagle-abc'])]
+  });
+
+  const summary = await sync(['--live'], { fetchJson: fakeFetch(teams), kc });
+
+  assert.deepStrictEqual(kc.log, [],
+    'an Eagle-only project has no Track team, so nothing here may take its scope away');
+  assert.strictEqual(summary.revokes, 0);
+  assert.deepStrictEqual([...kc.users[0].roles].sort(), ['project:1', 'project:eagle-abc']);
+});
+
+test('a Track project with an empty team revokes its holders', async () => {
+  const teams = [{ project_id: 2, staff: [] }];
+  const kc = fakeKc({ roles: ['project:2'], users: [realmBo(['project:2'])] });
+
+  const summary = await sync(['--live'], { fetchJson: fakeFetch(teams), kc });
+
+  assert.deepStrictEqual(kc.log, [['revoke', 'u-bo', ['project:2']]],
+    'the feed lists the project, so an empty team means the team is empty');
+  assert.strictEqual(summary.revokes, 1);
 });
 
 test('a missing realm role is created before it is granted', async () => {
@@ -174,7 +207,7 @@ test('a staff row with no IDIR GUID is matched on email', () => {
 });
 
 test('plan touches no role outside the project: prefix', () => {
-  const decided = plan([{ project_id: 1, staff: [ADA] }], {
+  const decided = plan([{ project_id: 1, staff: [ADA] }, { project_id: 9, staff: [] }], {
     current: new Map([['aaaa1111@idir', new Set(['project:9', 'staff'])]]),
     roles: new Set(['project:1', 'project:9'])
   });
@@ -198,6 +231,29 @@ test('a live run is refused before the team-grant model exists', async () => {
   } finally {
     if (held) Object.defineProperty(accessSql, 'teamsFor', held);
   }
+});
+
+test('an expired admin token is refreshed once', async (t) => {
+  const bodies = [
+    { access_token: 'admin-token' },
+    401,
+    { access_token: 'fresh-token' },
+    [{ name: 'project:1' }]
+  ];
+  const urls = [];
+  t.mock.method(global, 'fetch', async (url) => {
+    urls.push(String(url));
+    const body = bodies.shift();
+    if (body === 401) return { ok: false, status: 401, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => body };
+  });
+
+  const roles = await keycloakClient().listProjectRoles();
+
+  assert.deepStrictEqual(roles, [{ name: 'project:1' }], 'the retry is what the caller gets back');
+  assert.strictEqual(urls.filter(u => u.endsWith('/protocol/openid-connect/token')).length, 2,
+    'a run longer than the token lifetime re-mints instead of failing the night');
+  assert.strictEqual(urls.length, 4, 'and it retries the call once, not in a loop');
 });
 
 test('role listing pages past 1000', async (t) => {
