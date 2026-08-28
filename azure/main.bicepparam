@@ -36,3 +36,12 @@ param linkBaseUrl = 'https://demi-api-dev.azurewebsites.net'
 // will not submit without this line.
 param allowedClients = ''
 param ssoAudience = ''
+
+// Track team sync — off in dev, which has no Track counterpart. Placeholder secrets, matching the
+// MinIO and admin-key pair above.
+param trackApiBase = ''
+param trackClientId = ''
+param roleSyncClientId = ''
+param syncTeamsSchedule = ''
+param trackClientSecret = 'dev-track-secret'
+param roleSyncClientSecret = 'dev-role-sync-secret'

@@ -140,3 +140,14 @@ param contactEmails = [
   'daniel@digitalspace.ca'
   'Daniel.T.Truong@gov.bc.ca'
 ]
+
+// ── Track team sync ───────────────────────────────────────────────────────────────────────────
+// Same job as test. Secrets come from OpenShift `demi-app-secrets` through deploy-infra.sh.
+param trackApiBase = 'https://epictrack-api-c72cba-prod.apps.gold.devops.gov.bc.ca'
+param trackClientId = 'demi-track-reader'
+param roleSyncClientId = 'demi-role-sync'
+param trackClientSecret = readEnvironmentVariable('TRACK_CLIENT_SECRET')
+param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
+
+// Empty until both realm clients exist in the prod realm.
+param syncTeamsSchedule = ''

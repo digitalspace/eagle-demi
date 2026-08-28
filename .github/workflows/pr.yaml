@@ -128,10 +128,10 @@ jobs:
 
       # The param file is where the subnet ids, the object-store coordinates and the CORS origin
       # list actually live, and none of it is covered by compiling main.bicep. It was ungated
-      # because it cannot compile at all as checked out: four params call
+      # because it cannot compile at all as checked out: six params call
       # `readEnvironmentVariable` with NO default (MINIO_ACCESS_KEY, MINIO_SECRET_KEY,
-      # ADMIN_API_KEY, DOCLING_API_KEY), so BCP427 fires on all four and even
-      # `az deployment group what-if` never gets to run.
+      # ADMIN_API_KEY, DOCLING_API_KEY, TRACK_CLIENT_SECRET, ROLE_SYNC_CLIENT_SECRET), so BCP427
+      # fires on all six and even `az deployment group what-if` never gets to run.
       #
       # THE MISSING DEFAULTS ARE THE SAFETY PROPERTY — do not "fix" this by adding `''`. Quoting
       # the note at azure/main.test.bicepparam:22-25: with a `''` fallback a forgotten export
@@ -151,15 +151,19 @@ jobs:
           MINIO_SECRET_KEY: ci-placeholder-not-a-real-key
           ADMIN_API_KEY: ci-placeholder-not-a-real-key
           DOCLING_API_KEY: ci-placeholder-not-a-real-key
+          TRACK_CLIENT_SECRET: ci-placeholder-not-a-real-key
+          ROLE_SYNC_CLIENT_SECRET: ci-placeholder-not-a-real-key
         run: az bicep build-params --file ./azure/main.test.bicepparam --outfile /dev/null
 
-      # Same placeholders, same reason: main.prod.bicepparam reads the same four credentials.
+      # Same placeholders, same reason: main.prod.bicepparam reads the same six credentials.
       - name: Validate Prod Parameters
         env:
           MINIO_ACCESS_KEY: ci-placeholder-not-a-real-key
           MINIO_SECRET_KEY: ci-placeholder-not-a-real-key
           ADMIN_API_KEY: ci-placeholder-not-a-real-key
           DOCLING_API_KEY: ci-placeholder-not-a-real-key
+          TRACK_CLIENT_SECRET: ci-placeholder-not-a-real-key
+          ROLE_SYNC_CLIENT_SECRET: ci-placeholder-not-a-real-key
         run: az bicep build-params --file ./azure/main.prod.bicepparam --outfile /dev/null
 
       - name: Report Validation Failure to Job Summary

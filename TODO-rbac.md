@@ -151,7 +151,7 @@ Doc §2 item 10. Code and app setting ship together.
         (or `./scripts/deploy-infra.sh test --live`). The setting is inert for the running build.
   - [x] (test 2026-08-27, #199 merged `3707bee`) Then merge, which is deploying on test (CI `azure-deploy-staging-api`). Boot guard sees the
         setting already present.
-  - [ ] Prod: `MINIO_*=… ADMIN_API_KEY=… DOCLING_API_KEY=… ./scripts/deploy-infra.sh prod --what-if`,
+  - [ ] Prod: `MINIO_*=… ADMIN_API_KEY=… DOCLING_API_KEY=… TRACK_CLIENT_SECRET=… ROLE_SYNC_CLIENT_SECRET=… ./scripts/deploy-infra.sh prod --what-if`,
         review, then `CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live`.
   - [x] Verify: `GET /api/deployments/latest` status 4, then the two curls above. Test 2026-08-27:
         anonymous `/api/projects` 200 and byte-identical. 2026-08-28: a signed client-credentials

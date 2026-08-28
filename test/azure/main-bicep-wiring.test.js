@@ -108,7 +108,16 @@ const WIRED = [
   ['allowedClients', /^\s+allowedClients: allowedClients$/m,
     'the API module call — without it DEMI_ALLOWED_CLIENTS is empty and the app refuses to boot'],
   ['ssoAudience', /^\s+ssoAudience: ssoAudience$/m,
-    'the API module call — without it SSO_AUDIENCE cannot be set once the aud claim is measured']
+    'the API module call — without it SSO_AUDIENCE cannot be set once the aud claim is measured'],
+  ['syncTeamsSchedule', /^\s+syncTeamsSchedule: syncTeamsSchedule$/m,
+    'the API module call — without it SYNC_TEAMS_SCHEDULE is empty, no timer is registered and the ' +
+    'nightly Track team sync never fires'],
+  ['trackApiBase', /^\s+trackApiBase: trackApiBase$/m,
+    'the API module call — without it the sync has no upstream to read team members from'],
+  ['trackClientId', /^\s+trackClientId: trackClientId$/m,
+    'the API module call — without it the sync cannot ask Keycloak for a Track token'],
+  ['roleSyncClientId', /^\s+roleSyncClientId: roleSyncClientId$/m,
+    'the API module call — without it the sync has no admin identity to grant roles with']
 ];
 
 for (const [name, wiring, why] of WIRED) {
@@ -138,6 +147,18 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
     assert.match(params, /^param ssoAudience = '[^']*'$/m,
       `${envName} must state the audience explicitly, empty or otherwise`);
   });
+}
+
+// The Track team sync's four plain settings. Every one is a whole-collection-PUT app setting, so a
+// param file that omits one takes main.bicep's empty default and the live value is deleted on the
+// next deploy — `az bicep build` says nothing, because an empty default compiles.
+for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+  for (const name of ['trackApiBase', 'trackClientId', 'roleSyncClientId', 'syncTeamsSchedule']) {
+    test(`the ${envName} param file declares ${name}`, () => {
+      assert.match(params, new RegExp(`^param ${name} = '[^']*'$`, 'm'),
+        `${envName} must state ${name} explicitly, empty or otherwise`);
+    });
+  }
 }
 
 // deploySearch=false means ai-search.bicep never runs, so the ONE thing that gives the indexer a
@@ -321,4 +342,35 @@ test('the app identity is granted Key Vault Secrets User', () => {
   // a user-assigned one — so the grant above is wired to a principal App Service would not use.
   assert.match(API_MODULE, /^\s+keyVaultReferenceIdentity: identityId$/m,
     'the app must resolve references as the identity that holds the grant');
+});
+
+// The team sync's two credentials, same reasoning as ADMIN_API_KEY above: as plain app settings
+// their values would sit in the template parameters and in ARM deployment history, and a revert to
+// that is invisible to both `az bicep build` and a what-if diff.
+test('the API app reads both team-sync secrets through Key Vault references', () => {
+  const cases = [
+    ['TRACK_CLIENT_SECRET', 'trackClientSecret', 'track-client-secret'],
+    ['KEYCLOAK_ADMIN_CLIENT_SECRET', 'roleSyncClientSecret', 'role-sync-client-secret']
+  ];
+
+  for (const [settingName, paramName, secretName] of cases) {
+    const setting = API_MODULE
+      .split(/^\s+\{$/m)
+      .find(b => new RegExp(`name: '${settingName}'`).test(b));
+    assert.ok(setting, `no ${settingName} app setting declared at all`);
+    assert.match(setting, new RegExp(`value: '@Microsoft\\.KeyVault\\(SecretUri=\\$\\{${paramName}Uri\\}\\)'`),
+      `${settingName} must be a Key Vault reference, not the credential itself`);
+    assert.doesNotMatch(API_MODULE, new RegExp(`value: ${paramName}$`, 'm'),
+      `no app setting may carry the raw ${paramName} value`);
+
+    assert.match(MAIN, new RegExp(`^\\s+${paramName}Uri: keyVault\\.outputs\\.${paramName}Uri$`, 'm'),
+      'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
+    assert.match(MAIN, new RegExp(`^\\s+${paramName}: ${paramName}$`, 'm'),
+      'and the value into the vault module, or the secret is never written');
+    assert.match(KEY_VAULT_MODULE, new RegExp(`name: '${secretName}'`),
+      `key-vault.bicep must declare the ${secretName} secret`);
+    assert.match(KEY_VAULT_MODULE, new RegExp(`^output ${paramName}Uri string = \\w+\\.properties\\.secretUri$`, 'm'),
+      'and output its VERSIONLESS uri (secretUri, not secretUriWithVersion), so a rotation needs ' +
+      'a new secret version and a restart rather than an infrastructure deploy');
+  }
 });

@@ -142,3 +142,15 @@ param allowedClients = 'eagle-admin-console'
 
 // Measured 2026-08-28 on a test-realm user token: aud contains 'account'. Prod not measured.
 param ssoAudience = 'account'
+
+// ── Track team sync ───────────────────────────────────────────────────────────────────────────
+// The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
+// Secrets come from OpenShift `demi-app-secrets` through deploy-infra.sh, never from this file.
+param trackApiBase = 'https://epictrack-api-c72cba-test.apps.gold.devops.gov.bc.ca'
+param trackClientId = 'demi-track-reader'
+param roleSyncClientId = 'demi-role-sync'
+param trackClientSecret = readEnvironmentVariable('TRACK_CLIENT_SECRET')
+param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
+
+// set to '0 0 10 * * *' once the Track endpoint is live
+param syncTeamsSchedule = ''
