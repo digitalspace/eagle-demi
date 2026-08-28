@@ -48,6 +48,15 @@ widest token present, 1 when none.
 `sysadmin` is superuser on the ladder (levels 1-4) and has no access to level 0. `ADMIN_ROLES` and
 `WRITE_ROLES` are unchanged: staff writes and administers exactly as before.
 
+`SECURE_ROLES` and `isPrivileged` carry the ROW-plane short-circuit meaning and nothing else. They
+must not also decide who may hold a session. `authMiddleware` (`src/middleware/auth.js:21`) 403s
+any caller `isPrivileged` rejects and fronts every write and admin route, so dropping `staff` from
+`SECURE_ROLES` on its own would lock staff out of the whole API and keep 403ing a `compliance`-only
+credential. `authMiddleware` therefore gates on a separate
+`AUTHENTICATED_ROLES = [...WRITE_ROLES, 'compliance']` — every role that may hold a session — and
+the two sets move independently. `requireWrite`, `requireAdmin` and `requireRole` stay the
+per-route gates behind it.
+
 **Back-compat.** Legacy `read[]` values (`['sysadmin','staff','demi-admin']`, with `'public'` when
 published) already contain `staff`, so they read as level 2 — today's meaning. Admin role names in
 `read[]` are ignored by `levelOfRead`; they only ever matched callers who short-circuit anyway. No
@@ -145,8 +154,8 @@ Each item below overrides the corresponding section of the source document.
    called first so an unknown entity throws for every caller. This only holds because predicates
    widen rather than gate (Section 1): with the source semantics (predicate ANDed with level) a
    false `cacPublished` would hide `cacEmail` from level 0, and the identity property would need
-   a bypass branch. No caller is level 0 — only `systemAccess()` carries it (§5 item 3) — so `maxVis: 0` fields
-   reach no response.
+   a bypass branch. After P3-2 no caller is level 0 — only `systemAccess()` carries it (§5 item 3) —
+   so `maxVis: 0` fields reach no response. Until P3-2 ships, `sysadmin` is level 0 and does see them.
 5. **`read[]` does not carry levels.** The source design put `demi-vis-*` into `read[]` for
    whole-record restriction. `readClause` and `canRead` return `true` for any `SECURE_ROLES`
    holder before reading `read[]` (`src/helpers/access-sql.js:235,373`), `staff` is in
@@ -249,11 +258,13 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    "Special: Selected Credentials" lane is not a tag on a field — it is a time-bound grant to a
    named party over named records, on the ROW plane. See §1 and Phase 3 unit P3-6. Dials stay
    integers; `src/vis/groups.js` is never created.
-3. **§2 item 4, "level 0 sees every field", no longer holds.** No caller is level 0, so `maxVis: 0`
-   now means what it says: `read`, `ownRead`, `vis`, `s3Key`, `sources` and the Cosmos bookkeeping
-   fields are visible to nobody through a response, `sysadmin` included. The redactor loop is
-   unchanged — still no `if (level === 0) return record`, still one comparison. The U9 and P2-1
-   deviation notes ("level 0 now sees `s3Key`/`read`/`sources.track`") are void.
+3. **§2 item 4, "level 0 sees every field", stops holding at P3-2.** `sysadmin` is level 0 today
+   and does see `maxVis: 0` fields. After P3-2 moves it to level 1 no caller is level 0, so
+   `maxVis: 0` means what it says: `read`, `ownRead`, `vis`, `s3Key`, `sources` and the Cosmos
+   bookkeeping fields are visible to nobody through a response, `sysadmin` included. The redactor
+   loop is unchanged — still no `if (level === 0) return record`, still one comparison. The U9 and
+   P2-1 deviation notes ("level 0 sees `s3Key`/`read`/`sources.track`") describe today and become
+   void at P3-2.
 4. **§2 item 5 is narrowed, not dropped.** `read[]` still carries no FIELD levels (`demi-vis-*`
    stays dead). It does now carry the four ladder tokens `team|staff|idir|public`, which is the row
    plane it always encoded. The reason item 5 gave — `readClause` short-circuits for
@@ -264,7 +275,10 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    `WRITE_ROLES` (`:58`) are untouched: staff's write and admin rights do not move. Every write
    site that spelled an ACL as `[...SECURE_ROLES]` must convert to `readForLevel()` in the same
    commit (`document.js:47,363,635,852`; `project.js:227-228`) or newly private rows would lose
-   their `staff` token and read as level 1.
+   their `staff` token and read as level 1. Dropping `staff` from `SECURE_ROLES` is also not enough
+   on its own: `authMiddleware` 403s on `isPrivileged`, so the same commit must move that gate to
+   `AUTHENTICATED_ROLES = [...WRITE_ROLES, 'compliance']` (§1, Superuser) or staff loses every
+   authenticated route.
 6. **§3 question 1's answer is replaced.** "Nested levels 0-4 with lateral groups inside a level" is
    wrong on both halves. Model in §1.
 7. **Files still carrying the old reading, to update with the code:**
@@ -283,7 +297,7 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
   `Math.min`, not a second comparison.
 - Everything shipped in Phases 0-2 stands: catalogs, redactor, `selectFor`, PUT hidden-key guard,
   search drift ratchets, query-param gate, `/api/me`, frontend `visLevel`. Two consequences of
-  item 1 above: `selectFor(entity, access)` returns `'*'` only for `systemAccess()` now, and the
-  frontend must gate on `level <= 2` rather than on `privileged`, which goes false for staff
-  (`frontend/src/app/services/registry-state.service.ts`, P2-5).
+  item 1 above land with P3-2: `selectFor(entity, access)` then returns `'*'` only for
+  `systemAccess()`, and the frontend must gate on `level <= 2` rather than on `privileged`, which
+  goes false for staff (`frontend/src/app/services/registry-state.service.ts`, P2-5).
 - §3 questions 2, 3, 4 stay closed. New questions are in §3 under 2026-08-28b.

@@ -63,7 +63,7 @@ module.exports = {
   responsibleEPD: { defaultVis: 4, maxVis: 4 },
   eaoMember: { defaultVis: 4, maxVis: 4 },
 
-  // Public by policy (docs/rbac-architecture.md §3 question 2, 2026-08-28).
+  // Public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2).
   projectLeadEmail: { defaultVis: 4, maxVis: 4 },
   responsibleEPDEmail: { defaultVis: 4, maxVis: 4 },
   cacEmail: { defaultVis: 4, maxVis: 4 },

@@ -7,7 +7,7 @@ measurement, `node --test` per new/changed endpoint, swagger same PR, `src/utils
 ask before commit. **Merging is deploying** on test: every unit leaves anonymous responses
 byte-identical unless its line says otherwise. Line cites are at `5c6ce05` (2026-08-27).
 
-Merge order: U1-U5 (Phase 0) then U6-U11 (Phase 1) then P2-1..P2-5, P3-1..P3-7, P4-1..P4-5,
+Merge order: U1-U5 (Phase 0) then U6-U11 (Phase 1) then P2-1..P2-5, P3-1..P3-8, P4-1..P4-5,
 P5-1..P5-2.
 U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 
@@ -39,7 +39,7 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
       records. Blocks P3-3. Owner: Daniel. Delivered: ______
 - [x] EAO question 1 (nested vs lateral groups). Answered 2026-08-28: ladder 1-4 on the row plane,
       level 0 a sealed compartment, Selected Credentials a time-bound grant (doc §1, §5).
-- [x] EAO question 2: answered 2026-08-28, public (already shown by `eagle-public`). Emails stay `defaultVis: 4`; no tightening list.
+- [x] EAO question 2: public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2). Emails stay `defaultVis: 4`; no tightening list.
 - [x] EAO questions 3 and 4: closed 2026-08-28. `forMAEE` is a spreadsheet column DEMI never reads; `trackProjectId` and `eagleId` are already public (`4/4`).
 - [ ] Entra app registration for DEMI API, app roles named exactly as the realm roles, issuer and audience recorded in the wiki. Blocks P4-3. Owner: ______  Requested: ______  Delivered: ______
 
@@ -831,6 +831,21 @@ The whole ladder is this unit. No endpoint, no stored-data change.
       `['sysadmin','demi-admin','demi-service-read','demi-service-write']`. `ADMIN_ROLES:44` and
       `WRITE_ROLES:58` untouched. This is the one line that makes level 1 enforceable
       (`readClause:261`, `canRead:399`, `access-odata.js:72` all key off `isPrivileged`).
+- [ ] `src/middleware/auth.js:21` — `authMiddleware` stops gating on `isPrivileged`. Add
+      `AUTHENTICATED_ROLES = Object.freeze([...WRITE_ROLES, 'compliance'])` and an
+      `isAuthenticatedRole(roles)` beside it in `access-sql.js`, export both, and 403 on that
+      instead. Without this line the constant change above locks `staff` out of every write and
+      admin route — `authMiddleware` fronts all of them — and keeps 403ing a `compliance`-only key.
+      `SECURE_ROLES`/`isPrivileged` keep the ROW-plane short-circuit meaning only (doc §1,
+      Superuser). Also fixes the P5-2 minor: `requireRole('compliance')` is unreachable while
+      `authMiddleware` rejects the caller first.
+- [ ] Every other `isPrivileged` consumer keeps its meaning and needs no edit. Full list
+      (`grep -rn isPrivileged src/`): `access-sql.js:90` (definition), `:135` (`resolveAccess`
+      tier), `:261` (`readClause` short-circuit), `:399` (`canRead`), `:422` (export),
+      `access-odata.js:14,72` (`filterFor`), `controllers/me.js:8,19` (the `privileged` flag
+      `/api/me` reports, which goes false for staff), `middleware/auth.js:4,21` (the only caller
+      that changes). The comment at `scripts/probe-acl.js:11` names `staff` as privileged and is
+      corrected in the same commit.
 - [ ] Same file, beside `PUBLIC_ROLES:21`: `LEVEL_TOKENS = { 1: 'team', 2: 'staff', 3: 'idir', 4: 'public' }`,
       `readForLevel(level)` → cumulative token array (`readForLevel(2) === ['team','staff']`),
       `levelOfRead(read)` → widest token present, `1` when none. Export both.
@@ -861,6 +876,11 @@ The whole ladder is this unit. No endpoint, no stored-data change.
   - [ ] `test/helpers/access-odata.test.js` case `'a staff caller now gets a filter'` — asserts
         `filterFor({ roles: ['public','staff'] }).filter` contains `staff` and is not null. Fails if
         `staff` is put back in `SECURE_ROLES`.
+  - [ ] `test/middleware/auth.test.js` case `'a staff-only token passes authMiddleware after the
+        SECURE_ROLES change'` — `next()` runs and nothing 403s. Fails if the gate is still
+        `isPrivileged`.
+  - [ ] Same file, `'a compliance-only token passes authMiddleware'` — same assertion. This is what
+        makes `requireRole('compliance')` reachable in P5-2.
   - [ ] `test/vis/level.test.js:48` — delete `'levels 1 and 3 have no role until EAO question 1 is
         answered'`; add `'sysadmin is level 1, not 0'` (`levelFromRoles(['sysadmin']) === 1`) and
         `'an IDIR login is level 3'` (`ROLE_LEVELS.idir === 3`).
@@ -1021,8 +1041,44 @@ level, never changes anyone else's access, and never touches the field plane.
 
 ## P3-7 index the `vis` map
 
-Branch: `feat/vis-index-field`  (unchanged from the previous plan; run the reindex block at the end
-of this file. Note the record-level clamp needs `read`, which the index already carries.)
+Branch: `feat/vis-index-field`  (run the reindex block at the end of this file. The record-level
+clamp needs `read`, which the index already carries.)
+
+- [ ] `azure/search/indexes/projects.json`: add `{ "name": "vis", "type": "Edm.String", "retrievable": true, "searchable": false, "filterable": false, "sortable": false, "facetable": false }` — a JSON string, because the index has no map type.
+- [ ] `azure/search/datasources/demi-projects-ds.json` `container.query`: append `, c.vis` to the SELECT before `, c._ts`.
+- [ ] `src/search/ai-search.js:82-84` `PROJECT_SELECT`: append `,vis`.
+- [ ] `src/controllers/search.js:291` mapper: `JSON.parse(doc.vis || '{}')` inside a try, fall back to `{}` on a throw (fail closed = no dial = `defaultVis`), then hand the parsed map to the redactor before mapping.
+- [ ] Same for `azure/search/indexes/documents.json` only if documents get dials; do not add it speculatively.
+
+Tests
+
+- [ ] `test/vis/search-drift.test.js` — case `'vis is retrievable and never searchable'` asserts the three flags on the index definition. Fails if a later PUT makes it searchable, which would let a caller find records by their classification.
+- [ ] `test/controllers/search.test.js` — case `'a malformed vis string falls back to defaultVis'` feeds `vis: '{'` and asserts the row is redacted at `defaultVis`, not returned raw. Fails on an unguarded `JSON.parse`.
+- [ ] `test/search/ai-search.test.js` — the existing select-vs-index guard covers the new name.
+
+Acceptance
+
+- [ ] `node --test test/vis/search-drift.test.js test/search/ai-search.test.js test/controllers/search.test.js` — 0 fail.
+- [ ] Reindex block below, run in order.
+- [ ] After the indexer reset: `GET {endpoint}/indexers/projects-indexer/status` reports `393 processed, 0 failed` and a dialled project's search hit is redacted.
+
+## P3-8 gate `projectCACPublished`, then the `cacPublished` predicate
+
+Branch: `feat/vis-cac-predicate`
+
+- [ ] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:52`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only `PATCH /visibility` (P3-5) or the Eagle push may set it. Merges before the predicate, per doc section 2 item 7.
+- [ ] Only then: `cacPublished: (record) => record.projectCACPublished === true` in `src/vis/predicates.js`, and `when: 'cacPublished'` on `cacEmail` in `src/vis/catalog/projects.js` with `defaultVis: 2, maxVis: 4`.
+
+Tests
+
+- [ ] `test/controllers/nosql/nosql-controllers.test.js` — case `'PUT /api/projects/:id cannot set projectCACPublished'` asserts the stored row is unchanged. Fails today, where the body spreads in at `:211`.
+- [ ] `test/vis/redact-matrix.test.js` — case `'cacEmail is public only while the CAC is published'`: level 4 + `projectCACPublished: true` → present; level 4 + false → absent; level 2 → present in both. Fails if the predicate narrows instead of widening.
+- [ ] Same file, case `'a dial beats the predicate'`: `vis: { cacEmail: 0 }` with `projectCACPublished: true` → absent at level 4 and at level 2. Fails on the source design's AND semantics.
+
+Acceptance
+
+- [ ] `node --test test/vis/redact-matrix.test.js test/controllers/nosql/nosql-controllers.test.js` — 0 fail.
+- [ ] Anonymous `GET /api/projects/<published-CAC-project>` still returns `cacEmail` (today's behaviour, per doc section 2 item 3).
 
 ---
 
@@ -1165,6 +1221,8 @@ Branch: `feat/level-zero-routes`
       (unseal and return, redacted at the caller's level), `GET /api/sealed` (ids, `sealedAt` and
       `title` only — never content). All three `authMiddleware` + `requireRole('compliance')`.
       `sysadmin` gets 403 from the same middleware: doc §1, superuser is levels 1-4.
+- [ ] No auth change here: P3-2's `AUTHENTICATED_ROLES` is what lets a `compliance`-only credential
+      reach `requireRole('compliance')`. Before it, `authMiddleware` 403s the caller first.
 - [ ] `POST /api/sealed/:id/release` — `requireRole('compliance')` and `confirm === true`; unseals,
       writes the record to its ordinary container with `read: readForLevel(1)`, deletes the sealed
       row, audits `sealed.release` with `{ targetId, newId, authority }` from the body. This is the
