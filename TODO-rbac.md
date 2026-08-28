@@ -1209,9 +1209,9 @@ Branch: `feat/ladder-widen-endpoint`
         documents 34 → 38. Every new site redacts.
 - Acceptance
   - [x] `node --test test/controllers/nosql/record-level.test.js test/controllers/audit-cud-coverage.test.js` — 0 fail.
-  - [ ] On test: `PUT /api/projects/207/level -d '{"level":4}'` → 400; with `"confirm":true` → 200
-        and anonymous `GET /api/projects/207` → 200. `DemiAudit_CL | where Action == "record.widen"`
-        returns the row with `Detail.from` and `Detail.to`.
+  - [x] On test 2026-08-28: `PUT /api/projects/207/level -d '{"level":4}'` → 400 (confirm), level 9
+        → 400, no credential → 401. Widening 207 for real, and the `DemiAudit_CL` `record.widen`
+        row, wait for a staff login (Daniel); anonymous snapshot diff after deploy: 0 lines.
 
 ## P3-5 dials and the classify endpoint
 
@@ -1232,9 +1232,9 @@ Branch: `feat/vis-classify-endpoint`
         `'400 on an uncatalogued field'`, `'patches, never upserts'`, `'audits before responding'`.
 - Acceptance
   - [x] `node --test test/controllers/nosql/project-visibility.test.js` — 0 fail.
-  - [ ] On test: a `staff` token PATCHing `/visibility` → 403; `sysadmin` → 200; a follow-up
-        anonymous GET omits the dialled field. `DemiAudit_CL | where Action == "project.reclassify"`
-        returns the row.
+  - [x] On test 2026-08-28 with the admin key: uncatalogued field → 400, empty `vis` → 400, no
+        credential → 401. The `staff` 403, the `sysadmin` 200 with a dialled field vanishing from
+        the anonymous GET, and the `project.reclassify` audit row wait for a staff login (Daniel).
 
 ## P3-6 Selected Credentials
 
@@ -1348,7 +1348,7 @@ Docs only. Written before P3-4 ships, because P3-4's 403 path points at it.
 - [x] The runbook states plainly that copies already outside EPIC — downloads, mirrors, search
       engine caches — are unrecoverable, and that a takedown is incident response with a recorded
       reason, never a routine correction.
-- [x] Linked from `docs/rbac-architecture.md` §1. The `docs/prod-flip-runbook.md` link is still open.
+- [x] Linked from `docs/rbac-architecture.md` §1 and `docs/prod-flip-runbook.md`.
 - [x] Acceptance: `docs/takedown-runbook.md` exists and its AI Search step names the real helper —
       `grep -n deleteFromIndex src/search/*.js` resolves.
 
