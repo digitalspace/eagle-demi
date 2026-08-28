@@ -601,7 +601,7 @@ Acceptance
 - [x] `yarn test` — all green.
 - [x] `node --test test/vis/catalog-completeness.test.js test/controllers/nosql/document-redaction.test.js` — 0 fail.
 - [x] `curl -s $API/api/documents/<id> | jq 'has("s3Key"), has("read"), has("_etag")'` on test → `false false false`; same output as before the PR. (test 2026-08-28: `false false false`; list, point read and Document search `jq -S` diff 0 lines vs pre-merge snapshot)
-- [x] (2026-08-28: identical; the P2-1 predicted `ownRead`/Cosmos-field deviation did not appear anonymously) `curl -s $API/api/documents/<id> | jq -S 'keys'` before and after are identical.
+- [x] `curl -s $API/api/documents/<id> | jq -S 'keys'` before and after are identical (2026-08-28: identical, see the deviation note above).
 
 ### P2-1 recorded deviations
 
@@ -614,8 +614,9 @@ Acceptance
 - `_rid`, `_self`, `_attachments`, `_ts` at `maxVis: 0` remove four more keys, the same deviation
   U7 recorded for projects and for the same reason. They are unavoidable here regardless of the
   catalog: `selectFor` projects named fields, so a list read no longer fetches them at all.
-- Both bullets above mean the two `jq -S 'keys'` acceptance lines will differ by those five names.
-  The `has("s3Key"), has("read"), has("_etag")` line is unaffected.
+- Measured 2026-08-28 on test: neither removal is observable. `src/db/cosmos-nosql.js` strips
+  `_rid`/`_self`/`_attachments`/`_ts` on every read before any view runs, and 0 of 100 documents
+  read at level 0 carry `ownRead`. The two `jq -S 'keys'` acceptance lines are identical.
 - Level 0 now sees `s3Key`, `read`, `ownRead` and the Cosmos system fields on a document response.
   `publicView` stripped them from every caller. Doc §2 item 4 holding, not a regression.
 - The coverage ratchet identifies hand-built payloads by the dotted-name lookahead the projects
@@ -654,7 +655,7 @@ Tests
 Acceptance
 
 - [x] `node --test test/vis/search-drift.test.js test/controllers/search.test.js` — 0 fail.
-- [x] Anonymous `GET /api/search?dataset=Project&pageSize=5` and `dataset=Document&pageSize=5` on test, `jq -S` before and after: 0 lines (`search-diff.js` is moot, its baseline is retired eagle-search). Date the run here: ______ (2026-08-28: Project, Document, DocumentChunk 0 lines)
+- [x] Anonymous `GET /api/search?dataset=Project&pageSize=5` and `dataset=Document&pageSize=5` on test, `jq -S` before and after: 0 lines (`search-diff.js` is moot, its baseline is retired eagle-search). (2026-08-28: Project, Document, DocumentChunk 0 lines)
 - [x] `curl -s "$API/api/search?dataset=Project&pageSize=5" | jq -S '.[0].searchResults[0] | keys'` identical before and after. (2026-08-28: 0 lines)
 
 ### P2-2 recorded deviations
@@ -698,7 +699,7 @@ Acceptance
 
 - [x] `node --test test/search/eagle-query.test.js test/controllers/search.test.js test/repositories/projects.test.js` — 0 fail.
 - [x] `curl -s "$API/api/search?dataset=Project&complianceLead=x"` → 400 (unknown param, unchanged). (2026-08-28: 400)
-- [x] Same anonymous `/api/search` `jq -S` diff as P2-2: 0 lines. Date: ______ (2026-08-28: 0 lines)
+- [x] Same anonymous `/api/search` `jq -S` diff as P2-2: 0 lines. (2026-08-28: 0 lines)
 
 ### P2-3 recorded deviations
 
@@ -721,14 +722,14 @@ Acceptance
 
 Branch: `feat/vis-me-endpoint`
 
-- [x] New `exports.getMe` in `src/controllers/me.js` (no Cosmos read, so beside `config.js`, not under `nosql/`) (new file, ~15 lines): `resolveAccess(req)` then `res.json({ roles: access.roles, level: access.level, tier: access.tier })`. No Cosmos read.
+- [x] New `exports.getMe` in `src/controllers/me.js` (no Cosmos read, so beside `config.js`, not under `nosql/`) (new file, ~15 lines): `resolveAccess(req)` then `res.json({ roles, level, tier, privileged })`. No Cosmos read.
 - [x] Route `router.get('/me', passiveAuthMiddleware, meController.getMe)` in `src/routes/api.js`, beside `/config` at `:38`. Passive, not `authMiddleware`: an anonymous caller must get `{ roles: ['public'], level: 4, tier: 'public' }` rather than a 401.
 - [x] `src/swagger/swagger.yaml`: add `/api/me` under `paths:` (`:15`), before `/api/projects` (`:39`); response schema in `components:` (`:499`).
 
 Tests
 
 - [x] `test/controllers/me.test.js` — case `'anonymous /api/me returns level 4'` asserts `{ level: 4, tier: 'public' }` and `roles` contains only `public`. Fails if the route is mounted behind `authMiddleware` (401 instead of 200).
-- [x] Same file, case `'/api/me never returns a token or a key id'` asserts the response has exactly the keys `roles`, `level`, `tier`. Fails if someone spreads `req.user` in.
+- [x] Same file, case `'/api/me never returns a token or a key id'` asserts the response has exactly the keys `roles`, `level`, `tier`, `privileged`. Fails if someone spreads `req.user` in.
 - [x] `test/app.api-docs-prod.test.js` already asserts swagger parses; confirm `/api/me` appears.
 
 Acceptance
@@ -737,13 +738,18 @@ Acceptance
 - [x] `curl -s $API/api/me` → `{"roles":["public"],"level":4,"tier":"public"}`. (2026-08-28: `{"roles":["public"],"level":4,"tier":"public","privileged":false}`)
 - [x] `curl -s -H "X-Api-Key: $KEY" $API/api/me | jq .level` → the level of that key's roles. (2026-08-28: admin key → level 0, tier privileged)
 
+### P2-4 recorded deviations
+- The response carries a fourth key, `privileged` (`isPrivileged(access.roles)`), because neither
+  `level` (shared by `compliance`) nor `tier` (`scoped` for staff with a `project:` role) answers the
+  frontend's privilege question. Controller lives at `src/controllers/me.js`, not under `nosql/`.
+
 ## P2-5 frontend level signal
 
 Branch: `feat/vis-frontend-level`
 
 - [x] `frontend/src/app/services/registry-state.service.ts`: add `visLevel = signal<number>(4)` beside `isAuthenticated` / `isUnauthorized` (`:52-53`).
 - [x] Fetch `/api/me` in `authSettled()` (called at `:771` and `:778`) and set `visLevel`. The fetch monkey-patch at `:602-628` already attaches the bearer, so no header work here.
-- [x] Replace the hard-coded role check at `:757` with `tier === 'privileged'` from the `/api/me` answer; keep `isUnauthorized` as the rendered signal so no template changes. The role check survives as the fallback for a `/api/me` that times out or fails, so a staffer is never locked out by an unreachable API.
+- [x] Replace the hard-coded role check at `:757` with `privileged` from the `/api/me` answer (the server's `isPrivileged`, since `tier` is `scoped` for staff holding a `project:` role); keep `isUnauthorized` as the rendered signal so no template changes. The role check survives as the fallback for a `/api/me` that times out or fails, so a staffer is never locked out by an unreachable API.
 - [x] `frontend/src/app/models/registry.models.ts`: make every field a redactor can remove optional — `Project` (`:1-35`) `sector`, `status`, `region`, `description`, `proponent`, `centroid`, `legacyEagleId`; `Document` (`:37-53`) `orcsCode`, `documentType`, `projectName`. `id` and `name` stay required (`maxVis 4` in the catalog).
 - [x] Templates render on field presence, never on role: grep `isStaff()` and `isUnauthorized()` in `frontend/src/app/**/*.html` and convert any field-level use to `@if (project.x)`. Screen-level gating stays.
 - [x] (`Attribute-Level-Access.md`, wiki `afde91e`) Wiki page: catalog format and the level table. Link it from `docs/rbac-architecture.md`.
@@ -757,7 +763,7 @@ Tests
 Acceptance
 
 - [x] `cd frontend && yarn lint && yarn test && yarn build` — all green.
-- [x] Anonymous load of the deployed frontend shows no staff panel; DevTools Network shows `/api/me` returning `level: 4`. (2026-08-28: `/api/me` anonymous returns level 4; deployed bundle `main-AAKEFNZ6.js` carries the `/me` fetch, timeout and fallback. Rendered check not done: both browser MCPs failed to load the AFD host)
+- [ ] Anonymous load of the deployed frontend shows no staff panel; DevTools Network shows `/api/me` returning `level: 4`. Not observed: 2026-08-28: `/api/me` anonymous returns level 4; deployed bundle `main-AAKEFNZ6.js` carries the `/me` fetch, timeout and fallback. Rendered check not done: both browser MCPs failed to load the AFD host
 - [ ] Staff login shows the same panels as before the PR. Needs a staff login; not done.
 
 ---
