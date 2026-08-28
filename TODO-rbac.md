@@ -1207,7 +1207,7 @@ Acceptance
 
 Branch: `feat/vis-cac-predicate`
 
-- [ ] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:52`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only `PATCH /visibility` (P3-5) or the Eagle push may set it. Merges before the predicate, per doc section 2 item 7.
+- [ ] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:58`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only `PATCH /visibility` (P3-5) or the Eagle push may set it. Merges before the predicate, per doc section 2 item 7.
 - [ ] Only then: `cacPublished: (record) => record.projectCACPublished === true` in `src/vis/predicates.js`, and `when: 'cacPublished'` on `cacEmail` in `src/vis/catalog/projects.js` with `defaultVis: 2, maxVis: 4`.
 
 Tests
@@ -1353,7 +1353,8 @@ system caller must stop seeing these rows — plus one release path.
 Branch: `feat/level-zero-token`
 
 - [ ] `src/helpers/access-sql.js` (home of `readForLevel`/`levelOfRead` since P3-2) — `readForLevel(0)` returns `['compliance']`, and
-      `levelOfRead(['compliance'])` returns 0. `readForLevel` covers 1-4 only.
+      `levelOfRead(['compliance'])` returns 0; the ladder tokens stay 1-4 and `0` is the only
+      non-ladder value `readForLevel` accepts.
 - [ ] `src/helpers/access-sql.js` — `readClause:257` stops returning bare `true` for a privileged
       caller: when the caller's roles do not include `compliance` it returns
       `NOT ARRAY_CONTAINS(c.read, 'compliance')` (alias-aware), for privileged and unprivileged

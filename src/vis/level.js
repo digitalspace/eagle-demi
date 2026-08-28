@@ -2,8 +2,7 @@
 
 /**
  * Field-visibility LEVEL: one integer per caller, 0 most privileged, 4 anonymous public. The table
- * below is the whole mapping: one integer per role, lowest wins, and an unrecognised role grants
- * nothing, so an unknown caller reads as 4.
+ * below is the whole mapping; lowest wins.
  *
  * Adding `idir` and moving `sysadmin`/`demi-admin` and team membership is Phase 3 work, tracked in
  * TODO-rbac.md. DEMI reuses Eagle's realm roles and creates none of its own.

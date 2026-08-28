@@ -128,7 +128,7 @@ collapses to `true`. `systemAccess()` holds no `compliance` role and carries the
 exports, seed and reconcile never read a sealed row.
 
 Sealing is an application-layer guarantee. Cosmos data-plane operators, backups and the
-`ADMIN_API_KEY` break-glass sit outside it, so the seal is real only under two conditions:
+`ADMIN_API_KEY` break-glass sit outside it, so the seal is real only under three conditions:
 
 1. The `ADMIN_API_KEY` break-glass must not resolve the `compliance` role.
 2. Exports and backups stay locked down.
