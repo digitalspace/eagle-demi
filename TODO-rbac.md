@@ -743,7 +743,7 @@ Branch: `feat/vis-frontend-level`
 
 - [x] `frontend/src/app/services/registry-state.service.ts`: add `visLevel = signal<number>(4)` beside `isAuthenticated` / `isUnauthorized` (`:52-53`).
 - [x] Fetch `/api/me` in `authSettled()` (called at `:771` and `:778`) and set `visLevel`. The fetch monkey-patch at `:602-628` already attaches the bearer, so no header work here.
-- [x] Replace the hard-coded role check at `:757` (`roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin')`) with `level <= 2` from the `/api/me` answer; keep `isUnauthorized` as the rendered signal so no template changes.
+- [x] Replace the hard-coded role check at `:757` with `tier === 'privileged'` from the `/api/me` answer; keep `isUnauthorized` as the rendered signal so no template changes. The role check survives as the fallback for a `/api/me` that times out or fails, so a staffer is never locked out by an unreachable API.
 - [x] `frontend/src/app/models/registry.models.ts`: make every field a redactor can remove optional — `Project` (`:1-35`) `sector`, `status`, `region`, `description`, `proponent`, `centroid`, `legacyEagleId`; `Document` (`:37-53`) `orcsCode`, `documentType`, `projectName`. `id` and `name` stay required (`maxVis 4` in the catalog).
 - [x] Templates render on field presence, never on role: grep `isStaff()` and `isUnauthorized()` in `frontend/src/app/**/*.html` and convert any field-level use to `@if (project.x)`. Screen-level gating stays.
 - [x] (`Attribute-Level-Access.md`, wiki `afde91e`) Wiki page: catalog format and the level table. Link it from `docs/rbac-architecture.md`.
@@ -752,7 +752,7 @@ Tests
 
 - [x] `frontend/src/app/services/registry-state.service.spec.ts` — case `'visLevel defaults to 4 before /api/me answers'` asserts the initial signal value. Fails if the signal is initialised optimistically at 0 or 2, which would render staff UI to anonymous.
 - [x] Same file, case `'visLevel 2 clears isUnauthorized'` stubs `/api/me` → `{ level: 2 }` and asserts `isUnauthorized()` is false; `{ level: 3 }` asserts true. Fails if the old role check survives.
-- [x] Same file, case `'a project row with no sector renders'` — construct a `Project` without the now-optional fields and assert no throw. Fails if a template dereferences a removed field.
+- [x] Same file, case `'a project row with no sector renders'` — a `Project` carrying only `id`, `name` and `gatingState` passes through `filteredProjects()` without throwing. Pins the service's filter path only; no template is rendered.
 
 Acceptance
 

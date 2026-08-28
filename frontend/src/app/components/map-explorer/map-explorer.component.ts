@@ -366,8 +366,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
         marker.bindPopup(`
           <div class="popup-title">${p.name}</div>
-          <div class="popup-meta"><strong>Sector:</strong> ${p.sector}</div>
-          <div class="popup-meta"><strong>Status:</strong> ${p.status}</div>
+          <div class="popup-meta"><strong>Sector:</strong> ${p.sector ?? ''}</div>
+          <div class="popup-meta"><strong>Status:</strong> ${p.status ?? ''}</div>
         `);
 
         marker.on('click', () => {

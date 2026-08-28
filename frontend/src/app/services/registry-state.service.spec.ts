@@ -671,19 +671,27 @@ describe('RegistryStateService — loadSummary gating', () => {
 /**
  * `GET /api/me` is the only source of "what may this caller see". The browser used to read
  * sysadmin / staff / demi-admin off the token itself, which meant the two could disagree with the
- * API that actually redacts the data.
+ * API that actually redacts the data. Those roles survive as the fallback for an /api/me that
+ * hangs or fails, so an unreachable API cannot lock a staffer out of the UI for the session.
  */
-describe('RegistryStateService — visLevel', () => {
-  // Answers /api/me with the current `meLevel`; every other URL gets the ordinary loadData() stub.
-  // `meLevel` is a closure so one spec can answer twice without a second spyOn.
-  let meLevel: number | undefined;
+describe('RegistryStateService — /api/me gating', () => {
+  // The /api/me answer. `undefined` hangs the request, honouring the abort signal the way a real
+  // fetch does; `meStatus` other than 200 answers with that status. Every other URL gets the
+  // ordinary loadData() stub. Closures, so one spec can answer twice without a second spyOn.
+  let meAnswer: { roles: string[]; level: number; tier: string } | undefined;
+  let meStatus: number;
 
   function makeService(): RegistryStateService {
-    sharedFetchSpy = spyOn(window, 'fetch').and.callFake((input: RequestInfo | URL) => {
+    sharedFetchSpy = spyOn(window, 'fetch').and.callFake((input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : input.url);
       if (url.endsWith('/me')) {
-        if (meLevel === undefined) return new Promise<Response>(() => { /* stays in flight */ });
-        return Promise.resolve(okResponse({ roles: [], level: meLevel, tier: 'public' }));
+        if (meStatus !== 200) return Promise.resolve(new Response('{}', { status: meStatus }));
+        if (meAnswer === undefined) {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('timed out', 'TimeoutError')));
+          });
+        }
+        return Promise.resolve(okResponse(meAnswer));
       }
       return Promise.resolve(okResponse());
     });
@@ -698,7 +706,12 @@ describe('RegistryStateService — visLevel', () => {
 
   beforeEach(() => {
     localStorage.clear();
-    meLevel = undefined;
+    meAnswer = undefined;
+    meStatus = 200;
+  });
+
+  afterEach(() => {
+    RegistryStateService.meTimeoutMs = 5000;
   });
 
   it('visLevel defaults to 4 before /api/me answers', () => {
@@ -707,9 +720,38 @@ describe('RegistryStateService — visLevel', () => {
     expect(service.visLevel()).toBe(4);
   });
 
-  it('visLevel 2 clears isUnauthorized', async () => {
-    meLevel = 2;
+  it('a hung /api/me does not block authReady', async () => {
+    RegistryStateService.meTimeoutMs = 50;
     const service = makeService();
+
+    await service.authReady;
+
+    expect(service.visLevel()).toBe(4);
+    expect(service.isUnauthorized()).toBe(false);
+  });
+
+  it('a failed /api/me falls back to token roles', async () => {
+    meStatus = 500;
+    const service = makeService();
+    await service.authReady;
+    service.isAuthenticated.set(true);
+
+    (service as any).keycloak = { tokenParsed: { realm_access: { roles: ['staff'] } } };
+    await (service as any).loadVisLevel();
+
+    expect(service.isUnauthorized()).toBe(false);
+    expect(service.visLevel()).toBe(4);
+
+    (service as any).keycloak = { tokenParsed: { realm_access: { roles: ['compliance'] } } };
+    await (service as any).loadVisLevel();
+
+    expect(service.isUnauthorized()).toBe(true);
+  });
+
+  it('the privileged tier clears isUnauthorized, and level alone does not', async () => {
+    meAnswer = { roles: ['staff'], level: 2, tier: 'privileged' };
+    const service = makeService();
+    await service.authReady;
     service.isAuthenticated.set(true);
 
     await (service as any).loadVisLevel();
@@ -717,15 +759,16 @@ describe('RegistryStateService — visLevel', () => {
     expect(service.visLevel()).toBe(2);
     expect(service.isUnauthorized()).toBe(false);
 
-    meLevel = 3;
+    // Same level, public tier: `compliance` reads redacted fields without being staff.
+    meAnswer = { roles: ['compliance'], level: 2, tier: 'public' };
     await (service as any).loadVisLevel();
 
-    expect(service.visLevel()).toBe(3);
+    expect(service.visLevel()).toBe(2);
     expect(service.isUnauthorized()).toBe(true);
   });
 
   it('a project row with no sector renders', async () => {
-    meLevel = 4;
+    meAnswer = { roles: [], level: 4, tier: 'public' };
     const service = makeService();
     await settleInitialLoad(service);
 

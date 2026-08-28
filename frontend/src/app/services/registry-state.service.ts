@@ -57,6 +57,9 @@ export class RegistryStateService {
   // renders privileged UI while the request is in flight.
   visLevel = signal<number>(4);
 
+  // Budget for `GET /api/me`. Static so a spec can shorten it before the constructor fires.
+  static meTimeoutMs = 5000;
+
   /**
    * THE one answer to "may this person see staff-only things".
    *
@@ -694,20 +697,30 @@ export class RegistryStateService {
     this.loadData();
   }
 
-  /** Ask the API what this caller may see, and derive `isUnauthorized` from the answer. */
+  /** Ask the API what this caller may see; fall back to the token roles when it cannot answer. */
   private async loadVisLevel(): Promise<void> {
+    let privileged: boolean | null = null;
     try {
-      const res = await fetch(`${this.getBasePath()}/me`);
+      const res = await fetch(`${this.getBasePath()}/me`, {
+        signal: AbortSignal.timeout(RegistryStateService.meTimeoutMs)
+      });
       if (res.ok) {
         const me = await res.json();
         if (typeof me?.level === 'number') this.visLevel.set(me.level);
+        if (typeof me?.tier === 'string') privileged = me.tier === 'privileged';
       }
     } catch {
-      // Unreachable or unparseable /api/me leaves level 4 in place, which denies rather than grants.
+      // fall through to the token roles below
     }
-    // Anonymous is level 4 too, so this stays conjoined with isAuthenticated — otherwise every
-    // public visitor gets the "your account has no staff access" copy.
-    this.isUnauthorized.set(this.isAuthenticated() && this.visLevel() > 2);
+    if (privileged === null) {
+      // A hung or refusing /api/me must not lock a real staffer out for the session; redaction is
+      // server-side either way, so the client keeps level 4 and only the UI gate falls back.
+      const roles: string[] = this.keycloak?.tokenParsed?.realm_access?.roles || [];
+      privileged = roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
+    }
+    // Anonymous is the public tier too, so this stays conjoined with isAuthenticated — otherwise
+    // every public visitor gets the "your account has no staff access" copy.
+    this.isUnauthorized.set(this.isAuthenticated() && !privileged);
   }
 
   // Keycloak initialization Flow
