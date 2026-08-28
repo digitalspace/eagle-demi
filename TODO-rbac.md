@@ -29,9 +29,10 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 
 ## External dependencies (owner and date before the unit that needs them)
 
-- [ ] Realm roles `demi-vis-0`, `demi-vis-1`, `demi-vis-2`, `demi-vis-3` in `eao-epic` (`test.loginproxy.gov.bc.ca`). Claude scripts against secret `demi-keycloak-admin` in `6cdc9e-test`; Daniel fires the mutation. Owner: ______  Requested: ______  Created: ______
-- [ ] Realm role `demi-classify` in `eao-epic`, same mechanism. Blocks P3-2, P3-3. Owner: ______  Requested: ______  Created: ______
-- [ ] `demi-service-write` realm role (ADR-007) exists before `demi-classify` is created. Owner: ______  Confirmed: ______
+- [ ] Realm roles: DEMI reuses Eagle's vocabulary, no `demi-*` realm roles (decided 2026-08-28). Test done; prod open.
+      `eao-epic` test held only `sysadmin` of the names eagle-api checks; `staff` created there
+      2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
+      Levels 1 and 3 get a role only when EAO question 1 is answered. Classifying (P3-2) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
 - [ ] EAO question 1 (nested vs lateral groups). Blocks all of Phase 3. Owner: Daniel. Asked: ______  Answered: ______
 - [ ] EAO question 2 (lead/EPD names and emails public by policy). Gates the P2-1 tightening list. Asked: ______  Answered: ______
 - [ ] EAO questions 3 and 4 (`forMAEE = Y` implies `maxVis >= 3`; `project_tracking_number` and `epic_guid` ceilings). Asked: ______  Answered: ______
@@ -142,11 +143,10 @@ Doc §2 item 10. Code and app setting ship together.
         setting already present.
   - [ ] Prod: `MINIO_*=… ADMIN_API_KEY=… DOCLING_API_KEY=… ./scripts/deploy-infra.sh prod --what-if`,
         review, then `CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live`.
-  - [ ] Verify: `GET /api/deployments/latest` status 4, then the two curls above. Test 2026-08-27:
-        anonymous `/api/projects` 200 and byte-identical. The unlisted-client 401 is NOT shown live —
-        a malformed Bearer 401s at `jwt.verify` before the allowlist runs. It needs a signed token
-        from a client other than `eagle-admin-console` (e.g. `epic-admin` client credentials);
-        until then the guard is proved only by `test/helpers/client-allowlist.test.js`.
+  - [x] Verify: `GET /api/deployments/latest` status 4, then the two curls above. Test 2026-08-27:
+        anonymous `/api/projects` 200 and byte-identical. 2026-08-28: a signed client-credentials
+        token from a throwaway confidential client (`azp=demi-allowlist-probe`, created and deleted
+        the same minute) got `401 Unauthorized. Client is not permitted to call this API.`
   - [ ] Rollback: revert the code commit and redeploy the API. The app setting alone is harmless —
         the old build ignores `DEMI_ALLOWED_CLIENTS` only if it is empty, so leave the setting in
         place and revert code, never the reverse. An empty setting on the new build is not a boot
@@ -254,7 +254,7 @@ creates one; it is the largest Phase 0 item and merges alone.
       (`src/controllers/nosql/api-key.js:31` makes it grantable). Initial map per the source design:
       `sysadmin` 0, `demi-admin` 0, `staff` 2, `demi-service-read` 2, `demi-service-write` 2,
       `compliance` 2 `?`, `public` 4. Levels 1 and 3 have no role until EAO question 1 (doc §3) is
-      answered; do not invent `demi-vis-*` names here.
+      answered; do not invent new role names here.
 - [x] `src/helpers/access-sql.js:109-135` `resolveAccess`: add `level: levelFromRoles(roles)` to all
       three returned objects.
 - [x] `src/helpers/access-sql.js:201-203` `systemAccess`: add `level: 0`.
@@ -821,7 +821,7 @@ Acceptance
 Branch: `feat/vis-classify-endpoint`
 
 - [ ] `requireRole(name)` factory in `src/middleware/require-roles.js`, next to `requireWrite` (`:24-31`) and `requireAdmin` (`:33-41`); same shape — read `req.user.realm_access.roles`, 403 with a message naming the missing role. Export it at `:43`.
-- [ ] Route: `router.patch('/projects/:id/visibility', authMiddleware, requireWrite, requireRole('demi-classify'), projectController.setVisibility)` in `src/routes/api.js`, after `:68`.
+- [ ] Route: `router.patch('/projects/:id/visibility', authMiddleware, requireWrite, requireRole('sysadmin'), projectController.setVisibility)` in `src/routes/api.js`, after `:68`.
 - [ ] `exports.setVisibility` in `src/controllers/nosql/project.js`, after `updateProject` (ends `:250`). Body `{ vis: { field: level } }`. 400 on a field absent from `catalogFor('projects')`, 400 on a level outside `0..maxVis`, 400 on more than 10 keys (`src/db/cosmos-nosql.js:262-265` caps patch at 10 operations).
 - [ ] Write with `cosmos.patch(CONTAINER, id, id, ops)` — the precedent is `src/repositories/api-keys.js:78-86` `touchLastUsed`, and the reason is the same: an upsert writes the whole record and would race the content writers. Add `patchVis` to `src/repositories/projects.js` beside `patchWildfireStats` and export it at `:263`.
 - [ ] `auditEvent(req, { action: 'project.reclassify', targetType: 'project', targetId, projectId, detail: { fields, from, to } })` BEFORE responding — signature at `src/utils/audit.js:182`, an existing call to copy at `src/controllers/nosql/project.js:222-232`. Field names and levels only, never values.
@@ -829,7 +829,7 @@ Branch: `feat/vis-classify-endpoint`
 
 Tests
 
-- [ ] `test/controllers/nosql/project-visibility.test.js` — case `'403 without demi-classify'` drives the route with a `staff`-only token. Fails if the middleware is missing from the chain.
+- [ ] `test/controllers/nosql/project-visibility.test.js` — case `'403 without sysadmin'` drives the route with a `staff`-only token. Fails if the middleware is missing from the chain.
 - [ ] Same file, case `'400 on an uncatalogued field'` posts `{ vis: { notAField: 2 } }`.
 - [ ] Same file, case `'400 on a level above maxVis'` posts a level 4 dial for a `maxVis: 2` field.
 - [ ] Same file, case `'patches, never upserts'` asserts the stub repo saw `patch` and not `upsert` — an upsert here would clobber a concurrent content write.
@@ -840,7 +840,7 @@ Acceptance
 
 - [ ] `node --test test/controllers/nosql/project-visibility.test.js test/controllers/audit-cud-coverage.test.js` — 0 fail.
 - [ ] `curl -X PATCH -H "Authorization: Bearer $STAFF" -d '{"vis":{"cacEmail":2}}' $API/api/projects/207/visibility` → 403.
-- [ ] Same with a `demi-classify` token → 200; a follow-up anonymous `GET /api/projects/207` omits `cacEmail`.
+- [ ] Same with a `sysadmin` token → 200; a follow-up anonymous `GET /api/projects/207` omits `cacEmail`.
 - [ ] `DemiAudit_CL | where Action == "project.reclassify"` returns the row.
 
 ## P3-3 gate `projectCACPublished`, then ship the `cacPublished` predicate
@@ -888,7 +888,7 @@ Acceptance
 Branch: `feat/vis-clearance-set`
 
 - [ ] Replace `visible(level, effVis)` in `src/vis/redact.js` and `levelFromRoles` in `src/vis/level.js` with set membership. Doc section 2 item 11 says these two are the only places the scalar order is assumed — hold that claim with a grep for `<=` under `src/vis/` in the completeness test before writing any dial.
-- [ ] Must land BEFORE any `demi-vis-*` role is created or any dial is written.
+- [ ] Must land BEFORE any level-1/3 role is created or any dial is written.
 
 ---
 
@@ -946,7 +946,7 @@ Tests
 
 - [ ] `test/helpers/registry-key-auth.test.js` (or a new `test/helpers/dual-issuer.test.js`) — case `'a token from an unknown issuer is rejected without a JWKS fetch'` asserts 401 and that the jwks stub was never called. Fails if `iss` is read after verification.
 - [ ] Same file, case `'each issuer verifies against its own audience'` — a token valid for issuer A with issuer B's `aud` is rejected. Fails on a shared-audience shortcut.
-- [ ] Same file, case `'Entra roles claim maps to the same levels'` asserts a token with `roles: ['demi-vis-2']` and no `realm_access` resolves to level 2.
+- [ ] Same file, case `'Entra roles claim maps to the same levels'` asserts a token with `roles: ['staff']` and no `realm_access` resolves to level 2.
 
 Acceptance
 

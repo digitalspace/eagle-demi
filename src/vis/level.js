@@ -4,8 +4,8 @@
  * Field-visibility LEVEL: one integer per caller, 0 most privileged, 4 anonymous public.
  *
  * Levels 1 and 3 have no role yet — EAO question 1 (docs/rbac-architecture.md §3) decides whether
- * the internal groups are nested or lateral, and `demi-vis-*` names are realm roles DEMI does not
- * own, so neither is invented here.
+ * the internal groups are nested or lateral; DEMI reuses Eagle's realm roles and creates none of
+ * its own, so no name is invented here.
  */
 const ROLE_LEVELS = {
   sysadmin: 0,
