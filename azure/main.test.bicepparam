@@ -140,5 +140,5 @@ param linkBaseUrl = 'https://test.projects.eao.gov.bc.ca'
 // takes main.bicep's 'eagle-admin-console' default, and frontend/public/env.js names the same id.
 param allowedClients = 'eagle-admin-console'
 
-// set after measuring aud on a live token
-param ssoAudience = ''
+// Measured 2026-08-28 on a test-realm user token: aud contains 'account'. Prod not measured.
+param ssoAudience = 'account'

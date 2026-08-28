@@ -130,9 +130,9 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   });
 }
 
-// Declared, not non-empty. The value is unmeasured — nobody has read `aud` off a live token per
-// realm — and a guessed one rejects every caller, so both files ship '' (verification off) and this
-// only guards the line itself: delete it and the environment silently takes the module default.
+// Declared, not non-empty: a guessed value rejects every caller, so a realm ships '' until its `aud`
+// is measured (test: 'account', 2026-08-28; prod: ''). The check only guards the line itself —
+// delete it and the environment silently takes the module default.
 for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
   test(`the ${envName} param file declares ssoAudience`, () => {
     assert.match(params, /^param ssoAudience = '[^']*'$/m,
