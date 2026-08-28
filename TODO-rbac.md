@@ -898,7 +898,7 @@ The whole ladder is this unit. No endpoint, no stored-data change.
       `SECURE_ROLES` in this unit: leave one site behind and every row written between the two
       merges carries no `staff` token and is invisible to all of EAO.
 - [ ] `src/controllers/nosql/api-key.js:31` `GRANTABLE_ROLES` derives from `SECURE_ROLES`; move it
-      to `[...AUTHENTICATED_ROLES, 'public']` or `staff` keys become unmintable (400
+      to `[...AUTHENTICATED_ROLES, 'compliance', 'public']` (keep `compliance`, or its keys become unmintable) or `staff` keys become unmintable (400
       `Unknown role(s)`). Test: `'a staff API key can still be minted'`.
 - [ ] `src/helpers/access-odata.js` — the role half needs no change. `filterFor:72` already emits
       `read/any(r: search.in(r, '<caller roles>'))`, so `team`/`idir` ride in for free.

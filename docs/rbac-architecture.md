@@ -13,6 +13,10 @@ Reference page: `eagle-demi.wiki/Attribute-Level-Access.md` (level table, catalo
 
 ## 1. Model
 
+Status: the field plane (catalog, dials engine, redactor, `/api/me`) is live on test. The ladder,
+the sealed compartment and Selected Credentials below are the design for Phases 3 and 5; the code
+they describe does not exist yet, and `TODO-rbac.md` is the record of what has shipped.
+
 The EAO sharing model (business text 2026-08-28) maps onto the two planes DEMI already has.
 
 | Plane | Question | Mechanism | Carries |
@@ -237,15 +241,15 @@ Each item below overrides the corresponding section of the source document.
 
 ### 2026-08-28b — open questions
 
-1. Closed 2026-08-28 (Daniel): a project must exist before any record does, so every record
+9. Closed 2026-08-28 (Daniel): a project must exist before any record does, so every record
    has a team. `documents` already partitions on `/projectId`; no business-unit axis is needed.
-2. **Who issues `project:<id>` roles, and for which projects?** Level 1 is unenforceable until every EAO user carries them. Keycloak group mapper, Track project membership, or hand-granted? This blocks P3-3 merging.
-3. **Level 0 role holders.** DEMI creates no realm roles. Is the C&E compartment exactly the existing `compliance` role (today only grantable on an API key, `src/controllers/nosql/api-key.js:31`)? If so it must be created as a realm role and granted to named humans — by whom?
-4. **Who is "the accountable authority" for a level-0 release**, and does the release need two people, or is one `compliance` credential plus a recorded authority reference enough?
-5. **Do external credential parties get Keycloak identities?** First Nations, proponents and local governments must be `user`, `group` or `apikey` parties. If they log in, through which IdP (BCeID? IDIR guest?) — that also decides whether they land on level 3 by accident, since `identity_provider` is the level-3 test.
-6. **Credential defaults**: maximum `end` (90 days? one assessment?) and whether an expiring credential needs a notification or simply lapses.
-7. **Does a widening need a recorded reason?** The audit row carries actor, time, from and to. If policy needs the authority under which a record was published (an EA process gate, a records decision), it must be a required body field — say so before P3-4 ships, since backfilling it is a schema change.
-8. **May a record move DOWN the ladder after level 4?** The code can narrow, and the endpoint allows it today. Business must say whether unpublishing a published record is permitted and by whom.
+10. **Who issues `project:<id>` roles, and for which projects?** Level 1 is unenforceable until every EAO user carries them. Keycloak group mapper, Track project membership, or hand-granted? This blocks P3-3 merging.
+11. **Level 0 role holders.** DEMI creates no realm roles. Is the C&E compartment exactly the existing `compliance` role (today only grantable on an API key, `src/controllers/nosql/api-key.js:31`)? If so it must be created as a realm role and granted to named humans — by whom?
+12. **Who is "the accountable authority" for a level-0 release**, and does the release need two people, or is one `compliance` credential plus a recorded authority reference enough?
+13. **Do external credential parties get Keycloak identities?** First Nations, proponents and local governments must be `user`, `group` or `apikey` parties. If they log in, through which IdP (BCeID? IDIR guest?) — that also decides whether they land on level 3 by accident, since `identity_provider` is the level-3 test.
+14. **Credential defaults**: maximum `end` (90 days? one assessment?) and whether an expiring credential needs a notification or simply lapses.
+15. **Does a widening need a recorded reason?** The audit row carries actor, time, from and to. If policy needs the authority under which a record was published (an EA process gate, a records decision), it must be a required body field — say so before P3-4 ships, since backfilling it is a schema change.
+16. **May a record move DOWN the ladder after level 4?** The code can narrow, and the endpoint allows it today. Business must say whether unpublishing a published record is permitted and by whom.
 
 ## 4. Source-document claims that were wrong at `aea2a0c`
 
@@ -305,7 +309,7 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    `merge/project.js:195` (the last two are `ADMIN_ROLES` aliases, unaffected but re-checked) — each
    to the level it means today, unpublished `readForLevel(2)` and published `readForLevel(4)`, or
    newly private rows would lose their `staff` token and read as level 1. `api-key.js:31`
-   `GRANTABLE_ROLES` derives from `SECURE_ROLES` and must move to `AUTHENTICATED_ROLES ∪ public`
+   `GRANTABLE_ROLES` derives from `SECURE_ROLES` and must move to `AUTHENTICATED_ROLES ∪ {compliance, public}`
    or `staff` keys become unmintable. Dropping `staff` from `SECURE_ROLES` is also not enough
    on its own: `authMiddleware` 403s on `isPrivileged`, so the same commit must move that gate to
    `AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES])]` (§1, Superuser) or staff
