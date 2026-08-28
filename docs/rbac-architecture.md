@@ -17,7 +17,7 @@ The EAO sharing model (business text 2026-08-28) maps onto the two planes DEMI a
 
 | Plane | Question | Mechanism | Carries |
 |---|---|---|---|
-| Row | which records | `read[]` + `readClause` / `canRead` / `filterFor`; `project:<id>` scope is an OR arm for `team` rows, and a global AND filter only for team-only callers | ladder 1-4 |
+| Row | which records | `read[]` + `readClause` / `canRead` / `filterFor`; a token's `project:<id>` roles are an OR arm for `team` rows, an API key's `projectScope` is a global AND filter | ladder 1-4 |
 | Field | which attributes of a visible record | catalog + dial + one redactor | dials 1-4 |
 | Write | may I mutate | `WRITE_ROLES`, unchanged | — |
 
@@ -26,27 +26,40 @@ record is public" are the same integer. 0 is not a caller level. It is the seale
 below, and the level `systemAccess()` carries for internal jobs. `visible(level, effVis)` in
 `src/vis/redact.js` stays the only comparison.
 
-**Ladder (row plane).** `read[]` holds ladder tokens — role types, never ids — cumulative, so a
-record at level N carries the tokens of every level ≤ N.
+**Ladder (row plane).** `read[]` holds ladder tokens — role types, never ids. It is not cumulative
+downwards: a level-2 row carries no `team` token, so a caller whose only ladder membership is
+`team` cannot read an All-EAO row of its own project.
 
 | Level | Name | `read[]` | Matched by | Claim |
 |---|---|---|---|---|
-| 1 | Team only | `['team']` | `team` AND the row's project in the caller's scope | any `project:<id>` role |
-| 2 | All EAO | `+ 'staff'` | `staff` | realm role |
-| 3 | All IDIR | `+ 'idir'` | `idir` | `identity_provider` claim |
-| 4 | Public | `+ 'public'` | anyone | none |
+| 1 | Team only | `['team']` | `team` AND the row's project in the caller's teams | any `project:<id>` role |
+| 2 | All EAO | `['staff']` | `staff` | realm role |
+| 3 | All IDIR | `['staff','idir']` | `staff` or `idir` | `identity_provider` claim |
+| 4 | Public | `['staff','idir','public']` | anyone | none |
+
+Levels 2-4 all carry `staff`, so staff reads every row at level 2 or above with one token. Level 1
+rows are reached only through the team arm.
 
 `rolesFor` (`access-sql.js:76`) injects `team` when the token carries any `project:` role and
 `idir` when `identity_provider === 'idir'`. It still strips `project:*` itself: which projects is
-the scope plane's job, never `ROLE_LEVELS`.
+`teamsFor`'s job, never `ROLE_LEVELS`.
 
-Project scope is a per-row GRANT, not a global filter. For a caller holding a ladder role above
-team (`staff`, `idir`, or a privileged role), a row is visible when `read[]` carries one of the
-caller's ladder tokens OR (`read[]` carries `team` AND the row's project is in the caller's scope).
-ANDing the scope into every read instead — what `visibilityFor` (`access-sql.js:371`) and `canRead`
-(`:391`) do today — drops a staff caller who holds `project:207` to that one project and hides
-every other level-2 row. The global scope AND stays only for a caller whose sole ladder membership
-is `team`: a proponent-style scoped user with no `staff` and no `idir`.
+**Teams grant, key scope restricts.** Two different project facts, and they must not be merged.
+
+`access.teams` holds the project ids from the caller's `project:<id>` realm roles. It is a GRANT
+and is used in exactly one place: the team OR arm. A row is visible when `read[]` carries one of
+the caller's ladder tokens, OR `read[]` carries `team` and the row's project is in `access.teams`.
+A user token carrying `project:` roles is therefore NOT scoped — its tier comes from its other
+roles. ANDing team membership into every read instead would drop a staff caller who holds
+`project:207` to that one project and hide every other level-2 row.
+
+`access.scope` is the `projectScope` minted onto an API key (`api-key.js:73`). It is a deliberate
+RESTRICTION by the key's issuer: a key with `roles: ['staff'], projectScope: ['207']` may read
+project 207 and nothing else. It sets `TIER.SCOPED` and is ANDed into every read by `scopeClause`
+(`access-sql.js:317`) and `canRead` (`:391`), exactly as today; none of that changes.
+
+`projectScopeFor` (`:168`) splits along that line: `teamsFor(req)` reads the realm `project:` roles
+into `access.teams`, and `projectScopeFor` keeps only the explicit key `projectScope`.
 
 `isPublished` still mirrors `read.includes('public')`. A record's level is derived, not stored: `levelOfRead(read)` =
 widest token present, 1 when none.
@@ -264,8 +277,8 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    called 0 "Sensitive". Level 0 is a compartment outside the ladder; `sysadmin` is superuser on
    levels 1-4 only. `ROLE_LEVELS` (`src/vis/level.js:10`): `sysadmin: 0 → 1`, `demi-admin: 0 → 1`;
    `staff: 2`, `demi-service-read/write: 2`, `compliance: 2`, `public: 4` unchanged; add `idir: 3`.
-   There is no `team` entry — team membership is a row-plane fact resolved per record by
-   `scopeClause`/`canRead`, not a role level. `systemAccess()` keeps `level: 0`; it is now the only
+   There is no `team` entry — team membership is a row-plane fact resolved per record by the team
+   arm in `readClause`/`canRead`, not a role level. `systemAccess()` keeps `level: 0`; it is now the only
    level-0 identity.
 2. **"Group (compartment)" and dial values of shape `{ level, groups }` are deleted.** The EAO
    "Special: Selected Credentials" lane is not a tag on a field — it is a time-bound grant to a
@@ -289,7 +302,8 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    site that spelled an ACL as `[...SECURE_ROLES]` must convert to `readForLevel()` in the same
    commit — every `grep -rn SECURE_ROLES src/` hit that builds a `read[]`: `document.js:47,364,380,
    635,852`, `project.js:124,227`, `boundary.js:32`, `seed/transform.js:36,202`,
-   `merge/project.js:195` (the last two are `ADMIN_ROLES` aliases, unaffected but re-checked) — or
+   `merge/project.js:195` (the last two are `ADMIN_ROLES` aliases, unaffected but re-checked) — each
+   to the level it means today, unpublished `readForLevel(2)` and published `readForLevel(4)`, or
    newly private rows would lose their `staff` token and read as level 1. `api-key.js:31`
    `GRANTABLE_ROLES` derives from `SECURE_ROLES` and must move to `AUTHENTICATED_ROLES ∪ public`
    or `staff` keys become unmintable. Dropping `staff` from `SECURE_ROLES` is also not enough
