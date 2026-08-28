@@ -17,8 +17,8 @@ set -euo pipefail
 # ── WHY THIS EXISTS AT ALL ────────────────────────────────────────────────────────────────────
 #
 # `siteConfig.appSettings` in api-web-app.bicep is a WHOLE-COLLECTION PUT: every setting the
-# template does not supply is deleted from the running app. Four of them are secrets the template
-# cannot derive, so a deploy has to be told them. That made the procedure a four-command
+# template does not supply is deleted from the running app. Six of them are secrets the template
+# cannot derive, so a deploy has to be told them. That made the procedure a multi-command
 # hand-export across two clouds, documented only in a comment, and getting it wrong overwrote the
 # break-glass credential with an empty string.
 #
@@ -139,8 +139,11 @@ require_secrets() {
   MINIO_SECRET_KEY="${MINIO_SECRET_KEY:-$(os_secret "$MINIO_SECRET_NAME" "$MINIO_SECRET_KEY_FIELD")}"
   ADMIN_API_KEY="${ADMIN_API_KEY:-$(os_secret demi-app-secrets ADMIN_API_KEY)}"
   DOCLING_API_KEY="${DOCLING_API_KEY:-$(os_secret demi-app-secrets DOCLING_API_KEY)}"
+  TRACK_CLIENT_SECRET="${TRACK_CLIENT_SECRET:-$(os_secret demi-app-secrets TRACK_CLIENT_SECRET)}"
+  ROLE_SYNC_CLIENT_SECRET="${ROLE_SYNC_CLIENT_SECRET:-$(os_secret demi-app-secrets ROLE_SYNC_CLIENT_SECRET)}"
 
   export MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
+  export TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET
 
   # `val` via indirect expansion, then ${#val}. There is no ${#!name} form — bash rejects it as a
   # bad substitution, and `bash -n` does not catch it because it is a runtime expansion error.
@@ -150,7 +153,8 @@ require_secrets() {
   # here is legitimately shorter than 8 characters — the real ones are 11, 40, 48 and 64.
   local missing=0 val
   local -r MIN_LEN=8
-  for name in MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY; do
+  for name in MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY \
+              TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET; do
     # Trim surrounding whitespace before judging it, so " " is empty and not a one-character secret.
     val="$(printf '%s' "${!name}" | tr -d '[:space:]')"
     if [ -z "$val" ]; then
@@ -176,8 +180,10 @@ there is no rollback — ARM does not retain @secure() parameter values.
   MINIO_ACCESS_KEY / MINIO_SECRET_KEY  OpenShift secret ${MINIO_SECRET_NAME} in 6cdc9e-${ENVIRONMENT}
                                        (keys ${MINIO_ACCESS_KEY_FIELD} / ${MINIO_SECRET_KEY_FIELD})
   ADMIN_API_KEY / DOCLING_API_KEY      OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
+  TRACK_CLIENT_SECRET                  same secret, key TRACK_CLIENT_SECRET (Track service account)
+  ROLE_SYNC_CLIENT_SECRET              same secret, key ROLE_SYNC_CLIENT_SECRET (Keycloak role sync)
 
-There is no demi-app-secrets in 6cdc9e-prod — export those two by hand for a prod run.
+There is no demi-app-secrets in 6cdc9e-prod — export those four by hand for a prod run.
 
 Check 'oc --context ${OC_CONTEXT}' works, or export the missing value and re-run.
 EOF

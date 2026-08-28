@@ -216,6 +216,31 @@ param reconcileSchedule string = ''
 @description('Deploy the log alert that fires when that run reports drift.')
 param deployReconcileDriftAlert bool = false
 
+// The nightly Track team sync, a second Functions timer (api/index.js) that mints `project:<id>`
+// realm roles from Track's team-members endpoint. Four settings and a schedule, and the schedule
+// is the switch: empty registers no timer, which is where every environment starts.
+@description('Base URL of the Track API the team sync reads, e.g. https://epictrack-api-c72cba-test.apps.gold.devops.gov.bc.ca. Empty runs no sync.')
+param trackApiBase string = ''
+
+@description('Keycloak client id of the Track service account (client credentials).')
+param trackClientId string = ''
+
+// No default, same rule as adminApiKey: an unset value must fail the build rather than write an
+// empty secret over a live one.
+@description('Client secret for trackClientId. Written to the Key Vault secret the app reads by reference.')
+@secure()
+param trackClientSecret string
+
+@description('Keycloak client id of the realm-management service account the sync grants roles with.')
+param roleSyncClientId string = ''
+
+@description('Client secret for roleSyncClientId. Same handling as trackClientSecret.')
+@secure()
+param roleSyncClientSecret string
+
+@description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty runs it never.')
+param syncTeamsSchedule string = ''
+
 // THE PUBLIC URL, not this API's own hostname. rproxy resolves the Front Door address once at
 // config load, so a probe aimed straight at the app stays green through a moved edge — the failure
 // this exists to catch. Not composable here for the same reason `frontendHostNames` is not.
@@ -257,6 +282,8 @@ module keyVault './modules/key-vault.bicep' = {
     peSubnetId: privateEndpointSubnetId
     identityPrincipalId: identity.outputs.principalId
     adminApiKey: adminApiKey
+    trackClientSecret: trackClientSecret
+    roleSyncClientSecret: roleSyncClientSecret
   }
 }
 
@@ -394,6 +421,12 @@ module apiWebApp './modules/api-web-app.bicep' = {
     doclingApiKey: doclingApiKey
     eagleApiBase: eagleApiBase
     reconcileSchedule: reconcileSchedule
+    trackApiBase: trackApiBase
+    trackClientId: trackClientId
+    trackClientSecretUri: keyVault.outputs.trackClientSecretUri
+    roleSyncClientId: roleSyncClientId
+    roleSyncClientSecretUri: keyVault.outputs.roleSyncClientSecretUri
+    syncTeamsSchedule: syncTeamsSchedule
     keycloakClientId: keycloakClientId
     allowedClients: allowedClients
     ssoAudience: ssoAudience

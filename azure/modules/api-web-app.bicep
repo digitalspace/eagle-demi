@@ -171,6 +171,24 @@ param eagleApiBase string
 @description('NCRONTAB schedule for the nightly Eagle reconcile timer, e.g. `0 0 9 * * *` for 09:00 UTC. Empty registers no timer at all, which is the default in every environment that has not opted in.')
 param reconcileSchedule string = ''
 
+@description('Base URL of the Track API the team sync reads its project team members from. Empty leaves the sync with no upstream.')
+param trackApiBase string = ''
+
+@description('Keycloak client id of the Track service account (client credentials).')
+param trackClientId string = ''
+
+@description('Key Vault URI of the Track service account secret. Not the value: the app resolves it through a Key Vault reference.')
+param trackClientSecretUri string
+
+@description('Keycloak client id of the realm-management service account the team sync grants project roles with.')
+param roleSyncClientId string = ''
+
+@description('Key Vault URI of that service account secret. Same handling as trackClientSecretUri.')
+param roleSyncClientSecretUri string
+
+@description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty registers no timer, same switch as reconcileSchedule.')
+param syncTeamsSchedule string = ''
+
 // Empty creates the B1 plan below. Set, the app joins a plan that already exists and this template
 // creates none — so it must already be a LINUX plan; a Windows one cannot host `functionapp,linux`.
 @description('Resource id of an App Service plan to join instead of creating demi-plan-<env>.')
@@ -404,6 +422,36 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'DOCLING_API_KEY'
           value: doclingApiKey
+        }
+        // Track team sync — src/scripts/sync-track-teams.js, registered as a timer only when
+        // SYNC_TEAMS_SCHEDULE is set. All six are declared even when empty, for the
+        // whole-collection-PUT reason above: a value set by hand on the live app is deleted by the
+        // next infra deploy. Both secrets are Key Vault references, like ADMIN_API_KEY.
+        {
+          name: 'TRACK_API_BASE'
+          value: trackApiBase
+        }
+        {
+          name: 'TRACK_CLIENT_ID'
+          value: trackClientId
+        }
+        {
+          name: 'TRACK_CLIENT_SECRET'
+          value: '@Microsoft.KeyVault(SecretUri=${trackClientSecretUri})'
+        }
+        // The realm-management service account the sync grants `project:<id>` roles with. Distinct
+        // from KEYCLOAK_CLIENT_ID, which is the client whose user tokens this API accepts.
+        {
+          name: 'KEYCLOAK_ADMIN_CLIENT_ID'
+          value: roleSyncClientId
+        }
+        {
+          name: 'KEYCLOAK_ADMIN_CLIENT_SECRET'
+          value: '@Microsoft.KeyVault(SecretUri=${roleSyncClientSecretUri})'
+        }
+        {
+          name: 'SYNC_TEAMS_SCHEDULE'
+          value: syncTeamsSchedule
         }
         // Azure AI Search — Deep Search over extracted document text. No key: the service has
         // disableLocalAuth, so the app authenticates with the same user-assigned identity it uses

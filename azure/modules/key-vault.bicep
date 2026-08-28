@@ -24,6 +24,14 @@ param peSubnetId string = ''
 @secure()
 param adminApiKey string
 
+@description('Client secret of the Track service account DEMI reads project team members with. Same handling as adminApiKey.')
+@secure()
+param trackClientSecret string
+
+@description('Client secret of the Keycloak service account the team sync grants roles with. Same handling as adminApiKey.')
+@secure()
+param roleSyncClientSecret string
+
 // 3-24 characters, alphanumeric and hyphens, must start with a letter. `demi-kv-prod` is 12.
 var vaultName = 'demi-kv-${environmentName}'
 
@@ -58,6 +66,22 @@ resource adminApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   name: 'admin-api-key'
   properties: {
     value: adminApiKey
+  }
+}
+
+resource trackClientSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'track-client-secret'
+  properties: {
+    value: trackClientSecret
+  }
+}
+
+resource roleSyncClientSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'role-sync-client-secret'
+  properties: {
+    value: roleSyncClientSecret
   }
 }
 
@@ -105,3 +129,5 @@ output vaultName string = vault.name
 // versionless reference on its own, so a rotation is a new secret version plus a restart rather
 // than an infrastructure deploy.
 output adminApiKeySecretUri string = adminApiKeySecret.properties.secretUri
+output trackClientSecretUri string = trackClientSecretSecret.properties.secretUri
+output roleSyncClientSecretUri string = roleSyncClientSecretSecret.properties.secretUri
