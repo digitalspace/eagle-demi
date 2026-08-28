@@ -170,6 +170,56 @@ paths:
         '404':
           description: Project not found.
 
+  /api/projects/{id}/visibility:
+    patch:
+      summary: Classify project fields
+      description: >-
+        Set per-field visibility dials on one project. `sysadmin` only — a dial is access policy,
+        not content, so the ordinary PUT refuses a `vis` key at every level. A dial never raises a
+        field above its catalogued `maxVis`, and it is independent of the project's own record
+        level. A level of `null` removes the dial and the field falls back to its `defaultVis`;
+        a field the body does not name keeps the dial it had.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vis]
+              properties:
+                vis:
+                  type: object
+                  description: Field name to level. At most 10 fields per request.
+                  additionalProperties:
+                    type: integer
+                    nullable: true
+                    minimum: 0
+                    maximum: 4
+              example:
+                vis:
+                  complianceLead: 2
+                  projectLeadEmail: null
+      responses:
+        '200':
+          description: The updated project, redacted for the caller.
+        '400':
+          description: >-
+            An uncatalogued field, a level outside 0..maxVis for that field, a non-integer level,
+            more than 10 fields, or an empty vis object.
+        '403':
+          description: Forbidden. Requires role sysadmin.
+        '404':
+          description: Project not found.
+
   /api/documents:
     get:
       summary: Retrieve documents
