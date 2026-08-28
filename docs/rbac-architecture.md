@@ -44,9 +44,10 @@ downwards: a level-2 row carries no `team` token, so a caller whose only ladder 
 Levels 2-4 all carry `staff`, so staff reads every row at level 2 or above with one token. Level 1
 rows are reached only through the team arm.
 
-`rolesFor` (`access-sql.js:76`) injects `team` when the token carries any `project:` role and
-`idir` when `identity_provider === 'idir'`. It still strips `project:*` itself: which projects is
-`teamsFor`'s job, never `ROLE_LEVELS`.
+`rolesFor` (`access-sql.js:76`) adds `idir` when `identity_provider === 'idir'`. It never adds
+`team`: `team` is a row token only, matched by the team arm (`read[]` carries `team` AND the row's
+project is in `access.teams`), never by the caller's role list — a caller token `team` would match
+every level-1 row of every project. `project:*` stays stripped; which projects is `teamsFor`'s job.
 
 **Teams grant, key scope restricts.** Two different project facts, and they must not be merged.
 

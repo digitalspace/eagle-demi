@@ -857,10 +857,10 @@ The whole ladder is this unit. No endpoint, no stored-data change.
       NOT cumulative downwards: a level-2 row carrying `team` would be readable by a team-only
       external caller. `levelOfRead(read)` → widest token present (`team` 1, `staff` 2, `idir` 3,
       `public` 4), `1` when none. Export both.
-- [ ] `src/helpers/access-sql.js:76` `rolesFor` — inside the existing loop, add `'team'` when a
-      `project:` role is seen, and after it add `'idir'` when
-      `req.user.identity_provider === 'idir'`. `project:*` stays stripped (`:84`): which projects is
-      `projectScopeFor`'s job. Confirm the claim name on a live loginproxy token before merging;
+- [ ] `src/helpers/access-sql.js:76` `rolesFor` — add `'idir'` when
+      `req.user.identity_provider === 'idir'`. NEVER add `'team'` to the caller's roles: the role arm
+      would then match every level-1 row of every project. `project:*` stays stripped (`:84`); which
+      projects is `teamsFor`'s job, and only the team arm reads it. Confirm the claim name on a live loginproxy token before merging;
       record the measurement in the PR.
 - [ ] Team membership becomes a per-row GRANT, separate from key scope (doc §1, "Teams grant, key
       scope restricts"). Today `projectScopeFor:168` returns both the realm `project:` roles and an
@@ -906,9 +906,10 @@ The whole ladder is this unit. No endpoint, no stored-data change.
   - [ ] `test/helpers/access-sql.test.js` case `'staff is not privileged'` —
         `isPrivileged(['staff']) === false`, `isPrivileged(['sysadmin']) === true`. Fails on a
         revert of the constant.
-  - [ ] Same file, `'a project role injects the team token and is still stripped'` — `rolesFor`
-        with `roles: ['staff','project:207']` returns `['public','staff','team']` (sorted),
-        `teamsFor` returns `['207']`, and `projectScopeFor` returns `null`.
+  - [ ] Same file, `'a project role never becomes a caller token'` — `rolesFor` with
+        `roles: ['staff','project:207']` returns `['public','staff']` (sorted, no `team`),
+        `teamsFor` returns `['207']`, and `projectScopeFor` returns `null`. Fails if `team` is
+        injected: a `['project:999']` caller would then read a level-1 row of project 207.
   - [ ] Same file, `'the ladder tokens are not cumulative downwards'` — literal
         `deepStrictEqual(readForLevel(3), ['staff','idir'])`, `readForLevel(1) === ['team']`,
         `readForLevel(2) === ['staff']`, `readForLevel(4) === ['staff','idir','public']`.
