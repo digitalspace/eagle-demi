@@ -576,8 +576,11 @@ components:
           type: boolean
           description: >-
             True when the caller holds a row-plane privileged role (`sysadmin`, `demi-admin`,
-            `demi-service-*`). `staff` is not privileged; the frontend gates staff screens on
-            `level` and `tier`.
+            `demi-service-*`). `staff` is not privileged.
+        staffUi:
+          type: boolean
+          description: >-
+            True when the caller passes authMiddleware; the frontend gates staff screens on it.
 
     Project:
       type: object

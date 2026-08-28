@@ -398,6 +398,16 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     assert.strictEqual(acl.published, true);
   });
 
+  // `published` is read off the CAPPED read[], not off the request. A legacy parent carrying no
+  // read[] at all caps the document at level 1, so publishing it would otherwise have stamped
+  // `isPublished: true` on a row only its own team can see.
+  await t.test('published mirrors the capped read[], never the request', () => {
+    assert.deepStrictEqual(
+      resolveDocumentAcl({ isPublished: true }, true), { read: ['team'], published: false });
+    assert.deepStrictEqual(
+      resolveDocumentAcl({ read: ['public'], isPublished: true }, true).published, true);
+  });
+
   await t.test('delete removes the record but NEVER the stored file', async () => {
     t.mock.method(aiSearch, 'deleteFromIndex', async () => 1);
     t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 0);

@@ -42,14 +42,16 @@ function resolveDocumentAcl(parentProject, isPublished) {
   const parentIsPublic = Array.isArray(parentProject.read) && parentProject.read.length > 0
     ? parentProject.read.includes('public')
     : parentProject.isPublished === true;
-  const published = requested && parentIsPublic;
+  const wanted = requested && parentIsPublic;
 
-  return {
-    published,
-    // Capped at the parent's own level, so a document under a level-1 project is admitted at
-    // level 1 rather than handed the level-2 default that would out-rank it.
-    read: readForLevel(Math.min(published ? 4 : 2, levelOfRead(parentProject.read)))
-  };
+  // Capped at the parent's own level, so a document under a level-1 project is admitted at
+  // level 1 rather than handed the level-2 default that would out-rank it.
+  const read = readForLevel(Math.min(wanted ? 4 : 2, levelOfRead(parentProject.read)));
+
+  // `published` is READ OFF the capped read[], never off the request: a parent with `isPublished:
+  // true` and no read[] caps the document at level 1, and taking `wanted` here would have stamped
+  // `isPublished: true` on a row carrying only `team`. read[] is authoritative; isPublished mirrors it.
+  return { published: read.includes('public'), read };
 }
 
 exports.getDocuments = async (req, res) => {

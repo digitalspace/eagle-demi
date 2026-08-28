@@ -708,9 +708,11 @@ export class RegistryStateService {
         const me = await res.json();
         if (typeof me?.level === 'number') {
           this.visLevel.set(me.level);
-          // Level alone admits a compliance-only caller (level 2, tier 'public'), who then 403s on
-          // every staff endpoint. Staff lands at 'privileged' or 'scoped'; only tier tells them apart.
-          staffUi = me.level <= 2 && me.tier !== 'public';
+        }
+        // The server answers the gate directly. Deriving it here from level/tier admitted a
+        // compliance caller and locked out staff, who share level 2 and tier 'public'.
+        if (typeof me?.staffUi === 'boolean') {
+          staffUi = me.staffUi;
         }
       }
     } catch (err) {
