@@ -575,8 +575,9 @@ components:
         privileged:
           type: boolean
           description: >-
-            Whether this caller holds a staff/admin role. Not derivable from `tier`: a staff
-            credential scoped to a project reports tier `scoped` and privileged `true`.
+            True when the caller holds a row-plane privileged role (`sysadmin`, `demi-admin`,
+            `demi-service-*`). `staff` is not privileged; the frontend gates staff screens on
+            `level` and `tier`.
 
     Project:
       type: object

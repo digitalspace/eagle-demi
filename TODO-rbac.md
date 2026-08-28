@@ -1020,13 +1020,14 @@ The whole ladder is this unit. No endpoint, no stored-data change.
   - [x] `src/repositories/boundaries.js:51` `VISIBILITY = { unsetIsPublic: true }`, passed at
         `:73`, `:94`, `:101`, `:122`, `:140`. Delete the constant and the `visibility` argument at
         each of the five sites; the file header (`:20-27`) explains the flag and goes with it.
-  - [ ] The 281 seeded `boundaries` rows carry neither `read[]` nor `isPublished`, which is why the
+  - [x] The 281 seeded `boundaries` rows carry neither `read[]` nor `isPublished`, which is why the
         flag existed. Backfill runs BEFORE the deploy or the public map goes blank. No new script:
         `node src/scripts/seed-nosql.js --only boundaries --live` rebuilds all 281 from the
         checked-in geojson and `transform.transformBoundary` stamps `['public', ...ADMIN_ROLES]`
         (level 4) on every one. `boundary.js:32` `resolveBoundaryAcl` converts with the other write
         sites above (`readForLevel(4)` published, `readForLevel(2)` not).
-        Owner: Daniel — test, then prod. Run: ______
+        Owner: Daniel — test, then prod. Run: test: 2026-08-28, 281 rows written via seed-nosql
+        --only boundaries --live; prod container is empty, nothing to reseed
 - [x] `src/helpers/access-odata.js` — the role half needs no change. `filterFor:72` already emits
       `read/any(r: search.in(r, '<caller roles>'))`, so `team`/`idir` ride in for free.
 - Tests

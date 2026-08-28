@@ -770,6 +770,19 @@ describe('RegistryStateService — /api/me gating', () => {
     expect(service.isUnauthorized()).toBe(false);
   });
 
+  // Compliance holds level 2 (same as staff) but tier 'public' — the gate must not let it through.
+  it('a compliance-only caller stays unauthorized', async () => {
+    meAnswer = { roles: ['public', 'compliance'], level: 2, tier: 'public', privileged: false };
+    const service = makeService();
+    await service.authReady;
+    service.isAuthenticated.set(true);
+
+    await (service as any).loadVisLevel();
+
+    expect(service.visLevel()).toBe(2);
+    expect(service.isUnauthorized()).toBe(true);
+  });
+
   it('level 3 keeps isUnauthorized', async () => {
     meAnswer = { roles: ['public', 'idir'], level: 3, tier: 'public', privileged: false };
     const service = makeService();
