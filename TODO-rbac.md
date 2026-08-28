@@ -13,8 +13,8 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 ## Facts — verified 2026-08-27 at `5c6ce05`
 
 1. Anonymous `GET /api/projects` on test returns `projectLead`, `projectLeadEmail`,
-   `responsibleEPDEmail`, `eaoMember`, `cacEmail`, plus Cosmos `_rid`, `_self`, `_ts`,
-   `_attachments`. `eagle-public` renders the staff fields anonymously from eagle-api, so this is
+   `responsibleEPDEmail`, `eaoMember`, `cacEmail`. Cosmos `_rid`, `_self`, `_ts`, `_attachments`
+   never leave: `src/db/cosmos-nosql.js` strips them on every read (corrected 2026-08-28). `eagle-public` renders the staff fields anonymously from eagle-api, so this is
    current product behaviour. Whether it is policy is EAO question 2.
 2. `DEMI_ALLOWED_CLIENTS` is set in every bicepparam and enforced by `isAllowedClient`
    (`src/helpers/auth.js`): a verified token from an unlisted `azp` gets 401. `src/config.js`
@@ -338,8 +338,8 @@ Writer-visible only:
 
 ### U7 recorded deviations from byte-identical
 
-- `_rid`, `_self`, `_attachments`, `_ts` at `maxVis: 0` remove four keys from the anonymous project
-  response. No consumer:
+- `_rid`, `_self`, `_attachments`, `_ts` at `maxVis: 0` are a ceiling only: `src/db/cosmos-nosql.js`
+  strips them on every read, so no response changed (measured 2026-08-28). No consumer:
   `grep -rEn "\b_rid\b|\b_attachments\b|\b_ts\b|\._self\b" eagle-public/src/app eagle-demi/frontend/src`
   returns nothing.
 - `complianceLead` and `execProjectDirector` at `defaultVis: 2` drop those keys for anonymous
@@ -617,7 +617,7 @@ Acceptance
 - Measured 2026-08-28 on test: neither removal is observable. `src/db/cosmos-nosql.js` strips
   `_rid`/`_self`/`_attachments`/`_ts` on every read before any view runs, and 0 of 100 documents
   read at level 0 carry `ownRead`. The two `jq -S 'keys'` acceptance lines are identical.
-- Level 0 now sees `s3Key`, `read`, `ownRead` and the Cosmos system fields on a document response.
+- Level 0 now sees `s3Key`, `read` and `ownRead` (where stored) on a document response.
   `publicView` stripped them from every caller. Doc §2 item 4 holding, not a regression.
 - The coverage ratchet identifies hand-built payloads by the dotted-name lookahead the projects
   subtest already uses, NOT by the line-number allowlist the unit names: the same file records that
