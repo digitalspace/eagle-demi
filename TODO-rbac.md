@@ -36,16 +36,13 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
       2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
       Level 3 is the `identity_provider` claim and level 1 is project scope: neither is a new realm
       role. Classifying (P3-5) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
-- [x] Read access to Track's database: self-serve, delivered 2026-08-28. Track Postgres is
-      statefulset `patroni-epictrack-db` (`db16` on test) in `c72cba-test` / `c72cba-prod` (Gold
-      cluster); secret `patroni-epictrack-db` holds `app-db-name`/`app-db-username`/`app-db-password`.
-      Measured on test 2026-08-28 over port-forward: `staff_work_roles` 715 rows, `works` 208
-      (`project_id`, `work_lead_id`, `responsible_epd_id`, `eao_team_id`, `is_active`, `is_deleted`),
-      `staffs` (`email`, `idir_user_id`, `is_active`). DEMI on Azure cannot reach it, so the sync job
-      runs as a CronJob inside `c72cba` (decided 2026-08-28, option a).
+- [ ] Track read endpoint `GET /api/v1/projects/team-members` — Track PR, owner Daniel, reviewer
+      Track team. Opened: ______ Merged: ______
+- [ ] Realm clients `demi-track-reader` and `demi-role-sync` in `eao-epic` (test, then prod),
+      secrets in `demi-app-secrets`. Owner: Daniel. Delivered: ______
 - [ ] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
-      records. Minted by P3-0 once the line above carries a date; hand-granted until then.
-      Blocks P3-3. Owner: Daniel. Delivered: ______
+      records. Minted by P3-0's timer once the two lines above carry a date; hand-granted until
+      then. Blocks P3-3. Owner: Daniel. Delivered: ______
 - [x] EAO question 1 (nested vs lateral groups). Answered 2026-08-28: ladder 1-4 on the row plane,
       level 0 a sealed compartment, Selected Credentials a time-bound grant (doc §1, §5).
 - [x] EAO question 2: public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2). Emails stay `defaultVis: 4`; no tightening list.
@@ -817,48 +814,103 @@ carries a date, a level-1 record is visible to superusers only.
 
 ## P3-0 Track team feed
 
-Branch: `feat/track-team-feed`
+Two repos. A is Track's PR, reviewed by the Track team, owner Daniel. B is DEMI: a script, tests,
+and a Functions timer (shape of `reconcileEagle`), plus the infra and realm clients it needs. No
+CronJob, no `pg`, no `TRACK_DB_*`, no `src/track/team-feed.js` — DEMI has no route to Track's
+database; it calls a Track HTTP endpoint instead. A project's team is the union of the staff on its
+works, read from `find_staff_for_works`; the feed mints and revokes the existing `project:<id>`
+realm roles and creates no new role vocabulary. Lead-managed member lists are a manual override,
+not a source (doc §3 question 10).
 
-Placement (decided 2026-08-28): a CronJob in `c72cba-test` and `c72cba-prod`, mounting the
-in-namespace `patroni-epictrack-db` secret and a copy of `demi-keycloak-admin`; the script ships in
-this repo and runs from a stock Node image with the file mounted from a ConfigMap. Track's owners are
-told it reads two tables, read-only. A project's team is the union of the staff on its works:
-Track `staff_work_roles` (`work_id`, `role_id`, `staff_id`) joined to `works` (`project_id`,
-`work_lead_id`, `responsible_epd_id`). The feed mints and revokes the existing `project:<id>` realm
-roles; it creates no new role vocabulary. Lead-managed member lists are a manual override, not a
-source (doc §3 question 10).
+### A. Track PR `feat/project-team-members` off `develop` (Track repo, reviewer: Track team)
 
-- [ ] `src/track/team-feed.js` — pure functions over Track rows: `teamsFromWorks(works,
-      staffWorkRoles)` returns `Map<projectId, Set<staffId>>` as the union across the project's
-      works, including a work's `work_lead_id` and `responsible_epd_id`. A CLOSED work still
-      counts while `is_active` is true; that default is written in the header comment so a
-      reviewer can flip one predicate.
+- [ ] `EPIC.track/epictrack-api/src/api/services/project.py`: `ProjectService.find_team_members
+      (project_id=None)`, `_check_auth(one_of_roles=[KeycloakRole.VIEW])`; query `Work` with
+      `is_deleted.is_(False)` (+ `project_id`), call `WorkService.find_staff_for_works(work_ids)`,
+      fold to `{project_id: {staff_id: {...}}}`, add each work's `work_lead`/`responsible_epd` when
+      active and not deleted (role names `"Work Lead"`, `"Responsible EPD"`). Return
+      `[{project_id, staff:[{staff_id, idir_user_id, email, is_active, roles, work_ids}]}]`, sorted.
+- [ ] `EPIC.track/epictrack-api/src/api/resources/project.py`: `GET /api/v1/projects/team-members
+      ?project_id=`, `@auth.require`, `@cors.crossdomain`, `@profiletime`. Schemas
+      `ProjectTeamMemberSchema`, `ProjectTeamResponseSchema` in
+      `src/api/schemas/response/project_response.py`, exported from `__init__.py`.
+- Tests: `EPIC.track/epictrack-api/tests/unit/apis/test_projects.py`
+  - [ ] union of works (`{10,11,12}`, staff 11 `work_ids == [A,B]`)
+  - [ ] departed staff excluded
+  - [ ] closed work still counts
+  - [ ] deleted work excluded
+  - [ ] `?project_id=` returns one
+  - [ ] no token → 401
+- Acceptance: `make lint`; PR text (≤ 8 lines) says read-only, reuses `find_staff_for_works`, same
+      auth as the rest of the API plus `view`, caller is DEMI's nightly sync, nothing written to
+      Track, tests listed.
+
+### B. DEMI — three PRs, in order
+
+- [ ] B1 script + tests. `src/scripts/sync-track-teams.js` (shape of
+      `src/scripts/reconcile-eagle.js`: `parseArgs`, pure `plan()`, `sync(argv, deps)`,
+      `run({live, deps})`), `--dry-run` default. Deps `{ fetchJson, kc }`; extend `fetchJson`
+      in `src/seed/sources.js` with an optional headers arg. Flow: client-credentials token
+      (`TRACK_CLIENT_ID`/`TRACK_CLIENT_SECRET`) →
+      `GET ${TRACK_API_BASE}/api/v1/projects/team-members` → desired
+      `Map<username, Set<'project:<id>'>>`; Keycloak token for `demi-role-sync` → current holders
+      via `GET /roles?search=project:` then `GET /roles/<name>/users`; match staff by
+      `idir_user_id` (`<guid>@idir`, `exact=true`) then email; reconcile: create missing
+      `project:<id>` roles (409 ignored), grant, REVOKE stale, touching only names starting
+      `project:`. One summary line
+      `[track-teams] mode=… projects=… users=… grants=… revokes=… unmatched=… failures=…`
+      via `src/utils/logger.js`. `package.json` script `rbac:sync-teams`.
       `ponytail: union over all works. Per-work roles only if the business ever needs them.`
-- [ ] Same module — `matchStaff(staff, idirUsers)` maps a Track staff row to an IDIR identity by
-      email, falling back to the IDIR GUID (`<guid>@idir`) the Track audit columns carry.
-      A staff row with `is_active: false`, or with no match, yields no role.
-- [ ] `src/scripts/sync-track-teams.js` — reads Track over `pg` with `TRACK_DB_*` env from the
-      mounted secret (`staffs` matched by `idir_user_id`, then `email`),
-      builds the desired `project:<id>` role set per user, and reconciles against Keycloak through
-      the admin API as `demi-user` (it holds `realm-management`): create missing realm roles,
-      assign, and REMOVE roles no longer in the union. `--dry-run` default, `--live` to write;
-      logs one summary line through `src/utils/logger.js`. Same shape as
-      `src/scripts/reconcile-eagle.js`.
-- Tests: `test/track/team-feed.test.js`, literals only
-  - [ ] `'a project team is the union of its works'` — project 1 with works A (staff 10, 11) and
-        B (staff 11, 12) → `['10','11','12']`.
-  - [ ] `'a departed staff member is removed'` — staff 11 `is_active: false` → `['10','12']`,
-        and the reconcile plan lists `project:1` under that user's removals.
-  - [ ] `'a closed work still counts while is_active'` — work B closed, `is_active` true → the
-        union still holds staff 12.
-  - [ ] `'an unmatched staff row mints nothing'` — no email, no IDIR GUID → no role.
-- Acceptance
-  - [ ] `node --test test/track/team-feed.test.js` — 0 fail.
-  - [ ] `openshift/track-team-sync.cronjob.yaml` (new, in this repo): CronJob for `c72cba-<env>`,
-        schedule `0 10 * * *` UTC, ConfigMap with the script, secret refs; applied by Daniel with
-        `oc -n c72cba-test apply -f`. First run `--dry-run`, then flip to `--live`.
-  - [ ] On test: the dry run prints a plan; with `--live`, one named test user gains
-        `project:<id>` and Keycloak shows it.
+  - Tests: `test/scripts/sync-track-teams.test.js`, in-memory `kc` fake, literals only
+    - [ ] `'a project team is the union of its works'`
+    - [ ] `'a departed staff member is revoked'`
+    - [ ] `'an unmatched staff row mints nothing'`
+    - [ ] `'a dry run writes nothing'`
+    - [ ] `'a stale role is removed while staff and demi-admin are untouched'`
+    - [ ] `'a missing role is created before it is granted'`
+  - Acceptance: `node --test test/scripts/sync-track-teams.test.js` — 0 fail.
+- [ ] B2 timer. `api/index.js`, beside `reconcileEagle`:
+      `app.timer('syncTrackTeams', { schedule: '%SYNC_TEAMS_SCHEDULE%', runOnStartup: false })`,
+      only registered when `SYNC_TEAMS_SCHEDULE` is set; handler lazily requires the script,
+      `run({ live: true })`, logs failures. `host.json` timeout already 30 min.
+  - Tests: `test/sync-teams-timer.test.js`, mirrors `test/reconcile-timer.test.js`; update
+        `loadIndex` in the reconcile test to clear `SYNC_TEAMS_SCHEDULE`.
+  - Acceptance: `node --test test/sync-teams-timer.test.js` — 0 fail.
+- [ ] B3 infra. `azure/modules/key-vault.bicep`: secrets `track-client-secret`,
+      `role-sync-client-secret` (+ URI outputs). `azure/main.bicep`: params `trackApiBase`,
+      `trackClientId`, `trackClientSecret`, `roleSyncClientId`, `roleSyncClientSecret`,
+      `syncTeamsSchedule = ''`. `azure/modules/api-web-app.bicep` appSettings: `TRACK_API_BASE`,
+      `TRACK_CLIENT_ID`, `SYNC_TEAMS_SCHEDULE`, `KEYCLOAK_ADMIN_CLIENT_ID` (fed by `roleSyncClientId`) plain;
+      `TRACK_CLIENT_SECRET`, `KEYCLOAK_ADMIN_CLIENT_SECRET` as
+      `@Microsoft.KeyVault(SecretUri=…)`. Param files: test `syncTeamsSchedule = '0 0 10 * * *'`,
+      dev/prod `''`. `scripts/deploy-infra.sh`: source `TRACK_CLIENT_SECRET`,
+      `ROLE_SYNC_CLIENT_SECRET` from OpenShift `demi-app-secrets`, add to the floor-check loop
+      and usage.
+  - Tests: `test/azure/main-bicep-wiring.test.js` — WIRED entries + Key Vault reference
+        assertions.
+  - Acceptance: `az bicep build -f azure/main.bicep` exits 0;
+        `node --test test/azure/main-bicep-wiring.test.js` — 0 fail;
+        `scripts/deploy-infra.sh test --what-if` before `--live`.
+- [ ] B4 realm clients (Daniel, test then prod): confidential client `demi-track-reader`, service
+      account on, standard flow off, granted `epictrack-web` client role `view` (audience mapper
+      if `aud` lacks `epictrack-web`). Confidential client `demi-role-sync`, service account with
+      realm-management `manage-realm`, `manage-users`, `view-users`. Secrets into
+      `demi-app-secrets` (`6cdc9e-<env>`).
+
+Acceptance (test, end to end)
+
+- [ ] Track PR merged to `develop` → `epictrack-api-c72cba-test`. Client-credentials token for
+      `demi-track-reader`:
+      `curl -H "Authorization: Bearer $t" https://epictrack-api-c72cba-test.apps.gold.devops.gov.bc.ca/api/v1/projects/team-members`
+      → 200, non-empty. 403 = `view` grant missing; 401 = audience mapper needed.
+- [ ] DEMI B1-B3 merged; `scripts/deploy-infra.sh test --live` before the schedule is non-empty.
+- [ ] Dry run locally against test: summary line shows plausible `grants`, `revokes=0`.
+- [ ] `--live`; verify one named user: Keycloak admin `GET /users?username=<guid>@idir` →
+      `/role-mappings/realm` lists `project:<id>`; a fresh login token carries it in
+      `realm_access.roles`.
+- [ ] `node --test test/scripts/sync-track-teams.test.js test/sync-teams-timer.test.js test/azure/main-bicep-wiring.test.js`;
+      `yarn test`; Track `make lint` + pytest.
+- [ ] Prod: `syncTeamsSchedule` stays `''` until both realm clients exist in the prod realm.
 
 ## P3-1 carry `vis` forward through the two whole-item writers
 
