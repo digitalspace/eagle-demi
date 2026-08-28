@@ -746,7 +746,7 @@ Branch: `feat/vis-frontend-level`
 - [x] Replace the hard-coded role check at `:757` (`roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin')`) with `level <= 2` from the `/api/me` answer; keep `isUnauthorized` as the rendered signal so no template changes.
 - [x] `frontend/src/app/models/registry.models.ts`: make every field a redactor can remove optional — `Project` (`:1-35`) `sector`, `status`, `region`, `description`, `proponent`, `centroid`, `legacyEagleId`; `Document` (`:37-53`) `orcsCode`, `documentType`, `projectName`. `id` and `name` stay required (`maxVis 4` in the catalog).
 - [x] Templates render on field presence, never on role: grep `isStaff()` and `isUnauthorized()` in `frontend/src/app/**/*.html` and convert any field-level use to `@if (project.x)`. Screen-level gating stays.
-- [ ] Wiki page: catalog format and the level table. Link it from `docs/rbac-architecture.md`.
+- [x] (`Attribute-Level-Access.md`, wiki `afde91e`) Wiki page: catalog format and the level table. Link it from `docs/rbac-architecture.md`.
 
 Tests
 

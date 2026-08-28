@@ -8,6 +8,8 @@ Section 1 is the model as accepted. Section 2 is what the audit changed and why.
 questions only the EAO can answer. Section 4 records claims in the source document that were wrong
 at `aea2a0c`, so nobody re-verifies them.
 
+Reference page: `eagle-demi.wiki/Attribute-Level-Access.md` (level table, catalog format, registered entities, `/api/me`).
+
 ## 1. Model
 
 Three planes. Two exist and stay as they are; one is new.
