@@ -17,7 +17,7 @@ The EAO sharing model (business text 2026-08-28) maps onto the two planes DEMI a
 
 | Plane | Question | Mechanism | Carries |
 |---|---|---|---|
-| Row | which records | `read[]` + `readClause` / `canRead` / `filterFor`, AND `project:<id>` scope | ladder 1-4 |
+| Row | which records | `read[]` + `readClause` / `canRead` / `filterFor`; `project:<id>` scope is an OR arm for `team` rows, and a global AND filter only for team-only callers | ladder 1-4 |
 | Field | which attributes of a visible record | catalog + dial + one redactor | dials 1-4 |
 | Write | may I mutate | `WRITE_ROLES`, unchanged | — |
 
@@ -38,9 +38,17 @@ record at level N carries the tokens of every level ≤ N.
 
 `rolesFor` (`access-sql.js:76`) injects `team` when the token carries any `project:` role and
 `idir` when `identity_provider === 'idir'`. It still strips `project:*` itself: which projects is
-the scope plane's job, and `scopeClause` / `canRead` already AND it in. Team membership is
-therefore resolved per row by the scope clause, never by `ROLE_LEVELS`. `isPublished` still
-mirrors `read.includes('public')`. A record's level is derived, not stored: `levelOfRead(read)` =
+the scope plane's job, never `ROLE_LEVELS`.
+
+Project scope is a per-row GRANT, not a global filter. For a caller holding a ladder role above
+team (`staff`, `idir`, or a privileged role), a row is visible when `read[]` carries one of the
+caller's ladder tokens OR (`read[]` carries `team` AND the row's project is in the caller's scope).
+ANDing the scope into every read instead — what `visibilityFor` (`access-sql.js:371`) and `canRead`
+(`:391`) do today — drops a staff caller who holds `project:207` to that one project and hides
+every other level-2 row. The global scope AND stays only for a caller whose sole ladder membership
+is `team`: a proponent-style scoped user with no `staff` and no `idir`.
+
+`isPublished` still mirrors `read.includes('public')`. A record's level is derived, not stored: `levelOfRead(read)` =
 widest token present, 1 when none.
 
 **Superuser.** `SECURE_ROLES` (the privileged short-circuit) is `sysadmin`, `demi-admin`,
@@ -53,8 +61,10 @@ must not also decide who may hold a session. `authMiddleware` (`src/middleware/a
 any caller `isPrivileged` rejects and fronts every write and admin route, so dropping `staff` from
 `SECURE_ROLES` on its own would lock staff out of the whole API and keep 403ing a `compliance`-only
 credential. `authMiddleware` therefore gates on a separate
-`AUTHENTICATED_ROLES = [...WRITE_ROLES, 'compliance']` — every role that may hold a session — and
-the two sets move independently. `requireWrite`, `requireAdmin` and `requireRole` stay the
+`AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES, 'compliance'])]` — every role
+that may hold a session — and the two sets move independently. `SECURE_ROLES` is in that union
+because `demi-service-read` is privileged for reads and holds no write role; `WRITE_ROLES` alone
+would 403 it. `requireWrite`, `requireAdmin` and `requireRole` stay the
 per-route gates behind it.
 
 **Back-compat.** Legacy `read[]` values (`['sysadmin','staff','demi-admin']`, with `'public'` when
@@ -277,19 +287,10 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    commit (`document.js:47,363,635,852`; `project.js:227-228`) or newly private rows would lose
    their `staff` token and read as level 1. Dropping `staff` from `SECURE_ROLES` is also not enough
    on its own: `authMiddleware` 403s on `isPrivileged`, so the same commit must move that gate to
-   `AUTHENTICATED_ROLES = [...WRITE_ROLES, 'compliance']` (§1, Superuser) or staff loses every
-   authenticated route.
+   `AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES, 'compliance'])]` (§1,
+   Superuser) or staff loses every authenticated route and `demi-service-read` loses the API.
 6. **§3 question 1's answer is replaced.** "Nested levels 0-4 with lateral groups inside a level" is
    wrong on both halves. Model in §1.
-7. **Files still carrying the old reading, to update with the code:**
-   `TODO-rbac.md:35` ("Levels 1 and 3 get a role when EAO question 1 is answered") → level 3 is the
-   `idir` claim, level 1 is project scope, neither is a new realm role;
-   `src/vis/level.js:6-8` (header comment) → same;
-   `test/vis/level.test.js:48` case `levels 1 and 3 have no role until EAO question 1 is answered`
-   → replace with `sysadmin is level 1, not 0` and `an IDIR login is level 3`;
-   `test/vis/redact-matrix.test.js:179` comment "a lateral clearance set later changes one
-   function" → the ratchet stays, the justification becomes the record-level clamp.
-
 ### Still valid
 
 - §2 items 1, 2, 3, 6, 7, 8, 9, 10, 13, 14 stand as written.

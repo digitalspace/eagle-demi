@@ -832,10 +832,14 @@ The whole ladder is this unit. No endpoint, no stored-data change.
       `WRITE_ROLES:58` untouched. This is the one line that makes level 1 enforceable
       (`readClause:261`, `canRead:399`, `access-odata.js:72` all key off `isPrivileged`).
 - [ ] `src/middleware/auth.js:21` — `authMiddleware` stops gating on `isPrivileged`. Add
-      `AUTHENTICATED_ROLES = Object.freeze([...WRITE_ROLES, 'compliance'])` and an
+      `AUTHENTICATED_ROLES = Object.freeze([...new Set([...SECURE_ROLES, ...WRITE_ROLES, 'compliance'])])`
+      and an
       `isAuthenticatedRole(roles)` beside it in `access-sql.js`, export both, and 403 on that
       instead. Without this line the constant change above locks `staff` out of every write and
       admin route — `authMiddleware` fronts all of them — and keeps 403ing a `compliance`-only key.
+      `SECURE_ROLES` is in the union because `demi-service-read` is a read tier with no write role
+      (`test/middleware/require-roles.test.js:63-66` pins that split); `WRITE_ROLES` alone would
+      403 it.
       `SECURE_ROLES`/`isPrivileged` keep the ROW-plane short-circuit meaning only (doc §1,
       Superuser). Also fixes the P5-2 minor: `requireRole('compliance')` is unreachable while
       `authMiddleware` rejects the caller first.
@@ -844,7 +848,7 @@ The whole ladder is this unit. No endpoint, no stored-data change.
       tier), `:261` (`readClause` short-circuit), `:399` (`canRead`), `:422` (export),
       `access-odata.js:14,72` (`filterFor`), `controllers/me.js:8,19` (the `privileged` flag
       `/api/me` reports, which goes false for staff), `middleware/auth.js:4,21` (the only caller
-      that changes). The comment at `scripts/probe-acl.js:11` names `staff` as privileged and is
+      that changes). The comment at `src/scripts/probe-acl.js:11` names `staff` as privileged and is
       corrected in the same commit.
 - [ ] Same file, beside `PUBLIC_ROLES:21`: `LEVEL_TOKENS = { 1: 'team', 2: 'staff', 3: 'idir', 4: 'public' }`,
       `readForLevel(level)` → cumulative token array (`readForLevel(2) === ['team','staff']`),
@@ -852,8 +856,27 @@ The whole ladder is this unit. No endpoint, no stored-data change.
 - [ ] `src/helpers/access-sql.js:76` `rolesFor` — inside the existing loop, add `'team'` when a
       `project:` role is seen, and after it add `'idir'` when
       `req.user.identity_provider === 'idir'`. `project:*` stays stripped (`:84`): which projects is
-      `projectScopeFor`'s job and `scopeClause`/`canRead` already AND it in. Confirm the claim name
-      on a live loginproxy token before merging; record the measurement in the PR.
+      `projectScopeFor`'s job. Confirm the claim name on a live loginproxy token before merging;
+      record the measurement in the PR.
+- [ ] Project scope becomes a per-row GRANT for `team` rows instead of a global filter (doc §1,
+      Ladder). Today `visibilityFor:371` ANDs `scopeClause` into every read and `canRead:391`
+      applies scope before the privilege check, so a staff caller holding `project:207` resolves to
+      tier `scoped` and sees only project 207 even at level 2. Four edits, one commit:
+  - [ ] `resolveAccess:131` — return `TIER.SCOPED` only when the caller has no `staff`, no `idir`
+        and no privileged role. A scoped caller that also holds one of those keeps its old tier and
+        carries `projectScope` for the OR arm below.
+  - [ ] `readClause:257` — for a caller with a scope, add the OR arm
+        `ARRAY_CONTAINS(c.read, 'team') AND c.projectId IN (@scope0…)`, `c.id` on `projects`. Same
+        bound-parameter rule as everything else in the file; take the partition field the way
+        `scopeClause` does.
+  - [ ] `canRead:391` — same predicate in JS: visible when `read[]` carries one of the caller's
+        ladder tokens, OR `read[]` carries `team` and `String(doc[partitionField])` is in the scope.
+        The scope pre-check stays only for the team-only tier.
+  - [ ] `access-odata.js` `filterFor:63` — the OData twin:
+        `(read/any(r: search.in(r, '<roles>')) or (read/any(r: r eq 'team') and search.in(projectId, '<scope>')))`.
+        The `empty` flag still fires for a team-only caller scoped to nothing.
+  - [ ] `visibilityFor:371` ANDs `scopeClause` only for the team-only tier; every other caller gets
+        the OR arm inside `readClause`.
 - [ ] `src/vis/level.js:10` — `sysadmin: 1`, `demi-admin: 1`, add `idir: 3`; `staff`,
       `demi-service-*`, `compliance`, `public` unchanged. Rewrite the header comment `:6-8`.
       No `team` entry: team is a row-plane fact (doc §5 item 1).
@@ -873,6 +896,17 @@ The whole ladder is this unit. No endpoint, no stored-data change.
         `levelOfRead(['sysadmin','staff','demi-admin']) === 2`,
         `levelOfRead(['public','sysadmin','staff','demi-admin']) === 4`, `levelOfRead([]) === 1`,
         `levelOfRead(['sysadmin']) === 1`. This is the whole back-compat story; it must be literal.
+  - [ ] Same file, `'a staff caller with a project role still sees every level-2 row'` — row
+        `{ read: ['team','staff'], projectId: '300' }`, caller roles `['staff','project:207']` →
+        `canRead` true, and `visibilityFor(access).clause` carries no bare scope AND.
+  - [ ] Same file, `'a team-only row is visible to its team and to nobody else at level 2'` — row
+        `{ read: ['team'], projectId: '207' }`: `staff` + `project:207` → true; `staff` with no
+        project role → false; `sysadmin` → true.
+  - [ ] Same file, `'a caller with only a project role stays scoped'` — token roles `['project:207']`
+        only → `resolveAccess` tier `scoped`, and `visibilityFor(access).clause` contains the scope
+        AND (`c.projectId IN`).
+  - [ ] `test/helpers/access-odata.test.js` case `'filterFor emits the team arm'` — a staff caller
+        with `projectScope: ['207']` gets a filter containing `'team'` and `207`, joined by `or`.
   - [ ] `test/helpers/access-odata.test.js` case `'a staff caller now gets a filter'` — asserts
         `filterFor({ roles: ['public','staff'] }).filter` contains `staff` and is not null. Fails if
         `staff` is put back in `SECURE_ROLES`.
@@ -881,6 +915,9 @@ The whole ladder is this unit. No endpoint, no stored-data change.
         `isPrivileged`.
   - [ ] Same file, `'a compliance-only token passes authMiddleware'` — same assertion. This is what
         makes `requireRole('compliance')` reachable in P5-2.
+  - [ ] Same file, `'a demi-service-read token still passes authMiddleware'` — `next()` runs. Fails
+        if `AUTHENTICATED_ROLES` is spelled `[...WRITE_ROLES, 'compliance']`, which omits it
+        (`test/middleware/require-roles.test.js:63-66`).
   - [ ] `test/vis/level.test.js:48` — delete `'levels 1 and 3 have no role until EAO question 1 is
         answered'`; add `'sysadmin is level 1, not 0'` (`levelFromRoles(['sysadmin']) === 1`) and
         `'an IDIR login is level 3'` (`ROLE_LEVELS.idir === 3`).
