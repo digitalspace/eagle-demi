@@ -880,7 +880,7 @@ not a source (doc §3 question 10).
       `role-sync-client-secret` (+ URI outputs). `azure/main.bicep`: params `trackApiBase`,
       `trackClientId`, `trackClientSecret`, `roleSyncClientId`, `roleSyncClientSecret`,
       `syncTeamsSchedule = ''`. `azure/modules/api-web-app.bicep` appSettings: `TRACK_API_BASE`,
-      `TRACK_CLIENT_ID`, `SYNC_TEAMS_SCHEDULE`, `KEYCLOAK_ADMIN_CLIENT_ID` plain;
+      `TRACK_CLIENT_ID`, `SYNC_TEAMS_SCHEDULE`, `KEYCLOAK_ADMIN_CLIENT_ID` (fed by `roleSyncClientId`) plain;
       `TRACK_CLIENT_SECRET`, `KEYCLOAK_ADMIN_CLIENT_SECRET` as
       `@Microsoft.KeyVault(SecretUri=…)`. Param files: test `syncTeamsSchedule = '0 0 10 * * *'`,
       dev/prod `''`. `scripts/deploy-infra.sh`: source `TRACK_CLIENT_SECRET`,
