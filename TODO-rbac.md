@@ -1125,12 +1125,11 @@ Merges only after the `project:<id>` roles dependency above carries a date.
       `readForLevel(4)`. The ceiling itself — `Math.min(..., levelOfRead(parentProject.read))` — is
       already in place from P3-2. Every other write site converted in P3-2 keeps the level it has;
       this bullet is the only default that moves.
-- [ ] `src/repositories/documents.js:208` `constrainToProject` — the cascade INTERSECTS role
-      names, so once a document is admitted at level 1 its `ownRead` is `['team']` and a
-      level-2 project ACL (`['staff']`) shares nothing with it: every level-1 document falls to
-      the fail-closed branch on the first cascade and its `ownRead` snapshot records the flattened
-      value. Keep `team`, or replace the intersection with a `levelOfRead` cap, BEFORE the default
-      moves. Fixing it after means a re-seed per project.
+- [x] `src/repositories/documents.js` `constrainToProject` is
+      `readForLevel(Math.min(levelOfRead(ownRead), levelOfRead(projectRead)))` — the lower of the
+      two levels, no set intersection. A level-1 document keeps `team` under a level-2 project
+      instead of falling to a fail-closed branch that flattened its `ownRead` snapshot. Landed
+      before the default moves, as this line required.
 - [ ] `src/seed/transform.js:202` and `src/merge/project.js:195` write a local `SECURE_ROLES`
       that aliases `ADMIN_ROLES` (`['sysadmin','staff','demi-admin']`), so `levelOfRead` reads
       the private form as 2 and the published form as 4 — correct today, but a re-seed rewrites
@@ -1339,19 +1338,19 @@ Branch: `docs/takedown-runbook`
 
 Docs only. Written before P3-4 ships, because P3-4's 403 path points at it.
 
-- [ ] `docs/takedown-runbook.md`, how-to, numbered steps: narrow the record with
+- [x] `docs/takedown-runbook.md`, how-to, numbered steps: narrow the record with
       `PUT /api/{projects,documents}/:id/level` as `sysadmin`; purge the AI Search index with
       `aiSearch.deleteFromIndex` (indexers are `_ts` high-water only and never see a delete, so a
       narrowed row lingers in the index until this runs); delete the document's chunks with
       `deleteChunksForDocument` and purge them from the chunks index the same way; invalidate the
       Front Door and browser caches for any affected URL; confirm with an anonymous
       `GET /api/search` that no hit remains.
-- [ ] The runbook states plainly that copies already outside EPIC — downloads, mirrors, search
+- [x] The runbook states plainly that copies already outside EPIC — downloads, mirrors, search
       engine caches — are unrecoverable, and that a takedown is incident response with a recorded
       reason, never a routine correction.
-- [ ] Link it from `docs/rbac-architecture.md` §1 (done) and from `docs/prod-flip-runbook.md`.
-- Acceptance: `docs/takedown-runbook.md` exists and its AI Search step names the real helper —
-  `grep -n deleteFromIndex src/search/*.js` resolves.
+- [x] Linked from `docs/rbac-architecture.md` §1. The `docs/prod-flip-runbook.md` link is still open.
+- [x] Acceptance: `docs/takedown-runbook.md` exists and its AI Search step names the real helper —
+      `grep -n deleteFromIndex src/search/*.js` resolves.
 
 ---
 

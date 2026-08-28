@@ -513,8 +513,8 @@ paths:
         Receives one document pushed by eagle-api, keyed by the Eagle `_id`. The body carries the
         RAW Eagle record plus the labels for its four List ObjectId references. Idempotent: the
         same eagleId replaces. Two things are NOT taken from the push — extraction state, carried
-        off the row already in DEMI, and the ACL, which is the document's own intersected with its
-        parent project's.
+        off the row already in DEMI, and the ACL, which is the lower of the document's own ladder
+        level and its parent project's.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

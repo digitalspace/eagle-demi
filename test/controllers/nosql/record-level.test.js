@@ -149,6 +149,42 @@ test('the ladder move routes', async (t) => {
     assert.strictEqual(row.Detail.confirmed, false, 'level 3 needs no confirmation');
   });
 
+  await t.test('a project level change re-derives its documents', async () => {
+    // The cascade is what stops a document out-ranking the project it moved under. Asserted
+    // through `setAclForProject`, which is the only observable the module-local cascade has.
+    let cascadedWith = null;
+    t.mock.method(projects, 'getById', async () => PROJECT_AT(2, ['staff']));
+    t.mock.method(projects, 'upsert', async (item) => item);
+    t.mock.method(aiSearch, 'indexes', () => ({
+      chunks: 'chunks', projects: 'projects', documents: 'documents'
+    }));
+    t.mock.method(aiSearch, 'writeAcls', async () => 1);
+    t.mock.method(documents, 'setAclForProject', async (access, projectId, read) => {
+      cascadedWith = { projectId, read };
+      return { succeeded: 1, failed: 0, rows: [] };
+    });
+
+    const moved = mockRes();
+    await projectController.setLevel({
+      params: { id: '207' }, query: {}, body: { level: 3 }, user: SYSADMIN
+    }, moved);
+
+    assert.strictEqual(moved.statusCode, 200);
+    assert.deepStrictEqual(cascadedWith, { projectId: '207', read: ['staff', 'idir'] },
+      'the documents are re-derived against the level the project just moved to');
+
+    // A no-op move touches nothing: re-running the cascade would rewrite every document in the
+    // partition for a request that changed no visibility at all.
+    cascadedWith = null;
+    const same = mockRes();
+    await projectController.setLevel({
+      params: { id: '207' }, query: {}, body: { level: 2 }, user: SYSADMIN
+    }, same);
+
+    assert.strictEqual(same.statusCode, 200);
+    assert.strictEqual(cascadedWith, null, 'level equal to from runs no cascade');
+  });
+
   await t.test('a document cannot pass its project', async () => {
     t.mock.method(documents, 'getById', async () => ({ id: 'd1', projectId: '207', read: ['staff'] }));
     t.mock.method(projects, 'getById', async () => PROJECT_AT(2, ['staff']));
@@ -254,9 +290,22 @@ test('the ladder move routes', async (t) => {
     }, res);
 
     assert.strictEqual(res.statusCode, 200);
-    assert.deepStrictEqual(args, ['d1', '207', true, 4], 'isPublished: true is level 4');
+    assert.deepStrictEqual(args, ['d1', '207', 4], 'isPublished: true is level 4');
     assert.strictEqual(res.rowsAtResponse[0].Action, 'record.widen');
     assert.strictEqual(res.rowsAtResponse[0].Detail.to, 4);
+    // The alias synthesises `confirm: true` to clear the level-4 guard. Filing that as a
+    // confirmation would put a decision in the audit table that nobody made.
+    assert.strictEqual(res.rowsAtResponse[0].Detail.confirmed, false);
+    assert.strictEqual(res.rowsAtResponse[0].Detail.reason, 'legacy PUT /documents/:id/published');
+
+    // And the level route itself still records a real confirmation as one — otherwise the fix
+    // above would be satisfied by never recording any.
+    const direct = mockRes();
+    await documentController.setLevel({
+      params: { id: 'd1' }, query: {},
+      body: { level: 4, confirm: true, reason: 'cleared by the EAO' }, user: SYSADMIN
+    }, direct);
+    assert.strictEqual(direct.rowsAtResponse.at(-1).Detail.confirmed, true);
   });
 
   await t.test('the alias is not a way around the takedown gate', async () => {

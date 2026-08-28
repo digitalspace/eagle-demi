@@ -33,6 +33,10 @@ const { redactForAccess, redactAllForAccess, refusedWriteKeys } = require('../..
 // until it expires, so keep the window short.
 const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
 
+// Marks a request that arrived through the deprecated `published` alias. A symbol, so no request
+// body can set it.
+const LEGACY_PUBLISH = Symbol('legacy publish alias');
+
 /**
  * Resolve a new document's ACL. Fail closed, and never let a document out-rank its parent.
  * EVERY document write path must go through this.
@@ -389,7 +393,7 @@ exports.setLevel = async (req, res) => {
     }
 
     const published = level === 4;
-    const updated = await documents.setPublished(existing.id, existing.projectId, published, level);
+    const updated = await documents.setPublished(existing.id, existing.projectId, level);
 
     // The highest-value row in the table: this is the call that changes who can see a document.
     // Before the chunk patch below, not after — the change is already applied by here and the
@@ -399,7 +403,13 @@ exports.setLevel = async (req, res) => {
       targetType: 'document',
       targetId: existing.id,
       projectId: existing.projectId,
-      detail: { from, to: level, confirmed: confirm === true, reason: reason || '' }
+      detail: {
+        from,
+        to: level,
+        // The alias's `confirm` is synthetic, so it is not a confirmation anybody made.
+        confirmed: confirm === true && !req[LEGACY_PUBLISH],
+        reason: reason || ''
+      }
     });
 
     const acl = updated && Array.isArray(updated.read) && updated.read.length > 0
@@ -455,13 +465,22 @@ exports.setLevel = async (req, res) => {
  * Publish or unpublish. DEPRECATED — a thin alias for `setLevel`, kept because
  * eagle-admin-console still sends `{ isPublished }`. It goes through the same guards on purpose:
  * an alias that skipped them would be the way around the ladder.
+ *
+ * The `confirm` it synthesises satisfies the level-4 guard and nothing else: the marker on `req`
+ * makes the audit row say `confirmed: false`, so a legacy publish is never filed as a confirmed
+ * one. A body key would not do — the caller controls the body and could mislabel a real
+ * confirmation.
  */
 exports.setDocumentPublished = (req, res) => {
   const body = req.body || {};
   const published = body.isPublished === true || body.isPublished === 'true';
-  req.body = published
-    ? { level: 4, confirm: true, reason: body.reason || 'published through PUT /documents/:id/published' }
-    : { level: 2 };
+  logger.warn('[Document Controller] deprecated PUT /documents/:id/published — use PUT /:id/level', {
+    documentId: req.params.id, isPublished: published
+  });
+
+  const reason = 'legacy PUT /documents/:id/published';
+  req[LEGACY_PUBLISH] = true;
+  req.body = published ? { level: 4, confirm: true, reason } : { level: 2, reason };
   return exports.setLevel(req, res);
 };
 
