@@ -93,7 +93,7 @@ async function resolveProjectFilter(access, query) {
  *   filter, or null. `recovered` are the keys to REMOVE from the dropped report — everything else
  *   stays reported, the over-cap case included.
  */
-async function recoverChunkFilters(query, dropped, acl) {
+async function recoverChunkFilters(query, dropped, acl, access) {
   if (!dropped.length) return { scope: null, recovered: [] };
 
   // Only the dropped keys the DOCUMENTS index can express, asked by building a filter from those
@@ -117,7 +117,7 @@ async function recoverChunkFilters(query, dropped, acl) {
   if (Object.keys(narrowed).length === 0) return { scope: null, recovered: [] };
 
   const { filter: docFilter, dropped: stillDropped } =
-    eagleQuery.buildFilter(narrowed, 'Document', acl);
+    eagleQuery.buildFilter(narrowed, 'Document', acl, access);
   const recovered = dropped.filter(key => !stillDropped.includes(key));
   if (!recovered.length || !docFilter) return { scope: null, recovered: [] };
 
@@ -267,13 +267,13 @@ exports.search = async (req, res) => {
           if (!acl.empty) {
             // The caller's `and[...]` filters COMPOSED WITH the ACL clause, never instead of it —
             // buildFilter takes the whole `filterFor` result and refuses to run without it.
-            const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
+            const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl, access);
             noteDropped('filter', dropped);
 
             // `Boolean(keywords)`, not `true`: with no keywords there is no relevance to order by,
             // and DEFAULT_ORDER is what keeps `$skip` paging from repeating and omitting rows.
             const { orderby, dropped: sortDropped } =
-              eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords));
+              eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords), access);
             noteDropped('sort', sortDropped);
 
             // `count` is the index-wide total, not the page — eagle-public pages against it and the
@@ -445,12 +445,12 @@ exports.search = async (req, res) => {
         const projectScope = filterFor(access, 'id');
 
         if (!acl.empty) {
-          const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
+          const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl, access);
           noteDropped('filter', dropped);
           // See the Project branch: `Boolean(keywords)` is what lets DEFAULT_ORDER give a
           // keywordless page a stable order instead of a constant relevance score.
           const { orderby, dropped: sortDropped } =
-            eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords));
+            eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords), access);
           noteDropped('sort', sortDropped);
 
           const { items, count } = await aiSearch.searchDocuments({
@@ -544,11 +544,11 @@ exports.search = async (req, res) => {
           return res.json([{ searchResults: [], count: 0 }]);
         }
 
-        const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl);
+        const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl, access);
 
         // Document metadata resolved through the documents index, because a chunk cannot be
         // filtered on it. Reported only for what stayed dropped — a recovered key is one that worked.
-        const { scope, recovered } = await recoverChunkFilters(filterQuery, dropped, acl);
+        const { scope, recovered } = await recoverChunkFilters(filterQuery, dropped, acl, access);
         noteDropped('filter', dropped.filter(key => !recovered.includes(key)));
         // `filter` is UNDEFINED for an unscoped privileged caller — an unfiltered read, not an
         // empty one — and a bare template over it emits `(undefined) and …`, a 400 this route
@@ -560,7 +560,7 @@ exports.search = async (req, res) => {
         // A `sortBy` reaching this line is always dropped: every field in `chunks` is
         // `sortable: false`, so `buildOrderBy` is called for its drop list and nothing else. Not on
         // every request — the keywordless return above fires first and reports no `dropped` at all.
-        noteDropped('sort', eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords)).dropped);
+        noteDropped('sort', eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords), access).dropped);
 
         // A PAGE OF DOCUMENTS COSTS A WINDOW OF CHUNKS, so the window is the paging unit too and
         // `pageSize` is a fetch knob for this dataset, not a row count. See

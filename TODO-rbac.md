@@ -683,22 +683,39 @@ Acceptance
 
 Branch: `feat/vis-query-params`
 
-- [ ] `src/search/eagle-query.js` `buildFilter` (`:313`) and `buildOrderBy` (`:443`): after alias resolution through `ALIASES` (`:44-70`), drop any key whose resolved index field is not visible at the caller's level. Pass `access` in from `src/controllers/search.js:268` and `:475`. Dropped keys already flow to `noteDropped` (`src/controllers/search.js:194`), so the response meta says so — no new wire shape.
-- [ ] `src/repositories/projects.js:27-35` `buildCriteria`: reject (not silently drop) `regionalDistrict`, `municipality`, `electoralDistrict` when the caller cannot see them; today they are unconditional `eq` clauses. All three are `defaultVis: 4` in the Phase 1 catalog, so this is a guard with no behaviour change today.
-- [ ] `KNOWN_PARAMS` (`src/search/eagle-query.js:113-121`) is unchanged — an unknown param stays a 400.
+- [x] `src/search/eagle-query.js` `buildFilter` (`:313`) and `buildOrderBy` (`:443`): after alias resolution through `ALIASES` (`:44-70`), drop any key whose resolved index field is not visible at the caller's level. Pass `access` in from `src/controllers/search.js:268` and `:475`. Dropped keys already flow to `noteDropped` (`src/controllers/search.js:194`), so the response meta says so — no new wire shape.
+- [x] `src/repositories/projects.js:27-35` `buildCriteria`: reject (not silently drop) `regionalDistrict`, `municipality`, `electoralDistrict` when the caller cannot see them; today they are unconditional `eq` clauses. All three are `defaultVis: 4` in the Phase 1 catalog, so this is a guard with no behaviour change today.
+- [x] `KNOWN_PARAMS` (`src/search/eagle-query.js:113-121`) is unchanged — an unknown param stays a 400.
 
 Tests
 
-- [ ] `test/search/eagle-query.test.js` — case `'every ALIASES target is a maxVis 4 index field'` iterates `ALIASES.Project`, `.Document`, `.DocumentChunk` values and asserts each is catalogued at `maxVis 4`. Fails if an alias ever points at a restricted column.
-- [ ] Same file, case `'DEFAULT_ORDER fields are maxVis 4'` over `:108-111` (`name asc`, `displayName asc`). Fails on a sort default that would leak ordering over a hidden field.
-- [ ] `test/repositories/projects.test.js` — case `'buildCriteria keys are all catalogued'` asserts the three criteria field names exist in `src/vis/catalog/projects.js`. Fails when a filter is added for an uncatalogued field.
-- [ ] `test/controllers/search.test.js` — case `'a filter on a hidden field is dropped, not applied'` drives an anonymous search with a filter on a `defaultVis: 2` field and asserts the key appears in `meta.dropped` and not in the emitted OData filter. Fails if the filter is composed.
+- [x] `test/search/eagle-query.test.js` — case `'every ALIASES target is a maxVis 4 index field'` iterates `ALIASES.Project`, `.Document`, `.DocumentChunk` values and asserts each is catalogued at `maxVis 4`. Fails if an alias ever points at a restricted column.
+- [x] Same file, case `'DEFAULT_ORDER fields are maxVis 4'` over `:108-111` (`name asc`, `displayName asc`). Fails on a sort default that would leak ordering over a hidden field.
+- [x] `test/repositories/projects.test.js` — case `'buildCriteria keys are all catalogued'` asserts the three criteria field names exist in `src/vis/catalog/projects.js`. Fails when a filter is added for an uncatalogued field.
+- [x] `test/controllers/search.test.js` — case `'a filter on a hidden field is dropped, not applied'` drives an anonymous search with a filter on a `defaultVis: 2` field and asserts the key appears in `meta.dropped` and not in the emitted OData filter. Fails if the filter is composed.
 
 Acceptance
 
-- [ ] `node --test test/search/eagle-query.test.js test/controllers/search.test.js test/repositories/projects.test.js` — 0 fail.
+- [x] `node --test test/search/eagle-query.test.js test/controllers/search.test.js test/repositories/projects.test.js` — 0 fail.
 - [ ] `curl -s "$API/api/search?dataset=Project&complianceLead=x"` → 400 (unknown param, unchanged).
 - [ ] Same anonymous `/api/search` `jq -S` diff as P2-2: 0 lines. Date: ______
+
+### P2-3 recorded deviations
+
+- The catalog gate lives in one helper, `fieldVisible` (`src/search/eagle-query.js`), shared by
+  `buildFilter` and `buildOrderBy`. An index field with NO catalog entry is dropped, not passed —
+  same allowlist rule the redactor applies to a response field.
+- `src/vis/level.js` gains `levelOf(access)`. The fail-closed level read was already written twice
+  inside `redact.js`; a third copy in `eagle-query.js` and a fourth in `repositories/projects.js`
+  would have been four. Both `redact.js` copies now call it, so no behaviour moves.
+- `recoverChunkFilters` (`src/controllers/search.js:96`) takes `access` too. The unit did not name
+  it — it rebuilds a `Document` filter out of the chunk drop list, so without it a Document field
+  the caller cannot see would come back as chunk scope.
+- The `'a filter on a hidden field is dropped, not applied'` case filters on `read`, not on a
+  `defaultVis: 2` field: the index catalogs classify nothing at 2. `read` is `defaultVis: 0` and
+  filterable, so it is the only key that exercises the gate today.
+- `CRITERIA_FIELDS` is exported from `src/repositories/projects.js` so the new test iterates the
+  real key list. A literal list in the test would not fail when a fourth criterion is added.
 
 ## P2-4 GET /api/me
 

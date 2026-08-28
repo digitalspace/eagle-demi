@@ -14,23 +14,41 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
+const { catalogFor } = require('../vis/catalog');
+const { visible } = require('../vis/redact');
+const { levelOf } = require('../vis/level');
 const { eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'projects';
 const PARTITION_FIELD = 'id';
 
+/** Every field a caller may narrow a project list by, and the SQL parameter each binds to. */
+const CRITERIA_FIELDS = {
+  regionalDistrict: '@rd',
+  municipality: '@muni',
+  electoralDistrict: '@ed'
+};
+
 /**
  * Criteria shared by list and count so the two can never diverge — a count built from a
  * different predicate would leak the size of a set the caller cannot read.
+ *
+ * REJECTED, NOT DROPPED, for a field this caller cannot see: a narrowed count answers what the
+ * hidden value is. All three are `defaultVis: 4` today, so nothing reaches the throw.
  */
-function buildCriteria({ regionalDistrict, municipality, electoralDistrict }) {
-  const criteria = [];
+function buildCriteria(opts, access) {
+  const catalog = catalogFor('projects');
+  const level = levelOf(access);
 
-  if (regionalDistrict) criteria.push(eq('regionalDistrict', regionalDistrict, '@rd'));
-  if (municipality) criteria.push(eq('municipality', municipality, '@muni'));
-  if (electoralDistrict) criteria.push(eq('electoralDistrict', electoralDistrict, '@ed'));
-
-  return criteria;
+  return Object.entries(CRITERIA_FIELDS)
+    .filter(([field]) => opts[field])
+    .map(([field, param]) => {
+      const entry = catalog[field];
+      if (!entry || !visible(level, entry.defaultVis)) {
+        throw new Error(`[projects] cannot filter on a field this caller cannot see: ${field}`);
+      }
+      return eq(field, opts[field], param);
+    });
 }
 
 /**
@@ -42,7 +60,7 @@ async function listVisible(access, opts = {}) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: buildCriteria(opts),
+    criteria: buildCriteria(opts, access),
     // getById keeps the raw point read: canRead needs the whole row, and the controllers upsert
     // what they read.
     select: selectFor('projects', access, PARTITION_FIELD),
@@ -56,7 +74,7 @@ async function countVisible(access, opts = {}) {
   const spec = countWhere({
     access,
     partitionField: PARTITION_FIELD,
-    criteria: buildCriteria(opts)
+    criteria: buildCriteria(opts, access)
   });
 
   const value = await cosmos.queryValue(CONTAINER, spec);
@@ -220,6 +238,7 @@ module.exports = {
   CONTAINER,
   PARTITION_FIELD,
   buildCriteria,
+  CRITERIA_FIELDS,
   listVisible,
   countVisible,
   getById,

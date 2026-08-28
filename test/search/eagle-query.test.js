@@ -514,3 +514,39 @@ test('every DATASET_INDEX value names an index definition that is actually on di
     assert.ok(onDisk.includes(index), `${dataset} -> '${index}' has no definition; on disk: ${onDisk}`);
   }
 });
+
+// The catalog gates query keys as well as response fields (P2-3): a caller who cannot READ a field
+// cannot FILTER or SORT on it either, because a narrowed row count answers what the value is.
+const { catalogFor } = require('../../src/vis/catalog');
+
+const INDEX_CATALOG = { Project: 'index-projects', Document: 'index-documents' };
+
+test('every ALIASES target is a maxVis 4 index field', () => {
+  for (const [dataset, aliases] of Object.entries(eagleQuery.ALIASES)) {
+    const entity = INDEX_CATALOG[dataset];
+    if (!entity) continue;
+    for (const [wireKey, field] of Object.entries(aliases)) {
+      const entry = catalogFor(entity)[field];
+      assert.ok(entry, `${dataset}.${wireKey} -> '${field}' is not in ${entity}`);
+      assert.strictEqual(entry.maxVis, 4,
+        `${dataset}.${wireKey} -> '${field}' is restricted; filtering on it would answer its value`);
+    }
+  }
+
+  // DocumentChunk is the exception and it is deliberate: the chunks catalog is P4-1, so chunk keys
+  // are not gated and its aliases still resolve.
+  assert.throws(() => catalogFor('chunks'));
+  const { filter } = eagleQuery.buildFilter(
+    { 'and[document]': 'abc' }, 'DocumentChunk', anonAcl(), anonymous());
+  assert.match(filter, /documentId eq 'abc'/);
+});
+
+test('DEFAULT_ORDER fields are maxVis 4', () => {
+  for (const [dataset, clause] of Object.entries(eagleQuery.DEFAULT_ORDER)) {
+    const field = clause.split(' ')[0];
+    const entry = catalogFor(INDEX_CATALOG[dataset])[field];
+    assert.ok(entry, `DEFAULT_ORDER.${dataset} sorts on '${field}', which is not catalogued`);
+    assert.strictEqual(entry.maxVis, 4,
+      `DEFAULT_ORDER.${dataset} sorts every page on restricted field '${field}'`);
+  }
+});
