@@ -48,8 +48,8 @@ and below, and public only while the CAC is published. Predicates never narrow; 
 catalog is removed. Unknown entity throws. Unknown or throwing predicate hides the field. Dial out
 of range clamps toward restriction. A merged field without a catalog entry fails CI.
 
-**Write side.** Content writes stay `WRITE_ROLES`. Changing a dial needs a separate role
-`demi-classify`, goes through one endpoint `PATCH /api/projects/:id/visibility`, is validated
+**Write side.** Content writes stay `WRITE_ROLES`. Changing a dial needs `sysadmin`
+(no separate classify role; decided 2026-08-28), goes through one endpoint `PATCH /api/projects/:id/visibility`, is validated
 (400 on uncatalogued field or out-of-range level) and audited through the existing
 `src/utils/audit.js` `auditEvent`. Ordinary POST and PUT strip `vis` from bodies.
 
@@ -130,7 +130,7 @@ Each item below overrides the corresponding section of the source document.
    engine.
 7. **Predicates read only fields ordinary writes cannot set.** `projectCACPublished` is a plain
    content field any `WRITE_ROLES` caller sets through PUT, so `when: 'cacPublished'` would let a
-   content writer publish `cacEmail` without `demi-classify`. Until Phase 3 gates that field, the
+   content writer publish `cacEmail` without `sysadmin`. Until Phase 3 gates that field, the
    predicate is not shipped. Predicates take `(record)` only.
 8. **`read`, `s3Key`, `vis` are `maxVis: 0`; `_etag` is `maxVis: 2`.** `publicView` strips
    `read` on purpose and the document controller strips `s3Key`. `isPublished` is derived in the
@@ -153,9 +153,9 @@ Each item below overrides the corresponding section of the source document.
     added to `ROLE_LEVELS`. The 3-role lists named `SECURE_ROLES` in `src/merge/project.js:22` and
     `src/seed/transform.js:16` equal `ADMIN_ROLES` in `access-sql.js:42`, not `SECURE_ROLES`;
     they build stored `read[]`, so they import `ADMIN_ROLES` and are never widened to the 5-role
-    list (that would rewrite every ACL). `demi-vis-0..3` and
-    `demi-classify` are realm roles DEMI does not own; creating them in `eao-epic` is an external
-    dependency with a named owner. `demi-service-write` (wiki `ADR-007-Service-to-Service-Credentials`) lands before `demi-classify`.
+    list (that would rewrite every ACL). DEMI creates no realm roles of its own: it reuses Eagle's
+    (`sysadmin`, `staff`), classification is gated by `sysadmin`, and any level-1/3 role waits on
+    EAO question 1. `demi-admin` and `demi-service-*` exist only on API keys.
 13. **Dropped.** `visLevelCap` on API keys (keys already carry roles and scope), a separate
     `audits` container (`auditEvent` exists), `GET /api/vis-catalog` (no admin UI yet), golden
     fixture files (a regenerated golden proves nothing). `/api/me` is kept but is its own change.
@@ -167,7 +167,7 @@ Each item below overrides the corresponding section of the source document.
    existing model in the workspace is Track's `Membership` enum (`EPD`, `LEAD`, `ANALYST`,
    `FNCAIRT`, `OTHER`; `epictrack-api/src/api/utils/roles.py:29-38`), which is lateral with
    orthogonal capability roles. If lateral, the scalar level becomes a clearance set (correction
-   11). Decide before dials or `demi-vis-*` role names exist anywhere.
+   11). Decide before dials or any level-1/3 role names exist anywhere.
 2. Are project lead and EPD names and emails public by policy? `eagle-public` shows them to
    anonymous visitors today; the EAO field inventory marks them internal. One of the two is wrong.
 3. Should `forMAEE = Y` in the field inventory imply `maxVis >= 3`?
