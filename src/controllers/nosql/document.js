@@ -25,8 +25,7 @@ const { purgeDocument } = require('../../helpers/purge');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
 const { transformDocument, seedAcl } = require('../../seed/transform');
-const { redactForAccess, redactAllForAccess, visible, effectiveVis } = require('../../vis/redact');
-const { catalogFor } = require('../../vis/catalog');
+const { redactForAccess, redactAllForAccess, refusedWriteKeys } = require('../../vis/redact');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -302,10 +301,7 @@ exports.updateDocument = async (req, res) => {
     // accepting a hidden key back would overwrite a value they were never shown
     // (docs/rbac-architecture.md §2 item 1). `vis` is refused at EVERY level — the dial map is
     // policy rather than content, and no route sets it yet.
-    const catalog = catalogFor('documents');
-    const dials = existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
-    const refused = Object.keys(changes).filter(key => key === 'vis' || !catalog[key] ||
-      !visible(access.level, effectiveVis(catalog[key], dials[key])));
+    const refused = refusedWriteKeys('documents', changes, access, existing);
     if (refused.length) {
       return res.status(400).json({
         error: `Fields not writable by this caller: ${refused.join(', ')}`

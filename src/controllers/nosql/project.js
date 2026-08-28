@@ -19,8 +19,7 @@ const { purgeProject } = require('../../helpers/purge');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
-const { redactForAccess, visible, effectiveVis } = require('../../vis/redact');
-const { catalogFor } = require('../../vis/catalog');
+const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 
 /**
  * A project's visibility change, carried to its index row and re-derived onto its documents.
@@ -214,10 +213,7 @@ exports.updateProject = async (req, res) => {
     // they were never shown, which is the hole the redaction-safe update rule closes
     // (docs/rbac-architecture.md §2 item 1). `vis` is refused at EVERY level: the dial map is
     // policy rather than content, and no route sets it yet.
-    const catalog = catalogFor('projects');
-    const dials = existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
-    const refused = Object.keys(changes).filter(key => key === 'vis' || !catalog[key] ||
-      !visible(access.level, effectiveVis(catalog[key], dials[key])));
+    const refused = refusedWriteKeys('projects', changes, access, existing);
     if (refused.length) {
       return res.status(400).json({
         error: `Fields not writable by this caller: ${refused.join(', ')}`

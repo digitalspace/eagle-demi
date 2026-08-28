@@ -98,4 +98,16 @@ function redactAllForAccess(entity, docs, access) {
   return docs.map(doc => redactForAccess(entity, doc, access));
 }
 
-module.exports = { visible, effectiveVis, redactForAccess, redactAllForAccess };
+/**
+ * Body keys a caller may not write: `vis` at every level, anything uncatalogued, anything the
+ * caller cannot see on the existing row (docs/rbac-architecture.md §2 item 1).
+ */
+function refusedWriteKeys(entity, changes, access, existing) {
+  const catalog = catalogFor(entity);
+  const dials = existing && existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
+  const level = LEVELS.includes(access && access.level) ? access.level : ANONYMOUS_LEVEL;
+  return Object.keys(changes).filter(key => key === 'vis' || !catalog[key] ||
+    !visible(level, effectiveVis(catalog[key], dials[key])));
+}
+
+module.exports = { visible, effectiveVis, redactForAccess, redactAllForAccess, refusedWriteKeys };
