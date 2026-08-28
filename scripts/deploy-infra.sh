@@ -244,6 +244,7 @@ assert_secrets_survived() {
   # `@Microsoft.KeyVault(SecretUri=...)` reference (~70 chars) whether or not it resolves, so the
   # length check the other four use would pass on a dead reference. Probe the key live instead.
   local code attempt
+  local recycled=0
   probe_admin_key() {
     curl -s -o /dev/null -w '%{http_code}' --max-time 60 \
       -H "X-Api-Key: ${ADMIN_API_KEY}" \
@@ -258,19 +259,25 @@ assert_secrets_survived() {
     # A worker that started mid-deploy keeps the unresolved @Microsoft.KeyVault literal even after
     # the platform reports the reference Resolved; only a stop/start re-reads it (seen 2026-08-28).
     echo -e "${YELLOW}  ADMIN_API_KEY probe 401 — stop/start ${API_APP} to re-read the Key Vault reference${NC}"
-    az functionapp stop -g "$RESOURCE_GROUP" -n "$API_APP" --subscription "$SUBSCRIPTION" -o none
-    sleep 10
-    az functionapp start -g "$RESOURCE_GROUP" -n "$API_APP" --subscription "$SUBSCRIPTION" -o none
-    for attempt in 1 2 3 4 5 6; do
-      sleep 15; code=$(probe_admin_key); [ "$code" = '200' ] && break
-    done
+    recycled=1
+    if az functionapp stop -g "$RESOURCE_GROUP" -n "$API_APP" --subscription "$SUBSCRIPTION" -o none; then
+      sleep 10
+      if ! az functionapp start -g "$RESOURCE_GROUP" -n "$API_APP" --subscription "$SUBSCRIPTION" -o none; then
+        echo -e "${RED}  ✗ ${API_APP} is STOPPED and 'az functionapp start' failed — start it by hand now.${NC}" >&2
+        exit 4
+      fi
+      for attempt in 1 2 3 4 5 6; do
+        sleep 15; code=$(probe_admin_key); [ "$code" = '200' ] && break
+      done
+    fi
   fi
   if [ "$code" = '200' ]; then
     echo -e "${GREEN}  ✓ ADMIN_API_KEY${NC} (live probe: 200)"
   else
     echo -e "${RED}  ✗ ADMIN_API_KEY live probe returned ${code} on ${API_APP}${NC}" >&2
     echo -e "${YELLOW}    401 means the KeyVault reference did not resolve. A fresh private endpoint${NC}" >&2
-    echo -e "${YELLOW}    A-record can take ~10 min to appear — retried, then stop/started once, before failing.${NC}" >&2
+    [ "$recycled" = 1 ] && echo -e "${YELLOW}    Retried, then stop/started the app once; still not 200.${NC}" >&2
+    [ "$recycled" = 0 ] && echo -e "${YELLOW}    A fresh private endpoint A-record can take ~10 min to appear — retried 3x, 30s apart.${NC}" >&2
     failed=1
   fi
 
