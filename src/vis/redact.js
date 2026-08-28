@@ -73,7 +73,8 @@ function redactForAccess(entity, doc, access) {
   for (const [key, value] of Object.entries(doc)) {
     if (key === 'isPublished') continue;
 
-    const entry = catalog[key];
+    // Object.hasOwn: a stored key named constructor/toString must not hit Object.prototype.
+    const entry = Object.hasOwn(catalog, key) ? catalog[key] : undefined;
     if (!entry) continue;
 
     if (visible(level, effectiveVis(entry, dials[key]))) {
@@ -105,7 +106,7 @@ function refusedWriteKeys(entity, changes, access, existing) {
   const catalog = catalogFor(entity);
   const dials = existing && existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
   const level = levelOf(access);
-  return Object.keys(changes).filter(key => key === 'vis' || !catalog[key] ||
+  return Object.keys(changes).filter(key => key === 'vis' || !Object.hasOwn(catalog, key) ||
     !visible(level, effectiveVis(catalog[key], dials[key])));
 }
 
