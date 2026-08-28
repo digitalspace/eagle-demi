@@ -230,6 +230,36 @@ async function patchBoundaries(id, { regionalDistrict, municipality, electoralDi
   ]);
 }
 
+/**
+ * Set field visibility dials. `patch`, NEVER `upsert` — an upsert writes the whole record, so a
+ * classify would clobber any content write that landed since this caller read it (the failure
+ * api-keys.touchLastUsed documents). A dial the body does not name is left alone; a `null` level
+ * REMOVES the dial, so the field falls back to its catalog `defaultVis`.
+ */
+async function patchVis(id, vis) {
+  // Cosmos refuses `set /vis/<field>` when the parent node is absent, and no write site emits
+  // `vis`, so an unclassified project takes one whole-map set — it has no dials to preserve.
+  const existing = await cosmos.readItem(CONTAINER, String(id), String(id));
+  const dials = existing && existing.vis && typeof existing.vis === 'object' ? existing.vis : null;
+
+  const operations = dials
+    ? Object.entries(vis)
+      .filter(([field, level]) => level !== null || Object.hasOwn(dials, field))
+      .map(([field, level]) => (level === null
+        ? { op: 'remove', path: `/vis/${field}` }
+        : { op: 'set', path: `/vis/${field}`, value: level }))
+    : [{
+      op: 'set',
+      path: '/vis',
+      value: Object.fromEntries(Object.entries(vis).filter(([, level]) => level !== null))
+    }];
+
+  // Every key asked to remove a dial the record never held. patch() throws on an empty array.
+  if (!operations.length) return existing;
+
+  return cosmos.patch(CONTAINER, String(id), String(id), operations);
+}
+
 async function deleteById(id) {
   return cosmos.remove(CONTAINER, String(id), String(id));
 }
@@ -252,5 +282,6 @@ module.exports = {
   upsert,
   patchWildfireStats,
   patchBoundaries,
+  patchVis,
   deleteById
 };

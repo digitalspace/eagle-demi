@@ -180,3 +180,13 @@ test('effectiveVis and visible', async (t) => {
     assert.strictEqual(source.match(/<=|>=/g).length, 1);
   });
 });
+
+test('prototype names are never catalogued', () => {
+  const { refusedWriteKeys, redactForAccess } = require('../../src/vis/redact');
+  assert.deepStrictEqual(
+    refusedWriteKeys('projects', { constructor: 'x', toString: 'y', name: 'ok' }, { level: 2 }, { read: ['staff'] }),
+    ['constructor', 'toString']
+  );
+  const out = redactForAccess('projects', { id: '1', name: 'n', constructor: 'x', read: ['public'] }, { level: 4 });
+  assert.strictEqual(Object.hasOwn(out, 'constructor'), false);
+});

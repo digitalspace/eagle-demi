@@ -249,9 +249,12 @@ async function replace(containerName, id, partitionKey, item, etag) {
   return resource;
 }
 
+/** Cosmos rejects a patch with more than this many operations. Exported so a caller that turns
+ * request keys into operations can refuse the request instead of failing at the data layer. */
+const PATCH_MAX_OPERATIONS = 10;
+
 /**
  * Partial update — atomic, no read-modify-write, and it cannot erase fields it does not name.
- * Cosmos caps a patch at 10 operations.
  *
  * @param {Array<{op: string, path: string, value: any}>} operations
  */
@@ -259,9 +262,9 @@ async function patch(containerName, id, partitionKey, operations) {
   if (!Array.isArray(operations) || operations.length === 0) {
     throw new TypeError('[Cosmos] patch() requires a non-empty operations array.');
   }
-  if (operations.length > 10) {
+  if (operations.length > PATCH_MAX_OPERATIONS) {
     throw new RangeError(
-      `[Cosmos] patch() supports at most 10 operations, got ${operations.length}.`
+      `[Cosmos] patch() supports at most ${PATCH_MAX_OPERATIONS} operations, got ${operations.length}.`
     );
   }
   const container = getContainer(containerName);
@@ -408,6 +411,7 @@ module.exports = {
   INTERNAL_FIELDS,
   stripInternals,
   BULK_MAX_OPERATIONS,
+  PATCH_MAX_OPERATIONS,
   initCosmosClient,
   getDatabase,
   getContainer,

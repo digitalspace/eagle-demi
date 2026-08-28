@@ -1217,21 +1217,21 @@ Branch: `feat/ladder-widen-endpoint`
 
 Branch: `feat/vis-classify-endpoint`
 
-- [ ] `requireRole(name)` factory in `src/middleware/require-roles.js` beside `requireWrite:24-31`;
+- [x] `requireRole(name)` factory in `src/middleware/require-roles.js` beside `requireWrite:24-31`;
       route `router.patch('/projects/:id/visibility', authMiddleware, requireWrite,
       requireRole('sysadmin'), projectController.setVisibility)` in `src/routes/api.js` after `:72`.
-- [ ] `exports.setVisibility` in `src/controllers/nosql/project.js` after `updateProject`: body
+- [x] `exports.setVisibility` in `src/controllers/nosql/project.js` after `updateProject`: body
       `{ vis: { field: level } }`; 400 on an uncatalogued field, on a level outside `0..maxVis`,
       and on more than 10 keys
-      (`src/db/cosmos-nosql.js:262-265`). Writes with `patchVis` in
+      (`cosmos-nosql.js` `PATCH_MAX_OPERATIONS`). Writes with `patchVis` in
       `src/repositories/projects.js` via `cosmos.patch` — precedent
       `src/repositories/api-keys.js:78-86`; an upsert would clobber a concurrent content write.
       Audits `project.reclassify` with field names and levels only, never values.
 - Tests
-  - [ ] `test/controllers/nosql/project-visibility.test.js`: `'403 without sysadmin'`,
+  - [x] `test/controllers/nosql/project-visibility.test.js`: `'403 without sysadmin'`,
         `'400 on an uncatalogued field'`, `'patches, never upserts'`, `'audits before responding'`.
 - Acceptance
-  - [ ] `node --test test/controllers/nosql/project-visibility.test.js` — 0 fail.
+  - [x] `node --test test/controllers/nosql/project-visibility.test.js` — 0 fail.
   - [ ] On test: a `staff` token PATCHing `/visibility` → 403; `sysadmin` → 200; a follow-up
         anonymous GET omits the dialled field. `DemiAudit_CL | where Action == "project.reclassify"`
         returns the row.

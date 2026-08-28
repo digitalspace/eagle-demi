@@ -15,6 +15,8 @@ const documents = require('../../repositories/documents');
 const {
   resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
 } = require('../../helpers/access-sql');
+const { catalogFor } = require('../../vis/catalog');
+const { PATCH_MAX_OPERATIONS } = require('../../db/cosmos-nosql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeProject } = require('../../helpers/purge');
@@ -332,6 +334,78 @@ exports.setLevel = async (req, res) => {
       const failure = await cascadeProjectVisibility(existing.id, acl);
       if (failure) return res.status(500).json({ success: false, error: failure });
     }
+
+    return res.json(redactForAccess('projects', saved, access));
+  } catch (err) {
+    return serverError(res, err, 'project controller failed');
+  }
+};
+
+/**
+ * Classify a project's fields: `{ vis: { field: level } }`, `sysadmin` only.
+ *
+ * A dial is POLICY, not content, which is why `refusedWriteKeys` refuses `vis` on the ordinary PUT
+ * and why this gate is narrower than `requireWrite`. Dials are independent of the record's own
+ * level (docs/rbac-architecture.md §1) — there is no cap here beyond each field's catalog `maxVis`.
+ *
+ * A level of `null` REMOVES the dial; a field the body does not name keeps whatever it had.
+ */
+exports.setVisibility = async (req, res) => {
+  try {
+    const access = resolveAccess(req);
+    const existing = await projects.getById(access, req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const vis = req.body && req.body.vis;
+    if (!vis || typeof vis !== 'object' || Array.isArray(vis) || !Object.keys(vis).length) {
+      return res.status(400).json({ error: 'Body must carry a non-empty vis object of { field: level }.' });
+    }
+
+    const fields = Object.keys(vis);
+    // One dial is one Cosmos patch operation, and patch() refuses more than its cap. Refused here
+    // so the caller gets a 400 naming the limit rather than a 500 from the data layer.
+    if (fields.length > PATCH_MAX_OPERATIONS) {
+      return res.status(400).json({
+        error: `At most ${PATCH_MAX_OPERATIONS} fields may be classified in one request, got ${fields.length}.`
+      });
+    }
+
+    const catalog = catalogFor('projects');
+    for (const field of fields) {
+      // `hasOwn`, not truthiness: `catalog.constructor` and `catalog.__proto__` come off the
+      // prototype and would read as catalogued, with an undefined `maxVis` that caps nothing.
+      const entry = Object.hasOwn(catalog, field) ? catalog[field] : null;
+      // An uncatalogued field has no policy, so a dial on it would be silently unreadable.
+      if (!entry) {
+        return res.status(400).json({ error: `Not a catalogued projects field: ${field}` });
+      }
+      const level = vis[field];
+      if (level === null) continue;
+      if (!Number.isInteger(level) || level < 0 || level > entry.maxVis) {
+        return res.status(400).json({
+          error: `Level for ${field} must be an integer 0 to ${entry.maxVis}, got ${JSON.stringify(level)}.`
+        });
+      }
+    }
+
+    const saved = await projects.patchVis(existing.id, vis);
+
+    // Field NAMES and LEVELS only, never values — same rule as project.update, and it matters more
+    // here: the fields being classified are the ones somebody decided were sensitive.
+    const before = existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
+    auditEvent(req, {
+      action: 'project.reclassify',
+      targetType: 'project',
+      targetId: existing.id,
+      projectId: existing.id,
+      detail: {
+        fields,
+        from: Object.fromEntries(fields.map(field => [field, before[field] ?? null])),
+        to: vis
+      }
+    });
 
     return res.json(redactForAccess('projects', saved, access));
   } catch (err) {

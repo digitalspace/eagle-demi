@@ -9,7 +9,7 @@ const passiveAuthMiddleware = require('../middleware/passiveAuth');
 // credential (demi-service-read) can be issued without also granting the ability to delete.
 // `requireAdmin` is the narrower gate on /admin/*, so a machine writer (demi-service-write) can
 // mirror data without being able to mint itself a wider credential.
-const { requireWrite, requireAdmin } = require('../middleware/require-roles');
+const { requireWrite, requireAdmin, requireRole } = require('../middleware/require-roles');
 
 // One data layer. The `USE_COSMOS_NOSQL` switch and the MongoDB-API controllers behind it are
 // gone — the flag was the rollback path during the Cosmos cutover, and the account it fell back
@@ -73,6 +73,9 @@ router.put('/projects/:id', authMiddleware, requireWrite, projectController.upda
 // Ladder moves — docs/rbac-architecture.md §1, "Widening is an act". Nothing else raises a level.
 router.put('/projects/:id/level', authMiddleware, requireWrite, projectController.setLevel);
 router.delete('/projects/:id', authMiddleware, requireWrite, projectController.deleteProject);
+// Classifying a field is narrower than writing one: `requireWrite` admits staff and the machine
+// writer, `sysadmin` is who may change the policy itself.
+router.patch('/projects/:id/visibility', authMiddleware, requireWrite, requireRole('sysadmin'), projectController.setVisibility);
 
 // Documents Routes
 const multer = require('multer');

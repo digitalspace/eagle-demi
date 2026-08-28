@@ -249,6 +249,28 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written[0].Detail.removedFromSearch, true);
   });
 
+  await t.test('project reclassify writes one project.reclassify', async () => {
+    // The row that says who changed the access POLICY rather than the content, so it carries the
+    // dialled field names and their levels — and nothing else off the record.
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207', name: 'Skeena LNG', complianceLead: 'A. Lead', vis: { complianceLead: 1 }
+    }));
+    t.mock.method(projects, 'patchVis', async (id, vis) => ({ id, name: 'Skeena LNG', vis }));
+
+    const written = await rowsFrom(() => projectController.setVisibility({
+      params: { id: '207' }, query: {}, body: { vis: { complianceLead: 2 } }, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(written.length, 1);
+    assert.strictEqual(written[0].Action, 'project.reclassify');
+    assert.strictEqual(written[0].TargetId, '207');
+    assert.strictEqual(written[0].ProjectId, '207');
+    assert.deepStrictEqual(written[0].Detail.fields, ['complianceLead']);
+    assert.deepStrictEqual(written[0].Detail.from, { complianceLead: 1 });
+    assert.deepStrictEqual(written[0].Detail.to, { complianceLead: 2 });
+    assert.ok(!JSON.stringify(written[0].Detail).includes('A. Lead'), 'levels only, never values');
+  });
+
   await t.test('an Eagle project push writes one project.push', async () => {
     // The mirror routes are unattended — nothing renders their result — so the audit row is the
     // only record that a project changed shape because eagle-api said so.
