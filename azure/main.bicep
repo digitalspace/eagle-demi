@@ -16,7 +16,6 @@
 // landing zone supplied one — but instantiating it would build a second, disconnected network.
 //
 // WHAT IS DELIBERATELY ABSENT.
-//   - Key Vault. Never deployed; secrets are app settings.
 //   - Static Web App. The frontend is a Storage static website (module 8) fronted by the Front
 //     Door profile that lives in eagle-search.
 //   - Cosmos DB for MongoDB. Cut loose at Phase 8; nothing speaks Mongo.
@@ -45,7 +44,8 @@ param minioAccessKey string
 @secure()
 param minioSecretKey string
 
-// These two reach app settings directly (api-web-app.bicep). Until now main.bicep did not pass them
+// `adminApiKey` is written to the Key Vault secret the app then reads by reference; `doclingApiKey`
+// still reaches an app setting directly (api-web-app.bicep). Until now main.bicep did not pass them
 // at all, so the module default of '' applied and the first successful deploy would have written
 // ADMIN_API_KEY='' and DOCLING_API_KEY='' over the live values — destroying the break-glass
 // credential and the extraction host's key. `what-if` cannot surface that, because @secure() values
@@ -246,6 +246,20 @@ module identity './modules/identity.bicep' = {
   }
 }
 
+// 1b. Key Vault — holds ADMIN_API_KEY, which the API reads by reference rather than as a stored
+// setting. Declared after identity because the secrets-read grant needs its principal.
+module keyVault './modules/key-vault.bicep' = {
+  name: 'deploy-key-vault'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    peSubnetId: privateEndpointSubnetId
+    identityPrincipalId: identity.outputs.principalId
+    adminApiKey: adminApiKey
+  }
+}
+
 // 2. Cosmos DB for NoSQL — the system of record. Serverless, keyless (`disableLocalAuth`), reached
 // only through a private endpoint. The module also carries the SQL role assignment that lets the
 // identity read and write it.
@@ -376,7 +390,7 @@ module apiWebApp './modules/api-web-app.bicep' = {
     minioSecretKey: minioSecretKey
     minioBucketName: minioBucketName
     minioKeyPrefix: minioKeyPrefix
-    adminApiKey: adminApiKey
+    adminApiKeySecretUri: keyVault.outputs.adminApiKeySecretUri
     doclingApiKey: doclingApiKey
     eagleApiBase: eagleApiBase
     reconcileSchedule: reconcileSchedule

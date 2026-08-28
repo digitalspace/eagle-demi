@@ -283,3 +283,42 @@ test('the drift alert query matches the line the reconcile actually logs', () =>
   assert.strictEqual(new RegExp(extract[1]).exec(clean)[1], '0', 'a clean night must read 0');
   assert.match(query[1], /where drift > 0/, 'and 0 must not alert');
 });
+
+// ADMIN_API_KEY is the break-glass credential. As a plain app setting its value sat in the template
+// parameters and in ARM deployment history; a revert to that is invisible to `az bicep build` and to
+// a what-if diff, which masks @secure() values on both sides. Text-structural, same honest limits as
+// the guards above.
+const KEY_VAULT_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
+
+test('the API app reads ADMIN_API_KEY through a Key Vault reference', () => {
+  const setting = API_MODULE
+    .split(/^\s+\{$/m)
+    .find(b => /name: 'ADMIN_API_KEY'/.test(b));
+  assert.ok(setting, 'no ADMIN_API_KEY app setting declared at all');
+  assert.match(setting, /value: '@Microsoft\.KeyVault\(SecretUri=\$\{adminApiKeySecretUri\}\)'/,
+    'the setting must be a Key Vault reference, not the credential itself');
+  assert.doesNotMatch(API_MODULE, /value: adminApiKey$/m,
+    'no app setting may carry the raw adminApiKey value');
+
+  assert.match(MAIN, /^\s+adminApiKeySecretUri: keyVault\.outputs\.adminApiKeySecretUri$/m,
+    'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
+  assert.match(MAIN, /^module keyVault '\.\/modules\/key-vault\.bicep' = \{$/m,
+    'and the vault module must be instantiated');
+});
+
+// Without the grant the reference resolves to nothing, App Service leaves the literal
+// `@Microsoft.KeyVault(...)` string in the setting, and every admin call 401s against a credential
+// that looks configured. `az bicep build` exits 0 with the assignment deleted.
+test('the app identity is granted Key Vault Secrets User', () => {
+  assert.match(KEY_VAULT_MODULE, /'4633458b-17de-408a-b874-0445c86b69e6'/,
+    'Key Vault Secrets User is the role that reads secret VALUES; no other built-in role does');
+  assert.match(KEY_VAULT_MODULE, /principalId: identityPrincipalId/,
+    'the assignment must target the identity the API runs as');
+  assert.match(KEY_VAULT_MODULE, /enableRbacAuthorization: true/,
+    'a role assignment grants nothing on a vault still using access policies');
+
+  // Key Vault references resolve as the system-assigned identity by default, and this app has only
+  // a user-assigned one — so the grant above is wired to a principal App Service would not use.
+  assert.match(API_MODULE, /^\s+keyVaultReferenceIdentity: identityId$/m,
+    'the app must resolve references as the identity that holds the grant');
+});
