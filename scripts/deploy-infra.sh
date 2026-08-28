@@ -18,8 +18,9 @@ set -euo pipefail
 #
 # `siteConfig.appSettings` in api-web-app.bicep is a WHOLE-COLLECTION PUT: every setting the
 # template does not supply is deleted from the running app. Six of them are secrets the template
-# cannot derive, so a deploy has to be told them. That made the procedure a multi-command
-# hand-export across two clouds, documented only in a comment, and getting it wrong overwrote the
+# cannot derive, so a deploy has to be told them (four required; TRACK_CLIENT_SECRET and
+# ROLE_SYNC_CLIENT_SECRET are optional until their Keycloak clients exist). That made the procedure
+# a multi-command hand-export across two clouds, documented only in a comment, and getting it wrong overwrote the
 # break-glass credential with an empty string.
 #
 # `what-if` could not warn about any of it: it masks @secure() values as "*******" in BOTH the
@@ -153,8 +154,7 @@ require_secrets() {
   # here is legitimately shorter than 8 characters — the real ones are 11, 40, 48 and 64.
   local missing=0 val
   local -r MIN_LEN=8
-  for name in MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY \
-              TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET; do
+  for name in MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY; do
     # Trim surrounding whitespace before judging it, so " " is empty and not a one-character secret.
     val="$(printf '%s' "${!name}" | tr -d '[:space:]')"
     if [ -z "$val" ]; then
@@ -171,6 +171,21 @@ require_secrets() {
     fi
   done
 
+  # TRACK_CLIENT_SECRET and ROLE_SYNC_CLIENT_SECRET are optional: the Keycloak clients do not exist
+  # in any environment yet. Empty here just means the team sync feature stays off, not a bad deploy.
+  for name in TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET; do
+    val="$(printf '%s' "${!name}" | tr -d '[:space:]')"
+    if [ -z "$val" ]; then
+      echo -e "${YELLOW}  - ${name} not set in demi-app-secrets; the team sync stays off${NC}"
+      printf -v "$name" '%s' 'unset'
+      export "${name?}"
+    else
+      printf -v "$name" '%s' "$val"
+      export "${name?}"
+      echo -e "${GREEN}  ✓ ${name}${NC} (${#val} chars)"
+    fi
+  done
+
   if [ "$missing" -ne 0 ]; then
     cat >&2 <<EOF
 
@@ -180,8 +195,8 @@ there is no rollback — ARM does not retain @secure() parameter values.
   MINIO_ACCESS_KEY / MINIO_SECRET_KEY  OpenShift secret ${MINIO_SECRET_NAME} in 6cdc9e-${ENVIRONMENT}
                                        (keys ${MINIO_ACCESS_KEY_FIELD} / ${MINIO_SECRET_KEY_FIELD})
   ADMIN_API_KEY / DOCLING_API_KEY      OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
-  TRACK_CLIENT_SECRET                  same secret, key TRACK_CLIENT_SECRET (Track service account)
-  ROLE_SYNC_CLIENT_SECRET              same secret, key ROLE_SYNC_CLIENT_SECRET (Keycloak role sync)
+
+TRACK_CLIENT_SECRET and ROLE_SYNC_CLIENT_SECRET are optional — empty just turns the team sync off.
 
 There is no demi-app-secrets in 6cdc9e-prod — export those four by hand for a prod run.
 
