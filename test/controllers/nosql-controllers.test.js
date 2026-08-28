@@ -453,7 +453,7 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     await documentController.setDocumentPublished(
       { params: { id: 'd1' }, query: {}, body: { isPublished: false } }, mockRes()
     );
-    assert.strictEqual(args[2], false, 'published flag set to false');
+    assert.strictEqual(args[2], 2, 'unpublishing moves the document to level 2');
   });
 
   await t.test('a document cannot be published under an unpublished project', async () => {

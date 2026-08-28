@@ -1125,12 +1125,11 @@ Merges only after the `project:<id>` roles dependency above carries a date.
       `readForLevel(4)`. The ceiling itself — `Math.min(..., levelOfRead(parentProject.read))` — is
       already in place from P3-2. Every other write site converted in P3-2 keeps the level it has;
       this bullet is the only default that moves.
-- [ ] `src/repositories/documents.js:208` `constrainToProject` — the cascade INTERSECTS role
-      names, so once a document is admitted at level 1 its `ownRead` is `['team']` and a
-      level-2 project ACL (`['staff']`) shares nothing with it: every level-1 document falls to
-      the fail-closed branch on the first cascade and its `ownRead` snapshot records the flattened
-      value. Keep `team`, or replace the intersection with a `levelOfRead` cap, BEFORE the default
-      moves. Fixing it after means a re-seed per project.
+- [x] `src/repositories/documents.js` `constrainToProject` is
+      `readForLevel(Math.min(levelOfRead(ownRead), levelOfRead(projectRead)))` — the lower of the
+      two levels, no set intersection. A level-1 document keeps `team` under a level-2 project
+      instead of falling to a fail-closed branch that flattened its `ownRead` snapshot. Landed
+      before the default moves, as this line required.
 - [ ] `src/seed/transform.js:202` and `src/merge/project.js:195` write a local `SECURE_ROLES`
       that aliases `ADMIN_ROLES` (`['sysadmin','staff','demi-admin']`), so `levelOfRead` reads
       the private form as 2 and the published form as 4 — correct today, but a re-seed rewrites
@@ -1165,39 +1164,51 @@ Merges only after the `project:<id>` roles dependency above carries a date.
 
 Branch: `feat/ladder-widen-endpoint`
 
-- [ ] `src/routes/api.js` — `router.put('/projects/:id/level', authMiddleware, requireWrite,
+- [x] `src/routes/api.js` — `router.put('/projects/:id/level', authMiddleware, requireWrite,
       projectController.setLevel)` after `:72`, and `/documents/:id/level` beside `:90`. Keep
       `PUT /documents/:id/published` (`:90`) as a thin alias for `{ level: 4, confirm }` /
-      `{ level: 2 }`, marked deprecated in swagger — eagle-admin-console still calls it.
-- [ ] `exports.setLevel` in each controller: body `{ level, confirm, reason }`; 400 on a level
+      `{ level: 2 }`, marked deprecated in swagger — eagle-admin-console still calls it. The alias
+      runs the same guards, so unpublishing a level-4 document now needs `sysadmin`.
+- [x] `exports.setLevel` in each controller: body `{ level, confirm, reason }`; 400 on a level
       outside `1..4`; 400 on `level === 4` without `confirm === true` (message names the
       confirmation); 400 on `level === 4` without a non-empty `reason` (doc §3 question 15 —
       optional on every other move); 400 on `level === 0`; 409 when a document would out-rank its
       project. Writes `readForLevel(level)`, keeps the existing cascade (`project.js:31`
-      `cascadeProjectVisibility`, `document.js:378-400` index + chunk ACL patch) verbatim.
-- [ ] A move DOWN from level 4 (`level < levelOfRead(existing.read)` where the existing level is 4)
-      needs `requireRole('sysadmin')` — 403 for anyone else, `requireWrite` alone is not enough —
-      and audits `record.takedown` instead of `record.narrow`. Incident response, not a routine
+      `cascadeProjectVisibility`, `document.js` index + chunk ACL patch) verbatim. The project
+      cascade runs on any level change, not only a publish transition: a project dropping 2 → 1
+      leaves its documents out-ranking it otherwise.
+- [x] A move DOWN from level 4 (`level < levelOfRead(existing.read)` where the existing level is 4)
+      needs the `sysadmin` role — 403 for anyone else, `requireWrite` alone is not enough — and
+      audits `record.takedown` instead of `record.narrow`. Incident response, not a routine
       correction; the response body points at `docs/takedown-runbook.md` (P3-9), because narrowing
       the row leaves the AI Search index and every cache untouched.
-- [ ] `auditEvent(req, { action: level > from ? 'record.widen' : 'record.narrow', targetType,
-      targetId, projectId, detail: { from, to, confirmed: level === 4 } })` before responding —
-      signature `src/utils/audit.js:182`, pattern `project.js:247-257`.
-- [ ] `src/swagger/swagger.yaml` — both routes, 200/400/403/409, and the deprecation note.
+      ~~`requireRole('sysadmin')` as middleware~~: the check is conditional on the DIRECTION of the
+      move, which a route-level gate cannot see, so it reads `access.roles` inside the handler.
+      P3-5 adds the `requireRole` factory for its own unconditional route.
+- [x] `auditEvent(req, { action, targetType, targetId, projectId, detail: { from, to, confirmed,
+      reason } })` before responding — signature `src/utils/audit.js:182`, pattern
+      `project.js:247-257`. `confirmed` records the flag the caller sent
+      (~~`confirmed: level === 4`~~, which restates the level already in `to`).
+- [x] `src/swagger/swagger.yaml` — both routes, 200/400/403/409, and the deprecation note.
 - Tests: `test/controllers/nosql/record-level.test.js`
-  - [ ] `'level 4 without a reason is 400'` and `'a reason is optional below level 4'`.
-  - [ ] `'only sysadmin may pull back from level 4'` — a `staff` caller narrowing a level-4 row
-        gets 403; `sysadmin` gets 200 and the buffer holds `record.takedown`.
-  - [ ] `'level 4 without confirm is 400'` and `'level 4 with confirm writes public'` —
+  - [x] `'level 4 without reason is 400'`, and a reason stays optional below level 4 — the widen
+        case below sends level 3 with no reason and gets 200.
+  - [x] `'a staff caller cannot narrow'` — a `staff` caller narrowing a level-4 row gets 403 —
+        and `'sysadmin narrowing is audited as record.takedown'` — 200, and the buffer holds
+        `record.takedown`.
+  - [x] `'level 4 without confirm is 400'` and `'level 4 with confirm and reason writes public'` —
         `deepStrictEqual(saved.read, ['staff','idir','public'])`, `isPublished === true`.
-  - [ ] `'a widen is audited before the response'` — the buffer holds `record.widen` with
+  - [x] `'a widen is audited before the response'` — the buffer holds `record.widen` with
         `detail.from === 1, detail.to === 3` when `res.json` runs.
-  - [ ] `'a document cannot pass its project'` — level 4 on a document under a level-2 project → 409.
-  - [ ] `'nothing widens implicitly'` — `upsertFromEagle` and `PUT /:id` on a level-1 row leave
-        `read` untouched.
-  - [ ] `test/controllers/audit-cud-coverage.test.js` — add both routes to the covered set.
+  - [x] `'a document cannot pass its project'` — level 4 on a document under a level-2 project → 409.
+  - [x] `'nothing widens implicitly'` — `upsertFromEagle` and `PUT /:id` on a level-1 row leave
+        `read` untouched, and a `level` key in an ordinary update body is refused.
+  - [x] `'the published alias still works'` and `'the alias is not a way around the takedown gate'`.
+  - [x] `test/controllers/audit-cud-coverage.test.js` — add both routes to the covered set.
+  - [x] `test/helpers/access-coverage.test.js` response-site counts: projects 16 → 23,
+        documents 34 → 38. Every new site redacts.
 - Acceptance
-  - [ ] `node --test test/controllers/nosql/record-level.test.js test/controllers/audit-cud-coverage.test.js` — 0 fail.
+  - [x] `node --test test/controllers/nosql/record-level.test.js test/controllers/audit-cud-coverage.test.js` — 0 fail.
   - [ ] On test: `PUT /api/projects/207/level -d '{"level":4}'` → 400; with `"confirm":true` → 200
         and anonymous `GET /api/projects/207` → 200. `DemiAudit_CL | where Action == "record.widen"`
         returns the row with `Detail.from` and `Detail.to`.
@@ -1327,19 +1338,19 @@ Branch: `docs/takedown-runbook`
 
 Docs only. Written before P3-4 ships, because P3-4's 403 path points at it.
 
-- [ ] `docs/takedown-runbook.md`, how-to, numbered steps: narrow the record with
+- [x] `docs/takedown-runbook.md`, how-to, numbered steps: narrow the record with
       `PUT /api/{projects,documents}/:id/level` as `sysadmin`; purge the AI Search index with
       `aiSearch.deleteFromIndex` (indexers are `_ts` high-water only and never see a delete, so a
       narrowed row lingers in the index until this runs); delete the document's chunks with
       `deleteChunksForDocument` and purge them from the chunks index the same way; invalidate the
       Front Door and browser caches for any affected URL; confirm with an anonymous
       `GET /api/search` that no hit remains.
-- [ ] The runbook states plainly that copies already outside EPIC — downloads, mirrors, search
+- [x] The runbook states plainly that copies already outside EPIC — downloads, mirrors, search
       engine caches — are unrecoverable, and that a takedown is incident response with a recorded
       reason, never a routine correction.
-- [ ] Link it from `docs/rbac-architecture.md` §1 (done) and from `docs/prod-flip-runbook.md`.
-- Acceptance: `docs/takedown-runbook.md` exists and its AI Search step names the real helper —
-  `grep -n deleteFromIndex src/search/*.js` resolves.
+- [x] Linked from `docs/rbac-architecture.md` §1. The `docs/prod-flip-runbook.md` link is still open.
+- [x] Acceptance: `docs/takedown-runbook.md` exists and its AI Search step names the real helper —
+      `grep -n deleteFromIndex src/search/*.js` resolves.
 
 ---
 
