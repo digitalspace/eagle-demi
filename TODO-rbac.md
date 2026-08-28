@@ -37,7 +37,7 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
       Level 3 is the `identity_provider` claim and level 1 is project scope: neither is a new realm
       role. Classifying (P3-5) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
 - [ ] Track read endpoint `GET /api/v1/projects/team-members` — Track PR, owner Daniel, reviewer
-      Track team. Opened: ______ Merged: ______
+      Track team. Opened: 2026-08-28 (bcgov/EPIC.track#2829). Merged: ____
 - [ ] Realm clients `demi-track-reader` and `demi-role-sync` in `eao-epic` (test, then prod),
       secrets in `demi-app-secrets`. Owner: Daniel. Delivered: ______
 - [ ] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
