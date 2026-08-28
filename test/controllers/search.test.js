@@ -361,6 +361,29 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(row.isPublished, false, 'derived from read[], not copied from the index');
   });
 
+  // The catalog gates QUERY keys as well as response fields (P2-3). `read` is the only field the
+  // index catalogs put below level 4, and it is filterable, so it is the one key that proves the
+  // gate: without it `read/any(x: x eq 'sysadmin')` composes into the caller's own filter.
+  await t.test('a filter on a hidden field is dropped, not applied', async () => {
+    let sent = null;
+    t.mock.method(aiSearch, 'searchProjects', async (opts) => {
+      sent = opts;
+      return { count: 0, items: [] };
+    });
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'mine', 'and[read]': 'sysadmin' }, header: () => null },
+      res);
+
+    assert.deepStrictEqual(body[0].meta[0].dropped.filter, ['read']);
+    assert.ok(!/sysadmin/.test(sent.filter),
+      'a filter the caller cannot see must never reach the service');
+    assert.strictEqual(sent.filter, "read/any(r: search.in(r, 'public', ','))",
+      'and the ACL clause is still the only thing scoping the read');
+  });
+
   await t.test('anonymous Document hit carries no read[]', async () => {
     t.mock.method(aiSearch, 'searchDocuments', async () => ({
       count: 1,

@@ -7,7 +7,7 @@
  */
 
 const { catalogFor, CATALOGS } = require('./catalog');
-const { ANONYMOUS_LEVEL, LEVELS } = require('./level');
+const { LEVELS, levelOf } = require('./level');
 const config = require('../config');
 
 // Predicates are Phase 3 (docs/rbac-architecture.md §2 item 7). Throwing at load rather than
@@ -67,7 +67,7 @@ function redactForAccess(entity, doc, access) {
   const catalog = catalogFor(entity);
   if (!doc || typeof doc !== 'object') return doc;
 
-  const level = LEVELS.includes(access && access.level) ? access.level : ANONYMOUS_LEVEL;
+  const level = levelOf(access);
   const dials = doc.vis && typeof doc.vis === 'object' ? doc.vis : {};
 
   const out = {};
@@ -105,7 +105,7 @@ function redactAllForAccess(entity, docs, access) {
 function refusedWriteKeys(entity, changes, access, existing) {
   const catalog = catalogFor(entity);
   const dials = existing && existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
-  const level = LEVELS.includes(access && access.level) ? access.level : ANONYMOUS_LEVEL;
+  const level = levelOf(access);
   return Object.keys(changes).filter(key => key === 'vis' || !catalog[key] ||
     !visible(level, effectiveVis(catalog[key], dials[key])));
 }

@@ -35,4 +35,9 @@ function levelFromRoles(roles) {
   return level;
 }
 
-module.exports = { ROLE_LEVELS, ANONYMOUS_LEVEL, LEVELS, levelFromRoles };
+/** The level on an access context, fail-closed: anything but a real level reads as anonymous. */
+function levelOf(access) {
+  return LEVELS.includes(access && access.level) ? access.level : ANONYMOUS_LEVEL;
+}
+
+module.exports = { ROLE_LEVELS, ANONYMOUS_LEVEL, LEVELS, levelFromRoles, levelOf };

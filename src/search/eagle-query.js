@@ -17,6 +17,9 @@
 const fs = require('fs');
 const path = require('path');
 const { logger } = require('../utils/logger');
+const { catalogFor } = require('../vis/catalog');
+const { visible } = require('../vis/redact');
+const { levelOf } = require('../vis/level');
 
 const INDEX_DIR = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes');
 
@@ -161,6 +164,28 @@ function fieldsFor(dataset) {
 }
 
 /**
+ * Dataset -> the catalog that classifies its INDEX field names (docs/rbac-architecture.md section 2
+ * item 9). No entry for DocumentChunk: the chunks catalog is P4-1, so chunk keys are not gated yet.
+ */
+const DATASET_CATALOG = {
+  Project: 'index-projects',
+  Document: 'index-documents'
+};
+
+/**
+ * May this caller filter or sort on this index field? A field they cannot READ they cannot QUERY
+ * either — a row count over a hidden value answers what the value is.
+ *
+ * Uncatalogued is a drop, not a pass: an index field with no policy has no answer here.
+ */
+function fieldVisible(dataset, field, access) {
+  const entity = DATASET_CATALOG[dataset];
+  if (!entity) return true;
+  const entry = catalogFor(entity)[field];
+  return Boolean(entry) && visible(levelOf(access), entry.defaultVis);
+}
+
+/**
  * Yield `[key, value]` for every `and[...]` parameter, whichever shape the query parser produced.
  * BOTH SHAPES, on purpose — see wiki Search-Query-Construction#query-parser-shapes.
  */
@@ -297,10 +322,11 @@ function withProjectIds(query, demiIds) {
  * @param {object} query    req.query
  * @param {string} dataset  Project | Document | DocumentChunk
  * @param {{filter: string|null, empty: boolean}} acl  from helpers/access-odata.filterFor()
+ * @param {object} access  from helpers/access-sql.resolveAccess(); absent reads as anonymous
  * @returns {{filter: string|undefined, dropped: string[]}} filter undefined = unrestricted, which
  *          is reachable ONLY for a privileged caller whose ACL clause is legitimately null.
  */
-function buildFilter(query, dataset, acl) {
+function buildFilter(query, dataset, acl, access) {
   if (!acl || typeof acl.empty !== 'boolean') {
     throw new TypeError('[eagle-query] buildFilter requires the access filter from filterFor()');
   }
@@ -332,6 +358,11 @@ function buildFilter(query, dataset, acl) {
     }
 
     const field = aliases[base] || base;
+    if (!fieldVisible(dataset, field, access)) {
+      dropped.push(key);
+      continue;
+    }
+
     const meta = fields.get(field);
     // Three ways a key cannot be filtered on, all the same answer: not in the index, not
     // `filterable`, or a TYPE the term builder has no case for. The edge branch gates on `rangeTerm`
@@ -438,7 +469,7 @@ function hasCriteria(query) {
  * order at all. See wiki Search-Query-Construction#default-order-and-relevance and
  * #type-gates-not-filterable-and-sortable-flags.
  */
-function buildOrderBy(sortBy, dataset, hasKeywords = false) {
+function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
   const fields = fieldsFor(dataset);
   const aliases = ALIASES[dataset] || {};
   const tiebreak = fields.get('id')?.sortable ? 'id asc' : null;
@@ -457,6 +488,11 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false) {
     const aliased = aliases[name] || name;
     const aliasMeta = fields.get(aliased);
     const field = aliasMeta && aliasMeta.sortable ? aliased : name;
+    if (!fieldVisible(dataset, field, access)) {
+      dropped.push(name);
+      continue;
+    }
+
     const meta = fields.get(field);
     // Three ways a key cannot be ordered by, all the same answer: not in the index, not `sortable`,
     // or a TYPE `$orderby` cannot name — `centroid` is `sortable: true` and is still a 400.
@@ -480,13 +516,17 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false) {
       return { orderby: tiebreak ? `search.score() desc, ${tiebreak}` : undefined, dropped };
     }
     if (!DEFAULT_ORDER[dataset]) return { orderby: undefined, dropped };
-    parts.push(DEFAULT_ORDER[dataset]);
+    // The default sort goes through the SAME visibility gate as the caller's own keys: a field this
+    // caller cannot read cannot order their page either.
+    if (fieldVisible(dataset, DEFAULT_ORDER[dataset].split(' ')[0], access)) {
+      parts.push(DEFAULT_ORDER[dataset]);
+    }
   }
 
   // The tiebreak goes through the SAME dedupe as the caller's clauses, or `sortBy=id` emits
   // `id asc, id asc`. `_id` reaches here as `id` too, through the alias table.
   if (tiebreak && !seen.has(tiebreak.split(' ')[0])) parts.push(tiebreak);
-  return { orderby: parts.join(', '), dropped };
+  return { orderby: parts.join(', ') || undefined, dropped };
 }
 
 /**
@@ -547,6 +587,10 @@ module.exports = {
   // Exported for the guard test only: it asserts every value still names a definition file on disk,
   // which is this mapping's one failure mode and the one that produces a 200 instead of an error.
   DATASET_INDEX,
+  // Exported for the ratchet tests: an alias or a default sort naming a restricted field would
+  // filter and order over something the caller cannot see.
+  ALIASES,
+  DEFAULT_ORDER,
   buildFilter,
   buildOrderBy,
   hasCriteria,
