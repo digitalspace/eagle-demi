@@ -188,26 +188,26 @@ Doc §2 item 10. Code and app setting ship together.
 No Key Vault exists in this subscription's DEMI template (`azure/main.bicep:19` says so). This unit
 creates one; it is the largest Phase 0 item and merges alone.
 
-- [ ] New `azure/modules/key-vault.bicep`: vault `demi-kv-${environmentName}`, RBAC authorization,
+- [x] New `azure/modules/key-vault.bicep`: vault `demi-kv-${environmentName}`, RBAC authorization,
       `publicNetworkAccess: 'Disabled'` if the landing zone demands it, secret `admin-api-key` from
       `@secure() param adminApiKey`, role assignment `Key Vault Secrets User`
       (`4633458b-17de-408a-b874-0445c86b69e6`) to `identityPrincipalId`. Outputs
       `adminApiKeySecretUri`.
-- [ ] `azure/main.bicep`: module `deploy-key-vault` after `identity`, passing
+- [x] `azure/main.bicep`: module `deploy-key-vault` after `identity`, passing
       `identity.outputs.principalId` (`azure/modules/identity.bicep:26`) and `adminApiKey`
       (`main.bicep:61`); pass `adminApiKeySecretUri: keyVault.outputs.adminApiKeySecretUri` into
       `apiWebApp` (`main.bicep:358-393`).
-- [ ] `azure/modules/api-web-app.bicep:386-389`: `ADMIN_API_KEY` value becomes
+- [x] `azure/modules/api-web-app.bicep:386-389`: `ADMIN_API_KEY` value becomes
       `'@Microsoft.KeyVault(SecretUri=${adminApiKeySecretUri})'`; keep `param adminApiKey` only if
       the vault module still needs it via main (it does — main writes the secret, the app reads it).
-- [ ] `docs/prod-flip-runbook.md`: name the rotation owner and the sequence (OpenShift
+- [x] `docs/prod-flip-runbook.md`: name the rotation owner and the sequence (OpenShift
       `demi-app-secrets` → vault secret new version → app restart). `docs/FUTURE.md:23-27` already
       describes the hand sequence; link it.
 - Tests: `test/azure/main-bicep-wiring.test.js`
-  - [ ] `the API app reads ADMIN_API_KEY through a Key Vault reference` — assert
+  - [x] `the API app reads ADMIN_API_KEY through a Key Vault reference` — assert
         `/@Microsoft\.KeyVault\(SecretUri=/` appears in the `ADMIN_API_KEY` setting and that no
         `value: adminApiKey` line remains for it. Fails on a revert to a plain setting.
-  - [ ] `the app identity is granted Key Vault Secrets User` — assert the role GUID string is in
+  - [x] `the app identity is granted Key Vault Secrets User` — assert the role GUID string is in
         `key-vault.bicep`. Fails if the assignment is dropped (the app would 401 on startup key
         reads and the break-glass credential would silently be empty).
 - Acceptance: `az bicep build -f azure/main.bicep` exits 0; `./scripts/deploy-infra.sh test --what-if`
@@ -218,6 +218,30 @@ creates one; it is the largest Phase 0 item and merges alone.
   from OpenShift `demi-app-secrets`). Reference resolution failures show as a literal
   `@Microsoft.KeyVault(...)` string in the setting and a 401 on every admin call — check before
   leaving.
+
+### U5 recorded deviations from the unit spec
+
+- The vault also sets `enableSoftDelete`, `softDeleteRetentionInDays: 90` and
+  `enablePurgeProtection: true`. Not defaults and not optional: the `Enforce recommended guardrails
+  for Azure Key Vault` assignment denies the create outright without both flags
+  (`RequestDisallowedByPolicy`, definitions `1e66c121-…` and `0b60c0b2-…`, measured 2026-08-28).
+  Purge protection is irreversible, so `demi-kv-test` and `demi-kv-prod` are names the subscriptions
+  keep for 90 days after any delete.
+- `azure/modules/api-web-app.bicep` also sets `keyVaultReferenceIdentity: identityId`. The unit does
+  not name it and without it the change does nothing: App Service resolves Key Vault references as
+  the SYSTEM-assigned identity, this app has none, and the grant is on the user-assigned one — so
+  `ADMIN_API_KEY` would stay the literal `@Microsoft.KeyVault(...)` string and every admin call 401.
+- The module outputs `secretUri` (versionless), not `secretUriWithVersion`. A pinned version would
+  make the runbook's rotation sequence require an infrastructure deploy, which is the thing this
+  unit removes.
+- `param adminApiKey` is GONE from `api-web-app.bicep` rather than kept: main writes the secret and
+  the app reads the URI, so the module has no use for the value. `main.bicep` keeps its own
+  `@secure() param adminApiKey`, still with no default.
+- `az deployment group what-if` does not render `siteConfig.appSettings` for `Microsoft.Web/sites`
+  at all — on this branch or on `main`. "No change to any other app setting" is proved instead by
+  diffing the COMPILED ARM: 51 settings before and after, one differs (`ADMIN_API_KEY`). Role
+  assignments are likewise `unsupported` in a full-template what-if (4 before, 5 after); the
+  Key Vault Secrets User assignment was rendered by a what-if of `modules/key-vault.bicep` alone.
 
 ---
 
