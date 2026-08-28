@@ -396,10 +396,7 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         // never committed — a template carrying real values would put them in deployment history.
         // ADMIN_API_KEY -- not DOCLING_API_KEY -- is what the admin endpoints check.
         //
-        // A Key Vault reference, so the value is never in this template or in deployment history.
-        // It resolves over the vault's private endpoint, which works only because this app already
-        // has VNet integration and WEBSITE_DNS_SERVER set below — without both, the privatelink
-        // name resolves to a public address the vault refuses.
+        // Resolves through the UAMI (keyVaultReferenceIdentity) over the vault private endpoint; see the PE note below.
         {
           name: 'ADMIN_API_KEY'
           value: '@Microsoft.KeyVault(SecretUri=${adminApiKeySecretUri})'

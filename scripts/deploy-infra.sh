@@ -228,7 +228,7 @@ run_deployment() {
 assert_secrets_survived() {
   echo -e "${BLUE}[4/4] Verifying live app settings…${NC}"
   local failed=0 len
-  for name in ADMIN_API_KEY DOCLING_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY EAGLE_API_BASE; do
+  for name in DOCLING_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY EAGLE_API_BASE; do
     len=$(az webapp config appsettings list -n "$API_APP" -g "$RESOURCE_GROUP" \
       --subscription "$SUBSCRIPTION" --only-show-errors \
       --query "[?name=='${name}'] | [0].value | length(@)" -o tsv 2>/dev/null || echo 0)
@@ -239,6 +239,26 @@ assert_secrets_survived() {
       echo -e "${GREEN}  ✓ ${name}${NC} (${len} chars)"
     fi
   done
+
+  # ADMIN_API_KEY is not length-checked above: the app setting is always the literal
+  # `@Microsoft.KeyVault(SecretUri=...)` reference (~70 chars) whether or not it resolves, so the
+  # length check the other four use would pass on a dead reference. Probe the key live instead.
+  local code attempt
+  for attempt in 1 2 3; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 \
+      -H "X-Api-Key: ${ADMIN_API_KEY}" \
+      "https://${API_APP}.azurewebsites.net/api/db/stats" 2>/dev/null || echo 000)
+    [ "$code" = '200' ] && break
+    [ "$attempt" -lt 3 ] && sleep 30
+  done
+  if [ "$code" = '200' ]; then
+    echo -e "${GREEN}  ✓ ADMIN_API_KEY${NC} (live probe: 200)"
+  else
+    echo -e "${RED}  ✗ ADMIN_API_KEY live probe returned ${code} on ${API_APP}${NC}" >&2
+    echo -e "${YELLOW}    401 means the KeyVault reference did not resolve. A fresh private endpoint${NC}" >&2
+    echo -e "${YELLOW}    A-record can take ~10 min to appear — retried 3x, 30s apart, before failing.${NC}" >&2
+    failed=1
+  fi
 
   if [ "$failed" -ne 0 ]; then
     echo -e "${RED}✗ a live credential was lost. Restore it before anything else.${NC}" >&2
