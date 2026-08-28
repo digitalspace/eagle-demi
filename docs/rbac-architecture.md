@@ -127,12 +127,9 @@ Each item below overrides the corresponding section of the source document.
    `name`, `description`, `centroid`, `proponentName`, `region`, `projectState` `defaultVis: 2`,
    which would have left an anonymous project response with five identifier fields. Fields
    `eagle-public` does not request today: `complianceLead`, `execProjectDirector`. Those start at
-   `defaultVis: 2`. One exception list may ship in Phase 1 as a deliberate tightening:
-   `projectLeadEmail`, `responsibleEPDEmail`, `cacEmail` to `defaultVis: 2`, only after the EAO
-   signs it off (Section 3, question 2). Without sign-off they stay at 4. On documents the same
-   mechanism holds `orcsClassification` and `edrmsRecordNumber` at 4: they are records-management
-   identifiers rather than content, and are the document-side candidates for `defaultVis: 2` under
-   that same sign-off.
+   `defaultVis: 2`. Lead and EPD names and emails, and the records-management identifiers
+   `orcsClassification` and `edrmsRecordNumber`, stay at 4: public by policy (Section 3,
+   question 2, 2026-08-28).
 4. **Level 0 runs the same loop.** No `if (level === 0) return record`. `catalogFor(entity)` is
    called first so an unknown entity throws for every caller. This only holds because predicates
    widen rather than gate (Section 1): with the source semantics (predicate ANDed with level) a
@@ -187,11 +184,12 @@ Each item below overrides the corresponding section of the source document.
    only, 2 All EAO, 3 All IDIR, 4 Public; named groups inside a level are lateral compartments
    ("Special: Selected Credentials"). Model in §1. Open detail: whether a level-0 caller outside a
    group sees group-tagged fields; §1 says no (compartment) until told otherwise.
-2. Are project lead and EPD names and emails public by policy? `eagle-public` shows them to
-   anonymous visitors today; the EAO field inventory marks them internal. One of the two is wrong.
-3. Should `forMAEE = Y` in the field inventory imply `maxVis >= 3`?
-4. Which of the inventory's `???` cells (`project_tracking_number`, `epic_guid` ceiling) get a
-   value? Until answered they sit at the most restrictive plausible value.
+2. Answered 2026-08-28 (Daniel): project lead and EPD names and emails are public, because
+   `eagle-public` already shows them. They stay `defaultVis: 4`; no exception list.
+3. Dropped 2026-08-28: `forMAEE` is a column of the source spreadsheet that nothing in DEMI
+   reads. No catalog entry derives from it.
+4. Moot 2026-08-28: `project_tracking_number` (`trackProjectId`) and `epic_guid` (`eagleId`) are
+   in today's anonymous response and catalogued `4/4`. They stay public.
 
 ## 4. Source-document claims that were wrong at `aea2a0c`
 

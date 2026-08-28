@@ -15,7 +15,7 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 1. Anonymous `GET /api/projects` on test returns `projectLead`, `projectLeadEmail`,
    `responsibleEPDEmail`, `eaoMember`, `cacEmail`. Cosmos `_rid`, `_self`, `_ts`, `_attachments`
    never leave: `src/db/cosmos-nosql.js` strips them on every read (corrected 2026-08-28). `eagle-public` renders the staff fields anonymously from eagle-api, so this is
-   current product behaviour. Whether it is policy is EAO question 2.
+   current product behaviour and, per 2026-08-28, policy.
 2. `DEMI_ALLOWED_CLIENTS` is set in every bicepparam and enforced by `isAllowedClient`
    (`src/helpers/auth.js`): a verified token from an unlisted `azp` gets 401. `src/config.js`
    throws unless `ENVIRONMENT` is `dev` or `local`. That throw does not boot-loop the app —
@@ -34,8 +34,8 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
       2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
       Levels 1 and 3 get a role only when EAO question 1 is answered. Classifying (P3-2) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
 - [x] EAO question 1 (nested vs lateral groups). Answered 2026-08-28: nested levels 0-4 with lateral groups inside a level (doc §1, §3).
-- [ ] EAO question 2 (lead/EPD names and emails public by policy). Gates the P2-1 tightening list. Asked: ______  Answered: ______
-- [ ] EAO questions 3 and 4 (`forMAEE = Y` implies `maxVis >= 3`; `project_tracking_number` and `epic_guid` ceilings). Asked: ______  Answered: ______
+- [x] EAO question 2: answered 2026-08-28, public (already shown by `eagle-public`). Emails stay `defaultVis: 4`; no tightening list.
+- [x] EAO questions 3 and 4: closed 2026-08-28. `forMAEE` is a spreadsheet column DEMI never reads; `trackProjectId` and `eagleId` are already public (`4/4`).
 - [ ] Entra app registration for DEMI API, app roles named exactly as the realm roles, issuer and audience recorded in the wiki. Blocks P4-3. Owner: ______  Requested: ______  Delivered: ______
 
 ---
@@ -44,8 +44,7 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 
 ## U1 — chore/rbac-adr-and-questions (docs + wiki only)
 
-- [ ] Send EAO the four questions in `docs/rbac-architecture.md:155-166`. Owner: Daniel. Answers
-      land in that doc (§3), not in `TODO-rbac.md`.
+- [x] The four questions in `docs/rbac-architecture.md` §3 are all closed 2026-08-28 (answers in §3).
 - [ ] Wiki `ADR-010-Attribute-Level-Access-Control.md` (ADR-009 is Track Feed): Status Accepted;
       Context / Decision / Consequences; links `docs/rbac-architecture.md`.
 - [ ] `TODO-rbac.md`: tick the ADR line, date it.
@@ -308,8 +307,7 @@ Eagle-only fields (`merge/project.js:48-57`, 31 entries) — `defaultVis: 4, max
       `region` · `fedElecDist` · `provElecDist` · `projectCAC` · `projectCACPublished` ·
       `overallProgress` · `code`
 - [x] `projectLeadEmail` · `responsibleEPDEmail` · `cacEmail` — `defaultVis: 4, maxVis: 4` today.
-      Move to `defaultVis: 2` ONLY with EAO sign-off (doc §2 item 3, §3 question 2). Without
-      sign-off they stay at 4; leave a one-line comment naming the question.
+      Stay at 4: public by policy (§3 question 2, 2026-08-28).
 - [x] `complianceLead`, `execProjectDirector` — `defaultVis: 2, maxVis: 4` per doc §2 item 3.
       **This is a byte change** on any row that carries a value. Before merging, count rows:
       `SELECT VALUE COUNT(1) FROM c WHERE IS_DEFINED(c.complianceLead)` over `projects` (via the
@@ -582,8 +580,8 @@ The behaviour change. Keep the diff to the projects entity.
 ## Phase 1 close-out
 
 - [x] `TODO-rbac.md`: Phase 1 lines ticked, the two deviations recorded (Cosmos system fields;
-      `complianceLead`/`execProjectDirector`). EAO sign-off on the three email fields is still
-      outstanding, so they stay at `defaultVis: 4`.
+      `complianceLead`/`execProjectDirector`). The three email fields stay at `defaultVis: 4`:
+      public by policy (2026-08-28).
 - Anonymous response: measured 2026-08-27 on test, anonymous `GET /api/projects?pageSize=100`
   (no continuation token returned; 100 rows = full anonymous set): 0 rows carry `complianceLead`,
   0 carry `execProjectDirector`, 0 uncatalogued keys. JSON-equal, not byte-identical — the
@@ -606,7 +604,7 @@ Branch: `feat/vis-documents-catalog`
 - [x] `s3Key: { defaultVis: 0, maxVis: 0 }` — `publicView` strips it today (`src/controllers/nosql/document.js:90`), and `downloadDocument` reads `doc.s3Key` off the RAW repository row (`:151-157`), not off a redacted one, so the ceiling costs nothing.
 - [x] `read: { maxVis: 0 }`, `vis: { maxVis: 0 }`; `_etag: { defaultVis: 2, maxVis: 2 }`.
 - [x] `isPublished` derived in the redactor from `read.includes('public')` — same derivation `publicView` does at `src/controllers/nosql/document.js:90-92`, so it must not be copied from the stored field.
-- [x] Record `orcsClassification` and `edrmsRecordNumber` in the doc as candidates for a later tightening to `defaultVis: 2`; they stay 4 without EAO sign-off (question 2 mechanism).
+- [x] `orcsClassification` and `edrmsRecordNumber` stay 4: public by policy (question 2, 2026-08-28).
 - [x] Register `documents` in `src/vis/catalog/index.js` so `catalogFor('documents')` resolves.
 - [x] Replace `publicView` at the six document call sites that emit a stored row with `redactForAccess('documents', doc, access)` / `redactAllForAccess`: `src/controllers/nosql/document.js:118` (list), `:132` (get), `:236` (create 201), `:360` (update), `:447` (setPublished), `:579` (delete `deleted:` body). Sites `:182` (download URL), `:541` (eagle upsert ack), `:800`, `:871`, `:931` (ingest acks) are hand-built payloads with no stored field except `displayName` at `:185` — leave them and list them in the coverage test as hand-built.
 - [x] Delete `publicView` from `src/controllers/nosql/document.js:84-93` and its 40-line header.
