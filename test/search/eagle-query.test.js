@@ -18,6 +18,7 @@ const path = require('node:path');
 const eagleQuery = require('../../src/search/eagle-query');
 const { filterFor } = require('../../src/helpers/access-odata');
 const { resolveAccess } = require('../../src/helpers/access-sql');
+const { catalogFor } = require('../../src/vis/catalog');
 
 const anonymous = () => resolveAccess({ header: () => null });
 const anonAcl = (field) => filterFor(anonymous(), field);
@@ -134,13 +135,15 @@ test('eagle-query filters', async (t) => {
     assert.deepStrictEqual(dropped, ['dateAddedStart']);
   });
 
-  // `read` is filterable in the index, so a caller could otherwise widen their own ACL by asking
-  // for a role they do not hold — the clause would be ORed into their own group and ANDed with the
-  // real one, which still restricts. This pins that it composes rather than replaces.
+  // `read` is filterable in the index, so a caller naming a role they do not hold would otherwise
+  // emit a clause about their own ACL. It is `defaultVis: 0`, so the visibility gate drops the key
+  // outright and the filter is the bare ACL clause — nothing of the caller's survives.
   await t.test('a caller cannot filter their way past the ACL clause', () => {
-    const { filter } = eagleQuery.buildFilter({ 'and[read]': 'staff' }, 'Document', anonAcl());
-    assert.ok(filter.includes("read/any(r: search.in(r, 'public', ','))"),
-      'the ACL clause is still ANDed on');
+    const { filter, dropped } = eagleQuery.buildFilter({ 'and[read]': 'staff' }, 'Document',
+      anonAcl(), anonymous());
+
+    assert.deepStrictEqual(dropped, ['read']);
+    assert.strictEqual(filter, "read/any(r: search.in(r, 'public', ','))");
   });
 
   // `_id` is the Eagle ObjectId on the wire. On a project that lives in `legacyEagleId`; filtering
@@ -407,6 +410,40 @@ test('eagle-query sort', async (t) => {
     assert.strictEqual(orderby, 'proponent desc, id asc');
   });
 
+  // A sortable, orderable field the CALLER cannot read must not order their page either: the row
+  // order over a hidden value answers what the value is. `sector` is public in the committed
+  // catalog, so it is hidden here for the length of the call and put back.
+  await t.test('a sort key hidden from this caller is dropped, not emitted', () => {
+    const catalog = catalogFor('index-projects');
+    const restore = catalog.sector.defaultVis;
+    catalog.sector.defaultVis = 0;
+    try {
+      const { orderby, dropped } = eagleQuery.buildOrderBy(
+        '-sector', 'Project', false, anonymous());
+
+      assert.deepStrictEqual(dropped, ['sector']);
+      assert.strictEqual(orderby, 'name asc, id asc', 'the sort falls back to the stable default');
+    } finally {
+      catalog.sector.defaultVis = restore;
+    }
+  });
+
+  // The DEFAULT order is nobody's request, and it goes through the same gate: hiding `name` leaves
+  // the tiebreak alone, not a page ordered on a field this caller may not read.
+  await t.test('a hidden default sort field falls back to the tiebreak alone', () => {
+    const catalog = catalogFor('index-projects');
+    const restore = catalog.name.defaultVis;
+    catalog.name.defaultVis = 0;
+    try {
+      const { orderby, dropped } = eagleQuery.buildOrderBy(null, 'Project', false, anonymous());
+
+      assert.strictEqual(orderby, 'id asc');
+      assert.deepStrictEqual(dropped, [], 'the caller asked for nothing, so nothing was dropped');
+    } finally {
+      catalog.name.defaultVis = restore;
+    }
+  });
+
   // Every field in chunks is sortable:false, the key included. There is nothing to name, so
   // no $orderby may be emitted at all.
   await t.test('DocumentChunk can express no order whatsoever', () => {
@@ -517,19 +554,21 @@ test('every DATASET_INDEX value names an index definition that is actually on di
 
 // The catalog gates query keys as well as response fields (P2-3): a caller who cannot READ a field
 // cannot FILTER or SORT on it either, because a narrowed row count answers what the value is.
-const { catalogFor } = require('../../src/vis/catalog');
-
 const INDEX_CATALOG = { Project: 'index-projects', Document: 'index-documents' };
 
-test('every ALIASES target is a maxVis 4 index field', () => {
+test('every ALIASES target is a defaultVis 4 index field', () => {
   for (const [dataset, aliases] of Object.entries(eagleQuery.ALIASES)) {
     const entity = INDEX_CATALOG[dataset];
     if (!entity) continue;
     for (const [wireKey, field] of Object.entries(aliases)) {
       const entry = catalogFor(entity)[field];
       assert.ok(entry, `${dataset}.${wireKey} -> '${field}' is not in ${entity}`);
-      assert.strictEqual(entry.maxVis, 4,
+      // `defaultVis` is what the gate in `fieldVisible` reads; `maxVis` only caps a dial. A
+      // `defaultVis: 0, maxVis: 4` entry is hidden from public callers and must fail here.
+      assert.strictEqual(entry.defaultVis, 4,
         `${dataset}.${wireKey} -> '${field}' is restricted; filtering on it would answer its value`);
+      assert.strictEqual(entry.maxVis, 4,
+        `${dataset}.${wireKey} -> '${field}' cannot be dialled up to public`);
     }
   }
 
@@ -541,12 +580,14 @@ test('every ALIASES target is a maxVis 4 index field', () => {
   assert.match(filter, /documentId eq 'abc'/);
 });
 
-test('DEFAULT_ORDER fields are maxVis 4', () => {
+test('DEFAULT_ORDER fields are defaultVis 4', () => {
   for (const [dataset, clause] of Object.entries(eagleQuery.DEFAULT_ORDER)) {
     const field = clause.split(' ')[0];
     const entry = catalogFor(INDEX_CATALOG[dataset])[field];
     assert.ok(entry, `DEFAULT_ORDER.${dataset} sorts on '${field}', which is not catalogued`);
-    assert.strictEqual(entry.maxVis, 4,
+    assert.strictEqual(entry.defaultVis, 4,
       `DEFAULT_ORDER.${dataset} sorts every page on restricted field '${field}'`);
+    assert.strictEqual(entry.maxVis, 4,
+      `DEFAULT_ORDER.${dataset} sorts on '${field}', which cannot be dialled up to public`);
   }
 });

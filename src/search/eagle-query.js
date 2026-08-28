@@ -516,13 +516,17 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
       return { orderby: tiebreak ? `search.score() desc, ${tiebreak}` : undefined, dropped };
     }
     if (!DEFAULT_ORDER[dataset]) return { orderby: undefined, dropped };
-    parts.push(DEFAULT_ORDER[dataset]);
+    // The default sort goes through the SAME visibility gate as the caller's own keys: a field this
+    // caller cannot read cannot order their page either.
+    if (fieldVisible(dataset, DEFAULT_ORDER[dataset].split(' ')[0], access)) {
+      parts.push(DEFAULT_ORDER[dataset]);
+    }
   }
 
   // The tiebreak goes through the SAME dedupe as the caller's clauses, or `sortBy=id` emits
   // `id asc, id asc`. `_id` reaches here as `id` too, through the alias table.
   if (tiebreak && !seen.has(tiebreak.split(' ')[0])) parts.push(tiebreak);
-  return { orderby: parts.join(', '), dropped };
+  return { orderby: parts.join(', ') || undefined, dropped };
 }
 
 /**
