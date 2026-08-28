@@ -1131,11 +1131,10 @@ Merges only after the `project:<id>` roles dependency above carries a date.
       the fail-closed branch on the first cascade and its `ownRead` snapshot records the flattened
       value. Keep `team`, or replace the intersection with a `levelOfRead` cap, BEFORE the default
       moves. Fixing it after means a re-seed per project.
-- [ ] `src/seed/transform.js:202` and `src/merge/project.js:195` write `SECURE_ROLES` arrays
-      (`['public', ...SECURE_ROLES]` and `[...SECURE_ROLES]`). No admin role name is a ladder
-      token, so `levelOfRead` reads the private one as level 1, not 2 — a seeded private project
-      is already narrower than the level-2 rows around it. Convert both to `readForLevel(...)` in
-      this unit, where level 1 becomes the intended default rather than an accident.
+- [ ] `src/seed/transform.js:202` and `src/merge/project.js:195` write a local `SECURE_ROLES`
+      that aliases `ADMIN_ROLES` (`['sysadmin','staff','demi-admin']`), so `levelOfRead` reads
+      the private form as 2 and the published form as 4 — correct today, but a re-seed rewrites
+      the tokens a controller wrote. Convert both to `readForLevel(...)` in this unit.
 - [ ] `src/controllers/nosql/project.js:123,152,223-228` — `createProject` ignores `isPublished`
       from the body and admits at level 1; `updateProject`'s `isPublished` arm is deleted (widening
       moves to P3-4) and the ACL is carried from `existing` unconditionally.
