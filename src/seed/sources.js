@@ -28,13 +28,14 @@ const PAGE_SIZE = 100;
 const FETCH_TIMEOUT_MS = parseInt(process.env.SEED_FETCH_TIMEOUT_MS || '120000', 10);
 const FETCH_RETRIES = 3;
 
-async function fetchJson(url) {
+/** @param {object} [headers] request headers — the Track team feed needs a bearer token. */
+async function fetchJson(url, headers) {
   let lastError;
   for (let attempt = 1; attempt <= FETCH_RETRIES; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
-      const res = await fetch(url, { signal: controller.signal });
+      const res = await fetch(url, { signal: controller.signal, headers });
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
       return await res.json();
     } catch (err) {

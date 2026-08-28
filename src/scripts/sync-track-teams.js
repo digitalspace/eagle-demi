@@ -1,0 +1,303 @@
+'use strict';
+
+/**
+ * Hold the `project:<id>` realm roles in `eao-epic` in step with Track's project team feed.
+ *
+ * Track is the source of truth for who is on a project team: `GET /api/v1/projects/team-members`
+ * returns, per project, the union of the staff on its works. This script turns that into realm
+ * roles — create the missing `project:<id>`, grant what the feed says, revoke what it no longer
+ * says — so a level-1 record is readable by its own team and nobody else.
+ *
+ *   node src/scripts/sync-track-teams.js [--live]
+ *
+ * DRY RUN BY DEFAULT, matching close-unpublished-track-projects.js and purge-extraction.js. The
+ * API app also runs `run({ live: true })` on a Functions timer when SYNC_TEAMS_SCHEDULE is set —
+ * see api/index.js.
+ *
+ * ONLY ROLES NAMED `project:` ARE TOUCHED. `staff`, `demi-admin` and the rest are granted by hand
+ * and no run of this script may take one away, so the prefix is re-checked after the Keycloak
+ * search rather than trusted — `search=` is a substring match, not a prefix one.
+ *
+ * Two client-credentials identities, both confidential clients in the same realm:
+ * `TRACK_CLIENT_ID` reads Track, `KEYCLOAK_ADMIN_CLIENT_ID` (`demi-role-sync`) holds
+ * `realm-management` on the realm. Neither secret lives here; both arrive as app settings.
+ */
+
+const config = require('../config');
+const { fetchJson } = require('../seed/sources');
+const { logger } = require('../utils/logger');
+
+const ROLE_PREFIX = 'project:';
+
+function parseArgs(argv) {
+  const args = { live: false };
+  for (const a of argv) {
+    if (a === '--live') args.live = true;
+    else if (a === '--dry-run') args.live = false;
+    else throw new Error(`[track-teams] unknown argument: ${a}`);
+  }
+  return args;
+}
+
+const emailKey = (staff) => (staff.email ? String(staff.email).trim().toLowerCase() : '');
+
+/** The Keycloak username for a Track staff row, or null when nothing identifies them. */
+function usernameFor(staff, usernameByEmail = new Map()) {
+  if (staff.idir_user_id) return `${String(staff.idir_user_id).trim().toLowerCase()}@idir`;
+  const email = emailKey(staff);
+  return email ? usernameByEmail.get(email) || null : null;
+}
+
+const countRoles = (entries) => entries.reduce((n, e) => n + e.roles.length, 0);
+const byUsername = (a, b) => a.username.localeCompare(b.username);
+
+/**
+ * The whole decision, with no I/O in it.
+ *
+ * @param {Array}  trackTeams     [{ project_id, staff: [{ staff_id, idir_user_id, email, is_active }] }]
+ * @param {object} keycloakState  {current: Map<username, Set<role>>, roles: Set<role>,
+ *                                 usernameByEmail: Map<email, username>} — `current` holds only
+ *                                 the `project:` roles, since only those were enumerated.
+ */
+function plan(trackTeams, keycloakState = {}) {
+  const current = keycloakState.current || new Map();
+  const existingRoles = keycloakState.roles || new Set();
+  const usernameByEmail = keycloakState.usernameByEmail || new Map();
+
+  const desired = new Map();
+  const unmatched = new Set();
+
+  for (const team of trackTeams) {
+    const role = `${ROLE_PREFIX}${team.project_id}`;
+    for (const staff of team.staff || []) {
+      // A departed staff member earns no role here and so falls out under the revokes below.
+      if (staff.is_active === false) continue;
+      const username = usernameFor(staff, usernameByEmail);
+      if (!username) {
+        unmatched.add(String(staff.staff_id ?? emailKey(staff)) || 'unknown');
+        continue;
+      }
+      if (!desired.has(username)) desired.set(username, new Set());
+      desired.get(username).add(role);
+    }
+  }
+
+  const wanted = new Set([...desired.values()].flatMap(roles => [...roles]));
+
+  const grants = [];
+  for (const [username, roles] of desired) {
+    const held = current.get(username) || new Set();
+    const add = [...roles].filter(r => !held.has(r)).sort();
+    if (add.length) grants.push({ username, roles: add });
+  }
+
+  const revokes = [];
+  for (const [username, held] of current) {
+    const roles = desired.get(username) || new Set();
+    const drop = [...held].filter(r => r.startsWith(ROLE_PREFIX) && !roles.has(r)).sort();
+    if (drop.length) revokes.push({ username, roles: drop });
+  }
+
+  return {
+    projects: trackTeams.length,
+    users: desired.size,
+    rolesToCreate: [...wanted].filter(r => !existingRoles.has(r)).sort(),
+    grants: grants.sort(byUsername),
+    revokes: revokes.sort(byUsername),
+    unmatched: [...unmatched].sort()
+  };
+}
+
+/** Every Keycloak call this script makes, in one object so a test can replace the lot. */
+function keycloakClient() {
+  const realmBase = `${config.keycloakUrl}/realms/${config.keycloakRealm}`;
+  const adminBase = `${config.keycloakUrl}/admin/realms/${config.keycloakRealm}`;
+  let adminToken;
+
+  async function clientToken(clientId, clientSecret) {
+    const res = await fetch(`${realmBase}/protocol/openid-connect/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret
+      })
+    });
+    if (!res.ok) throw new Error(`[track-teams] token for ${clientId}: HTTP ${res.status}`);
+    return (await res.json()).access_token;
+  }
+
+  async function admin(path, { method = 'GET', body, tolerate = [] } = {}) {
+    if (!adminToken) {
+      adminToken = await clientToken(config.keycloakAdminClientId, config.keycloakAdminClientSecret);
+    }
+    const res = await fetch(`${adminBase}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${adminToken}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {})
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if (!res.ok && !tolerate.includes(res.status)) {
+      throw new Error(`[track-teams] ${method} ${path}: HTTP ${res.status}`);
+    }
+    return res.status === 200 ? res.json() : null;
+  }
+
+  const first = async (query) => (await admin(`/users?${query}`))[0] || null;
+
+  return {
+    clientToken,
+    listProjectRoles: () => admin(`/roles?search=${encodeURIComponent(ROLE_PREFIX)}&max=1000`),
+    roleUsers: (name) => admin(`/roles/${encodeURIComponent(name)}/users?max=1000`),
+    findByUsername: (username) => first(`username=${encodeURIComponent(username)}&exact=true`),
+    findByEmail: (email) => first(`email=${encodeURIComponent(email)}&exact=true`),
+    // 409 is another run, or another hand, having created the role already — read it back either way.
+    createRole: async (name) => {
+      await admin('/roles', { method: 'POST', body: { name }, tolerate: [409] });
+      return admin(`/roles/${encodeURIComponent(name)}`);
+    },
+    grant: (userId, roles) =>
+      admin(`/users/${userId}/role-mappings/realm`, { method: 'POST', body: roles }),
+    revoke: (userId, roles) =>
+      admin(`/users/${userId}/role-mappings/realm`, { method: 'DELETE', body: roles })
+  };
+}
+
+/**
+ * @param {string[]} argv
+ * @param {object} [deps] test seam: {fetchJson, kc}
+ */
+async function sync(argv = [], deps = {}) {
+  const args = parseArgs(argv);
+  const get = deps.fetchJson || fetchJson;
+  const kc = deps.kc || keycloakClient();
+
+  const trackToken = await kc.clientToken(config.trackClientId, config.trackClientSecret);
+  const teams = await get(`${config.trackApiBase}/api/v1/projects/team-members`,
+    { Authorization: `Bearer ${trackToken}` });
+
+  const roles = (await kc.listProjectRoles()).filter(r => r.name.startsWith(ROLE_PREFIX));
+  const roleByName = new Map(roles.map(r => [r.name, r]));
+  const userByUsername = new Map();
+  const current = new Map();
+  for (const role of roles) {
+    for (const user of await kc.roleUsers(role.name)) {
+      userByUsername.set(user.username, user);
+      if (!current.has(user.username)) current.set(user.username, new Set());
+      current.get(user.username).add(role.name);
+    }
+  }
+
+  // The email fallback is a Keycloak read, so it is resolved here and handed to the pure plan().
+  const usernameByEmail = new Map();
+  for (const team of teams) {
+    for (const staff of team.staff || []) {
+      const email = emailKey(staff);
+      if (staff.idir_user_id || !email || usernameByEmail.has(email)) continue;
+      const user = await kc.findByEmail(email);
+      if (user) {
+        usernameByEmail.set(email, user.username);
+        userByUsername.set(user.username, user);
+      }
+    }
+  }
+
+  const decided = plan(teams, { current, roles: new Set(roleByName.keys()), usernameByEmail });
+  const summary = {
+    mode: args.live ? 'live' : 'dry-run',
+    projects: decided.projects,
+    users: decided.users,
+    grants: countRoles(decided.grants),
+    revokes: countRoles(decided.revokes),
+    unmatched: decided.unmatched.length,
+    failures: 0,
+    plan: decided
+  };
+
+  const idFor = async (username) => {
+    if (!userByUsername.has(username)) {
+      const found = await kc.findByUsername(username);
+      if (found) userByUsername.set(username, found);
+    }
+    const user = userByUsername.get(username);
+    return user ? user.id : null;
+  };
+
+  for (const name of decided.rolesToCreate) {
+    if (!args.live) continue;
+    try {
+      roleByName.set(name, await kc.createRole(name));
+    } catch (err) {
+      summary.failures++;
+      logger.error(`[track-teams] create ${name} failed`, { error: err.message });
+    }
+  }
+
+  const noUser = [];
+  const apply = async (entries, write, label) => {
+    for (const { username, roles: names } of entries) {
+      const id = await idFor(username);
+      if (!id) {
+        summary.unmatched++;
+        noUser.push(username);
+        continue;
+      }
+      if (!args.live) continue;
+      const reps = names.map(n => roleByName.get(n)).filter(Boolean);
+      if (!reps.length) continue;
+      try {
+        await write(id, reps);
+      } catch (err) {
+        summary.failures++;
+        logger.error(`[track-teams] ${label} ${username} failed`, { error: err.message });
+      }
+    }
+  };
+  await apply(decided.grants, kc.grant, 'grant');
+  await apply(decided.revokes, kc.revoke, 'revoke');
+
+  // Without the names, `unmatched=N` is a number nobody can act on.
+  if (noUser.length) {
+    logger.warn(`[track-teams] no realm user for ${noUser.slice(0, 20).join(', ')}` +
+      (noUser.length > 20 ? `, and ${noUser.length - 20} more` : ''));
+  }
+
+  return summary;
+}
+
+/** The line a log alert matches. */
+function summaryLine(s) {
+  return `[track-teams] mode=${s.mode} projects=${s.projects} users=${s.users} ` +
+    `grants=${s.grants} revokes=${s.revokes} unmatched=${s.unmatched} failures=${s.failures}`;
+}
+
+/**
+ * One run, logging exactly what the CLI logs — the nightly timer and the CLI must not be able to
+ * produce different output, because the alert matches only one of the two lines.
+ *
+ * @param {object} [opts] {live} write, {deps} the same test seam `sync` takes
+ */
+async function run({ live = false, deps } = {}) {
+  const summary = await sync(live ? ['--live'] : [], deps);
+  logger.info(summaryLine(summary));
+  return summary;
+}
+
+module.exports = { parseArgs, usernameFor, plan, keycloakClient, sync, summaryLine, run };
+
+if (require.main === module) {
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    logger.error(err.message);
+    process.exit(1);
+  }
+
+  run({ live: args.live })
+    .catch(err => {
+      logger.error(`[track-teams] ${err.stack || err.message}`);
+      process.exit(1);
+    });
+}
