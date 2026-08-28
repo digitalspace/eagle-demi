@@ -1,7 +1,7 @@
 # TODO — attribute-level access control
 
 **Goal: every field of every entity classified and redacted per caller level, per
-`docs/rbac-architecture.md`.** `TODO.md` (prod cutover) retired 2026-08-27 (#198); this is the only open tracker.
+`docs/rbac-architecture.md`.** `TODO.md` (prod cutover) retired 2026-08-27 (#198); `TODO-frontend.md` holds frontend items.
 Rules: append work here before doing it, strike wrong lines with a reason, date every
 measurement, `node --test` per new/changed endpoint, swagger same PR, `src/utils/logger.js` only,
 ask before commit. **Merging is deploying** on test: every unit leaves anonymous responses
