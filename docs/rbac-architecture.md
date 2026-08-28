@@ -48,8 +48,8 @@ and below, and public only while the CAC is published. Predicates never narrow; 
 catalog is removed. Unknown entity throws. Unknown or throwing predicate hides the field. Dial out
 of range clamps toward restriction. A merged field without a catalog entry fails CI.
 
-**Write side.** Content writes stay `WRITE_ROLES`. Changing a dial needs `sysadmin`
-(no separate classify role; decided 2026-08-28), goes through one endpoint `PATCH /api/projects/:id/visibility`, is validated
+**Write side.** Content writes stay `WRITE_ROLES`. Changing a dial needs `sysadmin` via
+`requireRole('sysadmin')` (`requireAdmin` admits `staff`; no separate classify role, decided 2026-08-28), goes through one endpoint `PATCH /api/projects/:id/visibility`, is validated
 (400 on uncatalogued field or out-of-range level) and audited through the existing
 `src/utils/audit.js` `auditEvent`. Ordinary POST and PUT strip `vis` from bodies.
 
@@ -154,7 +154,7 @@ Each item below overrides the corresponding section of the source document.
     `src/seed/transform.js:16` equal `ADMIN_ROLES` in `access-sql.js:42`, not `SECURE_ROLES`;
     they build stored `read[]`, so they import `ADMIN_ROLES` and are never widened to the 5-role
     list (that would rewrite every ACL). DEMI creates no realm roles of its own: it reuses Eagle's
-    (`sysadmin`, `staff`), classification is gated by `sysadmin`, and any level-1/3 role waits on
+    (`sysadmin`, `staff`), classification is gated by `requireRole('sysadmin')`, and any level-1/3 role waits on
     EAO question 1. `demi-admin` and `demi-service-*` exist only on API keys.
 13. **Dropped.** `visLevelCap` on API keys (keys already carry roles and scope), a separate
     `audits` container (`auditEvent` exists), `GET /api/vis-catalog` (no admin UI yet), golden

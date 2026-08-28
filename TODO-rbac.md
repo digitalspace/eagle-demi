@@ -29,10 +29,10 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 
 ## External dependencies (owner and date before the unit that needs them)
 
-- [x] Realm roles: DEMI reuses Eagle's vocabulary, no `demi-*` realm roles (decided 2026-08-28).
+- [ ] Realm roles: DEMI reuses Eagle's vocabulary, no `demi-*` realm roles (decided 2026-08-28). Test done; prod open.
       `eao-epic` test held only `sysadmin` of the names eagle-api checks; `staff` created there
       2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
-      Levels 1 and 3 get a role only when EAO question 1 is answered. Classifying (P3-2) uses `requireAdmin`.
+      Levels 1 and 3 get a role only when EAO question 1 is answered. Classifying (P3-2) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
 - [ ] EAO question 1 (nested vs lateral groups). Blocks all of Phase 3. Owner: Daniel. Asked: ______  Answered: ______
 - [ ] EAO question 2 (lead/EPD names and emails public by policy). Gates the P2-1 tightening list. Asked: ______  Answered: ______
 - [ ] EAO questions 3 and 4 (`forMAEE = Y` implies `maxVis >= 3`; `project_tracking_number` and `epic_guid` ceilings). Asked: ______  Answered: ______
@@ -820,8 +820,8 @@ Acceptance
 
 Branch: `feat/vis-classify-endpoint`
 
-- ~~`requireRole(name)` factory~~ not needed: `requireAdmin` gates classification (2026-08-28). Original: `requireRole(name)` factory in `src/middleware/require-roles.js`, next to `requireWrite` (`:24-31`) and `requireAdmin` (`:33-41`); same shape — read `req.user.realm_access.roles`, 403 with a message naming the missing role. Export it at `:43`.
-- [ ] Route: `router.patch('/projects/:id/visibility', authMiddleware, requireWrite, requireAdmin, projectController.setVisibility)` in `src/routes/api.js`, after `:68`.
+- [ ] `requireRole(name)` factory in `src/middleware/require-roles.js`, next to `requireWrite` (`:24-31`) and `requireAdmin` (`:33-41`); same shape — read `req.user.realm_access.roles`, 403 with a message naming the missing role. Export it at `:43`.
+- [ ] Route: `router.patch('/projects/:id/visibility', authMiddleware, requireWrite, requireRole('sysadmin'), projectController.setVisibility)` in `src/routes/api.js`, after `:68`.
 - [ ] `exports.setVisibility` in `src/controllers/nosql/project.js`, after `updateProject` (ends `:250`). Body `{ vis: { field: level } }`. 400 on a field absent from `catalogFor('projects')`, 400 on a level outside `0..maxVis`, 400 on more than 10 keys (`src/db/cosmos-nosql.js:262-265` caps patch at 10 operations).
 - [ ] Write with `cosmos.patch(CONTAINER, id, id, ops)` — the precedent is `src/repositories/api-keys.js:78-86` `touchLastUsed`, and the reason is the same: an upsert writes the whole record and would race the content writers. Add `patchVis` to `src/repositories/projects.js` beside `patchWildfireStats` and export it at `:263`.
 - [ ] `auditEvent(req, { action: 'project.reclassify', targetType: 'project', targetId, projectId, detail: { fields, from, to } })` BEFORE responding — signature at `src/utils/audit.js:182`, an existing call to copy at `src/controllers/nosql/project.js:222-232`. Field names and levels only, never values.
