@@ -44,21 +44,23 @@ test('constrainToProject — the intersection rule', async (t) => {
       documents.constrainToProject(['sysadmin'], PUBLIC_PROJECT), ['sysadmin']);
   });
 
-  await t.test('an empty intersection fails closed to sysadmin', () => {
+  await t.test('an empty intersection fails closed to level 2', () => {
+    // Not `['sysadmin']`: an admin role name is no longer a ladder token, so stamping one would
+    // hide the row from the staff callers that could read it before.
     assert.deepStrictEqual(
-      documents.constrainToProject(['project-team'], PRIVATE_PROJECT), ['sysadmin']);
+      documents.constrainToProject(['project-team'], PRIVATE_PROJECT), ['staff']);
   });
 
   await t.test('a missing or empty project ACL fails closed', () => {
     // Not "unrestricted" and not "unchanged" — an absent project ACL is the case where the least
     // is known, so it collapses to the narrowest answer rather than to the wider of the two.
-    assert.deepStrictEqual(documents.constrainToProject(['public'], []), ['sysadmin']);
-    assert.deepStrictEqual(documents.constrainToProject(['public'], undefined), ['sysadmin']);
+    assert.deepStrictEqual(documents.constrainToProject(['public'], []), ['staff']);
+    assert.deepStrictEqual(documents.constrainToProject(['public'], undefined), ['staff']);
   });
 
   await t.test('a missing or empty document ACL fails closed', () => {
-    assert.deepStrictEqual(documents.constrainToProject([], PUBLIC_PROJECT), ['sysadmin']);
-    assert.deepStrictEqual(documents.constrainToProject(undefined, PUBLIC_PROJECT), ['sysadmin']);
+    assert.deepStrictEqual(documents.constrainToProject([], PUBLIC_PROJECT), ['staff']);
+    assert.deepStrictEqual(documents.constrainToProject(undefined, PUBLIC_PROJECT), ['staff']);
   });
 });
 
@@ -82,7 +84,7 @@ test('setAclForProject', async (t) => {
 
       await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
 
-      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin']);
+      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['staff']);
     });
 
   await t.test('captures ownRead on the first cascade', async (tt) => {
@@ -151,7 +153,7 @@ test('setAclForProject', async (t) => {
       assert.ok(cap.ops.every(o => o.partitionKey === '207'), 'one partition, one bulk request');
       assert.ok(cap.ops.every(o => o.operationType === 'Patch'));
       assert.deepStrictEqual(result.ids, ['d1', 'd2', 'd3']);
-      assert.deepStrictEqual(opValue(cap.ops[2], '/read'), ['sysadmin'],
+      assert.deepStrictEqual(opValue(cap.ops[2], '/read'), ['staff'],
         'a row with no ACL at all still fails closed rather than being skipped');
     });
 
@@ -171,7 +173,7 @@ test('setAclForProject', async (t) => {
     for (const op of wire) {
       assert.ok('value' in op, `${op.path} reaches Cosmos with no value key, which is a 400`);
     }
-    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin'], 'and it still fails closed');
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['staff'], 'and it still fails closed');
   });
 
   await t.test('an empty project writes nothing', async (tt) => {

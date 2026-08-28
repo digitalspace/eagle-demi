@@ -380,6 +380,24 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     assert.strictEqual(acl.published, false);
   });
 
+  await t.test('a level-1 parent caps the document at level 1', () => {
+    // The default is level 2, and taking it here would let the document out-rank its project.
+    const acl = resolveDocumentAcl({ read: ['team'], isPublished: false }, false);
+    assert.deepStrictEqual(acl.read, ['team']);
+  });
+
+  await t.test('a level-2 parent cannot be passed by a publish request', () => {
+    const acl = resolveDocumentAcl({ read: ['staff'], isPublished: false }, true);
+    assert.deepStrictEqual(acl.read, ['staff']);
+    assert.strictEqual(acl.published, false);
+  });
+
+  await t.test('a public parent lets a publish request reach level 4', () => {
+    const acl = resolveDocumentAcl({ read: ['staff', 'idir', 'public'], isPublished: true }, true);
+    assert.deepStrictEqual(acl.read, ['staff', 'idir', 'public']);
+    assert.strictEqual(acl.published, true);
+  });
+
   await t.test('delete removes the record but NEVER the stored file', async () => {
     t.mock.method(aiSearch, 'deleteFromIndex', async () => 1);
     t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 0);

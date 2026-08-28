@@ -187,6 +187,20 @@ test('rolesFor / resolveAccess — roles come only from the verified token', asy
     const bceid = resolveAccess({ user: { realm_access: { roles: [] }, identity_provider: 'bceid' } });
     assert.deepStrictEqual(bceid.roles, ['public']);
   });
+
+  await t.test('a realm role named team is never a caller token', () => {
+    // It would match the level-1 rows of EVERY project, its own or not.
+    assert.deepStrictEqual(rolesFor({ user: { realm_access: { roles: ['team'] } } }), ['public']);
+  });
+
+  await t.test('a realm role named idir does not grant level 3', () => {
+    assert.deepStrictEqual(rolesFor({ user: { realm_access: { roles: ['idir'] } } }), ['public']);
+
+    const real = rolesFor({
+      user: { realm_access: { roles: ['idir'] }, identity_provider: 'idir' }
+    });
+    assert.deepStrictEqual(real.sort(), ['idir', 'public'], 'the claim path, and it appears once');
+  });
 });
 
 test('the ladder vocabulary', async (t) => {
@@ -273,17 +287,40 @@ test('teams grant, key scope restricts — two different project facts', async (
     const access = resolveAccess(withRoles('staff', 'project:207'));
     const { clause, params } = visibilityFor(access, 'projectId');
 
-    assert.match(clause, /ARRAY_CONTAINS\(c\.read, 'team'\) AND c\.projectId IN \(@roleTeam0\)/);
+    assert.match(clause, /ARRAY_CONTAINS\(c\.read, 'team'\) AND c\.projectId IN \(@roleT0\)/);
     assert.match(clause, / OR /, 'the team arm GRANTS — it is an OR, never an AND');
-    assert.deepStrictEqual(params.find(p => p.name === '@roleTeam0'),
-      { name: '@roleTeam0', value: '207' });
+    assert.deepStrictEqual(params.find(p => p.name === '@roleT0'),
+      { name: '@roleT0', value: '207' });
   });
 
   await t.test('a project IS its own scope, so the team arm compares id there', () => {
     const access = resolveAccess(withRoles('staff', 'project:207'));
-    assert.match(visibilityFor(access, 'id').clause, /AND c\.id IN \(@roleTeam0\)/);
+    assert.match(visibilityFor(access, 'id').clause, /AND c\.id IN \(@roleT0\)/);
     assert.strictEqual(canRead({ read: ['team'], id: '207' }, access, 'id'), true);
     assert.strictEqual(canRead({ read: ['team'], id: '300' }, access, 'id'), false);
+  });
+
+  await t.test('an unknown partition field emits no team arm', () => {
+    // The one value that reaches SQL uninterpolated. Unknown means no arm, not a guessed field.
+    const access = resolveAccess(withRoles('staff', 'project:207'));
+    const { clause, params } = readClause(access.roles,
+      { teams: access.teams, partitionField: 'ownerId' });
+
+    assert.ok(!clause.includes('ownerId'), 'the caller does not name the compared field');
+    assert.ok(!clause.includes("ARRAY_CONTAINS(c.read, 'team')"), 'no team arm at all');
+    assert.deepStrictEqual(params.map(p => p.name), ['@role0', '@role1']);
+    assert.strictEqual(canRead({ read: ['team'], ownerId: '207' }, access, 'ownerId'), false);
+  });
+
+  await t.test('a caller prefix cannot collide with the team parameters', () => {
+    // `@roleTeam0` used to be both this clause's first team id and the other clause's first role.
+    const merged = andClauses(
+      readClause(['public'], { teams: ['207'] }),
+      readClause(['public'], { teams: ['207'], prefix: '@roleTeam' })
+    );
+
+    assert.deepStrictEqual(merged.params.map(p => p.name),
+      ['@role0', '@roleT0', '@roleTeam0', '@roleTeamT0']);
   });
 
   await t.test('a staff API key with projectScope is still scoped', () => {

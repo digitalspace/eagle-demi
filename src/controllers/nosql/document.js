@@ -18,7 +18,9 @@ const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const chunks = require('../../repositories/chunks');
 const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
-const { resolveAccess, systemAccess, pageSizeFor, readForLevel } = require('../../helpers/access-sql');
+const {
+  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
+} = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeDocument } = require('../../helpers/purge');
@@ -44,7 +46,9 @@ function resolveDocumentAcl(parentProject, isPublished) {
 
   return {
     published,
-    read: readForLevel(published ? 4 : 2)
+    // Capped at the parent's own level, so a document under a level-1 project is admitted at
+    // level 1 rather than handed the level-2 default that would out-rank it.
+    read: readForLevel(Math.min(published ? 4 : 2, levelOfRead(parentProject.read)))
   };
 }
 

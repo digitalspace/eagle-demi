@@ -1103,6 +1103,10 @@ The whole ladder is this unit. No endpoint, no stored-data change.
 - Acceptance
   - [ ] `identity_provider` is the claim name on a live loginproxy token — confirm on test before
         merging and record the measurement in the PR. Level 3 is dead until it is right.
+  - [x] No realm role can forge a ladder token: test realm 2026-08-28 carries zero `project:*`
+        roles and no role named `team` or `idir`. `rolesFor` strips both regardless, so the
+        measurement is a starting state, not the control.
+  - [ ] The same count on the prod realm.
   - [x] `node --test test/helpers/access-sql.test.js test/helpers/access-odata.test.js test/vis/level.test.js test/controllers/nosql/document-redaction.test.js`, then `yarn test`.
   - [ ] Anonymous `GET /api/projects?pageSize=100` and `GET /api/search?dataset=Project&pageSize=5`
         on test, `jq -S` before/after: 0 lines. Anonymous callers are unaffected by every line here.
@@ -1118,9 +1122,20 @@ Merges only after the `project:<id>` roles dependency above carries a date.
 
 - [ ] `src/controllers/nosql/document.js:36-49` `resolveDocumentAcl` — the unpublished arm drops
       from `readForLevel(2)` (what P3-2 left) to `readForLevel(1)`; the published arm stays
-      `readForLevel(4)`. Same ceiling rule: a document cannot out-rank its parent, computed from
-      `levelOfRead(parentProject.read)`. Every other write site converted in P3-2 keeps the level
-      it has; this bullet is the only default that moves.
+      `readForLevel(4)`. The ceiling itself — `Math.min(..., levelOfRead(parentProject.read))` — is
+      already in place from P3-2. Every other write site converted in P3-2 keeps the level it has;
+      this bullet is the only default that moves.
+- [ ] `src/repositories/documents.js:208` `constrainToProject` — the cascade INTERSECTS role
+      names, so once a document is admitted at level 1 its `ownRead` is `['team']` and a
+      level-2 project ACL (`['staff']`) shares nothing with it: every level-1 document falls to
+      the fail-closed branch on the first cascade and its `ownRead` snapshot records the flattened
+      value. Keep `team`, or replace the intersection with a `levelOfRead` cap, BEFORE the default
+      moves. Fixing it after means a re-seed per project.
+- [ ] `src/seed/transform.js:202` and `src/merge/project.js:195` write `SECURE_ROLES` arrays
+      (`['public', ...SECURE_ROLES]` and `[...SECURE_ROLES]`). No admin role name is a ladder
+      token, so `levelOfRead` reads the private one as level 1, not 2 — a seeded private project
+      is already narrower than the level-2 rows around it. Convert both to `readForLevel(...)` in
+      this unit, where level 1 becomes the intended default rather than an accident.
 - [ ] `src/controllers/nosql/project.js:123,152,223-228` — `createProject` ignores `isPublished`
       from the body and admits at level 1; `updateProject`'s `isPublished` arm is deleted (widening
       moves to P3-4) and the ACL is carried from `existing` unconditionally.

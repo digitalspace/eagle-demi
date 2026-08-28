@@ -134,15 +134,21 @@ function rolesFor(req) {
   const tokenRoles = user && user.realm_access && user.realm_access.roles;
   if (Array.isArray(tokenRoles)) {
     for (const r of tokenRoles) {
+      if (!r) continue;
+      const name = String(r);
       // `project:*` roles are the OTHER dimension — they grant a team, not a role type. Leaving
       // them in would put project ids into the read[] IN list, which is exactly the conflation of
       // the two dimensions this module exists to prevent. Which projects is `teamsFor`'s job.
-      if (r && !String(r).startsWith(PROJECT_ROLE_PREFIX)) roles.add(r);
+      if (name.startsWith(PROJECT_ROLE_PREFIX)) continue;
+      // A realm role must not FORGE a ladder token. One literally named `team` would match the
+      // level-1 rows of every project; one named `idir` would claim level 3 with no IDIR login.
+      // Both enter only through the paths below them — the team arm and the identity claim.
+      if (name === LEVEL_TOKENS[1] || name === LEVEL_TOKENS[3]) continue;
+      roles.add(r);
     }
   }
 
   // Level 3 is "any IDIR login", which arrives as a token claim rather than as a realm role.
-  // `team` is never added here: a caller carrying it would match every level-1 row of every project.
   if (user && user.identity_provider === 'idir') roles.add(LEVEL_TOKENS[3]);
 
   return Array.from(roles);
@@ -323,6 +329,9 @@ function pageSizeFor(access, raw) {
   return { pageSize: Math.min(requested, max) };
 }
 
+/** Partition-key fields the team arm may compare — `id` on projects, `projectId` everywhere else. */
+const TEAM_PARTITION_FIELDS = Object.freeze(['projectId', 'id']);
+
 /**
  * The visibility predicate for these roles, as a SQL fragment plus bound parameters.
  *
@@ -364,9 +373,12 @@ function readClause(roles, opts = {}) {
   // project's narrowest rows; ANDing it would hide every other level-2 row from the same caller.
   const teams = Array.isArray(opts.teams) ? opts.teams : [];
   const field = opts.partitionField === undefined ? 'projectId' : opts.partitionField;
-  if (teams.length > 0 && field) {
-    // Named off the role prefix, so a second clause in the same query cannot collide here either.
-    const teamNames = teams.map((_, i) => `${prefix}Team${i}`);
+  // The field name is the one value here that reaches SQL uninterpolated, so it comes off an
+  // allow-list rather than from the caller. An unknown field (or null) skips the arm.
+  if (teams.length > 0 && TEAM_PARTITION_FIELDS.includes(field)) {
+    // `T`, not `Team`: `@roleTeam0` is also what a clause built with `prefix: '@roleTeam'` calls
+    // its first role, and andClauses rejects that pair rather than running.
+    const teamNames = teams.map((_, i) => `${prefix}T${i}`);
     arms.push(
       `(ARRAY_CONTAINS(${alias}.read, '${LEVEL_TOKENS[1]}')` +
       ` AND ${alias}.${field} IN (${teamNames.join(', ')}))`
@@ -485,7 +497,7 @@ function canRead(doc, access, partitionField = 'projectId') {
 
   // The team arm's JS twin — see readClause. A row with no ladder token at all reaches no
   // unprivileged caller: `isPublished` mirrors `read`, it never grants.
-  return Boolean(partitionField) &&
+  return TEAM_PARTITION_FIELDS.includes(partitionField) &&
     read.includes(LEVEL_TOKENS[1]) &&
     (access.teams || []).includes(String(doc[partitionField]));
 }

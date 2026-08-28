@@ -202,15 +202,19 @@ async function aclRowsForProject(access, projectId) {
  *
  * The rule is `eagle-search/worker/transform.js`'s `constrainToProject`, which is the intersecting
  * version of what this file used to do by assignment. Three fail-closed branches: no project ACL,
- * an empty one, or an empty intersection all collapse to `['sysadmin']` rather than to the wider
- * of the two.
+ * an empty one, or an empty intersection all collapse to level 2 rather than to the wider of the
+ * two.
+ *
+ * Level 2 and not `['sysadmin']`: an admin role name is not a ladder token, so once `staff` left
+ * SECURE_ROLES a row stamped that way stopped being readable by the staff callers that saw it
+ * before. `readForLevel(2)` is what "as narrow as this cascade can say" already means to them.
  */
 function constrainToProject(ownRead, projectRead) {
-  if (!Array.isArray(projectRead) || projectRead.length === 0) return ['sysadmin'];
-  if (!Array.isArray(ownRead) || ownRead.length === 0) return ['sysadmin'];
+  if (!Array.isArray(projectRead) || projectRead.length === 0) return readForLevel(2);
+  if (!Array.isArray(ownRead) || ownRead.length === 0) return readForLevel(2);
   const allowed = new Set(projectRead);
   const kept = ownRead.filter(role => allowed.has(role));
-  return kept.length > 0 ? kept : ['sysadmin'];
+  return kept.length > 0 ? kept : readForLevel(2);
 }
 
 /**
@@ -270,7 +274,7 @@ async function setAclForProject(access, projectId, read) {
     // `set` op, and Cosmos rejects a `set` with no value. Patch ops are atomic per item, so that
     // 400 would take the `/read` narrowing down with it — the row keeps its old ACL and the failure
     // is counted, but the effect is fail-OPEN for exactly the row that had no ACL to begin with.
-    // `[]` intersects to `['sysadmin']` instead. No current write path produces such a row (all
+    // `[]` intersects to level 2 instead. No current write path produces such a row (all
     // four write an explicit `read[]`, and `seedAcl` fails closed), so this guards a legacy row
     // nobody can rule out from outside the private endpoint.
     const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead

@@ -122,8 +122,10 @@ test('transformDocument', async (t) => {
   await t.test('projectRead narrows the ACL — a document may not out-rank its project', () => {
     // The seed used to keep the Eagle ACL verbatim, so a public document under a project Track
     // marks private was seeded public and stayed listable under a project nobody could see.
+    // The Eagle roles and `['sysadmin']` share nothing, so this is the fail-closed branch, and
+    // it lands on level 2 — an admin role name is not a ladder token.
     const priv = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, projectRead: ['sysadmin'] });
-    assert.deepStrictEqual(priv.read, ['sysadmin']);
+    assert.deepStrictEqual(priv.read, ['staff']);
     assert.strictEqual(priv.isPublished, false);
 
     const pub = transformDocument(EAGLE_DOC, '207', LIST,
