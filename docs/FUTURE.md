@@ -40,3 +40,54 @@ Not scheduled. Added 2026-08-26.
   a GitHub federated credential; a secret can be added) if the landing zone permits, else a new
   one. Caveats: ABAC/role assignment writes need a human; the SP must never get prod write
   without a separate decision; secret lifetime ≤ 2 years and belongs in the key manager above.
+- **Serve eagle-public's project reads.** Today the public site reads from two backends. Its
+  `AZURE_DATASETS` set (`eagle-public/src/app/api/api.ts:44`, React rewrite; the Angular equivalent
+  is `services/api.ts`) sends `Project`, `Document` and `DocumentChunk` searches to
+  `SEARCH_API_PATH`, so the project list and map, the project-list table, site search, content
+  search, featured documents and the Documents / Application / Certificate / Amendment tabs are all
+  DEMI. Everything else is eagle-api: `GET /api/project/:id` (the detail record plus
+  `commentPeriodForBanner`), `GET /api/project/:id/pin`, `GET /api/commentperiod?project=`,
+  `GET /api/search?dataset=RecentActivity`, `GET /api/search?dataset=List`, and the document
+  download URL `/api/public/document/:id/download/...` (hardcoded in the frontend in two places,
+  not routed through its `apiPath()` helper). Target: DEMI serves the project page outright, so a
+  project the list shows always opens.
+
+  Three things block it.
+
+  1. *Transport.* rproxy exposes exactly one DEMI URL — `location = /demi-search/search`, an exact
+     match, `eao-nginx/conf.d/server.conf.tmpl:244`. That is a security control, not an oversight:
+     a prefix match publishes this API's whole route table anonymously on a gov.bc.ca origin,
+     `/api-docs` and `/documents/:id/download` included. Do not widen it. The block goes away when
+     `demi.eao.gov.bc.ca` resolves (BC Gov DNS request outstanding) and `SEARCH_API_PATH` becomes an
+     absolute URL the browser calls directly; until then the site's CSP `connect-src 'self'
+     https://*.gov.bc.ca` also rejects `demi-api-*.azurewebsites.net`.
+  2. *Missing data.* No comment periods, no pins, no recent activities, no organization records
+     exist here. Pins arrive on the Eagle push but survive only inside `sources.eagle`, which the
+     field catalog strips from every response at every level (`src/vis/catalog/projects.js:85`).
+  3. *Missing key.* `GET /projects/:id` takes the DEMI id — the Track id, or `eagle-<objectid>` for
+     an Eagle-only project — not the Eagle `_id` the site holds. The only Eagle-keyed path is
+     `/search?dataset=Project&and[_id]=`, aliased onto `legacyEagleId`.
+
+  Even inside the one allowed URL a search-only detail page does not work: `and[_id]=` takes the AI
+  Search branch, which omits `location` (`src/controllers/search.js:410-412` — the Cosmos branch
+  reads `row.address`, the index has no such column). It also carries none of `legislation`,
+  `build` (the page derives "Nature" from it), `CEAAInvolvement`, `CEAALink`,
+  `applicableRegulation`, `operational`, `projectCAC`, `cacEmail` or `commentPeriodForBanner`.
+
+  Order of work: DNS and the absolute `SEARCH_API_PATH` first, since nothing else is reachable
+  without it; then the DEMI side — an Eagle-`_id` project lookup, the missing project fields, and
+  comment-period, pin and activity records with their read endpoints; then the frontend swap, one
+  call at a time behind `SEARCH_API_PATH` so each can be reverted on its own. Document downloads
+  are separable and cheap: `GET /documents/:id/download` already returns a presigned URL and needs
+  only the transport, no new data. It presigns against eagle-api's MinIO while
+  `STORAGE_BACKEND=minio` (the default), so it brokers the bytes rather than owning them.
+
+  Two response-shape traps: `GET /projects` returns stored Cosmos names (`projectState`, `address`,
+  `proponentName`) while `/search?dataset=Project` returns eagle-shaped ones (`status`, `location`,
+  `proponent.name`), and the two search branches disagree with each other over `location`,
+  `sources` and `highlighted`. Anything the frontend consumes needs one agreed shape first.
+
+  Until this lands, the two corpora drift: test's DEMI corpus was seeded from prod, so its project
+  list names projects the test eagle-api has never held and those pages 404. Remedy is
+  `.claude/scripts/epic-backfill-projects.py --missing` in the workspace root, which copies the
+  gap across; the frontend renders a "Project not found" page rather than an alert.
