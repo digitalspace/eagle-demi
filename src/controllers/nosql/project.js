@@ -12,7 +12,11 @@
 
 const projects = require('../../repositories/projects');
 const documents = require('../../repositories/documents');
-const { resolveAccess, systemAccess, pageSizeFor, readForLevel } = require('../../helpers/access-sql');
+const {
+  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
+} = require('../../helpers/access-sql');
+const { catalogFor } = require('../../vis/catalog');
+const { PATCH_MAX_OPERATIONS } = require('../../db/cosmos-nosql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeProject } = require('../../helpers/purge');
@@ -20,8 +24,6 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
-const { catalogFor } = require('../../vis/catalog');
-const { PATCH_MAX_OPERATIONS } = require('../../db/cosmos-nosql');
 
 /**
  * A project's visibility change, carried to its index row and re-derived onto its documents.
@@ -267,6 +269,72 @@ exports.updateProject = async (req, res) => {
 
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
     // narrowed.
+    return res.json(redactForAccess('projects', saved, access));
+  } catch (err) {
+    return serverError(res, err, 'project controller failed');
+  }
+};
+
+/**
+ * Move a project to a ladder level (docs/rbac-architecture.md §1, "Widening is an act").
+ *
+ * The ONLY route that raises a record's level: no job, no push and no merge widens anything, so
+ * every widening has an actor, a time and an audit row behind it.
+ */
+exports.setLevel = async (req, res) => {
+  try {
+    const access = resolveAccess(req);
+    const { level, confirm, reason } = req.body || {};
+
+    if (!Number.isInteger(level) || level < 1 || level > 4) {
+      return res.status(400).json({
+        error: 'level must be an integer 1-4. Level 0 is the sealed compartment and is not set here.'
+      });
+    }
+    if (level === 4 && confirm !== true) {
+      return res.status(400).json({ error: 'Publishing to level 4 requires "confirm": true.' });
+    }
+    if (level === 4 && !String(reason || '').trim()) {
+      return res.status(400).json({ error: 'Publishing to level 4 requires a non-empty "reason".' });
+    }
+
+    const existing = await projects.getById(access, req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const from = levelOfRead(existing.read);
+    // Pulling a record back from public is incident response, not a routine correction.
+    const takedown = from === 4 && level < 4;
+    if (takedown && !access.roles.includes('sysadmin')) {
+      return res.status(403).json({
+        error: 'Only sysadmin may pull a record back from level 4. See docs/takedown-runbook.md.'
+      });
+    }
+
+    const acl = { read: readForLevel(level), isPublished: level === 4 };
+    const saved = await projects.upsert({
+      ...existing,
+      ...acl,
+      id: existing.id,
+      updatedAt: new Date().toISOString()
+    });
+
+    // Before the cascade, which can 500: the row someone comes looking for is the visibility
+    // change, and it must not be the one path that records nothing.
+    auditEvent(req, {
+      action: takedown ? 'record.takedown' : (level > from ? 'record.widen' : 'record.narrow'),
+      targetType: 'project',
+      targetId: existing.id,
+      projectId: existing.id,
+      detail: { from, to: level, confirmed: confirm === true, reason: reason || '' }
+    });
+
+    if (level !== from) {
+      const failure = await cascadeProjectVisibility(existing.id, acl);
+      if (failure) return res.status(500).json({ success: false, error: failure });
+    }
+
     return res.json(redactForAccess('projects', saved, access));
   } catch (err) {
     return serverError(res, err, 'project controller failed');
