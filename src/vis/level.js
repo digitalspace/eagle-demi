@@ -1,19 +1,17 @@
 'use strict';
 
 /**
- * Field-visibility LEVEL: one integer per caller, 0 most privileged, 4 anonymous public. The table
- * below is the whole mapping; lowest wins.
- *
- * Adding `idir` and moving `sysadmin`/`demi-admin` and team membership is Phase 3 work, tracked in
- * TODO-rbac.md. DEMI reuses Eagle's realm roles and creates none of its own.
+ * Field-visibility LEVEL: one integer per caller, 1 narrowest, 4 anonymous public; lowest wins.
+ * 0 is not a caller level — it's the sealed row-plane compartment `systemAccess()` carries.
  */
 const ROLE_LEVELS = {
-  sysadmin: 0,
-  'demi-admin': 0,
+  sysadmin: 1,
+  'demi-admin': 1,
   staff: 2,
   'demi-service-read': 2,
   'demi-service-write': 2,
   compliance: 2,
+  idir: 3,
   public: 4
 };
 

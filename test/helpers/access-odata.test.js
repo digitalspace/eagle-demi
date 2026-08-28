@@ -8,9 +8,11 @@ const assert = require('node:assert');
 const { filterFor, quote } = require('../../src/helpers/access-odata');
 const { TIER } = require('../../src/helpers/access-sql');
 
-const PUBLIC = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null };
-const ADMIN = { tier: TIER.PRIVILEGED, roles: ['public', 'sysadmin'], projectScope: null };
-const SCOPED = { tier: TIER.SCOPED, roles: ['public', 'project-team'], projectScope: ['207'] };
+const PUBLIC = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] };
+const ADMIN = { tier: TIER.PRIVILEGED, roles: ['public', 'sysadmin'], projectScope: null, teams: [] };
+const SCOPED = {
+  tier: TIER.SCOPED, roles: ['public', 'project-team'], projectScope: ['207'], teams: []
+};
 
 test('access-odata filter', async (t) => {
   await t.test('privileged callers get no filter at all', () => {
@@ -23,7 +25,9 @@ test('access-odata filter', async (t) => {
     // The twin of the SQL fix: privilege lifts the ROLE predicate, never the project scope. This
     // function used to short-circuit on privilege before it ever looked at projectScope, so a
     // scoped service key searched the whole index.
-    const scopedAdmin = { tier: TIER.SCOPED, roles: ['public', 'staff'], projectScope: ['207'] };
+    const scopedAdmin = {
+      tier: TIER.SCOPED, roles: ['public', 'sysadmin'], projectScope: ['207'], teams: []
+    };
     const { filter, empty } = filterFor(scopedAdmin);
     assert.strictEqual(empty, false);
     assert.strictEqual(filter, "search.in(projectId, '207', ',')",
@@ -97,6 +101,34 @@ test('access-odata filter', async (t) => {
     // Every quote is either a literal delimiter or half of a doubled pair, so the total is even.
     // An escape that dropped or added one would leave the filter unbalanced.
     assert.strictEqual((filter.match(/'/g) || []).length % 2, 0, 'quotes must stay balanced');
+  });
+
+  await t.test('a staff caller now gets a filter', () => {
+    // `staff` left SECURE_ROLES, so it no longer lifts the role predicate here either.
+    const { filter, empty } = filterFor({
+      tier: TIER.PUBLIC, roles: ['public', 'staff'], projectScope: null, teams: []
+    });
+    assert.strictEqual(empty, false);
+    assert.ok(filter, 'a null filter would be UNRESTRICTED');
+    assert.ok(filter.includes('staff'));
+  });
+
+  await t.test('filterFor emits the team arm', () => {
+    const { filter } = filterFor({
+      tier: TIER.PUBLIC, roles: ['public', 'staff'], projectScope: null, teams: ['207']
+    });
+    assert.ok(filter.includes("r eq 'team'"), 'the level-1 token must be in the filter');
+    assert.ok(filter.includes("'207'"));
+    assert.match(filter, / or /, 'membership GRANTS — the arm is an or, never an and');
+    assert.ok(filter.includes('read/any(r: '), 'the role arm survives beside it');
+  });
+
+  await t.test('a team arm never replaces the scope and', () => {
+    const { filter } = filterFor({
+      tier: TIER.SCOPED, roles: ['public', 'staff'], projectScope: ['207'], teams: ['300']
+    });
+    assert.match(filter, / and search\.in\(projectId, '207', ','\)$/,
+      'the key scope stays an AND over everything the roles and teams allow');
   });
 
   // A comma is the separator search.in() uses, so a value containing one would silently split

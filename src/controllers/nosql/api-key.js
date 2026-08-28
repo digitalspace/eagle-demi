@@ -14,7 +14,7 @@
 
 const apiKeys = require('../../repositories/api-keys');
 const { generateKey, defaultExpiry } = require('../../helpers/api-key');
-const { SECURE_ROLES, WRITE_ROLES } = require('../../helpers/access-sql');
+const { AUTHENTICATED_ROLES, WRITE_ROLES } = require('../../helpers/access-sql');
 const { forgetCachedKey } = require('../../helpers/auth');
 const { logger } = require('../../utils/logger');
 const { serverError } = require('../../helpers/response');
@@ -24,11 +24,13 @@ const config = require('../../config');
 /**
  * Roles a key may be granted. A key can never be given a role DEMI does not recognise.
  *
- * Derived from SECURE_ROLES rather than listed, so a new tier is grantable the moment it exists.
+ * Derived from AUTHENTICATED_ROLES rather than listed, so a new tier is grantable the moment it
+ * exists. SECURE_ROLES alone would drop `staff`, which left it in P3-2, and make staff keys
+ * unmintable.
  * Exported for the test that asserts the derivation still reaches `demi-service-write` — a role
  * the mint route rejects as unknown is a role nobody can hold.
  */
-const GRANTABLE_ROLES = Array.from(new Set([...SECURE_ROLES, 'compliance', 'public']));
+const GRANTABLE_ROLES = Array.from(new Set([...AUTHENTICATED_ROLES, 'compliance', 'public']));
 exports.GRANTABLE_ROLES = GRANTABLE_ROLES;
 
 exports.createApiKey = async (req, res) => {

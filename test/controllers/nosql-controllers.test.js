@@ -172,6 +172,33 @@ test('nosql project controller', async (t) => {
     assert.deepStrictEqual(saved.sources, {}, 'the wildfire patch needs /sources to exist');
   });
 
+
+  // P3-2 converts the write sites to `readForLevel` at the level they already meant. Literal
+  // tokens, because reading them off a constant would pass whatever that constant becomes.
+  await t.test('a new unpublished project still reads as level 2 after P3-2', async () => {
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.createProject({
+      body: { trackProjectId: 5, name: 'U', centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+
+    assert.deepStrictEqual(saved.read, ['staff']);
+    assert.strictEqual(saved.isPublished, false);
+  });
+
+  await t.test('a published project reads as level 4', async () => {
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await projectController.createProject({
+      body: { trackProjectId: 6, name: 'V', isPublished: true, centroid: { coordinates: [0, 0] } }
+    }, mockRes());
+
+    assert.deepStrictEqual(saved.read, ['staff', 'idir', 'public']);
+    assert.strictEqual(saved.isPublished, true);
+  });
+
   // ONE STORED NAME FOR THE PROJECT STATE. `status` is the wire name and the index alias
   // (`c.projectState AS status`); `projectState` is what the sync writes and what 389 of the 393
   // stored rows carry. Both write routes used to let the wire name through, which put the state
@@ -353,6 +380,34 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
     assert.strictEqual(acl.published, false);
   });
 
+  await t.test('a level-1 parent caps the document at level 1', () => {
+    // The default is level 2, and taking it here would let the document out-rank its project.
+    const acl = resolveDocumentAcl({ read: ['team'], isPublished: false }, false);
+    assert.deepStrictEqual(acl.read, ['team']);
+  });
+
+  await t.test('a level-2 parent cannot be passed by a publish request', () => {
+    const acl = resolveDocumentAcl({ read: ['staff'], isPublished: false }, true);
+    assert.deepStrictEqual(acl.read, ['staff']);
+    assert.strictEqual(acl.published, false);
+  });
+
+  await t.test('a public parent lets a publish request reach level 4', () => {
+    const acl = resolveDocumentAcl({ read: ['staff', 'idir', 'public'], isPublished: true }, true);
+    assert.deepStrictEqual(acl.read, ['staff', 'idir', 'public']);
+    assert.strictEqual(acl.published, true);
+  });
+
+  // `published` is read off the CAPPED read[], not off the request. A legacy parent carrying no
+  // read[] at all caps the document at level 1, so publishing it would otherwise have stamped
+  // `isPublished: true` on a row only its own team can see.
+  await t.test('published mirrors the capped read[], never the request', () => {
+    assert.deepStrictEqual(
+      resolveDocumentAcl({ isPublished: true }, true), { read: ['team'], published: false });
+    assert.deepStrictEqual(
+      resolveDocumentAcl({ read: ['public'], isPublished: true }, true).published, true);
+  });
+
   await t.test('delete removes the record but NEVER the stored file', async () => {
     t.mock.method(aiSearch, 'deleteFromIndex', async () => 1);
     t.mock.method(aiSearch, 'deleteChunksForDocument', async () => 0);
@@ -504,6 +559,23 @@ test('chunk ingest route', async (t) => {
         'a caller-supplied read[] must be ignored entirely');
       assert.ok(!chunk.read.includes('public'));
     }
+  });
+
+  await t.test('a document with no ACL of its own gives its chunks level 2', async () => {
+    stubDoc(t, { id: 'd1', projectId: '207' });
+    let written = null;
+    t.mock.method(chunksRepo, 'replaceForDocument', async (access, id, items) => {
+      written = items;
+      return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+
+    await documentController.ingestChunks(
+      { params: { id: 'd1' }, query: {}, body: { markdown: 'x'.repeat(200) }, user: ADMIN_USER },
+      mockRes()
+    );
+
+    assert.ok(written.length > 0);
+    for (const c of written) assert.deepStrictEqual(c.read, ['staff']);
   });
 
   await t.test('chunk ids are deterministic, so a re-post is idempotent', async () => {
@@ -812,6 +884,20 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
     for (const c of written) assert.deepStrictEqual(c.read, ['staff', 'sysadmin']);
   });
 
+  await t.test('a streamed document with no ACL of its own gives its chunks level 2', async () => {
+    stubDoc(t, { id: 'd1', projectId: '207' });
+    const written = [];
+    t.mock.method(chunksRepo, 'upsertBatch', async (a, id, items) => {
+      written.push(...items); return { succeeded: items.length, failed: 0, statusCounts: {} };
+    });
+    t.mock.method(chunksRepo, 'deleteSurplus', async () => ({ succeeded: 0, failed: 0 }));
+
+    await documentController.ingestChunks(streamReq(ndjson(['x'.repeat(300)])), mockRes());
+
+    assert.ok(written.length > 0);
+    for (const c of written) assert.deepStrictEqual(c.read, ['staff']);
+  });
+
   await t.test('a failed batch 500s, records the error, and never marks the document extracted',
     async () => {
       // bulkVerified REPORTS partial failure, it does not throw. Marking the document extracted
@@ -931,7 +1017,7 @@ test('PUT bodies cannot hand-craft an ACL', async (t) => {
 
     assert.strictEqual(saved.name, 'New');
     assert.ok(!saved.read.includes('some-invented-role'), 'no unvetted role reaches read[]');
-    assert.ok(saved.read.includes('public'), 'publishing derives the public ACL');
+    assert.deepStrictEqual(saved.read, ['staff', 'idir', 'public'], 'publishing derives level 4');
     assert.strictEqual(saved.isPublished, true, 'read[] and isPublished cannot disagree');
   });
 
@@ -1152,6 +1238,19 @@ test('a visibility change is written into the search index, not left to the inde
     }]);
   });
 
+  await t.test('a patch result with no read[] still indexes the level it was set to', async () => {
+    t.mock.method(documents, 'getById', async () => existingDoc);
+    t.mock.method(projects, 'getById', async () => ({ id: 'p1', read: ['public'] }));
+    t.mock.method(documents, 'setPublished', async () => ({ id: 'd1' }));
+    t.mock.method(chunksRepo, 'setAclForDocument', async () => ({ succeeded: 0, failed: 0 }));
+    const writes = captureWrites(t);
+
+    await documentController.setDocumentPublished(
+      { params: { id: 'd1' }, query: {}, body: { isPublished: false }, user: ADMIN_USER }, mockRes());
+
+    assert.deepStrictEqual(writes[0].rows, [{ id: 'd1', read: ['staff'], isPublished: false }]);
+  });
+
   await t.test('unpublishing a project writes the project row AND every cascaded document', async () => {
     const cascadeRows = [
       { id: 'd1', read: ['sysadmin'], isPublished: false },
@@ -1174,8 +1273,10 @@ test('a visibility change is written into the search index, not left to the inde
     // The project row goes FIRST and outside the cascade's try: its Cosmos write has already
     // landed, so it must narrow even when the cascade below fails.
     assert.strictEqual(writes[0].index, 'projects');
+    // Literal: an unpublished project is level 2, and reading the value off a constant would pass
+    // whatever that constant becomes.
     assert.deepStrictEqual(writes[0].rows, [
-      { id: 'p1', read: [...SECURE_ROLES], isPublished: false }
+      { id: 'p1', read: ['staff'], isPublished: false }
     ]);
     assert.strictEqual(writes[1].index, 'documents');
     assert.deepStrictEqual(writes[1].rows, cascadeRows,

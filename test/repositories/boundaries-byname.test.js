@@ -12,7 +12,7 @@ const { TIER, systemAccess } = require('../../src/helpers/access-sql');
 // The frontend calls /boundaries/<name> with NO type. Requiring the partition key turned `type`
 // into the string "undefined", which matches nothing and 404s every lookup.
 
-const ANON = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null };
+const ANON = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] };
 
 test('getByName works with and without a type', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
@@ -86,7 +86,7 @@ test('boundaries are ACL-gated', async (t) => {
     let spec;
     t.mock.method(cosmos, 'query', async (c, s) => { spec = s; return { items: [] }; });
 
-    const scoped = { tier: TIER.SCOPED, roles: ['public'], projectScope: ['207'] };
+    const scoped = { tier: TIER.SCOPED, roles: ['public'], projectScope: ['207'], teams: [] };
     await boundaries.listByType(scoped, {});
     assert.ok(!/@scope0/.test(spec.query), 'no project narrowing on this container');
     assert.match(spec.query, /c\.read/, 'but the role ACL still applies');
@@ -102,34 +102,31 @@ test('boundaries are ACL-gated', async (t) => {
       'canRead must withhold it — readItem bypasses the query predicate'
     );
 
-    const staff = { tier: TIER.PUBLIC, roles: ['public', 'staff'], projectScope: null };
+    const staff = { tier: TIER.PUBLIC, roles: ['public', 'staff'], projectScope: null, teams: [] };
     assert.strictEqual((await boundaries.getById(staff, 'b9', 'Regional District')).id, 'b9');
   });
 
 
-  await t.test('the 281 pre-ACL rows stay visible — they carry NEITHER field', async () => {
-    // The regression this nearly shipped. Seeded boundaries have no read[] and no isPublished, so
-    // the ordinary fallback arm (`no read[] AND isPublished = true`) is FALSE against them and the
-    // map would go blank for every anonymous caller on deploy.
+  await t.test('this container has no unset-ACL allowance left', async () => {
+    // The allowance was for the 281 rows seeded before boundaries had an ACL. It is gone: a row
+    // with no ladder token reaches no unprivileged caller here either. Those rows are backfilled
+    // by re-running the boundaries seed stage, which stamps `read` on every one of them.
     let spec;
     t.mock.method(cosmos, 'query', async (c, s) => { spec = s; return { items: [] }; });
 
     await boundaries.listByType(ANON, {});
 
-    assert.ok(
-      !/isPublished/.test(spec.query),
-      'this container drops the isPublished half of the unset-ACL arm'
-    );
-    assert.match(spec.query, /NOT IS_DEFINED\(c\.read\) OR ARRAY_LENGTH\(c\.read\) = 0/);
+    assert.ok(!/IS_DEFINED/.test(spec.query), 'no unset-ACL arm');
+    assert.ok(!/isPublished/.test(spec.query), 'isPublished mirrors read[], it never grants');
   });
 
-  await t.test('a legacy row passes the point-read gate too', async () => {
+  await t.test('a row carrying no read[] is withheld from a point read', async () => {
     const legacy = { id: 'b1', type: 'Regional District', name: 'Bulkley-Nechako' };
     t.mock.method(cosmos, 'readItem', async () => legacy);
 
     assert.strictEqual(
-      (await boundaries.getById(ANON, 'b1', 'Regional District')).id, 'b1',
-      'a list that returns it and a point read that withholds it would be worse than either'
+      await boundaries.getById(ANON, 'b1', 'Regional District'), null,
+      'the point read and the list must agree, and both fail closed'
     );
   });
 

@@ -1079,7 +1079,7 @@ test('a scoped privileged caller searches only its own projects', async (t) => {
     const res = { json: () => res, status: () => res };
     await searchController.search({
       query: { dataset: 'DocumentChunk', keywords: 'river' },
-      user: { realm_access: { roles: ['staff'] }, projectScope: ['207'] },
+      user: { realm_access: { roles: ['demi-service-read'] }, projectScope: ['207'] },
       header: () => null
     }, res);
 

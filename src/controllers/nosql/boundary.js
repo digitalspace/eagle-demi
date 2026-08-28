@@ -13,7 +13,7 @@
  */
 
 const boundaries = require('../../repositories/boundaries');
-const { resolveAccess, SECURE_ROLES } = require('../../helpers/access-sql');
+const { resolveAccess, readForLevel } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
 const { logger } = require('../../utils/logger');
@@ -29,7 +29,7 @@ function resolveBoundaryAcl(isPublished) {
   const published = isPublished !== false;
   return {
     isPublished: published,
-    read: published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]
+    read: readForLevel(published ? 4 : 2)
   };
 }
 

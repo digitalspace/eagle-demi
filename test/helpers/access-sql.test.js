@@ -8,7 +8,11 @@ const assert = require('node:assert');
 const {
   TIER,
   rolesFor,
+  teamsFor,
+  projectScopeFor,
   isPrivileged,
+  readForLevel,
+  levelOfRead,
   resolveAccess,
   readClause,
   scopeClause,
@@ -24,7 +28,7 @@ const {
 
 test('readClause — role ACL predicate', async (t) => {
   await t.test('privileged roles short-circuit to true with no params', () => {
-    for (const role of ['sysadmin', 'staff', 'demi-admin']) {
+    for (const role of ['sysadmin', 'demi-admin', 'demi-service-read']) {
       const { clause, params } = readClause(['public', role]);
       assert.strictEqual(clause, 'true', `${role} should be unrestricted`);
       assert.deepStrictEqual(params, []);
@@ -56,13 +60,16 @@ test('readClause — role ACL predicate', async (t) => {
     assert.ok(params.some(p => p.value === "'; DROP--"));
   });
 
-  await t.test('the isPublished mirror requires an explicit true', () => {
+  await t.test('a row with no read[] is not public', () => {
+    // Both legacy fallthrough arms are gone: `isPublished` MIRRORS `read`, it never grants. A row
+    // carrying no ladder token reaches privileged callers only.
     const { clause } = readClause(['public']);
-    assert.match(clause, /AND c\.isPublished = true/);
-    // The old Mongo filter had a third tier matching rows with NO isPublished field at all.
-    // It is deleted, not translated — every seeder writes read[] explicitly.
-    assert.ok(!clause.includes('NOT IS_DEFINED(c.isPublished)'),
-      'legacy no-isPublished tier must not be carried into SQL');
+    assert.ok(!clause.includes('IS_DEFINED'), 'the unset-ACL arm must not come back');
+    assert.ok(!clause.includes('isPublished'), 'the isPublished arm must not come back');
+
+    const anonymous = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] };
+    assert.strictEqual(canRead({ isPublished: true }, anonymous), false);
+    assert.strictEqual(canRead({ read: [], isPublished: true }, anonymous), false);
   });
 
   await t.test('honours alias and prefix so clauses cannot collide', () => {
@@ -162,7 +169,7 @@ test('rolesFor / resolveAccess — roles come only from the verified token', asy
   });
 
   await t.test('token roles resolve to the right tier', () => {
-    const admin = resolveAccess({ user: { realm_access: { roles: ['staff'] } } });
+    const admin = resolveAccess({ user: { realm_access: { roles: ['sysadmin'] } } });
     assert.strictEqual(admin.tier, TIER.PRIVILEGED);
 
     const scoped = resolveAccess({
@@ -171,33 +178,160 @@ test('rolesFor / resolveAccess — roles come only from the verified token', asy
     assert.strictEqual(scoped.tier, TIER.SCOPED);
     assert.deepStrictEqual(scoped.projectScope, ['207']);
   });
+
+  await t.test('an IDIR login carries the idir token, from the claim not a realm role', () => {
+    const idir = resolveAccess({ user: { realm_access: { roles: [] }, identity_provider: 'idir' } });
+    assert.deepStrictEqual(idir.roles.sort(), ['idir', 'public']);
+    assert.strictEqual(idir.level, 3);
+
+    const bceid = resolveAccess({ user: { realm_access: { roles: [] }, identity_provider: 'bceid' } });
+    assert.deepStrictEqual(bceid.roles, ['public']);
+  });
+
+  await t.test('a realm role named team is never a caller token', () => {
+    // It would match the level-1 rows of EVERY project, its own or not.
+    assert.deepStrictEqual(rolesFor({ user: { realm_access: { roles: ['team'] } } }), ['public']);
+  });
+
+  await t.test('a realm role named idir does not grant level 3', () => {
+    assert.deepStrictEqual(rolesFor({ user: { realm_access: { roles: ['idir'] } } }), ['public']);
+
+    const real = rolesFor({
+      user: { realm_access: { roles: ['idir'] }, identity_provider: 'idir' }
+    });
+    assert.deepStrictEqual(real.sort(), ['idir', 'public'], 'the claim path, and it appears once');
+  });
 });
 
-test('project scope arrives as Keycloak roles', async (t) => {
+test('the ladder vocabulary', async (t) => {
+  // Every expectation is a literal. Deriving one from the table under test would pass against any
+  // table, including a wrong one.
+
+  await t.test('staff is not privileged', () => {
+    // The one line that makes level 1 enforceable: while staff short-circuited the predicate, no
+    // row could be narrower than all of EAO.
+    assert.strictEqual(isPrivileged(['staff']), false);
+    assert.strictEqual(isPrivileged(['sysadmin']), true);
+    assert.strictEqual(isPrivileged(['demi-admin']), true);
+    assert.strictEqual(isPrivileged(['demi-service-read']), true);
+    assert.strictEqual(isPrivileged(['demi-service-write']), true);
+  });
+
+  await t.test('the ladder tokens are not cumulative downwards', () => {
+    // A level-2 row carrying `team` would hand a team-only caller every All-EAO row of its own
+    // project — the exact leak the ladder exists to prevent.
+    assert.deepStrictEqual(readForLevel(1), ['team']);
+    assert.deepStrictEqual(readForLevel(2), ['staff']);
+    assert.deepStrictEqual(readForLevel(3), ['staff', 'idir']);
+    assert.deepStrictEqual(readForLevel(4), ['staff', 'idir', 'public']);
+
+    // 0 is the sealed compartment and is not on the ladder.
+    assert.throws(() => readForLevel(0), /not a ladder level/);
+    assert.throws(() => readForLevel(5), /not a ladder level/);
+  });
+
+  await t.test('a legacy ACL reads as level 2', () => {
+    // The whole back-compat story: no stored ACL is rewritten, and every one of them already
+    // carries `staff` (plus `public` when published).
+    assert.strictEqual(levelOfRead(['sysadmin', 'staff', 'demi-admin']), 2);
+    assert.strictEqual(levelOfRead(['public', 'sysadmin', 'staff', 'demi-admin']), 4);
+    assert.strictEqual(levelOfRead(['team']), 1);
+    assert.strictEqual(levelOfRead(['staff', 'idir']), 3);
+    assert.strictEqual(levelOfRead([]), 1);
+    assert.strictEqual(levelOfRead(undefined), 1);
+    assert.strictEqual(levelOfRead(['sysadmin']), 1, 'an admin role name is not a ladder token');
+  });
+});
+
+test('teams grant, key scope restricts — two different project facts', async (t) => {
   const withRoles = (...roles) => ({ user: { realm_access: { roles } } });
+  const keyScoped = (roles, projectScope) => ({ user: { realm_access: { roles }, projectScope } });
 
-  await t.test('a project: role scopes the caller', () => {
-    const access = resolveAccess(withRoles('project-team', 'project:207', 'project:311'));
-    assert.strictEqual(access.tier, TIER.SCOPED);
-    assert.deepStrictEqual(access.projectScope, ['207', '311']);
+  await t.test('a project role never becomes a caller token', () => {
+    // A caller carrying `team` would match the level-1 rows of EVERY project, its own or not.
+    const req = withRoles('staff', 'project:207');
+
+    assert.deepStrictEqual(rolesFor(req).sort(), ['public', 'staff']);
+    assert.deepStrictEqual(teamsFor(req), ['207']);
+    assert.strictEqual(projectScopeFor(req), null);
   });
 
-  await t.test('project: roles are kept OUT of the read[] role list', () => {
-    // The two dimensions must not mix: a project id in the read[] IN list would make the ACL
-    // match on project identity, which is what the partition key is for.
-    const access = resolveAccess(withRoles('project-team', 'project:207'));
-    assert.ok(!access.roles.includes('project:207'));
-    assert.ok(!access.roles.includes('207'));
-    assert.deepStrictEqual(access.roles.sort(), ['project-team', 'public']);
+  await t.test('a staff user token with project roles is not scoped', () => {
+    const access = resolveAccess(withRoles('staff', 'project:207'));
+
+    assert.strictEqual(access.tier, TIER.PUBLIC, 'membership grants, it never restricts');
+    assert.deepStrictEqual(access.teams, ['207']);
+    assert.strictEqual(access.projectScope, null);
   });
 
-  await t.test('the scope reaches the emitted SQL as bound parameters', () => {
-    const access = resolveAccess(withRoles('project-team', 'project:207'));
+  await t.test('a staff caller with a project role still sees every level-2 row', () => {
+    // The regression this split exists to prevent: routing `project:` roles through projectScope
+    // dropped a staff caller to its one project and hid the rest of the corpus.
+    const access = resolveAccess(withRoles('staff', 'project:207'));
+
+    assert.strictEqual(canRead({ read: ['staff'], projectId: '300' }, access), true);
+    assert.ok(!visibilityFor(access, 'projectId').clause.includes('c.projectId IN (@scope0)'),
+      'no bare scope AND');
+  });
+
+  await t.test('a team-only row is visible to its team and to nobody else at level 2', () => {
+    const row = { read: ['team'], projectId: '207' };
+
+    assert.strictEqual(canRead(row, resolveAccess(withRoles('staff', 'project:207'))), true);
+    assert.strictEqual(canRead(row, resolveAccess(withRoles('staff'))), false);
+    assert.strictEqual(canRead(row, resolveAccess(withRoles('staff', 'project:300'))), false);
+    assert.strictEqual(canRead(row, resolveAccess(withRoles('sysadmin'))), true);
+  });
+
+  await t.test('the team arm reaches the emitted SQL as bound parameters', () => {
+    const access = resolveAccess(withRoles('staff', 'project:207'));
     const { clause, params } = visibilityFor(access, 'projectId');
-    assert.match(clause, /c\.projectId IN \(@scope0\)/);
-    assert.deepStrictEqual(params.find(p => p.name === '@scope0'), {
-      name: '@scope0', value: '207'
-    });
+
+    assert.match(clause, /ARRAY_CONTAINS\(c\.read, 'team'\) AND c\.projectId IN \(@roleT0\)/);
+    assert.match(clause, / OR /, 'the team arm GRANTS — it is an OR, never an AND');
+    assert.deepStrictEqual(params.find(p => p.name === '@roleT0'),
+      { name: '@roleT0', value: '207' });
+  });
+
+  await t.test('a project IS its own scope, so the team arm compares id there', () => {
+    const access = resolveAccess(withRoles('staff', 'project:207'));
+    assert.match(visibilityFor(access, 'id').clause, /AND c\.id IN \(@roleT0\)/);
+    assert.strictEqual(canRead({ read: ['team'], id: '207' }, access, 'id'), true);
+    assert.strictEqual(canRead({ read: ['team'], id: '300' }, access, 'id'), false);
+  });
+
+  await t.test('an unknown partition field emits no team arm', () => {
+    // The one value that reaches SQL uninterpolated. Unknown means no arm, not a guessed field.
+    const access = resolveAccess(withRoles('staff', 'project:207'));
+    const { clause, params } = readClause(access.roles,
+      { teams: access.teams, partitionField: 'ownerId' });
+
+    assert.ok(!clause.includes('ownerId'), 'the caller does not name the compared field');
+    assert.ok(!clause.includes("ARRAY_CONTAINS(c.read, 'team')"), 'no team arm at all');
+    assert.deepStrictEqual(params.map(p => p.name), ['@role0', '@role1']);
+    assert.strictEqual(canRead({ read: ['team'], ownerId: '207' }, access, 'ownerId'), false);
+  });
+
+  await t.test('a caller prefix cannot collide with the team parameters', () => {
+    // `@roleTeam0` used to be both this clause's first team id and the other clause's first role.
+    const merged = andClauses(
+      readClause(['public'], { teams: ['207'] }),
+      readClause(['public'], { teams: ['207'], prefix: '@roleTeam' })
+    );
+
+    assert.deepStrictEqual(merged.params.map(p => p.name),
+      ['@role0', '@roleT0', '@roleTeam0', '@roleTeamT0']);
+  });
+
+  await t.test('a staff API key with projectScope is still scoped', () => {
+    // The issuer's restriction, and it must not be turned into a grant.
+    const access = resolveAccess(keyScoped(['staff'], ['207']));
+
+    assert.strictEqual(access.tier, TIER.SCOPED);
+    assert.match(visibilityFor(access, 'projectId').clause, /c\.projectId IN \(@scope0\)/);
+    assert.strictEqual(canRead({ projectId: '300', read: ['public'] }, access), false);
+    assert.strictEqual(canRead({ projectId: '300', read: ['staff'] }, access), false);
+    assert.strictEqual(canRead({ projectId: '207', read: ['staff'] }, access), true);
   });
 
   await t.test('no project: role means not scoped, not scoped-to-nothing', () => {
@@ -206,21 +340,21 @@ test('project scope arrives as Keycloak roles', async (t) => {
     const access = resolveAccess(withRoles('project-team'));
     assert.strictEqual(access.tier, TIER.PUBLIC);
     assert.strictEqual(access.projectScope, null);
+    assert.deepStrictEqual(access.teams, []);
   });
 
   await t.test('an explicit empty projectScope claim still means scoped-to-nothing', () => {
-    const access = resolveAccess({ user: { realm_access: { roles: [] }, projectScope: [] } });
+    const access = resolveAccess(keyScoped([], []));
     assert.strictEqual(access.tier, TIER.SCOPED);
     assert.strictEqual(scopeClause(access, 'projectId').clause, 'false');
   });
 
-  await t.test('a privileged caller is still narrowed by its scope', () => {
+  await t.test('a privileged key is still narrowed by its scope', () => {
     // This used to assert the opposite — that privilege discarded the scope — which is exactly the
-    // leak: a credential minted as `roles:['staff'], projectScope:['207']` read the whole corpus,
-    // so the restriction its issuer asked for did nothing and said nothing.
-    const access = resolveAccess(withRoles('sysadmin', 'project:207'));
+    // leak: a credential minted with a projectScope read the whole corpus, so the restriction its
+    // issuer asked for did nothing and said nothing.
+    const access = resolveAccess(keyScoped(['sysadmin'], ['207']));
     assert.strictEqual(access.tier, TIER.SCOPED);
-    assert.deepStrictEqual(access.projectScope, ['207']);
 
     // Privilege lifts the ROLE predicate; the project narrowing survives.
     const { clause, params } = visibilityFor(access, 'projectId');
@@ -228,14 +362,13 @@ test('project scope arrives as Keycloak roles', async (t) => {
     assert.deepStrictEqual(params, [{ name: '@scope0', value: '207' }]);
   });
 
-  await t.test('a scoped privileged caller still reads private rows INSIDE its scope', () => {
+  await t.test('a scoped privileged key still reads private rows INSIDE its scope', () => {
     // Scope narrows which projects; it must not downgrade the caller to public within them.
-    const access = resolveAccess(withRoles('staff', 'project:207'));
-    const inScopePrivate = { projectId: '207', read: ['sysadmin'], isPublished: false };
-    const outOfScope = { projectId: '999', read: ['sysadmin'], isPublished: false };
+    const access = resolveAccess(keyScoped(['demi-service-read'], ['207']));
 
-    assert.strictEqual(canRead(inScopePrivate, access), true);
-    assert.strictEqual(canRead(outOfScope, access), false, 'scope binds the point read too');
+    assert.strictEqual(canRead({ projectId: '207', read: ['sysadmin'] }, access), true);
+    assert.strictEqual(canRead({ projectId: '999', read: ['sysadmin'] }, access), false,
+      'scope binds the point read too');
   });
 
   await t.test('an unscoped privileged caller is unrestricted, as before', () => {
@@ -249,6 +382,7 @@ test('project scope arrives as Keycloak roles', async (t) => {
     const access = systemAccess();
     assert.strictEqual(access.tier, TIER.PRIVILEGED);
     assert.strictEqual(access.projectScope, null);
+    assert.deepStrictEqual(access.teams, []);
     assert.strictEqual(visibilityFor(access, 'projectId').clause, 'true');
   });
 
@@ -258,42 +392,34 @@ test('project scope arrives as Keycloak roles', async (t) => {
 
   await t.test('resolveAccess carries a level', () => {
     assert.strictEqual(resolveAccess({}).level, 4);
-    assert.strictEqual(resolveAccess({ user: { realm_access: { roles: ['sysadmin'] } } }).level, 0);
+    assert.strictEqual(resolveAccess({ user: { realm_access: { roles: ['sysadmin'] } } }).level, 1);
     assert.strictEqual(resolveAccess(withRoles('staff')).level, 2);
     assert.strictEqual(resolveAccess(withRoles('staff', 'project:207')).level, 2);
   });
 
   await t.test('a bare role name is never treated as a project id', () => {
-    // The requested example was a role literally named `ajax`. Classifying bare names as scopes
-    // would silently turn every role type into a project restriction.
+    // The requested example was a role literally named `ajax`. Classifying bare names as project
+    // facts would silently turn every role type into one.
     const access = resolveAccess(withRoles('ajax'));
     assert.strictEqual(access.tier, TIER.PUBLIC);
+    assert.deepStrictEqual(access.teams, []);
     assert.ok(access.roles.includes('ajax'), 'it is a role TYPE, usable in read[]');
   });
 
   await t.test('malformed and duplicate project roles are handled', () => {
     const access = resolveAccess(withRoles('project:', 'project:  ', 'project:207', 'project:207'));
-    assert.deepStrictEqual(access.projectScope, ['207'], 'empty ids dropped, duplicates collapsed');
+    assert.deepStrictEqual(access.teams, ['207'], 'empty ids dropped, duplicates collapsed');
   });
 
-  await t.test('a scoped caller cannot reach a project outside scope by id', () => {
-    const access = resolveAccess(withRoles('project:207'));
-    assert.strictEqual(canRead({ id: '311', read: ['public'], isPublished: true }, access, 'id'),
-      false, 'a point read must not bypass the partition restriction');
-    assert.strictEqual(canRead({ id: '207', read: ['public'], isPublished: true }, access, 'id'),
-      true);
-  });
-
-  await t.test('being in scope does not grant a role the caller lacks', () => {
+  await t.test('being on a team does not grant a role the caller lacks', () => {
     const access = resolveAccess(withRoles('project:207'));
     assert.strictEqual(
       canRead({ id: '207', read: ['sysadmin'], isPublished: false }, access, 'id'), false);
   });
 });
-
 test('canRead — point reads bypass the query predicate', async (t) => {
-  const pub = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null };
-  const admin = { tier: TIER.PRIVILEGED, roles: ['public', 'sysadmin'], projectScope: null };
+  const pub = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] };
+  const admin = { tier: TIER.PRIVILEGED, roles: ['public', 'sysadmin'], projectScope: null, teams: [] };
 
   await t.test('public cannot read a privately-ACL\'d item', () => {
     assert.strictEqual(canRead({ read: ['sysadmin'], isPublished: false }, pub), false);
@@ -307,8 +433,8 @@ test('canRead — point reads bypass the query predicate', async (t) => {
     assert.strictEqual(canRead({ read: ['sysadmin'] }, admin), true);
   });
 
-  await t.test('falls back to isPublished, and fails closed with neither marker', () => {
-    assert.strictEqual(canRead({ isPublished: true }, pub), true);
+  await t.test('there is no isPublished fallback — it mirrors read[], it never grants', () => {
+    assert.strictEqual(canRead({ isPublished: true }, pub), false);
     assert.strictEqual(canRead({}, pub), false, 'no ACL and no flag must not be public');
     assert.strictEqual(canRead(null, pub), false);
   });
@@ -316,7 +442,9 @@ test('canRead — point reads bypass the query predicate', async (t) => {
   await t.test('a scoped caller cannot reach a project outside its scope BY ID', () => {
     // The regression that matters: the partition filter must not be bypassable via a point
     // read. A public-ACL'd document in a project the caller is not scoped to stays invisible.
-    const scoped = { tier: TIER.SCOPED, roles: ['public', 'project-team'], projectScope: ['207'] };
+    const scoped = {
+      tier: TIER.SCOPED, roles: ['public', 'project-team'], projectScope: ['207'], teams: []
+    };
     assert.strictEqual(canRead({ projectId: '207', read: ['public'] }, scoped), true);
     assert.strictEqual(canRead({ projectId: '999', read: ['public'] }, scoped), false);
   });

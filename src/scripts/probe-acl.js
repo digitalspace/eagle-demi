@@ -8,9 +8,9 @@
  * hidden/control pair, and asserts a matrix in which each cell is a prediction competing hypotheses
  * disagree on. It cleans up after itself and exits non-zero on the first missed prediction.
  *
- * Two keys, not one: `staff` is in SECURE_ROLES, so `isPrivileged` short-circuits `readClause` to
- * `true` and a staff key proves only the SCOPE narrowing. `compliance` is the one grantable role
- * that is not privileged, so it is the only credential that exercises the `read[]` predicate.
+ * Two keys, not one: a privileged key short-circuits `readClause` to `true` and proves only the
+ * SCOPE narrowing, so the matrix needs an unprivileged one as well. `compliance` is grantable, is
+ * not in SECURE_ROLES and is not on the ladder, so it exercises the `read[]` predicate.
  *
  *   ADMIN_API_KEY=... node src/scripts/probe-acl.js
  *
@@ -206,9 +206,9 @@ async function main() {
     // A: the only grantable NON-privileged role, so readClause does not short-circuit.
     const keyA = await mint('compliance', ['compliance'], undefined);
     // B: privileged AND scoped — proves resolveAccess resolves scope before the privilege check.
-    // `demi-service-read`, not `staff`: both are in SECURE_ROLES so both are privileged for READS,
-    // but `staff` is in WRITE_ROLES and the mint route refuses it without `allowWrite: true`. A
-    // probe has no business holding a write credential.
+    // `demi-service-read`, not `staff`: only the first is in SECURE_ROLES, and `staff` is in
+    // WRITE_ROLES so the mint route refuses it without `allowWrite: true`. A probe has no business
+    // holding a write credential.
     const keyB = await mint('scoped-service-read', ['demi-service-read'], [projectA]);
 
     // BEFORE reading: the admin sees all three, or the rest of the matrix measures nothing.

@@ -135,6 +135,50 @@ test('Auth Middleware Tests', async (t) => {
     assert.ok(jsonVal.error.includes('Forbidden. User does not possess admin or staff permissions'));
   });
 
+  /** Run the middleware over a verified token carrying `roles`. */
+  function withRoles(roles) {
+    config.keycloakEnabled = true;
+    t.mock.method(jwt, 'decode', () => ({ header: { kid: 'key-id' } }));
+    t.mock.method(jwt, 'verify', (token, getKey, options, callback) => {
+      callback(null, { preferred_username: 'someone', realm_access: { roles } });
+    });
+
+    const out = { nextCalled: false, status: 0, body: null };
+    const res = {
+      status: (val) => {
+        out.status = val;
+        return { json: (data) => { out.body = data; } };
+      }
+    };
+
+    const req = { header: (name) => (name === 'Authorization' ? 'Bearer mock-token' : null) };
+    authMiddleware(req, res, () => { out.nextCalled = true; });
+    return out;
+  }
+
+  await t.test('a staff-only token passes authMiddleware after the SECURE_ROLES change', () => {
+    // `staff` is no longer privileged on the row plane, and this gate is not about that: it fronts
+    // every write and admin route, so gating it on isPrivileged would lock staff out of the API.
+    const out = withRoles(['staff']);
+    assert.ok(out.nextCalled);
+    assert.strictEqual(out.status, 0, 'nothing may 403 a staff session');
+  });
+
+  await t.test('a demi-service-read token still passes authMiddleware', () => {
+    // A read tier holding no write role, so `[...WRITE_ROLES]` alone would 403 it.
+    const out = withRoles(['demi-service-read']);
+    assert.ok(out.nextCalled);
+    assert.strictEqual(out.status, 0);
+  });
+
+  await t.test('a compliance-only token is still 403 at authMiddleware', () => {
+    // Four routes behind this middleware have no second gate. The compartment role reaches its own
+    // chain and nothing else.
+    const out = withRoles(['compliance']);
+    assert.strictEqual(out.nextCalled, false);
+    assert.strictEqual(out.status, 403);
+  });
+
   await t.test('returns 401 when Bearer token verification fails', () => {
     config.keycloakEnabled = true;
 

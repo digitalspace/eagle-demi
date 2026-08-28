@@ -96,8 +96,7 @@ async function idsForDocument(access, documentId) {
  */
 function assertAcl(chunkItems) {
   for (const item of chunkItems) {
-    // Fail closed. A chunk with no ACL falls back to the isPublished mirror and could become
-    // publicly readable — a chunk is a fragment of its document and must never out-rank it.
+    // Fail closed: a chunk with no ladder token matches nobody but privileged callers.
     if (!Array.isArray(item.read) || item.read.length === 0) {
       throw new TypeError('[chunks] every chunk requires a non-empty read[] ACL');
     }

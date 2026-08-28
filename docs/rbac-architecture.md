@@ -385,6 +385,8 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
 - Everything shipped in Phases 0-2 stands: catalogs, redactor, `selectFor`, PUT hidden-key guard,
   search drift ratchets, query-param gate, `/api/me`, frontend `visLevel`. Two consequences of
   item 1 above land with P3-2: `selectFor(entity, access)` then returns `'*'` only for
-  `systemAccess()`, and the frontend must gate on `level <= 2` rather than on `privileged`, which
-  goes false for staff (`frontend/src/app/services/registry-state.service.ts`, P2-5).
+  `systemAccess()`, and the frontend must gate on `staffUi` from `/api/me` rather than on
+  `privileged`, which goes false for staff. `level`/`tier` cannot stand in for it either: `staff`
+  and `compliance` are both level 2, tier `public`
+  (`frontend/src/app/services/registry-state.service.ts`, P2-5).
 - §3 questions 2, 3, 4 stay closed. Questions 9-16 (§3, 2026-08-28b) are answered.

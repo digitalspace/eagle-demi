@@ -9,7 +9,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead } = require('../helpers/access-sql');
+const { canRead, readForLevel, levelOfRead } = require('../helpers/access-sql');
 const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'documents';
@@ -200,17 +200,16 @@ async function aclRowsForProject(access, projectId) {
 /**
  * The document's ACL narrowed by its project's — never widened by it.
  *
- * The rule is `eagle-search/worker/transform.js`'s `constrainToProject`, which is the intersecting
- * version of what this file used to do by assignment. Three fail-closed branches: no project ACL,
- * an empty one, or an empty intersection all collapse to `['sysadmin']` rather than to the wider
- * of the two.
+ * Fail-closed branches (no project ACL, no document ACL, empty intersection) cap at the PARENT's
+ * own level, never at a fixed level 2 — a level-1 project must not hand out a level-2 fallback.
  */
 function constrainToProject(ownRead, projectRead) {
-  if (!Array.isArray(projectRead) || projectRead.length === 0) return ['sysadmin'];
-  if (!Array.isArray(ownRead) || ownRead.length === 0) return ['sysadmin'];
+  const cap = readForLevel(Math.min(2, levelOfRead(projectRead)));
+  if (!Array.isArray(projectRead) || projectRead.length === 0) return cap;
+  if (!Array.isArray(ownRead) || ownRead.length === 0) return cap;
   const allowed = new Set(projectRead);
   const kept = ownRead.filter(role => allowed.has(role));
-  return kept.length > 0 ? kept : ['sysadmin'];
+  return kept.length > 0 ? kept : cap;
 }
 
 /**
@@ -270,7 +269,7 @@ async function setAclForProject(access, projectId, read) {
     // `set` op, and Cosmos rejects a `set` with no value. Patch ops are atomic per item, so that
     // 400 would take the `/read` narrowing down with it — the row keeps its old ACL and the failure
     // is counted, but the effect is fail-OPEN for exactly the row that had no ACL to begin with.
-    // `[]` intersects to `['sysadmin']` instead. No current write path produces such a row (all
+    // `[]` intersects to level 2 instead. No current write path produces such a row (all
     // four write an explicit `read[]`, and `seedAcl` fails closed), so this guards a legacy row
     // nobody can rule out from outside the private endpoint.
     const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
@@ -375,13 +374,11 @@ async function patchExtraction(id, projectId, fields) {
  * Set publication state. This — NOT deletion — is how a document is hidden from the public
  * and from proponents.
  *
- * `read[]` is authoritative, so publishing/unpublishing means adding or removing 'public'
- * from it; `isPublished` is kept as the mirror. Privileged roles retain access either way.
- *
- * @param {string[]} secureRoles  roles that keep access when unpublished
+ * `read[]` is authoritative, so publishing moves the row between ladder levels 4 and 2;
+ * `isPublished` is kept as the mirror. Privileged roles retain access either way.
  */
-async function setPublished(id, projectId, published, secureRoles) {
-  const read = published ? ['public', ...secureRoles] : [...secureRoles];
+async function setPublished(id, projectId, published) {
+  const read = readForLevel(published ? 4 : 2);
   return cosmos.patch(CONTAINER, String(id), String(projectId), [
     { op: 'set', path: '/isPublished', value: Boolean(published) },
     { op: 'set', path: '/read', value: read },
