@@ -299,6 +299,8 @@ exports.upsertFromEagle = async (req, res) => {
     // rebuilds only `track`/`eagle` — so without this every push wipes `sources.wildfire`, which
     // nothing upstream can rebuild. The same trap the seed hit.
     merged.sources = { ...(existing && existing.sources), ...merged.sources };
+    // Same replace-the-whole-item trap as sources: an upsert with no vis wipes classification.
+    if (existing && existing.vis) merged.vis = existing.vis;
 
     const saved = await projects.upsert(merged);
 

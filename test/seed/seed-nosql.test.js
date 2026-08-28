@@ -299,7 +299,10 @@ test('seed() end to end with stubbed sources', async (t) => {
     return {
       written,
       repos: {
-        projects: { upsert: async (p) => { written.projects.push(p); return p; } },
+        projects: {
+          upsert: async (p) => { written.projects.push(p); return p; },
+          getById: async () => null
+        },
         // Returns the verified shape: the seeder must count what LANDED, not what it sent.
         documents: {
           // The seeder reads the extraction state of each partition before writing it. Empty
@@ -347,6 +350,40 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(summary.stages.projects.written, 2);
     assert.strictEqual(summary.stages.documents.written, 2);
     assert.strictEqual(summary.stages.boundaries.written, 1);
+  });
+
+  await t.test('the project stage carries vis forward', async () => {
+    // Same replace-the-whole-item trap as the Eagle push: a re-seed with no existing-row read
+    // would wipe classification and any source block this run does not itself rebuild. Two
+    // existing rows here, not one: 373 has no vis at all, so visCarried must NOT count it, and
+    // 207 carries a stale sources.track to prove the freshly rebuilt block wins the merge.
+    const { written, repos } = makeRepos();
+    const track207 = track.find(p => p.track_project_id === 207);
+    repos.projects.getById = async (_access, id) => {
+      if (id === '207') {
+        return {
+          id: '207',
+          vis: { eacExpires: 3 },
+          sources: {
+            track: { ...track207, name: 'STALE Track name from a prior run' },
+            wildfire: { x: 1 }
+          }
+        };
+      }
+      if (id === '373') return { id: '373' };
+      return null;
+    };
+
+    const summary = await seed(['--live', '--only', 'projects'],
+      { sources: stubSources, repos, now: NOW });
+
+    const matched = written.projects.find(p => p.id === '207');
+    assert.deepStrictEqual(matched.vis, { eacExpires: 3 });
+    assert.deepStrictEqual(matched.sources.track, track207,
+      'the freshly built Track block must win the merge, not the stale stored one');
+    assert.strictEqual(matched.sources.wildfire.x, 1, 'a source block the run does not rebuild survives');
+    assert.strictEqual(summary.stages.projects.visCarried, 1,
+      'only the row that actually had vis counts, not every existing row read');
   });
 
   await t.test('documents are grouped by project — the partition key', async () => {
@@ -676,6 +713,7 @@ test('seed --reconcile end to end', async (t) => {
     const repos = {
       projects: {
         upsert: async (p) => p,
+        getById: async () => null,
         listEagleOnlyIds: async () => eagleOnlyRows,
         countEagleOnlyIds: async () => counts.projects ?? eagleOnlyRows.length
       },
@@ -1086,6 +1124,7 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
     const repos = {
       projects: {
         upsert: async (p) => p,
+        getById: async () => null,
         listEagleOnlyIds: async () => projRows,
         countEagleOnlyIds: async () => projRows.length
       },

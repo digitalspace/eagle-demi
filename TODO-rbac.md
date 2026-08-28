@@ -916,17 +916,17 @@ Acceptance (test, end to end)
 
 Branch: `fix/vis-carry-forward`  (unchanged from the previous plan — still needed, still first)
 
-- [ ] `src/controllers/nosql/project.js:301` — beside `merged.sources = {...}`, add
+- [x] `src/controllers/nosql/project.js:301` — beside `merged.sources = {...}`, add
       `if (existing && existing.vis) merged.vis = existing.vis;` A Cosmos upsert replaces the item.
-- [ ] `src/scripts/seed-nosql.js:398-408` — the project stage upserts with no existing-row read;
+- [x] `src/scripts/seed-nosql.js:398-408` — the project stage upserts with no existing-row read;
       add a `projects.getById(systemAccess(), project.id)` lookup mirroring the document stage's
       `existingFor` (`:444-450`) and carry `vis` and `sources`; count carried rows in
       `summary.stages.projects`.
-- Tests: `test/controllers/nosql/nosql-controllers.test.js` case `'upsertFromEagle preserves an
+- Tests: `test/controllers/nosql/eagle-push.test.js` case `'upsertFromEagle preserves an
   existing vis map'` — existing row `vis: { eacExpires: 3 }`, push an Eagle doc, assert the
   upserted item still carries `{ eacExpires: 3 }`. Fails on today's code.
-  `test/scripts/seed-nosql.test.js` case `'the project stage carries vis forward'`, same literal.
-- Acceptance: `node --test test/controllers/nosql/nosql-controllers.test.js test/scripts/seed-nosql.test.js` — 0 fail.
+  `test/seed/seed-nosql.test.js` case `'the project stage carries vis forward'`, same literal.
+- Acceptance: `node --test test/controllers/nosql/eagle-push.test.js test/seed/seed-nosql.test.js` — 0 fail.
 
 ## P3-2 ladder vocabulary: `team`, `idir`, and `staff` off the short-circuit
 
