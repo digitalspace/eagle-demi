@@ -284,8 +284,12 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    `['sysadmin','demi-admin','demi-service-read','demi-service-write']`. `ADMIN_ROLES` (`:44`) and
    `WRITE_ROLES` (`:58`) are untouched: staff's write and admin rights do not move. Every write
    site that spelled an ACL as `[...SECURE_ROLES]` must convert to `readForLevel()` in the same
-   commit (`document.js:47,363,635,852`; `project.js:227-228`) or newly private rows would lose
-   their `staff` token and read as level 1. Dropping `staff` from `SECURE_ROLES` is also not enough
+   commit — every `grep -rn SECURE_ROLES src/` hit that builds a `read[]`: `document.js:47,364,380,
+   635,852`, `project.js:124,227`, `boundary.js:32`, `seed/transform.js:36,202`,
+   `merge/project.js:195` (the last two are `ADMIN_ROLES` aliases, unaffected but re-checked) — or
+   newly private rows would lose their `staff` token and read as level 1. `api-key.js:31`
+   `GRANTABLE_ROLES` derives from `SECURE_ROLES` and must move to `AUTHENTICATED_ROLES ∪ public`
+   or `staff` keys become unmintable. Dropping `staff` from `SECURE_ROLES` is also not enough
    on its own: `authMiddleware` 403s on `isPrivileged`, so the same commit must move that gate to
    `AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES, 'compliance'])]` (§1,
    Superuser) or staff loses every authenticated route and `demi-service-read` loses the API.

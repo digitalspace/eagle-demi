@@ -21,8 +21,7 @@ for (const [entity, catalog] of Object.entries(CATALOGS)) {
 }
 
 /**
- * The ONLY place the level order is assumed (docs/rbac-architecture.md §2 item 11). Switching to a
- * clearance set changes this function and `levelFromRoles`, nothing else.
+ * The ONLY place the level order is assumed (docs/rbac-architecture.md §2 item 11).
  */
 function visible(level, effVis) {
   return level <= effVis;

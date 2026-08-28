@@ -938,9 +938,13 @@ Merges only after the `project:<id>` roles dependency above carries a date.
 - [ ] `src/controllers/nosql/document.js:36-49` `resolveDocumentAcl` — the unpublished arm becomes
       `readForLevel(1)`, the published arm `readForLevel(4)`. Same ceiling rule: a document cannot
       out-rank its parent, computed from `levelOfRead(parentProject.read)`.
-- [ ] Same file `:363`, `:635`, `:852` — every `[...SECURE_ROLES]` ACL literal becomes
-      `readForLevel(n)`. Doc §5 item 5: leaving them would write an ACL with no `staff` token and
-      hide the row from all of EAO.
+- [ ] Every `[...SECURE_ROLES]` ACL literal becomes `readForLevel(n)`: `document.js:364,380,635,852`,
+      `project.js:124`, `boundary.js:32` (re-grep `SECURE_ROLES src/` before merging; `seed/transform.js`
+      and `merge/project.js` alias `ADMIN_ROLES` and are unaffected). Doc §5 item 5: leaving one would
+      write an ACL with no `staff` token and hide the row from all of EAO.
+- [ ] `src/controllers/nosql/api-key.js:31` `GRANTABLE_ROLES` derives from `SECURE_ROLES`; move it to
+      `[...AUTHENTICATED_ROLES, 'public']` or `staff` keys become unmintable (400 `Unknown role(s)`).
+      Test: `'a staff API key can still be minted'`.
 - [ ] `src/controllers/nosql/project.js:123,152,223-228` — `createProject` ignores `isPublished`
       from the body and admits at level 1; `updateProject`'s `isPublished` arm is deleted (widening
       moves to P3-4) and the ACL is carried from `existing` unconditionally.
