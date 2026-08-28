@@ -49,7 +49,8 @@ catalog is removed. Unknown entity throws. Unknown or throwing predicate hides t
 of range clamps toward restriction. A merged field without a catalog entry fails CI.
 
 **Write side.** Content writes stay `WRITE_ROLES`. Changing a dial needs `sysadmin` via
-`requireRole('sysadmin')` (`requireAdmin` admits `staff`; no separate classify role, decided 2026-08-28), goes through one endpoint `PATCH /api/projects/:id/visibility`, is validated
+`requireRole('sysadmin')` (`requireAdmin` admits `staff`; no separate classify role, decided
+2026-08-28), goes through one endpoint `PATCH /api/projects/:id/visibility`, is validated
 (400 on uncatalogued field or out-of-range level) and audited through the existing
 `src/utils/audit.js` `auditEvent`. Ordinary POST and PUT strip `vis` from bodies.
 
