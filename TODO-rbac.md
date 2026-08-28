@@ -36,10 +36,13 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
       2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
       Level 3 is the `identity_provider` claim and level 1 is project scope: neither is a new realm
       role. Classifying (P3-5) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
-- [ ] Read access to Track's database or an export, covering `staff_work_roles` and `works`.
-      DEMI has no live Track feed: the only Track data here is the static
-      `src/data/track_projects_enriched.json` (382 rows, 2026-07-29), which carries no staff.
-      Blocks P3-0. Owner: Daniel. Delivered: ______
+- [x] Read access to Track's database: self-serve, delivered 2026-08-28. Track Postgres is
+      statefulset `patroni-epictrack-db` (`db16` on test) in `c72cba-test` / `c72cba-prod` (Gold
+      cluster); secret `patroni-epictrack-db` holds `app-db-name`/`app-db-username`/`app-db-password`.
+      Measured on test 2026-08-28 over port-forward: `staff_work_roles` 715 rows, `works` 208
+      (`project_id`, `work_lead_id`, `responsible_epd_id`, `eao_team_id`, `is_active`, `is_deleted`),
+      `staffs` (`email`, `idir_user_id`, `is_active`). DEMI on Azure cannot reach it, so the sync job
+      runs as a CronJob inside `c72cba` (decided 2026-08-28, option a).
 - [ ] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
       records. Minted by P3-0 once the line above carries a date; hand-granted until then.
       Blocks P3-3. Owner: Daniel. Delivered: ______
@@ -816,7 +819,10 @@ carries a date, a level-1 record is visible to superusers only.
 
 Branch: `feat/track-team-feed`
 
-Blocked on the Track dependency above. A project's team is the union of the staff on its works:
+Placement (decided 2026-08-28): a CronJob in `c72cba-test` and `c72cba-prod`, mounting the
+in-namespace `patroni-epictrack-db` secret and a copy of `demi-keycloak-admin`; the script ships in
+this repo and runs from a stock Node image with the file mounted from a ConfigMap. Track's owners are
+told it reads two tables, read-only. A project's team is the union of the staff on its works:
 Track `staff_work_roles` (`work_id`, `role_id`, `staff_id`) joined to `works` (`project_id`,
 `work_lead_id`, `responsible_epd_id`). The feed mints and revokes the existing `project:<id>` realm
 roles; it creates no new role vocabulary. Lead-managed member lists are a manual override, not a
@@ -831,7 +837,8 @@ source (doc §3 question 10).
 - [ ] Same module — `matchStaff(staff, idirUsers)` maps a Track staff row to an IDIR identity by
       email, falling back to the IDIR GUID (`<guid>@idir`) the Track audit columns carry.
       A staff row with `is_active: false`, or with no match, yields no role.
-- [ ] `src/scripts/sync-track-teams.js` — reads Track (connection or export path from config),
+- [ ] `src/scripts/sync-track-teams.js` — reads Track over `pg` with `TRACK_DB_*` env from the
+      mounted secret (`staffs` matched by `idir_user_id`, then `email`),
       builds the desired `project:<id>` role set per user, and reconciles against Keycloak through
       the admin API as `demi-user` (it holds `realm-management`): create missing realm roles,
       assign, and REMOVE roles no longer in the union. `--dry-run` default, `--live` to write;
@@ -847,9 +854,11 @@ source (doc §3 question 10).
   - [ ] `'an unmatched staff row mints nothing'` — no email, no IDIR GUID → no role.
 - Acceptance
   - [ ] `node --test test/track/team-feed.test.js` — 0 fail.
-  - [ ] On test: `node src/scripts/sync-track-teams.js` (dry run) prints a plan; with `--live`, one
-        named test user gains `project:<id>` and Keycloak shows it. Date the external dependency
-        line the day this runs.
+  - [ ] `openshift/track-team-sync.cronjob.yaml` (new, in this repo): CronJob for `c72cba-<env>`,
+        schedule `0 10 * * *` UTC, ConfigMap with the script, secret refs; applied by Daniel with
+        `oc -n c72cba-test apply -f`. First run `--dry-run`, then flip to `--live`.
+  - [ ] On test: the dry run prints a plan; with `--live`, one named test user gains
+        `project:<id>` and Keycloak shows it.
 
 ## P3-1 carry `vis` forward through the two whole-item writers
 
