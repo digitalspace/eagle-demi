@@ -96,11 +96,19 @@ stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` ve
 **Default on admission is level 1.** Every DEMI-native write site that used to default to
 `[...SECURE_ROLES]` writes `readForLevel(1)` instead. Nothing reaches level 2+ by being created.
 
-**Widening is an act.** `PUT /api/{projects,documents}/:id/level` with `{ level, confirm }`,
+**Widening is an act.** `PUT /api/{projects,documents}/:id/level` with `{ level, confirm, reason }`,
 `requireWrite`, audited as `record.widen` / `record.narrow` through `auditEvent`. Level 4 requires
-`confirm: true` and answers 400 without it. Nothing widens automatically — no job, no push, no
+`confirm: true` and answers 400 without it. Level 4 and a level-0 release also require a `reason`
+body field and answer 400 without it; on every other move `reason` is optional, because the audit
+row already carries actor, time, from and to. Nothing widens automatically — no job, no push, no
 merge raises a record's level. A document still cannot out-rank its project; a project's change
 cascades to its documents as it does today.
+
+Pulling a record BACK from level 4 is `sysadmin` only, always audited as `record.takedown`, and is
+incident response — an error or a privacy breach, never a routine correction, which publishes a
+replacement instead. A takedown is not finished when the row narrows: `docs/takedown-runbook.md`
+covers purging the AI Search index, cleaning up chunks, invalidating caches, and the fact that
+copies already outside EPIC are unrecoverable.
 
 **Field dials refine WITHIN a level.** A dial is an integer 1-4 (0 = never), clamped to
 `[0, maxVis]`, else `defaultVis`. **Invariant: a field is never wider than its record** —
@@ -109,14 +117,32 @@ and validated again by `PATCH /api/projects/:id/visibility` (400 on a dial above
 level). Narrowing a record therefore narrows its fields for free; widening a record never widens a
 field.
 
-**Level 0 — sealed compartment.** Outside the ladder. Sealed records live in their own container
-`sealed`, client-side encrypted with a DEK wrapped by a Key Vault key in `demi-kv-<env>`; the
-plaintext never reaches Cosmos, so the data layer holds ciphertext only. `sysadmin` is excluded by
-role and by key: the compartment is readable only by `compliance`, and no dial, credential or
-widening endpoint reaches it. A record leaves level 0 only through `POST /api/sealed/:id/release`
-by `compliance` with `confirm: true`: it is decrypted, written to the ordinary container at level 1
-(`read: ['team']`), the sealed row is deleted, and `sealed.release` is audited. There is no path
-back in through the sharing interface.
+**Level 0 — sealed compartment.** Outside the ladder, but on the same row plane as every other
+level: a sealed record carries `read: ['compliance']` (`readForLevel(0)`) and stays in its ordinary
+container. Only the `compliance` role matches that token. No new store, no separate ACL mechanism.
+
+The privileged short-circuit must EXCLUDE these rows. `readClause`, `canRead` and `filterFor` add
+`NOT ARRAY_CONTAINS(c.read, 'compliance')` — `not read/any(r: r eq 'compliance')` in OData — for
+every caller that does not itself hold `compliance`, including the privileged ones (`isPrivileged`:
+`sysadmin`, `demi-admin`, `demi-service-read`, `demi-service-write`), whose predicate otherwise
+collapses to `true`. `systemAccess()` holds no `compliance` role and carries the same exclusion, so
+exports, seed and reconcile never read a sealed row.
+
+Sealing is an application-layer guarantee. Cosmos data-plane operators, backups and the
+`ADMIN_API_KEY` break-glass sit outside it, so the seal is real only under two conditions:
+
+1. The `ADMIN_API_KEY` break-glass must not resolve the `compliance` role.
+2. Exports and backups stay locked down.
+
+Encryption is a later hardening, not part of this design: per-record envelope encryption is
+optional Phase 5b in `TODO-rbac.md`, taken only when the compartment holds real C&E material.
+
+A record leaves level 0 only through `POST /api/sealed/:id/release`. One `compliance` holder is
+enough; the body must carry `caseNumber` and `decision` (400 without either). The release rewrites
+`read[]` to `readForLevel(1)`, writes `auditEvent('sealed.release')` with the case number and
+decision, and notifies the C&E lead. Notification path: TBD — ACS Email is EPIC's send path, but
+this repo has no mailer. Two-person release is a later policy toggle. Nothing enters level 0 through
+the widening endpoint; `PUT /:id/level` 400s on level 0.
 
 **Selected Credentials.** A credential grants a named party sight of specified records at levels
 1-3 without changing any record's level and without changing anyone else's access. Stored in
@@ -129,6 +155,14 @@ revoked rows filtered in JS. Evaluated as one extra OR arm in `readClause`, `can
 so no new SQL. Grant, revoke and bulk revoke (by `batchId`, party or project) go through
 `auditEvent`. Credentials never touch the field plane — the holder's own level still governs which
 attributes they see — and level 4 needs none.
+
+The party is a person logging in through BCeID (Business, which ties the credential to the
+organisation) or a registry API key; IDIR guest only for an external acting as staff. BCeID is not
+`idir`, so a credential holder never reaches level 3 by logging in. `end` is required and enforced
+on the GRANT, not on the login — 90 days by default. A grant is also revoked by state change: when
+the project closes or the engagement's work completes, from the same Track feed that mints team
+roles. EA windows routinely run past 90 days, so renewal is the norm and the grantor is notified
+7 days before expiry.
 
 **Fail closed.** Unknown role → level 4. No ladder token → the record reads as level 1. Missing
 `access.level` → 4. Uncatalogued field removed. Unknown entity throws. Dial out of range →
@@ -240,17 +274,35 @@ Each item below overrides the corresponding section of the source document.
 4. Moot 2026-08-28: `project_tracking_number` (`trackProjectId`) and `epic_guid` (`eagleId`) are
    in today's anonymous response and catalogued `4/4`. They stay public.
 
-### 2026-08-28b — open questions
+### 2026-08-28b
 
 9. Closed 2026-08-28 (Daniel): a project must exist before any record does, so every record
    has a team. `documents` already partitions on `/projectId`; no business-unit axis is needed.
-10. **Who issues `project:<id>` roles, and for which projects?** Level 1 is unenforceable until every EAO user carries them. Keycloak group mapper, Track project membership, or hand-granted? This blocks P3-3 merging.
-11. **Level 0 role holders.** DEMI creates no realm roles. Is the C&E compartment exactly the existing `compliance` role (today only grantable on an API key, `src/controllers/nosql/api-key.js:31`)? If so it must be created as a realm role and granted to named humans — by whom?
-12. **Who is "the accountable authority" for a level-0 release**, and does the release need two people, or is one `compliance` credential plus a recorded authority reference enough?
-13. **Do external credential parties get Keycloak identities?** First Nations, proponents and local governments must be `user`, `group` or `apikey` parties. If they log in, through which IdP (BCeID? IDIR guest?) — that also decides whether they land on level 3 by accident, since `identity_provider` is the level-3 test.
-14. **Credential defaults**: maximum `end` (90 days? one assessment?) and whether an expiring credential needs a notification or simply lapses.
-15. **Does a widening need a recorded reason?** The audit row carries actor, time, from and to. If policy needs the authority under which a record was published (an EA process gate, a records decision), it must be a required body field — say so before P3-4 ships, since backfilling it is a schema change.
-16. **May a record move DOWN the ladder after level 4?** The code can narrow, and the endpoint allows it today. Business must say whether unpublishing a published record is permitted and by whom.
+10. Answered 2026-08-28: from Track. A project's team is the union of staff across its works
+    (`staff_work_roles` joined to `works`); a feed mints the existing `project:<id>` realm roles.
+    Lead-managed lists are a manual override, not the system of record. Unit P3-0.
+11. Answered 2026-08-28: the compartment is exactly the existing `compliance` role
+    (`src/controllers/nosql/api-key.js:31`), created as a realm role and granted to named humans
+    behind the C&E lead.
+12. Answered 2026-08-28: one `compliance` holder is enough, provided the release records a case
+    number and a decision in the same action and the C&E lead is notified. Two-person release is a
+    later policy toggle, not a schema change.
+13. Answered 2026-08-28: yes, people through BCeID enabled as an IdP on `eao-epic` — BCeID
+    Business for proponents and consultants, which ties the credential to the organisation. IDIR
+    guest only for an external acting as staff. Systems use the existing registry API keys (roles +
+    `projectScope` + level cap). BCeID is not `idir`, so a BCeID party never lands on level 3 by
+    accident.
+14. Answered 2026-08-28: `end` is required and defaults to 90 days, enforced on the grant and not
+    on the login. The grant is also auto-revoked when the project closes or the engagement's work
+    completes. EA windows routinely exceed 90 days, so renewal is the norm and the grantor is
+    notified 7 days before expiry.
+15. Answered 2026-08-28: required for any widening to level 4 and for every level-0 release
+    (which also carries the case number). Optional on every other move; the audit row already
+    carries actor, time, from and to.
+16. Answered 2026-08-28: yes, but `sysadmin` only, always audited, and framed as incident response
+    (error or privacy breach). A routine correction publishes a replacement instead. Pulling back
+    from level 4 needs `docs/takedown-runbook.md` (unit P3-9): purge the AI Search index, clean up
+    chunks, invalidate caches, and state that copies outside EPIC are unrecoverable.
 
 ## 4. Source-document claims that were wrong at `aea2a0c`
 
@@ -283,8 +335,9 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    levels 1-4 only. `ROLE_LEVELS` (`src/vis/level.js:10`): `sysadmin: 0 → 1`, `demi-admin: 0 → 1`;
    `staff: 2`, `demi-service-read/write: 2`, `compliance: 2`, `public: 4` unchanged; add `idir: 3`.
    There is no `team` entry — team membership is a row-plane fact resolved per record by the team
-   arm in `readClause`/`canRead`, not a role level. `systemAccess()` keeps `level: 0`; it is now the only
-   level-0 identity.
+   arm in `readClause`/`canRead`, not a role level. `systemAccess()` keeps `level: 0` on the FIELD
+   plane and is the only caller that carries it; the ROW plane's level 0 is the `compliance`
+   token, which `systemAccess()` does not hold (§1).
 2. **"Group (compartment)" and dial values of shape `{ level, groups }` are deleted.** The EAO
    "Special: Selected Credentials" lane is not a tag on a field — it is a time-bound grant to a
    named party over named records, on the ROW plane. See §1 and Phase 3 unit P3-6. Dials stay
@@ -327,4 +380,4 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
   item 1 above land with P3-2: `selectFor(entity, access)` then returns `'*'` only for
   `systemAccess()`, and the frontend must gate on `level <= 2` rather than on `privileged`, which
   goes false for staff (`frontend/src/app/services/registry-state.service.ts`, P2-5).
-- §3 questions 2, 3, 4 stay closed. New questions are in §3 under 2026-08-28b.
+- §3 questions 2, 3, 4 stay closed. Questions 9-16 (§3, 2026-08-28b) are answered.

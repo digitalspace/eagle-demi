@@ -3,8 +3,8 @@
 /**
  * Field-visibility LEVEL: one integer per caller, 0 most privileged, 4 anonymous public.
  *
- * Level 3 (`idir`) and level 1 (project scope) arrive with Phase 3 (docs/rbac-architecture.md §1,
- * §5); DEMI reuses Eagle's realm roles and creates none of its own.
+ * `idir` (level 3) arrives with Phase 3. Level 1 is not a role: it is the row plane's team arm
+ * (docs/rbac-architecture.md §1). DEMI reuses Eagle's realm roles and creates none of its own.
  */
 const ROLE_LEVELS = {
   sysadmin: 0,
