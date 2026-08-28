@@ -167,7 +167,7 @@ Doc §2 item 10. Code and app setting ship together.
 - [x] `azure/modules/api-web-app.bicep`: `param ssoAudience string = ''`; app setting
       `{ name: 'SSO_AUDIENCE', value: ssoAudience }` next to `SSO_ISSUER` (`:472-478`).
 - [x] `azure/main.bicep`: `param ssoAudience string = ''`, passed into the module.
-- [ ] `azure/main.test.bicepparam` and `azure/main.prod.bicepparam`: `param ssoAudience = '<measured>'`.
+- [ ] `azure/main.test.bicepparam` and `azure/main.prod.bicepparam`: `param ssoAudience = '<measured>'`. Test set to `account` 2026-08-28; prod stays `''` until measured.
 - [x] `src/swagger/swagger.yaml`: `BearerAuth` description — token `aud` must match the configured
       audience.
 - Tests: `test/middleware/auth.test.js`
