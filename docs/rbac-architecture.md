@@ -222,7 +222,8 @@ Each item below overrides the corresponding section of the source document.
 
 ### 2026-08-28b — open questions
 
-1. **Level 1 for non-project records.** The text says "the project team… or the business unit that created the record". DEMI's only team axis is `project:<id>` (the partition key). What is a business unit's identifier, and does a record belong to exactly one? Without an answer, business-unit records can only be admitted at level 2.
+1. Closed 2026-08-28 (Daniel): a project must exist before any record does, so every record
+   has a team. `documents` already partitions on `/projectId`; no business-unit axis is needed.
 2. **Who issues `project:<id>` roles, and for which projects?** Level 1 is unenforceable until every EAO user carries them. Keycloak group mapper, Track project membership, or hand-granted? This blocks P3-3 merging.
 3. **Level 0 role holders.** DEMI creates no realm roles. Is the C&E compartment exactly the existing `compliance` role (today only grantable on an API key, `src/controllers/nosql/api-key.js:31`)? If so it must be created as a realm role and granted to named humans — by whom?
 4. **Who is "the accountable authority" for a level-0 release**, and does the release need two people, or is one `compliance` credential plus a recorded authority reference enough?
