@@ -61,3 +61,6 @@ scratch/
 # Python bytecode — the extractor is Python inside a Node repo
 __pycache__/
 *.pyc
+
+# Impeccable design-hook config (local tooling)
+.impeccable/

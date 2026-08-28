@@ -1,0 +1,186 @@
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>API keys</h1>
+    <p>Registry keys for callers that cannot hold a Keycloak client. Each carries its own roles, project scope, expiry and revocation.</p>
+  </div>
+  <button type="button" (click)="toggleMint()" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); white-space: nowrap; cursor: pointer;">{{ mintOpen() ? 'Cancel' : 'Mint a key' }}</button>
+</div>
+
+@if (keys.error()) {
+  <div class="callout callout--warning">{{ keys.error() }}</div>
+}
+
+@if (keys.mintedPlaintext()) {
+  <div class="callout callout--warning">
+    <div class="cell__title">Copy this secret now — it is shown once</div>
+    <code class="cell__mono" style="display: block; overflow-wrap: anywhere; margin: var(--layout-margin-small) 0;">{{ keys.mintedPlaintext() }}</code>
+    <div class="cell__sub">DEMI stores a hash, so a lost key is rotated, not recovered. Send it as <code class="cell__mono">X-Api-Key</code>.</div>
+    <div class="panel__actions">
+      <button type="button" (click)="copySecret()" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">{{ copied() ? 'Copied' : 'Copy secret' }}</button>
+      <button type="button" (click)="dismiss()" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Dismiss</button>
+    </div>
+  </div>
+}
+
+<div class="stat-grid" [attr.aria-busy]="firstLoad() ? 'true' : null">
+  <div class="stat-card">
+    <div class="micro-label">Keys</div>
+    <div class="stat-card__value">
+      @if (firstLoad()) { <span class="skeleton skeleton--text" style="width: 2.5rem;" aria-hidden="true"></span> } @else { {{ keys.counts().total }} }
+    </div>
+    <div class="stat-card__note">every key ever minted, revoked ones included</div>
+  </div>
+  <div class="stat-card">
+    <div class="micro-label">Active keys</div>
+    <div class="stat-card__value">
+      @if (firstLoad()) { <span class="skeleton skeleton--text" style="width: 2.5rem;" aria-hidden="true"></span> } @else { {{ keys.counts().active }} }
+    </div>
+    <div class="stat-card__note">still authenticating</div>
+  </div>
+  <div class="stat-card">
+    <div class="micro-label">Expiring in 30 days</div>
+    <div class="stat-card__value">
+      @if (firstLoad()) { <span class="skeleton skeleton--text" style="width: 2.5rem;" aria-hidden="true"></span> } @else { {{ keys.counts().expiring }} }
+    </div>
+    <div class="stat-card__note">mint a replacement before revoking</div>
+  </div>
+  <div class="stat-card">
+    <div class="micro-label">Revoked</div>
+    <div class="stat-card__value">
+      @if (firstLoad()) { <span class="skeleton skeleton--text" style="width: 2.5rem;" aria-hidden="true"></span> } @else { {{ keys.counts().revoked }} }
+    </div>
+    <div class="stat-card__note">row kept, so the audit trail survives</div>
+  </div>
+</div>
+
+@if (mintOpen()) {
+  <section class="panel panel--padded">
+    <h2 class="panel__title panel__title--inline">Mint a key</h2>
+    <div style="display: flex; flex-direction: column; gap: var(--layout-margin-medium); margin-top: var(--layout-margin-medium);">
+      <label style="display: block;">
+        <span class="micro-label">Consumer name</span>
+        <input type="text" placeholder="epic-map-frontend" [value]="name()" (input)="name.set(value($event))" style="width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+      </label>
+      <div>
+        <span class="micro-label">Roles</span>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          @for (role of grantableRoles; track role) {
+            <label style="display: flex; align-items: flex-start; gap: 0.5rem; font: var(--typography-regular-small-body); padding: 2px 0; cursor: pointer;">
+              <input type="checkbox" [checked]="hasRole(role)" (change)="toggleRole(role)" style="flex: 0 0 auto; margin-top: 3px;">
+              <code class="cell__mono">{{ role }}</code>
+            </label>
+          }
+        </div>
+      </div>
+      <label style="display: block;">
+        <span class="micro-label">Project scope, optional</span>
+        <input type="text" placeholder="402, 111" [value]="scope()" (input)="scope.set(value($event))" style="width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+        <span class="cell__sub">Comma-separated project ids. Left blank, the key is unscoped.</span>
+      </label>
+      @if (needsAllowWrite()) {
+        <label style="display: flex; align-items: flex-start; gap: 0.5rem; font: var(--typography-regular-small-body); cursor: pointer;">
+          <input type="checkbox" [checked]="allowWrite()" (change)="allowWrite.set(!allowWrite())" style="flex: 0 0 auto; margin-top: 3px;">
+          <span>This key may mutate data. A machine writer wants <code class="cell__mono">demi-service-write</code>, not <code class="cell__mono">demi-admin</code>.</span>
+        </label>
+      }
+    </div>
+    <div class="panel__actions">
+      <button type="button" [disabled]="!name().trim() || !roles().length || (needsAllowWrite() && !allowWrite())" (click)="mint()" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Mint key</button>
+    </div>
+  </section>
+}
+
+<section class="panel panel--scroll" [attr.aria-busy]="keys.loading() ? 'true' : null" [style.opacity]="keys.loading() && keys.keys().length ? 0.6 : null">
+  <h2 class="panel__title">Keys</h2>
+  @if (firstLoad()) { <p class="visually-hidden">Loading keys…</p> }
+  <table style="min-width: 55rem; table-layout: fixed; width: 100%;">
+    <thead>
+      <tr>
+        <th style="width: 15rem;">Consumer</th>
+        <th style="width: 12rem;">Roles</th>
+        <th style="width: 8rem;">Last used</th>
+        <th style="width: 8rem;">Expires</th>
+        <th style="width: 6rem;">Status</th>
+        <th style="width: 8rem; text-align: right;"></th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (key of keys.keys(); track key.id) {
+        <tr>
+          <td>
+            <div class="cell__title">{{ key.name }}</div>
+            <div class="cell__sub"><code class="cell__mono" style="overflow-wrap: anywhere;">{{ key.id }}</code></div>
+          </td>
+          <td>
+            <span class="role-chips">
+              @for (role of key.roles; track role) {
+                <span class="role-chip">{{ role }}</span>
+              }
+            </span>
+            <div class="cell__sub">{{ scopeLabel(key) }}</div>
+          </td>
+          <td class="cell--muted cell--nowrap">{{ when(key.lastUsedAt) }}</td>
+          <td class="cell--muted cell--nowrap">{{ when(key.expiresAt) }}</td>
+          <td class="cell--nowrap"><span class="pill {{ pillClass(key) }}">{{ status(key) }}</span></td>
+          <td class="cell--right cell--nowrap">
+            @if (key.revokedAt) {
+              <span class="cell--muted">—</span>
+            } @else {
+              <span class="row-actions">
+                <button type="button" (click)="rotate(key)" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--surface-color-primary-default); text-decoration: underline; cursor: pointer;">Rotate</button>
+                <button type="button" (click)="revoke(key)" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--surface-color-primary-default); text-decoration: underline; cursor: pointer;">Revoke</button>
+              </span>
+            }
+          </td>
+        </tr>
+      } @empty {
+        @if (keys.loading()) {
+          @for (i of [1, 2, 3, 4]; track i) {
+            <tr aria-hidden="true">
+              <td>
+                <div class="cell__title"><span class="skeleton skeleton--text" style="width: 70%;"></span></div>
+                <div class="cell__sub"><span class="skeleton skeleton--text" style="width: 90%;"></span></div>
+              </td>
+              <td>
+                <div><span class="skeleton skeleton--text" style="width: 80%;"></span></div>
+                <div class="cell__sub"><span class="skeleton skeleton--text" style="width: 50%;"></span></div>
+              </td>
+              <td><span class="skeleton skeleton--text" style="width: 4rem;"></span></td>
+              <td><span class="skeleton skeleton--text" style="width: 4rem;"></span></td>
+              <td><span class="pill" style="padding: 0;"><span class="skeleton skeleton--text" style="width: 3.5rem;"></span></span></td>
+              <td class="cell--right"><span class="skeleton skeleton--text" style="width: 5rem;"></span></td>
+            </tr>
+          }
+        } @else {
+          <tr>
+            <td colspan="6" class="cell--muted">No keys have been minted.</td>
+          </tr>
+        }
+      }
+    </tbody>
+  </table>
+</section>
+
+<section class="panel panel--padded">
+  <h2 class="panel__title panel__title--inline">Before you mint one</h2>
+  <div style="display: flex; flex-direction: column; gap: var(--layout-margin-medium);">
+    <div>
+      <div class="cell__title">Ask for the least privilege that works</div>
+      <div class="cell__sub" style="overflow-wrap: anywhere;">A key minted with <code class="cell__mono">demi-service-read</code> reads everything the ACL allows and writes nothing. Write access is a separate role, and no key can reach <code class="cell__mono">/api/admin/*</code>.</div>
+    </div>
+    <div>
+      <div class="cell__title">Project scope is orthogonal to privilege</div>
+      <div class="cell__sub" style="overflow-wrap: anywhere;">A scoped key is privileged <em>within those projects</em>. Scope arrives as roles prefixed <code class="cell__mono">project:</code> and narrows the partition, so privilege lifts the role predicate but never the project one.</div>
+    </div>
+    <div>
+      <div class="cell__title">The secret is shown once</div>
+      <div class="cell__sub" style="overflow-wrap: anywhere;">Format is <code class="cell__mono">demi_&lt;env&gt;_&lt;keyId&gt;_&lt;secret&gt;</code>, sent as <code class="cell__mono">X-Api-Key</code>. DEMI stores a hash, so a lost key is rotated, not recovered.</div>
+    </div>
+    <div>
+      <div class="cell__title">Rotate before revoking</div>
+      <div class="cell__sub" style="overflow-wrap: anywhere;">Rotating here mints the replacement, then revokes the old key only once the new one exists — revocation takes effect immediately and is recorded in the audit log.</div>
+    </div>
+  </div>
+</section>
+
+<p class="footnote">Never commit a key literal. This repository is public, so a literal in it is a world-readable credential; <code class="cell__mono">ADMIN_API_KEY</code> is break-glass only.</p>

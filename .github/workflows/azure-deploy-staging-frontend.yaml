@@ -109,9 +109,18 @@ jobs:
       - name: Point env.js at the test environment
         run: |
           ENV_JS=frontend/public/env.js
-          sed -i 's|https://demi-api-dev.azurewebsites.net|https://demi-api-test.azurewebsites.net|g' "$ENV_JS"
-          grep -qF 'https://demi-api-test.azurewebsites.net' "$ENV_JS" \
-            || { echo "::error file=$ENV_JS::API URL rewrite did not take — the bundle would call the DEV API"; exit 1; }
+          # Local dev keeps API_LOCATION empty and routes /api through the dev proxy; the
+          # deployed bundle calls the API host directly and reads the rest from /api/config.
+          sed -i "s|window.__env.API_LOCATION = ''|window.__env.API_LOCATION = 'https://demi-api-test.azurewebsites.net'|" "$ENV_JS"
+          sed -i "s|window.__env.API_PATH = '/api'|window.__env.API_PATH = 'https://demi-api-test.azurewebsites.net/api'|" "$ENV_JS"
+          sed -i "s|window.__env.configEndpoint = false|window.__env.configEndpoint = true|" "$ENV_JS"
+          sed -i "s|window.__env.NOTIFY_API_LOCATION = '/notify-api'|window.__env.NOTIFY_API_LOCATION = 'https://notify-api-test.azurewebsites.net'|" "$ENV_JS"
+          grep -qF "window.__env.NOTIFY_API_LOCATION = 'https://notify-api-test.azurewebsites.net'" "$ENV_JS" \
+            || { echo "::error file=$ENV_JS::NOTIFY_API_LOCATION rewrite did not take"; exit 1; }
+          grep -qF "window.__env.API_LOCATION = 'https://demi-api-test.azurewebsites.net'" "$ENV_JS" \
+            || { echo "::error file=$ENV_JS::API URL rewrite did not take — the bundle would call the dev proxy"; exit 1; }
+          grep -qF "window.__env.configEndpoint = true" "$ENV_JS" \
+            || { echo "::error file=$ENV_JS::configEndpoint rewrite did not take"; exit 1; }
           sed -i 's|https://dev.loginproxy.gov.bc.ca|https://test.loginproxy.gov.bc.ca|g' "$ENV_JS"
           grep -qF 'https://test.loginproxy.gov.bc.ca' "$ENV_JS" \
             || { echo "::error file=$ENV_JS::Keycloak URL rewrite did not take — the bundle would use the DEV realm"; exit 1; }
@@ -135,6 +144,13 @@ jobs:
         run: |
           corepack enable
           yarn --cwd frontend install --immutable
+
+      # This workflow checks out only eagle-demi, so the sibling repos the script
+      # compares against never exist here — --check detects that and exits 0 (see the
+      # script). This file has no lint step (that lives in pr.yaml); placed here,
+      # before the deploy, as the closest equivalent gate.
+      - name: Check design CSS is in sync
+        run: bash frontend/scripts/sync-design-css.sh --check
 
       - name: Azure Login
         uses: azure/login@v3

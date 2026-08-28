@@ -1,0 +1,136 @@
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>eagle-notify</h1>
+    <p>EPIC's subscription and notification service — consent, digests and campaigns — sending over Azure Communication Services Email.</p>
+  </div>
+</div>
+
+@if (error()) {
+  <div class="callout callout--warning">{{ error() }}</div>
+}
+
+<div class="stat-grid" [attr.aria-busy]="loading() ? 'true' : null">
+  <div class="stat-card">
+    <div class="micro-label">Confirmed subscribers</div>
+    <div class="stat-card__value">
+      @if (loading()) { <span class="skeleton skeleton--text" style="width: 3.5rem;" aria-hidden="true"></span> } @else { {{ figure(stats()?.subscribers?.confirmed) }} }
+    </div>
+    <div class="stat-card__note">clicked the confirmation link</div>
+  </div>
+  <div class="stat-card">
+    <div class="micro-label">Unconfirmed</div>
+    <div class="stat-card__value">
+      @if (loading()) { <span class="skeleton skeleton--text" style="width: 3.5rem;" aria-hidden="true"></span> } @else { {{ figure(stats()?.subscribers?.unconfirmed) }} }
+    </div>
+    <div class="stat-card__note">asked to subscribe, never confirmed</div>
+  </div>
+  <div class="stat-card">
+    <div class="micro-label">Bounced addresses</div>
+    <div class="stat-card__value">
+      @if (loading()) { <span class="skeleton skeleton--text" style="width: 3.5rem;" aria-hidden="true"></span> } @else { {{ figure(stats()?.bounces?.addresses) }} }
+    </div>
+    <div class="stat-card__note">
+      @if (loading()) { <span class="skeleton skeleton--text" style="width: 6rem;" aria-hidden="true"></span> } @else { {{ figure(stats()?.bounces?.hard) }} hard — a hard bounce unsubscribes the address }
+    </div>
+  </div>
+  <div class="stat-card">
+    <div class="micro-label">Sends this hour</div>
+    <div class="stat-card__value">
+      @if (loading()) { <span class="skeleton skeleton--text" style="width: 5rem;" aria-hidden="true"></span> } @else { {{ figure(stats()?.sending?.usedThisHour) }} / {{ figure(stats()?.sending?.hourlyBudget) }} }
+    </div>
+    <div class="stat-card__note">one budget, shared with confirmation mail</div>
+  </div>
+</div>
+
+<section class="panel">
+  <h2 class="panel__title">Connection</h2>
+  <div class="row-grid" style="grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));">
+    <div>
+      <div class="micro-label">Endpoint</div>
+      <div class="row-grid__figure"><code class="cell__mono" style="overflow-wrap: anywhere;">{{ endpointHost }}</code></div>
+    </div>
+    <div>
+      <div class="micro-label">Status</div>
+      <div style="margin-top: 2px;"><span class="pill {{ connection().pill }}">{{ connection().label }}</span></div>
+    </div>
+    <div>
+      <div class="micro-label">Credential</div>
+      <div class="row-grid__figure">Keycloak bearer token</div>
+    </div>
+    <div>
+      <div class="micro-label">Templates</div>
+      <div class="row-grid__figure">
+        @if (loading()) { <span class="skeleton skeleton--text" style="width: 2.5rem;" aria-hidden="true"></span> } @else { {{ figure(stats()?.templates) }} }
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="panel panel--scroll" [attr.aria-busy]="loading() ? 'true' : null">
+  <h2 class="panel__title">Services</h2>
+  <table>
+    <thead><tr><th>Service</th><th class="cell--right" style="width: 12rem;">Confirmed subscribers</th></tr></thead>
+    <tbody>
+      @if (loading()) {
+        <tr><td><span class="skeleton skeleton--text" style="width: 10rem;" aria-hidden="true"></span></td><td class="cell--right"><span class="skeleton skeleton--text" style="width: 3rem;" aria-hidden="true"></span></td></tr>
+      } @else if (stats()?.services?.length) {
+        @for (service of stats()!.services; track service.serviceName) {
+          <tr><td>{{ service.serviceName }}</td><td class="cell--right cell--figures">{{ figure(service.confirmed) }}</td></tr>
+        }
+      } @else {
+        <tr><td colspan="2" class="cell--muted">No service has a confirmed subscriber.</td></tr>
+      }
+    </tbody>
+  </table>
+</section>
+
+<section class="panel panel--scroll" [attr.aria-busy]="loading() ? 'true' : null">
+  <h2 class="panel__title">Recent sends</h2>
+  @if (loading()) { <p class="visually-hidden">Loading campaigns…</p> }
+  <table style="min-width: 46rem;">
+    <thead>
+      <tr>
+        <th style="width: 11rem;">Created</th>
+        <th>Template</th>
+        <th style="width: 8rem;">Audience</th>
+        <th style="width: 9rem;">Sent / failed</th>
+        <th style="width: 9rem;">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (campaign of campaigns(); track campaign.id) {
+        <tr>
+          <td class="cell--muted cell--nowrap">{{ when(campaign.createdAt) }}</td>
+          <td>
+            <div class="cell__title">{{ campaign.templateName || campaign.id }}</div>
+            <div class="cell__sub">{{ campaign.serviceLabel || campaign.serviceName || '—' }}@if (campaign.templateVersion) { · v{{ campaign.templateVersion }}}</div>
+          </td>
+          <td class="cell--figures">{{ figure(campaign.audience) }}</td>
+          <td class="cell--figures">{{ figure(campaign.sent) }} / {{ figure(campaign.failed) }}</td>
+          <td class="cell--nowrap"><span class="pill {{ campaignPill(campaign) }}">{{ campaignStatus(campaign) }}</span></td>
+        </tr>
+      } @empty {
+        @if (loading()) {
+          @for (i of [1, 2, 3, 4]; track i) {
+            <tr aria-hidden="true">
+              <td><span class="skeleton skeleton--text" style="width: 7rem;"></span></td>
+              <td>
+                <div class="cell__title"><span class="skeleton skeleton--text" style="width: 60%;"></span></div>
+                <div class="cell__sub"><span class="skeleton skeleton--text" style="width: 40%;"></span></div>
+              </td>
+              <td><span class="skeleton skeleton--text" style="width: 3.5rem;"></span></td>
+              <td><span class="skeleton skeleton--text" style="width: 4.5rem;"></span></td>
+              <td><span class="pill" style="padding: 0;"><span class="skeleton skeleton--text" style="width: 3.5rem;"></span></span></td>
+            </tr>
+          }
+        } @else {
+          <tr>
+            <td colspan="5" class="cell--muted">No campaigns have been created.</td>
+          </tr>
+        }
+      }
+    </tbody>
+  </table>
+</section>
+
+<p class="footnote">DEMI holds no mailing list of its own. Subscriptions, suppression and templates live in eagle-notify; DEMI supplies the event and the recipient query.</p>

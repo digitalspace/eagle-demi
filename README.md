@@ -850,7 +850,9 @@ REST API, so it cannot be scripted. CodeQL above provides the same analysis engi
 
 ## Frontend
 
-Angular app under `frontend/`, built to `frontend/dist`.
+Angular app under `frontend/`, built to `frontend/dist`. Every route requires a Keycloak session
+with `staff`, `sysadmin` or `demi-admin`; there is no anonymous screen. Screen list, routes and
+backend calls: [[Frontend]] on the wiki.
 
 - **Interactive map explorer** over project coordinates and administrative overlays.
 - **Static boundary GeoJSON** — `regional_districts.geojson`, `municipalities.geojson`,

@@ -780,6 +780,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@bcgov/bc-sans@npm:^2.1.1":
+  version: 2.1.1
+  resolution: "@bcgov/bc-sans@npm:2.1.1"
+  checksum: 10c0/009c0191df042ef94e0ff81d68521b76e3265d8fd4aba119fdb64d21797cc60de7d9098eb49ec6d7d8a6da8e4ecb4f8b0a32b699dc7b474b1334a2f6ed2bd868
+  languageName: node
+  linkType: hard
+
+"@bcgov/design-tokens@npm:^5.0.0":
+  version: 5.0.0
+  resolution: "@bcgov/design-tokens@npm:5.0.0"
+  checksum: 10c0/1fa284a9abbcc14637eb0643ed5c55ca8a1d180542beaacc78c0279744478e67315fe7d2d8e911209ae9a9db58f680c160c655b440abfed55e2a56b265326c0c
+  languageName: node
+  linkType: hard
+
 "@colors/colors@npm:1.5.0":
   version: 1.5.0
   resolution: "@colors/colors@npm:1.5.0"
@@ -2376,6 +2390,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/geojson@npm:*":
+  version: 7946.0.16
+  resolution: "@types/geojson@npm:7946.0.16"
+  checksum: 10c0/1ff24a288bd5860b766b073ead337d31d73bdc715e5b50a2cee5cb0af57a1ed02cc04ef295f5fa68dc40fe3e4f104dd31282b2b818a5ba3231bc1001ba084e3c
+  languageName: node
+  linkType: hard
+
 "@types/jasmine@npm:~6.0.0":
   version: 6.0.0
   resolution: "@types/jasmine@npm:6.0.0"
@@ -2397,21 +2418,30 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/leaflet.markercluster@npm:^1.5.6":
+  version: 1.5.6
+  resolution: "@types/leaflet.markercluster@npm:1.5.6"
+  dependencies:
+    "@types/leaflet": "npm:^1.9"
+  checksum: 10c0/d49f03f0cf8880c12b827ec82377ccb26ad5df7d27c779306cd278024580f9f9fc6f2fe124a7fe3e264b05aa030b7a1f0b8a98a8a322ed36c1218bfc44e8b77f
+  languageName: node
+  linkType: hard
+
+"@types/leaflet@npm:^1.9, @types/leaflet@npm:^1.9.22":
+  version: 1.9.22
+  resolution: "@types/leaflet@npm:1.9.22"
+  dependencies:
+    "@types/geojson": "npm:*"
+  checksum: 10c0/ce2e09d0f208244478c6103ba64726b33a474f89f303860c7b0494ca1bb44f1744285d93c90093c95669497c7dbdc7c206495af0b741fe6e251bf106b0415593
+  languageName: node
+  linkType: hard
+
 "@types/node@npm:*, @types/node@npm:>=10.0.0":
   version: 26.1.1
   resolution: "@types/node@npm:26.1.1"
   dependencies:
     undici-types: "npm:~8.3.0"
   checksum: 10c0/25ac5093195736dd074d5027adbba85617bc951d5a41506ebd3b9073048acb7233613f3822d5f9b9447f9c0841c91f6387c46283916767e3ef79f23917452c46
-  languageName: node
-  linkType: hard
-
-"@types/proj4@npm:^2.19.0":
-  version: 2.19.0
-  resolution: "@types/proj4@npm:2.19.0"
-  dependencies:
-    proj4: "npm:*"
-  checksum: 10c0/3df1d7a3613461f3f1c5e0369668e50b02c0149233e235bf4b82af53a1f6c61acea633c9087b0a57ed211c873397c005af31082e202ac642b001d3c866d66871
   languageName: node
   linkType: hard
 
@@ -3351,9 +3381,12 @@ __metadata:
     "@angular/platform-browser": "npm:^22.1.2"
     "@angular/platform-browser-dynamic": "npm:^22.1.2"
     "@angular/router": "npm:^22.1.2"
+    "@bcgov/bc-sans": "npm:^2.1.1"
+    "@bcgov/design-tokens": "npm:^5.0.0"
     "@eslint/js": "npm:^10.0.1"
     "@types/jasmine": "npm:~6.0.0"
-    "@types/proj4": "npm:^2.19.0"
+    "@types/leaflet": "npm:^1.9.22"
+    "@types/leaflet.markercluster": "npm:^1.5.6"
     angular-eslint: "npm:^22.1.0"
     eslint: "npm:^10.8.1"
     globals: "npm:^17.11.0"
@@ -3363,7 +3396,9 @@ __metadata:
     karma-coverage: "npm:~2.2.0"
     karma-jasmine: "npm:~5.1.0"
     karma-jasmine-html-reporter: "npm:~2.3.0"
-    proj4: "npm:^2.21.0"
+    keycloak-js: "npm:25.0.6"
+    leaflet: "npm:1.9.4"
+    leaflet.markercluster: "npm:1.4.1"
     rxjs: "npm:~7.8.0"
     tslib: "npm:^2.3.0"
     typescript: "npm:~6.0.3"
@@ -4629,6 +4664,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"js-sha256@npm:^0.11.0":
+  version: 0.11.1
+  resolution: "js-sha256@npm:0.11.1"
+  checksum: 10c0/ef8e294b6f38f218e4834cb653471dd1a76808cea93dc66eaffcb04124116bc36d6cebc4e8866753e184ab4e57892b6ef21918e8ab0450179a7e093ea962d974
+  languageName: node
+  linkType: hard
+
 "js-tokens@npm:^10.0.0":
   version: 10.0.0
   resolution: "js-tokens@npm:10.0.0"
@@ -4715,6 +4757,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"jwt-decode@npm:^4.0.0":
+  version: 4.0.0
+  resolution: "jwt-decode@npm:4.0.0"
+  checksum: 10c0/de75bbf89220746c388cf6a7b71e56080437b77d2edb29bae1c2155048b02c6b8c59a3e5e8d6ccdfd54f0b8bda25226e491a4f1b55ac5f8da04cfbadec4e546c
+  languageName: node
+  linkType: hard
+
 "karma-chrome-launcher@npm:~3.2.0":
   version: 3.2.0
   resolution: "karma-chrome-launcher@npm:3.2.0"
@@ -4794,12 +4843,38 @@ __metadata:
   languageName: node
   linkType: hard
 
+"keycloak-js@npm:25.0.6":
+  version: 25.0.6
+  resolution: "keycloak-js@npm:25.0.6"
+  dependencies:
+    js-sha256: "npm:^0.11.0"
+    jwt-decode: "npm:^4.0.0"
+  checksum: 10c0/56d4cc7b463096da20da3389af60b5dd889dad260fd8474d4ed912c25070fcb43559bd6a335b23462075a2e59e36a8a104f2a200317d3ff46ded4d801391bab2
+  languageName: node
+  linkType: hard
+
 "keyv@npm:^4.5.4":
   version: 4.5.4
   resolution: "keyv@npm:4.5.4"
   dependencies:
     json-buffer: "npm:3.0.1"
   checksum: 10c0/aa52f3c5e18e16bb6324876bb8b59dd02acf782a4b789c7b2ae21107fab95fab3890ed448d4f8dba80ce05391eeac4bfabb4f02a20221342982f806fa2cf271e
+  languageName: node
+  linkType: hard
+
+"leaflet.markercluster@npm:1.4.1":
+  version: 1.4.1
+  resolution: "leaflet.markercluster@npm:1.4.1"
+  peerDependencies:
+    leaflet: ~1.3.1
+  checksum: 10c0/08c9faad98417bfa3f04f839e553d31f93f9c9c9ad246a2d55b9c94f7b7eb66b7b88acd986f6be77657344a4b0a62d05cf803c0421079588fd45be76a9f7b3d5
+  languageName: node
+  linkType: hard
+
+"leaflet@npm:1.9.4":
+  version: 1.9.4
+  resolution: "leaflet@npm:1.9.4"
+  checksum: 10c0/f639441dbb7eb9ae3fcd29ffd7d3508f6c6106892441634b0232fafb9ffb1588b05a8244ec7085de2c98b5ed703894df246898477836cfd0ce5b96d4717b5ca1
   languageName: node
   linkType: hard
 
@@ -5105,13 +5180,6 @@ __metadata:
   version: 2.0.0
   resolution: "merge-descriptors@npm:2.0.0"
   checksum: 10c0/95389b7ced3f9b36fbdcf32eb946dc3dd1774c2fdf164609e55b18d03aa499b12bd3aae3a76c1c7185b96279e9803525550d3eb292b5224866060a288f335cb3
-  languageName: node
-  linkType: hard
-
-"mgrs@npm:1.0.0":
-  version: 1.0.0
-  resolution: "mgrs@npm:1.0.0"
-  checksum: 10c0/a360853be5a3b4f4734dbf0a193851c08039ccb6077362ab0f890cccd170ef88b59585129757da9fea4d7a313d7dc3ee88f37f594fc1ae3e4e8efc5353144d77
   languageName: node
   linkType: hard
 
@@ -5776,36 +5844,6 @@ __metadata:
   version: 7.0.0
   resolution: "proc-log@npm:7.0.0"
   checksum: 10c0/b89c2d862604f35fec795477b0c7e376feab3ba0d4f4d291c4e959567442697cf451ac557d0623c1cc38af45a78128b983410f397a10c5d3a67f76c33de4754b
-  languageName: node
-  linkType: hard
-
-"proj4@npm:*":
-  version: 2.20.9
-  resolution: "proj4@npm:2.20.9"
-  dependencies:
-    mgrs: "npm:1.0.0"
-    wkt-parser: "npm:^1.5.5"
-  peerDependencies:
-    geotiff: "*"
-  peerDependenciesMeta:
-    geotiff:
-      optional: true
-  checksum: 10c0/9917dc75627a3198b0226741a04e29ecd084f3613ba4a9359815fddab4f579d3135cf68d3ba914659470c45a5ca9c3d52b6f68a43365d6b9484d8603761ecdf9
-  languageName: node
-  linkType: hard
-
-"proj4@npm:^2.21.0":
-  version: 2.21.0
-  resolution: "proj4@npm:2.21.0"
-  dependencies:
-    mgrs: "npm:1.0.0"
-    wkt-parser: "npm:^1.5.5"
-  peerDependencies:
-    geotiff: "*"
-  peerDependenciesMeta:
-    geotiff:
-      optional: true
-  checksum: 10c0/7a4c5d160492636114ecb3719191734dc2b0094b421b9139466a363e479cd907c63ac35a10277f3b7a4649470c8f02446acd45cc6155829364c2fa0ae2d91aae
   languageName: node
   linkType: hard
 
@@ -6767,13 +6805,6 @@ __metadata:
   bin:
     node-which: bin/which.js
   checksum: 10c0/ca0b54f198f78bbc4b7c02e34bda8d335cb352e0adb4cbca1c37b1a957af3a879a82c4c27ca6525bc942f548d8b64f816ef6528360af9f3de55ffb9b979b620d
-  languageName: node
-  linkType: hard
-
-"wkt-parser@npm:^1.5.5":
-  version: 1.5.5
-  resolution: "wkt-parser@npm:1.5.5"
-  checksum: 10c0/4ed71c407a7f13b2ea49441f3e9607eb421fac513c384b71a52a33abbeafeeb67ab32ffce327894a2b276fadaa352f204c21d0a02e34183644fe41d3282fd735
   languageName: node
   linkType: hard
 

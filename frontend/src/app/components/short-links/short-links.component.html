@@ -1,0 +1,101 @@
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>Short URLs</h1>
+    <p>Permanent links DEMI issues for posters, campaigns and staff sharing.</p>
+  </div>
+  <button type="button" (click)="toggleForm()" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">{{ formOpen() ? 'Cancel' : 'New short link' }}</button>
+</div>
+
+@if (links.error()) {
+  <div class="callout callout--warning">{{ links.error() }}</div>
+}
+
+@if (formOpen()) {
+  <section class="panel panel--padded">
+    <h2 class="panel__title panel__title--inline">New short link</h2>
+    <div style="display: flex; flex-direction: column; gap: var(--layout-margin-medium); margin-top: var(--layout-margin-medium);">
+      <label style="display: block;">
+        <span class="micro-label">Destination</span>
+        <input type="url" placeholder="https://projects.eao.gov.bc.ca/…" [value]="newUrl()" (input)="newUrl.set(value($event))" style="width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+      </label>
+      <label style="display: block;">
+        <span class="micro-label">Custom code, optional</span>
+        <input type="text" placeholder="site-c-eac" [value]="newCode()" (input)="newCode.set(value($event))" style="width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+        <span class="cell__sub">3–64 characters of a–z, 0–9, hyphen or underscore. Left blank, DEMI generates one.</span>
+      </label>
+      <label style="display: block;">
+        <span class="micro-label">Note</span>
+        <input type="text" placeholder="Where this link is being used" [value]="newNote()" (input)="newNote.set(value($event))" style="width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+      </label>
+    </div>
+    <div class="panel__actions">
+      <button type="button" [disabled]="!newUrl().trim()" (click)="submit()" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Create link</button>
+    </div>
+  </section>
+}
+
+<section class="panel panel--scroll" [attr.aria-busy]="links.loading() ? 'true' : null" [style.opacity]="links.loading() && links.links().length ? 0.6 : null">
+  @if (links.loading() && !links.links().length) {
+    <p class="visually-hidden">Loading short links…</p>
+  }
+  <table style="min-width: 52rem; table-layout: fixed; width: 100%;">
+    <thead>
+      <tr>
+        <th style="width: 15rem;">Short link</th>
+        <th style="width: 15rem;">Destination</th>
+        <th style="width: 13rem;">Note</th>
+        <th style="width: 7rem;">Created by</th>
+        <th style="width: 5.5rem;">Created</th>
+        <th style="width: 10rem; text-align: right;"></th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (link of links.links(); track link.id) {
+        <tr>
+          <td><a [href]="link.shortUrl" target="_blank" rel="noopener"><code class="cell__mono" style="overflow-wrap: anywhere; color: inherit;">{{ link.shortUrl }}</code></a></td>
+          <td class="cell--truncate cell--muted">
+            @if (editingCode() === link.id) {
+              <input type="url" aria-label="New destination" [value]="editUrl()" (input)="editUrl.set(value($event))" style="width: 100%; box-sizing: border-box; padding: 0.35rem 0.6rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
+            } @else {
+              {{ link.url }}
+            }
+          </td>
+          <td>{{ link.note || '—' }}</td>
+          <td class="cell--muted">{{ link.createdBy }}</td>
+          <td class="cell--muted cell--nowrap">{{ shortDate(link.createdAt) }}</td>
+          <td class="cell--right cell--nowrap">
+            <span class="row-actions">
+              @if (editingCode() === link.id) {
+                <button type="button" (click)="saveRepoint(link.id)" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--surface-color-primary-default); text-decoration: underline; cursor: pointer;">Save</button>
+                <button type="button" (click)="cancelRepoint()" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--typography-color-secondary); text-decoration: underline; cursor: pointer;">Cancel</button>
+              } @else {
+                <button type="button" (click)="copy(link)" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--surface-color-primary-default); text-decoration: underline; cursor: pointer;">{{ copiedCode() === link.id ? 'Copied' : 'Copy' }}</button>
+                <button type="button" (click)="startRepoint(link)" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--surface-color-primary-default); text-decoration: underline; cursor: pointer;">Repoint</button>
+                <button type="button" (click)="remove(link)" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--surface-color-primary-default); text-decoration: underline; cursor: pointer;">Delete</button>
+              }
+            </span>
+          </td>
+        </tr>
+      } @empty {
+        @if (links.loading()) {
+          @for (i of [1, 2, 3, 4]; track i) {
+            <tr aria-hidden="true">
+              <td><span class="skeleton skeleton--text" style="width: 90%;"></span></td>
+              <td><span class="skeleton skeleton--text" style="width: 85%;"></span></td>
+              <td><span class="skeleton skeleton--text" style="width: 70%;"></span></td>
+              <td><span class="skeleton skeleton--text" style="width: 60%;"></span></td>
+              <td><span class="skeleton skeleton--text" style="width: 3rem;"></span></td>
+              <td class="cell--right"><span class="skeleton skeleton--text" style="width: 6rem;"></span></td>
+            </tr>
+          }
+        } @else {
+          <tr>
+            <td colspan="6" class="cell--muted">No short links yet.</td>
+          </tr>
+        }
+      }
+    </tbody>
+  </table>
+</section>
+
+<p class="footnote">Short links are permanent and redirect without caching, so a repointed link takes effect on the next click — including on links already printed. Deleting one is not reversible; the audit trail keeps the record.</p>

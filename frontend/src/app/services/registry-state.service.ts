@@ -1,9 +1,8 @@
-import { Injectable, signal, computed, effect, untracked, inject } from '@angular/core';
+import { Injectable, signal, computed, effect, untracked, inject, WritableSignal } from '@angular/core';
 import { Project, Document, DocumentChunk, SummaryCitation } from '../models/registry.models';
 import { MOCK_PROJECTS, MOCK_DOCUMENTS } from '../mocks/mock-registry.data';
 import { ConfigService, AppConfig } from './config.service';
-
-declare const Keycloak: any;
+import Keycloak from 'keycloak-js';
 
 const loadInitialCache = (): Record<string, any> => {
   try {
@@ -22,6 +21,21 @@ const loadInitialCache = (): Record<string, any> => {
   }
   return {};
 };
+
+/** Boundary layer id -> the denormalised project field naming that boundary. */
+const BOUNDARY_PROPS = {
+  regionalDistricts: 'regionalDistrict',
+  municipalities: 'municipality',
+  electoralDistricts: 'electoralDistrict'
+} as const;
+
+/** One filter section resolved to the project field it names plus the polygons it selected. */
+interface GeoSelection {
+  prop: 'region' | 'regionalDistrict' | 'municipality' | 'electoralDistrict';
+  /** Lower-cased selected names. OR'd: matching any one of them passes the section. */
+  names: string[];
+  geoms: any[];
+}
 
 @Injectable({
   providedIn: 'root'
@@ -115,9 +129,11 @@ export class RegistryStateService {
   activeTab = signal<'projects' | 'documents'>('projects');
   searchQuery = signal<string>('');
   debouncedSearchQuery = signal<string>('');
-  gatingFilter = signal<'all' | 'admitted' | 'staged'>('all');
-  sectorFilter = signal<string>('all');
-  regionFilter = signal<string>('all');
+  // Every filter is multi-select: values inside one signal are OR'd, the signals AND together.
+  // Empty means "no constraint" — there is no 'all' sentinel.
+  gatingFilter = signal<Set<string>>(new Set());
+  sectorFilter = signal<Set<string>>(new Set());
+  regionFilter = signal<Set<string>>(new Set());
   // NOTE for whoever adds a document or project list to the summariser page: the two big computeds
   // branch on this. `filteredProjects`/`filteredDocuments` return [] only when this is 'search'
   // (:281, :313), and documents are constrained to map-matched projects whenever it is NOT
@@ -136,6 +152,20 @@ export class RegistryStateService {
   // Matches inside extracted document TEXT — this is what makes Deep Search "deep" rather than
   // a metadata search. Populated only when there is a query; null is the loading sentinel.
   documentChunks = signal<DocumentChunk[] | null>(null);
+
+  // True while loadData() is in flight. The lists are no longer blanked on a re-search, so this is
+  // what tells a screen to dim the rows it already has instead of flashing placeholders at them.
+  searching = signal<boolean>(false);
+
+  /** 'first' — nothing to show yet, render skeletons. 'refresh' — keep the old rows, dim them. */
+  private loadPhase(list: unknown[] | null): 'first' | 'refresh' | null {
+    if (list === null) return 'first';
+    return this.searching() ? 'refresh' : null;
+  }
+
+  projectsLoading = computed(() => this.loadPhase(this.filteredProjects()));
+  documentsLoading = computed(() => this.loadPhase(this.filteredDocuments()));
+  chunksLoading = computed(() => this.loadPhase(this.documentChunks()));
 
   // Selected Items (using Signals)
   selectedProject = signal<Project | null>(null);
@@ -157,9 +187,9 @@ export class RegistryStateService {
     return layers[layers.length - 1] as any;
   });
 
-  // Active administrative filter value
-  boundaryFilter = signal<string>('all');
-  boundaryFilterLayer = signal<string>('none');
+  // Selected boundary names per layer. The layers are independent, so a project can be constrained
+  // by a regional district AND a municipality at once.
+  boundaryFilter = signal<Record<string, Set<string>>>({});
 
   // Cache of loaded GeoJSON data with geometry to avoid repeated API fetches
   loadedBoundariesGeoJSON = signal<Record<string, any>>(loadInitialCache());
@@ -206,6 +236,7 @@ export class RegistryStateService {
   // Cancels the in-flight search when a newer one starts. Without this the last request to
   // RESOLVE wins each signal rather than the last one issued, and fetchWithRetry's backoff sleeps
   // make that window seconds wide — so a stale response can overwrite a fresh one.
+  private loadedQuery: string | null = null;
   private searchAbort: AbortController | null = null;
 
   // Computed alphabetical list of boundary names in active layer
@@ -230,52 +261,79 @@ export class RegistryStateService {
   /**
    * Everything the per-project predicate needs that is resolved ONCE, not per row.
    *
-   * The two geometry lookups are the reason this exists separately: finding the selected region or
-   * boundary polygon inside the filter callback would repeat a `find()` over every boundary for
+   * The geometry lookups are the reason this exists separately: finding the selected region or
+   * boundary polygons inside the filter callback would repeat a `find()` over every boundary for
    * every project.
    */
   private projectFilterContext() {
-    const region = this.regionFilter();
-    const bLayer = this.activeBoundaryLayer();
-    const bFilter = this.boundaryFilter();
-
-    let selectedBoundaryGeom: any = null;
-    if (bFilter !== 'all' && bFilter !== '' && bLayer !== 'none') {
-      const cache = this.loadedBoundariesGeoJSON();
-      const boundaries = cache[bLayer];
-      if (boundaries && Array.isArray(boundaries)) {
-        const boundary = boundaries.find((b: any) => (b.name || '').toLowerCase() === bFilter.toLowerCase());
-        if (boundary) {
-          selectedBoundaryGeom = boundary.geometry || boundary.simplifiedGeometry;
-        }
-      }
-    }
-
-    let selectedRegionGeom: any = null;
-    if (region !== 'all') {
-      const geo = this.regionalBoundariesGeoJSON();
-      // Shape-checked, not just truthy: a boundary answer that is not a FeatureCollection would
-      // otherwise throw out of the computed and blank the project list.
-      if (geo?.features) {
-        const feature = geo.features.find((f: any) =>
-          (f.properties?.regionName || '').toLowerCase() === region.toLowerCase()
-        );
-        if (feature) {
-          selectedRegionGeom = feature.geometry;
-        }
-      }
-    }
-
     return {
       gating: this.gatingFilter(),
       sector: this.sectorFilter(),
-      region,
       staff: this.isStaff(),
-      bLayer,
-      bFilter,
-      selectedRegionGeom,
-      selectedBoundaryGeom
+      geo: this.geoSelections()
     };
+  }
+
+  /**
+   * The region section and the three boundary sections, each resolved to the project field it
+   * names plus the polygons of every value ticked in it. One entry per section: the caller ANDs
+   * across the entries while the names inside one entry are OR'd.
+   */
+  private geoSelections(): GeoSelection[] {
+    const out: GeoSelection[] = [];
+    // A geometry of any other type cannot be ray cast, so dropping it here keeps `geoms.length`
+    // meaning "there is something to test against".
+    const usable = (g: any) => g && (g.type === 'Polygon' || g.type === 'MultiPolygon');
+
+    const regions = [...this.regionFilter()].map(r => r.toLowerCase());
+    if (regions.length) {
+      // Shape-checked, not just truthy: a boundary answer that is not a FeatureCollection would
+      // otherwise throw out of the computed and blank the project list.
+      const features: any[] = this.regionalBoundariesGeoJSON()?.features || [];
+      out.push({
+        prop: 'region',
+        names: regions,
+        geoms: features
+          .filter(f => regions.includes((f.properties?.regionName || '').toLowerCase()))
+          .map(f => f.geometry)
+          .filter(usable)
+      });
+    }
+
+    const selected = this.boundaryFilter();
+    const cache = this.loadedBoundariesGeoJSON();
+    for (const [layer, prop] of Object.entries(BOUNDARY_PROPS)) {
+      const names = [...(selected[layer] || [])].map(n => n.toLowerCase());
+      if (!names.length) continue;
+      const boundaries: any[] = cache[layer] || [];
+      out.push({
+        prop,
+        names,
+        geoms: boundaries
+          .filter(b => names.includes((b.name || '').toLowerCase()))
+          .map(b => b.geometry || b.simplifiedGeometry)
+          .filter(usable)
+      });
+    }
+
+    return out;
+  }
+
+  /** Does the project fall inside any one value ticked in this section? */
+  private matchesGeoSelection(p: Project, sel: GeoSelection): boolean {
+    // The denormalised field wins when the record carries one; ray casting the centroid is the
+    // fallback for rows that were never tagged.
+    const value = String(p[sel.prop] || '').toLowerCase();
+    if (value) return sel.names.some(n => value.includes(n) || n.includes(value));
+    if (!p.centroid || !sel.geoms.length) return true;
+    return sel.geoms.some(g => this.containsPoint(g, p.centroid!));
+  }
+
+  private containsPoint(geom: any, centroid: (string | number)[]): boolean {
+    const point: [number, number] = [Number(centroid[0]), Number(centroid[1])];
+    return geom.type === 'Polygon'
+      ? this.isPointInPolygon(point, geom.coordinates)
+      : this.isPointInMultiPolygon(point, geom.coordinates);
   }
 
   /**
@@ -291,57 +349,14 @@ export class RegistryStateService {
     if (!ctx.staff && p.gatingState !== 'admitted') return false;
 
     // 2. Gating filter selection
-    if (ctx.gating !== 'all' && p.gatingState !== ctx.gating) return false;
+    if (ctx.gating.size && !ctx.gating.has(p.gatingState || '')) return false;
 
-    // 3. Sector filter selection.
-    //
-    // Exact match on the trimmed value, because the chips are now built FROM these values —
-    // see `sectorOptions`. It used to be a substring test with a special case for mining, over a
-    // hardcoded list of Energy/Mining/Transportation, and measured against dev data on 2026-08-06
-    // that list was wrong in three ways at once: nothing in the corpus contains "transportation"
-    // so the chip matched 0 of 382 projects; "Energy" missed `Power Plants`, the largest sector at
-    // 87; and `startsWith('mine')` missed `Coal Mines` (32) while catching `Mineral Mines`.
-    if (!skipSector && ctx.sector !== 'all') {
-      if ((p.sector || '').trim() !== ctx.sector) return false;
-    }
+    // 3. Sector: exact match on the trimmed value, because the chips are built FROM these values
+    // (see `sectorOptions`). Substring matching missed `Coal Mines` and `Power Plants` outright.
+    if (!skipSector && ctx.sector.size && !ctx.sector.has((p.sector || '').trim())) return false;
 
-    // 3b. Region filter selection
-    if (ctx.region !== 'all') {
-      const pRegion = (p.region || '').toLowerCase();
-      const fRegion = ctx.region.toLowerCase();
-      if (pRegion) {
-        if (!pRegion.includes(fRegion) && !fRegion.includes(pRegion)) return false;
-      } else if (ctx.selectedRegionGeom && p.centroid) {
-        const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
-        if (ctx.selectedRegionGeom.type === 'Polygon') {
-          if (!this.isPointInPolygon(point, ctx.selectedRegionGeom.coordinates)) return false;
-        } else if (ctx.selectedRegionGeom.type === 'MultiPolygon') {
-          if (!this.isPointInMultiPolygon(point, ctx.selectedRegionGeom.coordinates)) return false;
-        }
-      }
-    }
-
-    // 3c. Administrative Boundary filter selection (prioritize tagged properties over ray casting)
-    if (ctx.bFilter !== 'all' && ctx.bFilter !== '' && ctx.bLayer !== 'none') {
-      const fFilter = ctx.bFilter.toLowerCase();
-      let targetProp = '';
-      if (ctx.bLayer === 'regionalDistricts') targetProp = (p.regionalDistrict || '').toLowerCase();
-      else if (ctx.bLayer === 'municipalities') targetProp = (p.municipality || '').toLowerCase();
-      else if (ctx.bLayer === 'electoralDistricts') targetProp = (p.electoralDistrict || '').toLowerCase();
-
-      if (targetProp) {
-        if (!targetProp.includes(fFilter) && !fFilter.includes(targetProp)) return false;
-      } else if (ctx.selectedBoundaryGeom && p.centroid) {
-        const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
-        if (ctx.selectedBoundaryGeom.type === 'Polygon') {
-          if (!this.isPointInPolygon(point, ctx.selectedBoundaryGeom.coordinates)) return false;
-        } else if (ctx.selectedBoundaryGeom.type === 'MultiPolygon') {
-          if (!this.isPointInMultiPolygon(point, ctx.selectedBoundaryGeom.coordinates)) return false;
-        }
-      }
-    }
-
-    return true;
+    // 4. Region and administrative boundaries: OR within a section, AND across them.
+    return ctx.geo.every(sel => this.matchesGeoSelection(p, sel));
   }
 
   // Projects matching active filters (excluding query)
@@ -377,43 +392,31 @@ export class RegistryStateService {
 
     const ctx = this.projectFilterContext();
     const counts = new Map<string, number>();
-    let total = 0;
 
     for (const p of projs) {
       if (!this.matchesProjectFilters(p, ctx, true)) continue;
-      total++;
       const value = (p.sector || '').trim();
       if (!value) continue;
       counts.set(value, (counts.get(value) || 0) + 1);
     }
 
-    // The selected sector always has a chip, even at zero. The list is counted under the OTHER
-    // active filters, so narrowing the region can empty the sector the user picked — and without
+    // A selected sector always keeps a chip, even at zero. The list is counted under the OTHER
+    // active filters, so narrowing the region can empty a sector the user picked — and without
     // this its chip would simply vanish, leaving a map with no projects, no chip rendered active,
     // and nothing to click to get back. A `(0)` chip says "this is still your filter, and it now
     // matches nothing", which is the true statement.
-    const selected = this.sectorFilter();
-    if (selected !== 'all' && !counts.has(selected)) counts.set(selected, 0);
+    for (const selected of this.sectorFilter()) {
+      if (!counts.has(selected)) counts.set(selected, 0);
+    }
 
-    // `all` leads the list so the whole chip row is one loop and the sentinel cannot drift from the
-    // options beside it. Its count is every matching project, including those with no sector at
-    // all — which is why it is counted separately rather than summed from the map.
-    return [
-      { value: 'all', label: 'All Sectors', count: total },
-      ...[...counts.entries()]
-        .map(([value, count]) => ({ value, label: value, count }))
-        .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
-    ];
+    return [...counts.entries()]
+      .map(([value, count]) => ({ value, label: value, count }))
+      .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
   });
 
   // Dynamic Filtering Computations (Signals are automatically tracked!)
   filteredProjects = computed(() => {
     const query = this.debouncedSearchQuery().toLowerCase().trim();
-
-    // For plain deep search view, return empty array until user starts typing
-    if (this.activePage() === 'search' && !query) {
-      return [];
-    }
 
     const projs = this.filteredProjectsNoQuery();
     if (projs === null) return null;
@@ -442,11 +445,6 @@ export class RegistryStateService {
     const projs = this.filteredProjectsNoQuery() || [];
     const matchedProjectIds = new Set(projs.map(p => p.id));
 
-    // For plain deep search view, return empty array until user starts typing
-    if (this.activePage() === 'search' && !query) {
-      return [];
-    }
-
     const docs = this.documents();
     if (docs === null) return null;
 
@@ -458,7 +456,7 @@ export class RegistryStateService {
       if (!staff && d.gatingState !== 'admitted') return false;
 
       // 2. Gating filter selection
-      if (gating !== 'all' && d.gatingState !== gating) return false;
+      if (gating.size && !gating.has(d.gatingState || '')) return false;
 
       // 3. Concatenate search text fields to bypass JSON stringify and speed up search
       if (query) {
@@ -691,10 +689,11 @@ export class RegistryStateService {
     const resolve = this.resolveAuthReady;
     if (!resolve) return;
     this.resolveAuthReady = null as any;
-    // Route guards read isStaff() the moment this gate opens, so the level has to land first.
+    // The bearer token is already attached by now, so the corpus load does not need to wait
+    // for /me; only the gate does.
+    this.loadData();
     await this.loadVisLevel();
     resolve();
-    this.loadData();
   }
 
   /** Ask the API what this caller may see; fall back to the token roles when it cannot answer. */
@@ -727,6 +726,15 @@ export class RegistryStateService {
   }
 
   // Keycloak initialization Flow
+  /** Refresh the access token before it expires so a 401 never starts the session-over path. */
+  private keepTokenFresh() {
+    const tick = () => this.keycloak?.updateToken(70).catch((err: unknown) => {
+      console.warn('[Keycloak] token refresh failed; session over', err);
+      this.clearAuthState();
+    });
+    setInterval(tick, 60_000);
+  }
+
   private initKeycloak() {
     if (!this.authEnabled()) {
       this.authSettled();
@@ -750,9 +758,9 @@ export class RegistryStateService {
       }
 
       this.keycloak = new Keycloak({
-        url: this.config.KEYCLOAK_URL,
-        realm: this.config.KEYCLOAK_REALM,
-        clientId: this.config.KEYCLOAK_CLIENT_ID
+        url: this.config.KEYCLOAK_URL ?? '',
+        realm: this.config.KEYCLOAK_REALM ?? '',
+        clientId: this.config.KEYCLOAK_CLIENT_ID ?? ''
       });
 
       const cleanRedirectUri = typeof window !== 'undefined' ? (window.location.origin + window.location.pathname) : '';
@@ -771,8 +779,12 @@ export class RegistryStateService {
       // happens next: 'check-sso' retries via the silent iframe below; omitting onLoad
       // (as a prior version of this code did) makes it give up silently with no error and no
       // retry, which reads as "kicked to public for no reason". Always keep onLoad set.
+      // A remembered login uses 'login-required': a full redirect to the IdP, which holds a
+      // first-party cookie and bounces straight back with a code, no prompt. 'check-sso' does
+      // the same through a hidden iframe, which needs third-party cookies that browsers now
+      // block by default, so a page reload silently signed the user out.
       const keycloakPromise = this.keycloak.init({
-        onLoad: 'check-sso',
+        onLoad: previouslyLoggedIn && !isOAuthCallback ? 'login-required' : 'check-sso',
         checkLoginIframe: false,
         pkceMethod: 'S256',
         scope: 'openid roles',
@@ -781,7 +793,7 @@ export class RegistryStateService {
       });
 
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Keycloak initialization timeout')), 5000)
+        setTimeout(() => reject(new Error('Keycloak initialization timeout')), 15000)
       );
 
       Promise.race([keycloakPromise, timeoutPromise]).then((authenticated: any) => {
@@ -792,6 +804,7 @@ export class RegistryStateService {
           localStorage.setItem('isLoggedIn', 'true');
           this.isAuthenticated.set(true);
           this.userName.set(this.keycloak.tokenParsed?.preferred_username || this.keycloak.tokenParsed?.name || 'Staff User');
+          this.keepTokenFresh();
         } else {
           sessionStorage.removeItem('isLoggedIn');
           localStorage.removeItem('isLoggedIn');
@@ -817,9 +830,9 @@ export class RegistryStateService {
     if (!this.keycloak) {
       try {
         this.keycloak = new Keycloak({
-          url: this.config.KEYCLOAK_URL,
-          realm: this.config.KEYCLOAK_REALM,
-          clientId: this.config.KEYCLOAK_CLIENT_ID
+          url: this.config.KEYCLOAK_URL ?? '',
+          realm: this.config.KEYCLOAK_REALM ?? '',
+          clientId: this.config.KEYCLOAK_CLIENT_ID ?? ''
         });
       } catch (e) {
         console.error('[Keycloak] Failed to create Keycloak client:', e);
@@ -1050,7 +1063,7 @@ export class RegistryStateService {
   resultCountLabel(shown: number | null | undefined, total: number | null): string {
     // A null length is the loading sentinel, not an empty result. Pairing it with a stale total
     // would flash "0 of 1,204" between every keystroke.
-    if (shown === null || shown === undefined) return '0';
+    if (shown === null || shown === undefined) return '…';
     if (total === null || total <= shown) return String(shown);
     return `${shown} of ${total.toLocaleString()}`;
   }
@@ -1110,22 +1123,26 @@ export class RegistryStateService {
       return;
     }
 
+    // Every screen calls loadData() on entry. The corpus for a given query is already in memory
+    // after the first load (two ~370 kB uncompressed responses at ~2 s each), so only a changed
+    // query or an empty cache goes back to the API.
+    const q = this.searchQuery();
+    if (q === this.loadedQuery && this.projects() !== null && this.documents() !== null && !this.searching()) {
+      return;
+    }
+
     // Supersede whatever is still in flight. The three requests below are independent of each
     // other but NOT of the next keystroke — without this they race, and the loser can win.
     this.searchAbort?.abort();
     const abort = new AbortController();
     this.searchAbort = abort;
     const signal = abort.signal;
+    this.searching.set(true);
 
     try {
       const basePath = this.getBasePath();
 
       console.log('[Registry] Loading real-time projects and documents from central dev database...');
-
-      const q = this.searchQuery();
-
-      this.projects.set(null);
-      this.documents.set(null);
 
       let projParams = `dataset=Project&pageSize=500`;
       if (q) projParams += `&keywords=${encodeURIComponent(q)}&fuzzy=true`;
@@ -1157,7 +1174,6 @@ export class RegistryStateService {
       // Full-text matches from inside the documents. Only meaningful with a query, and a failure
       // here must not take the whole page down — metadata results are still worth showing. That is
       // why this leg keeps its own catch instead of riding the shared one below.
-      if (q) this.documentChunks.set(null);
       const chunkPromise = q
         ? this.fetchWithRetry(
           `${basePath}/search?dataset=DocumentChunk&pageSize=50&keywords=${encodeURIComponent(q)}&fuzzy=true`,
@@ -1278,29 +1294,27 @@ export class RegistryStateService {
           const matchedProj = (this.projects() || []).find(p => p.id === projId || p.legacyEagleId === projId);
           const resolvedProjectName = matchedProj ? matchedProj.name : (d.projectName || 'Associated Project');
 
-          let displayName = d.displayName || d.documentFileName || 'Untitled Document';
-          const fileFileName = d.documentFileName || (d.s3Key ? d.s3Key.split('/').pop() : 'document.pdf');
-          if (displayName === 'Unnamed Document' || displayName === 'Untitled Document') {
-            const baseName = fileFileName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, ' ');
-            displayName = baseName.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') + ' Document';
-          }
+          // Placeholder names stay as they are; a title rebuilt from "document.pdf" read "Document Document".
+          const displayName = d.displayName || d.documentFileName || 'Untitled Document';
+          const fileFileName = d.documentFileName || (d.s3Key ? d.s3Key.split('/').pop() : '');
 
+          // Never invent a description. The API's own placeholder is dropped too, and the
+          // subline falls back to real metadata: source, type, date posted.
+          const placeholder = /^(Unnamed Document|Untitled Document|No project description provided|Official document extracted from central registry\.?)$/;
           let snippet = d.description || d.textSnippet || '';
-          // Carried only while the text is the SERVER's; dropped the moment we substitute our own.
           let snippetHtml = d.highlighted?.description || '';
-          if (!snippet || snippet === 'Unnamed Document' || snippet === 'Untitled Document' || snippet === 'No project description provided') {
-            snippet = `Official document for ${resolvedProjectName}, containing environmental assessment logs, regulatory compliance checklists, and public review feedback index files.`;
+          if (!snippet || placeholder.test(snippet)) {
+            const posted = d.datePosted ? new Date(d.datePosted).toLocaleDateString('en-CA') : '';
+            snippet = [d.documentSource, d.type !== 'None' ? d.type : '', posted].filter(Boolean).join(' · ');
             snippetHtml = '';
           }
-          // Same rule for the title: the block above rebuilds it from the filename when the record
-          // has no usable name, and the index highlighted the name it actually holds.
-          const displayNameHtml = displayName === d.displayName ? (d.highlighted?.displayName || '') : '';
+          const displayNameHtml = d.highlighted?.displayName || '';
 
           return {
             id: d._id,
             displayName: displayName,
             documentFileName: fileFileName,
-            documentType: 'PDF Document',
+            documentType: d.documentType || 'Document',
             // Never invent a record number — this rendered the literal '34800-20/MOCK' to
             // users as "Record Number (ORCS)" for every document without a classification.
             orcsCode: d.orcsClassification || '',
@@ -1315,11 +1329,16 @@ export class RegistryStateService {
       } else {
         this.documents.set([]);
       }
+
+      this.loadedQuery = q;
+      this.searching.set(false);
     } catch (err) {
       // A superseded search is not an outage. Leave every signal alone: a newer loadData() is
       // already running and owns them now, and clearing them here would blank the results the
       // user is about to see — or raise an error banner for a request we cancelled ourselves.
-      if (this.isAbortError(err)) return;
+      if (this.isAbortError(err)) return;   // the newer loadData() owns `searching` now
+
+      this.searching.set(false);
 
       // Do NOT silently substitute mock data here. Doing so made a broken backend render as
       // a healthy demo full of fictional projects, masking outages and every other bug.
@@ -1419,23 +1438,51 @@ export class RegistryStateService {
     }
   }
 
+  /**
+   * Container counts from `GET /db/stats`.
+   *
+   * The route is behind authMiddleware, so an anonymous caller gets a 401 straight into the
+   * fetch interceptor's refresh-and-replay — same reason loadSummary() gates on isStaff().
+   * Counts documents and projects, NOT chunks: there is no passage total to read here.
+   */
+  dbStats = signal<{ projects: number; trackProjects: number; unlinkedProjects: number; documents: number; boundaries: number } | null>(null);
+
+  async loadDbStats() {
+    if (!this.isStaff() || this.config.USE_MOCK_DATA) return;
+    try {
+      const res = await fetch(`${this.getBasePath()}/db/stats`);
+      if (!res.ok) return;
+      const data = await res.json();
+      this.dbStats.set(data?.stats ?? null);
+    } catch (err) {
+      console.warn('[Registry loadDbStats] failed:', err);
+    }
+  }
+
   resetSelection() {
     this.selectedProject.set(null);
     this.selectedDocument.set(null);
   }
 
-  setGatingFilter(state: 'all' | 'admitted' | 'staged') {
-    this.gatingFilter.set(state);
+  /** Tick or untick one value of a multi-select filter. */
+  toggleFilterValue(filter: WritableSignal<Set<string>>, value: string) {
+    const next = new Set(filter());
+    if (!next.delete(value)) next.add(value);
+    filter.set(next);
   }
 
-  setSectorFilter(sector: string) {
-    this.sectorFilter.set(sector);
-    this.loadData();
+  toggleBoundaryFilter(layer: string, name: string) {
+    const current = this.boundaryFilter();
+    const next = new Set(current[layer] || []);
+    if (!next.delete(name)) next.add(name);
+    this.boundaryFilter.set({ ...current, [layer]: next });
   }
 
-  setRegionFilter(region: string) {
-    this.regionFilter.set(region);
-    this.loadData();
+  clearFilters() {
+    this.gatingFilter.set(new Set());
+    this.sectorFilter.set(new Set());
+    this.regionFilter.set(new Set());
+    this.boundaryFilter.set({});
   }
 
   selectProject(proj: Project | null) {
@@ -1744,49 +1791,6 @@ export class RegistryStateService {
     return false;
   }
 
-  private isProjectInRegion(p: Project, regionName: string): boolean {
-    const geo = this.regionalBoundariesGeoJSON();
-    if (!geo?.features || !p.centroid) return true;
-    
-    const feature = geo.features.find((f: any) => 
-      (f.properties?.regionName || '').toLowerCase() === regionName.toLowerCase()
-    );
-    if (!feature || !feature.geometry) return true;
-
-    const geom = feature.geometry;
-    const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
-
-    if (geom.type === 'Polygon') {
-      return this.isPointInPolygon(point, geom.coordinates);
-    } else if (geom.type === 'MultiPolygon') {
-      return this.isPointInMultiPolygon(point, geom.coordinates);
-    }
-
-    return true;
-  }
-
-  isProjectInBoundary(p: Project, bLayer: string, boundaryName: string): boolean {
-    if (!bLayer || bLayer === 'none' || bLayer === 'regions' || !boundaryName || boundaryName === 'all' || !p.centroid) return true;
-
-    const cache = this.loadedBoundariesGeoJSON();
-    const boundaries = cache[bLayer];
-    if (!boundaries || !Array.isArray(boundaries)) return true;
-
-    const boundary = boundaries.find((b: any) => (b.name || '').toLowerCase() === boundaryName.toLowerCase());
-    if (!boundary || (!boundary.geometry && !boundary.simplifiedGeometry)) return true;
-
-    const geom = boundary.geometry || boundary.simplifiedGeometry;
-    const point: [number, number] = [Number(p.centroid[0]), Number(p.centroid[1])];
-
-    if (geom.type === 'Polygon') {
-      return this.isPointInPolygon(point, geom.coordinates);
-    } else if (geom.type === 'MultiPolygon') {
-      return this.isPointInMultiPolygon(point, geom.coordinates);
-    }
-
-    return true;
-  }
-
   /**
    * Display markup for one result field, preferring what the SEARCH SERVICE matched.
    *
@@ -1889,6 +1893,7 @@ export class RegistryStateService {
    * redirect below is the untestable half, and it is not the half that was broken.
    */
   clearAuthState() {
+    this.loadedQuery = null;
     sessionStorage.removeItem('isLoggedIn');
     localStorage.removeItem('isLoggedIn');
 

@@ -1,35 +1,60 @@
-import { Component, inject, ChangeDetectionStrategy } from '@angular/core';
-import { RouterOutlet, RouterLink, RouterLinkActive, Router } from '@angular/router';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { RegistryStateService } from './services/registry-state.service';
+import { GROUPS, SCREENS } from './shell/screens';
+import { SignInComponent } from './shell/sign-in.component';
+import { HowBuiltComponent } from './shell/how-built.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, SignInComponent, HowBuiltComponent],
   templateUrl: './app.component.html',
-  changeDetection: ChangeDetectionStrategy.Eager,
-  styleUrl: './app.component.css'
+  changeDetection: ChangeDetectionStrategy.Eager
 })
 export class AppComponent {
   service = inject(RegistryStateService);
-  router = inject(Router);
+  private router = inject(Router);
 
-  login() {
-    this.service.loginKeycloak();
+  readonly sections = GROUPS.map(heading => ({ heading, items: SCREENS.filter(s => s.group === heading) }));
+
+  screenKey = signal(this.keyOf(this.router.url));
+  isMap = computed(() => this.screenKey() === 'map');
+  navOpen = signal(!this.isMap());
+  // Keycloak check-sso is async; rendering the gate before it settles flashes sign-in at staff.
+  authSettled = signal(false);
+  accountOpen = signal(false);
+  infoOpen = signal(false);
+
+  // Map Explorer gets the nav's width back; every other screen keeps it open.
+  constructor() {
+    this.service.authReady.then(() => this.authSettled.set(true));
+    this.router.events.pipe(takeUntilDestroyed()).subscribe(event => {
+      if (!(event instanceof NavigationEnd)) return;
+      this.screenKey.set(this.keyOf(event.urlAfterRedirects));
+      this.navOpen.set(!this.isMap());
+      this.accountOpen.set(false);
+    });
   }
 
-  /** Mirrors the server's own gate (src/app.js: `['dev', 'test'].includes(config.environmentName)`). */
-  get apiDocsAvailable(): boolean {
-    return ['dev', 'test'].includes(this.service.config.ENVIRONMENT ?? '');
-  }
+  mainStyle = computed(() => this.isMap()
+    ? 'padding: 0; display: flex; flex-direction: column; min-height: 0;'
+    : 'padding: var(--layout-padding-large);');
 
-  openSwagger() {
-    const basePath = this.service.config.API_PATH || '/api';
-    const url = basePath === '/api' ? '/api-docs' : basePath.replace(/\/api$/, '/api-docs');
-    window.open(url, '_blank');
-  }
+  initials = computed(() => {
+    const parts = this.service.userName().split(/[\s._@-]+/).filter(Boolean);
+    const letters = parts.length > 1 ? parts[0][0] + parts[1][0] : parts[0]?.slice(0, 2) || 'BC';
+    return letters.toUpperCase();
+  });
 
   logout() {
+    this.accountOpen.set(false);
     this.service.logout();
+  }
+
+  private keyOf(url: string): string {
+    const seg = url.split(/[?#]/)[0].replace(/^\//, '').split('/')[0] || 'map';
+    return SCREENS.find(sc => sc.path === '/' + seg)?.key ?? seg;
   }
 }
