@@ -1375,11 +1375,12 @@ Branch: `feat/level-zero-routes`
 
 - [ ] `src/controllers/nosql/sealed.js`: `POST /api/sealed` (write a record at
       `readForLevel(0)`), `GET /api/sealed/:id`, `GET /api/sealed` (ids, `sealedAt` and `title`
-      only).
-- [ ] Sealed routes never use `authMiddleware` — it 403s `compliance` (doc §1, Superuser). Mount
-      `authenticate` (the raw verifier in `src/helpers/auth.js`) then `requireRole('compliance')`.
+      only), and the release route below.
+- [ ] ONE chain for all four routes, and it is not `authMiddleware` — that gate 403s `compliance`
+      and keeps doing so after P3-2. Mount `authenticate` (the raw verifier in
+      `src/helpers/auth.js`) then `requireRole('compliance')`.
       Test: `'a compliance-only token reaches the sealed routes and nothing else'`.
-- [ ] `POST /api/sealed/:id/release` — `requireRole('compliance')`, body requires `caseNumber` and
+- [ ] `POST /api/sealed/:id/release` — same chain; body requires `caseNumber` and
       `decision` (400 without either). Rewrites `read[]` to `readForLevel(1)`, audits
       `sealed.release` with `{ targetId, caseNumber, decision }`, and notifies the C&E lead.
       Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer; log the
