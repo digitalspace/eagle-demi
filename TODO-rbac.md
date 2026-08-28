@@ -635,25 +635,49 @@ Acceptance
 
 Branch: `feat/vis-search-drift`
 
-- [ ] Add `src/vis/catalog/index-projects.js` and `src/vis/catalog/index-documents.js`, keyed by AI SEARCH field names, not Cosmos names — the index renames (`azure/search/datasources/demi-projects-ds.json` `container.query`: `abbreviation AS displayName`, `proponentName AS proponent`, `projectState AS status`, `eagleId AS legacyEagleId`, `projectType AS type`). Every field in `azure/search/indexes/projects.json` and `documents.json` gets an entry; `read` at `maxVis: 0`.
-- [ ] Redact the repository row before mapping, never after: the three mappers emit eagle-search wire names (`_id`, `proponent.name`, `location`, `status`) which are not catalog keys. Sites: `src/controllers/search.js:291-329` (AI project hits → index-projects catalog), `:374-415` (Cosmos project rows → the Phase 1 `projects` catalog), `:460-491` (AI document hits → index-documents catalog), `:588-621` (chunk mapper: redact `parent` and `project`, which come from `documentsRepo.listByIds` / `projectsRepo.listByIds` at `:570-573`).
-- [ ] `src/controllers/search.js:414` still calls `projectsRepo.publicView(p).sources` — Phase 1 deleted `publicView`; replace with the `sources.wildfire` dotted catalog key, gated by `config.enrichmentSources` exactly as `src/repositories/projects.js:152-157` did.
-- [ ] `src/controllers/search.js:701-760` `summarize`: redact the `chunksRepo.getById` rows and the `projectsRepo.listByIds` rows before building `citations`.
-- [ ] Chunks keep the `select` string as the enforcement point, per doc section 2 item 9 — do not change `retrievable` on `content` (`azure/search/indexes/chunks.json`), semantic ranking needs it.
+- [x] Add `src/vis/catalog/index-projects.js` and `src/vis/catalog/index-documents.js`, keyed by AI SEARCH field names, not Cosmos names — the index renames (`azure/search/datasources/demi-projects-ds.json` `container.query`: `abbreviation AS displayName`, `proponentName AS proponent`, `projectState AS status`, `eagleId AS legacyEagleId`, `projectType AS type`). Every field in `azure/search/indexes/projects.json` and `documents.json` gets an entry; `read` at `maxVis: 0`.
+- [x] Redact the repository row before mapping, never after: the three mappers emit eagle-search wire names (`_id`, `proponent.name`, `location`, `status`) which are not catalog keys. Sites: `src/controllers/search.js:291-329` (AI project hits → index-projects catalog), `:374-415` (Cosmos project rows → the Phase 1 `projects` catalog), `:460-491` (AI document hits → index-documents catalog), `:588-621` (chunk mapper: redact `parent` and `project`, which come from `documentsRepo.listByIds` / `projectsRepo.listByIds` at `:570-573`).
+- [x] `src/controllers/search.js:414` still calls `projectsRepo.publicView(p).sources` — Phase 1 deleted `publicView`; replace with the `sources.wildfire` dotted catalog key, gated by `config.enrichmentSources` exactly as `src/repositories/projects.js:152-157` did.
+- [x] `src/controllers/search.js:701-760` `summarize`: redact the `documentsRepo.listByIds` and
+      `projectsRepo.listByIds` rows before building `citations`. The `chunksRepo.getById` rows are
+      deferred to P4-1, which is where the chunks catalog they need is authored.
+- [x] Chunks keep the `select` string as the enforcement point, per doc section 2 item 9 — do not change `retrievable` on `content` (`azure/search/indexes/chunks.json`), semantic ranking needs it.
 
 Tests
 
-- [ ] `test/vis/search-drift.test.js` — case `'DOCUMENT_SELECT is a subset of maxVis 4 index fields'` parses `src/search/ai-search.js:64-66` `DOCUMENT_SELECT` and asserts every name is in `index-documents` with `maxVis === 4`. Fails the moment someone adds a restricted field to the select.
-- [ ] Same file, case `'PROJECT_SELECT is a subset of maxVis 4 index fields'` over `src/search/ai-search.js:82-84`. Fails identically.
-- [ ] Same file, case `'chunk select never names content'` asserts the literal at `src/search/ai-search.js:773` is exactly `chunkId,documentId,projectId,pageNumber,read`. Fails when `content` is added — the change that would start shipping whole chunk text.
-- [ ] Same file, case `'every retrievable index field is catalogued at maxVis 4'` reads all three `azure/search/indexes/*.json`, filters `retrievable !== false`, and asserts each is in the matching index catalog with `maxVis === 4`, except `read` (`maxVis 0`). Fails on an index PUT that exposes a restricted field.
-- [ ] `test/controllers/search.test.js` — add case `'anonymous Project hit carries no read[]'` and `'anonymous Document hit carries no read[]'`, asserting on the mapped rows. Fails if a mapper starts spreading the raw row.
+- [x] `test/vis/search-drift.test.js` — case `'DOCUMENT_SELECT is a subset of maxVis 4 index fields'` parses `src/search/ai-search.js:64-66` `DOCUMENT_SELECT` and asserts every name is in `index-documents` with `maxVis === 4`. Fails the moment someone adds a restricted field to the select.
+- [x] Same file, case `'PROJECT_SELECT is a subset of maxVis 4 index fields'` over `src/search/ai-search.js:82-84`. Fails identically.
+- [x] Same file, case `'chunk select never names content'` asserts the literal at `src/search/ai-search.js:773` is exactly `chunkId,documentId,projectId,pageNumber,read`. Fails when `content` is added — the change that would start shipping whole chunk text.
+- [x] Same file, case `'every retrievable index field is catalogued at maxVis 4'` reads all three `azure/search/indexes/*.json`, filters `retrievable !== false`, and asserts each is in the matching index catalog with `maxVis === 4`, except `read` (`maxVis 0`). Fails on an index PUT that exposes a restricted field.
+- [x] `test/controllers/search.test.js` — add case `'anonymous Project hit carries no read[]'` and `'anonymous Document hit carries no read[]'`, asserting on the mapped rows. Fails if a mapper starts spreading the raw row.
 
 Acceptance
 
-- [ ] `node --test test/vis/search-drift.test.js test/controllers/search.test.js` — 0 fail.
+- [x] `node --test test/vis/search-drift.test.js test/controllers/search.test.js` — 0 fail.
 - [ ] Anonymous `GET /api/search?dataset=Project&pageSize=5` and `dataset=Document&pageSize=5` on test, `jq -S` before and after: 0 lines (`search-diff.js` is moot, its baseline is retired eagle-search). Date the run here: ______
 - [ ] `curl -s "$API/api/search?dataset=Project&pageSize=5" | jq -S '.[0].searchResults[0] | keys'` identical before and after.
+
+### P2-2 recorded deviations
+
+- The `summarize` chunk rows are NOT redacted: `catalogFor('chunks')` does not exist until P4-1, and
+  authoring it here would pull that unit forward. Nothing off a chunk row reaches the response —
+  `citations` reads its ids off the AI Search hit and `content` goes to the model only — so the
+  deferral costs no wire exposure. Carried as a line under P4-1.
+- `read` is exempted from the two `*_SELECT` subset cases and from the retrievable-fields case: it is
+  selected and retrievable on purpose, because the redactor derives `isPublished` from it and then
+  drops it. The cases assert `maxVis === 0` for it rather than skipping it.
+- The retrievable-fields case covers `projects.json` and `documents.json` only. `chunks.json` has no
+  catalog until P4-1, and `content` is retrievable there by design (semantic ranking); the
+  `'chunk select never names content'` case is its ratchet instead.
+- `labelWithProjectNames` (`src/controllers/search.js:39`) redacts its `projectsRepo.listByIds` rows
+  too. The unit did not name it — it hydrates the document hits the unit does name, off raw
+  repository rows, so it is the same site one function further out. `name` and `eagleId` are 4/4, so
+  no output moves.
+- Both AI mappers now read `isPublished` off the redacted row instead of recomputing it from
+  `doc.read`. Recomputing was not optional to change: the redactor drops `read`, so the old
+  expression would have reported every hit published.
+- Two catalog entries are not index fields: `highlighted` on both, the marked-up copy `ai-search.js`
+  attaches to a hit. Classified at 4/4, the ceiling of the fields it is derived from.
 
 ## P2-3 query parameters gated by the catalog
 
@@ -831,6 +855,8 @@ Branch: `feat/vis-chunks-catalog`
 - [ ] Decide and record: chunk content classification is the PARENT DOCUMENT's, not the chunk's. The gate already works that way — `src/controllers/search.js:581` filters chunks whose parent document is not visible, and `src/repositories/chunks.js:68-73` `getById` gates on `canRead`. No new plane; the catalog only classifies chunk METADATA.
 - [ ] `content` stays out of the wire by the `select` string at `src/search/ai-search.js:773` and by `content: ''` at `src/controllers/search.js:617`. Catalogue `content` at `maxVis: 0` so the drift test can hold both.
 - [ ] There is no chunk read endpoint: `src/routes/api.js` mounts only `POST /documents/:id/chunks` (`:96`). No new `res.json` site to redact.
+- [ ] `src/controllers/search.js` `summarize`: redact the `chunksRepo.getById` rows, deferred from
+      P2-2 because the catalog did not exist yet.
 
 Tests
 

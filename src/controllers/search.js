@@ -3,7 +3,7 @@
 // Searches go to Azure AI Search. A KEYWORDLESS project list is a read, not a search, and comes
 // from the Cosmos NoSQL repositories — see wiki Search-Query-Construction#project-reads-split-between-cosmos-and-the-index.
 const { resolveAccess } = require('../helpers/access-sql');
-const { redactForAccess } = require('../vis/redact');
+const { redactForAccess, redactAllForAccess } = require('../vis/redact');
 const { logger } = require('../utils/logger');
 const { filterFor } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
@@ -39,7 +39,9 @@ function geoPoint(centroid) {
 async function labelWithProjectNames(access, docs) {
   const projectIds = docs.map(d => d.project).filter(Boolean);
   if (projectIds.length === 0) return;
-  const parents = await projectsRepo.listByIds(access, projectIds);
+  // Redacted before anything reads a field off it, like every other repository row on this route
+  // (docs/rbac-architecture.md §2 item 9).
+  const parents = redactAllForAccess('projects', await projectsRepo.listByIds(access, projectIds), access);
   const byId = new Map(parents.map(p => [String(p.id), p]));
   for (const doc of docs) {
     const parent = byId.get(String(doc.project));
@@ -289,7 +291,12 @@ exports.search = async (req, res) => {
             });
 
             if (items.length > 0) {
-              const searchResults = items.map(doc => ({
+              const searchResults = items.map(hit => {
+                // Redact the INDEX row, then map, exactly as the Cosmos branch below does. The
+                // catalog is keyed on INDEX field names because the data source renames columns
+                // (docs/rbac-architecture.md §2 item 9).
+                const doc = redactForAccess('index-projects', hit, access);
+                return {
                 // THE EAGLE ObjectId — eagle-public re-fetches the project from eagle-api by it.
                 // Falls back to the DEMI id for a Track-only project. See
                 // wiki Search-Query-Construction#project-id-spaces.
@@ -322,11 +329,12 @@ exports.search = async (req, res) => {
                   description: (doc.highlighted || {}).description || ''
                 },
                 // `read[]` is NOT emitted, here or on any other row shape: it is the caller's own
-                // ACL restated, it publishes internal role names, and nothing reads it.
-                // `isPublished` is the mirror the frontends actually render.
-                isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true
+                // ACL restated, it publishes internal role names, and nothing reads it. The
+                // redactor drops it and derives `isPublished`, the mirror the frontends render.
+                isPublished: doc.isPublished
                 // No `sources`: the `projects` index has no such field.
-              }));
+                };
+              });
 
               return res.json([{ searchResults, count }]);
             }
@@ -463,7 +471,10 @@ exports.search = async (req, res) => {
           });
 
           if (items.length > 0) {
-            const mappedDocs = items.map(doc => ({
+            const mappedDocs = items.map(hit => {
+              // Redact the INDEX row, then map — same rule and same reason as the project branch.
+              const doc = redactForAccess('index-documents', hit, access);
+              return {
               // Already an Eagle ObjectId: documents are seeded keyed on it, which is what makes
               // eagle-api's `/api/public/document/{_id}/download/...` resolve.
               _id: String(doc.id),
@@ -487,12 +498,14 @@ exports.search = async (req, res) => {
               // The index carries no projectName — an indexer reads a single container.
               // `labelWithProjectNames` supplies both this and the `{_id, name}` shape below.
               projectName: 'Associated Project',
-              isPublished: Array.isArray(doc.read) ? doc.read.includes('public') : true,
+              // Derived by the redactor from `read[]`, which it drops — see the project branch.
+              isPublished: doc.isPublished,
               description: doc.description || 'Official document extracted from central registry.',
               // Pre-escaped display markup. Empty when the field is, in which case the frontend
               // falls back to the default text above — ours, so there is nothing to highlight.
               highlighted: doc.highlighted
-            }));
+              };
+            });
 
             await labelWithProjectNames(access, mappedDocs);
 
@@ -578,8 +591,12 @@ exports.search = async (req, res) => {
           documentsRepo.listByIds(access, documentIds, projectIds),
           projectsRepo.listByIds(access, projectIds)
         ]);
-        const docById = new Map(parentDocs.map(d => [String(d.id), d]));
-        const projById = new Map(parentProjects.map(p => [String(p.id), p]));
+        // Redacted before the mapper reads a label off either row. `id` is 4/4 in both catalogs, so
+        // the document map is still the gate below.
+        const docById = new Map(redactAllForAccess('documents', parentDocs, access)
+          .map(d => [String(d.id), d]));
+        const projById = new Map(redactAllForAccess('projects', parentProjects, access)
+          .map(p => [String(p.id), p]));
 
         // THE GATE, not a label lookup: a caller who cannot see the document cannot see its text.
         // `listByIds` is ACL-enforcing and unbounded, so a miss means DENIED, not truncated. See
@@ -707,7 +724,9 @@ exports.summarize = async (req, res) => {
       Promise.all(items.map(c => chunksRepo.getById(access, String(c.chunkId), String(c.documentId)))),
       documentsRepo.listByIds(access, items.map(c => c.documentId), items.map(c => c.projectId))
     ]);
-    const docById = new Map(parentDocs.map(d => [String(d.id), d]));
+    // Redacted before `citations` reads a name off it; `id` is 4/4, so this stays the parent gate.
+    const docById = new Map(redactAllForAccess('documents', parentDocs, access)
+      .map(d => [String(d.id), d]));
 
     const chunks = items
       .map((item, i) => ({ item, row: fetched[i] }))
@@ -739,7 +758,8 @@ exports.summarize = async (req, res) => {
     const citedProjects = cited.length > 0
       ? await projectsRepo.listByIds(access, cited.map(c => c.projectId))
       : [];
-    const projById = new Map(citedProjects.map(p => [String(p.id), p]));
+    const projById = new Map(redactAllForAccess('projects', citedProjects, access)
+      .map(p => [String(p.id), p]));
 
     return res.json({
       summary,
