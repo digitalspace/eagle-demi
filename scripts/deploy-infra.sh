@@ -65,9 +65,9 @@ case "$ENVIRONMENT" in
     SUBSCRIPTION='be5924ac-1083-4a1b-be92-7b444882cfd9'
     RESOURCE_GROUP='rg-demi-prod'
     # This box has NO prod write context. The name below is the read-only ServiceAccount context
-    # from the workspace CLAUDE.md, used here only to fetch the MinIO values out of 6cdc9e-prod;
-    # ADMIN_API_KEY, DOCLING_API_KEY, TRACK_CLIENT_SECRET and ROLE_SYNC_CLIENT_SECRET have no prod
-    # copy at all and must be exported by hand.
+    # from the workspace CLAUDE.md, used here to read the MinIO secret and demi-app-secrets
+    # (ADMIN_API_KEY, DOCLING_API_KEY, TRACK_CLIENT_SECRET, ROLE_SYNC_CLIENT_SECRET) out of
+    # 6cdc9e-prod. Export any of them by hand to override.
     OC_CONTEXT='6cdc9e-prod/api-silver-devops-gov-bc-ca:6443/system:serviceaccount:6cdc9e-tools:github-cicd'
     ;;
   *)
