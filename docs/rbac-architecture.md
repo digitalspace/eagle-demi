@@ -21,10 +21,29 @@ Three planes. Two exist and stay as they are; one is new.
 | Field visibility | which attributes of a visible record | level 0-4, field catalog, one redactor | new |
 | Write rights | can I mutate | `WRITE_ROLES` | unchanged |
 
-**Level.** Every caller gets one integer from their roles: 0 most privileged, 3 least privileged
-EAO group, 4 anonymous public. Derived in `src/vis/level.js` from a `ROLE_LEVELS` map. Unknown
-role gives 4. Roles are the portable contract; the IdP (Keycloak today, Entra later) only changes
-the claim path in `rolesFor()`.
+**Level.** Every caller gets one integer from their roles: 0 most privileged, 4 anonymous public.
+Derived in `src/vis/level.js` from a `ROLE_LEVELS` map. Unknown role gives 4. Roles are the
+portable contract; the IdP (Keycloak today, Entra later) only changes the claim path in `rolesFor()`.
+Levels are nested (a lower number sees everything a higher one sees) and named by the EAO
+(decided 2026-08-28):
+
+| Level | Name | Who | Source of the claim |
+|---|---|---|---|
+| 0 | Sensitive | `sysadmin` | realm role |
+| 1 | Team only | members of the record's project team | `project:<id>` role on the row's project |
+| 2 | All EAO | `staff` | realm role |
+| 3 | All IDIR | any IDIR login | `identity_provider` claim (`idir`) |
+| 4 | Public | anonymous | none |
+
+**Group (compartment).** Inside a level, a record field may additionally be cleared for named
+groups ("Special: Selected Credentials" on the EAO diagram; e.g. an Indigenous-relations group at
+level 0). A group is a lateral tag, not a level: a dial value is either an integer (`{ cacEmail: 2 }`)
+or `{ level, groups }` (`{ cacEmail: { level: 0, groups: ['indigenous'] } }`). The field is visible
+only when `caller.level <= level` AND (`groups` is empty OR the caller belongs to one of them).
+Membership comes from the IdP group claim (Keycloak groups now, Entra groups later), never from
+`read[]`. A caller at level 0 who is not in the group does not see the field: groups compartment,
+they do not rank. Groups are data (created in the IdP, referenced by name in dials); levels are
+code. Ships in Phase 3 with the dials.
 
 **Catalog.** Every field of every entity is classified in code under `src/vis/catalog/<entity>.js`
 with `defaultVis` and `maxVis`. `maxVis` is the ceiling a field may ever reach. The catalog is
@@ -164,11 +183,10 @@ Each item below overrides the corresponding section of the source document.
 
 ## 3. Questions for the EAO
 
-1. Are the four internal groups nested (each a superset of the next) or lateral? The only
-   existing model in the workspace is Track's `Membership` enum (`EPD`, `LEAD`, `ANALYST`,
-   `FNCAIRT`, `OTHER`; `epictrack-api/src/api/utils/roles.py:29-38`), which is lateral with
-   orthogonal capability roles. If lateral, the scalar level becomes a clearance set (correction
-   11). Decide before dials or any level-1/3 role names exist anywhere.
+1. Answered 2026-08-28 (Daniel, EAO diagram): levels are nested containers 0 Sensitive, 1 Team
+   only, 2 All EAO, 3 All IDIR, 4 Public; named groups inside a level are lateral compartments
+   ("Special: Selected Credentials"). Model in §1. Open detail: whether a level-0 caller outside a
+   group sees group-tagged fields; §1 says no (compartment) until told otherwise.
 2. Are project lead and EPD names and emails public by policy? `eagle-public` shows them to
    anonymous visitors today; the EAO field inventory marks them internal. One of the two is wrong.
 3. Should `forMAEE = Y` in the field inventory imply `maxVis >= 3`?

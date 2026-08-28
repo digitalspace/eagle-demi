@@ -33,7 +33,7 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
       `eao-epic` test held only `sysadmin` of the names eagle-api checks; `staff` created there
       2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
       Levels 1 and 3 get a role only when EAO question 1 is answered. Classifying (P3-2) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
-- [ ] EAO question 1 (nested vs lateral groups). Blocks all of Phase 3. Owner: Daniel. Asked: ______  Answered: ______
+- [x] EAO question 1 (nested vs lateral groups). Answered 2026-08-28: nested levels 0-4 with lateral groups inside a level (doc §1, §3).
 - [ ] EAO question 2 (lead/EPD names and emails public by policy). Gates the P2-1 tightening list. Asked: ______  Answered: ______
 - [ ] EAO questions 3 and 4 (`forMAEE = Y` implies `maxVis >= 3`; `project_tracking_number` and `epic_guid` ceilings). Asked: ______  Answered: ______
 - [ ] Entra app registration for DEMI API, app roles named exactly as the realm roles, issuer and audience recorded in the wiki. Blocks P4-3. Owner: ______  Requested: ______  Delivered: ______
@@ -885,12 +885,28 @@ Acceptance
 - [ ] Reindex block below, run in order.
 - [ ] After the indexer reset: `GET {endpoint}/indexers/projects-indexer/status` reports `393 processed, 0 failed` and a dialled project's search hit is redacted.
 
-## P3-5 lateral clearance sets — only if the EAO answers "lateral"
+## P3-5 groups (compartments) and the level-1/3 claims
 
-Branch: `feat/vis-clearance-set`
+Branch: `feat/vis-groups`
 
-- [ ] Replace `visible(level, effVis)` in `src/vis/redact.js` and `levelFromRoles` in `src/vis/level.js` with set membership. Doc section 2 item 11 says these two are the only places the scalar order is assumed — hold that claim with a grep for `<=` under `src/vis/` in the completeness test before writing any dial.
-- [ ] Must land BEFORE any level-1/3 role is created or any dial is written.
+Levels stay nested and scalar (doc §1 table, decided 2026-08-28); `visible(level, effVis)` stays the
+one comparison. This unit adds the lateral group tag and the two claims that were missing.
+
+- [ ] `src/vis/level.js`: level 3 from the token `identity_provider` claim (`idir`; confirm the claim
+      name on a live IDIR token first), level 1 from a `project:<id>` role matching the row's project
+      (needs the row, so resolved in the redactor, not in `resolveAccess`).
+- [ ] `src/vis/redact.js`: accept a dial value `{ level, groups }`; visible iff
+      `visible(callerLevel, level)` AND (`groups` empty OR `access.groups` intersects). Integer dials
+      unchanged. Invalid shape → `defaultVis`.
+- [ ] `src/helpers/access-sql.js` `resolveAccess`: `groups` from the IdP claim (Keycloak `groups`
+      mapper on `eagle-admin-console`; confirm the claim path on a live token). Never from `read[]`.
+- [ ] `PATCH /visibility` (P3-2) validates `groups` against a catalog list `src/vis/groups.js`
+      (names only); unknown group → 400.
+- [ ] Keycloak: groups exist in `eao-epic` before any dial names one. Owner: Daniel.
+- Tests: `test/vis/redact-matrix.test.js` — `a group-tagged field is hidden from a level-0 caller
+  outside the group`, `a group member at the tagged level sees it`, `a group member below the level
+  does not`; `test/vis/level.test.js` — `an IDIR login is level 3`, `a project team member is level 1
+  on that project only`.
 
 ---
 
