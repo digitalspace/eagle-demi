@@ -946,6 +946,22 @@ The whole ladder is this unit. No endpoint, no stored-data change.
       becomes `[...AUTHENTICATED_ROLES, 'compliance', 'public']`; dropping `staff` or `compliance`
       from it makes those keys unmintable (400 `Unknown role(s)`).
       Test: `'staff and compliance API keys can still be minted'`.
+- [ ] `src/helpers/access-sql.js` — remove the `unsetIsPublic` arm and the empty-`read[]`
+      fallthrough, so a row with no ladder token matches only privileged callers. `readClause:283`
+      loses the `opts.unsetIsPublic` branch AND its `else` twin: the whole second OR arm goes, and
+      the clause is the role arm plus the team arm above. `canRead:404-408` loses
+      `if (opts.unsetIsPublic) return true;` and the `return doc.isPublished === true;` fallthrough
+      that follows the `Array.isArray(doc.read) && doc.read.length > 0` guard. `isPublished` stays a
+      MIRROR of `read.includes('public')`, never a grant. `access-odata.js` `filterFor:63` has no
+      `unsetIsPublic` arm and no `isPublished` term, so it needs no edit; re-grep before merging.
+      One caller passes the flag today (`grep -rn unsetIsPublic src/`):
+  - [ ] `src/repositories/boundaries.js:51` `VISIBILITY = { unsetIsPublic: true }`, passed at
+        `:73`, `:94`, `:101`, `:122`, `:140`. Delete the constant and the `visibility` argument at
+        each of the five sites; the file header (`:20-27`) explains the flag and goes with it.
+  - [ ] The 281 seeded `boundaries` rows carry neither `read[]` nor `isPublished`, which is why the
+        flag exists. Backfill them to `readForLevel(4)` in the SAME merge or the public map goes
+        blank; `boundary.js:32` `resolveBoundaryAcl` converts with the other write sites above
+        (`readForLevel(4)` published, `readForLevel(2)` not).
 - [ ] `src/helpers/access-odata.js` — the role half needs no change. `filterFor:72` already emits
       `read/any(r: search.in(r, '<caller roles>'))`, so `team`/`idir` ride in for free.
 - Tests
@@ -961,6 +977,9 @@ The whole ladder is this unit. No endpoint, no stored-data change.
         `readForLevel(2) === ['staff']`, `readForLevel(4) === ['staff','idir','public']`.
         `readForLevel(2)` carrying `team` would hand a team-only caller every All-EAO row of its
         own project.
+  - [ ] Same file, `'a row with no read[] is not public'` — literal
+        `canRead({ isPublished: true }, anonymous) === false`, and `readClause(['public']).clause`
+        contains no `IS_DEFINED`. Fails if either fallthrough comes back.
   - [ ] Same file, `'a legacy ACL reads as level 2'` — literal
         `levelOfRead(['sysadmin','staff','demi-admin']) === 2`,
         `levelOfRead(['public','sysadmin','staff','demi-admin']) === 4`, `levelOfRead(['team']) === 1`,
@@ -1348,6 +1367,13 @@ Branch: `feat/level-zero-token`
       `not read/any(r: r eq 'compliance')`, so AI Search cannot return one either.
 - [ ] `ADMIN_API_KEY` break-glass must not resolve `compliance` (`src/helpers/auth.js`): the
       break-glass identity's role list is fixed and `compliance` is not in it. Doc §1 condition 1.
+- [ ] `src/controllers/nosql/api-key.js` create path — only a caller that already holds
+      `compliance` may mint a `compliance` key. After the unknown-role check (`:45-48`), when
+      `roles.includes('compliance')` and `(req.user.roles || [])` does not, return 400
+      `{ error: 'compliance is not grantable by this caller' }`. `compliance` stays in
+      `GRANTABLE_ROLES:31`; the gate is per caller. Without it the route's own gate is
+      `requireAdmin` (`api.js:122`), which every `staff`, `sysadmin` and `demi-admin` caller passes,
+      so any of them mints itself into the compartment. Doc §1 condition 3.
 - Tests: `test/helpers/access-sql.test.js` and `test/helpers/access-odata.test.js`
   - [ ] `'sysadmin cannot read a compliance-only row'` — `canRead({ read: ['compliance'] },
         access(['sysadmin'])) === false`, and `readClause(['sysadmin']).clause` contains
@@ -1357,7 +1383,14 @@ Branch: `feat/level-zero-token`
         `compliance`.
   - [ ] `'compliance reads it'` — `canRead` true for `['compliance']`, and a level-2 row is NOT
         visible to a compliance-only caller.
-- Acceptance: `node --test test/helpers/access-sql.test.js test/helpers/access-odata.test.js`
+  - [ ] `test/controllers/nosql/api-key.test.js` (new file)
+        `'an admin without compliance cannot mint a compliance key'` — `req.user.roles`
+        `['sysadmin']`, body `roles: ['compliance']` → status 400 and body literal
+        `{ error: 'compliance is not grantable by this caller' }`, and nothing written to `apikeys`.
+  - [ ] Same file, `'a compliance holder can mint a compliance key'` — `req.user.roles`
+        `['sysadmin','compliance']`, same body → 201 and the saved record's `roles` is
+        `['compliance']`.
+- Acceptance: `node --test test/helpers/access-sql.test.js test/helpers/access-odata.test.js test/controllers/nosql/api-key.test.js`
   — 0 fail.
 
 ## P5-2 the compartment routes

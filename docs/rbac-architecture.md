@@ -132,6 +132,13 @@ Sealing is an application-layer guarantee. Cosmos data-plane operators, backups 
 
 1. The `ADMIN_API_KEY` break-glass must not resolve the `compliance` role.
 2. Exports and backups stay locked down.
+3. Only a caller that already holds `compliance` may mint a `compliance` API key. The compartment
+   issues its own keys. `POST /api/admin/api-keys` (`api.js:122`) is gated on `requireAdmin`, so
+   every `staff`, `sysadmin` and `demi-admin` caller reaches it, and `compliance` is in
+   `GRANTABLE_ROLES` (`api-key.js:31`); without this gate any staff member mints itself into the
+   compartment. A `requireAdmin` caller without `compliance` gets 400
+   `compliance is not grantable by this caller`. `compliance` stays in `GRANTABLE_ROLES` — the gate
+   is on the caller, not on the list.
 
 Encryption is a later hardening, not part of this design: per-record envelope encryption is
 optional Phase 5b in `TODO-rbac.md`, taken only when the compartment holds real C&E material.
@@ -163,7 +170,8 @@ the project closes or the engagement's work completes, from the same Track feed 
 roles. EA windows routinely run past 90 days, so renewal is the norm and the grantor is notified
 7 days before expiry.
 
-**Fail closed.** Unknown role → level 4. No ladder token → the record reads as level 1. Missing
+**Fail closed.** Unknown role → level 4. No ladder token → the row matches only privileged
+callers until it is written with one (P3-2 removes the legacy `unsetIsPublic` arm). Missing
 `access.level` → 4. Uncatalogued field removed. Unknown entity throws. Dial out of range →
 `defaultVis`.
 
@@ -363,7 +371,8 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    to the level it means today, unpublished `readForLevel(2)` and published `readForLevel(4)`, or
    newly private rows would lose their `staff` token and read as level 1. `api-key.js:31`
    `GRANTABLE_ROLES` derives from `SECURE_ROLES` and must move to `AUTHENTICATED_ROLES ∪ {compliance, public}`
-   or `staff` keys become unmintable. Dropping `staff` from `SECURE_ROLES` is also not enough
+   or `staff` keys become unmintable. `compliance` stays in that list; who may grant it is a
+   separate per-caller gate in the mint path (§1 Level 0, condition 3). Dropping `staff` from `SECURE_ROLES` is also not enough
    on its own: `authMiddleware` 403s on `isPrivileged`, so the same commit must move that gate to
    `AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES])]` (§1, Superuser) or staff
    loses every authenticated route and `demi-service-read` loses the API.
