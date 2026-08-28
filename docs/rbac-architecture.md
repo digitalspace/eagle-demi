@@ -8,6 +8,8 @@ Section 1 is the model as accepted. Section 2 is what the audit changed and why.
 questions only the EAO can answer. Section 4 records claims in the source document that were wrong
 at `aea2a0c`, so nobody re-verifies them.
 
+Reference page: `eagle-demi.wiki/Attribute-Level-Access.md` (level table, catalog format, registered entities, `/api/me`).
+
 ## 1. Model
 
 Three planes. Two exist and stay as they are; one is new.
@@ -56,8 +58,10 @@ the merge and seed emit is in the catalog), search drift (index `select` lists a
 flags are a subset of catalog fields with `maxVis` 4), and a tripwire integration test asserting
 anonymous responses never contain named restricted fields.
 
-**Frontend.** `GET /api/me` returns `{ roles, level, tier }` from `resolveAccess`. One template per
-screen; sections render on field presence, never on role.
+**Frontend.** `GET /api/me` returns `{ roles, level, tier, privileged }` from `resolveAccess`.
+`privileged` is answered server-side because it is not derivable from `tier`: a staff credential
+scoped to a project is tier `scoped`. One template per screen; sections render on field presence,
+never on role.
 
 **Identity.** Keycloak roles first. Entra later: app roles with the same names, second issuer in
 `src/helpers/auth.js` selected atomically as `{ issuer, jwks, audience }` from the token's `iss`
