@@ -156,8 +156,10 @@ Doc §2 item 10. Code and app setting ship together.
 
 ## U4 — fix/auth-verify-audience
 
-- [ ] Measure first, record in the PR: `aud` on a live token per realm. Keycloak public clients
-      commonly emit `account`, not the client id. A wrong value 401s everyone.
+- [x] Measure first, record in the PR: `aud` on a live token per realm. Test realm, 2026-08-28, a
+      staff login through the DEMI frontend (`azp=eagle-admin-console`): `aud` is the array
+      `["epictrack-web","realm-management","epic-search","epic-engage","account"]`, so
+      `SSO_AUDIENCE=account` verifies (jsonwebtoken matches any element). Prod realm not measured.
 - [x] `src/config.js`: add `ssoAudience: process.env.SSO_AUDIENCE || ''` beside `ssoIssuer`
       (`config.js:181`). Empty = not enforced, so local and dev keep working.
 - [x] `src/helpers/auth.js:225-228`: add `...(config.ssoAudience ? { audience: config.ssoAudience } : {})`
@@ -787,8 +789,8 @@ Tests
 Acceptance
 
 - [x] `cd frontend && yarn lint && yarn test && yarn build` — all green.
-- [ ] Anonymous load of the deployed frontend shows no staff panel; DevTools Network shows `/api/me` returning `level: 4`. Not observed: 2026-08-28: `/api/me` anonymous returns level 4; deployed bundle `main-AAKEFNZ6.js` carries the `/me` fetch, timeout and fallback. Rendered check not done: both browser MCPs failed to load the AFD host
-- [ ] Staff login shows the same panels as before the PR. Needs a staff login; not done.
+- [x] Anonymous load of the deployed frontend shows no staff panel; DevTools Network shows `/api/me` returning `level: 4` (2026-08-28, Daniel's browser: pre-login `/api/me` with no bearer answered the 65-byte anonymous body).
+- [x] Staff login shows the same panels as before the PR (2026-08-28, Daniel's browser: post-login `/api/me` sent the bearer, answered `privileged: true`, panels unchanged).
 
 ---
 
