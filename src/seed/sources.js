@@ -176,6 +176,7 @@ function loadBoundaries() {
 module.exports = {
   EAGLE_API_BASE,
   PAGE_SIZE,
+  fetchJson,
   unwrapSearchResponse,
   fetchAllPages,
   loadTrackProjects,

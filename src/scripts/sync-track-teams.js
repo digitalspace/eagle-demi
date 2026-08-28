@@ -10,9 +10,14 @@
  *
  *   node src/scripts/sync-track-teams.js [--live]
  *
- * DRY RUN BY DEFAULT, matching close-unpublished-track-projects.js and purge-extraction.js. The
- * API app also runs `run({ live: true })` on a Functions timer when SYNC_TEAMS_SCHEDULE is set —
- * see api/index.js.
+ * DRY RUN BY DEFAULT, matching close-unpublished-track-projects.js and purge-extraction.js. In
+ * Azure it is the `syncTrackTeams` Functions timer in this app (api/index.js, scheduled by the
+ * SYNC_TEAMS_SCHEDULE app setting), reading Track over its HTTPS API — no CronJob, no database
+ * credential.
+ *
+ * ORDERING: a live run needs P3-2's team-grant model, because until it lands a `project:<id>` role
+ * NARROWS its holder to that project (`access-sql.projectScopeFor`) instead of granting a team —
+ * so `run({ live: true })` refuses while `access-sql` exports no `teamsFor`.
  *
  * ONLY ROLES NAMED `project:` ARE TOUCHED. `staff`, `demi-admin` and the rest are granted by hand
  * and no run of this script may take one away, so the prefix is re-checked after the Keycloak
@@ -24,10 +29,12 @@
  */
 
 const config = require('../config');
+const { PROJECT_ROLE_PREFIX } = require('../helpers/access-sql');
 const { fetchJson } = require('../seed/sources');
 const { logger } = require('../utils/logger');
 
-const ROLE_PREFIX = 'project:';
+/** Keycloak's admin API caps a listing page; anything longer has to be walked with `first=`. */
+const PAGE_MAX = 1000;
 
 function parseArgs(argv) {
   const args = { live: false };
@@ -68,7 +75,7 @@ function plan(trackTeams, keycloakState = {}) {
   const unmatched = new Set();
 
   for (const team of trackTeams) {
-    const role = `${ROLE_PREFIX}${team.project_id}`;
+    const role = `${PROJECT_ROLE_PREFIX}${team.project_id}`;
     for (const staff of team.staff || []) {
       // A departed staff member earns no role here and so falls out under the revokes below.
       if (staff.is_active === false) continue;
@@ -94,7 +101,7 @@ function plan(trackTeams, keycloakState = {}) {
   const revokes = [];
   for (const [username, held] of current) {
     const roles = desired.get(username) || new Set();
-    const drop = [...held].filter(r => r.startsWith(ROLE_PREFIX) && !roles.has(r)).sort();
+    const drop = [...held].filter(r => r.startsWith(PROJECT_ROLE_PREFIX) && !roles.has(r)).sort();
     if (drop.length) revokes.push({ username, roles: drop });
   }
 
@@ -146,10 +153,21 @@ function keycloakClient() {
 
   const first = async (query) => (await admin(`/users?${query}`))[0] || null;
 
+  /** A realm with more than PAGE_MAX project roles, or a role held by more users, is silently
+   *  truncated by one call, so walk until a page comes back short. */
+  async function pages(path, query = '') {
+    const all = [];
+    for (let offset = 0; ; offset += PAGE_MAX) {
+      const page = await admin(`${path}?${query}first=${offset}&max=${PAGE_MAX}`) || [];
+      all.push(...page);
+      if (page.length < PAGE_MAX) return all;
+    }
+  }
+
   return {
     clientToken,
-    listProjectRoles: () => admin(`/roles?search=${encodeURIComponent(ROLE_PREFIX)}&max=1000`),
-    roleUsers: (name) => admin(`/roles/${encodeURIComponent(name)}/users?max=1000`),
+    listProjectRoles: () => pages('/roles', `search=${encodeURIComponent(PROJECT_ROLE_PREFIX)}&`),
+    roleUsers: (name) => pages(`/roles/${encodeURIComponent(name)}/users`),
     findByUsername: (username) => first(`username=${encodeURIComponent(username)}&exact=true`),
     findByEmail: (email) => first(`email=${encodeURIComponent(email)}&exact=true`),
     // 409 is another run, or another hand, having created the role already — read it back either way.
@@ -177,7 +195,7 @@ async function sync(argv = [], deps = {}) {
   const teams = await get(`${config.trackApiBase}/api/v1/projects/team-members`,
     { Authorization: `Bearer ${trackToken}` });
 
-  const roles = (await kc.listProjectRoles()).filter(r => r.name.startsWith(ROLE_PREFIX));
+  const roles = (await kc.listProjectRoles()).filter(r => r.name.startsWith(PROJECT_ROLE_PREFIX));
   const roleByName = new Map(roles.map(r => [r.name, r]));
   const userByUsername = new Map();
   const current = new Map();
@@ -279,7 +297,13 @@ function summaryLine(s) {
  * @param {object} [opts] {live} write, {deps} the same test seam `sync` takes
  */
 async function run({ live = false, deps } = {}) {
-  const summary = await sync(live ? ['--live'] : [], deps);
+  // See ORDERING at the top: `teamsFor` is the marker that a `project:<id>` role grants a team
+  // rather than narrowing its holder. Required here so the check reads the module as loaded now.
+  const refused = live && typeof require('../helpers/access-sql').teamsFor !== 'function';
+  if (refused) logger.error('[track-teams] live sync refused: P3-2 team-grant model not present');
+
+  const summary = await sync(live && !refused ? ['--live'] : [], deps);
+  if (refused) summary.mode = 'refused';
   logger.info(summaryLine(summary));
   return summary;
 }

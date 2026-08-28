@@ -13,7 +13,10 @@ process.env.TRACK_CLIENT_ID = 'demi-track-reader';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { plan, sync, summaryLine, usernameFor } = require('../../src/scripts/sync-track-teams');
+const {
+  plan, sync, summaryLine, usernameFor, run, keycloakClient
+} = require('../../src/scripts/sync-track-teams');
+const accessSql = require('../../src/helpers/access-sql');
 
 // Track staff rows. The IDIR GUID is upper case in Track and lower case in Keycloak usernames.
 const ADA = { staff_id: 10, idir_user_id: 'AAAA1111', email: 'ada@gov.bc.ca', is_active: true };
@@ -179,4 +182,37 @@ test('plan touches no role outside the project: prefix', () => {
   assert.deepStrictEqual(decided.grants, [{ username: 'aaaa1111@idir', roles: ['project:1'] }]);
   assert.deepStrictEqual(decided.revokes, [{ username: 'aaaa1111@idir', roles: ['project:9'] }]);
   assert.deepStrictEqual(decided.rolesToCreate, []);
+});
+
+test('a live run is refused before the team-grant model exists', async () => {
+  const held = Object.getOwnPropertyDescriptor(accessSql, 'teamsFor');
+  delete accessSql.teamsFor;
+  try {
+    const kc = fakeKc({ roles: [], users: [realmAda(), realmBo()] });
+
+    const summary = await run({ live: true, deps: { fetchJson: fakeFetch(TEAMS), kc } });
+
+    assert.deepStrictEqual(kc.log, [], 'no role is created and none is granted');
+    assert.strictEqual(summary.mode, 'refused');
+    assert.strictEqual(summary.grants, 3, 'the plan is still reported');
+  } finally {
+    if (held) Object.defineProperty(accessSql, 'teamsFor', held);
+  }
+});
+
+test('role listing pages past 1000', async (t) => {
+  const page = (n, tag) => Array.from({ length: n }, (_, i) => ({ name: `project:${tag}${i}` }));
+  const bodies = [{ access_token: 'admin-token' }, page(1000, 'a'), page(3, 'b')];
+  const urls = [];
+  t.mock.method(global, 'fetch', async (url) => {
+    urls.push(String(url));
+    return { ok: true, status: 200, json: async () => bodies.shift() };
+  });
+
+  const roles = await keycloakClient().listProjectRoles();
+
+  assert.strictEqual(roles.length, 1003, 'both pages, not just the first');
+  assert.strictEqual(urls.length, 3, 'a short page ends the walk');
+  assert.ok(urls[1].endsWith('first=0&max=1000'), urls[1]);
+  assert.ok(urls[2].endsWith('first=1000&max=1000'), urls[2]);
 });
