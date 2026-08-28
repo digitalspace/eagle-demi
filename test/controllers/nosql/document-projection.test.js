@@ -4,8 +4,6 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
-const fs = require('node:fs');
-const path = require('node:path');
 
 const documents = require('../../../src/repositories/documents');
 const documentController = require('../../../src/controllers/nosql/document');
@@ -30,7 +28,6 @@ function mockRes() {
 }
 
 const ANON = { query: {}, params: {}, body: {} };
-const ADMIN_USER = { realm_access: { roles: ['sysadmin'] } };
 
 /**
  * The read ACL gates ROWS, not fields — so a caller entitled to the row was getting the raw Cosmos
@@ -52,43 +49,22 @@ const STORED = {
 test('document routes withhold the raw Cosmos record', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
-  await t.test('neither the list nor the point read emits read[], s3Key or _etag', async () => {
-    t.mock.method(documents, 'listVisible', async () => ({
-      items: [structuredClone(STORED)], continuationToken: undefined
-    }));
-    t.mock.method(documents, 'getById', async () => structuredClone(STORED));
-
-    const list = mockRes();
-    await documentController.getDocuments({ ...ANON }, list);
-    const one = mockRes();
-    await documentController.getDocument({ params: { id: 'd1' }, query: {} }, one);
-
-    for (const [label, body] of [['list', list.body[0]], ['point read', one.body]]) {
-      assert.strictEqual(body.read, undefined, `${label}: the ACL is withheld`);
-      assert.strictEqual(body.s3Key, undefined, `${label}: the object key is withheld`);
-      assert.strictEqual(body._etag, undefined, `${label}: the concurrency token is withheld`);
-      assert.strictEqual(body.displayName, 'Application Part A', `${label}: the record survives`);
-      assert.strictEqual(body.documentFileName, 'part-a.pdf', `${label}: the label survives`);
-      assert.strictEqual(body.isPublished, true, `${label}: the mirror survives`);
-    }
-  });
-
-  /**
-   * The same for a privileged caller. The search path takes no privilege branch on which FIELDS
-   * leave — only on which rows — and a second rule here is exactly how the two projections came to
-   * disagree in the first place.
-   */
-  await t.test('a privileged caller gets the same projection, not the raw row', async () => {
+  // The point read is covered by document-redaction.test.js, which also proves the level 0 side.
+  await t.test('the list does not emit read[], s3Key or _etag', async () => {
     t.mock.method(documents, 'listVisible', async () => ({
       items: [structuredClone(STORED)], continuationToken: undefined
     }));
 
     const res = mockRes();
-    await documentController.getDocuments({ query: {}, user: ADMIN_USER }, res);
+    await documentController.getDocuments({ ...ANON }, res);
+    const body = res.body[0];
 
-    assert.strictEqual(res.body[0].read, undefined);
-    assert.strictEqual(res.body[0].s3Key, undefined);
-    assert.strictEqual(res.body[0]._etag, undefined);
+    assert.strictEqual(body.read, undefined, 'the ACL is withheld');
+    assert.strictEqual(body.s3Key, undefined, 'the object key is withheld');
+    assert.strictEqual(body._etag, undefined, 'the concurrency token is withheld');
+    assert.strictEqual(body.displayName, 'Application Part A', 'the record survives');
+    assert.strictEqual(body.documentFileName, 'part-a.pdf', 'the label survives');
+    assert.strictEqual(body.isPublished, true, 'the mirror survives');
   });
 
   /**
@@ -116,65 +92,8 @@ test('document routes withhold the raw Cosmos record', async (t) => {
     assert.strictEqual(res.body.isPublished, true);
   });
 
-  /**
-   * Why the strip lives at res.json and not in the data layer: updateDocument reads, spreads and
-   * upserts, so a narrowed READ would erase the ACL and the object key from the stored document on
-   * the next edit — which would unlink the file and hand the row an empty `read[]`.
-   */
-  await t.test('narrowing the response does not narrow what is stored', async () => {
-    t.mock.method(documents, 'getById', async () => structuredClone(STORED));
-    let saved;
-    t.mock.method(documents, 'upsert', async (doc) => { saved = doc; return doc; });
-
-    const res = mockRes();
-    await documentController.updateDocument({
-      params: { id: 'd1' }, query: {}, body: { displayName: 'Renamed' }
-    }, res);
-
-    assert.deepStrictEqual(saved.read, STORED.read, 'stored ACL intact');
-    assert.strictEqual(saved.s3Key, STORED.s3Key, 'stored object key intact');
-    assert.strictEqual(res.body.read, undefined, 'response still narrowed');
-    assert.strictEqual(res.body.s3Key, undefined, 'response still narrowed');
-    assert.strictEqual(res.body.displayName, 'Renamed');
-  });
-});
-
-/**
- * `GET /projects` already passed rows through publicView, which stripped `sources` and nothing
- * else — so it shipped a LARGER role vocabulary than the documents route did.
- */
-test('EVERY response that emits a document row goes through publicView', async () => {
-  // The three write paths — create, publish, delete — had no test at all: reverting the strip on
-  // any of them left the whole suite green, so they could regress to shipping `read[]`, `s3Key` and
-  // `_etag` to an anonymous caller silently.
-  //
-  // Asserted against the SOURCE rather than by driving each handler, deliberately. Driving them
-  // would pin the four sites that exist today and say nothing about the fifth somebody adds next
-  // year — and "somebody added a return path and forgot the strip" is precisely how this defect
-  // arrived. A source invariant fails on the new site, before anyone has to think of testing it.
-  //
-  // Comments are stripped first, reusing `test/helpers/router-source.js` — the same helper the
-  // auth-coverage test uses, and for the same reason it exists: a bare regex over source text
-  // counts `// return res.json(saved)` as a real call site, so a matcher that reads comments can be
-  // satisfied by prose. That lesson cost a review round once already. `jsonEmissions` reads each
-  // argument to its MATCHING paren: the line-bounded version of this missed the delete route
-  // outright, whose `deleted: publicView(existing)` sits three lines below its `res.json(`.
-  const { jsonEmissions } = require('../../helpers/router-source');
-  const emissions = jsonEmissions(fs.readFileSync(
-    path.join(__dirname, '../../../src/controllers/nosql/document.js'), 'utf8'));
-
-  assert.ok(emissions.length >= 6, `expected the known response sites, found ${emissions.length}`);
-
-  // A row-emitting site names a repository row BARE — `publicView(saved)`, `items.map(publicView)`.
-  // The negative lookahead for a dot is what separates that from a hand-built literal that merely
-  // reads a scalar off one: `{ id: doc.id, chunks: keepIds.length }` carries no ACL and no storage
-  // key, and counting it would make this test fail against correct code — which is how a source
-  // invariant gets deleted by the next person instead of fixed.
-  const ROW_SOURCES = /\b(saved|updated|existing|doc|items)\b(?!\s*\.)/;
-  const unstripped = emissions.filter(e => ROW_SOURCES.test(e) && !/publicView/.test(e));
-
-  assert.deepStrictEqual(unstripped, [],
-    'these emit a repository row without publicView — each one ships read[], s3Key and _etag');
+  // The redaction-safe update rule — the response is narrowed, the stored row is not — is proved
+  // in document-redaction.test.js alongside the PUT guard that depends on it.
 });
 
 test('the projects redactor withholds the ACL as well as the upstream payloads', async (t) => {

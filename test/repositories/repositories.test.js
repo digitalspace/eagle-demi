@@ -151,6 +151,17 @@ test('documents repository', async (t) => {
       'the dominant list should be single-partition');
   });
 
+  await t.test('listVisible projects through selectFor', async () => {
+    const calls = captureQuery(t);
+    await documents.listVisible({ ...PUBLIC, level: 4 }, {});
+    await documents.listVisible(systemAccess(), {});
+
+    assert.match(calls[0].spec.query, /^SELECT c\./, 'an anonymous read projects named fields');
+    assert.ok(!calls[0].spec.query.includes('c.s3Key'),
+      'the object key has maxVis 0 and must not leave Cosmos');
+    assert.match(calls[1].spec.query, /^SELECT \* FROM c WHERE /, 'level 0 reads the whole row');
+  });
+
   // The search controller pages this list by re-running it and slicing. WITHOUT an ORDER BY the
   // SQL API guarantees no order at all, so two requests can return the same row twice and never
   // return another — the same failure DEFAULT_ORDER prevents on the AI Search side. `c.id` because

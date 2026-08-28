@@ -105,7 +105,10 @@ Each item below overrides the corresponding section of the source document.
    `eagle-public` does not request today: `complianceLead`, `execProjectDirector`. Those start at
    `defaultVis: 2`. One exception list may ship in Phase 1 as a deliberate tightening:
    `projectLeadEmail`, `responsibleEPDEmail`, `cacEmail` to `defaultVis: 2`, only after the EAO
-   signs it off (Section 3, question 2). Without sign-off they stay at 4.
+   signs it off (Section 3, question 2). Without sign-off they stay at 4. On documents the same
+   mechanism holds `orcsClassification` and `edrmsRecordNumber` at 4: they are records-management
+   identifiers rather than content, and are the document-side candidates for `defaultVis: 2` under
+   that same sign-off.
 4. **Level 0 runs the same loop.** No `if (level === 0) return record`. `catalogFor(entity)` is
    called first so an unknown entity throws for every caller. This only holds because predicates
    widen rather than gate (Section 1): with the source semantics (predicate ANDed with level) a
