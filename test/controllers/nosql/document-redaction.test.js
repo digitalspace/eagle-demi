@@ -12,6 +12,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const documents = require('../../../src/repositories/documents');
+const projects = require('../../../src/repositories/projects');
 const documentController = require('../../../src/controllers/nosql/document');
 
 function mockRes() {
@@ -139,5 +140,41 @@ test('document field redaction', async (t) => {
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(saved._rid, undefined, 'the bookkeeping key is not written back');
     assert.deepStrictEqual(saved.ownRead, STORED.ownRead, 'ownRead comes off the stored row');
+  });
+});
+
+
+// P3-2 converts every write site to `readForLevel` at the level it already meant, so no stored
+// row's visibility moves. The unpublished default drops to level 1 in P3-3, not here.
+test('a written document carries the ladder tokens for its level', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const PUBLISHED_PARENT = { id: '207', read: ['public', 'staff'], isPublished: true };
+
+  async function create(isPublished) {
+    t.mock.method(projects, 'getById', async () => PUBLISHED_PARENT);
+    let saved;
+    t.mock.method(documents, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    await documentController.createDocument({
+      query: {},
+      body: { project: '207', displayName: 'Application Part A', s3Key: 'k.pdf', isPublished }
+    }, mockRes());
+
+    return saved;
+  }
+
+  await t.test('a new unpublished document still reads as level 2 after P3-2', async () => {
+    const saved = await create(false);
+
+    assert.deepStrictEqual(saved.read, ['staff'], 'the level the legacy ACL already meant');
+    assert.strictEqual(saved.isPublished, false);
+  });
+
+  await t.test('a published document reads as level 4', async () => {
+    const saved = await create(true);
+
+    assert.deepStrictEqual(saved.read, ['staff', 'idir', 'public']);
+    assert.strictEqual(saved.isPublished, true);
   });
 });

@@ -18,7 +18,7 @@ const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const chunks = require('../../repositories/chunks');
 const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
-const { resolveAccess, systemAccess, pageSizeFor, SECURE_ROLES } = require('../../helpers/access-sql');
+const { resolveAccess, systemAccess, pageSizeFor, readForLevel } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeDocument } = require('../../helpers/purge');
@@ -44,7 +44,7 @@ function resolveDocumentAcl(parentProject, isPublished) {
 
   return {
     published,
-    read: published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]
+    read: readForLevel(published ? 4 : 2)
   };
 }
 
@@ -360,9 +360,7 @@ exports.setDocumentPublished = async (req, res) => {
       });
     }
 
-    const updated = await documents.setPublished(
-      existing.id, existing.projectId, published, SECURE_ROLES
-    );
+    const updated = await documents.setPublished(existing.id, existing.projectId, published);
 
     // The highest-value row in the table: this is the call that changes who can see a document.
     // Before the chunk patch below, not after — the visibility change is already applied by here,
@@ -377,7 +375,7 @@ exports.setDocumentPublished = async (req, res) => {
 
     const acl = updated && Array.isArray(updated.read) && updated.read.length > 0
       ? updated.read
-      : (published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]);
+      : readForLevel(published ? 4 : 2);
 
     // No document LIST is a live read any more (#148), so without this the row stayed listed and
     // keyword-searchable under its old ACL until the indexer's next PT5M pass — the file was
@@ -632,7 +630,7 @@ const STREAM_BATCH_CHUNKS = 200;
 async function ingestChunksStreaming(req, res, doc) {
   const readline = require('readline');
 
-  const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : [...SECURE_ROLES];
+  const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : readForLevel(2);
   const acc = createChunkAccumulator();
   const keepIds = [];
   let provenance = null;
@@ -849,7 +847,7 @@ exports.ingestChunks = async (req, res) => {
       return res.status(400).json({ error: 'markdown (string) or error (string) is required' });
     }
 
-    const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : [...SECURE_ROLES];
+    const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : readForLevel(2);
 
     const items = chunkMarkdown(markdown).map(({ pageNumber, chunkIndex, content }) => ({
       id: chunks.chunkId(doc.id, pageNumber, chunkIndex),

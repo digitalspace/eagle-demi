@@ -12,7 +12,7 @@
 
 const projects = require('../../repositories/projects');
 const documents = require('../../repositories/documents');
-const { resolveAccess, systemAccess, pageSizeFor, SECURE_ROLES } = require('../../helpers/access-sql');
+const { resolveAccess, systemAccess, pageSizeFor, readForLevel } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeProject } = require('../../helpers/purge');
@@ -121,7 +121,7 @@ exports.createProject = async (req, res) => {
 
     // Fail closed: private unless explicitly published.
     const published = isPublished === true || isPublished === 'true';
-    const read = published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES];
+    const read = readForLevel(published ? 4 : 2);
     const now = new Date().toISOString();
 
     const saved = await projects.upsert({
@@ -224,7 +224,7 @@ exports.updateProject = async (req, res) => {
       ? { read: existing.read, isPublished: existing.isPublished }
       : {
         isPublished: isPublished === true,
-        read: isPublished === true ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]
+        read: readForLevel(isPublished === true ? 4 : 2)
       };
 
     const saved = await projects.upsert({

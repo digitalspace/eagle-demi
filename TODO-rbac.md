@@ -995,7 +995,7 @@ The whole ladder is this unit. No endpoint, no stored-data change.
 - [x] `src/vis/level.js:10` — `sysadmin: 1`, `demi-admin: 1`, add `idir: 3`; `staff`,
       `demi-service-*`, `compliance`, `public` unchanged. Rewrite the header comment `:6-8`.
       No `team` entry: team is a row-plane fact (doc §5 item 1).
-- [ ] Every `[...SECURE_ROLES]` ACL literal becomes `readForLevel(n)` at the level it means TODAY,
+- [x] Every `[...SECURE_ROLES]` ACL literal becomes `readForLevel(n)` at the level it means TODAY,
       **and merges with the commit above, never after a deploy of it** — between the two, every
       unpublished row written carries no `staff` token and is invisible to all of EAO.
       so behaviour is unchanged: unpublished → `readForLevel(2)`, published → `readForLevel(4)`.
@@ -1004,7 +1004,7 @@ The whole ladder is this unit. No endpoint, no stored-data change.
       `ADMIN_ROLES` and are unaffected). This lands here and not in P3-3 because `staff` leaves
       `SECURE_ROLES` in this unit: leave one site behind and every row written between the two
       merges carries no `staff` token and is invisible to all of EAO.
-- [ ] `src/controllers/nosql/api-key.js:31` `GRANTABLE_ROLES` derives from `SECURE_ROLES` and
+- [x] `src/controllers/nosql/api-key.js:31` `GRANTABLE_ROLES` derives from `SECURE_ROLES` and
       becomes `[...AUTHENTICATED_ROLES, 'compliance', 'public']`; dropping `staff` or `compliance`
       from it makes those keys unmintable (400 `Unknown role(s)`).
       Test: `'staff and compliance API keys can still be minted'`.
@@ -1067,9 +1067,22 @@ The whole ladder is this unit. No endpoint, no stored-data change.
   - [x] `test/helpers/access-odata.test.js` case `'filterFor emits the team arm'` — a staff caller
         with `teams: ['207']` gets a filter containing `'team'` and `207`, joined by `or`; a caller
         with `projectScope: ['207']` still gets the scope `and`.
-  - [ ] `test/controllers/nosql/document-redaction.test.js` case `'a new unpublished document still
+  - [x] `test/controllers/nosql/document-redaction.test.js` case `'a new unpublished document still
         reads as level 2 after P3-2'` — `deepStrictEqual(saved.read, ['staff'])`. P3-2 converts the
         write sites without moving any behaviour; the default drops to level 1 in P3-3.
+  - [x] Same file, `'a published document reads as level 4'` — `['staff','idir','public']`. The same
+        pair for projects (`test/controllers/nosql-controllers.test.js`) and boundaries
+        (`test/controllers/nosql/boundary-acl.test.js`, new).
+  - [x] The fallback arms are literal too, or a revert of one is unobserved:
+        `nosql-controllers.test.js` `'a patch result with no read[] still indexes the level it was
+        set to'` (`document.js:380`), `'a document with no ACL of its own gives its chunks level 2'`
+        and its streamed twin (`:635`, `:852`), and
+        `test/repositories/document-acl-cascade.test.js` `'setPublished moves ownRead with it'`,
+        which now asserts `['staff']` and `['staff','idir','public']` — `setPublished` builds the
+        ACL itself and its `secureRoles` argument is gone.
+  - [x] `test/middleware/require-roles.test.js` case `'staff and compliance API keys can still be
+        minted'` — 201 for each. `allowWrite: true` on the staff body: staff is in `WRITE_ROLES`
+        and that confirmation is unchanged.
   - [x] `test/helpers/access-odata.test.js` case `'a staff caller now gets a filter'` — asserts
         `filterFor({ roles: ['public','staff'] }).filter` contains `staff` and is not null. Fails if
         `staff` is put back in `SECURE_ROLES`.
@@ -1110,8 +1123,10 @@ Merges only after the `project:<id>` roles dependency above carries a date.
 - [ ] `src/controllers/nosql/project.js:123,152,223-228` — `createProject` ignores `isPublished`
       from the body and admits at level 1; `updateProject`'s `isPublished` arm is deleted (widening
       moves to P3-4) and the ACL is carried from `existing` unconditionally.
-- [ ] `frontend/src/app/services/registry-state.service.ts` — gate on `level <= 2` from `/api/me`,
-      not on `privileged`, which is now false for staff (doc §5, "Still valid").
+- [x] ~~`frontend/src/app/services/registry-state.service.ts` — gate on `level <= 2` from
+      `/api/me`, not on `privileged`, which is now false for staff (doc §5, "Still valid").~~ done
+      in P3-2 B: `privileged` went false for staff there, so the gate could not wait for this unit.
+      Specs `'level 2 clears isUnauthorized'` and `'level 3 keeps isUnauthorized'`.
 - [ ] `src/swagger/swagger.yaml` — `POST /api/documents` and `POST /api/projects`: new records are
       admitted at level 1 and `isPublished` in a create body is ignored.
 - Tests
@@ -1122,8 +1137,8 @@ Merges only after the `project:<id>` roles dependency above carries a date.
         `['team']`.
   - [ ] `test/controllers/nosql/nosql-controllers.test.js` case `'PUT no longer changes a level'` —
         `{ isPublished: true }` on a level-1 project → the stored `read` is unchanged.
-  - [ ] `frontend/.../registry-state.service.spec.ts` case `'level 2 with privileged false clears
-        isUnauthorized'`. Fails if the old `privileged` check survives.
+  - [x] ~~`frontend/.../registry-state.service.spec.ts` case `'level 2 with privileged false clears
+        isUnauthorized'`~~ done in P3-2 B with the line above.
 - Acceptance
   - [ ] `node --test test/controllers/nosql/*.test.js`; `cd frontend && yarn lint && yarn test && yarn build`.
   - [ ] On test: create a document as a staff user holding `project:207`, then `GET` it back as the

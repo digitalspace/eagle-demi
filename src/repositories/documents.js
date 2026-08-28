@@ -9,7 +9,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead } = require('../helpers/access-sql');
+const { canRead, readForLevel } = require('../helpers/access-sql');
 const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'documents';
@@ -375,13 +375,11 @@ async function patchExtraction(id, projectId, fields) {
  * Set publication state. This — NOT deletion — is how a document is hidden from the public
  * and from proponents.
  *
- * `read[]` is authoritative, so publishing/unpublishing means adding or removing 'public'
- * from it; `isPublished` is kept as the mirror. Privileged roles retain access either way.
- *
- * @param {string[]} secureRoles  roles that keep access when unpublished
+ * `read[]` is authoritative, so publishing moves the row between ladder levels 4 and 2;
+ * `isPublished` is kept as the mirror. Privileged roles retain access either way.
  */
-async function setPublished(id, projectId, published, secureRoles) {
-  const read = published ? ['public', ...secureRoles] : [...secureRoles];
+async function setPublished(id, projectId, published) {
+  const read = readForLevel(published ? 4 : 2);
   return cosmos.patch(CONTAINER, String(id), String(projectId), [
     { op: 'set', path: '/isPublished', value: Boolean(published) },
     { op: 'set', path: '/read', value: read },

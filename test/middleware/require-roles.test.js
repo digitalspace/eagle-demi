@@ -6,6 +6,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { requireWrite, requireAdmin } = require('../../src/middleware/require-roles');
+const apiKeys = require('../../src/repositories/api-keys');
+const apiKeyController = require('../../src/controllers/nosql/api-key');
 const {
   isPrivileged, canWrite, canAdmin, SECURE_ROLES, ADMIN_ROLES, WRITE_ROLES
 } = require('../../src/helpers/access-sql');
@@ -110,11 +112,35 @@ test('demi-service-write writes data and administers nothing', async (t) => {
 
   await t.test('a key may be granted it', () => {
     // The role is useless if the mint route rejects it as unknown. GRANTABLE_ROLES derives from
-    // SECURE_ROLES, so this asserts the derivation still reaches the new tier.
+    // AUTHENTICATED_ROLES, so this asserts the derivation still reaches the new tier.
     const { GRANTABLE_ROLES } = require('../../src/controllers/nosql/api-key');
     assert.ok(GRANTABLE_ROLES.includes('demi-service-write'));
     assert.ok(GRANTABLE_ROLES.includes('demi-service-read'));
   });
+});
+
+// A role the mint route rejects as unknown is a role nobody can hold. `staff` left SECURE_ROLES in
+// P3-2, so GRANTABLE_ROLES derives from AUTHENTICATED_ROLES instead.
+test('staff and compliance API keys can still be minted', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+  t.mock.method(apiKeys, 'upsert', async (record) => record);
+
+  const mintRes = () => ({
+    statusCode: 200,
+    status(code) { this.statusCode = code; return this; },
+    json() { return this; }
+  });
+
+  // `allowWrite` because staff is in WRITE_ROLES, which is a separate confirmation and unchanged.
+  const staff = mintRes();
+  await apiKeyController.createApiKey(
+    { body: { name: 'staff key', roles: ['staff'], allowWrite: true } }, staff);
+  assert.strictEqual(staff.statusCode, 201);
+
+  const compliance = mintRes();
+  await apiKeyController.createApiKey(
+    { body: { name: 'compliance key', roles: ['compliance'] } }, compliance);
+  assert.strictEqual(compliance.statusCode, 201);
 });
 
 test('requireAdmin admits every role that could administer before the split', async (t) => {

@@ -699,31 +699,31 @@ export class RegistryStateService {
 
   /** Ask the API what this caller may see; fall back to the token roles when it cannot answer. */
   private async loadVisLevel(): Promise<void> {
-    let privileged: boolean | null = null;
+    let staffUi: boolean | null = null;
     try {
       const res = await fetch(`${this.getBasePath()}/me`, {
         signal: AbortSignal.timeout(RegistryStateService.meTimeoutMs)
       });
       if (res.ok) {
         const me = await res.json();
-        if (typeof me?.level === 'number') this.visLevel.set(me.level);
-        // Read the server's answer; never re-derive it from `tier`. A staff credential scoped to
-        // one project reports tier `scoped`, so a `tier === 'privileged'` test called that staffer
-        // unauthorized.
-        if (typeof me?.privileged === 'boolean') privileged = me.privileged;
+        if (typeof me?.level === 'number') {
+          this.visLevel.set(me.level);
+          // The level, not `privileged`, which is false for staff since `staff` left SECURE_ROLES.
+          staffUi = me.level <= 2;
+        }
       }
     } catch (err) {
       console.warn('[Me] /api/me unavailable, falling back to token roles', err);
     }
-    if (privileged === null) {
+    if (staffUi === null) {
       // A hung or refusing /api/me must not lock a real staffer out for the session; redaction is
       // server-side either way, so the client keeps level 4 and only the UI gate falls back.
       const roles: string[] = this.keycloak?.tokenParsed?.realm_access?.roles || [];
-      privileged = roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
+      staffUi = roles.includes('sysadmin') || roles.includes('staff') || roles.includes('demi-admin');
     }
     // Anonymous is the public tier too, so this stays conjoined with isAuthenticated — otherwise
     // every public visitor gets the "your account has no staff access" copy.
-    this.isUnauthorized.set(this.isAuthenticated() && !privileged);
+    this.isUnauthorized.set(this.isAuthenticated() && !staffUi);
   }
 
   // Keycloak initialization Flow

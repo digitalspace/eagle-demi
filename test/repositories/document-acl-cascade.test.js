@@ -198,12 +198,12 @@ test('setPublished moves ownRead with it', async (t) => {
       return {};
     });
 
-    await documents.setPublished('d1', '207', false, PRIVATE_PROJECT);
+    await documents.setPublished('d1', '207', false);
 
     const read = ops.find(o => o.path === '/read').value;
     const ownRead = ops.find(o => o.path === '/ownRead').value;
     assert.deepStrictEqual(ownRead, read, 'the deliberate decision becomes the document\'s own ACL');
-    assert.ok(!ownRead.includes('public'));
+    assert.deepStrictEqual(read, ['staff'], 'unpublishing lands the row at level 2');
   });
 
   await t.test('and a per-document publish does the same', async (tt) => {
@@ -213,10 +213,10 @@ test('setPublished moves ownRead with it', async (t) => {
       return {};
     });
 
-    await documents.setPublished('d1', '207', true, PRIVATE_PROJECT);
+    await documents.setPublished('d1', '207', true);
 
     const ownRead = ops.find(o => o.path === '/ownRead').value;
-    assert.ok(ownRead.includes('public'));
+    assert.deepStrictEqual(ownRead, ['staff', 'idir', 'public'], 'publishing lands it at level 4');
   });
 });
 
