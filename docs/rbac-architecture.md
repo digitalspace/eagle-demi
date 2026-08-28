@@ -330,8 +330,8 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
 
 ### Superseded
 
-1. **Levels are not one nested ladder that `sysadmin` tops.** §1's table put `sysadmin` at 0 and
-   called 0 "Sensitive". Level 0 is a compartment outside the ladder; `sysadmin` is superuser on
+1. **Levels are not one nested ladder that `sysadmin` tops.** The first draft of §1 (2026-08-28,
+   superseded the same day) put `sysadmin` at 0 and called 0 "Sensitive". Level 0 is a compartment outside the ladder; `sysadmin` is superuser on
    levels 1-4 only. `ROLE_LEVELS` (`src/vis/level.js:10`): `sysadmin: 0 → 1`, `demi-admin: 0 → 1`;
    `staff: 2`, `demi-service-read/write: 2`, `compliance: 2`, `public: 4` unchanged; add `idir: 3`.
    There is no `team` entry — team membership is a row-plane fact resolved per record by the team

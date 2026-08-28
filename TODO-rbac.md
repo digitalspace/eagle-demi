@@ -5,7 +5,8 @@
 Rules: append work here before doing it, strike wrong lines with a reason, date every
 measurement, `node --test` per new/changed endpoint, swagger same PR, `src/utils/logger.js` only,
 ask before commit. **Merging is deploying** on test: every unit leaves anonymous responses
-byte-identical unless its line says otherwise. Line cites are at `5c6ce05` (2026-08-27).
+byte-identical unless its line says otherwise. Line cites: Phases 0-2 at `5c6ce05` (2026-08-27); Phase 3 and later at `c71431a` (2026-08-28).
+Re-verify before editing.
 
 Merge order: U1-U5 (Phase 0) then U6-U11 (Phase 1) then P2-1..P2-5, P3-0..P3-9, P4-1..P4-5,
 P5-1..P5-2. P5b is optional and unscheduled.
