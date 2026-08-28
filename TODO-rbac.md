@@ -143,11 +143,10 @@ Doc §2 item 10. Code and app setting ship together.
         setting already present.
   - [ ] Prod: `MINIO_*=… ADMIN_API_KEY=… DOCLING_API_KEY=… ./scripts/deploy-infra.sh prod --what-if`,
         review, then `CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live`.
-  - [ ] Verify: `GET /api/deployments/latest` status 4, then the two curls above. Test 2026-08-27:
-        anonymous `/api/projects` 200 and byte-identical. The unlisted-client 401 is NOT shown live —
-        a malformed Bearer 401s at `jwt.verify` before the allowlist runs. It needs a signed token
-        from a client other than `eagle-admin-console` (e.g. `epic-admin` client credentials);
-        until then the guard is proved only by `test/helpers/client-allowlist.test.js`.
+  - [x] Verify: `GET /api/deployments/latest` status 4, then the two curls above. Test 2026-08-27:
+        anonymous `/api/projects` 200 and byte-identical. 2026-08-28: a signed client-credentials
+        token from a throwaway confidential client (`azp=demi-allowlist-probe`, created and deleted
+        the same minute) got `401 Unauthorized. Client is not permitted to call this API.`
   - [ ] Rollback: revert the code commit and redeploy the API. The app setting alone is harmless —
         the old build ignores `DEMI_ALLOWED_CLIENTS` only if it is empty, so leave the setting in
         place and revert code, never the reverse. An empty setting on the new build is not a boot
