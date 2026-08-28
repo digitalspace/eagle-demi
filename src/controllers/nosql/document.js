@@ -343,44 +343,68 @@ exports.updateDocument = async (req, res) => {
 };
 
 /**
- * Publish or unpublish. This is how a document is hidden from the public and from
- * proponents — deletion is for genuine removal, not for hiding.
+ * Move a document to a ladder level (docs/rbac-architecture.md §1, "Widening is an act").
+ *
+ * The ONLY route that raises a document's level, and the only place a document is hidden from the
+ * public — deletion is for genuine removal, not for hiding.
  */
-exports.setDocumentPublished = async (req, res) => {
+exports.setLevel = async (req, res) => {
   try {
     const access = resolveAccess(req);
+    const { level, confirm, reason } = req.body || {};
+
+    if (!Number.isInteger(level) || level < 1 || level > 4) {
+      return res.status(400).json({
+        error: 'level must be an integer 1-4. Level 0 is the sealed compartment and is not set here.'
+      });
+    }
+    if (level === 4 && confirm !== true) {
+      return res.status(400).json({ error: 'Publishing to level 4 requires "confirm": true.' });
+    }
+    if (level === 4 && !String(reason || '').trim()) {
+      return res.status(400).json({ error: 'Publishing to level 4 requires a non-empty "reason".' });
+    }
+
     const existing = await documents.getById(access, req.params.id, req.query.project);
     if (!existing) {
       return res.status(404).json({ error: 'Document not found' });
     }
 
-    const published = req.body.isPublished === true || req.body.isPublished === 'true';
+    const from = levelOfRead(existing.read);
     const parentProject = await projects.getById(access, existing.projectId);
-
-    // A document still cannot out-rank its parent: publishing under a private project — or under
-    // no readable project at all — is refused rather than silently exposing it.
-    if (published && !(parentProject && resolveDocumentAcl(parentProject, true).published)) {
+    // A document still cannot out-rank its parent, and an unreadable parent fails closed. Only a
+    // widen is checked: an unreachable project must never block hiding a document.
+    if (level > from && level > (parentProject ? levelOfRead(parentProject.read) : 1)) {
       return res.status(409).json({
-        error: 'Cannot publish a document whose project is not published.'
+        error: 'Cannot raise a document above the level of its project.'
       });
     }
 
-    const updated = await documents.setPublished(existing.id, existing.projectId, published);
+    // Pulling a record back from public is incident response, not a routine correction.
+    const takedown = from === 4 && level < 4;
+    if (takedown && !access.roles.includes('sysadmin')) {
+      return res.status(403).json({
+        error: 'Only sysadmin may pull a record back from level 4. See docs/takedown-runbook.md.'
+      });
+    }
+
+    const published = level === 4;
+    const updated = await documents.setPublished(existing.id, existing.projectId, published, level);
 
     // The highest-value row in the table: this is the call that changes who can see a document.
-    // Before the chunk patch below, not after — the visibility change is already applied by here,
-    // and the patch can return 500. That path is the one most worth having a row for.
+    // Before the chunk patch below, not after — the change is already applied by here and the
+    // patch can return 500.
     auditEvent(req, {
-      action: published ? 'document.publish' : 'document.unpublish',
+      action: takedown ? 'record.takedown' : (level > from ? 'record.widen' : 'record.narrow'),
       targetType: 'document',
       targetId: existing.id,
       projectId: existing.projectId,
-      detail: { displayName: existing.displayName, isPublishedFrom: existing.isPublished }
+      detail: { from, to: level, confirmed: confirm === true, reason: reason || '' }
     });
 
     const acl = updated && Array.isArray(updated.read) && updated.read.length > 0
       ? updated.read
-      : readForLevel(published ? 4 : 2);
+      : readForLevel(level);
 
     // No document LIST is a live read any more (#148), so without this the row stayed listed and
     // keyword-searchable under its old ACL until the indexer's next PT5M pass — the file was
@@ -425,6 +449,20 @@ exports.setDocumentPublished = async (req, res) => {
   } catch (err) {
     return serverError(res, err, 'document controller failed');
   }
+};
+
+/**
+ * Publish or unpublish. DEPRECATED — a thin alias for `setLevel`, kept because
+ * eagle-admin-console still sends `{ isPublished }`. It goes through the same guards on purpose:
+ * an alias that skipped them would be the way around the ladder.
+ */
+exports.setDocumentPublished = (req, res) => {
+  const body = req.body || {};
+  const published = body.isPublished === true || body.isPublished === 'true';
+  req.body = published
+    ? { level: 4, confirm: true, reason: body.reason || 'published through PUT /documents/:id/published' }
+    : { level: 2 };
+  return exports.setLevel(req, res);
 };
 
 /**

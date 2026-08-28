@@ -376,11 +376,14 @@ async function patchExtraction(id, projectId, fields) {
  *
  * `read[]` is authoritative, so publishing moves the row between ladder levels 4 and 2;
  * `isPublished` is kept as the mirror. Privileged roles retain access either way.
+ *
+ * `level` carries the other two rungs for `PUT /documents/:id/level`; `published` alone still
+ * means the 4/2 pair every existing caller wrote.
  */
-async function setPublished(id, projectId, published) {
-  const read = readForLevel(published ? 4 : 2);
+async function setPublished(id, projectId, published, level = published ? 4 : 2) {
+  const read = readForLevel(level);
   return cosmos.patch(CONTAINER, String(id), String(projectId), [
-    { op: 'set', path: '/isPublished', value: Boolean(published) },
+    { op: 'set', path: '/isPublished', value: read.includes('public') },
     { op: 'set', path: '/read', value: read },
     // `ownRead` MOVES WITH IT. This is a deliberate per-document decision about that document, so
     // it becomes the document's own ACL — the thing `setAclForProject` intersects against. Without
