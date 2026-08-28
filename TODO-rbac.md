@@ -1084,7 +1084,7 @@ Branch: `feat/ladder-widen-endpoint`
       the row leaves the AI Search index and every cache untouched.
 - [ ] `auditEvent(req, { action: level > from ? 'record.widen' : 'record.narrow', targetType,
       targetId, projectId, detail: { from, to, confirmed: level === 4 } })` before responding —
-      signature `src/utils/audit.js:182`, pattern `project.js:222-232`.
+      signature `src/utils/audit.js:182`, pattern `project.js:247-257`.
 - [ ] `src/swagger/swagger.yaml` — both routes, 200/400/403/409, and the deprecation note.
 - Tests: `test/controllers/nosql/record-level.test.js`
   - [ ] `'level 4 without a reason is 400'` and `'a reason is optional below level 4'`.
@@ -1148,8 +1148,8 @@ level, never changes anyone else's access, and never touches the field plane.
       in-process cache keyed by party, same shape as the API-key cache (`auth.js:30-37`) —
       `ponytail: a revoke takes effect within the TTL; drop the TTL if that is ever too slow`.
 - [ ] `readClause:257`, `canRead:384`, `filterFor` (`access-odata.js:63`) each gain ONE extra OR
-      arm: the record's id or projectId is in a credential's `scope.ids` AND its `read[]` carries one
-      of `readForLevel(min(levels))`'s tokens. No new SQL shape — the level check is the same
+      arm: the record's id or projectId is in a credential's `scope.ids` AND `levelOfRead(read)` is in
+      the credential's `levels` (doc §1: a credential names the levels it may see). No new SQL shape — the level check is the same
       `EXISTS ... r IN (...)` / `read/any` the role arm already builds.
 - [ ] Auto-revoke on state change, not only on the clock: the P3-0 Track feed revokes every live
       credential over a project when that project closes or its work completes, audited
@@ -1352,7 +1352,7 @@ system caller must stop seeing these rows — plus one release path.
 
 Branch: `feat/level-zero-token`
 
-- [ ] `src/vis/level.js` — `readForLevel(0)` returns `['compliance']`, and
+- [ ] `src/helpers/access-sql.js` (home of `readForLevel`/`levelOfRead` since P3-2) — `readForLevel(0)` returns `['compliance']`, and
       `levelOfRead(['compliance'])` returns 0. `readForLevel` covers 1-4 only.
 - [ ] `src/helpers/access-sql.js` — `readClause:257` stops returning bare `true` for a privileged
       caller: when the caller's roles do not include `compliance` it returns
