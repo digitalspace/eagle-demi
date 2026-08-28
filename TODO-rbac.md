@@ -832,7 +832,8 @@ The whole ladder is this unit. No endpoint, no stored-data change.
       `WRITE_ROLES:58` untouched. This is the one line that makes level 1 enforceable
       (`readClause:261`, `canRead:399`, `access-odata.js:72` all key off `isPrivileged`).
 - [ ] `src/middleware/auth.js:21` — `authMiddleware` stops gating on `isPrivileged`. Add
-      `AUTHENTICATED_ROLES = Object.freeze([...new Set([...SECURE_ROLES, ...WRITE_ROLES, 'compliance'])])`
+      `AUTHENTICATED_ROLES = Object.freeze([...new Set([...SECURE_ROLES, ...WRITE_ROLES])])` (no `compliance`:
+      `/db/stats`, `/admin/index-progress`, `/search/summary`, `/links` have no second gate)
       and an
       `isAuthenticatedRole(roles)` beside it in `access-sql.js`, export both, and 403 on that
       instead. Without this line the constant change above locks `staff` out of every write and
@@ -913,10 +914,10 @@ The whole ladder is this unit. No endpoint, no stored-data change.
   - [ ] `test/middleware/auth.test.js` case `'a staff-only token passes authMiddleware after the
         SECURE_ROLES change'` — `next()` runs and nothing 403s. Fails if the gate is still
         `isPrivileged`.
-  - [ ] Same file, `'a compliance-only token passes authMiddleware'` — same assertion. This is what
-        makes `requireRole('compliance')` reachable in P5-2.
+  - [ ] Same file, `'a compliance-only token is still 403 at authMiddleware'` — the compartment
+        role never reaches the ladder routes; P5-2 mounts its own chain.
   - [ ] Same file, `'a demi-service-read token still passes authMiddleware'` — `next()` runs. Fails
-        if `AUTHENTICATED_ROLES` is spelled `[...WRITE_ROLES, 'compliance']`, which omits it
+        if `AUTHENTICATED_ROLES` is spelled `[...WRITE_ROLES]`, which omits it
         (`test/middleware/require-roles.test.js:63-66`).
   - [ ] `test/vis/level.test.js:48` — delete `'levels 1 and 3 have no role until EAO question 1 is
         answered'`; add `'sysadmin is level 1, not 0'` (`levelFromRoles(['sysadmin']) === 1`) and
@@ -1018,8 +1019,7 @@ Branch: `feat/vis-classify-endpoint`
 - [ ] `src/vis/redact.js:66-77` — clamp inside `redactForAccess` where the dial is read:
       `const cap = levelOfRead(doc.read); ... visible(level, Math.min(effectiveVis(entry, dials[key]), cap))`,
       and the same in `visibleChildren:44`. `Math.min` is not a comparison, so the
-      `visible() is the only comparison` ratchet still holds; update the stale justification comment
-      at `test/vis/redact-matrix.test.js:179`.
+      `visible() is the only comparison` ratchet still holds.
 - Tests
   - [ ] `test/vis/redact-matrix.test.js` case `'a field is never wider than its record'` — a row
         `read: ['team','staff']` with a `defaultVis: 4` field is absent for a level-3 and a level-4
@@ -1262,8 +1262,9 @@ Branch: `feat/level-zero-routes`
       (unseal and return, redacted at the caller's level), `GET /api/sealed` (ids, `sealedAt` and
       `title` only — never content). All three `authMiddleware` + `requireRole('compliance')`.
       `sysadmin` gets 403 from the same middleware: doc §1, superuser is levels 1-4.
-- [ ] No auth change here: P3-2's `AUTHENTICATED_ROLES` is what lets a `compliance`-only credential
-      reach `requireRole('compliance')`. Before it, `authMiddleware` 403s the caller first.
+- [ ] Sealed routes never use `authMiddleware` (it 403s `compliance`): mount `authenticate` (the raw
+      verifier in `src/helpers/auth.js`) then `requireRole('compliance')`. Test: `'a compliance-only
+      token reaches the sealed routes and nothing else'`.
 - [ ] `POST /api/sealed/:id/release` — `requireRole('compliance')` and `confirm === true`; unseals,
       writes the record to its ordinary container with `read: readForLevel(1)`, deletes the sealed
       row, audits `sealed.release` with `{ targetId, newId, authority }` from the body. This is the

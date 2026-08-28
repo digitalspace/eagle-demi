@@ -59,13 +59,15 @@ widest token present, 1 when none.
 `SECURE_ROLES` and `isPrivileged` carry the ROW-plane short-circuit meaning and nothing else. They
 must not also decide who may hold a session. `authMiddleware` (`src/middleware/auth.js:21`) 403s
 any caller `isPrivileged` rejects and fronts every write and admin route, so dropping `staff` from
-`SECURE_ROLES` on its own would lock staff out of the whole API and keep 403ing a `compliance`-only
-credential. `authMiddleware` therefore gates on a separate
-`AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES, 'compliance'])]` — every role
-that may hold a session — and the two sets move independently. `SECURE_ROLES` is in that union
-because `demi-service-read` is privileged for reads and holds no write role; `WRITE_ROLES` alone
-would 403 it. `requireWrite`, `requireAdmin` and `requireRole` stay the
-per-route gates behind it.
+`SECURE_ROLES` on its own would lock staff out of the whole API. `authMiddleware` therefore gates
+on a separate `AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES])]` — the
+ladder's staff and service roles — and the two sets move independently. `SECURE_ROLES` is in that
+union because `demi-service-read` is privileged for reads and holds no write role. `compliance` is
+NOT in it: four routes sit behind `authMiddleware` with no second gate (`/db/stats`,
+`/admin/index-progress`, `/search/summary`, `/links`), and a compartment credential has no business
+there. The sealed routes (§1 Level 0) mount their own chain, `authenticate` then
+`requireRole('compliance')`, and never pass through `authMiddleware`. `requireWrite`,
+`requireAdmin` and `requireRole` stay the per-route gates behind it.
 
 **Back-compat.** Legacy `read[]` values (`['sysadmin','staff','demi-admin']`, with `'public'` when
 published) already contain `staff`, so they read as level 2 — today's meaning. Admin role names in
@@ -292,8 +294,8 @@ of §1-§3. Phases 0-2 are live on test; nothing shipped is withdrawn.
    `GRANTABLE_ROLES` derives from `SECURE_ROLES` and must move to `AUTHENTICATED_ROLES ∪ public`
    or `staff` keys become unmintable. Dropping `staff` from `SECURE_ROLES` is also not enough
    on its own: `authMiddleware` 403s on `isPrivileged`, so the same commit must move that gate to
-   `AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES, 'compliance'])]` (§1,
-   Superuser) or staff loses every authenticated route and `demi-service-read` loses the API.
+   `AUTHENTICATED_ROLES = [...new Set([...SECURE_ROLES, ...WRITE_ROLES])]` (§1, Superuser) or staff
+   loses every authenticated route and `demi-service-read` loses the API.
 6. **§3 question 1's answer is replaced.** "Nested levels 0-4 with lateral groups inside a level" is
    wrong on both halves. Model in §1.
 ### Still valid
