@@ -52,6 +52,8 @@ cells, then deletes the rows and revokes the keys (the tail of its output confir
 Expect `26 passed, 0 failed`. Use the kill switch (`''`) if search answers 5xx or the probe fails;
 the kill switch is reversed the same way.
 
+Pulling a published record back from the public is a different procedure: `takedown-runbook.md`.
+
 ## Rotating ADMIN_API_KEY
 
 Owner: Daniel Truong — the only holder of a prod write login, and the only person who can run
