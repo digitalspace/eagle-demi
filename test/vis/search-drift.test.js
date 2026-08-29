@@ -21,8 +21,11 @@ const INDEX_CATALOGS = [
   ['documents', 'index-documents']
 ];
 
-/** `read` is selected on purpose — the redactor derives `isPublished` from it and then drops it. */
-const ACL_FIELD = 'read';
+/**
+ * Selected on purpose and dropped by the redactor: `read` is what `isPublished` is derived from,
+ * `vis` is the dial map the redactor reads. Both are maxVis 0, so neither reaches a caller.
+ */
+const POLICY_FIELDS = new Set(['read', 'vis']);
 
 test('DOCUMENT_SELECT is a subset of maxVis 4 index fields', () => {
   const catalog = catalogFor('index-documents');
@@ -31,7 +34,7 @@ test('DOCUMENT_SELECT is a subset of maxVis 4 index fields', () => {
 
   for (const name of names) {
     assert.ok(catalog[name], `${name} is selected but not catalogued in index-documents`);
-    assert.strictEqual(catalog[name].maxVis, name === ACL_FIELD ? 0 : 4,
+    assert.strictEqual(catalog[name].maxVis, POLICY_FIELDS.has(name) ? 0 : 4,
       `${name} is selected, so it reaches the mapper at every level`);
   }
 });
@@ -43,7 +46,7 @@ test('PROJECT_SELECT is a subset of maxVis 4 index fields', () => {
 
   for (const name of names) {
     assert.ok(catalog[name], `${name} is selected but not catalogued in index-projects`);
-    assert.strictEqual(catalog[name].maxVis, name === ACL_FIELD ? 0 : 4,
+    assert.strictEqual(catalog[name].maxVis, POLICY_FIELDS.has(name) ? 0 : 4,
       `${name} is selected, so it reaches the mapper at every level`);
   }
 });
@@ -71,8 +74,46 @@ test('every retrievable index field is catalogued at maxVis 4', () => {
     for (const field of retrievable) {
       assert.ok(catalog[field.name],
         `${index}.${field.name} is retrievable but absent from ${entity}`);
-      assert.strictEqual(catalog[field.name].maxVis, field.name === ACL_FIELD ? 0 : 4,
+      assert.strictEqual(catalog[field.name].maxVis, POLICY_FIELDS.has(field.name) ? 0 : 4,
         `${index}.${field.name} is retrievable, so a hit carries it`);
     }
   }
+});
+
+// `vis` is the classification itself. Retrievable, because the redactor reads the dials off the
+// hit; never searchable, because a searchable dial map lets a caller find records BY their
+// classification — a term query for a dialled field name would enumerate every dialled row.
+// Filterable and facetable are the same leak through a different door.
+test('vis is retrievable and never searchable', () => {
+  const definition = require('../../azure/search/indexes/projects.json');
+  const vis = definition.fields.find(f => f.name === 'vis');
+
+  assert.ok(vis, 'projects.json has no vis field, so search hits carry no dials at all');
+  assert.strictEqual(vis.type, 'Edm.String', 'the index has no map type; the dials are JSON text');
+  assert.strictEqual(vis.retrievable, true, 'the redactor cannot apply a dial it never receives');
+  assert.strictEqual(vis.searchable, false, 'a searchable dial map is a classification oracle');
+  assert.strictEqual(vis.filterable, false, 'so is a filterable one');
+  assert.strictEqual(vis.facetable, false, 'a facet count over dials answers the same question');
+});
+
+// The dial keys are stored in the Cosmos vocabulary and applied to a hit in the index one, so the
+// rename map is the third file that has to move when a column is renamed. An entry pointing at a
+// key that no longer exists on either side is silent: the dial simply stops applying.
+test('every rename maps a real stored field onto a real index field', () => {
+  const { PROJECT_TO_INDEX, dialsForIndex } = require('../../src/vis/catalog/index-projects-renames');
+  const stored = catalogFor('projects');
+  const hit = catalogFor('index-projects');
+
+  for (const [from, targets] of Object.entries(PROJECT_TO_INDEX)) {
+    assert.ok(stored[from], `${from} is mapped but is not a projects field`);
+    for (const to of targets) {
+      assert.ok(hit[to], `${from} maps to ${to}, which is not an index-projects field`);
+    }
+  }
+
+  // The two ends of the translation the map exists for, plus the passthrough and the drop.
+  assert.deepStrictEqual(
+    dialsForIndex({ proponentName: 2, description: 2, complianceLead: 2 }),
+    { proponent: 2, description: 2 },
+    'renamed keys translate, same-named keys pass through, index-less keys are dropped');
 });

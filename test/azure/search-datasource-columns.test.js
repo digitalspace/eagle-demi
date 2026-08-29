@@ -6,6 +6,17 @@ const assert = require('node:assert');
 const index = require('../../azure/search/indexes/documents.json');
 const datasource = require('../../azure/search/datasources/demi-documents-ds.json');
 
+// Both indexer pairs. The projects one renames most of what it selects, so its drift is the same
+// bug wearing an alias.
+const PAIRS = [
+  [index, datasource],
+  [require('../../azure/search/indexes/projects.json'),
+    require('../../azure/search/datasources/demi-projects-ds.json')]
+];
+
+// Selected for the change detection policy, not for the index — the only column with no field.
+const NOT_INDEXED = new Set(['_ts']);
+
 /**
  * The index definition and the data source query are two hand-PUT files that never see each other,
  * and the indexer maps them BY NAME: a field the index declares and the query does not project is
@@ -23,11 +34,55 @@ function projectedColumns(query) {
   }));
 }
 
-test('every field of the documents index is projected by demi-documents-ds', () => {
-  const projected = projectedColumns(datasource.container.query);
-  const missing = index.fields.map(f => f.name).filter(name => !projected.has(name));
-  assert.deepStrictEqual(missing, [],
-    `declared by ${index.name} but not selected by ${datasource.name}: ${missing.join(', ')}`);
+for (const [idx, ds] of PAIRS) {
+  test(`every field of the ${idx.name} index is projected by ${ds.name}`, () => {
+    const projected = projectedColumns(ds.container.query);
+    const missing = idx.fields.map(f => f.name).filter(name => !projected.has(name));
+    assert.deepStrictEqual(missing, [],
+      `declared by ${idx.name} but not selected by ${ds.name}: ${missing.join(', ')}`);
+  });
+
+  // The other direction. A column selected under a name the index does not declare is dropped on
+  // the floor by the indexer, again under a 200 and a green run — which is how a rename ships half
+  // done.
+  test(`every column ${ds.name} selects is declared by ${idx.name}`, () => {
+    const declared = new Set(idx.fields.map(f => f.name));
+    const extra = [...projectedColumns(ds.container.query).keys()]
+      .filter(name => !declared.has(name) && !NOT_INDEXED.has(name));
+    assert.deepStrictEqual(extra, [],
+      `selected by ${ds.name} but not declared by ${idx.name}: ${extra.join(', ')}`);
+  });
+}
+
+// `vis` is the only column the projects query computes rather than reads: the container stores an
+// object, the index has no map type, and an indexer given the bare object writes null — every dial
+// then falls back to defaultVis with the whole suite green.
+test('the projects vis column is serialized to text', () => {
+  const [idx, ds] = PAIRS[1];
+  const projected = projectedColumns(ds.container.query);
+
+  assert.strictEqual(projected.get('vis'), 'ToString(c.vis)');
+  assert.strictEqual(idx.fields.find(f => f.name === 'vis').type, 'Edm.String');
+});
+
+// A rename in the data source and the dial translation in `src/vis/catalog/index-projects-renames.js`
+// are two files that never see each other. search-drift.test.js walks the entries that EXIST; it
+// cannot see an alias added here with no entry, and that alias is exactly the case where a stored
+// dial key stops matching any field on a hit — `dialsForIndex` drops it and the field ships.
+test('every column the projects data source renames is translated by PROJECT_TO_INDEX', () => {
+  const { PROJECT_TO_INDEX } = require('../../src/vis/catalog/index-projects-renames');
+  const [, ds] = PAIRS[1];
+
+  for (const [alias, expr] of projectedColumns(ds.container.query)) {
+    // `ToString(c.vis) AS vis` is a serialization, and `c.eacDecision._id` dials off its ROOT
+    // property — that is the name `PATCH /projects/:id/visibility` stores.
+    const call = /^\w+\(\s*c?\.?([\w.]+)\s*\)$/.exec(expr);
+    const stored = (call ? call[1] : expr).split('.')[0];
+    if (stored === alias) continue;
+
+    assert.ok((PROJECT_TO_INDEX[stored] || []).includes(alias),
+      `${stored} is aliased to ${alias}, so a dial on ${stored} needs that alias in PROJECT_TO_INDEX`);
+  }
 });
 
 // The three fields TODO 3.3 adds, pinned by name and by what they are: the generic check above

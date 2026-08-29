@@ -1295,21 +1295,24 @@ level, never changes anyone else's access, and never touches the field plane.
 
 Branch: `feat/vis-index-field`  (run the reindex block at the end of this file.)
 
-- [ ] `azure/search/indexes/projects.json`: add `{ "name": "vis", "type": "Edm.String", "retrievable": true, "searchable": false, "filterable": false, "sortable": false, "facetable": false }` — a JSON string, because the index has no map type.
-- [ ] `azure/search/datasources/demi-projects-ds.json` `container.query`: append `, c.vis` to the SELECT before `, c._ts`.
-- [ ] `src/search/ai-search.js:82-84` `PROJECT_SELECT`: append `,vis`.
-- [ ] `src/controllers/search.js:291` mapper: `JSON.parse(doc.vis || '{}')` inside a try, fall back to `{}` on a throw (fail closed = no dial = `defaultVis`), then hand the parsed map to the redactor before mapping.
-- [ ] Same for `azure/search/indexes/documents.json` only if documents get dials; do not add it speculatively.
+- [x] `azure/search/indexes/projects.json`: add `{ "name": "vis", "type": "Edm.String", "retrievable": true, "searchable": false, "filterable": false, "sortable": false, "facetable": false }` — a JSON string, because the index has no map type.
+- [x] `azure/search/datasources/demi-projects-ds.json` `container.query`: append `, ToString(c.vis) AS vis` to the SELECT before `, c._ts` — Cosmos stores the dials as an object, the index field is `Edm.String`, and no indexer field mapping function serializes an object, so the query does it.
+- [x] `src/search/ai-search.js:82-84` `PROJECT_SELECT`: append `,vis`.
+- [x] `src/controllers/search.js:291` mapper: `JSON.parse(doc.vis || '{}')` inside a try, fall back to `{}` on a throw (fail closed = no dial = `defaultVis`), then hand the parsed map to the redactor before mapping.
+- [x] Same for `azure/search/indexes/documents.json` only if documents get dials; do not add it speculatively.
+- [x] `src/vis/redact.js`: after the field loop, keep in `highlighted` only the keys whose plain field survived redaction. `markedField` falls back to the WHOLE raw value when the analyzer produced no fragment, so a dial on `name`/`description` withheld the field and shipped the same text back under its highlight key — and `highlighted` is not a stored field, so no dial can reach it directly.
 
 Tests
 
-- [ ] `test/vis/search-drift.test.js` — case `'vis is retrievable and never searchable'` asserts the three flags on the index definition. Fails if a later PUT makes it searchable, which would let a caller find records by their classification.
-- [ ] `test/controllers/search.test.js` — case `'a malformed vis string falls back to defaultVis'` feeds `vis: '{'` and asserts the row is redacted at `defaultVis`, not returned raw. Fails on an unguarded `JSON.parse`.
-- [ ] `test/search/ai-search.test.js` — the existing select-vs-index guard covers the new name.
+- [x] `test/vis/search-drift.test.js` — case `'vis is retrievable and never searchable'` asserts the three flags on the index definition. Fails if a later PUT makes it searchable, which would let a caller find records by their classification.
+- [x] `test/controllers/search.test.js` — case `'a malformed vis string falls back to defaultVis'` feeds `vis: '{'` and asserts the row is redacted at `defaultVis`, not returned raw. Fails on an unguarded `JSON.parse`.
+- [x] `test/search/ai-search.test.js` — case `'the project search selects the vis dial map'`. The select-vs-index guard does NOT cover this: it asserts a selected name exists in the index, which deleting `,vis` satisfies, so every dial went inert with the suite green.
+- [x] `test/controllers/search.test.js` — case `'a dial withholds the highlighted copy of the field too'` feeds the `highlighted` block `searchProjects` really attaches and asserts the marked copy of a dialled field is withheld while an undialled one is kept.
+- [x] `test/azure/search-datasource-columns.test.js` — case `'every column the projects data source renames is translated by PROJECT_TO_INDEX'`, so a new alias with no entry cannot ship a silently inert dial.
 
 Acceptance
 
-- [ ] `node --test test/vis/search-drift.test.js test/search/ai-search.test.js test/controllers/search.test.js` — 0 fail.
+- [x] `node --test test/vis/search-drift.test.js test/search/ai-search.test.js test/controllers/search.test.js` — 0 fail.
 - [ ] Reindex block below, run in order.
 - [ ] After the indexer reset: `GET {endpoint}/indexers/projects-indexer/status` reports `393 processed, 0 failed` and a dialled project's search hit is redacted.
 

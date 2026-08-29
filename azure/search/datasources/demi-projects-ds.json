@@ -8,7 +8,7 @@
   },
   "container": {
     "name": "projects",
-    "query": "SELECT c.id, c.name, c.abbreviation AS displayName, c.description, c.proponentName AS proponent, c.sector, c.projectState AS status, c.region, c.eagleId AS legacyEagleId, c.sourceSystem, c.centroid, c.read, c.isPublished, c.projectType AS type, c.currentPhaseName.name AS currentPhaseName, c.currentPhaseName._id AS currentPhaseNameId, c.eacDecision.name AS eacDecision, c.eacDecision._id AS eacDecisionId, c.CEAAInvolvement._id AS ceaaInvolvementId, c.decisionDate, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
+    "query": "SELECT c.id, c.name, c.abbreviation AS displayName, c.description, c.proponentName AS proponent, c.sector, c.projectState AS status, c.region, c.eagleId AS legacyEagleId, c.sourceSystem, c.centroid, c.read, c.isPublished, c.projectType AS type, c.currentPhaseName.name AS currentPhaseName, c.currentPhaseName._id AS currentPhaseNameId, c.eacDecision.name AS eacDecision, c.eacDecision._id AS eacDecisionId, c.CEAAInvolvement._id AS ceaaInvolvementId, c.decisionDate, ToString(c.vis) AS vis, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
   },
   "dataChangeDetectionPolicy": {
     "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",

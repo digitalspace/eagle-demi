@@ -361,9 +361,138 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(row.isPublished, false, 'derived from read[], not copied from the index');
   });
 
-  // The catalog gates QUERY keys as well as response fields (P2-3). `read` is the only field the
-  // index catalogs put below level 4, and it is filterable, so it is the one key that proves the
-  // gate: without it `read/any(x: x eq 'sysadmin')` composes into the caller's own filter.
+  // The index has no map type, so the dials ride along as a JSON string and the mapper parses them
+  // before the redactor runs. This pair is the mutation check on that parse: without it a dialled
+  // project's restricted fields ship to every anonymous search caller, and an unguarded
+  // `JSON.parse` turns one bad row into a 500 for the whole page.
+  await t.test('a well-formed vis string dials the hit down', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: '207',
+        name: 'Nicomen Wind Energy',
+        description: 'A wind farm.',
+        read: ['public'],
+        vis: '{"description": 2}'
+      }]
+    }));
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'nicomen' }, header: () => null }, res);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row.description, 'No project description provided.',
+      'a level-2 dial must withhold the description from an anonymous caller');
+    assert.strictEqual(row.name, 'Nicomen Wind Energy', 'an undialled field is untouched');
+  });
+
+  await t.test('a malformed vis string falls back to defaultVis', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: '207',
+        name: 'Nicomen Wind Energy',
+        description: 'A wind farm.',
+        read: ['public'],
+        // Truncated JSON: the parse throws.
+        vis: '{'
+      }]
+    }));
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'nicomen' }, header: () => null }, res);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row.description, 'A wind farm.',
+      'no readable dial means defaultVis, which is 4 for description');
+    assert.strictEqual(row.vis, undefined, 'the dial map itself is never published');
+    assert.strictEqual(row.read, undefined, 'the row still went through the redactor');
+  });
+
+  // `highlighted` is a marked-up copy of the fields it names, and `markedField` falls back to the
+  // whole raw value when the analyzer produced no fragment. So a dial that withheld the plain field
+  // shipped the same text back under the highlight key, which no dial can reach: `highlighted` is
+  // not a stored field, so `PATCH /projects/:id/visibility` 400s on it.
+  await t.test('a dial withholds the highlighted copy of the field too', async () => {
+    let dials = '{}';
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: '207',
+        name: 'Nicomen Wind Energy',
+        description: 'A wind farm.',
+        read: ['public'],
+        vis: dials,
+        // The block `searchProjects` really attaches: one key per highlighted field, carrying the
+        // escaped raw value where nothing matched.
+        highlighted: {
+          name: 'Nicomen <mark>Wind</mark> Energy',
+          displayName: '',
+          description: 'A wind farm.'
+        }
+      }]
+    }));
+
+    const run = async () => {
+      let body = null;
+      const res = { json: (b) => { body = b; return res; }, status: () => res };
+      await searchController.search(
+        { query: { dataset: 'Project', keywords: 'nicomen' }, header: () => null }, res);
+      return body[0].searchResults[0];
+    };
+
+    dials = '{"description": 2, "name": 2}';
+    const dialled = await run();
+    assert.strictEqual(dialled.highlighted.name, '',
+      'the marked copy of a withheld name must not reach an anonymous caller');
+    assert.strictEqual(dialled.highlighted.description, '',
+      'the marked copy of a withheld description must not either');
+
+    dials = '{"description": 2}';
+    const partial = await run();
+    assert.strictEqual(partial.highlighted.name, 'Nicomen <mark>Wind</mark> Energy',
+      'an undialled highlight key is kept — the filter is not a blanket wipe');
+    assert.strictEqual(partial.highlighted.description, '', 'the dialled one is still withheld');
+  });
+
+  // The dials are stored in the COSMOS vocabulary and applied to an INDEX hit, which the data
+  // source renames on the way in. Without the translation every dial on a renamed column is inert
+  // here while it works on the Cosmos branch — `description` is the one field spelled the same in
+  // both, so a test that dials only it cannot see the hole.
+  await t.test('a dial on a renamed field withholds on the index branch too', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: '207',
+        name: 'Nicomen Wind Energy',
+        description: 'A wind farm.',
+        proponent: 'Secret Proponent Inc',
+        status: 'Secret Status',
+        read: ['public'],
+        vis: '{"proponentName": 2, "projectState": 2, "description": 2}'
+      }]
+    }));
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'nicomen' }, header: () => null }, res);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row.proponent.name, 'Proponent Organization',
+      'proponentName dials the index column `proponent`');
+    assert.strictEqual(row.status, 'Active', 'projectState dials the index column `status`');
+    assert.strictEqual(row.description, 'No project description provided.',
+      'the same-named field stays withheld');
+  });
+
+  // The catalog gates QUERY keys as well as response fields (P2-3). `read` is the only FILTERABLE
+  // field the index catalogs put below level 4, so it is the one key that proves the gate: without
+  // it `read/any(x: x eq 'sysadmin')` composes into the caller's own filter.
   await t.test('a filter on a hidden field is dropped, not applied', async () => {
     let sent = null;
     t.mock.method(aiSearch, 'searchProjects', async (opts) => {
