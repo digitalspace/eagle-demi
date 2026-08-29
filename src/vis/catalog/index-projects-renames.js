@@ -29,6 +29,8 @@ const PROJECT_TO_INDEX = {
  * Object.hasOwn: the dials are parsed from an index column, so `constructor` must not resolve.
  */
 function dialsForIndex(dials) {
+  // A stored `vis` of JSON `null` parses without throwing; treat anything but an object as no dials.
+  if (!dials || typeof dials !== 'object' || Array.isArray(dials)) return {};
   const out = {};
   for (const [key, dial] of Object.entries(dials)) {
     const targets = Object.hasOwn(PROJECT_TO_INDEX, key) ? PROJECT_TO_INDEX[key]
