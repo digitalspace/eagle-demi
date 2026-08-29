@@ -7,10 +7,12 @@ const assert = require('node:assert');
 
 const documents = require('../../src/repositories/documents');
 const cosmos = require('../../src/db/cosmos-nosql');
-const { systemAccess, SECURE_ROLES } = require('../../src/helpers/access-sql');
+const { systemAccess } = require('../../src/helpers/access-sql');
 
-const PUBLIC_PROJECT = ['public', ...SECURE_ROLES];
-const PRIVATE_PROJECT = [...SECURE_ROLES];
+// The stored legacy ACLs, spelled out. Building them from a constant would pass against any value
+// of that constant, including one that no longer contains `staff`.
+const PUBLIC_PROJECT = ['public', 'sysadmin', 'staff', 'demi-admin'];
+const PRIVATE_PROJECT = ['sysadmin', 'staff', 'demi-admin'];
 
 /** Mock the partition read, capture the bulk write. Returns the operations the cascade planned. */
 function harness(tt, rows) {
@@ -29,34 +31,50 @@ function opValue(operation, path) {
   return op && op.value;
 }
 
-test('constrainToProject — the intersection rule', async (t) => {
-  await t.test('keeps only roles the project also allows', () => {
+test('constrainToProject — the lower of the two levels', async (t) => {
+  await t.test('two level-4 ACLs stay at level 4', () => {
     assert.deepStrictEqual(
       documents.constrainToProject(['public', 'staff', 'project-team'], ['public', 'staff']),
-      ['public', 'staff']);
+      ['staff', 'idir', 'public']);
   });
 
   await t.test('a narrower document stays narrow under a public project', () => {
     // The whole point. Assignment would have widened this to the project's array.
     assert.deepStrictEqual(
-      documents.constrainToProject(['sysadmin'], PUBLIC_PROJECT), ['sysadmin']);
+      documents.constrainToProject(['sysadmin'], PUBLIC_PROJECT), ['team']);
   });
 
-  await t.test('an empty intersection fails closed to sysadmin', () => {
+  await t.test('a legacy role name carries no level of its own', () => {
+    // `project-team` is not a ladder token, so the document reads as level 1 and stays there —
+    // stamping the project's level 2 over it would WIDEN the row.
     assert.deepStrictEqual(
-      documents.constrainToProject(['project-team'], PRIVATE_PROJECT), ['sysadmin']);
+      documents.constrainToProject(['project-team'], PRIVATE_PROJECT), ['team']);
   });
 
-  await t.test('a missing or empty project ACL fails closed', () => {
-    // Not "unrestricted" and not "unchanged" — an absent project ACL is the case where the least
-    // is known, so it collapses to the narrowest answer rather than to the wider of the two.
-    assert.deepStrictEqual(documents.constrainToProject(['public'], []), ['sysadmin']);
-    assert.deepStrictEqual(documents.constrainToProject(['public'], undefined), ['sysadmin']);
+  await t.test('fail-closed under a level-1 project yields team', () => {
+    // No project ACL is the case where the least is known — `levelOfRead([])` is 1.
+    assert.deepStrictEqual(documents.constrainToProject(['public'], []), ['team']);
+    assert.deepStrictEqual(documents.constrainToProject(['public'], undefined), ['team']);
   });
 
-  await t.test('a missing or empty document ACL fails closed', () => {
-    assert.deepStrictEqual(documents.constrainToProject([], PUBLIC_PROJECT), ['sysadmin']);
-    assert.deepStrictEqual(documents.constrainToProject(undefined, PUBLIC_PROJECT), ['sysadmin']);
+  await t.test('fail-closed under a public project yields team', () => {
+    // A document with no ACL knows nothing about itself, and a project cannot supply that —
+    // inheriting the parent's reach is exactly the widening this rule exists to stop.
+    assert.deepStrictEqual(documents.constrainToProject([], PUBLIC_PROJECT), ['team']);
+    assert.deepStrictEqual(documents.constrainToProject(undefined, PUBLIC_PROJECT), ['team']);
+  });
+
+  await t.test('a project move never widens a document', () => {
+    // The three directions a cascade can run, with every ACL spelled out. None may raise the
+    // document's level.
+    assert.deepStrictEqual(documents.constrainToProject(['team'], ['staff']), ['team'],
+      'project 1 -> 2 leaves a team document at team');
+    assert.deepStrictEqual(
+      documents.constrainToProject(['staff', 'idir', 'public'], ['staff']), ['staff'],
+      'project 4 -> 2 caps a public document at staff');
+    assert.deepStrictEqual(
+      documents.constrainToProject(['staff'], ['staff', 'idir', 'public']), ['staff'],
+      'project 2 -> 4 leaves a staff document at staff');
   });
 });
 
@@ -68,19 +86,19 @@ test('setAclForProject', async (t) => {
 
     await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
 
-    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin', 'staff']);
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['staff'], 'level 2, as it already was');
     assert.strictEqual(opValue(cap.ops[0], '/isPublished'), false);
   });
 
-  await t.test('a document Eagle restricted to a project team is not opened to SECURE_ROLES',
+  await t.test('a document Eagle restricted to a project team is not opened to the project ACL',
     async (tt) => {
       // `project-team` is a real role the seed preserves verbatim from Eagle
-      // (`seed/transform.js`), and it is in neither SECURE_ROLES nor PUBLIC_ROLES.
+      // (`seed/transform.js`), and it is in neither the project's ACL nor PUBLIC_ROLES.
       const cap = harness(tt, [{ id: 'd1', read: ['project-team'] }]);
 
       await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
 
-      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin']);
+      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['team']);
     });
 
   await t.test('captures ownRead on the first cascade', async (tt) => {
@@ -111,8 +129,8 @@ test('setAclForProject', async (t) => {
     const up = harness(tt, [afterDown]);
     await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
 
-    assert.deepStrictEqual(opValue(up.ops[0], '/read'), ['public', 'sysadmin'],
-      'the document comes back exactly as it was, no wider and no narrower');
+    assert.deepStrictEqual(opValue(up.ops[0], '/read'), ['staff', 'idir', 'public'],
+      'the document comes back to the level it started at, no wider and no narrower');
     assert.strictEqual(opValue(up.ops[0], '/isPublished'), true);
   });
 
@@ -123,7 +141,7 @@ test('setAclForProject', async (t) => {
 
     await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
 
-    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin']);
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['team']);
     assert.strictEqual(opValue(cap.ops[0], '/isPublished'), false);
   });
 
@@ -134,7 +152,8 @@ test('setAclForProject', async (t) => {
 
     await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
 
-    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['public', 'sysadmin']);
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['staff', 'idir', 'public'],
+      'the snapshot is level 4, the live value level 1 — reading the live one would lose the row');
   });
 
   await t.test('every row is patched in one request, pinned to the project partition',
@@ -149,7 +168,7 @@ test('setAclForProject', async (t) => {
       assert.ok(cap.ops.every(o => o.partitionKey === '207'), 'one partition, one bulk request');
       assert.ok(cap.ops.every(o => o.operationType === 'Patch'));
       assert.deepStrictEqual(result.ids, ['d1', 'd2', 'd3']);
-      assert.deepStrictEqual(opValue(cap.ops[2], '/read'), ['sysadmin'],
+      assert.deepStrictEqual(opValue(cap.ops[2], '/read'), ['team'],
         'a row with no ACL at all still fails closed rather than being skipped');
     });
 
@@ -169,7 +188,7 @@ test('setAclForProject', async (t) => {
     for (const op of wire) {
       assert.ok('value' in op, `${op.path} reaches Cosmos with no value key, which is a 400`);
     }
-    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['sysadmin'], 'and it still fails closed');
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['team'], 'and it still fails closed');
   });
 
   await t.test('an empty project writes nothing', async (tt) => {
@@ -186,43 +205,77 @@ test('setAclForProject', async (t) => {
   });
 });
 
+/** Capture the patch operations one setPublished call would send. */
+function capturePatch(tt) {
+  const captured = { ops: null };
+  tt.mock.method(cosmos, 'patch', async (container, id, pk, operations) => {
+    captured.ops = operations;
+    return {};
+  });
+  return captured;
+}
+
+const patchValue = (ops, path) => ops.find(o => o.path === path).value;
+
 test('setPublished moves ownRead with it', async (t) => {
   await t.test('a per-document unpublish updates the snapshot too', async (tt) => {
     // Without this, the next project re-publish re-derives from a stale snapshot and RESURRECTS a
     // document an operator individually unpublished.
-    let ops = null;
-    tt.mock.method(cosmos, 'patch', async (container, id, pk, operations) => {
-      ops = operations;
-      return {};
-    });
+    const cap = capturePatch(tt);
 
-    await documents.setPublished('d1', '207', false, SECURE_ROLES);
+    await documents.setPublished('d1', '207', 2);
 
-    const read = ops.find(o => o.path === '/read').value;
-    const ownRead = ops.find(o => o.path === '/ownRead').value;
-    assert.deepStrictEqual(ownRead, read, 'the deliberate decision becomes the document\'s own ACL');
-    assert.ok(!ownRead.includes('public'));
+    const read = patchValue(cap.ops, '/read');
+    assert.deepStrictEqual(patchValue(cap.ops, '/ownRead'), read,
+      'the deliberate decision becomes the document\'s own ACL');
+    assert.deepStrictEqual(read, ['staff'], 'unpublishing lands the row at level 2');
   });
 
   await t.test('and a per-document publish does the same', async (tt) => {
-    let ops = null;
-    tt.mock.method(cosmos, 'patch', async (container, id, pk, operations) => {
-      ops = operations;
-      return {};
-    });
+    const cap = capturePatch(tt);
 
-    await documents.setPublished('d1', '207', true, SECURE_ROLES);
+    await documents.setPublished('d1', '207', 4);
 
-    const ownRead = ops.find(o => o.path === '/ownRead').value;
-    assert.ok(ownRead.includes('public'));
+    assert.deepStrictEqual(patchValue(cap.ops, '/ownRead'), ['staff', 'idir', 'public'],
+      'publishing lands it at level 4');
+  });
+});
+
+test('setPublished writes the requested level', async (t) => {
+  // The middle rungs, which the 4/2 pair above cannot reach. A body that derived the ACL from
+  // publication state rather than from `level` would fail here and nowhere else.
+  await t.test('level 1 is team only', async (tt) => {
+    const cap = capturePatch(tt);
+
+    await documents.setPublished('d1', '207', 1);
+
+    assert.deepStrictEqual(patchValue(cap.ops, '/read'), ['team']);
+    assert.deepStrictEqual(patchValue(cap.ops, '/ownRead'), ['team']);
+    assert.strictEqual(patchValue(cap.ops, '/isPublished'), false);
+  });
+
+  await t.test('level 3 is staff and idir', async (tt) => {
+    const cap = capturePatch(tt);
+
+    await documents.setPublished('d1', '207', 3);
+
+    assert.deepStrictEqual(patchValue(cap.ops, '/read'), ['staff', 'idir']);
+    assert.deepStrictEqual(patchValue(cap.ops, '/ownRead'), ['staff', 'idir']);
+    assert.strictEqual(patchValue(cap.ops, '/isPublished'), false);
+  });
+
+  await t.test('a level outside the ladder writes nothing', async (tt) => {
+    const cap = capturePatch(tt);
+    await assert.rejects(() => documents.setPublished('d1', '207', 5), /not a ladder level/);
+    assert.strictEqual(cap.ops, null);
   });
 });
 
 // The caller writes the same ACLs into the search index, so the cascade has to report what it
-// derived. Re-deriving the intersection at the call site would be a second implementation of the
-// rule above, free to drift from this one.
+// derived. Re-deriving them at the call site would be a second implementation of the rule above,
+// free to drift from this one.
 test('setAclForProject reports the ACLs it derived', async (t) => {
-  await t.test('one row per document, carrying the INTERSECTION and its mirror', async (tt) => {
+  await t.test('one row per document, carrying the derived ACL and its mirror', async (tt) => {
     harness(tt, [
       { id: 'd1', read: ['public', 'sysadmin'] },
       { id: 'd2', read: ['sysadmin', 'project-team'] }
@@ -231,10 +284,10 @@ test('setAclForProject reports the ACLs it derived', async (t) => {
     const result = await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
 
     assert.deepStrictEqual(result.rows, [
-      { id: 'd1', read: ['public', 'sysadmin'], isPublished: true },
+      { id: 'd1', read: ['staff', 'idir', 'public'], isPublished: true },
       // Narrower than its project and it stays that way — so the index must NOT be told the
       // project's ACL for this row.
-      { id: 'd2', read: ['sysadmin'], isPublished: false }
+      { id: 'd2', read: ['team'], isPublished: false }
     ]);
     assert.deepStrictEqual(result.ids, ['d1', 'd2']);
   });

@@ -9,7 +9,7 @@ const passiveAuthMiddleware = require('../middleware/passiveAuth');
 // credential (demi-service-read) can be issued without also granting the ability to delete.
 // `requireAdmin` is the narrower gate on /admin/*, so a machine writer (demi-service-write) can
 // mirror data without being able to mint itself a wider credential.
-const { requireWrite, requireAdmin } = require('../middleware/require-roles');
+const { requireWrite, requireAdmin, requireRole } = require('../middleware/require-roles');
 
 // One data layer. The `USE_COSMOS_NOSQL` switch and the MongoDB-API controllers behind it are
 // gone — the flag was the rollback path during the Cosmos cutover, and the account it fell back
@@ -70,7 +70,12 @@ router.get('/projects', passiveAuthMiddleware, projectController.getProjects);
 router.get('/projects/:id', passiveAuthMiddleware, projectController.getProject);
 router.post('/projects', authMiddleware, requireWrite, projectController.createProject);
 router.put('/projects/:id', authMiddleware, requireWrite, projectController.updateProject);
+// Ladder moves — docs/rbac-architecture.md §1, "Widening is an act". Nothing else raises a level.
+router.put('/projects/:id/level', authMiddleware, requireWrite, projectController.setLevel);
 router.delete('/projects/:id', authMiddleware, requireWrite, projectController.deleteProject);
+// Classifying a field is narrower than writing one: `requireWrite` admits staff and the machine
+// writer, `sysadmin` is who may change the policy itself.
+router.patch('/projects/:id/visibility', authMiddleware, requireWrite, requireRole('sysadmin'), projectController.setVisibility);
 
 // Documents Routes
 const multer = require('multer');
@@ -84,9 +89,8 @@ router.get('/documents/:id/download', passiveAuthMiddleware, documentController.
 router.post('/documents', authMiddleware, requireWrite, documentController.createDocument);
 router.post('/documents/extract', authMiddleware, requireWrite, upload.single('upfile'), documentController.extractDocument);
 router.put('/documents/:id', authMiddleware, requireWrite, documentController.updateDocument);
-// Publish / unpublish — the mechanism for hiding a document from public and proponents.
-// Deletion is for genuine removal, not for hiding. Unconditional now: the guard existed only
-// because the Mongo controller had no equivalent handler to mount.
+router.put('/documents/:id/level', authMiddleware, requireWrite, documentController.setLevel);
+// Deprecated alias for the line above — eagle-admin-console still sends `{ isPublished }`.
 router.put('/documents/:id/published', authMiddleware, requireWrite, documentController.setDocumentPublished);
 // Extracted-text ingest. The body is markdown for a whole document.
 //

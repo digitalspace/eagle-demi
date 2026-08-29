@@ -9,7 +9,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead } = require('../helpers/access-sql');
+const { canRead, readForLevel, levelOfRead } = require('../helpers/access-sql');
 const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'documents';
@@ -182,9 +182,9 @@ async function listByIds(access, ids, projectIds) {
 /**
  * Every document in one project, with the two ACL fields. Single-partition.
  *
- * `c.read` and `c.ownRead` rather than `VALUE c.id`, because the cascade INTERSECTS and cannot do
- * that without the document's own ACL. Cosmos loads the whole item to project any field — there is
- * no index-only path for this filter — so the extra columns change response bytes, not item load.
+ * `c.read` and `c.ownRead` rather than `VALUE c.id`, because the cascade takes the lower of the two
+ * levels and cannot do that without the document's own ACL. Cosmos loads the whole item to project
+ * any field — no index-only path for this filter — so the extra columns cost response bytes only.
  */
 async function aclRowsForProject(access, projectId) {
   const spec = selectWhere({
@@ -200,17 +200,12 @@ async function aclRowsForProject(access, projectId) {
 /**
  * The document's ACL narrowed by its project's — never widened by it.
  *
- * The rule is `eagle-search/worker/transform.js`'s `constrainToProject`, which is the intersecting
- * version of what this file used to do by assignment. Three fail-closed branches: no project ACL,
- * an empty one, or an empty intersection all collapse to `['sysadmin']` rather than to the wider
- * of the two.
+ * The LOWER of the two ladder levels, which cannot widen either side by construction. A missing or
+ * empty ACL reads as level 1 (`levelOfRead([])`), so an unknown on either side fails closed to
+ * `team` rather than to a fixed level 2 a level-1 project never allowed.
  */
 function constrainToProject(ownRead, projectRead) {
-  if (!Array.isArray(projectRead) || projectRead.length === 0) return ['sysadmin'];
-  if (!Array.isArray(ownRead) || ownRead.length === 0) return ['sysadmin'];
-  const allowed = new Set(projectRead);
-  const kept = ownRead.filter(role => allowed.has(role));
-  return kept.length > 0 ? kept : ['sysadmin'];
+  return readForLevel(Math.min(levelOfRead(ownRead), levelOfRead(projectRead)));
 }
 
 /**
@@ -221,13 +216,10 @@ function constrainToProject(ownRead, projectRead) {
  * the way down: unpublishing a project left every document under it carrying `public`, and
  * `listVisible` filters on the document's own ACL, so they stayed listable and searchable.
  *
- * IT INTERSECTS, IT DOES NOT ASSIGN. Stamping the project's array over each document destroyed any
+ * IT NARROWS, IT DOES NOT ASSIGN. Stamping the project's array over each document destroyed any
  * narrower ACL the seed preserved from Eagle (`seed/transform.js` keeps roles like `project-team`
- * verbatim), and once destroyed there was nothing to restore on re-publish and nothing to intersect
- * against next time. That could not WIDEN anything while the only caller passed `[...SECURE_ROLES]`
- * — every role in that set short-circuits `readClause` to `true`, so the added ones granted nobody
- * anything — but it widens the moment a re-publish cascade passes an ACL containing `public`, which
- * is exactly what this change adds. The two fixes are one fix.
+ * verbatim), and once destroyed there was nothing to restore on re-publish. `constrainToProject`
+ * takes the lower of the two levels, so no cascade in either direction can raise a document.
  *
  * `ownRead` IS CAPTURED HERE, LAZILY, and that is why no backfill is needed. The first cascade over
  * a document reads the value the seed wrote and stores it alongside; every later cascade re-derives
@@ -260,7 +252,7 @@ async function setAclForProject(access, projectId, read) {
   const pk = String(projectId);
   const updatedAt = new Date().toISOString();
   // Each row's derived ACL, kept so the caller can write the same values into the search index
-  // without re-deriving the intersection a second way.
+  // without re-deriving the rule a second way.
   const derived = [];
   const result = await cosmos.bulkVerified(CONTAINER, rows.map(row => {
     // The snapshot if there is one, otherwise what the row carries today — which on a first
@@ -270,7 +262,7 @@ async function setAclForProject(access, projectId, read) {
     // `set` op, and Cosmos rejects a `set` with no value. Patch ops are atomic per item, so that
     // 400 would take the `/read` narrowing down with it — the row keeps its old ACL and the failure
     // is counted, but the effect is fail-OPEN for exactly the row that had no ACL to begin with.
-    // `[]` intersects to `['sysadmin']` instead. No current write path produces such a row (all
+    // `[]` fails closed to level 1 instead. No current write path produces such a row (all
     // four write an explicit `read[]`, and `seedAcl` fails closed), so this guards a legacy row
     // nobody can rule out from outside the private endpoint.
     const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
@@ -372,21 +364,19 @@ async function patchExtraction(id, projectId, fields) {
 }
 
 /**
- * Set publication state. This — NOT deletion — is how a document is hidden from the public
- * and from proponents.
+ * Move a document to a ladder level. This — NOT deletion — is how a document is hidden from the
+ * public and from proponents.
  *
- * `read[]` is authoritative, so publishing/unpublishing means adding or removing 'public'
- * from it; `isPublished` is kept as the mirror. Privileged roles retain access either way.
- *
- * @param {string[]} secureRoles  roles that keep access when unpublished
+ * `read[]` is authoritative and `isPublished` mirrors it: only level 4 carries `public`.
+ * Privileged roles retain access at every level.
  */
-async function setPublished(id, projectId, published, secureRoles) {
-  const read = published ? ['public', ...secureRoles] : [...secureRoles];
+async function setPublished(id, projectId, level) {
+  const read = readForLevel(level);
   return cosmos.patch(CONTAINER, String(id), String(projectId), [
-    { op: 'set', path: '/isPublished', value: Boolean(published) },
+    { op: 'set', path: '/isPublished', value: read.includes('public') },
     { op: 'set', path: '/read', value: read },
     // `ownRead` MOVES WITH IT. This is a deliberate per-document decision about that document, so
-    // it becomes the document's own ACL — the thing `setAclForProject` intersects against. Without
+    // it becomes the document's own ACL — the thing `setAclForProject` narrows against. Without
     // this line the snapshot still holds whatever the row carried before, and the next time the
     // project is re-published the cascade re-derives from that stale value and RESURRECTS a
     // document an operator had individually unpublished.
@@ -398,7 +388,7 @@ async function setPublished(id, projectId, published, secureRoles) {
 /**
  * Permanently remove the document record.
  *
- * Deliberately does NOT touch the stored blob. Hiding a document is `setPublished(false)`;
+ * Deliberately does NOT touch the stored blob. Hiding a document is `setPublished(id, pid, 2)`;
  * this is for genuine removal of the record, and no request path is allowed to destroy a
  * source file. Orphaned blobs are reclaimed by a separate audited job.
  *

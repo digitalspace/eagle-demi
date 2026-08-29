@@ -41,4 +41,20 @@ function requireAdmin(req, res, next) {
   return next();
 }
 
-module.exports = { requireWrite, requireAdmin };
+/**
+ * One named realm role, for a gate narrower than either set above — classifying fields, releasing
+ * a sealed record. Mounted behind `authMiddleware` like the other two.
+ */
+function requireRole(name) {
+  return function (req, res, next) {
+    const roles = (req.user && req.user.realm_access && req.user.realm_access.roles) || [];
+
+    if (!roles.includes(name)) {
+      return res.status(403).json({ error: `Forbidden. Requires role ${name}.` });
+    }
+
+    return next();
+  };
+}
+
+module.exports = { requireWrite, requireAdmin, requireRole };

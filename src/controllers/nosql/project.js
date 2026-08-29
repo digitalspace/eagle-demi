@@ -12,7 +12,11 @@
 
 const projects = require('../../repositories/projects');
 const documents = require('../../repositories/documents');
-const { resolveAccess, systemAccess, pageSizeFor, SECURE_ROLES } = require('../../helpers/access-sql');
+const {
+  resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
+} = require('../../helpers/access-sql');
+const { catalogFor } = require('../../vis/catalog');
+const { PATCH_MAX_OPERATIONS } = require('../../db/cosmos-nosql');
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeProject } = require('../../helpers/purge');
@@ -121,7 +125,7 @@ exports.createProject = async (req, res) => {
 
     // Fail closed: private unless explicitly published.
     const published = isPublished === true || isPublished === 'true';
-    const read = published ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES];
+    const read = readForLevel(published ? 4 : 2);
     const now = new Date().toISOString();
 
     const saved = await projects.upsert({
@@ -224,7 +228,7 @@ exports.updateProject = async (req, res) => {
       ? { read: existing.read, isPublished: existing.isPublished }
       : {
         isPublished: isPublished === true,
-        read: isPublished === true ? ['public', ...SECURE_ROLES] : [...SECURE_ROLES]
+        read: readForLevel(isPublished === true ? 4 : 2)
       };
 
     const saved = await projects.upsert({
@@ -272,6 +276,144 @@ exports.updateProject = async (req, res) => {
 };
 
 /**
+ * Move a project to a ladder level (docs/rbac-architecture.md §1, "Widening is an act").
+ *
+ * The ONLY route that raises a record's level: no job, no push and no merge widens anything, so
+ * every widening has an actor, a time and an audit row behind it.
+ */
+exports.setLevel = async (req, res) => {
+  try {
+    const access = resolveAccess(req);
+    const { level, confirm, reason } = req.body || {};
+
+    if (!Number.isInteger(level) || level < 1 || level > 4) {
+      return res.status(400).json({
+        error: 'level must be an integer 1-4. Level 0 is the sealed compartment and is not set here.'
+      });
+    }
+    if (level === 4 && confirm !== true) {
+      return res.status(400).json({ error: 'Publishing to level 4 requires "confirm": true.' });
+    }
+    if (level === 4 && !String(reason || '').trim()) {
+      return res.status(400).json({ error: 'Publishing to level 4 requires a non-empty "reason".' });
+    }
+
+    const existing = await projects.getById(access, req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const from = levelOfRead(existing.read);
+    // Pulling a record back from public is incident response, not a routine correction.
+    const takedown = from === 4 && level < 4;
+    if (takedown && !access.roles.includes('sysadmin')) {
+      return res.status(403).json({
+        error: 'Only sysadmin may pull a record back from level 4. See docs/takedown-runbook.md.'
+      });
+    }
+
+    const acl = { read: readForLevel(level), isPublished: level === 4 };
+    const saved = await projects.upsert({
+      ...existing,
+      ...acl,
+      id: existing.id,
+      updatedAt: new Date().toISOString()
+    });
+
+    // Before the cascade, which can 500: the row someone comes looking for is the visibility
+    // change, and it must not be the one path that records nothing.
+    auditEvent(req, {
+      action: takedown ? 'record.takedown' : (level > from ? 'record.widen' : 'record.narrow'),
+      targetType: 'project',
+      targetId: existing.id,
+      projectId: existing.id,
+      detail: { from, to: level, confirmed: confirm === true, reason: reason || '' }
+    });
+
+    if (level !== from) {
+      const failure = await cascadeProjectVisibility(existing.id, acl);
+      if (failure) return res.status(500).json({ success: false, error: failure });
+    }
+
+    return res.json(redactForAccess('projects', saved, access));
+  } catch (err) {
+    return serverError(res, err, 'project controller failed');
+  }
+};
+
+/**
+ * Classify a project's fields: `{ vis: { field: level } }`, `sysadmin` only.
+ *
+ * A dial is POLICY, not content, which is why `refusedWriteKeys` refuses `vis` on the ordinary PUT
+ * and why this gate is narrower than `requireWrite`. Dials are independent of the record's own
+ * level (docs/rbac-architecture.md §1) — there is no cap here beyond each field's catalog `maxVis`.
+ *
+ * A level of `null` REMOVES the dial; a field the body does not name keeps whatever it had.
+ */
+exports.setVisibility = async (req, res) => {
+  try {
+    const access = resolveAccess(req);
+    const existing = await projects.getById(access, req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const vis = req.body && req.body.vis;
+    if (!vis || typeof vis !== 'object' || Array.isArray(vis) || !Object.keys(vis).length) {
+      return res.status(400).json({ error: 'Body must carry a non-empty vis object of { field: level }.' });
+    }
+
+    const fields = Object.keys(vis);
+    // One dial is one Cosmos patch operation, and patch() refuses more than its cap. Refused here
+    // so the caller gets a 400 naming the limit rather than a 500 from the data layer.
+    if (fields.length > PATCH_MAX_OPERATIONS) {
+      return res.status(400).json({
+        error: `At most ${PATCH_MAX_OPERATIONS} fields may be classified in one request, got ${fields.length}.`
+      });
+    }
+
+    const catalog = catalogFor('projects');
+    for (const field of fields) {
+      // `hasOwn`, not truthiness: `catalog.constructor` and `catalog.__proto__` come off the
+      // prototype and would read as catalogued, with an undefined `maxVis` that caps nothing.
+      const entry = Object.hasOwn(catalog, field) ? catalog[field] : null;
+      // An uncatalogued field has no policy, so a dial on it would be silently unreadable.
+      if (!entry) {
+        return res.status(400).json({ error: `Not a catalogued projects field: ${field}` });
+      }
+      const level = vis[field];
+      if (level === null) continue;
+      if (!Number.isInteger(level) || level < 0 || level > entry.maxVis) {
+        return res.status(400).json({
+          error: `Level for ${field} must be an integer 0 to ${entry.maxVis}, got ${JSON.stringify(level)}.`
+        });
+      }
+    }
+
+    const saved = await projects.patchVis(existing.id, vis);
+
+    // Field NAMES and LEVELS only, never values — same rule as project.update, and it matters more
+    // here: the fields being classified are the ones somebody decided were sensitive.
+    const before = existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
+    auditEvent(req, {
+      action: 'project.reclassify',
+      targetType: 'project',
+      targetId: existing.id,
+      projectId: existing.id,
+      detail: {
+        fields,
+        from: Object.fromEntries(fields.map(field => [field, before[field] ?? null])),
+        to: vis
+      }
+    });
+
+    return res.json(redactForAccess('projects', saved, access));
+  } catch (err) {
+    return serverError(res, err, 'project controller failed');
+  }
+};
+
+/**
  * Receive one project pushed by eagle-api, keyed by its Eagle `_id`.
  *
  * The body carries the RAW Eagle record, so the merge rules stay in `merge/project.js` and this
@@ -299,6 +441,8 @@ exports.upsertFromEagle = async (req, res) => {
     // rebuilds only `track`/`eagle` — so without this every push wipes `sources.wildfire`, which
     // nothing upstream can rebuild. The same trap the seed hit.
     merged.sources = { ...(existing && existing.sources), ...merged.sources };
+    // Same replace-the-whole-item trap as sources: an upsert with no vis wipes classification.
+    if (existing && existing.vis) merged.vis = existing.vis;
 
     const saved = await projects.upsert(merged);
 

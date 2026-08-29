@@ -733,13 +733,17 @@ describe('RegistryStateService — loadSummary gating', () => {
  * API that actually redacts the data. Those roles survive as the fallback for an /api/me that
  * hangs or fails, so an unreachable API cannot lock a staffer out of the UI for the session.
  *
- * Privilege comes off the server's `privileged` field, never off `tier` — see the scoped-staff spec.
+ * The staff UI gate is the server's `staffUi` — the predicate authMiddleware itself 403s on.
+ * Nothing the client can derive answers it: `staff` and `compliance` are both level 2 and tier
+ * `public`, and `privileged` is false for staff since `staff` left SECURE_ROLES.
  */
 describe('RegistryStateService — /api/me gating', () => {
   // The /api/me answer. `undefined` hangs the request, honouring the abort signal the way a real
   // fetch does; `meStatus` other than 200 answers with that status. Every other URL gets the
   // ordinary loadData() stub. Closures, so one spec can answer twice without a second spyOn.
-  let meAnswer: { roles: string[]; level: number; tier: string; privileged: boolean } | undefined;
+  let meAnswer:
+    { roles: string[]; level: number; tier: string; privileged: boolean; staffUi?: boolean }
+    | undefined;
   let meStatus: number;
   // Set to hold /me open until the spec resolves it, for the authReady ordering spec.
   let mePending: Promise<Response> | null;
@@ -813,8 +817,10 @@ describe('RegistryStateService — /api/me gating', () => {
     expect(service.isUnauthorized()).toBe(true);
   });
 
-  it('the privileged flag clears isUnauthorized, and level alone does not', async () => {
-    meAnswer = { roles: ['staff'], level: 2, tier: 'privileged', privileged: true };
+  // What a Keycloak `staff` caller actually answers with: level 2, tier 'public', not privileged.
+  // Every one of those fields reads the same as the compliance row below.
+  it('staffUi true clears isUnauthorized', async () => {
+    meAnswer = { roles: ['public', 'staff'], level: 2, tier: 'public', privileged: false, staffUi: true };
     const service = makeService();
     await service.authReady;
     service.isAuthenticated.set(true);
@@ -823,26 +829,18 @@ describe('RegistryStateService — /api/me gating', () => {
 
     expect(service.visLevel()).toBe(2);
     expect(service.isUnauthorized()).toBe(false);
+  });
 
-    // Same level, not privileged: `compliance` reads redacted fields without being staff.
-    meAnswer = { roles: ['compliance'], level: 2, tier: 'public', privileged: false };
+  it('staffUi false keeps isUnauthorized', async () => {
+    meAnswer = { roles: ['public', 'compliance'], level: 2, tier: 'public', privileged: false, staffUi: false };
+    const service = makeService();
+    await service.authReady;
+    service.isAuthenticated.set(true);
+
     await (service as any).loadVisLevel();
 
     expect(service.visLevel()).toBe(2);
     expect(service.isUnauthorized()).toBe(true);
-  });
-
-  // A staff key minted for one project. `tier` is `scoped`, so anything deriving privilege from
-  // the tier string locks a real staffer out of the staff UI.
-  it('scoped staff is privileged', async () => {
-    meAnswer = { roles: ['public', 'staff'], level: 2, tier: 'scoped', privileged: true };
-    const service = makeService();
-    await service.authReady;
-    service.isAuthenticated.set(true);
-
-    await (service as any).loadVisLevel();
-
-    expect(service.isUnauthorized()).toBe(false);
   });
 
   // authSettled() awaits loadVisLevel() before resolving authReady, and route guards read
@@ -858,7 +856,7 @@ describe('RegistryStateService — /api/me gating', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(settled).toBe(false);
 
-    answer(okResponse({ roles: ['staff'], level: 2, tier: 'privileged', privileged: true }));
+    answer(okResponse({ roles: ['staff'], level: 2, tier: 'public', privileged: false, staffUi: true }));
     await service.authReady;
 
     expect(settled).toBe(true);

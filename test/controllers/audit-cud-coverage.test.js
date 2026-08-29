@@ -249,6 +249,28 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written[0].Detail.removedFromSearch, true);
   });
 
+  await t.test('project reclassify writes one project.reclassify', async () => {
+    // The row that says who changed the access POLICY rather than the content, so it carries the
+    // dialled field names and their levels — and nothing else off the record.
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207', name: 'Skeena LNG', complianceLead: 'A. Lead', vis: { complianceLead: 1 }
+    }));
+    t.mock.method(projects, 'patchVis', async (id, vis) => ({ id, name: 'Skeena LNG', vis }));
+
+    const written = await rowsFrom(() => projectController.setVisibility({
+      params: { id: '207' }, query: {}, body: { vis: { complianceLead: 2 } }, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(written.length, 1);
+    assert.strictEqual(written[0].Action, 'project.reclassify');
+    assert.strictEqual(written[0].TargetId, '207');
+    assert.strictEqual(written[0].ProjectId, '207');
+    assert.deepStrictEqual(written[0].Detail.fields, ['complianceLead']);
+    assert.deepStrictEqual(written[0].Detail.from, { complianceLead: 1 });
+    assert.deepStrictEqual(written[0].Detail.to, { complianceLead: 2 });
+    assert.ok(!JSON.stringify(written[0].Detail).includes('A. Lead'), 'levels only, never values');
+  });
+
   await t.test('an Eagle project push writes one project.push', async () => {
     // The mirror routes are unattended — nothing renders their result — so the audit row is the
     // only record that a project changed shape because eagle-api said so.
@@ -399,6 +421,55 @@ test('authenticated CUD audit coverage', async (t) => {
       ['activeCountWithin50km', 'firesOfNoteNearby', 'lastCalculatedAt', 'nearestDistanceKm']);
     assert.strictEqual(patched[0].activeCountWithin50km, 1);
     assert.strictEqual(patched[0].firesOfNoteNearby, 1);
+  });
+
+  await t.test('a project ladder move writes one record.widen', async () => {
+    // The level routes are the only handlers that raise a record's visibility, so their row is the
+    // record of who did it — one for the move, never one per cascaded document.
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207', name: 'Skeena LNG', read: ['team'], isPublished: false
+    }));
+    t.mock.method(projects, 'upsert', async (item) => item);
+    t.mock.method(aiSearch, 'writeAcls', async () => 1);
+    t.mock.method(documents, 'setAclForProject', async () => ({
+      succeeded: 2, failed: 0, rows: [{ id: 'd1' }, { id: 'd2' }]
+    }));
+
+    const written = await rowsFrom(() => projectController.setLevel({
+      params: { id: '207' }, query: {},
+      body: { level: 4, confirm: true, reason: 'cleared for publication' }, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(written.length, 1, 'one row for the move, not one per cascaded document');
+    assert.strictEqual(written[0].Action, 'record.widen');
+    assert.strictEqual(written[0].TargetId, '207');
+    assert.strictEqual(written[0].ProjectId, '207');
+    assert.strictEqual(written[0].Detail.from, 1);
+    assert.strictEqual(written[0].Detail.to, 4);
+    assert.strictEqual(written[0].Detail.confirmed, true);
+  });
+
+  await t.test('a document ladder move writes one record.narrow', async () => {
+    t.mock.method(documents, 'getById', async () => ({
+      id: 'd1', projectId: '207', read: ['staff', 'idir'], isPublished: false
+    }));
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207', read: ['staff', 'idir', 'public'], isPublished: true
+    }));
+    t.mock.method(documents, 'setPublished', async () => ({ id: 'd1', read: ['team'] }));
+    t.mock.method(aiSearch, 'writeAcls', async () => 1);
+    t.mock.method(chunksRepo, 'setAclForDocument', async () => ({ succeeded: 0, failed: 0 }));
+
+    const written = await rowsFrom(() => documentController.setLevel({
+      params: { id: 'd1' }, query: {}, body: { level: 1, reason: 'team review' }, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(written.length, 1);
+    assert.strictEqual(written[0].Action, 'record.narrow');
+    assert.strictEqual(written[0].TargetId, 'd1');
+    assert.strictEqual(written[0].ProjectId, '207');
+    assert.strictEqual(written[0].Detail.from, 3);
+    assert.strictEqual(written[0].Detail.to, 1);
   });
 
   await t.test('a failed mutation writes no row at all', async () => {

@@ -390,7 +390,7 @@ async function seed(argv = [], deps = {}) {
   // Parent ACLs by canonical id: documents are narrowed against these, and the pre-write gate
   // checks the same invariant.
   const projectRead = new Map(projects.map(p => [String(p.id), p.read]));
-  summary.stages.projects = { built: projects.length, report, written: 0 };
+  summary.stages.projects = { built: projects.length, report, written: 0, visCarried: 0 };
 
   const projectFailures = verifyProjects(projects);
   summary.failures.push(...projectFailures);
@@ -400,6 +400,16 @@ async function seed(argv = [], deps = {}) {
       // Projects partition on /id, so every project is its own partition and bulk cannot batch
       // across them. 392 sequential upserts is a few seconds.
       for (const project of projects) {
+        // A Cosmos upsert replaces the item, so without this every re-seed wipes vis and any
+        // source block the run itself did not rebuild.
+        const existing = await repos.projects.getById(access, project.id);
+        if (existing) {
+          if (existing.vis) {
+            project.vis = existing.vis;
+            summary.stages.projects.visCarried++;
+          }
+          project.sources = { ...existing.sources, ...project.sources };
+        }
         await repos.projects.upsert(project);
         summary.stages.projects.written++;
       }

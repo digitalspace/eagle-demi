@@ -144,6 +144,20 @@ test('PUT /eagle/projects/:eagleId', async (t) => {
       'Track keeps precedence over the pushed name');
   });
 
+  await t.test('upsertFromEagle preserves an existing vis map', async () => {
+    const existing = storedProject({ vis: { eacExpires: 3 } });
+    t.mock.method(projects, 'getByEagleId', async () => existing);
+    let written;
+    t.mock.method(projects, 'upsert', async (item) => { written = item; return item; });
+
+    await projectController.upsertFromEagle({
+      params: { eagleId: PROJECT_EAGLE_ID }, query: {},
+      body: { doc: eagleProject() }, user: STAFF
+    }, mockRes());
+
+    assert.deepStrictEqual(written.vis, { eacExpires: 3 });
+  });
+
   await t.test('an unmatched project is keyed eagle-<eagleId>', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
     let written;
@@ -395,7 +409,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.contentPageCount, 42);
   });
 
-  await t.test('read[] is the document\'s own ACL intersected with its project\'s', async () => {
+  await t.test('read[] is the lower of the document\'s level and its project\'s', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject({
       read: ['public', 'sysadmin', 'staff']
     }));
@@ -408,8 +422,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       body: { doc: eagleDocument({ read: ['public', 'project-team'] }) }, user: STAFF
     }, mockRes());
 
-    assert.deepStrictEqual(written.read, ['public'],
-      'project-team is not on the project, so the document cannot carry it');
+    assert.deepStrictEqual(written.read, ['staff', 'idir', 'public'],
+      'both sides are level 4, so the document lands at level 4');
     assert.strictEqual(written.isPublished, true);
 
     // And the ceiling holds: a private project cannot host a public document.
@@ -421,7 +435,7 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       body: { doc: eagleDocument({ read: ['public', 'sysadmin'] }) }, user: STAFF
     }, mockRes());
 
-    assert.deepStrictEqual(written.read, ['sysadmin']);
+    assert.deepStrictEqual(written.read, ['staff'], 'capped at the project\'s level 2');
     assert.strictEqual(written.isPublished, false);
     assert.deepStrictEqual(written.ownRead, ['public', 'sysadmin'],
       'the unconstrained Eagle ACL is what the cascade restores from on re-publish');
@@ -513,8 +527,9 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     }, mockRes());
 
     assert.strictEqual(indexWrites.length, 1);
+    // `sysadmin` is no ladder token at all, so the pushed ACL reads as level 1.
     assert.deepStrictEqual(indexWrites[0],
-      [{ id: DOC_EAGLE_ID, read: ['sysadmin'], isPublished: false }]);
+      [{ id: DOC_EAGLE_ID, read: ['team'], isPublished: false }]);
 
     indexWrites.length = 0;
     await documentController.upsertFromEagle({

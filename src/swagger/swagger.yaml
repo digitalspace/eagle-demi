@@ -170,6 +170,107 @@ paths:
         '404':
           description: Project not found.
 
+  /api/projects/{id}/level:
+    put:
+      summary: Set a project's ladder level
+      description: >-
+        Move a project on the row plane (docs/rbac-architecture.md §1, "Widening is an act").
+        Nothing else raises a record's level — no job, no push, no merge. Every move is audited as
+        `record.widen` or `record.narrow`, and the change cascades to the project's documents.
+        Pulling a project back from level 4 needs the `sysadmin` role and is audited as
+        `record.takedown`; narrowing the row alone does not finish a takedown, see
+        `docs/takedown-runbook.md`.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [level]
+              properties:
+                level:
+                  type: integer
+                  enum: [1, 2, 3, 4]
+                  description: >-
+                    1 team only, 2 all EAO, 3 all IDIR, 4 public. Level 0 is the sealed
+                    compartment and is not reachable here.
+                confirm:
+                  type: boolean
+                  description: Required and `true` for level 4.
+                reason:
+                  type: string
+                  description: Required and non-empty for level 4; optional on every other move.
+      responses:
+        '200':
+          description: Project moved to the requested level.
+        '400':
+          description: level is outside 1-4, or level 4 was sent without `confirm` or a `reason`.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Only sysadmin may pull a record back from level 4.
+        '404':
+          description: Project not found.
+
+  /api/projects/{id}/visibility:
+    patch:
+      summary: Classify project fields
+      description: >-
+        Set per-field visibility dials on one project. `sysadmin` only — a dial is access policy,
+        not content, so the ordinary PUT refuses a `vis` key at every level. A dial never raises a
+        field above its catalogued `maxVis`, and it is independent of the project's own record
+        level. A level of `null` removes the dial and the field falls back to its `defaultVis`;
+        a field the body does not name keeps the dial it had.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vis]
+              properties:
+                vis:
+                  type: object
+                  description: Field name to level. At most 10 fields per request.
+                  additionalProperties:
+                    type: integer
+                    nullable: true
+                    minimum: 0
+                    maximum: 4
+              example:
+                vis:
+                  complianceLead: 2
+                  projectLeadEmail: null
+      responses:
+        '200':
+          description: The updated project, redacted for the caller.
+        '400':
+          description: >-
+            An uncatalogued field, a level outside 0..maxVis for that field, a non-integer level,
+            more than 10 fields, or an empty vis object.
+        '403':
+          description: Forbidden. Requires role sysadmin.
+        '404':
+          description: Project not found.
+
   /api/documents:
     get:
       summary: Retrieve documents
@@ -302,6 +403,113 @@ paths:
         '401':
           description: Unauthorized.
 
+  /api/documents/{id}/level:
+    put:
+      summary: Set a document's ladder level
+      description: >-
+        Move a document on the row plane (docs/rbac-architecture.md §1, "Widening is an act").
+        A document may not out-rank its project, so a widen past the project's own level is
+        refused. Every move is audited as `record.widen` or `record.narrow`. Pulling a document
+        back from level 4 needs the `sysadmin` role and is audited as `record.takedown`; narrowing
+        the row alone does not finish a takedown, see `docs/takedown-runbook.md`.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Parent project id, the partition key. Avoids a cross-partition lookup.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [level]
+              properties:
+                level:
+                  type: integer
+                  enum: [1, 2, 3, 4]
+                  description: >-
+                    1 team only, 2 all EAO, 3 all IDIR, 4 public. Level 0 is the sealed
+                    compartment and is not reachable here.
+                confirm:
+                  type: boolean
+                  description: Required and `true` for level 4.
+                reason:
+                  type: string
+                  description: Required and non-empty for level 4; optional on every other move.
+      responses:
+        '200':
+          description: Document moved to the requested level.
+        '400':
+          description: level is outside 1-4, or level 4 was sent without `confirm` or a `reason`.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Only sysadmin may pull a record back from level 4.
+        '404':
+          description: Document not found.
+        '409':
+          description: The document would out-rank its project.
+
+  /api/documents/{id}/published:
+    put:
+      deprecated: true
+      summary: Publish or unpublish a document (deprecated)
+      description: >-
+        Deprecated alias for `PUT /api/documents/{id}/level`: `{ "isPublished": true }` is level 4
+        and `{ "isPublished": false }` is level 2. It runs the same guards, so unpublishing a
+        public document needs the `sysadmin` role and is audited as `record.takedown` — see
+        `docs/takedown-runbook.md`. Use the level route.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Parent project id, the partition key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [isPublished]
+              properties:
+                isPublished:
+                  type: boolean
+                reason:
+                  type: string
+                  description: Recorded on the audit row when publishing.
+      responses:
+        '200':
+          description: Document visibility changed.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Only sysadmin may unpublish a public document.
+        '404':
+          description: Document not found.
+        '409':
+          description: The document's project is not published.
+
   /api/eagle/projects/{eagleId}:
     put:
       summary: Mirror a project from eagle-api
@@ -355,8 +563,8 @@ paths:
         Receives one document pushed by eagle-api, keyed by the Eagle `_id`. The body carries the
         RAW Eagle record plus the labels for its four List ObjectId references. Idempotent: the
         same eagleId replaces. Two things are NOT taken from the push — extraction state, carried
-        off the row already in DEMI, and the ACL, which is the document's own intersected with its
-        parent project's.
+        off the row already in DEMI, and the ACL, which is the lower of the document's own ladder
+        level and its parent project's.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -575,8 +783,12 @@ components:
         privileged:
           type: boolean
           description: >-
-            Whether this caller holds a staff/admin role. Not derivable from `tier`: a staff
-            credential scoped to a project reports tier `scoped` and privileged `true`.
+            True when the caller holds a row-plane privileged role (`sysadmin`, `demi-admin`,
+            `demi-service-*`). `staff` is not privileged.
+        staffUi:
+          type: boolean
+          description: >-
+            True when the caller passes authMiddleware; the frontend gates staff screens on it.
 
     Project:
       type: object
