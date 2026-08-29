@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { AppComponent } from './app.component';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { routes } from './app.routes';
@@ -68,6 +68,13 @@ describe('AppComponent', () => {
     expect(headings).toEqual(['Discover', 'Operate', 'Access', 'Developers']);
 
     // Ten sidebar screens; profile and sessions are reachable from the account menu only.
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(10);
+  });
+
+  it('keeps the sidebar open when navigating to the map', async () => {
+    const { el, fixture } = await renderAs(true, false);
+    await TestBed.inject(Router).navigateByUrl('/map');
+    fixture.detectChanges();
     expect(el.querySelectorAll('.app-sidebar__link').length).toBe(10);
   });
 });
