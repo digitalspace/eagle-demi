@@ -301,6 +301,28 @@ test('nosql project controller', async (t) => {
     assert.deepStrictEqual(saved.sources, stored.sources, 'sources comes from the stored row, never the body');
   });
 
+  await t.test('PUT /api/projects/:id cannot set projectCACPublished', async () => {
+    // The cacPublished predicate reads this flag, so a content writer able to set it through PUT
+    // would publish cacEmail on their own (docs/rbac-architecture.md §2 item 7).
+    const stored = {
+      id: '207', trackProjectId: 207, name: 'P', projectCACPublished: false,
+      read: ['public', ...SECURE_ROLES], isPublished: true
+    };
+    t.mock.method(projects, 'getById', async () => structuredClone(stored));
+    let saved;
+    t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await projectController.updateProject({
+      params: { id: '207' }, query: {}, user: WRITER_USER,
+      body: { name: 'P2', projectCACPublished: true }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.name, 'P2');
+    assert.strictEqual(saved.projectCACPublished, false, 'the stored flag wins over the body');
+  });
+
   await t.test('PUT rejects vis for every caller', async () => {
     t.mock.method(projects, 'getById', async () => ({ id: '207', trackProjectId: 207, name: 'P' }));
     let upserted = false;
