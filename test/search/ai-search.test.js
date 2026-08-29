@@ -1273,6 +1273,16 @@ test('the project search selects the columns the project list renders', () => {
   }
 });
 
+// `vis` is not rendered — it is the dial map the redactor reads — so the list-columns case above
+// would never name it, and the select-vs-index guard only checks the subset direction. Deleting
+// `,vis` from PROJECT_SELECT therefore left the whole suite green while every per-record dial went
+// inert on the search path: no column, no `hit.vis`, no dials, every field back at defaultVis,
+// which is the fail-OPEN direction.
+test('the project search selects the vis dial map', () => {
+  assert.ok(aiSearch.PROJECT_SELECT.split(',').includes('vis'),
+    'without vis every per-record dial is silently inert on the project search path');
+});
+
 // THE INVARIANT THE CHUNK WINDOW RESTS ON. `group-chunks.windowFor` is handed SERVICE_MAX_TOP so a
 // page costs one request; if that ever exceeded MAX_PAGE_ROWS, `runSearch` would clamp `top` below
 // the window while `skip` still advanced by the whole window — the unreachable-chunk gap, back

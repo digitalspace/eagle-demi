@@ -86,6 +86,14 @@ function redactForAccess(entity, doc, access) {
     if (children) out[key] = children;
   }
 
+  // `highlighted` is a marked-up COPY of the fields it names, so it must never be wider than the
+  // row it came from: `markedField` falls back to the WHOLE raw value when the analyzer produced
+  // no fragment, which shipped a withheld field back verbatim under its highlight key.
+  if (out.highlighted && typeof out.highlighted === 'object') {
+    out.highlighted = Object.fromEntries(
+      Object.entries(out.highlighted).filter(([field]) => Object.hasOwn(out, field)));
+  }
+
   if (catalog.isPublished && visible(level, effectiveVis(catalog.isPublished, dials.isPublished))) {
     out.isPublished = derivePublished(doc);
   }

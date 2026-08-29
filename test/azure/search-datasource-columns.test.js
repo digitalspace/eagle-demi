@@ -65,6 +65,26 @@ test('the projects vis column is serialized to text', () => {
   assert.strictEqual(idx.fields.find(f => f.name === 'vis').type, 'Edm.String');
 });
 
+// A rename in the data source and the dial translation in `src/vis/catalog/index-projects-renames.js`
+// are two files that never see each other. search-drift.test.js walks the entries that EXIST; it
+// cannot see an alias added here with no entry, and that alias is exactly the case where a stored
+// dial key stops matching any field on a hit — `dialsForIndex` drops it and the field ships.
+test('every column the projects data source renames is translated by PROJECT_TO_INDEX', () => {
+  const { PROJECT_TO_INDEX } = require('../../src/vis/catalog/index-projects-renames');
+  const [, ds] = PAIRS[1];
+
+  for (const [alias, expr] of projectedColumns(ds.container.query)) {
+    // `ToString(c.vis) AS vis` is a serialization, and `c.eacDecision._id` dials off its ROOT
+    // property — that is the name `PATCH /projects/:id/visibility` stores.
+    const call = /^\w+\(\s*c?\.?([\w.]+)\s*\)$/.exec(expr);
+    const stored = (call ? call[1] : expr).split('.')[0];
+    if (stored === alias) continue;
+
+    assert.ok((PROJECT_TO_INDEX[stored] || []).includes(alias),
+      `${stored} is aliased to ${alias}, so a dial on ${stored} needs that alias in PROJECT_TO_INDEX`);
+  }
+});
+
 // The three fields TODO 3.3 adds, pinned by name and by what they are: the generic check above
 // passes on a `documentSource` typed Edm.Boolean or a `fileNameTokens` aliased off the wrong
 // column, and both are silent — a type flip is a rebuild, and the wrong alias analyzes the wrong
