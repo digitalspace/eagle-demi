@@ -1294,21 +1294,21 @@ level, never changes anyone else's access, and never touches the field plane.
 
 Branch: `feat/vis-index-field`  (run the reindex block at the end of this file.)
 
-- [ ] `azure/search/indexes/projects.json`: add `{ "name": "vis", "type": "Edm.String", "retrievable": true, "searchable": false, "filterable": false, "sortable": false, "facetable": false }` — a JSON string, because the index has no map type.
-- [ ] `azure/search/datasources/demi-projects-ds.json` `container.query`: append `, c.vis` to the SELECT before `, c._ts`.
-- [ ] `src/search/ai-search.js:82-84` `PROJECT_SELECT`: append `,vis`.
-- [ ] `src/controllers/search.js:291` mapper: `JSON.parse(doc.vis || '{}')` inside a try, fall back to `{}` on a throw (fail closed = no dial = `defaultVis`), then hand the parsed map to the redactor before mapping.
-- [ ] Same for `azure/search/indexes/documents.json` only if documents get dials; do not add it speculatively.
+- [x] `azure/search/indexes/projects.json`: add `{ "name": "vis", "type": "Edm.String", "retrievable": true, "searchable": false, "filterable": false, "sortable": false, "facetable": false }` — a JSON string, because the index has no map type.
+- [x] `azure/search/datasources/demi-projects-ds.json` `container.query`: append `, ToString(c.vis) AS vis` to the SELECT before `, c._ts` — Cosmos stores the dials as an object, the index field is `Edm.String`, and no indexer field mapping function serializes an object, so the query does it.
+- [x] `src/search/ai-search.js:82-84` `PROJECT_SELECT`: append `,vis`.
+- [x] `src/controllers/search.js:291` mapper: `JSON.parse(doc.vis || '{}')` inside a try, fall back to `{}` on a throw (fail closed = no dial = `defaultVis`), then hand the parsed map to the redactor before mapping.
+- [x] Same for `azure/search/indexes/documents.json` only if documents get dials; do not add it speculatively.
 
 Tests
 
-- [ ] `test/vis/search-drift.test.js` — case `'vis is retrievable and never searchable'` asserts the three flags on the index definition. Fails if a later PUT makes it searchable, which would let a caller find records by their classification.
-- [ ] `test/controllers/search.test.js` — case `'a malformed vis string falls back to defaultVis'` feeds `vis: '{'` and asserts the row is redacted at `defaultVis`, not returned raw. Fails on an unguarded `JSON.parse`.
-- [ ] `test/search/ai-search.test.js` — the existing select-vs-index guard covers the new name.
+- [x] `test/vis/search-drift.test.js` — case `'vis is retrievable and never searchable'` asserts the three flags on the index definition. Fails if a later PUT makes it searchable, which would let a caller find records by their classification.
+- [x] `test/controllers/search.test.js` — case `'a malformed vis string falls back to defaultVis'` feeds `vis: '{'` and asserts the row is redacted at `defaultVis`, not returned raw. Fails on an unguarded `JSON.parse`.
+- [x] `test/search/ai-search.test.js` — the existing select-vs-index guard covers the new name.
 
 Acceptance
 
-- [ ] `node --test test/vis/search-drift.test.js test/search/ai-search.test.js test/controllers/search.test.js` — 0 fail.
+- [x] `node --test test/vis/search-drift.test.js test/search/ai-search.test.js test/controllers/search.test.js` — 0 fail.
 - [ ] Reindex block below, run in order.
 - [ ] After the indexer reset: `GET {endpoint}/indexers/projects-indexer/status` reports `393 processed, 0 failed` and a dialled project's search hit is redacted.
 

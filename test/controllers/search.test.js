@@ -361,9 +361,61 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(row.isPublished, false, 'derived from read[], not copied from the index');
   });
 
-  // The catalog gates QUERY keys as well as response fields (P2-3). `read` is the only field the
-  // index catalogs put below level 4, and it is filterable, so it is the one key that proves the
-  // gate: without it `read/any(x: x eq 'sysadmin')` composes into the caller's own filter.
+  // The index has no map type, so the dials ride along as a JSON string and the mapper parses them
+  // before the redactor runs. This pair is the mutation check on that parse: without it a dialled
+  // project's restricted fields ship to every anonymous search caller, and an unguarded
+  // `JSON.parse` turns one bad row into a 500 for the whole page.
+  await t.test('a well-formed vis string dials the hit down', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: '207',
+        name: 'Nicomen Wind Energy',
+        description: 'A wind farm.',
+        read: ['public'],
+        vis: '{"description": 2}'
+      }]
+    }));
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'nicomen' }, header: () => null }, res);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row.description, 'No project description provided.',
+      'a level-2 dial must withhold the description from an anonymous caller');
+    assert.strictEqual(row.name, 'Nicomen Wind Energy', 'an undialled field is untouched');
+  });
+
+  await t.test('a malformed vis string falls back to defaultVis', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: '207',
+        name: 'Nicomen Wind Energy',
+        description: 'A wind farm.',
+        read: ['public'],
+        // Truncated JSON: the parse throws.
+        vis: '{'
+      }]
+    }));
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'nicomen' }, header: () => null }, res);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row.description, 'A wind farm.',
+      'no readable dial means defaultVis, which is 4 for description');
+    assert.strictEqual(row.vis, undefined, 'the dial map itself is never published');
+    assert.strictEqual(row.read, undefined, 'the row still went through the redactor');
+  });
+
+  // The catalog gates QUERY keys as well as response fields (P2-3). `read` is the only FILTERABLE
+  // field the index catalogs put below level 4, so it is the one key that proves the gate: without
+  // it `read/any(x: x eq 'sysadmin')` composes into the caller's own filter.
   await t.test('a filter on a hidden field is dropped, not applied', async () => {
     let sent = null;
     t.mock.method(aiSearch, 'searchProjects', async (opts) => {

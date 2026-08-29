@@ -36,5 +36,8 @@ module.exports = {
   highlighted: { defaultVis: 4, maxVis: 4 },
 
   // The caller's own ACL restated. `isPublished` is derived from it in the redactor.
-  read: { defaultVis: 0, maxVis: 0 }
+  read: { defaultVis: 0, maxVis: 0 },
+
+  // The dial map itself. Selected so the redactor can read it, published to nobody.
+  vis: { defaultVis: 0, maxVis: 0 }
 };

@@ -81,7 +81,7 @@ const DOCUMENT_SELECT = 'id,displayName,documentFileName,description,type,projec
  */
 const PROJECT_SELECT = 'id,name,displayName,description,proponent,sector,status,region,centroid,' +
   'legacyEagleId,read,isPublished,type,currentPhaseName,currentPhaseNameId,eacDecision,' +
-  'eacDecisionId,decisionDate';
+  'eacDecisionId,decisionDate,vis';
 
 /** Rows one search request can return. A larger page costs more requests, not fewer rows. */
 const SERVICE_MAX_TOP = 250;
