@@ -317,8 +317,9 @@ Eagle-only fields (`merge/project.js:48-57`, 31 entries) — `defaultVis: 4, max
       `CEAAInvolvement` · `projectLead` · `responsibleEPD` · `eaoMember` · `sector` · `commodity` ·
       `region` · `fedElecDist` · `provElecDist` · `projectCAC` · `projectCACPublished` ·
       `overallProgress` · `code`
-- [x] `projectLeadEmail` · `responsibleEPDEmail` · `cacEmail` — `defaultVis: 4, maxVis: 4` today.
-      Stay at 4: public by policy (§3 question 2, 2026-08-28).
+- [x] `projectLeadEmail` · `responsibleEPDEmail` — `defaultVis: 4, maxVis: 4` today.
+      Stay at 4: public by policy (§3 question 2, 2026-08-28). `cacEmail` moved to
+      `defaultVis: 2` with the `cacPublished` predicate in P3-8.
 - [x] `complianceLead`, `execProjectDirector` — `defaultVis: 2, maxVis: 4` per doc §2 item 3.
       **This is a byte change** on any row that carries a value. Before merging, count rows:
       `SELECT VALUE COUNT(1) FROM c WHERE IS_DEFINED(c.complianceLead)` over `projects` (via the
@@ -1316,7 +1317,7 @@ Acceptance
 
 Branch: `feat/vis-cac-predicate`
 
-- [x] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:58`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only `PATCH /visibility` (P3-5) or the Eagle push may set it. Merges before the predicate, per doc section 2 item 7.
+- [x] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:58`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only `PATCH /visibility` (P3-5) or the Eagle push may set it. Merges before the predicate, per doc section 2 item 7. The Eagle push shares PUT's `requireWrite` gate, so this is mirror ownership, not a privilege boundary.
 - [x] Only then: `cacPublished: (record) => record.projectCACPublished === true` in `src/vis/predicates.js`, and `when: 'cacPublished'` on `cacEmail` in `src/vis/catalog/projects.js` with `defaultVis: 2, maxVis: 4`.
 
 Tests
