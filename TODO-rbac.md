@@ -1313,8 +1313,8 @@ Tests
 Acceptance
 
 - [x] `node --test test/vis/search-drift.test.js test/search/ai-search.test.js test/controllers/search.test.js` — 0 fail.
-- [ ] Reindex block below, run in order.
-- [ ] After the indexer reset: `GET {endpoint}/indexers/projects-indexer/status` reports `393 processed, 0 failed` and a dialled project's search hit is redacted.
+- [x] Reindex block below, run in order.
+- [x] After the indexer reset: `GET {endpoint}/indexers/projects-indexer/status` reports `393 processed, 0 failed` and a dialled project's search hit is redacted. Done on test 2026-08-29: 393 processed, 0 failed; project 207 with `vis.description: 2` returned the placeholder and an empty highlight anonymously; dial removed after.
 
 ## P3-8 gate `projectCACPublished`, then the `cacPublished` predicate
 
@@ -1332,7 +1332,7 @@ Tests
 Acceptance
 
 - [x] `node --test test/vis/redact-matrix.test.js test/controllers/nosql-controllers.test.js` — 0 fail.
-- [ ] Anonymous `GET /api/projects/<published-CAC-project>` still returns `cacEmail` (today's behaviour, per doc section 2 item 3).
+- [x] Anonymous `GET /api/projects/<published-CAC-project>` still returns `cacEmail` (today's behaviour, per doc section 2 item 3). Verified on test 2026-08-29: projects 8, 69, 96 (`projectCACPublished: true`) return `cacEmail` anonymously; 207 (false) omits it. 97 projects lose the field anonymously, 94 of them the `noreply@` placeholder.
 
 ---
 
@@ -1561,11 +1561,11 @@ App Service SSH tunnel — the search service is `publicNetworkAccess: Disabled`
 gets a 403, not a connection error. Grant `Search Service Contributor`
 (`7ca78c08-252a-4471-8644-bb5ff32d4ba0`) at the SERVICE scope for the run and revoke it after.
 
-- [ ] 1. PUT the index: `node src/scripts/apply-search-definitions.js --only projects --live`. Adding a field is an additive change, so no `allowIndexDowntime`.
-- [ ] 2. PUT the data source: `node src/scripts/put-search-datasources.js --only projects --live`. `apply-search-definitions.js` deliberately never writes a data source; without this the indexer keeps its old SELECT and `vis` stays null on every row.
-- [ ] 3. Deploy the app carrying the new `PROJECT_SELECT` and the mapper. Order matters: an app selecting a field the index lacks is a 400 on every query, and a 400 is not retried.
-- [ ] 4. Reset and run the indexer: `POST {endpoint}/indexers/projects-indexer/reset?api-version=2024-07-01` → 204; `POST .../run` → 202; poll `GET .../status` until `lastResult.status` is `success` — treat `reset` as still-running, not terminal. Expect `393 processed, 0 failed`.
-- [ ] 5. Confirm: a dialled project's AI Search hit carries `vis`, and the mapper redacts it.
+- [x] 1. PUT the index: `node src/scripts/apply-search-definitions.js --only projects --live`. Adding a field is an additive change, so no `allowIndexDowntime`.
+- [x] 2. PUT the data source: `node src/scripts/put-search-datasources.js --only projects --live`. `apply-search-definitions.js` deliberately never writes a data source; without this the indexer keeps its old SELECT and `vis` stays null on every row. The container env carries no `DS_SUB`, `DS_RG`, `DS_IDENTITY_ID`; export them by hand or the PUT drops the identity block and the indexer refuses the data source ("Ensure managed identity is enabled").
+- [x] 3. Deploy the app carrying the new `PROJECT_SELECT` and the mapper. Order matters: an app selecting a field the index lacks is a 400 on every query, and a 400 is not retried.
+- [x] 4. Reset and run the indexer: `POST {endpoint}/indexers/projects-indexer/reset?api-version=2024-07-01` → 204; `POST .../run` → 202; poll `GET .../status` until `lastResult.status` is `success` — treat `reset` as still-running, not terminal. Expect `393 processed, 0 failed`.
+- [x] 5. Confirm: a dialled project's AI Search hit carries `vis`, and the mapper redacts it.
 
 **The window where the mapper redaction is the only guard** opens at step 1 and closes at step 5.
 Between the index PUT and a successful indexer run, `vis` is `null` on every indexed row: every
@@ -1573,8 +1573,8 @@ project search hit is redacted at `defaultVis` from the catalog with no dial app
 dialled BELOW its default is over-exposed in search results while remaining correct on
 `GET /api/projects/:id` (Cosmos, no indexer). Two consequences:
 
-- [ ] Do not write any dial that RESTRICTS below `defaultVis` until step 5 is green.
-- [ ] If a restricting dial must be applied first, unpublish the project (`read[]`, the row plane) for the duration — the row plane is indexed and enforced by `filterFor`, and it does not depend on the new field.
+- [x] Do not write any dial that RESTRICTS below `defaultVis` until step 5 is green.
+- [x] If a restricting dial must be applied first, unpublish the project (`read[]`, the row plane) for the duration — the row plane is indexed and enforced by `filterFor`, and it does not depend on the new field.
 
 ---
 
