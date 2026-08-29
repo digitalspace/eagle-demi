@@ -21,19 +21,17 @@ export class AppComponent {
 
   screenKey = signal(this.keyOf(this.router.url));
   isMap = computed(() => this.screenKey() === 'map');
-  navOpen = signal(!this.isMap());
+  navOpen = signal(true);
   // Keycloak check-sso is async; rendering the gate before it settles flashes sign-in at staff.
   authSettled = signal(false);
   accountOpen = signal(false);
   infoOpen = signal(false);
 
-  // Map Explorer gets the nav's width back; every other screen keeps it open.
   constructor() {
     this.service.authReady.then(() => this.authSettled.set(true));
     this.router.events.pipe(takeUntilDestroyed()).subscribe(event => {
       if (!(event instanceof NavigationEnd)) return;
       this.screenKey.set(this.keyOf(event.urlAfterRedirects));
-      this.navOpen.set(!this.isMap());
       this.accountOpen.set(false);
     });
   }
