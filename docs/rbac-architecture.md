@@ -237,10 +237,12 @@ Each item below overrides the corresponding section of the source document.
    and `seed-nosql.js:403` replace the whole item and carry only `sources` forward. `vis` is
    carried forward beside `sources` in both, with a test, in the same change that adds the dial
    engine.
-7. **Predicates read only fields ordinary writes cannot set.** `projectCACPublished` is a plain
-   content field any `WRITE_ROLES` caller sets through PUT, so `when: 'cacPublished'` would let a
-   content writer publish `cacEmail` without `sysadmin`. Until Phase 3 gates that field, the
-   predicate is not shipped. Predicates take `(record)` only.
+7. **Predicates read only fields ordinary writes cannot set.** PUT strips `projectCACPublished`
+   (`src/controllers/nosql/project.js`), so only the Eagle push writes it; without that strip
+   `when: 'cacPublished'` would let a content writer publish `cacEmail` without `sysadmin`.
+   `cacEmail` is `defaultVis: 2, maxVis: 4, when: 'cacPublished'`: a true predicate widens the
+   field to `maxVis`, a dial beats it, and a `when` naming no export of `src/vis/predicates.js`
+   throws at load. Predicates take `(record)` only.
 8. **`read`, `s3Key`, `vis` are `maxVis: 0`; `_etag` is `maxVis: 2`.** `publicView` strips
    `read` on purpose and the document controller strips `s3Key`. `isPublished` is derived in the
    redactor from `read.includes('public')`. Exposing the `vis` map at level 2 would reveal which

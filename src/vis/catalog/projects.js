@@ -9,7 +9,8 @@
  *
  * Day-one defaults reproduce today's anonymous output (docs/rbac-architecture.md §2 item 3), so
  * almost everything is 4/4. Keys may be dotted one level; the redactor descends only for those.
- * No `when` predicates this phase (§2 item 7) — redact.js throws if one appears.
+ * A `when` names a predicate in src/vis/predicates.js: true widens the field to `maxVis`, and a
+ * dial beats it (§2 item 7). redact.js throws at load on a name predicates.js does not export.
  */
 module.exports = {
   // Structural / identity.
@@ -66,7 +67,9 @@ module.exports = {
   // Public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2).
   projectLeadEmail: { defaultVis: 4, maxVis: 4 },
   responsibleEPDEmail: { defaultVis: 4, maxVis: 4 },
-  cacEmail: { defaultVis: 4, maxVis: 4 },
+
+  // Public only while the CAC is, which is what the predicate reads.
+  cacEmail: { defaultVis: 2, maxVis: 4, when: 'cacPublished' },
 
   // Not in eagle-public's request list, so restricting them costs nothing public (§2 item 3).
   complianceLead: { defaultVis: 2, maxVis: 4 },
