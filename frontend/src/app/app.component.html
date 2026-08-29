@@ -1,77 +1,101 @@
-<!-- Header -->
-<header>
-  <div class="brand">
-    <div class="brand-logo">
-      <i class="fa-solid fa-server"></i>
-    </div>
-    <div>
-      <div class="brand-title">DEMI Digital File Library & Registry</div>
-      <div style="font-size: 0.75rem; color: var(--bc-gold)">Digital File Library (DFL) & Document Registry</div>
+@if (!authSettled()) {
+  <!-- The shell, not a message: the sign-in/app swap lands into the same boxes, so nothing jumps. -->
+  <div class="app" aria-busy="true">
+    <p class="visually-hidden">Checking your session…</p>
+    <header class="eao-header app-header" aria-hidden="true">
+      <span class="skeleton" style="height: 60px; width: 3.5rem;"></span>
+      <span class="skeleton skeleton--text" style="width: 22rem;"></span>
+      <span class="skeleton skeleton--circle" style="height: 2rem; width: 2rem; margin-left: auto;"></span>
+    </header>
+    <div class="app__body">
+      <nav class="eao-sidebar app-sidebar" aria-hidden="true">
+        @for (i of [1, 2, 3, 4, 5, 6]; track i) {
+          <span class="skeleton skeleton--text" style="width: 60%; margin: var(--layout-margin-small) var(--layout-margin-medium);"></span>
+        }
+      </nav>
+      <main class="app__main"></main>
     </div>
   </div>
-
-  <!-- Navigation Switcher Tabs (Center) -->
-  <div class="nav-tabs">
-    <button class="nav-tab" routerLink="/map" routerLinkActive="active">
-      <i class="fa-solid fa-earth-americas"></i> Map Explorer
-    </button>
-    <button class="nav-tab" routerLink="/search" routerLinkActive="active">
-      <i class="fa-solid fa-magnifying-glass"></i> Deep Text Search
-    </button>
-    <!-- Visible to everyone: the page itself explains the staff gate and offers a login, which is
-         the point of it. Contrast /intake below, which is guarded and hidden. -->
-    <button class="nav-tab" routerLink="/summary" routerLinkActive="active">
-      <i class="fa-solid fa-wand-magic-sparkles"></i> AI Summary
-    </button>
-    @if (service.isStaff()) {
-      <button class="nav-tab" routerLink="/intake" routerLinkActive="active">
-        <i class="fa-solid fa-cloud-arrow-up"></i> Document Intake
-      </button>
-    }
-    <!-- The API only mounts /api-docs in dev and test, so anywhere else this link is a 404. -->
-    @if (apiDocsAvailable) {
-      <button class="nav-tab" (click)="openSwagger()">
-        <i class="fa-solid fa-code"></i> Swagger API Docs
-      </button>
-    }
-  </div>
-
-  <!--
-    Authentication is the only state control. The "EPIC Staff View / Public Citizen View" pill that
-    used to sit here was both a view toggle AND the app's only login button, so the two questions —
-    "who are you" and "what are you looking at" — could disagree. To see the public site, log out.
-  -->
-  <div style="display: flex; align-items: center; gap: 1.25rem;">
-    @if (service.authEnabled() && service.isAuthenticated()) {
-      <div class="user-identity-badge" [class.unauthorized]="service.isUnauthorized()">
-        <i class="fa-solid" [class.fa-user-check]="!service.isUnauthorized()" [class.fa-user-lock]="service.isUnauthorized()"></i>
-        @if (service.isUnauthorized()) {
-          <!-- Reachable and, until now, silent: the account is real but carries none of
-               sysadmin / staff / demi-admin. Say so; a second login cannot fix it. -->
-          <span><strong>{{ service.userName() }}</strong> — this account does not have EPIC staff access</span>
-        } @else {
-          <span>Logged in as <strong>{{ service.userName() }}</strong> (Staff)</span>
+} @else if (!service.isStaff()) {
+  <app-sign-in />
+} @else {
+  <div class="app">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="eao-header app-header">
+      <img class="eao-header__mark app-header__mark" src="assets/bcgov-header-vert.png" alt="Government of British Columbia">
+      <div class="app-header__centre">
+        <p class="eao-header__title app-header__title">DEMI — Digital File Library &amp; Registry</p>
+        @if (service.config.ENVIRONMENT; as env) {
+          <span class="app-header__env">{{ env }}</span>
         }
       </div>
-      <button class="btn-logout" (click)="logout()">
-        <i class="fa-solid fa-sign-out-alt"></i> Logout
-      </button>
-    } @else if (service.authEnabled()) {
-      <button class="btn-login" (click)="login()">
-        <i class="fa-solid fa-right-to-bracket"></i> Staff Login
-      </button>
-    }
-  </div>
-</header>
+      <div class="eao-header__actions">
+        <button type="button" (click)="infoOpen.set(!infoOpen())" aria-label="How this screen is built" style="display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.85rem; border-radius: var(--layout-border-radius-circular); background: var(--theme-primary-gold); color: var(--surface-color-primary-default); border: none; font: var(--typography-bold-small-body); white-space: nowrap; cursor: pointer;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><line x1="12" y1="11" x2="12" y2="16.5"></line><circle cx="12" cy="7.6" r="1.1" fill="currentColor" stroke="none"></circle></svg>
+          How this is built
+        </button>
+        <div class="account">
+          <button type="button" class="account__chip" (click)="accountOpen.set(!accountOpen())" [attr.aria-expanded]="accountOpen()" aria-label="Account menu">
+            <span class="account__avatar">{{ initials() }}</span>
+            <span class="account__caret">▾</span>
+          </button>
+          @if (accountOpen()) {
+            <div class="account__menu" role="menu">
+              <div class="account__identity">
+                <div class="account__name">{{ service.userName() || 'Local user' }}</div>
+                <div class="account__meta">{{ service.config.KEYCLOAK_REALM || 'eao-epic' }} · staff</div>
+              </div>
+              <button type="button" role="menuitem" class="account__item" routerLink="/profile">Profile and preferences</button>
+              <button type="button" role="menuitem" class="account__item" routerLink="/sessions">Active sessions</button>
+              <button type="button" role="menuitem" class="account__item account__item--danger" (click)="logout()">Sign out</button>
+            </div>
+          }
+        </div>
+      </div>
+    </header>
 
-<!-- Data-load failures must be visible. An empty list is otherwise indistinguishable from
-     a filtered-to-nothing result, which previously hid backend outages entirely. -->
-@if (service.loadError(); as loadError) {
-  <div class="load-error-banner" role="alert">
-    <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
-    <span>{{ loadError }}</span>
-    <button type="button" (click)="service.loadData()">Retry</button>
+    <div class="app__body">
+      <nav class="eao-sidebar app-sidebar" aria-label="DEMI" [attr.data-open]="navOpen()">
+        <button type="button" class="app-sidebar__toggle" (click)="navOpen.set(!navOpen())" aria-label="Toggle navigation" [attr.aria-expanded]="navOpen()">{{ navOpen() ? '‹' : '›' }}</button>
+        @if (navOpen()) {
+          @for (section of sections; track section.heading) {
+            <div>
+              <div class="eao-sidebar__divider app-sidebar__heading">{{ section.heading }}</div>
+              @for (item of section.items; track item.key) {
+                <a class="app-sidebar__link" [routerLink]="item.path" routerLinkActive #rla="routerLinkActive" [attr.aria-current]="rla.isActive ? 'page' : null">{{ item.label }}</a>
+              }
+            </div>
+          }
+        }
+      </nav>
+
+      <main id="main" tabindex="-1" class="app__main" [style]="mainStyle()">
+        <!-- Data-load failures must be visible. An empty list is otherwise indistinguishable from
+             a filtered-to-nothing result, which hid backend outages entirely. -->
+        @if (service.loadError(); as loadError) {
+          <div class="callout callout--warning alert-row" role="alert">
+            <p>{{ loadError }} <button type="button" (click)="service.loadData()">Retry</button></p>
+          </div>
+        }
+        <router-outlet />
+      </main>
+    </div>
+
+    <footer class="app-footer">
+      <span></span>
+      <nav aria-label="Footer" class="app-footer__links">
+        <a href="https://www2.gov.bc.ca/gov/content/home">Home</a>
+        <a href="https://www2.gov.bc.ca/gov/content/home/disclaimer">Disclaimer</a>
+        <a href="https://www2.gov.bc.ca/gov/content/home/privacy">Privacy</a>
+        <a href="https://www2.gov.bc.ca/gov/content/home/accessibility">Accessibility</a>
+        <a href="https://www2.gov.bc.ca/gov/content/home/copyright">Copyright</a>
+        <a href="https://www2.gov.bc.ca/gov/content/home/get-help-with-government-services">Contact us</a>
+      </nav>
+      <span class="app-footer__build">DEMI · {{ service.config.ENVIRONMENT }}</span>
+    </footer>
   </div>
+
+  @if (infoOpen()) {
+    <app-how-built [screenKey]="screenKey()" (closed)="infoOpen.set(false)" />
+  }
 }
-
-<router-outlet></router-outlet>

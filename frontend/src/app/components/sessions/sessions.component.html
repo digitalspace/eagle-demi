@@ -1,0 +1,50 @@
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>Active sessions</h1>
+    <p>What this browser is holding against DEMI, read from the access token.</p>
+  </div>
+</div>
+
+<div class="callout callout--warning">
+  <strong>Not wired</strong> — DEMI keeps no session store; tokens are stateless. Only this browser's session is shown.
+</div>
+
+<section class="panel panel--scroll">
+  <table style="min-width: 44rem;">
+    <thead>
+      <tr>
+        <th>Device</th>
+        <th>Session</th>
+        <th>Token issued</th>
+        <th>Token expires</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          <div class="cell__title">This browser</div>
+          <div class="cell__sub">{{ userAgent }}</div>
+        </td>
+        <td class="cell--muted">
+          @if (sessionId()) {
+            <code class="cell__mono">{{ sessionId() }}</code>
+          } @else { — }
+        </td>
+        <td class="cell--muted cell--nowrap">{{ issued() }}</td>
+        <td class="cell--muted cell--nowrap">{{ expires() }}</td>
+        <td class="cell--right cell--nowrap">
+          @if (service.isAuthenticated()) {
+            <span class="row-actions">
+              <button type="button" (click)="logout()" style="background: none; border: none; padding: 0; color: var(--typography-color-link); font: var(--typography-bold-small-body); cursor: pointer;">Sign out</button>
+            </span>
+          } @else {
+            <span class="pill pill--neutral">Not signed in</span>
+          }
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<p class="footnote">Sessions live in Keycloak. Signing out here ends this browser's session at the identity provider; sessions on other devices are not listed and cannot be revoked from DEMI.</p>

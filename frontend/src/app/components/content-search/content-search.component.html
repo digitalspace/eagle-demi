@@ -1,0 +1,117 @@
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>Document Content Search</h1>
+    <p>Matches from inside the documents themselves — the extracted passages, not their metadata.</p>
+  </div>
+</div>
+
+<section class="panel panel--padded">
+  <div style="position: relative;">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--typography-color-secondary);"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg>
+    <input id="demi-search-content" type="text" placeholder="Search the full text of every document" [value]="service.searchQuery()" (input)="onSearchInput($event)" aria-label="Search document text" style="width: 100%; box-sizing: border-box; padding: 0.8rem 3rem 0.8rem 3rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+    @if (service.searchQuery()) {
+      <button type="button" (click)="clearQuery()" aria-label="Clear search" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; font: var(--typography-bold-small-body); color: var(--typography-color-secondary); padding: 0.2rem 0.4rem;">✕</button>
+    }
+  </div>
+  <p class="panel__lede" style="margin-top: var(--layout-margin-small);">Every word you type has to appear in the same passage, so keywords retrieve where a sentence will not.</p>
+  <div style="display: flex; gap: var(--layout-margin-large); margin-top: var(--layout-margin-medium); flex-wrap: wrap;" [attr.aria-busy]="service.dbStats() ? null : 'true'">
+    <div>
+      <div class="micro-label">Documents in the registry</div>
+      <div class="cell__title">
+        @if (service.dbStats(); as stats) {
+          {{ stats.documents.toLocaleString() }}
+        } @else {
+          <span class="skeleton skeleton--text" style="width: 4rem;" aria-hidden="true"></span>
+        }
+      </div>
+    </div>
+    <div>
+      <div class="micro-label">Projects in the registry</div>
+      <div class="cell__title">
+        @if (service.dbStats(); as stats) {
+          {{ stats.projects.toLocaleString() }}
+        } @else {
+          <span class="skeleton skeleton--text" style="width: 3rem;" aria-hidden="true"></span>
+        }
+      </div>
+    </div>
+    <div>
+      <div class="micro-label">Matching passages</div>
+      <div class="cell__title">
+        @if (service.chunksLoading() === 'first') {
+          <span class="skeleton skeleton--text" style="width: 2.5rem;" aria-hidden="true"></span>
+        } @else {
+          {{ chunkCount() }}
+        }
+      </div>
+    </div>
+  </div>
+</section>
+
+@if (service.loadError()) {
+  <section class="panel panel--padded">
+    <div class="callout callout--warning">{{ service.loadError() }}</div>
+  </section>
+}
+
+@if (service.chunksLoading() === 'first') {
+  <p class="visually-hidden">Searching the passages…</p>
+  <!-- Same card as the real passage below: heading pair, quoted passage, action row. -->
+  @for (i of [1, 2, 3]; track i) {
+    <section class="panel panel--padded" aria-busy="true" aria-hidden="true">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: var(--layout-margin-small); flex-wrap: wrap;">
+        <div style="flex: 1;">
+          <div class="cell__title"><span class="skeleton skeleton--text" style="width: 55%;"></span></div>
+          <div class="cell__sub"><span class="skeleton skeleton--text" style="width: 35%;"></span></div>
+        </div>
+        <span class="pill" style="padding: 0;"><span class="skeleton skeleton--text" style="width: 5rem;"></span></span>
+      </div>
+      <p style="font: var(--typography-regular-small-body); margin: var(--layout-margin-small) 0 0; padding-left: var(--layout-padding-medium); border-left: 3px solid var(--surface-color-border-default);">
+        <span class="skeleton skeleton--text" style="width: 100%;"></span>
+        <span class="skeleton skeleton--text" style="width: 96%;"></span>
+        <span class="skeleton skeleton--text" style="width: 62%;"></span>
+      </p>
+      <div class="panel__actions" style="display: flex; gap: var(--layout-margin-medium);">
+        <span class="skeleton skeleton--text" style="width: 7rem;"></span>
+        <span class="skeleton skeleton--text" style="width: 7rem;"></span>
+      </div>
+    </section>
+  }
+}
+
+@for (chunk of service.documentChunks(); track chunk.id) {
+  <section class="panel panel--padded" [style.opacity]="service.chunksLoading() === 'refresh' ? 0.6 : null" [attr.aria-busy]="service.chunksLoading() === 'refresh' ? 'true' : null">
+    <div style="display: flex; align-items: baseline; justify-content: space-between; gap: var(--layout-margin-small); flex-wrap: wrap;">
+      <div>
+        <div class="cell__title">{{ chunk.documentName }}</div>
+        <div class="cell__sub">{{ chunkMeta(chunk) }}</div>
+      </div>
+      @if (chunk.documentType) {
+        <span class="pill pill--info pill--caps">{{ chunk.documentType }}</span>
+      }
+    </div>
+    <p style="font: var(--typography-regular-small-body); color: var(--typography-color-primary); margin: var(--layout-margin-small) 0 0; padding-left: var(--layout-padding-medium); border-left: 3px solid var(--surface-color-border-default);" [innerHTML]="highlightText(chunk.snippet || chunk.content, service.debouncedSearchQuery())"></p>
+    <div class="panel__actions" style="display: flex; gap: var(--layout-margin-medium);">
+      <button type="button" (click)="openDocument(chunk)" [disabled]="downloadingChunkId() === chunk.id" style="background: none; border: none; padding: 0; font: var(--typography-bold-small-body); color: var(--typography-color-link); text-decoration: underline; cursor: pointer;">{{ downloadingChunkId() === chunk.id ? 'Preparing…' : 'Open document' }}</button>
+      <button type="button" (click)="copyPassageId(chunk)" style="background: none; border: none; padding: 0; font: var(--typography-bold-small-body); color: var(--typography-color-link); text-decoration: underline; cursor: pointer;">{{ copiedChunkId() === chunk.id ? 'Copied' : 'Copy passage id' }}</button>
+    </div>
+  </section>
+}
+
+@if (downloadError()) {
+  <p class="footnote">{{ downloadError() }}</p>
+}
+
+@if (noResults()) {
+  <section class="panel panel--padded" style="text-align: center;">
+    <div class="cell__title">No passages matched “{{ service.debouncedSearchQuery() }}”</div>
+    <div class="cell__sub" style="margin-top: 4px;">Retrieval is conjunctive — drop a word, or try one of these:</div>
+    <div style="display: flex; flex-wrap: wrap; gap: var(--layout-margin-xsmall); justify-content: center; margin-top: var(--layout-margin-small);">
+      @for (sug of suggestions(); track sug) {
+        <button type="button" (click)="applySuggestion(sug)" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-circular); padding: 0.25rem 0.7rem; font: var(--typography-regular-label); cursor: pointer;">{{ sug }}</button>
+      }
+    </div>
+  </section>
+}
+
+<p class="footnote">Passages carry the read ACL of the live document they came from, so an extraction host can never widen a document's visibility. The registry exposes no passage total, so the figures above count documents and projects.</p>

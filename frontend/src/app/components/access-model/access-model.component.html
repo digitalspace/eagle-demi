@@ -1,0 +1,140 @@
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>Access model</h1>
+    <p>Assign a theoretical DEMI user to groups and watch what the registry returns. The same rules run on projects, on documents, and on individual fields.</p>
+  </div>
+</div>
+
+<div class="callout callout--warning">
+  <strong>Work in progress.</strong> The EAO sharing model is still being defined. Field-level rules in particular are illustrative here — the levels, the sealed compartment and the credential lane follow the current draft.
+</div>
+
+<div class="panel-grid" style="grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); align-items: start;">
+  <section class="panel panel--padded">
+    <h2 class="panel__title panel__title--inline">Simulated user</h2>
+    <div class="kv-grid" style="margin-bottom: var(--layout-margin-medium);">
+      <div class="kv-row"><span class="kv-row__key">Your level</span><span class="kv-row__value" [attr.aria-busy]="meLoading() ? 'true' : null">@if (meLoading()) {<span class="skeleton skeleton--text" style="width: 6rem;" aria-hidden="true"></span>} @else {{{ meLabel() }}}</span></div>
+      <div class="kv-row"><span class="kv-row__key">Realm</span><span class="kv-row__value"><code class="cell__mono">{{ realm }}</code></span></div>
+      <div class="kv-row"><span class="kv-row__key">Simulated reads</span><span class="kv-row__value">{{ audienceSummary() }}</span></div>
+    </div>
+
+    <div class="micro-label" style="margin-bottom: var(--layout-margin-xsmall);">Group membership</div>
+    <div style="display: flex; flex-direction: column; gap: var(--layout-margin-small);">
+      @for (g of groupRows(); track g.key) {
+        <label style="display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer;">
+          <input type="checkbox" [checked]="g.checked" [disabled]="g.disabled" (change)="toggle(g.key)" style="margin-top: 3px;">
+          <span>
+            <span class="cell__title">{{ g.label }}</span>
+            <span class="cell__sub" style="display: block;">{{ g.note }}</span>
+          </span>
+        </label>
+      }
+    </div>
+  </section>
+
+  <div>
+    <section class="panel">
+      <h2 class="panel__title">The sharing ladder, as this user</h2>
+      @for (lv of ladder(); track lv.heading) {
+        <div [style]="lv.rowStyle">
+          <div>
+            <div class="cell__title">{{ lv.heading }}</div>
+            <div class="cell__sub">{{ lv.audience }}</div>
+            <div class="cell__sub" style="margin-top: 2px;">{{ lv.detail }}</div>
+          </div>
+          <span [class]="lv.pillClass">{{ lv.verdict }}</span>
+        </div>
+      }
+
+      <div [style]="rowLevel0Style">
+        <div>
+          <div class="cell__title">Level 0 — Sensitive</div>
+          <div class="cell__sub">A sealed compartment beside the ladder, not a step below it</div>
+          <div class="cell__sub" style="margin-top: 2px;">Restricted to a named set of roles and encrypted, so it is unreadable to front-end users including Superusers, and through the data layer. A file cannot be elevated out of it through the sharing interface.</div>
+        </div>
+        <span [class]="sealedPillClass()">{{ sealedVerdict() }}</span>
+      </div>
+
+      <div [style]="rowLaneStyle">
+        <div>
+          <div class="cell__title">Special — Selected Credentials</div>
+          <div class="cell__sub">A lane alongside the ladder for First Nations, proponents, certificate holders, partner agencies and local governments</div>
+          <div class="cell__sub" style="margin-top: 2px;">Grants a named external party sight of specified content at Levels 1–3 without making them a member of that audience. The file's level does not change and no one else's access changes with it. Time-bound, renewable, revocable — singly or in bulk.</div>
+        </div>
+        <span class="pill pill--info">Lane</span>
+      </div>
+    </section>
+  </div>
+</div>
+
+<section class="panel panel--scroll">
+  <h2 class="panel__title">Field-level access — Site C Clean Energy Project</h2>
+  <table style="min-width: 52rem; table-layout: fixed; width: 100%;">
+    <thead>
+      <tr>
+        <th style="width: 14rem;">Field</th>
+        <th style="width: 22rem;">Value returned</th>
+        <th style="width: 8rem;">Field level</th>
+        <th style="width: 7rem;">Result</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (f of fields(); track f.label) {
+        <tr>
+          <td class="cell__title">{{ f.label }}</td>
+          <td><span [style]="f.valueStyle">{{ f.shown }}</span></td>
+          <td class="cell--muted cell--nowrap">{{ f.levelLabel }}</td>
+          <td class="cell--nowrap"><span [class]="f.pillClass">{{ f.verdict }}</span></td>
+        </tr>
+      }
+    </tbody>
+  </table>
+</section>
+
+<section class="panel panel--scroll">
+  <h2 class="panel__title">Projects in results</h2>
+  <table style="min-width: 30rem; table-layout: fixed; width: 100%;">
+    <thead>
+      <tr>
+        <th style="width: 16rem;">Project</th>
+        <th style="width: 6rem;">Level</th>
+        <th style="width: 8rem;">Result</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (p of projects(); track p.name) {
+        <tr>
+          <td class="cell__title">{{ p.name }}</td>
+          <td class="cell--muted cell--nowrap">{{ p.levelLabel }}</td>
+          <td class="cell--nowrap"><span [class]="p.pillClass">{{ p.verdict }}</span></td>
+        </tr>
+      }
+    </tbody>
+  </table>
+</section>
+
+<section class="panel panel--scroll">
+  <h2 class="panel__title">Documents · {{ docSummary() }}</h2>
+  <table style="min-width: 45rem; table-layout: fixed; width: 100%;">
+    <thead>
+      <tr>
+        <th style="width: 19rem;">Document</th>
+        <th style="width: 11rem;">Project</th>
+        <th style="width: 9rem;">Level</th>
+        <th style="width: 6rem;">Result</th>
+      </tr>
+    </thead>
+    <tbody>
+      @for (d of docs(); track d.id) {
+        <tr>
+          <td><span [style]="d.nameStyle">{{ d.shown }}</span></td>
+          <td class="cell--muted">{{ d.projectName }}</td>
+          <td class="cell--muted cell--nowrap">{{ d.levelLabel }}</td>
+          <td class="cell--nowrap"><span [class]="d.pillClass">{{ d.verdict }}</span></td>
+        </tr>
+      }
+    </tbody>
+  </table>
+</section>
+
+<p class="footnote">A record a caller cannot see returns 404, never 403 — a 403 would confirm the id exists. Broadening access is always a deliberate act by a permitted user, and it is always logged.</p>

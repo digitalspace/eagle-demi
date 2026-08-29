@@ -1,190 +1,143 @@
-<div class="summarizer-page-container">
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>AI Summary</h1>
+    <p>The registry is searched exactly as content search searches it, and the top matching passages are summarised. Every claim cites the passage it came from.</p>
+  </div>
+</div>
 
-  @if (!service.isStaff()) {
-    <!--
-      The endpoint is privileged-only by design (ADR-006), so an anonymous visitor would otherwise
-      sit on a page that can never produce anything. Explain the gate rather than render an empty
-      tool, and rather than hiding the route and leaving no explanation at all.
-    -->
-    <div class="summarizer-gate">
-      <i class="fa-solid fa-wand-magic-sparkles"></i>
-      <h1>AI Summary</h1>
-      @if (service.isUnauthorized()) {
-        <p>
-          You are signed in as <strong>{{ service.userName() }}</strong>, but this account does not
-          have EPIC staff access. Signing in again will not change that — ask an administrator for
-          the <code>staff</code> role.
-        </p>
-      } @else {
-        <p>
-          Ask a question and get a short answer drawn from the document registry, with citations to
-          the passages it came from. This tool is available to EPIC staff.
-        </p>
-        <button class="btn-gate-login" (click)="service.loginKeycloak()">
-          <i class="fa-solid fa-right-to-bracket"></i> Staff Login
-        </button>
-      }
-    </div>
-  } @else {
-
-    <div class="summarizer-hero">
-      <h1><i class="fa-solid fa-wand-magic-sparkles"></i> AI Summary</h1>
-      <p>
-        The registry is searched exactly as Deep Text Search searches it, and the top matching
-        passages are summarised — every claim cites the passage it came from.
+@if (!service.isStaff()) {
+  <!--
+    The endpoint is privileged-only by design (ADR-006), so an anonymous visitor would otherwise
+    sit on a page that can never produce anything. Explain the gate rather than render an empty
+    tool, and rather than hiding the route and leaving no explanation at all.
+  -->
+  <section class="panel panel--padded">
+    @if (service.isUnauthorized()) {
+      <p class="panel__lede" style="margin: 0;">
+        You are signed in as <strong>{{ service.userName() }}</strong>, but this account does not
+        have EPIC staff access. Signing in again will not change that — ask an administrator for
+        the <code class="cell__mono">staff</code> role.
       </p>
-
-      <div class="summarizer-ask-box">
-        <input
-          type="text"
-          placeholder="e.g. pipeline watercourse crossing mitigation"
-          [value]="service.summaryQuery()"
-          (input)="onQueryInput($event)"
-          (keydown)="onKeydown($event)"
-          [disabled]="service.summaryLoading()"
-        />
-        <button
-          class="btn-ask"
-          (click)="ask()"
-          [disabled]="service.summaryLoading() || !service.summaryQuery().trim()"
-        >
-          @if (service.summaryLoading()) {
-            <i class="fa-solid fa-circle-notch fa-spin"></i> Reading…
-          } @else {
-            <i class="fa-solid fa-paper-plane"></i> Ask
-          }
-        </button>
-      </div>
-      <!--
-        The wording here is load-bearing, not a hedge. Retrieval is conjunctive BM25: every content
-        word in the box must appear in the SAME passage before anything is retrieved at all. A long
-        natural-language question therefore narrows to nothing, and the model is never even called.
-        Promising a chat box we cannot serve would send people away thinking the corpus was empty.
-      -->
-      <p class="summarizer-disclaimer">
-        <i class="fa-solid fa-circle-info"></i>
-        Keywords work better than full sentences — every word you type has to appear in the same
-        passage. Answers are generated from retrieved passages only and cannot draw on anything
-        outside the registry, so always check the cited sources.
+    } @else {
+      <p class="panel__lede" style="margin: 0;">
+        Ask a question and get a short answer drawn from the document registry, with citations to
+        the passages it came from. This tool is available to EPIC staff.
       </p>
-    </div>
-
-    @if (service.summaryLoading()) {
-      <div class="summary-panel">
-        <div class="summary-shimmer"></div>
-        <div class="summary-shimmer"></div>
-        <div class="summary-shimmer short"></div>
-      </div>
-    } @else if (service.summary()) {
-      <div class="summary-panel">
-        <h2 class="summary-title">
-          Answer
-          <span class="summary-badge">AI-generated from the sources below</span>
-        </h2>
-        <p class="summary-text">{{ service.summary() }}</p>
-        @if (service.summaryCostCad() !== null) {
-          <!-- Labelled "est." deliberately. Derived from reported tokens and configured list rates,
-               not from Azure's meter — good for spotting an outlier query, not for reconciling a
-               bill. See estimateCostCad in src/ai/summarize.js. -->
-          <div class="summary-cost" [title]="'Estimated from list rates, not billed amounts'">
-            <i class="fa-solid fa-coins"></i>
-            est. {{ service.summaryCostCad() | currency:'CAD':'symbol':'1.4-4' }}
-            @if (service.summaryUsage(); as u) {
-              <span class="summary-cost-tokens">
-                &middot; {{ u.prompt_tokens }} in / {{ u.completion_tokens }} out
-              </span>
-            }
-          </div>
-        }
-      </div>
-
-      @if (service.summaryCitations().length > 0) {
-        <div class="summary-sources">
-          <h2 class="summary-title">Sources</h2>
-          @for (c of service.summaryCitations(); track c.chunkId) {
-            <!-- A real <button>, not a div with a click handler: this has to open from the
-                 keyboard, and the expanded panel has to be announced. -->
-            <button
-              type="button"
-              class="summary-source-card"
-              [class.open]="expandedChunkId() === c.chunkId"
-              [attr.aria-expanded]="expandedChunkId() === c.chunkId"
-              [attr.aria-controls]="'source-detail-' + c.chunkId"
-              (click)="toggleCitation(c)">
-              <span class="summary-citation">[{{ c.n }}]</span>
-              <div class="summary-source-body">
-                <div class="summary-source-doc">{{ c.documentName }}</div>
-                <div class="summary-source-meta">
-                  {{ c.projectName }} &middot; passage {{ c.pageNumber }}
-                </div>
-              </div>
-              <i class="fa-solid fa-chevron-down summary-source-chevron" aria-hidden="true"></i>
-            </button>
-
-            @if (expandedChunkId() === c.chunkId) {
-              <div class="summary-source-detail" [id]="'source-detail-' + c.chunkId" role="region">
-                @if (detailLoading()) {
-                  <div class="summary-shimmer"></div>
-                  <div class="summary-shimmer short"></div>
-                } @else if (detailError()) {
-                  <p class="summary-source-error">{{ detailError() }}</p>
-                } @else {
-                  <!-- Nested rather than an `@else if (…; as doc)`: the `as` alias is only allowed
-                       on `@if`, not on `@else if`. -->
-                  @if (expandedDoc(); as doc) {
-                    <p><strong>File name:</strong> <code>{{ doc.documentFileName }}</code></p>
-                    @if (doc.documentType) {
-                      <p><strong>Type:</strong> {{ doc.documentType }}</p>
-                    }
-                    @if (doc.orcsCode) {
-                      <p><strong>ORCS:</strong> {{ doc.orcsCode }}</p>
-                    }
-                    <p><strong>Project:</strong> {{ doc.projectName || c.projectName }}</p>
-                  }
-                }
-
-                <button
-                  type="button"
-                  class="summary-source-download"
-                  [disabled]="downloadingChunkId() === c.chunkId"
-                  (click)="download(c)">
-                  <i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i>
-                  {{ downloadingChunkId() === c.chunkId ? 'Preparing…' : 'Download' }}
-                </button>
-
-                @if (downloadError()) {
-                  <p class="summary-source-error">{{ downloadError() }}</p>
-                }
-              </div>
-            }
-          }
-        </div>
-      }
-    } @else if (service.summaryReason()) {
-      <!-- A null summary WITH a reason is an answer, not a failure. Say which. -->
-      <div class="summary-panel summary-empty">
-        @switch (service.summaryReason()) {
-          @case ('no_results') {
-            <p>Nothing in the registry matched that. Try different or fewer words.</p>
-          }
-          @case ('disabled') {
-            <p>The summariser is switched off in this environment.</p>
-          }
-          @case ('not_configured') {
-            <p>The summariser is enabled but not yet configured. This is a deployment issue, not your query.</p>
-          }
-          @case ('mock_mode') {
-            <p>Demo mode is active, so no live registry data is available to summarise.</p>
-          }
-          @case ('timeout') {
-            <p>The summariser took too long to answer. Try again, or narrow the question.</p>
-          }
-          @default {
-            <p>The summariser could not answer that. The search results themselves are unaffected.</p>
-          }
-        }
+      <div class="panel__actions">
+        <button type="button" (click)="service.loginKeycloak()" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.6rem 1.2rem; font: var(--typography-bold-small-body); cursor: pointer;">Staff login</button>
       </div>
     }
+  </section>
+} @else {
 
+  <section class="panel panel--padded">
+    <div style="display: flex; gap: var(--layout-margin-small); flex-wrap: wrap;">
+      <div style="position: relative; flex: 1; min-width: 18rem;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--typography-color-secondary);"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg>
+        <input id="demi-search-summary" type="text" placeholder="e.g. pipeline watercourse crossing mitigation" [value]="service.summaryQuery()" (input)="onQueryInput($event)" (keydown)="onKeydown($event)" [disabled]="service.summaryLoading()" aria-label="Ask a question of the registry" style="width: 100%; box-sizing: border-box; padding: 0.8rem 1rem 0.8rem 3rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+      </div>
+      <button type="button" (click)="ask()" [disabled]="service.summaryLoading() || !service.summaryQuery().trim()" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.8rem 1.6rem; font: var(--typography-bold-body); cursor: pointer;">{{ service.summaryLoading() ? 'Asking…' : 'Ask' }}</button>
+    </div>
+    <p class="panel__lede" style="margin-top: var(--layout-margin-small);">Keywords work better than full sentences. Answers are generated from retrieved passages only and cannot draw on anything outside the registry.</p>
+  </section>
+
+  @if (service.summary(); as answer) {
+    <section class="panel panel--padded">
+      <h2 class="panel__title panel__title--inline" style="display: flex; align-items: center; gap: var(--layout-margin-small); flex-wrap: wrap;">
+        Answer
+        <span class="pill pill--info">AI-generated from the sources below</span>
+      </h2>
+      <p style="font: var(--typography-regular-body); margin: 0;">{{ answer }}</p>
+      @if (service.summaryCostCad() !== null) {
+        <div style="margin-top: var(--layout-margin-medium); padding-top: var(--layout-margin-small); border-top: var(--layout-border-width-small) solid var(--surface-color-border-default); font: var(--typography-regular-label); color: var(--typography-color-secondary);">
+          est. {{ service.summaryCostCad() | currency:'CAD':'symbol':'1.4-4' }}
+          @if (service.summaryUsage(); as u) {
+            · {{ u.prompt_tokens }} tokens in / {{ u.completion_tokens }} out
+          }
+          · estimated from list rates, not billed amounts
+        </div>
+      }
+    </section>
+
+    @if (service.summaryCitations().length > 0) {
+      <section class="panel panel--scroll">
+        <h2 class="panel__title">Sources</h2>
+        <table style="min-width: 40rem;">
+          <thead>
+            <tr>
+              <th style="width: 4rem;"></th>
+              <th>Document</th>
+              <th>Project</th>
+              <th style="width: 6rem;">Passage</th>
+              <th style="width: 7rem; text-align: right;"></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (c of service.summaryCitations(); track c.chunkId) {
+              <tr>
+                <td><span class="pill pill--neutral">[{{ c.n }}]</span></td>
+                <td class="cell__title">{{ c.documentName }}</td>
+                <td class="cell--muted">{{ c.projectName }}</td>
+                <td class="cell--muted cell--nowrap">{{ c.pageNumber }}</td>
+                <td class="cell--right cell--nowrap">
+                  <button type="button" (click)="download(c)" [disabled]="downloadingChunkId() === c.chunkId" style="background: none; border: none; padding: 0; font: var(--typography-bold-small-body); color: var(--typography-color-link); text-decoration: underline; cursor: pointer;">{{ downloadingChunkId() === c.chunkId ? 'Preparing…' : 'Download' }}</button>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+        @if (downloadError()) {
+          <p class="footnote">{{ downloadError() }}</p>
+        }
+      </section>
+    }
+  } @else if (service.summaryLoading()) {
+    <section class="panel panel--padded" aria-busy="true">
+      <p class="visually-hidden">Retrieving passages and summarising…</p>
+      <div aria-hidden="true">
+        <h2 class="panel__title panel__title--inline" style="display: flex; align-items: center; gap: var(--layout-margin-small); flex-wrap: wrap;">
+          Answer
+          <span class="pill" style="padding: 0;"><span class="skeleton skeleton--text" style="width: 12rem;"></span></span>
+        </h2>
+        <p style="font: var(--typography-regular-body); margin: 0;">
+          <span class="skeleton skeleton--text" style="width: 100%;"></span>
+          <span class="skeleton skeleton--text" style="width: 98%;"></span>
+          <span class="skeleton skeleton--text" style="width: 70%;"></span>
+        </p>
+        <div style="display: flex; gap: var(--layout-margin-small); margin-top: var(--layout-margin-medium);">
+          @for (i of [1, 2, 3]; track i) {
+            <span class="pill" style="padding: 0;"><span class="skeleton skeleton--text" style="width: 2.5rem;"></span></span>
+          }
+        </div>
+      </div>
+    </section>
+  } @else if (service.summaryReason()) {
+    <!-- A null summary WITH a reason is an answer, not a failure. Say which. -->
+    <section class="panel panel--padded">
+      <div class="callout">
+        @switch (service.summaryReason()) {
+          @case ('no_results') {
+            <p style="margin: 0;">Nothing in the registry matched that. Try different or fewer words.</p>
+          }
+          @case ('disabled') {
+            <p style="margin: 0;">The summariser is switched off in this environment.</p>
+          }
+          @case ('not_configured') {
+            <p style="margin: 0;">The summariser is enabled but not yet configured. This is a deployment issue, not your query.</p>
+          }
+          @case ('mock_mode') {
+            <p style="margin: 0;">Demo mode is active, so no live registry data is available to summarise.</p>
+          }
+          @case ('timeout') {
+            <p style="margin: 0;">The summariser took too long to answer. Try again, or narrow the question.</p>
+          }
+          @default {
+            <p style="margin: 0;">The summariser could not answer that. The search results themselves are unaffected.</p>
+          }
+        }
+      </div>
+    </section>
   }
-</div>
+
+  <p class="footnote">A long natural-language question narrows retrieval to nothing and the model is never called, so the tool says so rather than answering from outside the corpus.</p>
+}

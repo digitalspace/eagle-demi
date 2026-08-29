@@ -1,0 +1,2023 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/epic-demi-admin-32e4fbe6-3f28-4002-97c2-c1104c66ba8f/tokens/variables.css">
+  <link rel="stylesheet" href="_ds/epic-demi-admin-32e4fbe6-3f28-4002-97c2-c1104c66ba8f/fonts/fonts.css">
+  <link rel="stylesheet" href="_ds/epic-demi-admin-32e4fbe6-3f28-4002-97c2-c1104c66ba8f/_ds_bundle.css">
+  <link rel="stylesheet" href="_ds/epic-demi-admin-32e4fbe6-3f28-4002-97c2-c1104c66ba8f/styles.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; background: var(--surface-color-background-light-gray); }
+    .app { height: 100vh; }
+    .app__body { min-height: 0; }
+    .app__main { overflow-y: auto; }
+    .app-sidebar { overflow-y: auto; }
+    a { color: var(--typography-color-link); }
+    a:hover { color: var(--surface-color-primary-default); }
+    /* Leaflet panes/controls climb to z-index 1000; the header and its menus must sit above. */
+    .app-header { position: relative; z-index: 2000; }
+    .account__menu { z-index: 2100; }
+    .demi-marker { background: var(--surface-color-primary-default); border: 2px solid #fff; border-radius: 50%; box-shadow: 0 1px 6px rgba(0,0,0,0.3); }
+    .demi-marker--staged { background: #b3261e; }
+  </style>
+</helmet>
+
+<sc-if value="{{ signedOut }}" hint-placeholder-val="{{ false }}">
+  <div style="min-height: 100vh; display: flex; flex-direction: column; background: var(--surface-color-primary-default);">
+    <div style="height: 4px; background: var(--theme-primary-gold);"></div>
+    <div style="flex: 1; display: grid; place-items: center; padding: var(--layout-padding-large);">
+      <div style="text-align: center; display: flex; flex-direction: column; align-items: center; gap: var(--layout-margin-medium); max-width: 30rem;">
+        <img src="assets/bcgov-header-vert.png" alt="Government of British Columbia" style="height: 76px; width: auto;">
+        <h1 style="font: var(--typography-bold-h2); color: var(--surface-color-background-white); margin: 0;">DEMI Demo</h1>
+        <p style="font: var(--typography-regular-body); color: var(--eao-on-dark-muted); margin: 0;">Digital File Library &amp; Document Registry</p>
+        <button type="button" onClick="{{ signIn }}" style="margin-top: var(--layout-margin-small); background: var(--theme-primary-gold); color: var(--surface-color-primary-default); border: none; border-radius: var(--layout-border-radius-small); padding: 0.8rem 1.6rem; font: var(--typography-bold-body); cursor: pointer;" style-hover="filter: brightness(1.06);">Sign in</button>
+        <sc-if value="{{ showRejected }}" hint-placeholder-val="{{ false }}">
+          <p style="font: var(--typography-regular-small-body); color: var(--theme-primary-gold); margin: 0; max-width: 24rem;">That account signed in successfully but carries no EPIC staff role, so DEMI signed it back out. Ask an administrator for the <code>staff</code> role.</p>
+        </sc-if>
+      </div>
+    </div>
+    <div style="padding: var(--layout-padding-small) var(--layout-padding-large); border-top: 2px solid var(--theme-primary-gold); display: flex; justify-content: space-between; font: var(--typography-regular-label); color: var(--eao-on-dark-muted);">
+      <span>Keycloak realm eao-epic</span>
+      <span>{{ envLabel }}</span>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ signedIn }}" hint-placeholder-val="{{ true }}">
+<div class="app">
+  <header class="eao-header app-header">
+    <img class="eao-header__mark app-header__mark" src="assets/bcgov-header-vert.png" alt="Government of British Columbia">
+    <div class="app-header__centre">
+      <p class="eao-header__title app-header__title">DEMI Demo — Digital File Library &amp; Registry</p>
+      <span class="app-header__env">{{ envLabel }}</span>
+    </div>
+    <div class="eao-header__actions">
+      <button type="button" onClick="{{ toggleInfo }}" aria-label="How this screen is built" style="display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.85rem; border-radius: var(--layout-border-radius-circular); background: var(--theme-primary-gold); color: var(--surface-color-primary-default); border: none; font: var(--typography-bold-small-body); white-space: nowrap; cursor: pointer;" style-hover="filter: brightness(1.08);">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><line x1="12" y1="11" x2="12" y2="16.5"></line><circle cx="12" cy="7.6" r="1.1" fill="currentColor" stroke="none"></circle></svg>
+        How this is built
+      </button>
+      <div class="account">
+        <button type="button" class="account__chip" onClick="{{ toggleAccount }}">
+          <span class="account__avatar">JO</span>
+          <span class="account__caret">▾</span>
+        </button>
+        <sc-if value="{{ accountOpen }}" hint-placeholder-val="{{ false }}">
+          <div class="account__menu" role="menu">
+            <div class="account__identity">
+              <div class="account__name">Jide Okafor</div>
+              <div class="account__meta">j.okafor@gov.bc.ca · staff</div>
+            </div>
+            <button type="button" role="menuitem" class="account__item" onClick="{{ goProfile }}">Profile and preferences</button>
+            <button type="button" role="menuitem" class="account__item" onClick="{{ goSessions }}">Active sessions</button>
+            <button type="button" role="menuitem" class="account__item account__item--danger" onClick="{{ signOut }}">Sign out</button>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </header>
+
+  <div class="app__body">
+    <nav class="eao-sidebar app-sidebar" aria-label="DEMI" data-open="{{ navOpen }}">
+      <button type="button" class="app-sidebar__toggle" onClick="{{ toggleNav }}" aria-label="Toggle navigation">{{ navGlyph }}</button>
+      <sc-if value="{{ navOpen }}" hint-placeholder-val="{{ true }}">
+        <sc-for list="{{ navSections }}" as="section" hint-placeholder-count="3">
+          <div>
+            <div class="eao-sidebar__divider app-sidebar__heading">{{ section.heading }}</div>
+            <sc-for list="{{ section.items }}" as="item" hint-placeholder-count="4">
+              <a href="#" class="app-sidebar__link" aria-current="{{ item.current }}" onClick="{{ item.go }}">{{ item.label }}</a>
+            </sc-for>
+          </div>
+        </sc-for>
+      </sc-if>
+    </nav>
+
+    <main class="app__main" style="{{ mainStyle }}">
+
+      <sc-if value="{{ isMap }}" hint-placeholder-val="{{ true }}">
+        <div style="flex: 1; min-height: 0; display: flex; align-items: stretch; overflow: hidden; background: var(--surface-color-background-white);">
+
+          <div style="position: relative; flex: 0 1 20rem; min-width: 15rem; display: flex; flex-direction: column; min-height: 0; overflow-x: hidden; border-right: var(--layout-border-width-small) solid var(--surface-color-border-default);">
+
+            <div style="padding: var(--layout-padding-medium) var(--layout-padding-large); border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);">
+              <div style="position: relative;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="position: absolute; left: 0.85rem; top: 50%; transform: translateY(-50%); color: var(--typography-color-secondary);"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg>
+                <input id="demi-search-map" type="text" placeholder="Search projects" value="{{ query }}" onChange="{{ onQuery }}" aria-label="Search projects" style="width: 100%; box-sizing: border-box; padding: 0.7rem 2.6rem 0.7rem 2.6rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-circular); font: var(--typography-regular-body); box-shadow: 0 1px 4px rgba(0,0,0,0.08);">
+                <sc-if value="{{ hasQuery }}" hint-placeholder-val="{{ false }}">
+                  <button type="button" onClick="{{ clearQuery }}" aria-label="Clear search" style="position: absolute; right: 0.6rem; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; font: var(--typography-bold-small-body); color: var(--typography-color-secondary); padding: 0.2rem 0.4rem;">✕</button>
+                </sc-if>
+              </div>
+
+              <div style="display: flex; align-items: center; gap: var(--layout-margin-xsmall); margin-top: var(--layout-margin-small);">
+                <button type="button" onClick="{{ toggleFilters }}" aria-expanded="{{ filtersExpanded }}" style="display: inline-flex; align-items: center; gap: 0.4rem; background: var(--surface-color-background-white); color: var(--typography-color-primary); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); padding: 0.35rem 0.75rem; font: var(--typography-bold-small-body); cursor: pointer;">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"></line><line x1="7" y1="12" x2="17" y2="12"></line><line x1="10" y1="17" x2="14" y2="17"></line></svg>
+                  Filters
+                  <sc-if value="{{ hasActiveFilters }}" hint-placeholder-val="{{ false }}">
+                    <span class="pill pill--info">{{ activeCount }}</span>
+                  </sc-if>
+                </button>
+                <sc-if value="{{ hasActiveFilters }}" hint-placeholder-val="{{ false }}">
+                  <button type="button" onClick="{{ clearFilters }}" style="background: none; border: none; font: var(--typography-regular-label); color: var(--typography-color-link); cursor: pointer; text-decoration: underline;">Clear all</button>
+                </sc-if>
+              </div>
+
+              <sc-if value="{{ hasActiveFilters }}" hint-placeholder-val="{{ false }}">
+                <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--layout-margin-xsmall);">
+                  <sc-for list="{{ activeFilters }}" as="f" hint-placeholder-count="2">
+                    <button type="button" onClick="{{ f.clear }}" aria-label="Remove filter" style="display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 0.15rem 0.5rem; border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-circular); font: var(--typography-regular-label); background: var(--surface-color-background-white); color: var(--surface-color-primary-default); cursor: pointer;"><span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ f.label }}</span> ✕</button>
+                  </sc-for>
+                  <sc-if value="{{ hasOverflow }}" hint-placeholder-val="{{ false }}">
+                    <button type="button" onClick="{{ toggleFilters }}" style="background: none; border: none; font: var(--typography-regular-label); color: var(--typography-color-link); cursor: pointer; text-decoration: underline;">{{ activeOverflow }}</button>
+                  </sc-if>
+                </div>
+              </sc-if>
+            </div>
+
+            <sc-if value="{{ filtersOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--surface-color-background-white);">
+                <div style="flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--layout-margin-small); padding: var(--layout-padding-medium) var(--layout-padding-large); border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);">
+                  <h2 class="panel__title panel__title--inline" style="margin: 0;">Filters</h2>
+                  <button type="button" onClick="{{ toggleFilters }}" aria-label="Close filters" style="background: none; border: none; cursor: pointer; font: var(--typography-bold-body); color: var(--typography-color-secondary);">✕</button>
+                </div>
+
+                <div style="flex: 1; min-height: 0; overflow-y: auto;">
+                  <sc-for list="{{ filterSections }}" as="sec" hint-placeholder-count="8">
+                    <div style="border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);">
+                      <button type="button" onClick="{{ sec.toggleSection }}" aria-expanded="{{ sec.open }}" style="display: flex; align-items: center; justify-content: space-between; gap: var(--layout-margin-small); width: 100%; text-align: left; background: none; border: none; cursor: pointer; padding: 0.6rem var(--layout-padding-large); font: inherit;">
+                        <span class="cell__title">{{ sec.label }}</span>
+                        <span style="display: inline-flex; align-items: center; gap: 0.4rem;">
+                          <sc-if value="{{ sec.hasBadge }}" hint-placeholder-val="{{ false }}">
+                            <span class="pill pill--info">{{ sec.badge }}</span>
+                          </sc-if>
+                          <span class="cell__sub">{{ sec.glyph }}</span>
+                        </span>
+                      </button>
+
+                      <sc-if value="{{ sec.open }}" hint-placeholder-val="{{ false }}">
+                        <div style="padding: 0 var(--layout-padding-large) var(--layout-padding-small);">
+                          <sc-if value="{{ sec.isSearchChecks }}" hint-placeholder-val="{{ false }}">
+                            <input type="text" placeholder="Type to narrow" value="{{ sec.searchValue }}" onChange="{{ sec.onSearch }}" aria-label="Narrow options" style="width: 100%; box-sizing: border-box; padding: 0.35rem 0.6rem; margin-bottom: var(--layout-margin-xsmall); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
+                          </sc-if>
+
+                          <sc-if value="{{ sec.isRange }}" hint-placeholder-val="{{ false }}">
+                            <div style="display: flex; gap: var(--layout-margin-xsmall);">
+                              <input type="date" value="{{ sec.from }}" onChange="{{ sec.onFrom }}" aria-label="From" style="flex: 1; min-width: 0; box-sizing: border-box; padding: 0.35rem 0.5rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
+                              <input type="date" value="{{ sec.to }}" onChange="{{ sec.onTo }}" aria-label="To" style="flex: 1; min-width: 0; box-sizing: border-box; padding: 0.35rem 0.5rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
+                            </div>
+                          </sc-if>
+
+                          <sc-if value="{{ sec.isText }}" hint-placeholder-val="{{ false }}">
+                            <input type="text" value="{{ sec.textValue }}" onChange="{{ sec.onText }}" aria-label="{{ sec.label }}" style="width: 100%; box-sizing: border-box; padding: 0.35rem 0.6rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
+                          </sc-if>
+
+                          <div style="max-height: 10rem; overflow-y: auto; overflow-x: hidden;">
+                            <sc-for list="{{ sec.options }}" as="opt" hint-placeholder-count="4">
+                              <label style="display: flex; align-items: flex-start; gap: 0.5rem; font: var(--typography-regular-small-body); padding: 2px 0; cursor: pointer;">
+                                <input type="checkbox" checked="{{ opt.checked }}" onChange="{{ opt.toggle }}" style="flex: 0 0 auto; margin-top: 3px;">
+                                <span style="flex: 1; min-width: 0; overflow-wrap: anywhere;">{{ opt.label }}</span>
+                              </label>
+                            </sc-for>
+                          </div>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+
+                <div style="flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--layout-margin-small); padding: var(--layout-padding-small) var(--layout-padding-large); border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);">
+                  <button type="button" onClick="{{ clearFilters }}" style="background: none; border: none; font: var(--typography-bold-small-body); color: var(--typography-color-link); cursor: pointer; text-decoration: underline;">Clear all</button>
+                  <button type="button" onClick="{{ toggleFilters }}" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.5rem 1rem; font: var(--typography-bold-small-body); white-space: nowrap; cursor: pointer;">Show {{ resultCount }}</button>
+                </div>
+              </div>
+            </sc-if>
+
+            <div style="padding: var(--layout-padding-small) var(--layout-padding-large); display: flex; align-items: center; justify-content: space-between; gap: var(--layout-margin-small); border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);">
+              <span class="cell__title">{{ resultSummary }}</span>
+              <label style="display: flex; align-items: center; gap: 0.35rem; font: var(--typography-regular-label); color: var(--typography-color-secondary); white-space: nowrap;">
+                Sort
+                <span style="position: relative; display: inline-flex; align-items: center;"><select style="border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body); color: var(--typography-color-primary); padding: 0.3rem 1.7rem 0.3rem 0.55rem; background: var(--surface-color-background-white); -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer;" value="{{ sort }}" onChange="{{ onSort }}" aria-label="Sort results">
+                  <option value="relevance">Relevance</option>
+                  <option value="name">Name A–Z</option>
+                </select><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="position: absolute; right: 0.55rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--typography-color-secondary);"><polyline points="6,9 12,15 18,9"></polyline></svg></span>
+              </label>
+            </div>
+
+            <div style="flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;">
+              <sc-for list="{{ pagedProjects }}" as="proj" hint-placeholder-count="6">
+                <button type="button" onClick="{{ proj.select }}" style="{{ proj.rowStyle }}">
+                  <span style="display: flex; align-items: baseline; justify-content: space-between; gap: var(--layout-margin-small);">
+                    <span class="cell__title">{{ proj.name }}</span>
+                    <span class="pill {{ proj.pillClass }} pill--caps">{{ proj.gatingState }}</span>
+                  </span>
+                  <span class="cell__sub" style="display: block; margin-top: 2px;">{{ proj.meta }}</span>
+                  <span class="cell__sub" style="display: block; margin-top: 4px;">{{ proj.proponent }}</span>
+                </button>
+              </sc-for>
+
+              <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: var(--layout-padding-xlarge) var(--layout-padding-large); text-align: center;">
+                  <div class="cell__title">No projects match “{{ query }}”</div>
+                  <div class="cell__sub" style="margin-top: 4px;">Try fewer words, or one of these:</div>
+                  <div style="display: flex; flex-wrap: wrap; gap: var(--layout-margin-xsmall); justify-content: center; margin-top: var(--layout-margin-small);">
+                    <sc-for list="{{ suggestions }}" as="sug" hint-placeholder-count="3">
+                      <button type="button" onClick="{{ sug.go }}" style="{{ sug.style }}">{{ sug.label }}</button>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ canLoadMore }}" hint-placeholder-val="{{ false }}">
+                <div style="padding: var(--layout-padding-medium) var(--layout-padding-large); text-align: center; border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);">
+                  <button type="button" onClick="{{ loadMore }}" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.5rem 1rem; font: var(--typography-bold-small-body); cursor: pointer;">Load 6 more</button>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+
+          <div style="flex: 1; min-width: 0; position: relative;">
+            <div id="demi-map" style="position: absolute; inset: 0;"></div>
+
+            <div style="position: absolute; top: var(--layout-padding-medium); right: var(--layout-padding-medium); z-index: 600; display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
+              <button type="button" onClick="{{ toggleLayers }}" aria-expanded="{{ layersExpanded }}" style="display: inline-flex; align-items: center; gap: 0.4rem; background: var(--surface-color-background-white); color: var(--typography-color-primary); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); box-shadow: 0 2px 8px rgba(0,0,0,0.18); padding: 0.45rem 0.8rem; font: var(--typography-bold-small-body); cursor: pointer;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12,3 21,8 12,13 3,8"></polygon><polyline points="3,13 12,18 21,13"></polyline></svg>
+                Layers
+                <sc-if value="{{ hasOverlays }}" hint-placeholder-val="{{ false }}">
+                  <span class="pill pill--info">{{ overlayCount }}</span>
+                </sc-if>
+              </button>
+              <sc-if value="{{ layersOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="width: 15rem; box-sizing: border-box; background: var(--surface-color-background-white); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-medium); box-shadow: 0 4px 14px rgba(0,0,0,0.2); padding: var(--layout-padding-medium);">
+                  <div class="micro-label" style="margin-bottom: var(--layout-margin-xsmall);">Boundary overlays</div>
+                  <sc-for list="{{ overlayRows }}" as="ov" hint-placeholder-count="5">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font: var(--typography-regular-small-body); padding: 3px 0; cursor: pointer;">
+                      <input type="checkbox" checked="{{ ov.checked }}" onChange="{{ ov.toggle }}">
+                      {{ ov.label }}
+                    </label>
+                  </sc-for>
+                  <p class="cell__sub" style="margin: var(--layout-margin-xsmall) 0 0;">Overlays change the map. Filters change the results.</p>
+                </div>
+              </sc-if>
+            </div>
+
+            <sc-if value="{{ showDetailCard }}" hint-placeholder-val="{{ true }}">
+            <div style="{{ detailsCardStyle }}">
+              <div style="flex: 0 0 auto; padding: var(--layout-padding-medium) var(--layout-padding-large) var(--layout-padding-xsmall);">
+                <div style="display: flex; align-items: baseline; justify-content: space-between; gap: var(--layout-margin-small);">
+                  <h2 class="panel__title panel__title--inline" style="margin: 0;">{{ selected.name }}</h2>
+                  <span class="pill {{ selected.pillClass }} pill--caps">{{ selected.gatingState }}</span>
+                </div>
+                <div class="cell__sub" style="margin-top: 2px;">{{ selected.meta }}</div>
+              </div>
+
+              <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--layout-padding-large) var(--layout-padding-xsmall);">
+                <div class="cell__sub" style="color: var(--typography-color-primary);">{{ selected.description }}</div>
+
+                <sc-if value="{{ detailsCollapsed }}" hint-placeholder-val="{{ true }}">
+                  <div style="display: flex; flex-wrap: wrap; gap: var(--layout-margin-large); margin-top: var(--layout-margin-small);">
+                    <div>
+                      <div class="micro-label">EAC number</div>
+                      <div class="cell__title">{{ selected.eacNumber }}</div>
+                    </div>
+                    <div>
+                      <div class="micro-label">Status</div>
+                      <div class="cell__title">{{ selected.status }}</div>
+                    </div>
+                    <div>
+                      <div class="micro-label">Track id</div>
+                      <div class="cell__title"><code class="cell__mono">{{ selected.trackId }}</code></div>
+                    </div>
+
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ detailsExpanded }}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); overflow: hidden; margin-top: var(--layout-margin-medium);">
+                    <sc-for list="{{ sourceTabs }}" as="tab" hint-placeholder-count="2">
+                      <button type="button" onClick="{{ tab.go }}" aria-pressed="{{ tab.pressed }}" style="{{ tab.style }}">{{ tab.label }}</button>
+                    </sc-for>
+                  </div>
+
+                  <div class="kv-grid" style="grid-template-columns: 1fr; margin-top: var(--layout-margin-small);">
+                    <sc-for list="{{ fieldRows }}" as="row" hint-placeholder-count="8">
+                      <div class="kv-row">
+                        <span class="kv-row__key" style="display: flex; align-items: baseline; justify-content: space-between; gap: var(--layout-margin-xsmall);">
+                          <span>{{ row.key }}</span>
+                          <span class="{{ row.sourcePill }}">{{ row.sourceLabel }}</span>
+                        </span>
+                        <span class="kv-row__value" style="overflow-wrap: anywhere;">{{ row.value }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+
+                  <p class="footnote" style="margin-top: var(--layout-margin-small);">{{ sourceNote }}</p>
+                </sc-if>
+              </div>
+
+              <div style="flex: 0 0 auto; display: flex; gap: var(--layout-margin-small); flex-wrap: nowrap; padding: var(--layout-padding-small) var(--layout-padding-large) var(--layout-padding-medium); border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);">
+                <button type="button" onClick="{{ goContent }}" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 0.9rem; font: var(--typography-bold-small-body); white-space: nowrap; cursor: pointer;">Documents</button>
+                <button type="button" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.55rem 0.9rem; font: var(--typography-bold-small-body); white-space: nowrap; cursor: pointer;">Copy link</button>
+                <button type="button" onClick="{{ toggleDetails }}" aria-expanded="{{ detailsExpanded }}" style="margin-left: auto; display: inline-flex; align-items: center; gap: 0.35rem; background: none; color: var(--typography-color-link); border: none; padding: 0.55rem 0; font: var(--typography-bold-small-body); white-space: nowrap; cursor: pointer;">{{ detailsGlyph }}<span style="{{ detailsChevronStyle }}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="6,9 12,15 18,9"></polyline></svg></span></button>
+              </div>
+            </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isIndex }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>Index Search</h1>
+            <p>Keyword search across project and document metadata. Highlights come from the index analyzer, so they reflect what the index matched rather than what a regex in the browser can find.</p>
+          </div>
+        </div>
+
+        <section class="panel panel--padded">
+          <div style="position: relative;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--typography-color-secondary);"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg>
+            <input id="demi-search-index" type="text" placeholder="Search projects and documents — e.g. water quality, fish habitat, Ajax" value="{{ query }}" onChange="{{ onQuery }}" aria-label="Search the registry" style="width: 100%; box-sizing: border-box; padding: 0.8rem 3rem 0.8rem 3rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+            <sc-if value="{{ hasQuery }}" hint-placeholder-val="{{ false }}">
+              <button type="button" onClick="{{ clearQuery }}" aria-label="Clear search" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; font: var(--typography-bold-small-body); color: var(--typography-color-secondary); padding: 0.2rem 0.4rem;">✕</button>
+            </sc-if>
+          </div>
+
+          <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--layout-margin-small); margin-top: var(--layout-margin-medium);">
+            <div style="display: flex; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); overflow: hidden;">
+              <sc-for list="{{ scopeTabs }}" as="tab" hint-placeholder-count="3">
+                <button type="button" onClick="{{ tab.go }}" aria-pressed="{{ tab.pressed }}" style="{{ tab.style }}">{{ tab.label }}</button>
+              </sc-for>
+            </div>
+            <label style="display: flex; align-items: center; gap: 0.35rem; font: var(--typography-regular-label); color: var(--typography-color-secondary); white-space: nowrap;">
+              Sort
+              <span style="position: relative; display: inline-flex; align-items: center;"><select value="{{ sort }}" onChange="{{ onSort }}" aria-label="Sort results" style="border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body); color: var(--typography-color-primary); padding: 0.3rem 1.7rem 0.3rem 0.55rem; background: var(--surface-color-background-white); -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer;">
+                <option value="relevance">Relevance</option>
+                <option value="name">Name A–Z</option>
+              </select><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="position: absolute; right: 0.55rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--typography-color-secondary);"><polyline points="6,9 12,15 18,9"></polyline></svg></span>
+            </label>
+          </div>
+
+          <p class="panel__lede" style="margin-top: var(--layout-margin-small);">{{ indexSummary }}</p>
+        </section>
+
+        <sc-if value="{{ showProjectResults }}" hint-placeholder-val="{{ true }}">
+          <section class="panel panel--scroll">
+            <h2 class="panel__title">Projects ({{ resultCount }})</h2>
+            <table style="min-width: 44rem;">
+              <thead>
+                <tr>
+                  <th>Project</th>
+                  <th>EAC number</th>
+                  <th>Sector</th>
+                  <th>Region</th>
+                  <th>Status</th>
+                  <th>State</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ pagedProjects }}" as="proj" hint-placeholder-count="5">
+                  <tr>
+                    <td>
+                      <div class="cell__title">{{ proj.name }}</div>
+                      <div class="cell__sub">{{ proj.proponent }}</div>
+                    </td>
+                    <td class="cell--nowrap"><code class="cell__mono">{{ proj.eacNumber }}</code></td>
+                    <td class="cell--muted">{{ proj.sector }}</td>
+                    <td class="cell--muted">{{ proj.region }}</td>
+                    <td class="cell--muted cell--nowrap">{{ proj.status }}</td>
+                    <td><span class="pill {{ proj.pillClass }} pill--caps">{{ proj.gatingState }}</span></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+            <sc-if value="{{ canLoadMore }}" hint-placeholder-val="{{ false }}">
+              <div style="padding: var(--layout-padding-medium) var(--layout-padding-large); display: flex; align-items: center; gap: var(--layout-margin-medium); border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);">
+                <button type="button" onClick="{{ loadMore }}" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.5rem 1rem; font: var(--typography-bold-small-body); cursor: pointer;">Load 6 more</button>
+                <span class="cell__sub">{{ resultSummary }} · paged with continuation tokens</span>
+              </div>
+            </sc-if>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{ showDocumentResults }}" hint-placeholder-val="{{ true }}">
+          <section class="panel panel--scroll">
+            <h2 class="panel__title">Documents ({{ documentCount }})</h2>
+            <table style="min-width: 44rem;">
+              <thead>
+                <tr>
+                  <th>Document</th>
+                  <th>Type</th>
+                  <th>ORCS</th>
+                  <th>Project</th>
+                  <th style="text-align: right;"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ visibleDocuments }}" as="doc" hint-placeholder-count="4">
+                  <tr>
+                    <td>
+                      <div class="cell__title">{{ doc.displayName }}</div>
+                      <div class="cell__sub">{{ doc.textSnippet }}</div>
+                    </td>
+                    <td class="cell--muted cell--nowrap">{{ doc.documentType }}</td>
+                    <td><code class="cell__mono">{{ doc.orcsCode }}</code></td>
+                    <td class="cell--muted">{{ doc.projectName }}</td>
+                    <td class="cell--right cell--nowrap"><a href="#">Download</a></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </section>
+        </sc-if>
+
+        <sc-if value="{{ indexNoResults }}" hint-placeholder-val="{{ false }}">
+          <section class="panel panel--padded" style="text-align: center;">
+            <div class="cell__title">Nothing matched “{{ query }}”</div>
+            <div class="cell__sub" style="margin-top: 4px;">Try fewer words, or one of these:</div>
+            <div style="display: flex; flex-wrap: wrap; gap: var(--layout-margin-xsmall); justify-content: center; margin-top: var(--layout-margin-small);">
+              <sc-for list="{{ suggestions }}" as="sug" hint-placeholder-count="3">
+                <button type="button" onClick="{{ sug.go }}" style="{{ sug.style }}">{{ sug.label }}</button>
+              </sc-for>
+            </div>
+          </section>
+        </sc-if>
+
+        <p class="footnote">A document a caller cannot see returns 404 rather than 403, so an id is never confirmed by the error.</p>
+      </sc-if>
+
+      <sc-if value="{{ isContent }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>Document Content Search</h1>
+            <p>Matches from inside the documents themselves — the extracted passages, not their metadata.</p>
+          </div>
+        </div>
+
+        <section class="panel panel--padded">
+          <div style="position: relative;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--typography-color-secondary);"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg>
+            <input id="demi-search-content" type="text" placeholder="Search the full text of every document" value="{{ query }}" onChange="{{ onQuery }}" aria-label="Search document text" style="width: 100%; box-sizing: border-box; padding: 0.8rem 3rem 0.8rem 3rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+            <sc-if value="{{ hasQuery }}" hint-placeholder-val="{{ false }}">
+              <button type="button" onClick="{{ clearQuery }}" aria-label="Clear search" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; font: var(--typography-bold-small-body); color: var(--typography-color-secondary); padding: 0.2rem 0.4rem;">✕</button>
+            </sc-if>
+          </div>
+          <p class="panel__lede" style="margin-top: var(--layout-margin-small);">Every word you type has to appear in the same passage, so keywords retrieve where a sentence will not.</p>
+          <div style="display: flex; gap: var(--layout-margin-large); margin-top: var(--layout-margin-medium); flex-wrap: wrap;">
+            <div>
+              <div class="micro-label">Documents extracted</div>
+              <div class="cell__title">60,661</div>
+            </div>
+            <div>
+              <div class="micro-label">Passages indexed</div>
+              <div class="cell__title">1.94 M</div>
+            </div>
+            <div>
+              <div class="micro-label">Matching passages</div>
+              <div class="cell__title">{{ chunkCount }}</div>
+            </div>
+          </div>
+        </section>
+
+        <sc-for list="{{ visibleChunks }}" as="chunk" hint-placeholder-count="3">
+          <section class="panel panel--padded">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; gap: var(--layout-margin-small); flex-wrap: wrap;">
+              <div>
+                <div class="cell__title">{{ chunk.documentName }}</div>
+                <div class="cell__sub">{{ chunk.meta }}</div>
+              </div>
+              <span class="pill pill--info pill--caps">{{ chunk.documentType }}</span>
+            </div>
+            <p style="font: var(--typography-regular-small-body); color: var(--typography-color-primary); margin: var(--layout-margin-small) 0 0; padding-left: var(--layout-padding-medium); border-left: 3px solid var(--surface-color-border-default);">{{ chunk.content }}</p>
+            <div class="panel__actions" style="display: flex; gap: var(--layout-margin-medium);">
+              <a href="#">Open document</a>
+              <a href="#">Copy passage id</a>
+            </div>
+          </section>
+        </sc-for>
+
+        <sc-if value="{{ contentNoResults }}" hint-placeholder-val="{{ false }}">
+          <section class="panel panel--padded" style="text-align: center;">
+            <div class="cell__title">No passages matched “{{ query }}”</div>
+            <div class="cell__sub" style="margin-top: 4px;">Retrieval is conjunctive — drop a word, or try one of these:</div>
+            <div style="display: flex; flex-wrap: wrap; gap: var(--layout-margin-xsmall); justify-content: center; margin-top: var(--layout-margin-small);">
+              <sc-for list="{{ suggestions }}" as="sug" hint-placeholder-count="3">
+                <button type="button" onClick="{{ sug.go }}" style="{{ sug.style }}">{{ sug.label }}</button>
+              </sc-for>
+            </div>
+          </section>
+        </sc-if>
+
+        <p class="footnote">Passages carry the read ACL of the live document they came from, so an extraction host can never widen a document's visibility.</p>
+      </sc-if>
+
+      <sc-if value="{{ isSummary }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>AI Summary</h1>
+            <p>The registry is searched exactly as content search searches it, and the top matching passages are summarised. Every claim cites the passage it came from.</p>
+          </div>
+        </div>
+
+        <section class="panel panel--padded">
+          <div style="display: flex; gap: var(--layout-margin-small); flex-wrap: wrap;">
+            <div style="position: relative; flex: 1; min-width: 18rem;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--typography-color-secondary);"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg>
+              <input id="demi-search-summary" type="text" placeholder="e.g. pipeline watercourse crossing mitigation" value="{{ summaryQuery }}" onChange="{{ onSummaryQuery }}" aria-label="Ask a question of the registry" style="width: 100%; box-sizing: border-box; padding: 0.8rem 1rem 0.8rem 3rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+            </div>
+            <button type="button" onClick="{{ ask }}" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.8rem 1.6rem; font: var(--typography-bold-body); cursor: pointer;">{{ askLabel }}</button>
+          </div>
+          <p class="panel__lede" style="margin-top: var(--layout-margin-small);">Keywords work better than full sentences. Answers are generated from retrieved passages only and cannot draw on anything outside the registry.</p>
+        </section>
+
+        <sc-if value="{{ hasSummary }}" hint-placeholder-val="{{ true }}">
+          <section class="panel panel--padded">
+            <h2 class="panel__title panel__title--inline" style="display: flex; align-items: center; gap: var(--layout-margin-small); flex-wrap: wrap;">
+              Answer
+              <span class="pill pill--info">AI-generated from the sources below</span>
+            </h2>
+            <p style="font: var(--typography-regular-body); margin: 0;">{{ summaryText }}</p>
+            <div style="margin-top: var(--layout-margin-medium); padding-top: var(--layout-margin-small); border-top: var(--layout-border-width-small) solid var(--surface-color-border-default); font: var(--typography-regular-label); color: var(--typography-color-secondary);">est. $0.0184 CAD · 3,918 tokens in / 214 out · estimated from list rates, not billed amounts</div>
+          </section>
+
+          <section class="panel panel--scroll">
+            <h2 class="panel__title">Sources</h2>
+            <table style="min-width: 40rem;">
+              <thead>
+                <tr>
+                  <th style="width: 4rem;"></th>
+                  <th>Document</th>
+                  <th>Project</th>
+                  <th style="width: 6rem;">Passage</th>
+                  <th style="width: 7rem; text-align: right;"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ citations }}" as="c" hint-placeholder-count="3">
+                  <tr>
+                    <td><span class="pill pill--neutral">[{{ c.n }}]</span></td>
+                    <td class="cell__title">{{ c.documentName }}</td>
+                    <td class="cell--muted">{{ c.projectName }}</td>
+                    <td class="cell--muted cell--nowrap">{{ c.pageNumber }}</td>
+                    <td class="cell--right cell--nowrap"><a href="#">Download</a></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </section>
+        </sc-if>
+
+        <p class="footnote">A long natural-language question narrows retrieval to nothing and the model is never called, so the tool says so rather than answering from outside the corpus.</p>
+      </sc-if>
+
+      <sc-if value="{{ isIntake }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>Document Intake</h1>
+            <p>Upload a document to the registry against a project that already exists. Extraction runs off-platform and posts the markdown back for chunking.</p>
+          </div>
+        </div>
+
+        <div class="panel-grid" style="grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); align-items: start;">
+          <section class="panel panel--padded">
+            <h2 class="panel__title panel__title--inline">Upload</h2>
+
+            <div class="micro-label" style="margin-bottom: var(--layout-margin-xsmall);">Target project</div>
+            <span style="position: relative; display: block; width: 100%; margin-bottom: var(--layout-margin-medium);"><select style="width: 100%; box-sizing: border-box; padding: 0.6rem 2rem 0.6rem 0.75rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body); color: var(--typography-color-primary); background: var(--surface-color-background-white); -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer;">
+              <option>Site C Clean Energy Project</option>
+              <option>Ajax Mine</option>
+              <option>Coastal GasLink Pipeline</option>
+              <option>Blackwater Gold Project</option>
+            </select><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="position: absolute; right: 0.55rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--typography-color-secondary);"><polyline points="6,9 12,15 18,9"></polyline></svg></span>
+
+            <div style="border: 2px dashed var(--surface-color-primary-default); border-radius: var(--layout-border-radius-medium); padding: var(--layout-padding-xlarge) var(--layout-padding-large); text-align: center; background: var(--surface-color-background-light-gray);">
+              <div class="cell__title">Drag a PDF here, or click to browse</div>
+              <div class="cell__sub" style="margin-top: 4px;">PDF only, up to 100 MB. Send Content-Length — a chunked body arrives empty.</div>
+            </div>
+
+            <div style="margin-top: var(--layout-margin-medium);">
+              <div style="display: flex; justify-content: space-between; font: var(--typography-regular-small-body); margin-bottom: var(--layout-margin-xsmall);">
+                <span class="cell__title">Site_C_Compliance_Report_2026.pdf</span>
+                <span class="cell--muted">Chunking · 62%</span>
+              </div>
+              <div class="progress progress--medium">
+                <div class="progress__fill" style="width: 62%;"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel panel--padded">
+            <h2 class="panel__title panel__title--inline">What happens next</h2>
+            <div style="display: flex; flex-direction: column; gap: var(--layout-margin-medium);">
+              <div>
+                <div class="cell__title">Access control</div>
+                <div class="cell__sub" style="overflow-wrap: anywhere;">Chunks copy <code class="cell__mono">read[]</code> from the live document, so an ingest can never widen visibility.</div>
+              </div>
+              <div>
+                <div class="cell__title">Chunking</div>
+                <div class="cell__sub" style="overflow-wrap: anywhere;">Deterministic ids of the form <code class="cell__mono">&lt;documentId&gt;::p&lt;page&gt;::c&lt;index&gt;</code>, so the route is idempotent and an interrupted backfill restarts.</div>
+              </div>
+              <div>
+                <div class="cell__title">Indexing</div>
+                <div class="cell__sub" style="overflow-wrap: anywhere;">Search indexers pull from Cosmos every five minutes; nothing is pushed. Deletes are removed from the index explicitly.</div>
+              </div>
+              <div>
+                <div class="cell__title">Projects</div>
+                <div class="cell__sub" style="overflow-wrap: anywhere;">Never created from an ingest. A row whose upstream id resolves to no project is dropped and counted.</div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <p class="footnote">Writes require <code class="cell__mono">demi-service-write</code> or a staff role. Every ingest is audited.</p>
+      </sc-if>
+
+      <sc-if value="{{ isNotify }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>eagle-notify</h1>
+            <p>The email service DEMI hands outbound mail to, over Azure Communication Services.</p>
+          </div>
+          <button type="button" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Open eagle-notify</button>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="micro-label">Delivered, 7 days</div>
+            <div class="stat-card__value">4,812</div>
+            <div class="stat-card__note">across 6 notification types</div>
+          </div>
+          <div class="stat-card">
+            <div class="micro-label">Bounced</div>
+            <div class="stat-card__value">31</div>
+            <div class="stat-card__note">0.6% — suppression list applied</div>
+          </div>
+          <div class="stat-card">
+            <div class="micro-label">Median latency</div>
+            <div class="stat-card__value">210 ms</div>
+            <div class="stat-card__note">handoff to ACS</div>
+          </div>
+          <div class="stat-card">
+            <div class="micro-label">Uptime</div>
+            <div class="stat-card__value">99.98%</div>
+            <div class="stat-card__note">30-day rolling</div>
+          </div>
+        </div>
+
+        <section class="panel panel--padded">
+          <h2 class="panel__title panel__title--inline">Connection</h2>
+          <div class="kv-grid">
+            <div class="kv-row"><span class="kv-row__key">Endpoint</span><span class="kv-row__value">eagle-notify-test</span></div>
+            <div class="kv-row"><span class="kv-row__key">Status</span><span class="kv-row__value"><span class="pill pill--success">Reachable</span></span></div>
+            <div class="kv-row"><span class="kv-row__key">Key</span><span class="kv-row__value"><code class="cell__mono">demi_test_71ffab30…</code></span></div>
+            <div class="kv-row"><span class="kv-row__key">Last delivery</span><span class="kv-row__value">Today, 08:12</span></div>
+          </div>
+          <div class="panel__actions">
+            <button type="button" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Send test email</button>
+          </div>
+        </section>
+
+        <section class="panel panel--scroll">
+          <h2 class="panel__title">Recent sends</h2>
+          <table style="min-width: 42rem;">
+            <thead>
+              <tr>
+                <th style="width: 10rem;">Sent</th>
+                <th>Notification</th>
+                <th style="width: 8rem;">Recipients</th>
+                <th style="width: 9rem;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="cell--muted cell--nowrap">Today, 08:12</td>
+                <td>
+                  <div class="cell__title">Comment period opened</div>
+                  <div class="cell__sub">Site C Clean Energy Project</div>
+                </td>
+                <td class="cell--figures">1,284</td>
+                <td><span class="pill pill--success">Delivered</span></td>
+              </tr>
+              <tr>
+                <td class="cell--muted cell--nowrap">Yesterday, 16:04</td>
+                <td>
+                  <div class="cell__title">Document published</div>
+                  <div class="cell__sub">Blackwater Gold Project</div>
+                </td>
+                <td class="cell--figures">318</td>
+                <td><span class="pill pill--success">Delivered</span></td>
+              </tr>
+              <tr>
+                <td class="cell--muted cell--nowrap">Yesterday, 09:41</td>
+                <td>
+                  <div class="cell__title">Certificate amendment</div>
+                  <div class="cell__sub">Nicomen Wind Energy</div>
+                </td>
+                <td class="cell--figures">142</td>
+                <td><span class="pill pill--warning">7 bounced</span></td>
+              </tr>
+              <tr>
+                <td class="cell--muted cell--nowrap">24 Aug</td>
+                <td>
+                  <div class="cell__title">Weekly registry digest</div>
+                  <div class="cell__sub">Subscribers, all projects</div>
+                </td>
+                <td class="cell--figures">2,910</td>
+                <td><span class="pill pill--success">Delivered</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{ isLinks }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>Short URLs</h1>
+            <p>Permanent links DEMI issues for posters, campaigns and staff sharing.</p>
+          </div>
+          <button type="button" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">New short link</button>
+        </div>
+
+        <section class="panel panel--scroll">
+          <table style="min-width: 52rem; table-layout: fixed; width: 100%;">
+            <thead>
+              <tr>
+                <th style="width: 15rem;">Short link</th>
+                <th style="width: 15rem;">Destination</th>
+                <th style="width: 13rem;">Note</th>
+                <th style="width: 7rem;">Created by</th>
+                <th style="width: 5.5rem;">Created</th>
+                <th style="width: 7rem; text-align: right;"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ shortLinks }}" as="link" hint-placeholder-count="4">
+                <tr>
+                  <td><code class="cell__mono" style="overflow-wrap: anywhere;">{{ link.shortUrl }}</code></td>
+                  <td class="cell--truncate cell--muted">{{ link.url }}</td>
+                  <td>{{ link.note }}</td>
+                  <td class="cell--muted">{{ link.createdBy }}</td>
+                  <td class="cell--muted cell--nowrap">{{ link.createdAt }}</td>
+                  <td class="cell--right cell--nowrap">
+                    <span class="row-actions">
+                      <a href="#">Copy</a>
+                      <a href="#">Repoint</a>
+                    </span>
+                  </td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </section>
+
+        <p class="footnote">Short links are permanent and redirect without caching, so a repointed link takes effect on the next click — including on links already printed. Deleting one is not reversible; the audit trail keeps the record.</p>
+      </sc-if>
+
+      <sc-if value="{{ isRbac }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>Access model</h1>
+            <p>Assign a theoretical DEMI user to groups and watch what the registry returns. The same rules run on projects, on documents, and on individual fields.</p>
+          </div>
+        </div>
+
+        <div class="callout callout--warning">
+          <strong>Work in progress.</strong> The EAO sharing model is still being defined. Field-level rules in particular are illustrative here — the levels, the sealed compartment and the credential lane follow the current draft.
+        </div>
+
+        <div class="panel-grid" style="grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); align-items: start;">
+          <section class="panel panel--padded">
+            <h2 class="panel__title panel__title--inline">Simulated user</h2>
+            <div class="kv-grid" style="margin-bottom: var(--layout-margin-medium);">
+              <div class="kv-row"><span class="kv-row__key">Account</span><span class="kv-row__value">a.demo@gov.bc.ca</span></div>
+              <div class="kv-row"><span class="kv-row__key">Realm</span><span class="kv-row__value">eao-epic</span></div>
+              <div class="kv-row"><span class="kv-row__key">Reads</span><span class="kv-row__value">{{ audienceSummary }}</span></div>
+            </div>
+
+            <div class="micro-label" style="margin-bottom: var(--layout-margin-xsmall);">Group membership</div>
+            <div style="display: flex; flex-direction: column; gap: var(--layout-margin-small);">
+              <sc-for list="{{ rbacGroupRows }}" as="g" hint-placeholder-count="6">
+                <label style="display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer;">
+                  <input type="checkbox" checked="{{ g.checked }}" disabled="{{ g.disabled }}" onChange="{{ g.toggle }}" style="margin-top: 3px;">
+                  <span>
+                    <span class="cell__title">{{ g.label }}</span>
+                    <span class="cell__sub" style="display: block;">{{ g.note }}</span>
+                  </span>
+                </label>
+              </sc-for>
+            </div>
+          </section>
+
+          <div>
+            <section class="panel">
+              <h2 class="panel__title">The sharing ladder, as this user</h2>
+              <sc-for list="{{ rbacLadder }}" as="lv" hint-placeholder-count="4">
+                <div style="{{ lv.rowStyle }}">
+                  <div>
+                    <div class="cell__title">{{ lv.heading }}</div>
+                    <div class="cell__sub">{{ lv.audience }}</div>
+                    <div class="cell__sub" style="margin-top: 2px;">{{ lv.detail }}</div>
+                  </div>
+                  <span class="{{ lv.pillClass }}">{{ lv.verdict }}</span>
+                </div>
+              </sc-for>
+
+              <div style="display: flex; gap: var(--layout-margin-medium); align-items: flex-start; justify-content: space-between; padding: var(--layout-padding-small) var(--layout-padding-large); border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default); background: var(--surface-color-background-light-gray);">
+                <div>
+                  <div class="cell__title">Level 0 — Sensitive</div>
+                  <div class="cell__sub">A sealed compartment beside the ladder, not a step below it</div>
+                  <div class="cell__sub" style="margin-top: 2px;">Restricted to a named set of roles and encrypted, so it is unreadable to front-end users including Superusers, and through the data layer. A file cannot be elevated out of it through the sharing interface.</div>
+                </div>
+                <span class="{{ sealedPillClass }}">{{ sealedVerdict }}</span>
+              </div>
+
+              <div style="display: flex; gap: var(--layout-margin-medium); align-items: flex-start; justify-content: space-between; padding: var(--layout-padding-small) var(--layout-padding-large);">
+                <div>
+                  <div class="cell__title">Special — Selected Credentials</div>
+                  <div class="cell__sub">A lane alongside the ladder for First Nations, proponents, certificate holders, partner agencies and local governments</div>
+                  <div class="cell__sub" style="margin-top: 2px;">Grants a named external party sight of specified content at Levels 1–3 without making them a member of that audience. The file's level does not change and no one else's access changes with it. Time-bound, renewable, revocable — singly or in bulk.</div>
+                </div>
+                <span class="pill pill--info">Lane</span>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <section class="panel panel--scroll">
+          <h2 class="panel__title">Field-level access — Site C Clean Energy Project</h2>
+          <table style="min-width: 52rem; table-layout: fixed; width: 100%;">
+            <thead>
+              <tr>
+                <th style="width: 14rem;">Field</th>
+                <th style="width: 22rem;">Value returned</th>
+                <th style="width: 8rem;">Field level</th>
+                <th style="width: 7rem;">Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ rbacFields }}" as="f" hint-placeholder-count="9">
+                <tr>
+                  <td class="cell__title">{{ f.label }}</td>
+                  <td><span style="{{ f.valueStyle }}">{{ f.shown }}</span></td>
+                  <td class="cell--muted cell--nowrap">{{ f.levelLabel }}</td>
+                  <td class="cell--nowrap"><span class="{{ f.pillClass }}">{{ f.verdict }}</span></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="panel panel--scroll">
+            <h2 class="panel__title">Projects in results</h2>
+            <table style="min-width: 30rem; table-layout: fixed; width: 100%;">
+              <thead>
+                <tr>
+                  <th style="width: 16rem;">Project</th>
+                  <th style="width: 6rem;">Level</th>
+                  <th style="width: 8rem;">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ rbacProjects }}" as="p" hint-placeholder-count="3">
+                  <tr>
+                    <td class="cell__title">{{ p.name }}</td>
+                    <td class="cell--muted cell--nowrap">{{ p.levelLabel }}</td>
+                    <td class="cell--nowrap"><span class="{{ p.pillClass }}">{{ p.verdict }}</span></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </section>
+
+          <section class="panel panel--scroll">
+            <h2 class="panel__title">Documents · {{ rbacDocSummary }}</h2>
+            <table style="min-width: 45rem; table-layout: fixed; width: 100%;">
+              <thead>
+                <tr>
+                  <th style="width: 19rem;">Document</th>
+                  <th style="width: 11rem;">Project</th>
+                  <th style="width: 9rem;">Level</th>
+                  <th style="width: 6rem;">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                <sc-for list="{{ rbacDocs }}" as="d" hint-placeholder-count="7">
+                  <tr>
+                    <td><span style="{{ d.nameStyle }}">{{ d.shown }}</span></td>
+                    <td class="cell--muted">{{ d.projectName }}</td>
+                    <td class="cell--muted cell--nowrap">{{ d.levelLabel }}</td>
+                    <td class="cell--nowrap"><span class="{{ d.pillClass }}">{{ d.verdict }}</span></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </section>
+
+        <p class="footnote">A record a caller cannot see returns 404, never 403 — a 403 would confirm the id exists. Broadening access is always a deliberate act by a permitted user, and it is always logged.</p>
+      </sc-if>
+
+      <sc-if value="{{ isKeys }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>API keys</h1>
+            <p>Registry keys for callers that cannot hold a Keycloak client. Each carries its own roles, project scope, expiry and revocation.</p>
+          </div>
+          <button type="button" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); white-space: nowrap; cursor: pointer;">Mint a key</button>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="micro-label">Active keys</div>
+            <div class="stat-card__value">7</div>
+            <div class="stat-card__note">across 5 consuming applications</div>
+          </div>
+          <div class="stat-card">
+            <div class="micro-label">Expiring in 14 days</div>
+            <div class="stat-card__value">2</div>
+            <div class="stat-card__note">mint a replacement before revoking</div>
+          </div>
+          <div class="stat-card">
+            <div class="micro-label">Default lifetime</div>
+            <div class="stat-card__value">90 days</div>
+            <div class="stat-card__note">shorter on request, never longer</div>
+          </div>
+          <div class="stat-card">
+            <div class="micro-label">Calls, 24 hours</div>
+            <div class="stat-card__value">41,882</div>
+            <div class="stat-card__note">rate limited per key</div>
+          </div>
+        </div>
+
+        <section class="panel panel--scroll">
+          <h2 class="panel__title">Keys</h2>
+          <table style="min-width: 55rem; table-layout: fixed; width: 100%;">
+            <thead>
+              <tr>
+                <th style="width: 15rem;">Consumer</th>
+                <th style="width: 12rem;">Roles</th>
+                <th style="width: 7rem;">Last used</th>
+                <th style="width: 7rem;">Expires</th>
+                <th style="width: 6rem;">Status</th>
+                <th style="width: 8rem; text-align: right;"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ apiKeys }}" as="key" hint-placeholder-count="5">
+                <tr>
+                  <td>
+                    <div class="cell__title">{{ key.name }}</div>
+                    <div class="cell__sub"><code class="cell__mono" style="overflow-wrap: anywhere;">{{ key.prefix }}</code></div>
+                  </td>
+                  <td>
+                    <span class="role-chips">
+                      <sc-for list="{{ key.roleList }}" as="role" hint-placeholder-count="2">
+                        <span class="role-chip">{{ role.label }}</span>
+                      </sc-for>
+                    </span>
+                    <div class="cell__sub">{{ key.scope }}</div>
+                  </td>
+                  <td class="cell--muted cell--nowrap">{{ key.lastUsed }}</td>
+                  <td class="cell--muted cell--nowrap">{{ key.expires }}</td>
+                  <td class="cell--nowrap"><span class="pill {{ key.pillClass }}">{{ key.status }}</span></td>
+                  <td class="cell--right cell--nowrap">
+                    <span class="row-actions">
+                      <a href="#">Rotate</a>
+                      <a href="#">Revoke</a>
+                    </span>
+                  </td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="panel panel--padded">
+          <h2 class="panel__title panel__title--inline">Before you mint one</h2>
+          <div style="display: flex; flex-direction: column; gap: var(--layout-margin-medium);">
+            <div>
+              <div class="cell__title">Ask for the least privilege that works</div>
+              <div class="cell__sub" style="overflow-wrap: anywhere;">A key minted with <code class="cell__mono">demi-service-read</code> reads everything the ACL allows and writes nothing. Write access is a separate role, and no key can reach <code class="cell__mono">/api/admin/*</code>.</div>
+            </div>
+            <div>
+              <div class="cell__title">Project scope is orthogonal to privilege</div>
+              <div class="cell__sub" style="overflow-wrap: anywhere;">A scoped key is privileged <em>within those projects</em>. Scope arrives as roles prefixed <code class="cell__mono">project:</code> and narrows the partition, so privilege lifts the role predicate but never the project one.</div>
+            </div>
+            <div>
+              <div class="cell__title">The secret is shown once</div>
+              <div class="cell__sub" style="overflow-wrap: anywhere;">Format is <code class="cell__mono">demi_&lt;env&gt;_&lt;keyId&gt;_&lt;secret&gt;</code>, sent as <code class="cell__mono">X-Api-Key</code>. DEMI stores a hash, so a lost key is rotated, not recovered.</div>
+            </div>
+            <div>
+              <div class="cell__title">Rotate before revoking</div>
+              <div class="cell__sub" style="overflow-wrap: anywhere;">Mint the replacement, deploy it, then revoke the old one — revocation takes effect immediately and is recorded in the audit log.</div>
+            </div>
+          </div>
+        </section>
+
+        <p class="footnote">Never commit a key literal. This repository is public, so a literal in it is a world-readable credential; <code class="cell__mono">ADMIN_API_KEY</code> is break-glass only.</p>
+      </sc-if>
+
+      <sc-if value="{{ isApi }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>API documentation</h1>
+            <p>The Swagger UI the API serves itself, plus what a caller needs before the first request.</p>
+          </div>
+          <button type="button" onClick="{{ openSwagger }}" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Open Swagger UI</button>
+        </div>
+
+        <section class="panel panel--padded">
+          <h2 class="panel__title panel__title--inline">Authenticating</h2>
+          <div style="display: flex; flex-direction: column; gap: var(--layout-margin-medium);">
+            <div>
+              <div class="cell__title">Staff and applications</div>
+              <div class="cell__sub" style="overflow-wrap: anywhere;">Keycloak realm <code class="cell__mono">eao-epic</code>. Applications use a service account — <code class="cell__mono">client_credentials</code>, then a normal bearer token.</div>
+            </div>
+            <div>
+              <div class="cell__title">Callers without a Keycloak client</div>
+              <div class="cell__sub" style="overflow-wrap: anywhere;">A registry API key: <code class="cell__mono">X-Api-Key: demi_&lt;env&gt;_&lt;keyId&gt;_&lt;secret&gt;</code>, issued with its own roles, expiry and revocation.</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel panel--scroll">
+          <h2 class="panel__title">Roles</h2>
+          <table style="min-width: 40rem;">
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Reads</th>
+                <th style="width: 8rem;">Writes data</th>
+                <th style="width: 9rem;">Admin routes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="role-chip">public</span></td>
+                <td class="cell--muted">published rows only</td>
+                <td class="cell--muted">no</td>
+                <td class="cell--muted">no</td>
+              </tr>
+              <tr>
+                <td><span class="role-chip">compliance</span></td>
+                <td class="cell--muted">rows whose read[] names it</td>
+                <td class="cell--muted">no</td>
+                <td class="cell--muted">no</td>
+              </tr>
+              <tr>
+                <td><span class="role-chip">demi-service-read</span></td>
+                <td class="cell--muted">everything the ACL allows</td>
+                <td class="cell--muted">no</td>
+                <td class="cell--muted">no</td>
+              </tr>
+              <tr>
+                <td><span class="role-chip">demi-service-write</span></td>
+                <td class="cell--muted">everything the ACL allows</td>
+                <td class="cell--muted">yes</td>
+                <td class="cell--muted">no</td>
+              </tr>
+              <tr>
+                <td><span class="role-chip">staff · sysadmin · demi-admin</span></td>
+                <td class="cell--muted">everything the ACL allows</td>
+                <td class="cell--muted">yes</td>
+                <td class="cell--muted">yes</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <p class="footnote">Ask for the least privilege that works. A privileged credential carrying a project scope is privileged within those projects only.</p>
+      </sc-if>
+
+      <sc-if value="{{ infoOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position: fixed; inset: 0; z-index: 950; background: rgba(0,0,0,0.35); display: grid; place-items: center; padding: var(--layout-padding-large);" onClick="{{ closeInfo }}">
+          <div role="dialog" aria-label="How this screen is built" style="width: 34rem; max-width: 100%; max-height: 80vh; overflow-y: auto; box-sizing: border-box; background: var(--surface-color-background-white); border-radius: var(--layout-border-radius-medium); box-shadow: 0 8px 30px rgba(0,0,0,0.3); padding: var(--layout-padding-large);">
+            <div style="display: flex; align-items: baseline; justify-content: space-between; gap: var(--layout-margin-small);">
+              <h2 class="panel__title panel__title--inline" style="margin: 0;">How {{ techTitle }} is built</h2>
+              <button type="button" onClick="{{ closeInfo }}" aria-label="Close" style="background: none; border: none; cursor: pointer; font: var(--typography-bold-body); color: var(--typography-color-secondary);">✕</button>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--layout-margin-medium);">
+              <sc-for list="{{ techChips }}" as="chip" hint-placeholder-count="5">
+                <span style="{{ chip.style }}">{{ chip.label }}</span>
+              </sc-for>
+            </div>
+            <p class="cell__sub" style="margin: var(--layout-margin-medium) 0 0;">{{ techNote }}</p>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isProfile }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>Profile and preferences</h1>
+            <p>Identity comes from Keycloak and cannot be edited here. Preferences are stored per user by DEMI.</p>
+          </div>
+        </div>
+
+        <div class="panel-grid" style="grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start;">
+          <section class="panel panel--padded">
+            <h2 class="panel__title panel__title--inline">Identity</h2>
+            <div class="kv-grid">
+              <div class="kv-row"><span class="kv-row__key">Name</span><span class="kv-row__value">Jide Okafor</span></div>
+              <div class="kv-row"><span class="kv-row__key">Email</span><span class="kv-row__value">j.okafor@gov.bc.ca</span></div>
+              <div class="kv-row"><span class="kv-row__key">IDIR</span><span class="kv-row__value"><code class="cell__mono">JOKAFOR</code></span></div>
+              <div class="kv-row"><span class="kv-row__key">Realm</span><span class="kv-row__value"><code class="cell__mono">eao-epic</code></span></div>
+              <div class="kv-row"><span class="kv-row__key">Roles</span><span class="kv-row__value"><span class="role-chips"><span class="role-chip">staff</span><span class="role-chip">demi-service-read</span></span></span></div>
+              <div class="kv-row"><span class="kv-row__key">Groups</span><span class="kv-row__value">EAO staff, Compliance and enforcement</span></div>
+            </div>
+            <p class="footnote">To change a role or group, ask an administrator. DEMI reads them from the token on every request.</p>
+          </section>
+
+          <section class="panel panel--padded">
+            <h2 class="panel__title panel__title--inline">Preferences</h2>
+            <div class="kv-grid">
+              <div class="kv-row"><span class="kv-row__key">Default landing screen</span><span class="kv-row__value">Map Explorer</span></div>
+              <div class="kv-row"><span class="kv-row__key">Results per page</span><span class="kv-row__value">6</span></div>
+              <div class="kv-row"><span class="kv-row__key">Email digest</span><span class="kv-row__value">Weekly, via eagle-notify</span></div>
+              <div class="kv-row"><span class="kv-row__key">Show staged projects</span><span class="kv-row__value">On</span></div>
+            </div>
+            <div class="panel__actions" style="display: flex; gap: var(--layout-margin-small);">
+              <button type="button" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Save preferences</button>
+              <button type="button" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Reset to defaults</button>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isSessions }}" hint-placeholder-val="{{ false }}">
+        <div class="screen-header">
+          <div class="screen-header__text">
+            <h1>Active sessions</h1>
+            <p>Every Keycloak session open against DEMI for this account. Revoking one ends it at the next request.</p>
+          </div>
+          <button type="button" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Revoke all others</button>
+        </div>
+
+        <section class="panel panel--scroll">
+          <table style="min-width: 44rem;">
+            <thead>
+              <tr>
+                <th>Device</th>
+                <th>Location</th>
+                <th>Started</th>
+                <th>Last seen</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <div class="cell__title">Chrome on Windows</div>
+                  <div class="cell__sub">This session</div>
+                </td>
+                <td class="cell--muted">Victoria, BC</td>
+                <td class="cell--muted cell--nowrap">Today, 07:58</td>
+                <td class="cell--muted cell--nowrap">Now</td>
+                <td class="cell--right"><span class="pill pill--success">Current</span></td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="cell__title">Edge on Windows</div>
+                  <div class="cell__sub">Desktop, office</div>
+                </td>
+                <td class="cell--muted">Victoria, BC</td>
+                <td class="cell--muted cell--nowrap">Yesterday, 09:12</td>
+                <td class="cell--muted cell--nowrap">Yesterday, 17:40</td>
+                <td class="cell--right cell--nowrap"><a href="#">Revoke</a></td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="cell__title">Safari on iOS</div>
+                  <div class="cell__sub">Mobile</div>
+                </td>
+                <td class="cell--muted">Nanaimo, BC</td>
+                <td class="cell--muted cell--nowrap">25 Aug, 11:03</td>
+                <td class="cell--muted cell--nowrap">26 Aug, 08:22</td>
+                <td class="cell--right cell--nowrap"><a href="#">Revoke</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <p class="footnote">DEMI holds no session state of its own. Sessions live in Keycloak; revoking one here calls the realm's admin API.</p>
+      </sc-if>
+
+    </main>
+  </div>
+
+  <footer class="app-footer">
+    <span></span>
+    <nav aria-label="Footer" class="app-footer__links">
+      <a href="#">Home</a>
+      <a href="#">Disclaimer</a>
+      <a href="#">Privacy</a>
+      <a href="#">Accessibility</a>
+      <a href="#">Copyright</a>
+      <a href="#">Contact us</a>
+    </nav>
+    <span class="app-footer__build">DEMI Demo · {{ envLabel }}</span>
+  </footer>
+</div>
+</sc-if>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;environment&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dev&quot;, &quot;test&quot;, &quot;prod&quot;], &quot;default&quot;: &quot;test&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Environment&quot;}, &quot;simulateUnauthorized&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Environment&quot;}}">
+const PROJECTS = [
+  { id: 111, eacNumber: "—", code: "1631041", epicProjectID: "EPIC-111", name: "Ajax Mine", sector: "Mining", type: "Mines", region: "Thompson-Nicola", phase: "Decision", eacDecision: "Certificate Refused", ceaa: "Coordinated", status: "Completed", legacyEagleId: "588510b0aaecd9001b8142a1", centroid: [-120.37, 50.62], gatingState: "admitted", decisionDate: "2017-12-14", description: "KGHM Ajax Mining Inc. proposes to develop a new open-pit copper and gold mine with a production capacity of up to 24 million tonnes of ore per year near Kamloops, British Columbia.", proponent: "KGHM Ajax Mining Inc." },
+  { id: 207, eacNumber: "EAC #14-02", code: "1721289", epicProjectID: "EPIC-207", name: "Nicomen Wind Energy", sector: "Energy", type: "Energy-Electricity", region: "Thompson-Nicola", phase: "Post-Certification", eacDecision: "Certificate Issued", ceaa: "None", status: "In Progress", legacyEagleId: "58851172aaecd9001b820335", centroid: [-121.22, 50.25], gatingState: "admitted", decisionDate: "2014-06-02", description: "Wind energy generation project consisting of up to 40 wind turbines near Lytton, British Columbia.", proponent: "Nicomen Wind Energy Corp" },
+  { id: 304, eacNumber: "—", code: "1854402", epicProjectID: "EPIC-304", name: "Timicw Good Earth Recycling Landfill", sector: "Waste Management", type: "Waste Disposal", region: "Thompson-Nicola", phase: "Application Review", eacDecision: "In Progress", ceaa: "None", status: "Completed", legacyEagleId: "64a5f1dc2d0a9c002225f25e", centroid: [-120.35, 51.10], gatingState: "admitted", decisionDate: "2023-07-05", description: "Recycling and composting facility aiming to process organic and wood wastes into usable agricultural additions.", proponent: "Good Earth Recycling Ltd" },
+  { id: 307, eacNumber: "—", code: "1902117", epicProjectID: "EPIC-307", name: "Tranquille on the Lake", sector: "Urban Development", type: "Tourist Destination Resorts", region: "Thompson-Nicola", phase: "Pre-Application", eacDecision: "In Progress", ceaa: "None", status: "In Progress", legacyEagleId: "64f9f03e559cf40022effe76", centroid: [-120.48, 50.70], gatingState: "staged", decisionDate: "2023-09-07", description: "A comprehensive lakeside resort community master-planned development.", proponent: "Tranquille Developments" },
+  { id: 333, eacNumber: "—", code: "1774630", epicProjectID: "EPIC-333", name: "WCOL Natural Gas Liquids (NGL) Recovery", sector: "Energy", type: "Energy-Petroleum & Natural Gas", region: "Peace", phase: "Effects Assessment", eacDecision: "In Progress", ceaa: "None", status: "In Progress", legacyEagleId: "620ef49aabfe9500223f403a", centroid: [-121.5, 55.7], gatingState: "admitted", decisionDate: "2022-02-17", description: "Natural gas extraction, recovery and enrichment processing facility.", proponent: "West Coast Olefins Ltd" },
+  { id: 336, eacNumber: "EAC #14-04", code: "1655982", epicProjectID: "EPIC-336", name: "Westcoast Connector Gas Transmission", sector: "Energy", type: "Energy-Petroleum & Natural Gas", region: "Skeena", phase: "Post-Certification", eacDecision: "Certificate Issued", ceaa: "Substituted", status: "Completed", legacyEagleId: "588511b7aaecd9001b824889", centroid: [-128.5, 54.5], gatingState: "admitted", decisionDate: "2014-11-25", description: "Natural gas pipeline proposal to transport gas from northeast BC to Prince Rupert.", proponent: "Spectra Energy" },
+  { id: 401, eacNumber: "EAC #14-03", code: "1660319", epicProjectID: "EPIC-401", name: "Coastal GasLink Pipeline", sector: "Energy", type: "Energy-Petroleum & Natural Gas", region: "Skeena", phase: "Certificate Amendment", eacDecision: "Certificate Issued", ceaa: "Substituted", status: "Completed", legacyEagleId: "588511b8aaecd9001b8249a1", centroid: [-124.0, 54.0], gatingState: "admitted", decisionDate: "2014-10-23", description: "A 670-kilometre pipeline delivering natural gas from northeastern BC to the LNG Canada facility in Kitimat.", proponent: "TC Energy" },
+  { id: 402, eacNumber: "EAC #14-01", code: "1602557", epicProjectID: "EPIC-402", name: "Site C Clean Energy Project", sector: "Energy", type: "Energy-Electricity", region: "Peace", phase: "Post-Certification", eacDecision: "Certificate Issued", ceaa: "Panel", status: "In Progress", legacyEagleId: "588511b9aaecd9001b824ab2", centroid: [-120.9, 56.2], gatingState: "admitted", decisionDate: "2014-10-14", description: "Third dam and hydroelectric generating station on the Peace River in northeastern BC.", proponent: "BC Hydro" },
+  { id: 403, eacNumber: "EAC #19-02", code: "1743088", epicProjectID: "EPIC-403", name: "Blackwater Gold Project", sector: "Mining", type: "Mines", region: "Cariboo", phase: "Post-Certification", eacDecision: "Certificate Issued", ceaa: "Coordinated", status: "In Progress", legacyEagleId: "588511baaaecd9001b824bc3", centroid: [-124.8, 53.2], gatingState: "admitted", decisionDate: "2019-06-13", description: "Gold and silver open-pit mine development located in central British Columbia.", proponent: "Artemis Gold Inc." },
+  { id: 404, eacNumber: "EAC #14-05", code: "1618744", epicProjectID: "EPIC-404", name: "KSM Project", sector: "Mining", type: "Mines", region: "Skeena", phase: "Certificate Amendment", eacDecision: "Certificate Issued", ceaa: "Comprehensive Study", status: "In Progress", legacyEagleId: "588511bbaaecd9001b824cd4", centroid: [-130.0, 56.5], gatingState: "staged", decisionDate: "2014-07-29", description: "One of the largest undeveloped gold and copper projects in the world, located in northwestern BC.", proponent: "Seabridge Gold Inc." }
+];
+
+const DOCUMENTS = [
+  { id: "doc-ajax-1", displayName: "Ajax Mine Project Assessment Report", documentType: "Assessment Report", orcsCode: "34800-20/AJAX", projectId: 111, projectName: "Ajax Mine", textSnippet: "This assessment report evaluates the environmental, social, economic, heritage, and health effects of the proposed KGHM Ajax Mine project near Kamloops, BC." },
+  { id: "doc-ajax-2", displayName: "Environmental Certificate Application Summary", documentType: "Application", orcsCode: "34800-30/AJAX", projectId: 111, projectName: "Ajax Mine", textSnippet: "KGHM Ajax Mining Inc. submits this application summary for an Environmental Assessment Certificate for development of a copper-gold open-pit mine." },
+  { id: "doc1", displayName: "Environmental Assessment Certificate #14-02", documentType: "Certificate", orcsCode: "35400-20/NICO", projectId: 207, projectName: "Nicomen Wind Energy", textSnippet: "Nicomen Wind Energy Corp is hereby authorized to construct and operate up to 40 wind turbines subject to the terms in Schedule A." },
+  { id: "doc2", displayName: "Acoustic Impact Assessment & Noise Model Report", documentType: "Assessment Report", orcsCode: "35400-30/NICO", projectId: 207, projectName: "Nicomen Wind Energy", textSnippet: "Acoustical models demonstrate noise levels at nearest residential receptors will not exceed 40 dBA under any operational wind configurations." },
+  { id: "doc3", displayName: "Draft Master Landfill Reclamation & Closure Plan", documentType: "Management Plan", orcsCode: "32600-40/RECY", projectId: 304, projectName: "Timicw Good Earth Recycling Landfill", textSnippet: "Plan details the progressive capping, gas monitoring, and final vegetation restoration of the landfill site starting in year 2028." }
+];
+
+const CHUNKS = [
+  { id: "c1", documentName: "Ajax Mine Project Assessment Report", documentType: "Assessment Report", projectName: "Ajax Mine", pageNumber: 412, content: "Watercourse crossings within the local study area were assessed for fish habitat sensitivity; four of eleven crossings required trenchless installation to avoid instream work windows." },
+  { id: "c2", documentName: "Environmental Assessment Certificate #14-02", documentType: "Certificate", projectName: "Nicomen Wind Energy", pageNumber: 18, content: "The Holder must implement the Surface Water Quality Management Plan prior to the commencement of construction and report annually to the Environmental Assessment Office." },
+  { id: "c3", documentName: "Draft Master Landfill Reclamation & Closure Plan", documentType: "Management Plan", projectName: "Timicw Good Earth Recycling Landfill", pageNumber: 66, content: "Leachate collection performance is monitored at three downgradient wells; exceedances trigger the adaptive management response described in Section 7.4." },
+  { id: "c4", documentName: "Acoustic Impact Assessment & Noise Model Report", documentType: "Assessment Report", projectName: "Nicomen Wind Energy", pageNumber: 205, content: "Mitigation for the two crossings nearest the receptor cluster relies on seasonal timing restrictions rather than physical works, on the basis that the channel is ephemeral." }
+];
+
+const CITATIONS = [
+  { n: 1, documentName: "Ajax Mine Project Assessment Report", projectName: "Ajax Mine", pageNumber: 412 },
+  { n: 2, documentName: "Environmental Assessment Certificate #14-02", projectName: "Nicomen Wind Energy", pageNumber: 18 },
+  { n: 3, documentName: "Draft Master Landfill Reclamation & Closure Plan", projectName: "Timicw Good Earth Recycling Landfill", pageNumber: 66 }
+];
+
+const SHORT_LINKS = [
+  { id: "1", shortUrl: "demi.gov.bc.ca/u/site-c-eac", url: "https://demi.gov.bc.ca/projects/402/documents?type=certificate", note: "Site C certificate, printed handout", createdBy: "j.okafor", createdAt: "24 Aug" },
+  { id: "2", shortUrl: "demi.gov.bc.ca/u/ajax-report", url: "https://demi.gov.bc.ca/documents/doc-ajax-1", note: "Assessment report, media enquiry", createdBy: "a.lindqvist", createdAt: "21 Aug" },
+  { id: "3", shortUrl: "demi.gov.bc.ca/u/comment-blackwater", url: "https://demi.gov.bc.ca/projects/403/comment", note: "Comment period poster", createdBy: "m.tremblay", createdAt: "18 Aug" },
+  { id: "4", shortUrl: "demi.gov.bc.ca/u/registry-help", url: "https://demi.gov.bc.ca/help/search", note: "—", createdBy: "j.okafor", createdAt: "11 Aug" }
+];
+
+// One entry per screen: adding a page is one row here plus one sc-if in the template.
+const SCREENS = [
+  // Account screens reach the router but not the sidebar — the account menu links them.
+  { key: "profile", label: "Profile and preferences", group: null },
+  { key: "sessions", label: "Active sessions", group: null },
+  { key: "map", label: "Map Explorer", group: "Discover" },
+  { key: "index", label: "Index Search", group: "Discover" },
+  { key: "content", label: "Document Content Search", group: "Discover" },
+  { key: "summary", label: "AI Summary", group: "Discover" },
+  { key: "intake", label: "Document Intake", group: "Operate" },
+  { key: "notify", label: "eagle-notify", group: "Operate" },
+  { key: "links", label: "Short URLs", group: "Operate" },
+  { key: "rbac", label: "Access model", group: "Access" },
+  { key: "api", label: "API documentation", group: "Developers" },
+  { key: "keys", label: "API keys", group: "Developers" }
+];
+
+// EAO sharing model — four levels, one sealed compartment, one credential lane.
+const LEVELS = [
+  { n: 4, name: "Public", audience: "Anyone, no credential, through EPIC.public", detail: "Finalized products. Moving a file here is an explicit human action, warned and logged." },
+  { n: 3, name: "All IDIR", audience: "Any BC Government employee with an IDIR account", detail: "Chosen because government-wide sharing is intended, not because the file is uncontroversial." },
+  { n: 2, name: "All EAO", audience: "Every EAO staff member, any project or business unit", detail: "Approved internal records — settled enough to be relied on across the organization." },
+  { n: 1, name: "Team Only", audience: "The group that originated the file", detail: "The default on admission. Unapproved, in-progress and working records live here." }
+];
+
+const RBAC_GROUPS = [
+  { key: "public", label: "Public (no credential)", note: "Always in effect — the floor of the ladder", locked: true },
+  { key: "idir", label: "All IDIR", note: "A BC Government IDIR account" },
+  { key: "eao", label: "All EAO staff", note: "Any EAO business unit or project" },
+  { key: "team", label: "Site C project team", note: "Originating group for Site C files only" },
+  { key: "credential", label: "Selected credential — proponent", note: "Site C content at Level 2, expires 31 Dec 2026" },
+  { key: "ce", label: "Compliance & Enforcement", note: "Named role for the sealed Level 0 compartment" }
+];
+
+const RBAC_PROJECTS = [
+  { id: 402, name: "Site C Clean Energy Project", level: 4, team: true },
+  { id: 111, name: "Ajax Mine", level: 4, team: false },
+  { id: 404, name: "KSM Project", level: 1, team: false }
+];
+
+const RBAC_FIELDS = [
+  { key: "name", label: "Project name", value: "Site C Clean Energy Project", level: 4 },
+  { key: "proponent", label: "Proponent", value: "BC Hydro", level: 4 },
+  { key: "region", label: "Region", value: "Peace", level: 4 },
+  { key: "status", label: "Decision status", value: "In Progress", level: 4 },
+  { key: "capital", label: "Capital investment", value: "$16.0 B", level: 2 },
+  { key: "contact", label: "Proponent contact", value: "k.wells@bchydro.com", level: 2 },
+  { key: "risk", label: "Internal risk assessment", value: "Elevated — schedule and reservoir clearing", level: 1 },
+  { key: "rationale", label: "Draft decision rationale", value: "Working draft, not for reliance", level: 1 },
+  { key: "investigation", label: "C&E investigation file", value: "CE-2026-0114 — open", level: 0 }
+];
+
+const RBAC_DOCS = [
+  { id: "d1", name: "Environmental Assessment Certificate #14-02", projectId: 402, level: 4 },
+  { id: "d2", name: "Site C Compliance Report 2026", projectId: 402, level: 3 },
+  { id: "d3", name: "Reservoir clearing cost schedule", projectId: 402, level: 2 },
+  { id: "d4", name: "Draft condition amendment, internal", projectId: 402, level: 1 },
+  { id: "d5", name: "Ajax Mine Project Assessment Report", projectId: 111, level: 4 },
+  { id: "d6", name: "KSM pre-application working notes", projectId: 404, level: 1 },
+  { id: "d7", name: "CE-2026-0114 investigation record", projectId: 402, level: 0 }
+];
+
+const API_KEYS = [
+  { id: "ak_c02da6f1", name: "epic-map-frontend", prefix: "demi_test_c02da6f1_…", roles: ["demi-service-read"], scope: "All projects", lastUsed: "Today", expires: "24 Nov 2026", status: "Active" },
+  { id: "ak_5e8c94aa", name: "docling-extraction-host", prefix: "demi_test_5e8c94aa_…", roles: ["demi-service-write"], scope: "All projects", lastUsed: "Today", expires: "02 Sep 2026", status: "Expiring" },
+  { id: "ak_71ffab30", name: "eagle-notify", prefix: "demi_test_71ffab30_…", roles: ["demi-service-read"], scope: "All projects", lastUsed: "Today", expires: "11 Oct 2026", status: "Active" },
+  { id: "ak_9b3d2277", name: "site-c-compliance-review", prefix: "demi_test_9b3d2277_…", roles: ["compliance"], scope: "project:402", lastUsed: "Yesterday", expires: "05 Sep 2026", status: "Expiring" },
+  { id: "ak_44f0ce18", name: "eagle-api push", prefix: "demi_test_44f0ce18_…", roles: ["demi-service-write"], scope: "All projects", lastUsed: "Today", expires: "18 Dec 2026", status: "Active" },
+  { id: "ak_1a77b904", name: "ajax-media-enquiry", prefix: "demi_test_1a77b904_…", roles: ["public"], scope: "project:111", lastUsed: "14 Aug", expires: "—", status: "Revoked" }
+];
+const KEY_PILL = { Active: "pill--success", Expiring: "pill--warning", Expired: "pill--neutral", Revoked: "pill--neutral" };
+const GROUPS = ["Discover", "Operate", "Access", "Developers"];
+const SEARCH_INPUTS = { map: "demi-search-map", index: "demi-search-index", content: "demi-search-content", summary: "demi-search-summary" };
+const SUGGESTED = ["water quality", "fish habitat", "Ajax", "pipeline"];
+const PAGE_SIZE = 6;
+
+// Per-screen technology provenance, drawn from the repo README and package manifests.
+const TECH = {
+  map: {
+    title: "Map Explorer",
+    chips: ["Leaflet 1.9", "markercluster", "CARTO light_all (prod)", "OpenStreetMap tiles (demo)", "Cosmos DB NoSQL", "AI Search GeographyPoint", "proj4"],
+    note: "Centroids are stored and returned as [longitude, latitude] end to end. Boundary geometry is served as GeoJSON from the boundaries container. This demo draws the keyless OSM basemap; production uses the CARTO light_all tiles."
+  },
+  index: {
+    title: "Index Search",
+    chips: ["Azure AI Search (Basic)", "indexes: projects, documents", "Cosmos DB NoSQL", "indexers on _ts high-water mark", "read[] ACL predicate"],
+    note: "Indexers pull from Cosmos every five minutes; nothing is pushed. Counts use the same WHERE fragment as the read, so totals never leak hidden records."
+  },
+  content: {
+    title: "Document Content Search",
+    chips: ["Azure AI Search — chunks index", "Docling extraction (off-platform)", "deterministic chunk ids", "conjunctive BM25", "MinIO / S3 object store"],
+    note: "Ids take the form <documentId>::p<page>::c<index>, so a passage always resolves back to its page and re-ingest reconciles rather than duplicating."
+  },
+  summary: {
+    title: "AI Summary",
+    chips: ["Azure AI Foundry", "retrieval over chunks index", "server-side citation resolution", "managed identity, keyless", "token-based cost estimate"],
+    note: "The model only ever emits a source number; the API maps those numbers back to real chunk ids under the caller's access, which is what lets a citation render as a link."
+  },
+  intake: {
+    title: "Document Intake",
+    chips: ["Express 5 on Azure Functions v4", "Node 22", "MinIO / S3 object store", "Docling", "pdf-lib page batching", "NDJSON path for >10 MB"],
+    note: "Downloads are five-minute presigned URLs gated by the same ACL as the metadata read, so a caller who cannot see a document cannot fetch its bytes."
+  },
+  notify: {
+    title: "eagle-notify",
+    chips: ["Azure Communication Services", "eagle-notify service", "registry API key auth", "audit log"],
+    note: "DEMI holds no mailing list of its own. Subscriptions and suppression live in eagle-notify; DEMI supplies the event and the recipient query. Figures are placeholders until the notify API is wired in."
+  },
+  links: {
+    title: "Short URLs",
+    chips: ["Cosmos DB NoSQL", "Azure Front Door", "uncached redirect", "audit log"],
+    note: "Codes are 3–64 letters, digits, hyphens or underscores; left blank, DEMI generates one. Destinations must be an https gov.bc.ca address."
+  },
+  rbac: {
+    title: "Access model",
+    chips: ["Keycloak realm eao-epic", "read[] ACL on every row", "project: scope prefix", "field-level redaction", "Level 0 encryption at rest"],
+    note: "A record is visible when its read[] array intersects the caller's roles. Project scope is a second, orthogonal dimension: privilege lifts the role predicate, never the project one. Field-level rules are being defined — this screen previews the intended behaviour."
+  },
+  keys: {
+    title: "API keys",
+    chips: ["Cosmos DB NoSQL", "hashed secrets", "Keycloak roles", "project: scope prefix", "express-rate-limit", "audit log"],
+    note: "A key's roles and project scope are resolved before the privilege check, so a privileged key carrying a scope is privileged within those projects only. ADMIN_API_KEY is break-glass: one shared secret with no identity."
+  },
+  profile: {
+    title: "Profile and preferences",
+    chips: ["Keycloak realm eao-epic", "token claims", "Cosmos DB user preferences"],
+    note: "Name, email, IDIR, roles and groups are token claims and are read-only here. Only the preferences are DEMI's own, stored per user id."
+  },
+  sessions: {
+    title: "Active sessions",
+    chips: ["Keycloak admin REST API", "refresh-token sessions"],
+    note: "DEMI holds no session state. The list and the revoke action both call the realm's admin API; a revoked session ends at its next request, not instantly."
+  },
+  api: {
+    title: "API documentation",
+    chips: ["swagger-ui-express", "Keycloak realm eao-epic", "JWKS, RS256 pinned", "registry API keys", "express-rate-limit"],
+    note: "Swagger is mounted in dev and test only, so this link is a 404 anywhere else."
+  }
+};
+const TECH_CHIP = "display: inline-flex; padding: 0.1rem 0.45rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-circular); font: var(--typography-regular-label); background: var(--surface-color-background-white); color: var(--typography-color-secondary);";
+
+// Field-level RBAC applies here: capital investment is staff-only even on a public project.
+const CAPITAL_INVESTMENT = {
+  111: "$1.3 B", 207: "$180 M", 304: "$24 M", 307: "$450 M", 333: "$5.6 B",
+  336: "$8.2 B", 401: "$6.6 B", 402: "$16 B", 403: "$1.9 B", 404: "$5.3 B"
+};
+
+// Option vocabularies from eagle-public src/app/utils/constants.ts.
+const PROJECT_TYPES = ["Energy-Electricity", "Energy-Petroleum & Natural Gas", "Food Processing", "Industrial", "Mines", "Other", "Tourist Destination Resorts", "Transportation", "Waste Disposal", "Water Management"];
+const REGIONS_COLLECTION = ["Cariboo", "Kootenay", "Lower Mainland", "Okanagan", "Omineca", "Peace", "Skeena", "Thompson-Nicola", "Vancouver Island"];
+// Dynamic List-collection types in eagle-public (eaDecisions, projectPhase, ceaaInvolvements,
+// label, author, doctype). Values below are placeholders until the List collection is read.
+const EA_DECISIONS = ["In Progress", "Certificate Issued", "Certificate Refused", "Further Assessment Required", "Pre-EA Act Approval", "Withdrawn", "Terminated"];
+const PROJECT_PHASES = ["Pre-Application", "Application Review", "Effects Assessment", "Decision", "Post-Certification", "Certificate Amendment"];
+const CEAA_INVOLVEMENTS = ["None", "Screening", "Comprehensive Study", "Coordinated", "Substituted", "Panel"];
+const MILESTONES = ["Application", "Assessment Report", "Certificate", "Comment Period", "Inspection", "Order"];
+const DOC_AUTHOR_TYPES = ["Proponent", "EAO", "Other Agency", "First Nation", "Public"];
+const DOC_TYPES = ["Assessment Report", "Application", "Certificate", "Management Plan", "Correspondence", "Inspection Record"];
+
+const OVERLAYS = [
+  { key: "regions", label: "Environmental regions" },
+  { key: "districts", label: "Regional districts" },
+  { key: "munis", label: "Municipalities" },
+  { key: "ridings", label: "Electoral districts" },
+  { key: "fires", label: "Active wildfires" }
+];
+
+/**
+ * Filter schema, one entry per dimension, mirroring eagle-public's filter inventory.
+ * Adding a dimension is one entry here — no template change.
+ *   checks       small option set, checkbox list
+ *   searchChecks large option set, type-to-narrow then checkbox list
+ *   range        two date inputs
+ *   text         "contains" match on one field
+ */
+const FILTER_SCHEMA = [
+  { id: "type", label: "Project type", kind: "checks", field: "type", options: PROJECT_TYPES, open: true },
+  { id: "region", label: "Region", kind: "checks", field: "region", options: REGIONS_COLLECTION, open: true },
+  { id: "gating", label: "Gating state", kind: "checks", field: "gatingState", options: ["admitted", "staged"], open: true, demi: true },
+  { id: "eacDecision", label: "EA decision", kind: "searchChecks", field: "eacDecision", options: EA_DECISIONS },
+  { id: "phase", label: "Project phase", kind: "searchChecks", field: "phase", options: PROJECT_PHASES },
+  { id: "proponent", label: "Proponent", kind: "searchChecks", field: "proponent", options: PROJECTS.map((p) => p.proponent).sort() },
+  { id: "ceaa", label: "IAAC involvement", kind: "searchChecks", field: "ceaa", options: CEAA_INVOLVEMENTS },
+  { id: "issuedDate", label: "Decision date", kind: "range", field: "decisionDate" },
+  { id: "eacNumber", label: "EAC number contains", kind: "text", field: "eacNumber" },
+  { id: "applicant", label: "Project name contains", kind: "text", field: "name" },
+  { id: "clFile", label: "CL file contains", kind: "text", field: "code" },
+  { id: "dispId", label: "EPIC project ID contains", kind: "text", field: "epicProjectID" },
+  { id: "purpose", label: "Purpose contains", kind: "text", field: "description" }
+];
+
+const SEG_ON = "flex: 1; background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; padding: 0.4rem 0.6rem; font: var(--typography-bold-label); cursor: pointer;";
+const SEG_OFF = "flex: 1; background: var(--surface-color-background-white); color: var(--typography-color-primary); border: none; padding: 0.4rem 0.6rem; font: var(--typography-regular-label); cursor: pointer;";
+
+const CHIP_ON = "background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.3rem 0.7rem; font: var(--typography-bold-label); cursor: pointer;";
+const CHIP_OFF = "background: var(--surface-color-background-white); color: var(--typography-color-primary); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); padding: 0.3rem 0.7rem; font: var(--typography-regular-label); cursor: pointer;";
+const TAB_ON = "background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; padding: 0.45rem 1rem; font: var(--typography-bold-small-body); cursor: pointer;";
+const TAB_OFF = "background: var(--surface-color-background-white); color: var(--typography-color-primary); border: none; padding: 0.45rem 1rem; font: var(--typography-regular-small-body); cursor: pointer;";
+const ROW_BASE = "display: block; width: 100%; text-align: left; background: none; border: none; border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default); padding: var(--layout-padding-small) var(--layout-padding-large); cursor: pointer; font: inherit;";
+const ROW_ON = ROW_BASE + " background: var(--surface-color-background-light-gray); box-shadow: inset 3px 0 0 var(--surface-color-primary-default);";
+
+class Component extends DCLogic {
+  state = {
+    signedIn: true,
+    rejected: false,
+    navOpen: false,
+    accountOpen: false,
+    screen: "map",
+    query: "",
+    sort: "relevance",
+    scope: "all",
+    limit: PAGE_SIZE,
+    gating: "all",
+    sector: "all",
+    region: "all",
+    // Schema-driven: multi-select arrays, date range, and text "contains".
+    picked: {},
+    ranges: {},
+    texts: {},
+    sectionOpen: { type: true, region: true, gating: true },
+    sectionQuery: {},
+    detailsExpanded: false,
+    detailsSource: "ALL",
+    filtersOpen: false,
+    overlays: { regions: false, districts: false, munis: false, ridings: false, fires: false },
+    layersOpen: false,
+    paneWidth: 0,
+    infoOpen: false,
+    rbacGroups: { public: true, idir: false, eao: false, team: false, credential: false, ce: false },
+    selectedId: 402,
+    summaryQuery: "pipeline watercourse crossing mitigation",
+    hasSummary: true
+  };
+
+  /** Track the map pane's width so two overlays never share a pane too narrow for both. */
+  watchPane() {
+    if (this.paneObserver || typeof ResizeObserver === "undefined") return;
+    const el = document.getElementById("demi-map");
+    if (!el || !el.parentElement) { setTimeout(() => this.watchPane(), 300); return; }
+    const pane = el.parentElement;
+    this.paneObserver = new ResizeObserver((entries) => {
+      const w = Math.round(entries[0].contentRect.width);
+      if (w !== this.state.paneWidth) this.setState({ paneWidth: w });
+    });
+    this.paneObserver.observe(pane);
+    this.setState({ paneWidth: Math.round(pane.getBoundingClientRect().width) });
+  }
+
+  componentDidMount() {
+    this.mountMap();
+    this.watchPane();
+    this.onKey = (e) => {
+      if (e.key !== "/" || !this.state.signedIn) return;
+      const tag = (e.target.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      const id = SEARCH_INPUTS[this.state.screen];
+      if (!id) return;
+      const el = document.getElementById(id);
+      if (el) { e.preventDefault(); el.focus(); }
+    };
+    document.addEventListener("keydown", this.onKey);
+  }
+
+  componentWillUnmount() {
+    document.removeEventListener("keydown", this.onKey);
+    if (this.paneObserver) { this.paneObserver.disconnect(); this.paneObserver = null; }
+  }
+
+  componentDidUpdate() { this.mountMap(); }
+
+  mountMap() {
+    if (!this.state.signedIn || this.state.screen !== "map") { this.map = null; return; }
+    const el = document.getElementById("demi-map");
+    if (!el || !window.L) { if (!window.L) setTimeout(() => this.mountMap(), 250); return; }
+    if (this.map && el._leaflet_id) return;
+    this.map = window.L.map(el, { zoomControl: true, preferCanvas: true }).setView([54.0, -125.0], 5);
+    // Prod uses the CARTO light_all tiles (map-explorer.component.ts:248); those are watermarked
+    // without a key, so the demo draws the keyless OSM basemap instead.
+    window.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19
+    }).addTo(this.map);
+    PROJECTS.forEach((p) => {
+      const icon = window.L.divIcon({
+        className: "demi-marker" + (p.gatingState === "staged" ? " demi-marker--staged" : ""),
+        iconSize: [14, 14]
+      });
+      window.L.marker([p.centroid[1], p.centroid[0]], { icon })
+        .addTo(this.map)
+        .bindTooltip(p.name)
+        .on("click", () => this.setState({ selectedId: p.id }));
+    });
+  }
+
+  /** Levels this simulated user can read for one project. Level 0 is a compartment, not a step. */
+  levelsFor(project) {
+    const g = this.state.rbacGroups;
+    const set = new Set([4]);
+    if (g.idir) set.add(3);
+    if (g.eao) { set.add(3); set.add(2); }
+    if (g.team && project.team) { set.add(3); set.add(2); set.add(1); }
+    // A credential grants sight of specified content without joining that level's audience.
+    if (g.credential && project.team) set.add(2);
+    if (g.ce) set.add(0);
+    return set;
+  }
+
+  /** True when a project satisfies every active filter dimension. */
+  passesFilters(p) {
+    const { picked, ranges, texts } = this.state;
+    for (const sec of FILTER_SCHEMA) {
+      if (sec.kind === "checks" || sec.kind === "searchChecks") {
+        const chosen = picked[sec.id] || [];
+        if (chosen.length && !chosen.includes(String(p[sec.field]))) return false;
+      } else if (sec.kind === "range") {
+        const r = ranges[sec.id] || {};
+        const v = p[sec.field] || "";
+        if (r.from && v < r.from) return false;
+        if (r.to && v > r.to) return false;
+      } else if (sec.kind === "text") {
+        const t = (texts[sec.id] || "").trim().toLowerCase();
+        if (t && !String(p[sec.field] || "").toLowerCase().includes(t)) return false;
+      }
+    }
+    return true;
+  }
+
+  toggleOption(sectionId, value) {
+    const picked = { ...this.state.picked };
+    const list = picked[sectionId] ? picked[sectionId].slice() : [];
+    const at = list.indexOf(value);
+    if (at === -1) list.push(value); else list.splice(at, 1);
+    picked[sectionId] = list;
+    this.setState({ picked, limit: PAGE_SIZE });
+  }
+
+  /**
+   * The two upstream records behind a merged project, field by field.
+   * DEMI stores both and resolves a winner per field; showing them side by side is
+   * how staff see why a value looks the way it does.
+   */
+  fieldInventory(p) {
+    // source: which system owns the field. TRACK = EPIC.track master, EPIC = legacy
+    // eagle/eagle-public cache, DEMI = created by DEMI and existing in no upstream system.
+    const rows = [
+      ["Master id", "TRK-" + p.id, "TRACK"],
+      ["Project name", p.name, "TRACK"],
+      ["Proponent", p.proponent, "TRACK"],
+      ["Project type", p.type, "TRACK"],
+      ["Current phase", p.phase, "TRACK"],
+      ["EA decision", p.eacDecision, "TRACK"],
+      ["EAC number", p.eacNumber, "TRACK"],
+      ["IAAC involvement", p.ceaa, "TRACK"],
+      ["Decision date", p.decisionDate, "TRACK"],
+      ["Region", p.region, "TRACK"],
+      ["Lead agency", "BC Environmental Assessment Office", "TRACK"],
+      ["Capital investment", CAPITAL_INVESTMENT[p.id] || "Not recorded", "TRACK"],
+
+      ["Legacy Eagle id", p.legacyEagleId, "EPIC"],
+      ["CL file", p.code, "EPIC"],
+      ["EPIC project ID", p.epicProjectID, "EPIC"],
+      ["Sector", p.sector, "EPIC"],
+      ["Status", p.status, "EPIC"],
+      ["EPD lead", "Project Assessment Director", "EPIC"],
+      ["Description", p.description, "EPIC"],
+      ["Centroid", p.centroid[0] + ", " + p.centroid[1], "EPIC"],
+      ["Last cached", "2024-11-30", "EPIC"],
+
+      ["DEMI project id", "demi-proj-" + p.id, "DEMI"],
+      ["Gating state", p.gatingState, "DEMI"],
+      ["Read ACL", p.gatingState === "admitted" ? "public, staff" : "staff", "DEMI"],
+      ["Documents held", String(DOCUMENTS.filter((d) => d.projectId === p.id).length), "DEMI"],
+      ["Passages indexed", p.gatingState === "staged" ? "0 — extraction on hold" : "18,442", "DEMI"],
+      ["Short link", "demi.gov.bc.ca/u/p" + p.id, "DEMI"],
+      ["First ingested", "2024-12-02", "DEMI"],
+      ["Last reconciled", "Today, 04:15", "DEMI"]
+    ];
+    const META = {
+      TRACK: { label: "Track", pill: "pill--info" },
+      EPIC: { label: "EPIC", pill: "pill--neutral" },
+      DEMI: { label: "DEMI", pill: "pill--success" }
+    };
+    return rows.map(([key, value, source]) => ({
+      key,
+      value: String(value),
+      source,
+      sourceLabel: META[source].label,
+      sourcePill: "pill " + META[source].pill
+    }));
+  }
+
+  hit(text) {
+    const q = this.state.query.trim().toLowerCase();
+    if (!q) return true;
+    return (text || "").toLowerCase().includes(q);
+  }
+
+  setQuery(v) { this.setState({ query: v, limit: PAGE_SIZE }); }
+
+  renderVals() {
+    const s = this.state;
+    const env = this.props.environment ?? "test";
+    const signedIn = s.signedIn && !s.rejected;
+
+    const navSections = GROUPS.map((g) => ({
+      heading: g,
+      items: SCREENS.filter((sc) => sc.group === g).map((sc) => ({
+        label: sc.label,
+        current: s.screen === sc.key ? "page" : undefined,
+        // Map Explorer gets the nav's width back; every other screen keeps it open.
+        go: (e) => { e.preventDefault(); this.setState({ screen: sc.key, accountOpen: false, limit: PAGE_SIZE, navOpen: sc.key !== "map" }); }
+      }))
+    }));
+
+    let projects = PROJECTS
+      .filter((p) => this.passesFilters(p))
+      .filter((p) => this.hit(p.name + " " + p.description + " " + p.type + " " + p.region + " " + p.proponent));
+    if (s.sort === "name") projects = projects.slice().sort((a, b) => a.name.localeCompare(b.name));
+
+    const shaped = projects.map((p) => ({
+      ...p,
+      meta: p.type + " · " + p.region + " · " + p.phase,
+      pillClass: p.gatingState === "admitted" ? "pill--success" : "pill--warning",
+      rowStyle: p.id === s.selectedId ? ROW_ON : ROW_BASE,
+      select: () => this.setState({ selectedId: p.id })
+    }));
+    const paged = shaped.slice(0, s.limit);
+
+    const documents = DOCUMENTS.filter((d) => this.hit(d.displayName + " " + d.textSnippet + " " + d.projectName + " " + d.documentType + " " + d.orcsCode));
+    const chunks = CHUNKS
+      .filter((c) => this.hit(c.content + " " + c.documentName + " " + c.projectName))
+      .map((c) => ({ ...c, meta: c.projectName + " · passage " + c.pageNumber }));
+
+    const selected = PROJECTS.find((p) => p.id === s.selectedId) || PROJECTS[0];
+    // 46rem: the card's 30rem plus the layers panel's 15rem plus gutters.
+    const narrowPane = s.paneWidth > 0 && s.paneWidth < 736;
+
+    const sectors = Array.from(new Set(PROJECTS.map((p) => p.sector)));
+    const regions = Array.from(new Set(PROJECTS.map((p) => p.region)));
+    const chip = (label, on, go) => ({ label, style: on ? CHIP_ON : CHIP_OFF, go });
+
+    // Sections rendered generically from the schema.
+    const filterSections = FILTER_SCHEMA.map((sec) => {
+      const chosen = s.picked[sec.id] || [];
+      const q = (s.sectionQuery[sec.id] || "").trim().toLowerCase();
+      const opts = (sec.options || []).filter((o) => !q || o.toLowerCase().includes(q));
+      // Selected values first, so a long list never hides what is already ticked.
+      const ordered = opts.slice().sort((a, b) => (chosen.includes(b) ? 1 : 0) - (chosen.includes(a) ? 1 : 0));
+      const range = s.ranges[sec.id] || {};
+      return {
+        id: sec.id,
+        label: sec.label,
+        isChecks: sec.kind === "checks",
+        isSearchChecks: sec.kind === "searchChecks",
+        isRange: sec.kind === "range",
+        isText: sec.kind === "text",
+        open: !!s.sectionOpen[sec.id],
+        glyph: s.sectionOpen[sec.id] ? "−" : "+",
+        badge: chosen.length ? String(chosen.length) : (range.from || range.to || (s.texts[sec.id] || "").trim() ? "1" : ""),
+        hasBadge: !!(chosen.length || range.from || range.to || (s.texts[sec.id] || "").trim()),
+        toggleSection: () => this.setState({ sectionOpen: { ...s.sectionOpen, [sec.id]: !s.sectionOpen[sec.id] } }),
+        searchValue: s.sectionQuery[sec.id] || "",
+        onSearch: (e) => this.setState({ sectionQuery: { ...s.sectionQuery, [sec.id]: e.target.value } }),
+        optionCount: (sec.options || []).length + " options",
+        options: ordered.map((o) => ({
+          label: o,
+          checked: chosen.includes(o),
+          toggle: () => this.toggleOption(sec.id, o)
+        })),
+        from: range.from || "",
+        to: range.to || "",
+        onFrom: (e) => this.setState({ ranges: { ...s.ranges, [sec.id]: { ...range, from: e.target.value } }, limit: PAGE_SIZE }),
+        onTo: (e) => this.setState({ ranges: { ...s.ranges, [sec.id]: { ...range, to: e.target.value } }, limit: PAGE_SIZE }),
+        textValue: s.texts[sec.id] || "",
+        onText: (e) => this.setState({ texts: { ...s.texts, [sec.id]: e.target.value }, limit: PAGE_SIZE })
+      };
+    });
+
+    const allActive = [];
+    FILTER_SCHEMA.forEach((sec) => {
+      (s.picked[sec.id] || []).forEach((v) => {
+        allActive.push({ label: v, clear: () => this.toggleOption(sec.id, v) });
+      });
+      const r = s.ranges[sec.id] || {};
+      if (r.from || r.to) {
+        allActive.push({
+          label: sec.label + " " + (r.from || "any") + " → " + (r.to || "any"),
+          clear: () => this.setState({ ranges: { ...s.ranges, [sec.id]: {} } })
+        });
+      }
+      const t = (s.texts[sec.id] || "").trim();
+      if (t) {
+        allActive.push({
+          label: sec.label + ": " + t,
+          clear: () => this.setState({ texts: { ...s.texts, [sec.id]: "" } })
+        });
+      }
+    });
+    // Cap the visible chips so 20 selections cannot push the result list off screen.
+    const activeFilters = allActive.slice(0, 4);
+    const activeOverflow = allActive.length > 4 ? "+" + (allActive.length - 4) + " more" : "";
+
+    const siteCLevels = this.levelsFor(RBAC_PROJECTS[0]);
+    const showProjects = s.scope === "all" || s.scope === "projects";
+    const showDocuments = s.scope === "all" || s.scope === "documents";
+
+    return {
+      envLabel: env,
+      techTitle: (TECH[s.screen] || TECH.map).title,
+      techChips: (TECH[s.screen] || TECH.map).chips.map((c) => ({ label: c, style: TECH_CHIP })),
+      techNote: (TECH[s.screen] || TECH.map).note,
+      techSummary: (TECH[s.screen] || TECH.map).chips.slice(0, 3).join(" · ")
+        + ((TECH[s.screen] || TECH.map).chips.length > 3 ? " +" + ((TECH[s.screen] || TECH.map).chips.length - 3) + " more" : ""),
+      infoOpen: s.infoOpen,
+      infoClosed: !s.infoOpen,
+      toggleInfo: () => this.setState({ infoOpen: !s.infoOpen }),
+      closeInfo: () => this.setState({ infoOpen: false }),
+      signedIn,
+      signedOut: !signedIn,
+      showRejected: s.rejected,
+      signIn: () => {
+        if (this.props.simulateUnauthorized) { this.setState({ signedIn: false, rejected: true }); return; }
+        this.setState({ signedIn: true, rejected: false });
+      },
+      signOut: () => this.setState({ signedIn: false, rejected: false, accountOpen: false }),
+
+      mainStyle: s.screen === "map"
+        ? "padding: 0; display: flex; flex-direction: column; min-height: 0;"
+        : "padding: var(--layout-padding-large);",
+
+      navOpen: s.navOpen,
+      navGlyph: s.navOpen ? "‹" : "›",
+      toggleNav: () => this.setState({ navOpen: !s.navOpen }),
+      navSections,
+      accountOpen: s.accountOpen,
+      toggleAccount: () => this.setState({ accountOpen: !s.accountOpen }),
+      goProfile: () => this.setState({ screen: "profile", accountOpen: false }),
+      goSessions: () => this.setState({ screen: "sessions", accountOpen: false }),
+      isProfile: s.screen === "profile",
+      isSessions: s.screen === "sessions",
+
+      isMap: s.screen === "map",
+      isIndex: s.screen === "index",
+      isContent: s.screen === "content",
+      isSummary: s.screen === "summary",
+      isIntake: s.screen === "intake",
+      isNotify: s.screen === "notify",
+      isLinks: s.screen === "links",
+      isApi: s.screen === "api",
+      isRbac: s.screen === "rbac",
+      isKeys: s.screen === "keys",
+      rbacGroupRows: RBAC_GROUPS.map((g) => ({
+        label: g.label,
+        note: g.note,
+        checked: !!s.rbacGroups[g.key],
+        disabled: !!g.locked,
+        toggle: () => {
+          if (g.locked) return;
+          this.setState({ rbacGroups: { ...s.rbacGroups, [g.key]: !s.rbacGroups[g.key] } });
+        }
+      })),
+      rbacLadder: LEVELS.map((lv) => {
+        const can = siteCLevels.has(lv.n);
+        return {
+          heading: "Level " + lv.n + " — " + lv.name,
+          audience: lv.audience,
+          detail: lv.detail,
+          pillClass: can ? "pill pill--success" : "pill pill--neutral",
+          verdict: can ? "You can read" : "Withheld",
+          rowStyle: can
+            ? "display: flex; gap: var(--layout-margin-medium); align-items: flex-start; justify-content: space-between; padding: var(--layout-padding-small) var(--layout-padding-large); border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default); box-shadow: inset 3px 0 0 var(--surface-color-primary-default);"
+            : "display: flex; gap: var(--layout-margin-medium); align-items: flex-start; justify-content: space-between; padding: var(--layout-padding-small) var(--layout-padding-large); border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default); opacity: 0.55;"
+        };
+      }),
+      sealedVerdict: siteCLevels.has(0) ? "You can read" : "Sealed",
+      sealedPillClass: siteCLevels.has(0) ? "pill pill--success" : "pill pill--danger",
+      audienceSummary: "Levels " + Array.from(siteCLevels).sort((a, b) => b - a).join(", "),
+      rbacFields: RBAC_FIELDS.map((f) => {
+        const visible = siteCLevels.has(f.level);
+        return {
+          label: f.label,
+          shown: visible ? f.value : "▮▮▮▮▮▮▮▮",
+          levelLabel: f.level === 0 ? "Level 0 · sealed" : "Level " + f.level,
+          valueStyle: visible
+            ? "font: var(--typography-regular-small-body); color: var(--typography-color-primary);"
+            : "font: var(--typography-regular-small-body); color: var(--typography-color-secondary); letter-spacing: 1px;",
+          pillClass: visible ? "pill pill--success pill--caps" : "pill pill--neutral pill--caps",
+          verdict: visible ? "Visible" : "Redacted"
+        };
+      }),
+      rbacDocs: RBAC_DOCS.map((d) => {
+        const project = RBAC_PROJECTS.find((p) => p.id === d.projectId);
+        const visible = this.levelsFor(project).has(d.level);
+        return {
+          name: d.name,
+          projectName: project.name,
+          levelLabel: d.level === 0 ? "Level 0 · sealed" : "Level " + d.level,
+          shown: visible ? d.name : "Withheld — not returned by the query",
+          nameStyle: visible
+            ? "font: var(--typography-bold-small-body); color: var(--typography-color-primary);"
+            : "font: var(--typography-regular-small-body); color: var(--typography-color-secondary); font-style: italic;",
+          pillClass: visible ? "pill pill--success pill--caps" : "pill pill--neutral pill--caps",
+          verdict: visible ? "Returned" : "404"
+        };
+      }),
+      rbacDocSummary: (() => {
+        const vis = RBAC_DOCS.filter((d) => this.levelsFor(RBAC_PROJECTS.find((p) => p.id === d.projectId)).has(d.level)).length;
+        return vis + " of " + RBAC_DOCS.length + " documents returned · " + (RBAC_DOCS.length - vis) + " withheld";
+      })(),
+      rbacProjects: RBAC_PROJECTS.map((p) => {
+        const visible = this.levelsFor(p).has(p.level);
+        return {
+          name: p.name,
+          levelLabel: "Level " + p.level,
+          pillClass: visible ? "pill pill--success pill--caps" : "pill pill--neutral pill--caps",
+          verdict: visible ? "In results" : "Not in results"
+        };
+      }),
+
+      apiKeys: API_KEYS.map((k) => ({
+        ...k,
+        roleList: k.roles.map((r) => ({ label: r })),
+        pillClass: KEY_PILL[k.status] || "pill--neutral"
+      })),
+      goContent: () => this.setState({ screen: "content" }),
+      openSwagger: () => window.open("https://demi-api-test.azurewebsites.net/api-docs/", "_blank"),
+
+      query: s.query,
+      hasQuery: s.query.trim().length > 0,
+      noQuery: s.query.trim().length === 0,
+      onQuery: (e) => this.setQuery(e.target.value),
+      clearQuery: () => {
+        this.setQuery("");
+        const el = document.getElementById(SEARCH_INPUTS[s.screen]);
+        if (el) el.focus();
+      },
+      suggestions: SUGGESTED.map((q) => chip(q, false, () => this.setQuery(q))),
+
+      sort: s.sort,
+      onSort: (e) => this.setState({ sort: e.target.value }),
+      scopeTabs: [
+        { key: "all", label: "All" },
+        { key: "projects", label: "Projects" },
+        { key: "documents", label: "Documents" }
+      ].map((t) => ({
+        label: t.label,
+        pressed: s.scope === t.key ? "true" : "false",
+        style: s.scope === t.key ? TAB_ON : TAB_OFF,
+        go: () => this.setState({ scope: t.key })
+      })),
+      showProjectResults: showProjects && shaped.length > 0,
+      showDocumentResults: showDocuments && documents.length > 0,
+      indexNoResults: shaped.length === 0 && documents.length === 0,
+      contentNoResults: chunks.length === 0,
+      indexSummary: "Showing " + paged.length + " of " + shaped.length + " projects and " + documents.length + " documents",
+
+      gateAllStyle: s.gating === "all" ? CHIP_ON : CHIP_OFF,
+      gateAdmittedStyle: s.gating === "admitted" ? CHIP_ON : CHIP_OFF,
+      gateStagedStyle: s.gating === "staged" ? CHIP_ON : CHIP_OFF,
+      gateAll: () => this.setState({ gating: "all", limit: PAGE_SIZE }),
+      gateAdmitted: () => this.setState({ gating: "admitted", limit: PAGE_SIZE }),
+      gateStaged: () => this.setState({ gating: "staged", limit: PAGE_SIZE }),
+      filtersOpen: s.filtersOpen,
+      filtersExpanded: s.filtersOpen ? "true" : "false",
+      toggleFilters: () => this.setState({ filtersOpen: !s.filtersOpen }),
+      filterSections,
+      hasActiveFilters: allActive.length > 0,
+      activeCount: allActive.length,
+      activeFilters,
+      activeOverflow,
+      hasOverflow: !!activeOverflow,
+      clearFilters: () => this.setState({ picked: {}, ranges: {}, texts: {}, sectionQuery: {}, limit: PAGE_SIZE }),
+      layersOpen: s.layersOpen,
+      layersExpanded: s.layersOpen ? "true" : "false",
+      toggleLayers: () => this.setState({ layersOpen: !s.layersOpen }),
+      // Wide pane: both overlays coexist in opposite corners. Narrow pane: there is no width
+      // for both, so the open layers panel takes the pane and the card waits its turn.
+      showDetailCard: !(narrowPane && s.layersOpen),
+      hasOverlays: Object.keys(s.overlays).some((k) => s.overlays[k]),
+      overlayCount: Object.keys(s.overlays).filter((k) => s.overlays[k]).length,
+      overlayRows: OVERLAYS.map((o) => ({
+        label: o.label,
+        checked: !!s.overlays[o.key],
+        toggle: () => this.setState({ overlays: { ...s.overlays, [o.key]: !s.overlays[o.key] } })
+      })),
+
+      pagedProjects: paged,
+      visibleDocuments: documents,
+      visibleChunks: chunks,
+      resultCount: shaped.length,
+      documentCount: documents.length,
+      chunkCount: chunks.length,
+      stagedCount: PROJECTS.filter((p) => p.gatingState === "staged").length,
+      resultSummary: "Showing " + paged.length + " of " + shaped.length,
+      canLoadMore: paged.length < shaped.length,
+      loadMore: () => this.setState({ limit: s.limit + PAGE_SIZE }),
+      noResults: shaped.length === 0,
+
+      detailsExpanded: s.detailsExpanded,
+      detailsCollapsed: !s.detailsExpanded,
+      toggleDetails: () => this.setState({ detailsExpanded: !s.detailsExpanded }),
+      detailsGlyph: s.detailsExpanded ? "Less" : "All fields",
+      detailsChevronStyle: s.detailsExpanded
+        ? "display: inline-flex;"
+        : "display: inline-flex; transform: rotate(180deg);",
+      // The layers panel owns a 17rem band on the right; the card yields to it rather than
+      // sliding under. Wide panes are unaffected.
+      detailsCardStyle: (s.layersOpen && !narrowPane ? "max-width: max(16rem, calc(100% - 17rem)); " : "max-width: calc(100% - 2rem); ") + (s.detailsExpanded
+        ? "position: absolute; bottom: var(--layout-padding-medium); left: var(--layout-padding-medium); z-index: 500; width: 30rem; max-height: calc(100% - 5.5rem); display: flex; flex-direction: column; box-sizing: border-box; background: var(--surface-color-background-white); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-medium); box-shadow: 0 4px 18px rgba(0,0,0,0.18);"
+        : "position: absolute; bottom: var(--layout-padding-medium); left: var(--layout-padding-medium); z-index: 500; width: 26rem; max-height: 65%; display: flex; flex-direction: column; box-sizing: border-box; background: var(--surface-color-background-white); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-medium); box-shadow: 0 4px 18px rgba(0,0,0,0.18);"),
+      sourceTabs: (() => {
+        const all = this.fieldInventory(selected);
+        const counts = { ALL: all.length, TRACK: 0, EPIC: 0, DEMI: 0 };
+        all.forEach((r) => { counts[r.source]++; });
+        return [
+          ["ALL", "All"], ["TRACK", "Track"], ["EPIC", "EPIC"], ["DEMI", "DEMI"]
+        ].map(([key, label]) => ({
+          label: label + " " + counts[key],
+          pressed: s.detailsSource === key,
+          style: s.detailsSource === key ? SEG_ON : SEG_OFF,
+          go: () => this.setState({ detailsSource: key })
+        }));
+      })(),
+      fieldRows: this.fieldInventory(selected)
+        .filter((r) => s.detailsSource === "ALL" || r.source === s.detailsSource),
+      sourceNote: {
+        ALL: "Every field DEMI holds for this project, tagged with the system that owns it. Where Track and EPIC hold the same field, Track wins.",
+        TRACK: "EPIC.track is the authoritative master. Capital investment is staff-only under field-level RBAC, so a public caller receives the project without it.",
+        EPIC: "Legacy Eagle cache, read only where EPIC.track holds nothing. Cached 2024-11-30 and not refreshed since the migration.",
+        DEMI: "Created by DEMI. These fields exist in no upstream system, so they cannot be reconciled against Track or EPIC."
+      }[s.detailsSource] || "",
+
+      selected: {
+        ...selected,
+        meta: selected.proponent + " · " + selected.sector + " · " + selected.region,
+        pillClass: selected.gatingState === "admitted" ? "pill--success" : "pill--warning",
+        trackId: "TRK-" + selected.id,
+        eagleIdShort: "EAG-" + selected.legacyEagleId.slice(0, 8) + "…"
+      },
+
+      summaryQuery: s.summaryQuery,
+      onSummaryQuery: (e) => this.setState({ summaryQuery: e.target.value }),
+      askLabel: "Ask",
+      ask: () => this.setState({ hasSummary: true }),
+      hasSummary: s.hasSummary,
+      summaryText: "Watercourse crossing mitigation in the retrieved passages follows three consistent commitments: trenchless installation where fish habitat sensitivity is high [1], instream work restricted to approved timing windows [1], and a surface water quality management plan filed before construction begins, with annual reporting to the Environmental Assessment Office [2]. Monitoring obligations continue after closure, and exceedances trigger a documented adaptive management response [3].",
+      citations: CITATIONS,
+      shortLinks: SHORT_LINKS
+    };
+  }
+}
+</script>
+</body>
+</html>
