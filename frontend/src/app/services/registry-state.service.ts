@@ -134,11 +134,8 @@ export class RegistryStateService {
   gatingFilter = signal<Set<string>>(new Set());
   sectorFilter = signal<Set<string>>(new Set());
   regionFilter = signal<Set<string>>(new Set());
-  // NOTE for whoever adds a document or project list to the summariser page: the two big computeds
-  // branch on this. `filteredProjects`/`filteredDocuments` return [] only when this is 'search'
-  // (:281, :313), and documents are constrained to map-matched projects whenever it is NOT
-  // 'search' (:322). 'summary' therefore takes the second path. Inert today — that page reads
-  // neither computed — but it is a trap, not a default.
+  // `filteredDocuments` constrains documents to map-matched projects whenever this is NOT
+  // 'search'; 'summary' and 'intake' therefore take the map path.
   activePage = signal<'map' | 'search' | 'intake' | 'summary'>('map');
 
   intakeProjectId = signal<string>('');

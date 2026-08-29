@@ -337,6 +337,22 @@ describe('RegistryStateService', () => {
   // field from the pair compared across id-spaces: `filteredDocuments` and
   // `map-explorer.getProjDocCount` both match it against `Project.id`, so every per-project
   // document count read 0 and the document list emptied on every page but /search.
+  describe('loadData cache guard', () => {
+    it('refetches when a query is set but the chunks were cleared', async () => {
+      (service as unknown as { loadedQuery: string | null }).loadedQuery = 'mine';
+      service.searchQuery.set('mine');
+      service.projects.set([]);
+      service.documents.set([]);
+      service.documentChunks.set(null);
+      sharedFetchSpy.calls.reset();
+
+      await service.loadData();
+
+      expect(sharedFetchSpy).toHaveBeenCalled();
+      expect(service.documentChunks()).not.toBeNull();
+    });
+  });
+
   describe('document project ids', () => {
     // The constructor's own load already cached the empty query; these specs exercise the fetch.
     beforeEach(() => { (service as unknown as { loadedQuery: string | null }).loadedQuery = null; });
