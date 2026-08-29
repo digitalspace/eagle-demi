@@ -1,9 +1,7 @@
 import { Component, OnInit, inject, signal, computed, effect, untracked, ChangeDetectionStrategy } from '@angular/core';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Document } from '../../models/registry.models';
-
-/** Rows added per "Load 6 more". */
-const PAGE_SIZE = 6;
+import { readPrefs } from '../../shell/prefs';
 
 @Component({
   selector: 'app-index-search',
@@ -20,7 +18,9 @@ export class IndexSearchComponent implements OnInit {
 
   scope = signal<'projects' | 'documents'>('projects');
   sortBy = signal<'relevance' | 'name'>('relevance');
-  visibleCount = signal<number>(PAGE_SIZE);
+  /** Rows added per "Load N more" — the profile's "Results per page" pref. */
+  private pageSize = readPrefs().perPage;
+  visibleCount = signal<number>(this.pageSize);
 
   readonly scopeTabs: { id: 'projects' | 'documents'; label: string }[] = [
     { id: 'projects', label: 'Projects' },
@@ -76,7 +76,7 @@ export class IndexSearchComponent implements OnInit {
     effect(() => {
       this.service.filteredProjects();
       this.sortBy();
-      untracked(() => this.visibleCount.set(PAGE_SIZE));
+      untracked(() => this.visibleCount.set(this.pageSize));
     });
   }
 
@@ -110,7 +110,7 @@ export class IndexSearchComponent implements OnInit {
     this.sortBy.set((event.target as HTMLSelectElement).value as 'relevance' | 'name');
   }
 
-  loadMore() { this.visibleCount.set(this.visibleCount() + PAGE_SIZE); }
+  loadMore() { this.visibleCount.set(this.visibleCount() + this.pageSize); }
 
   pillClass(state: string | undefined): string {
     return state === 'staged' ? 'pill--warning' : 'pill--success';

@@ -43,7 +43,24 @@
 </div>
 
 <section class="panel">
-  <h2 class="panel__title">Connection</h2>
+  <h2 class="panel__title" style="display: flex; align-items: center; justify-content: space-between; gap: var(--layout-margin-small); flex-wrap: wrap;">
+    <span>Connection</span>
+    <span style="display: flex; align-items: center; gap: var(--layout-margin-small); flex-wrap: wrap;">
+      @if (testTemplates() && testTemplates()!.length > 1) {
+        <select [value]="selectedTestTemplateId()" (change)="selectedTestTemplateId.set(value($event))" aria-label="Template to test" style="border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body); padding: 0.35rem 0.6rem; background: var(--surface-color-background-white);">
+          @for (t of testTemplates(); track t.id) {
+            <option [value]="t.id">{{ t.name }}</option>
+          }
+        </select>
+      }
+      <button type="button" [disabled]="testSending()" (click)="sendTestEmail()" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.4rem 0.9rem; font: var(--typography-bold-small-body); cursor: pointer;">{{ testSending() ? 'Sending…' : 'Send test email' }}</button>
+    </span>
+  </h2>
+  @if (testResult(); as result) {
+    <div style="padding: var(--layout-padding-small) var(--layout-padding-large) 0;">
+      <span class="pill {{ result.ok ? 'pill--success' : 'pill--warning' }}">{{ result.message }}</span>
+    </div>
+  }
   <div class="row-grid" style="grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));">
     <div>
       <div class="micro-label">Endpoint</div>

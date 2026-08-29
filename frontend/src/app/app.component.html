@@ -20,6 +20,7 @@
   <app-sign-in />
 } @else {
   <div class="app">
+    <a class="skip-link" href="#main">Skip to content</a>
     <header class="eao-header app-header">
       <img class="eao-header__mark app-header__mark" src="assets/bcgov-header-vert.png" alt="Government of British Columbia">
       <div class="app-header__centre">
@@ -68,7 +69,7 @@
         }
       </nav>
 
-      <main class="app__main" [style]="mainStyle()">
+      <main id="main" tabindex="-1" class="app__main" [style]="mainStyle()">
         <!-- Data-load failures must be visible. An empty list is otherwise indistinguishable from
              a filtered-to-nothing result, which hid backend outages entirely. -->
         @if (service.loadError(); as loadError) {

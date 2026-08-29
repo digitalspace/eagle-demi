@@ -145,13 +145,12 @@ jobs:
           corepack enable
           yarn --cwd frontend install --immutable
 
-      # This workflow checks out only eagle-demi, so the sibling repos the script
-      # compares against never exist here — --check detects that and exits 0 (see the
-      # script). This file has no lint step (that lives in pr.yaml); placed here,
-      # before the deploy, as the closest equivalent gate.
-      - name: Check design CSS is in sync
-        run: bash frontend/scripts/sync-design-css.sh --check
-
+      # There is no "Check design CSS is in sync" step here: this workflow checks out
+      # only eagle-demi, and eagle-design-kit/eagle-demi-admin are private repos in the
+      # same org with no cross-repo Actions access granted (access_level: none), so
+      # GITHUB_TOKEN cannot check them out — a PAT would be required, and this repo does
+      # not add one for that. `sync-design-css.sh --check` still runs locally for devs
+      # who have the sibling repos cloned next to this one; see its own header comment.
       - name: Azure Login
         uses: azure/login@v3
         with:

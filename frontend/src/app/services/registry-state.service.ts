@@ -1127,7 +1127,8 @@ export class RegistryStateService {
     // after the first load (two ~370 kB uncompressed responses at ~2 s each), so only a changed
     // query or an empty cache goes back to the API.
     const q = this.searchQuery();
-    if (q === this.loadedQuery && this.projects() !== null && this.documents() !== null && !this.searching()) {
+    const chunksReady = !q || this.documentChunks() !== null;
+    if (q === this.loadedQuery && this.projects() !== null && this.documents() !== null && chunksReady && !this.searching()) {
       return;
     }
 

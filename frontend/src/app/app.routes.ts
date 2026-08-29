@@ -1,6 +1,7 @@
-import { Route, Routes } from '@angular/router';
+import { Route, Router, Routes } from '@angular/router';
 import { inject } from '@angular/core';
 import { ConfigService } from './services/config.service';
+import { readPrefs } from './shell/prefs';
 
 // No route guard: AppComponent renders the sign-in screen instead of the router outlet until
 // isStaff() is true, so every route is gated once, in one place.
@@ -34,7 +35,14 @@ export const routes: Routes = [
     children: []
   },
   { path: 'search', redirectTo: 'index', pathMatch: 'full' },
-  { path: '', redirectTo: 'map', pathMatch: 'full' },
+  {
+    path: '',
+    pathMatch: 'full',
+    // Redirect target follows the saved "default landing screen" preference (profile screen).
+    // readPrefs() already validates the saved key against SCREENS and falls back to 'map'.
+    canActivate: [() => inject(Router).parseUrl(`/${readPrefs().landing}`)],
+    children: []
+  },
   { path: '**', redirectTo: 'map' }
 ];
 export const appRoutes = routes;

@@ -85,6 +85,22 @@ html, body {
   white-space: nowrap;
 }
 
+/* Hidden until focused, so keyboard users can jump past the header/nav without seeing clutter. */
+.skip-link {
+  position: absolute;
+  top: -3rem;
+  left: 0;
+  z-index: 2500;
+  padding: 0.6rem 1rem;
+  background: var(--surface-color-primary-default);
+  color: var(--surface-color-background-white);
+  border-radius: 0 0 var(--layout-border-radius-small) 0;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
 .demi-marker {
   background: var(--surface-color-primary-default);
   border: 2px solid var(--surface-color-background-white);

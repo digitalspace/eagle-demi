@@ -3,17 +3,19 @@ import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Project } from '../../models/registry.models';
-import * as L from 'leaflet';
+import { readPrefs } from '../../shell/prefs';
+import type * as Leaflet from 'leaflet';
+import 'leaflet';
 import 'leaflet.markercluster';
+// The plugin attaches markerClusterGroup to the module object leaflet also publishes as
+// window.L. A namespace import is the bundler's frozen copy and misses it in production.
+const L = (window as unknown as { L: typeof Leaflet }).L;
 
 /** One checkbox row inside the Filters drawer. */
 interface FilterOption { value: string; label: string; checked: boolean }
 interface FilterSection { id: string; label: string; searchable: boolean; searchValue: string; options: FilterOption[] }
 /** One `key: value` row of the detail card, tagged with the system the value came from. */
 interface FieldRow { key: string; value: string; source: 'TRACK' | 'EPIC' | 'DEMI'; long: boolean }
-
-/** Rows added per "Load 6 more" in the left rail. */
-const PAGE_SIZE = 6;
 
 @Component({
   selector: 'app-map-explorer',
@@ -44,7 +46,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   detailsExpanded = signal<boolean>(false);
   sourceTab = signal<'all' | 'track' | 'epic' | 'demi'>('all');
   sortBy = signal<'relevance' | 'name'>('relevance');
-  visibleCount = signal<number>(PAGE_SIZE);
+  /** Rows added per "Load N more" in the left rail — the profile's "Results per page" pref. */
+  private pageSize = readPrefs().perPage;
+  visibleCount = signal<number>(this.pageSize);
   openSections = signal<string[]>(['sector']);
   sectorQuery = signal<string>('');
   copiedId = signal<boolean>(false);
@@ -253,7 +257,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     effect(() => {
       this.service.filteredProjects();
       this.sortBy();
-      untracked(() => this.visibleCount.set(PAGE_SIZE));
+      untracked(() => this.visibleCount.set(this.pageSize));
     });
 
     // Re-sync map markers whenever our filtered projects or role change!
@@ -365,7 +369,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   toggleFilters() { this.filtersOpen.set(!this.filtersOpen()); }
   toggleLayers() { this.layersOpen.set(!this.layersOpen()); }
-  loadMore() { this.visibleCount.set(this.visibleCount() + PAGE_SIZE); }
+  loadMore() { this.visibleCount.set(this.visibleCount() + this.pageSize); }
 
   isSectionOpen(id: string): boolean { return this.openSections().includes(id); }
 

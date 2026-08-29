@@ -39,6 +39,13 @@ const CAMPAIGN_PILL: Record<string, string> = {
   done: 'pill--success'
 };
 
+/** Row from `GET staff/templates` — eagle-notify `api/src/template-store.js` `list()`. */
+export interface NotifyTemplate {
+  id: string;
+  name: string;
+  subject: string;
+}
+
 @Component({
   selector: 'app-notify',
   standalone: true,
@@ -59,6 +66,11 @@ export class NotifyComponent implements OnInit {
   loading = signal(true);
   error = signal('');
   httpStatus = signal(0);
+
+  testTemplates = signal<NotifyTemplate[] | null>(null);
+  selectedTestTemplateId = signal('');
+  testSending = signal(false);
+  testResult = signal<{ ok: boolean; message: string } | null>(null);
 
   readonly connection = computed(() => {
     if (this.loading()) return { label: 'Checking…', pill: 'pill--neutral' };
@@ -119,6 +131,77 @@ export class NotifyComponent implements OnInit {
       throw new Error(`eagle-notify returned HTTP ${res.status}${detail ? ` — ${detail}` : ''}`);
     }
     return body as T;
+  }
+
+  value(event: Event): string {
+    return (event.target as HTMLSelectElement).value;
+  }
+
+  /** Click handler for the header's "Send test email" button — loads the template list on first
+   *  use, then sends the only template, or the selected one once a `<select>` has appeared. */
+  async sendTestEmail() {
+    if (this.testSending()) return;
+    this.testResult.set(null);
+
+    let list = this.testTemplates();
+    if (list === null) {
+      this.testSending.set(true);
+      try {
+        const res = await this.get<{ templates: NotifyTemplate[] }>('staff/templates');
+        list = res.templates || [];
+        this.testTemplates.set(list);
+        if (list.length) this.selectedTestTemplateId.set(list[0].id);
+      } catch (err) {
+        this.testResult.set({ ok: false, message: (err as Error).message });
+        return;
+      } finally {
+        this.testSending.set(false);
+      }
+      // Several templates: show the picker and wait for a deliberate send, rather than mailing
+      // whichever one happened to sort first.
+      if (list.length > 1) return;
+    }
+
+    if (list.length === 0) {
+      this.testResult.set({ ok: false, message: 'No template to send' });
+      return;
+    }
+
+    const id = list.length === 1 ? list[0].id : this.selectedTestTemplateId();
+    await this.sendTest(id);
+  }
+
+  /** `POST staff/templates/{id}/test` — sends to the caller's own email (`user.email` from the
+   *  token). Deliberately does not touch `httpStatus`: a 429/400 here is about this one send, not
+   *  about eagle-notify's reachability, and must not flip the Connection pill. */
+  private async sendTest(id: string) {
+    this.testSending.set(true);
+    const token = this.registry.keycloak?.token;
+    try {
+      const res = await fetch(`${this.base}/staff/templates/${id}/test`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        const reason = body && body.error;
+        const message =
+          reason === 'send_budget_exhausted'
+            ? 'Send budget exhausted, try later'
+            : reason === 'no_email_claim'
+              ? 'Your token has no email claim'
+              : reason === 'not_found'
+                ? 'Template not found'
+                : `eagle-notify returned HTTP ${res.status}`;
+        this.testResult.set({ ok: false, message });
+        return;
+      }
+      this.testResult.set({ ok: true, message: `Sent to ${body.to}` });
+    } catch (err) {
+      this.testResult.set({ ok: false, message: (err as Error).message });
+    } finally {
+      this.testSending.set(false);
+    }
   }
 
   figure(value: number | null | undefined): string {
