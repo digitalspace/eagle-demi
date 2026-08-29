@@ -61,11 +61,8 @@ describe('AppComponent', () => {
   });
 
   it('shows the four sidebar groups and every screen link to staff', async () => {
-    const { el, fixture } = await renderAs(true, false);
+    const { el } = await renderAs(true, false);
     expect(el.querySelector('app-sign-in')).toBeNull();
-    // Default route is the map, which collapses the nav; open it to count links.
-    (el.querySelector('.app-sidebar__toggle') as HTMLButtonElement).click();
-    fixture.detectChanges();
 
     const headings = Array.from(el.querySelectorAll('.app-sidebar__heading')).map(h => h.textContent?.trim());
     expect(headings).toEqual(['Discover', 'Operate', 'Access', 'Developers']);
