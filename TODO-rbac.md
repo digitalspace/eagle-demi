@@ -1317,7 +1317,7 @@ Acceptance
 
 Branch: `feat/vis-cac-predicate`
 
-- [x] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:58`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only `PATCH /visibility` (P3-5) or the Eagle push may set it. Merges before the predicate, per doc section 2 item 7. The Eagle push shares PUT's `requireWrite` gate, so this is mirror ownership, not a privilege boundary.
+- [x] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:58`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only the Eagle push sets it. Merges before the predicate, per doc section 2 item 7. The Eagle push shares PUT's `requireWrite` gate, so this is mirror ownership, not a privilege boundary.
 - [x] Only then: `cacPublished: (record) => record.projectCACPublished === true` in `src/vis/predicates.js`, and `when: 'cacPublished'` on `cacEmail` in `src/vis/catalog/projects.js` with `defaultVis: 2, maxVis: 4`.
 
 Tests

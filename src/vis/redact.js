@@ -32,9 +32,9 @@ function visible(level, effVis) {
  * A dial restricts below `defaultVis` and never above `maxVis`; anything else falls back. A dial
  * beats the predicate: a classified field stays classified whatever the record says.
  */
-function effectiveVis(entry, dial, record = {}) {
+function effectiveVis(entry, dial, record) {
   if (LEVELS.includes(dial)) return Math.min(dial, entry.maxVis);
-  if (entry.when && PREDICATES[entry.when](record)) return entry.maxVis;
+  if (entry.when && PREDICATES[entry.when](record || {})) return entry.maxVis;
   return entry.defaultVis;
 }
 

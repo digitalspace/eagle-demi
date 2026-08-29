@@ -240,7 +240,7 @@ Each item below overrides the corresponding section of the source document.
    engine.
 7. **Predicates read only mirror-owned fields.** `projectCACPublished` is written
    by the Eagle push (`PUT /api/eagle/projects/:eagleId`, mirroring eagle-admin's CAC publish
-   toggle) and by `PATCH /:id/visibility`. Ordinary `PUT /api/projects/:id` strips the field
+   toggle). Ordinary `PUT /api/projects/:id` strips the field
    (`src/controllers/nosql/project.js`) so a hand-edited project body cannot flip it. The Eagle
    push carries the same `authMiddleware, requireWrite` gate as PUT, so the strip is not a
    privilege boundary — it keeps the flag mirror-owned. `cacEmail` is
