@@ -213,8 +213,9 @@ Each item below overrides the corresponding section of the source document.
    redactor descends only for listed dotted keys.
 3. **Day-one defaults reproduce today's public output.** Every field `eagle-public` renders
    anonymously today gets `defaultVis: 4`. That includes `projectLead`, `projectLeadEmail`,
-   `responsibleEPD`, `responsibleEPDEmail`, `eaoMember`, `cacEmail`, `projectCAC`,
-   `projectCACPublished` (`eagle-public/src/app/services/api.ts:274-318`). The source catalog gave
+   `responsibleEPD`, `responsibleEPDEmail`, `eaoMember`, `projectCAC`,
+   `projectCACPublished` (`eagle-public/src/app/services/api.ts:274-318`). `cacEmail` is
+   `defaultVis: 2, maxVis: 4, when: 'cacPublished'` (item 7), not a flat 4. The source catalog gave
    `name`, `description`, `centroid`, `proponentName`, `region`, `projectState` `defaultVis: 2`,
    which would have left an anonymous project response with five identifier fields. Fields
    `eagle-public` does not request today: `complianceLead`, `execProjectDirector`. Those start at
@@ -237,10 +238,16 @@ Each item below overrides the corresponding section of the source document.
    and `seed-nosql.js:403` replace the whole item and carry only `sources` forward. `vis` is
    carried forward beside `sources` in both, with a test, in the same change that adds the dial
    engine.
-7. **Predicates read only fields ordinary writes cannot set.** `projectCACPublished` is a plain
-   content field any `WRITE_ROLES` caller sets through PUT, so `when: 'cacPublished'` would let a
-   content writer publish `cacEmail` without `sysadmin`. Until Phase 3 gates that field, the
-   predicate is not shipped. Predicates take `(record)` only.
+7. **Predicates read only mirror-owned fields.** `projectCACPublished` is written
+   by the Eagle push (`PUT /api/eagle/projects/:eagleId`, mirroring eagle-admin's CAC publish
+   toggle). Ordinary `PUT /api/projects/:id` strips the field
+   (`src/controllers/nosql/project.js`) so a hand-edited project body cannot flip it. The Eagle
+   push carries the same `authMiddleware, requireWrite` gate as PUT, so the strip is not a
+   privilege boundary — it keeps the flag mirror-owned. `cacEmail` is
+   `defaultVis: 2, maxVis: 4, when: 'cacPublished'`: a true predicate widens the field to
+   `maxVis`, a dial beats it — `sysadmin` can pin `cacEmail` shut with the dial even while
+   `cacPublished` is true — and a `when` naming no export of `src/vis/predicates.js` throws at
+   load. Predicates take `(record)` only.
 8. **`read`, `s3Key`, `vis` are `maxVis: 0`; `_etag` is `maxVis: 2`.** `publicView` strips
    `read` on purpose and the document controller strips `s3Key`. `isPublished` is derived in the
    redactor from `read.includes('public')`. Exposing the `vis` map at level 2 would reveal which

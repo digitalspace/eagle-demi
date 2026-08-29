@@ -101,6 +101,26 @@ test('redactForAccess', async (t) => {
     }
   });
 
+  await t.test('cacEmail is public only while the CAC is published', () => {
+    const published = storedRow({ cacEmail: 'cac@example.invalid', projectCACPublished: true });
+    const withheld = storedRow({ cacEmail: 'cac@example.invalid', projectCACPublished: false });
+
+    assert.strictEqual(redactForAccess('projects', published, { level: 4 }).cacEmail, 'cac@example.invalid');
+    assert.strictEqual('cacEmail' in redactForAccess('projects', withheld, { level: 4 }), false);
+
+    // The predicate WIDENS: level 2 is already inside defaultVis, so it sees the field either way.
+    assert.strictEqual(redactForAccess('projects', published, { level: 2 }).cacEmail, 'cac@example.invalid');
+    assert.strictEqual(redactForAccess('projects', withheld, { level: 2 }).cacEmail, 'cac@example.invalid');
+  });
+
+  await t.test('a dial beats the predicate', () => {
+    const row = storedRow({
+      cacEmail: 'cac@example.invalid', projectCACPublished: true, vis: { cacEmail: 0 }
+    });
+    assert.strictEqual('cacEmail' in redactForAccess('projects', row, { level: 4 }), false);
+    assert.strictEqual('cacEmail' in redactForAccess('projects', row, { level: 2 }), false);
+  });
+
   await t.test('the dial map is withheld from everyone below level 0', () => {
     // Handing it out at level 2 would name the fields restricted below 2 (doc §2 item 8).
     for (const level of [1, 2, 3, 4]) {
@@ -158,17 +178,17 @@ test('effectiveVis and visible', async (t) => {
     assert.strictEqual(effectiveVis({ defaultVis: 2, maxVis: 4 }, 4), 4);
   });
 
-  await t.test('a catalog entry carrying a predicate refuses to load', () => {
-    // Ignoring `when` instead of throwing would read as "always visible" — a half-shipped
-    // predicate must break the build, not widen a field (doc §2 item 7).
+  await t.test('a `when` naming no predicate refuses to load', () => {
+    // Ignoring the name instead of throwing would pin the field to defaultVis and say nothing, so
+    // a renamed or half-shipped predicate must break the build (doc §2 item 7).
     const catalog = require('../../src/vis/catalog/projects');
     const modulePath = require.resolve('../../src/vis/redact');
-    catalog.cacEmail.when = 'cacPublished';
+    catalog.cacEmail.when = 'noSuchPredicate';
     delete require.cache[modulePath];
     try {
-      assert.throws(() => require('../../src/vis/redact'), /predicates are not supported/);
+      assert.throws(() => require('../../src/vis/redact'), /unknown predicate "noSuchPredicate"/);
     } finally {
-      delete catalog.cacEmail.when;
+      catalog.cacEmail.when = 'cacPublished';
       delete require.cache[modulePath];
       require('../../src/vis/redact');
     }

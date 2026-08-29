@@ -1,0 +1,163 @@
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>Index Search</h1>
+    <p>Keyword search across project and document metadata. Highlights come from the index analyzer, so they reflect what the index matched rather than what a regex in the browser can find.</p>
+  </div>
+</div>
+
+<section class="panel panel--padded">
+  <div style="position: relative;">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--typography-color-secondary);"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg>
+    <input id="demi-search-index" type="text" placeholder="Search projects and documents — e.g. water quality, fish habitat, Ajax" [value]="service.searchQuery()" (input)="onSearchInput($event)" aria-label="Search the registry" style="width: 100%; box-sizing: border-box; padding: 0.8rem 3rem 0.8rem 3rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
+    @if (service.searchQuery()) {
+      <button type="button" (click)="clearQuery()" aria-label="Clear search" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; font: var(--typography-bold-small-body); color: var(--typography-color-secondary); padding: 0.2rem 0.4rem;">✕</button>
+    }
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--layout-margin-small); margin-top: var(--layout-margin-medium);">
+    <div style="display: flex; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); overflow: hidden;">
+      @for (tab of scopeTabs; track tab.id) {
+        <button type="button" (click)="scope.set(tab.id)" [attr.aria-pressed]="scope() === tab.id"
+                [style.background]="scope() === tab.id ? 'var(--surface-color-primary-default)' : 'var(--surface-color-background-white)'"
+                [style.color]="scope() === tab.id ? 'var(--surface-color-background-white)' : 'var(--typography-color-primary)'"
+                style="border: none; padding: 0.4rem 0.9rem; font: var(--typography-bold-small-body); cursor: pointer;">{{ tab.label }}</button>
+      }
+    </div>
+    <label style="display: flex; align-items: center; gap: 0.35rem; font: var(--typography-regular-label); color: var(--typography-color-secondary); white-space: nowrap;">
+      Sort
+      <span style="position: relative; display: inline-flex; align-items: center;"><select [value]="sortBy()" (change)="onSortChange($event)" aria-label="Sort results" style="border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body); color: var(--typography-color-primary); padding: 0.3rem 1.7rem 0.3rem 0.55rem; background: var(--surface-color-background-white); -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer;">
+        <option value="relevance">Relevance</option>
+        <option value="name">Name A–Z</option>
+      </select><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="position: absolute; right: 0.55rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--typography-color-secondary);"><polyline points="6,9 12,15 18,9"></polyline></svg></span>
+    </label>
+  </div>
+
+  <p class="panel__lede" style="margin-top: var(--layout-margin-small);" [attr.aria-busy]="service.projectsLoading() ? 'true' : null">
+    @if (service.projectsLoading()) {
+      <span class="skeleton skeleton--text" style="width: 18rem;" aria-hidden="true"></span>
+    } @else {
+      {{ indexSummary() }}
+    }
+  </p>
+</section>
+
+@if (service.loadError()) {
+  <section class="panel panel--padded">
+    <div class="callout callout--warning">{{ service.loadError() }}</div>
+  </section>
+}
+
+@if (showProjectResults()) {
+  <section class="panel panel--scroll" [attr.aria-busy]="service.projectsLoading() ? 'true' : null" [style.opacity]="service.projectsLoading() === 'refresh' ? 0.6 : null">
+    <h2 class="panel__title">Projects ({{ service.resultCountLabel(sortedProjects()?.length, service.projectMatchCount()) }})</h2>
+    @if (projectsSkeleton()) { <p class="visually-hidden">Loading projects…</p> }
+    <table style="min-width: 44rem;">
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th>Sector</th>
+          <th>Region</th>
+          <th>Status</th>
+          <th>State</th>
+        </tr>
+      </thead>
+      <tbody>
+        @if (projectsSkeleton()) {
+          @for (i of [1, 2, 3, 4, 5, 6]; track i) {
+            <tr aria-hidden="true">
+              <td>
+                <div class="cell__title"><span class="skeleton skeleton--text" style="width: 70%;"></span></div>
+                <div class="cell__sub"><span class="skeleton skeleton--text" style="width: 45%;"></span></div>
+              </td>
+              <td><span class="skeleton skeleton--text" style="width: 5rem;"></span></td>
+              <td><span class="skeleton skeleton--text" style="width: 5rem;"></span></td>
+              <td><span class="skeleton skeleton--text" style="width: 4rem;"></span></td>
+              <td><span class="pill" style="padding: 0;"><span class="skeleton skeleton--text" style="width: 4.5rem;"></span></span></td>
+            </tr>
+          }
+        }
+        @for (proj of pagedProjects(); track proj.id) {
+          <tr>
+            <td>
+              <div class="cell__title" [innerHTML]="highlightField(proj.highlighted?.name, proj.name, service.debouncedSearchQuery())"></div>
+              <div class="cell__sub">{{ proj.proponent }}</div>
+            </td>
+            <td class="cell--muted">{{ proj.sector }}</td>
+            <td class="cell--muted">{{ proj.region }}</td>
+            <td class="cell--muted cell--nowrap">{{ proj.status }}</td>
+            <td><span [class]="'pill pill--caps ' + pillClass(proj.gatingState)">{{ proj.gatingState }}</span></td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    @if (canLoadMore()) {
+      <div style="padding: var(--layout-padding-medium) var(--layout-padding-large); display: flex; align-items: center; gap: var(--layout-margin-medium); border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);">
+        <button type="button" (click)="loadMore()" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.5rem 1rem; font: var(--typography-bold-small-body); cursor: pointer;">Load 6 more</button>
+        <span class="cell__sub">{{ resultSummary() }}</span>
+      </div>
+    }
+  </section>
+}
+
+@if (showDocumentResults()) {
+  <section class="panel panel--scroll" [attr.aria-busy]="service.documentsLoading() ? 'true' : null" [style.opacity]="service.documentsLoading() === 'refresh' ? 0.6 : null">
+    <h2 class="panel__title">Documents ({{ service.resultCountLabel(sortedDocuments()?.length, service.documentMatchCount()) }})</h2>
+    @if (documentsSkeleton()) { <p class="visually-hidden">Loading documents…</p> }
+    <table style="min-width: 44rem;">
+      <thead>
+        <tr>
+          <th>Document</th>
+          <th>Type</th>
+          <th>Project</th>
+          <th style="text-align: right;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        @if (documentsSkeleton()) {
+          @for (i of [1, 2, 3, 4, 5, 6]; track i) {
+            <tr aria-hidden="true">
+              <td>
+                <div class="cell__title"><span class="skeleton skeleton--text" style="width: 75%;"></span></div>
+                <div class="cell__sub"><span class="skeleton skeleton--text" style="width: 60%;"></span></div>
+              </td>
+              <td><span class="skeleton skeleton--text" style="width: 4.5rem;"></span></td>
+              <td><span class="skeleton skeleton--text" style="width: 3.5rem;"></span></td>
+              <td><span class="skeleton skeleton--text" style="width: 6rem;"></span></td>
+              <td class="cell--right"><span class="skeleton skeleton--text" style="width: 4rem;"></span></td>
+            </tr>
+          }
+        }
+        @for (doc of sortedDocuments(); track doc.id) {
+          <tr>
+            <td>
+              <div class="cell__title" [innerHTML]="highlightField(doc.highlighted?.displayName, doc.displayName, service.debouncedSearchQuery())"></div>
+              <div class="cell__sub" [innerHTML]="highlightField(doc.highlighted?.textSnippet, doc.textSnippet, service.debouncedSearchQuery())"></div>
+            </td>
+            <td class="cell--muted cell--nowrap">{{ doc.documentType }}</td>
+            <td class="cell--muted">{{ doc.projectName }}</td>
+            <td class="cell--right cell--nowrap">
+              <button type="button" (click)="download(doc)" [disabled]="downloadingId() === doc.id" style="background: none; border: none; padding: 0; font: var(--typography-bold-small-body); color: var(--typography-color-link); text-decoration: underline; cursor: pointer;">{{ downloadingId() === doc.id ? 'Preparing…' : 'Download' }}</button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    @if (downloadError()) {
+      <p class="footnote">{{ downloadError() }}</p>
+    }
+  </section>
+}
+
+@if (noResults()) {
+  <section class="panel panel--padded" style="text-align: center;">
+    <div class="cell__title">Nothing matched “{{ service.debouncedSearchQuery() }}”</div>
+    <div class="cell__sub" style="margin-top: 4px;">Try fewer words, or one of these:</div>
+    <div style="display: flex; flex-wrap: wrap; gap: var(--layout-margin-xsmall); justify-content: center; margin-top: var(--layout-margin-small);">
+      @for (sug of suggestions(); track sug) {
+        <button type="button" (click)="applySuggestion(sug)" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-circular); padding: 0.25rem 0.7rem; font: var(--typography-regular-label); cursor: pointer;">{{ sug }}</button>
+      }
+    </div>
+  </section>
+}
+
+<p class="footnote">A document a caller cannot see returns 404 rather than 403, so an id is never confirmed by the error.</p>

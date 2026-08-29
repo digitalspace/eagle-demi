@@ -1,140 +1,74 @@
-<div class="intake-page-container">
-  <div class="intake-hero">
-    <h1>Digital File Library Ingestion Registry</h1>
-    <p>Securely upload documents directly to the master registry. Extract structured sections using high-performance AI engines.</p>
-  </div>
-
-  <div class="intake-grid">
-    <!-- Intake Form Card -->
-    <div class="intake-card">
-      <h2><i class="fa-solid fa-cloud-arrow-up"></i> Document Upload</h2>
-      <p>Before submitting, please select the target project to file this document under.</p>
-
-      <!-- Project ID field -->
-      <div class="input-group" style="position: relative;">
-        <label for="intakeProjectIdInput">Target Project:</label>
-        @if (service.projects() === null) {
-          <input id="intakeProjectIdInput" type="text" disabled placeholder="Loading projects list...">
-        } @else {
-          <div style="position: relative; width: 100%;">
-            <input 
-              id="intakeProjectIdInput" 
-              type="text" 
-              [value]="service.intakeProjectSearchQuery()" 
-              (input)="onIntakeProjectSearch($event)" 
-              (focus)="service.showIntakeDropdown.set(true)"
-              (blur)="onIntakeDropdownBlur()"
-              placeholder="Search and select project..."
-              autocomplete="off"
-              style="padding-right: 2.5rem;"
-            >
-            <i class="fa-solid fa-chevron-down" style="position: absolute; right: 1rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none;"></i>
-            
-            @if (service.showIntakeDropdown() && service.filteredIntakeProjects().length > 0) {
-              <div class="searchable-dropdown-list">
-                @for (proj of service.filteredIntakeProjects(); track proj.id) {
-                  <div 
-                    class="searchable-dropdown-option" 
-                    [class.selected]="isProjectSelected(proj.id)"
-                    (mousedown)="selectIntakeProject(proj)"
-                  >
-                    <div style="font-weight: 600;">{{ proj.name }}</div>
-                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.15rem;">ID: {{ proj.id }}</div>
-                  </div>
-                }
-              </div>
-            } @else if (service.showIntakeDropdown() && service.filteredIntakeProjects().length === 0) {
-              <div class="searchable-dropdown-list" style="position: absolute; top: 100%; left: 0; right: 0; background: var(--white); border: 1.5px solid var(--bc-gray-border); border-radius: 6px; padding: 1rem; text-align: center; z-index: 1000; box-shadow: 0 8px 24px rgba(0,0,0,0.12); margin-top: 4px; color: var(--text-muted); font-size: 0.9rem;">
-                No projects match your search
-              </div>
-            }
-          </div>
-        }
-        @if (service.intakeProjectId() && !service.intakeProjectValid()) {
-          <div style="color: #dc3545; font-size: 0.8rem; margin-top: 0.35rem; font-weight: 500;">
-            <i class="fa-solid fa-triangle-exclamation"></i> Invalid project selected.
-          </div>
-        } @else if (service.intakeProjectValid()) {
-          <div style="color: #2e7559; font-size: 0.8rem; margin-top: 0.35rem; font-weight: 500;">
-            <i class="fa-solid fa-circle-check"></i> Project selected. Ready to upload.
-          </div>
-        }
-      </div>
-
-      <!-- Drop/Drag Zone -->
-      <div 
-        class="drop-zone" 
-        [class.disabled]="!service.intakeProjectValid()" 
-        (click)="triggerFileInput()"
-      >
-        <i class="fa-regular fa-file-pdf"></i>
-        @if (!service.intakeProjectValid()) {
-          <p style="font-weight: 600; color: var(--text-muted);">Unlock upload by entering a valid project ID above</p>
-        } @else {
-          <p style="font-weight: 600; color: var(--bc-blue-dark);">Drag & Drop your PDF file here, or click to browse</p>
-          <p class="drop-zone-help-text">Only PDF documents are supported. Max file size: 100MB.</p>
-        }
-        <input 
-          type="file" 
-          id="fileInput" 
-          style="display: none;" 
-          (change)="onFileSelected($event)" 
-          accept="application/pdf"
-          [disabled]="!service.intakeProjectValid()"
-        >
-      </div>
-
-      <!-- Active Progress Bar -->
-      @if (service.activeIngestion()) {
-        <div 
-          class="ingestion-progress" 
-          [class.success]="service.activeIngestion()?.status === 'Extraction complete!'"
-          [class.error]="service.activeIngestion()?.status?.startsWith('Error:') || service.activeIngestion()?.status?.startsWith('Extraction failed:')"
-        >
-          <div class="progress-details">
-            <span class="filename" [title]="service.activeIngestion()?.fileName">
-              <i class="fa-regular fa-file-pdf" style="color: #ff4d4f; margin-right: 0.25rem;"></i>
-              {{ service.activeIngestion()?.fileName }}
-            </span>
-            <span class="status">{{ service.activeIngestion()?.status }}</span>
-          </div>
-          <div class="progress-bar-container">
-            <div class="progress-bar" [style.width.%]="service.activeIngestion()?.progress || 0"></div>
-          </div>
-        </div>
-      }
-    </div>
-
-    <!-- Guidelines Card -->
-    <div class="intake-card" style="background-color: #fafbfc;">
-      <h2><i class="fa-solid fa-circle-info"></i> Ingestion Guidelines</h2>
-      <p>The Digital File Library maintains rigorous security and document visibility rules:</p>
-      
-      <div class="info-bullets-list">
-        <div class="info-bullet">
-          <i class="fa-solid fa-shield-halved"></i>
-          <div>
-            <strong>Security Protection Active:</strong>
-            <p style="margin-top: 0.25rem; margin-bottom: 0;">For security, the extraction pipeline is protected. Every ingest request is audited, parsed, and restricted to staff roles by default. Public citizens see only documents that are explicitly flagged as <code>isPublished: true</code>.</p>
-          </div>
-        </div>
-
-        <div class="info-bullet">
-          <i class="fa-solid fa-circle-nodes"></i>
-          <div>
-            <strong>Search Indexing:</strong>
-            <p style="margin-top: 0.25rem; margin-bottom: 0;">Once text is extracted, the document and its chunks are indexed into Typesense by the scheduled sync, making it discoverable in Deep Search.</p>
-          </div>
-        </div>
-
-        <div class="info-bullet">
-          <i class="fa-solid fa-wand-magic-sparkles"></i>
-          <div>
-            <strong>AI Text Extractor:</strong>
-            <p style="margin-top: 0.25rem; margin-bottom: 0;">Docling isolates headers, paragraphs, and tables automatically, indexing individual pages as independent chunks for high-relevance deep keyword search.</p>
-          </div>
-        </div>
-      </div>
-    </div>
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>Document Intake</h1>
+    <p>Upload a document to the registry against a project that already exists. Extraction runs off-platform and posts the markdown back for chunking.</p>
   </div>
 </div>
+
+<div class="panel-grid" style="grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); align-items: start;">
+  <section class="panel panel--padded">
+    <h2 class="panel__title panel__title--inline">Upload</h2>
+
+    <div class="micro-label" style="margin-bottom: var(--layout-margin-xsmall);">Target project</div>
+    <span style="position: relative; display: block; width: 100%; margin-bottom: var(--layout-margin-medium);"><select [value]="service.intakeProjectId()" (change)="onProjectChange($event)" aria-label="Target project" style="width: 100%; box-sizing: border-box; padding: 0.6rem 2rem 0.6rem 0.75rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body); color: var(--typography-color-primary); background: var(--surface-color-background-white); -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer;">
+      @if (service.projects() === null) {
+        <option value="" disabled>Loading projects…</option>
+      } @else {
+        <option value="">Choose a project…</option>
+      }
+      @for (proj of service.projects(); track proj.id) {
+        <option [value]="proj.id">{{ proj.name }}</option>
+      }
+    </select><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="position: absolute; right: 0.55rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--typography-color-secondary);"><polyline points="6,9 12,15 18,9"></polyline></svg></span>
+
+    <input id="fileInput" type="file" accept="application/pdf" (change)="onFileSelected($event)" hidden>
+    <button type="button" (click)="triggerFileInput()" (dragover)="onDragOver($event)" (dragleave)="onDragLeave()" (drop)="onDrop($event)"
+            [disabled]="!service.intakeProjectValid()"
+            [style.opacity]="service.intakeProjectValid() ? '1' : '0.55'"
+            [style.background]="dragging() ? 'var(--surface-color-background-white)' : 'var(--surface-color-background-light-gray)'"
+            style="display: block; width: 100%; box-sizing: border-box; border: 2px dashed var(--surface-color-primary-default); border-radius: var(--layout-border-radius-medium); padding: var(--layout-padding-xlarge) var(--layout-padding-large); text-align: center; font: inherit; cursor: pointer;">
+      <span class="cell__title">Drag a PDF here, or click to browse</span>
+      <span class="cell__sub" style="display: block; margin-top: 4px;">PDF only, up to 100 MB. Send Content-Length — a chunked body arrives empty.</span>
+    </button>
+
+    @if (!service.intakeProjectValid()) {
+      <p class="cell__sub" style="margin-top: var(--layout-margin-xsmall);">Choose a project before uploading — intake never creates one.</p>
+    }
+
+    @if (service.activeIngestion(); as ingestion) {
+      <div style="margin-top: var(--layout-margin-medium);">
+        <div style="display: flex; justify-content: space-between; gap: var(--layout-margin-small); font: var(--typography-regular-small-body); margin-bottom: var(--layout-margin-xsmall);">
+          <span class="cell__title cell--truncate">{{ ingestion.fileName }}</span>
+          <span class="cell--muted">{{ ingestion.status }} · {{ ingestion.progress }}%</span>
+        </div>
+        <div class="progress progress--medium">
+          <div class="progress__fill" [style.width.%]="ingestion.progress"></div>
+        </div>
+      </div>
+    }
+  </section>
+
+  <section class="panel panel--padded">
+    <h2 class="panel__title panel__title--inline">What happens next</h2>
+    <div style="display: flex; flex-direction: column; gap: var(--layout-margin-medium);">
+      <div>
+        <div class="cell__title">Access control</div>
+        <div class="cell__sub" style="overflow-wrap: anywhere;">Chunks copy <code class="cell__mono">read[]</code> from the live document, so an ingest can never widen visibility.</div>
+      </div>
+      <div>
+        <div class="cell__title">Chunking</div>
+        <div class="cell__sub" style="overflow-wrap: anywhere;">Deterministic ids of the form <code class="cell__mono">&lt;documentId&gt;::p&lt;page&gt;::c&lt;index&gt;</code>, so the route is idempotent and an interrupted backfill restarts.</div>
+      </div>
+      <div>
+        <div class="cell__title">Indexing</div>
+        <div class="cell__sub" style="overflow-wrap: anywhere;">Search indexers pull from Cosmos every five minutes; nothing is pushed. Deletes are removed from the index explicitly.</div>
+      </div>
+      <div>
+        <div class="cell__title">Projects</div>
+        <div class="cell__sub" style="overflow-wrap: anywhere;">Never created from an ingest. A row whose upstream id resolves to no project is dropped and counted.</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<p class="footnote">Writes require <code class="cell__mono">demi-service-write</code> or a staff role. Every ingest is audited.</p>

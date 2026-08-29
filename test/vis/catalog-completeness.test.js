@@ -150,7 +150,12 @@ test('the projects catalog covers every field the merge emits', async (t) => {
   await t.test('the contact emails are public by policy', () => {
     assert.strictEqual(catalog.projectLeadEmail.defaultVis, 4);
     assert.strictEqual(catalog.responsibleEPDEmail.defaultVis, 4);
-    assert.strictEqual(catalog.cacEmail.defaultVis, 4);
+  });
+
+  await t.test('cacEmail reaches the public only through its predicate', () => {
+    assert.strictEqual(catalog.cacEmail.defaultVis, 2);
+    assert.strictEqual(catalog.cacEmail.maxVis, 4);
+    assert.strictEqual(catalog.cacEmail.when, 'cacPublished');
   });
 
   await t.test('catalogFor throws on an unknown entity', () => {

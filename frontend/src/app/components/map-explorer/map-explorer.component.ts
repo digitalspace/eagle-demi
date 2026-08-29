@@ -1,9 +1,21 @@
 import { Component, OnInit, OnDestroy, AfterViewInit, inject, effect, signal, computed, untracked, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Router } from '@angular/router';
 import { RegistryStateService } from '../../services/registry-state.service';
-import { Project, Document } from '../../models/registry.models';
+import { Project } from '../../models/registry.models';
+import { readPrefs } from '../../shell/prefs';
+import type * as Leaflet from 'leaflet';
+import 'leaflet';
+import 'leaflet.markercluster';
+// The plugin attaches markerClusterGroup to the module object leaflet also publishes as
+// window.L. A namespace import is the bundler's frozen copy and misses it in production.
+const L = (window as unknown as { L: typeof Leaflet }).L;
 
-declare const L: any;
+/** One checkbox row inside the Filters drawer. */
+interface FilterOption { value: string; label: string; checked: boolean }
+interface FilterSection { id: string; label: string; searchable: boolean; searchValue: string; options: FilterOption[] }
+/** One `key: value` row of the detail card, tagged with the system the value came from. */
+interface FieldRow { key: string; value: string; source: 'TRACK' | 'EPIC' | 'DEMI'; long: boolean }
 
 @Component({
   selector: 'app-map-explorer',
@@ -15,6 +27,7 @@ declare const L: any;
 })
 export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   service = inject(RegistryStateService);
+  private router = inject(Router);
 
   availableRegions = ['Vancouver Island', 'Lower Mainland', 'Thompson', 'Kootenay', 'Cariboo', 'Skeena', 'Omineca', 'Okanagan', 'Peace'];
 
@@ -27,18 +40,37 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   showWildfires = signal<boolean>(false);
 
-  isDownloading = signal<boolean>(false);
-  downloadError = signal<string | null>(null);
+  // --- Left rail and detail card -------------------------------------------------------------
+  filtersOpen = signal<boolean>(false);
+  layersOpen = signal<boolean>(false);
+  detailsExpanded = signal<boolean>(false);
+  sourceTab = signal<'all' | 'track' | 'epic' | 'demi'>('all');
+  sortBy = signal<'relevance' | 'name'>('relevance');
+  /** Rows added per "Load N more" in the left rail — the profile's "Results per page" pref. */
+  private pageSize = readPrefs().perPage;
+  visibleCount = signal<number>(this.pageSize);
+  openSections = signal<string[]>(['sector']);
+  sectorQuery = signal<string>('');
+  copiedId = signal<boolean>(false);
+
+  readonly sourceTabs: { id: 'all' | 'track' | 'epic' | 'demi'; label: string }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'track', label: 'Track' },
+    { id: 'epic', label: 'EPIC' },
+    { id: 'demi', label: 'DEMI' }
+  ];
+
+  readonly overlayRows: { id: string; label: string }[] = [
+    { id: 'regions', label: 'Environmental regions' },
+    { id: 'regionalDistricts', label: 'Regional districts' },
+    { id: 'municipalities', label: 'Municipalities' },
+    { id: 'electoralDistricts', label: 'Electoral districts' }
+  ];
 
   // Custom searchable select signals per category
   activeDistrictQuery = signal<string>('');
-  showDistrictDropdown = signal<boolean>(false);
-
   activeMuniQuery = signal<string>('');
-  showMuniDropdown = signal<boolean>(false);
-
   activeElectoralQuery = signal<string>('');
-  showElectoralDropdown = signal<boolean>(false);
 
   regionalDistrictNames = computed(() => {
     const cache = this.service.loadedBoundariesGeoJSON();
@@ -79,25 +111,153 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     return names.filter((name: string) => name.toLowerCase().includes(q));
   });
 
+  // --- Result list ---------------------------------------------------------------------------
+
+  sortedProjects = computed(() => {
+    const list = this.service.filteredProjects();
+    if (list === null) return null;
+    if (this.sortBy() !== 'name') return list;
+    return [...list].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  });
+
+  pagedProjects = computed(() => (this.sortedProjects() || []).slice(0, this.visibleCount()));
+  canLoadMore = computed(() => (this.sortedProjects() || []).length > this.visibleCount());
+  noResults = computed(() => this.sortedProjects()?.length === 0);
+  resultCount = computed(() => this.sortedProjects()?.length ?? 0);
+
+  resultSummary = computed(() =>
+    `${this.service.resultCountLabel(this.sortedProjects()?.length, this.service.projectMatchCount())} projects`
+  );
+
+  /** Sectors present in the loaded corpus — a query with no hits gets offered real ones. */
+  suggestions = computed(() =>
+    this.service.sectorOptions().slice(0, 3).map(o => o.label)
+  );
+
+  // --- Filters drawer ------------------------------------------------------------------------
+
+  /** Names ticked in one boundary layer. Each layer has its own set; they never overwrite. */
+  private boundarySelection(layer: string): Set<string> {
+    return this.service.boundaryFilter()[layer] || new Set<string>();
+  }
+
+  private boundarySection(id: string, label: string, names: string[], query: string): FilterSection {
+    const active = this.boundarySelection(id);
+    return {
+      id,
+      label,
+      searchable: true,
+      searchValue: query,
+      // ponytail: 50-row cap, the drawer's own search box is the way past it. Virtual scrolling
+      // if the boundary lists ever outgrow that.
+      options: names.slice(0, 50).map(name => ({ value: name, label: name, checked: active.has(name) }))
+    };
+  }
+
+  filterSections = computed<FilterSection[]>(() => {
+    const gating = this.service.gatingFilter();
+    const sector = this.service.sectorFilter();
+    const region = this.service.regionFilter();
+    const sectorQuery = this.sectorQuery().toLowerCase().trim();
+
+    return [
+      {
+        id: 'gating', label: 'Gating state', searchable: false, searchValue: '',
+        options: [
+          { value: 'admitted', label: 'Admitted', checked: gating.has('admitted') },
+          { value: 'staged', label: 'Staged', checked: gating.has('staged') }
+        ]
+      },
+      {
+        id: 'sector', label: 'Sector', searchable: true, searchValue: this.sectorQuery(),
+        options: this.service.sectorOptions()
+          .filter(o => !sectorQuery || o.label.toLowerCase().includes(sectorQuery))
+          .map(o => ({ value: o.value, label: `${o.label} (${o.count})`, checked: sector.has(o.value) }))
+      },
+      {
+        id: 'region', label: 'Environmental region', searchable: false, searchValue: '',
+        options: this.availableRegions.map(r => ({ value: r, label: r, checked: region.has(r) }))
+      },
+      this.boundarySection('regionalDistricts', 'Regional district', this.filteredRegionalDistricts(), this.activeDistrictQuery()),
+      this.boundarySection('municipalities', 'Municipality', this.filteredMunicipalities(), this.activeMuniQuery()),
+      this.boundarySection('electoralDistricts', 'Electoral district', this.filteredElectoralDistricts(), this.activeElectoralQuery())
+    ];
+  });
+
+  /** One chip per selected value. `id` is `section:value`, so a chip removes only itself. */
+  activeFilters = computed<{ id: string; label: string }[]>(() => {
+    const rows: { id: string; label: string }[] = [];
+    const push = (section: string, values: Iterable<string>, label: (v: string) => string = v => v) => {
+      for (const value of values) rows.push({ id: `${section}:${value}`, label: label(value) });
+    };
+    push('gating', this.service.gatingFilter(), v => v === 'staged' ? 'Staged' : 'Admitted');
+    push('sector', this.service.sectorFilter());
+    push('region', this.service.regionFilter());
+    for (const [layer, names] of Object.entries(this.service.boundaryFilter())) push(layer, names);
+    return rows;
+  });
+
+  // --- Detail card ---------------------------------------------------------------------------
+
+  /**
+   * `key: value` rows for the selected project, tagged with where the value came from.
+   *
+   * Built by walking the metadata objects rather than from a fixed field list: the Track payload
+   * is a checked-in export whose columns move, and a hard-coded list drifts into showing blanks.
+   */
+  fieldRows = computed<FieldRow[]>(() => {
+    const p = this.service.selectedProject();
+    if (!p) return [];
+
+    const rows: FieldRow[] = [];
+    const push = (source: FieldRow['source'], key: string, value: any) => {
+      if (value === null || value === undefined || value === '') return;
+      const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      // Past ~40 chars a right-aligned value wraps into a cramped column; the template stacks it.
+      rows.push({ key, value: text, source, long: text.length > 40 });
+    };
+
+    for (const [key, value] of Object.entries(p.rawMetadata?.trackAttributes || {})) {
+      push('TRACK', this.humanise(key), value);
+    }
+    for (const [key, value] of Object.entries(p.rawMetadata?.eagleAttributes || {})) {
+      push('EPIC', this.humanise(key), value);
+    }
+    push('EPIC', 'Legacy Eagle id', p.legacyEagleId);
+
+    push('DEMI', 'DEMI id', p.id);
+    push('DEMI', 'Gating state', p.gatingState);
+    push('DEMI', 'Region', p.region);
+    push('DEMI', 'Regional district', p.regionalDistrict);
+    push('DEMI', 'Municipality', p.municipality);
+    push('DEMI', 'Electoral district', p.electoralDistrict);
+    if (p.centroid) push('DEMI', 'Centroid (lon, lat)', `${p.centroid[0]}, ${p.centroid[1]}`);
+
+    const wf = p.sources?.wildfire;
+    if (wf) {
+      const asOf = wf.lastCalculatedAt ? new Date(wf.lastCalculatedAt).toLocaleDateString() : '';
+      push('DEMI', 'Nearby fires (50 km)', `${wf.activeCountWithin50km} active fires${asOf ? `, as of ${asOf}` : ''}`);
+      push('DEMI', 'Fires of note', wf.firesOfNoteNearby > 0 ? 'Fires of Note Nearby' : 'None nearby');
+      if (wf.nearestDistanceKm != null) push('DEMI', 'Nearest fire', `${wf.nearestDistanceKm} km`);
+    }
+
+    const tab = this.sourceTab();
+    if (tab === 'all') return rows;
+    const wanted = tab === 'track' ? 'TRACK' : tab === 'epic' ? 'EPIC' : 'DEMI';
+    return rows.filter(r => r.source === wanted);
+  });
+
+  private humanise(key: string): string {
+    const words = key.replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+    return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
+  }
+
   constructor() {
-    // Sync boundaryFilters with active search queries
+    // A new result set starts at page one; without this a narrower search keeps the old page depth.
     effect(() => {
-      const activeFilter = this.service.boundaryFilter();
-      const activeLayer = this.service.boundaryFilterLayer();
-      
-      if (activeFilter === 'all' || activeFilter === '') {
-        this.activeDistrictQuery.set('');
-        this.activeMuniQuery.set('');
-        this.activeElectoralQuery.set('');
-      } else {
-        if (activeLayer === 'regionalDistricts') {
-          this.activeDistrictQuery.set(activeFilter);
-        } else if (activeLayer === 'municipalities') {
-          this.activeMuniQuery.set(activeFilter);
-        } else if (activeLayer === 'electoralDistricts') {
-          this.activeElectoralQuery.set(activeFilter);
-        }
-      }
+      this.service.filteredProjects();
+      this.sortBy();
+      untracked(() => this.visibleCount.set(this.pageSize));
     });
 
     // Re-sync map markers whenever our filtered projects or role change!
@@ -170,7 +330,6 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     // Re-style administrative boundaries in-place whenever active filters change!
     effect(() => {
       this.service.boundaryFilter();
-      this.service.boundaryFilterLayer();
       untracked(() => {
         this.updateBoundaryLayersStyles();
       });
@@ -206,49 +365,110 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     }, 50);
   }
 
-  /**
-   * Fetch a short-lived presigned URL for the selected document and open it.
-   * The API gates this by the same read ACL as the metadata, so a document the user cannot
-   * see returns 403 rather than a link.
-   */
-  async downloadSelectedDocument() {
-    const doc = this.service.selectedDocument();
-    if (!doc || this.isDownloading()) return;
+  // --- Left rail and detail card handlers ----------------------------------------------------
 
-    this.isDownloading.set(true);
-    this.downloadError.set(null);
+  toggleFilters() { this.filtersOpen.set(!this.filtersOpen()); }
+  toggleLayers() { this.layersOpen.set(!this.layersOpen()); }
+  loadMore() { this.visibleCount.set(this.visibleCount() + this.pageSize); }
+
+  isSectionOpen(id: string): boolean { return this.openSections().includes(id); }
+
+  toggleSection(id: string) {
+    const open = this.openSections();
+    this.openSections.set(open.includes(id) ? open.filter(s => s !== id) : [...open, id]);
+  }
+
+  /** The search boxes only narrow the option list; they never change what is ticked. */
+  onSectionSearch(id: string, event: Event) {
+    const value = (event.target as HTMLInputElement).value;
+    if (id === 'sector') this.sectorQuery.set(value);
+    else if (id === 'regionalDistricts') this.activeDistrictQuery.set(value);
+    else if (id === 'municipalities') this.activeMuniQuery.set(value);
+    else if (id === 'electoralDistricts') this.activeElectoralQuery.set(value);
+  }
+
+  toggleFilterOption(sectionId: string, option: FilterOption) {
+    this.toggleFilterValue(sectionId, option.value);
+  }
+
+  /** Remove one chip — a toggle, because the chip only exists while the value is selected. */
+  clearFilter(id: string) {
+    const split = id.indexOf(':');
+    this.toggleFilterValue(id.slice(0, split), id.slice(split + 1));
+  }
+
+  clearFilters() {
+    this.service.clearFilters();
+    this.updateRegionsLayerStyle();
+    this.updateBoundaryLayersStyles();
+  }
+
+  private toggleFilterValue(sectionId: string, value: string) {
+    if (sectionId === 'gating') this.service.toggleFilterValue(this.service.gatingFilter, value);
+    else if (sectionId === 'sector') this.service.toggleFilterValue(this.service.sectorFilter, value);
+    else if (sectionId === 'region') this.setRegionFilter(value);
+    else this.setBoundaryFilter(sectionId, value);
+  }
+
+  clearQuery() {
+    this.service.searchQuery.set('');
+    this.service.loadData();
+  }
+
+  applySuggestion(label: string) {
+    this.service.searchQuery.set(label);
+    this.service.loadData();
+  }
+
+  onSortChange(event: Event) {
+    this.sortBy.set((event.target as HTMLSelectElement).value as 'relevance' | 'name');
+  }
+
+  toggleDetails() { this.detailsExpanded.set(!this.detailsExpanded()); }
+  setSourceTab(tab: 'all' | 'track' | 'epic' | 'demi') { this.sourceTab.set(tab); }
+
+  pillClass(state: string | undefined): string {
+    return state === 'staged' ? 'pill--warning' : 'pill--success';
+  }
+
+  projectMeta(proj: Project): string {
+    return [proj.sector, proj.status, proj.region].filter(Boolean).join(' · ');
+  }
+
+  async copyProjectId() {
+    const proj = this.service.selectedProject();
+    if (!proj) return;
     try {
-      const res = await fetch(`${this.service.getBasePath()}/documents/${doc.id}/download`);
-      if (!res.ok) {
-        const message = res.status === 403
-          ? 'You do not have permission to download this document.'
-          : `Could not prepare download (HTTP ${res.status}).`;
-        this.downloadError.set(message);
-        return;
-      }
-      const { url } = await res.json();
-      window.open(url, '_blank', 'noopener');
+      await navigator.clipboard.writeText(String(proj.id));
+      this.copiedId.set(true);
+      setTimeout(() => this.copiedId.set(false), 2000);
     } catch (err) {
-      console.error('[MapExplorer] Download failed:', err);
-      this.downloadError.set('Could not reach the API to prepare the download.');
-    } finally {
-      this.isDownloading.set(false);
+      console.warn('[MapExplorer] Clipboard write refused:', err);
     }
   }
 
+  private sizeObserver?: ResizeObserver;
+
   ngOnDestroy() {
+    this.sizeObserver?.disconnect();
     this.destroyMap();
   }
 
   // GIS Leaflet Map initialization
   private initMap() {
     try {
-      this.map = L.map('map', { zoomControl: false, preferCanvas: true }).setView([54.0, -125.0], 5);
+      this.map = L.map('demi-map', { zoomControl: false, preferCanvas: true }).setView([54.0, -125.0], 5);
+      // The pane is sized by flex after first paint; Leaflet keeps the size it measured at init.
+      const host = document.getElementById('demi-map');
+      if (host) {
+        this.sizeObserver = new ResizeObserver(() => this.map?.invalidateSize());
+        this.sizeObserver.observe(host);
+      }
       
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 20
+      // CARTO basemaps watermark every tile without an API key; OSM's own tiles are keyless.
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19
       }).addTo(this.map);
 
       L.control.zoom({ position: 'bottomright' }).addTo(this.map);
@@ -357,7 +577,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         const [lng, lat] = p.centroid;
 
         const customIcon = L.divIcon({
-          className: p.gatingState === 'staged' ? 'custom-marker staged' : 'custom-marker',
+          className: p.gatingState === 'staged' ? 'demi-marker demi-marker--staged' : 'demi-marker',
           iconSize: [14, 14],
           iconAnchor: [7, 7]
         });
@@ -404,8 +624,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         layer.on({
           mouseover: (e: any) => {
             const ly = e.target;
-            const currentFilter = this.service.regionFilter();
-            if (currentFilter === 'all' || currentFilter.toLowerCase() === name.toLowerCase()) {
+            const selected = this.service.regionFilter();
+            if (!selected.size || this.isRegionSelected(name)) {
               ly.setStyle({
                 weight: 3.0,
                 color: '#fcba19',
@@ -431,27 +651,25 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
             }
             ly.setStyle(this.getRegionStyle(name));
           },
-          click: (_e: any) => {
-            const current = this.service.regionFilter();
-            if (current.toLowerCase() === name.toLowerCase()) {
-              this.setRegionFilter('all');
-            } else {
-              this.setRegionFilter(name);
-            }
-          }
+          click: (_e: any) => this.setRegionFilter(name)
         });
       }
-    }).addTo(this.map);
+    } as L.GeoJSONOptions).addTo(this.map);
 
     if (this.regionsLayer) {
       this.regionsLayer.bringToBack();
     }
   }
 
+  /** Case-insensitive: the map's own region names and the filter list are separate sources. */
+  private isRegionSelected(regionName: string): boolean {
+    const wanted = (regionName || '').toLowerCase();
+    return [...this.service.regionFilter()].some(r => r.toLowerCase() === wanted);
+  }
+
   private getRegionStyle(regionName: string): any {
-    const selected = this.service.regionFilter();
-    const isSelected = selected !== 'all' && selected.toLowerCase() === (regionName || '').toLowerCase();
-    const hasAnySelection = selected !== 'all';
+    const isSelected = this.isRegionSelected(regionName);
+    const hasAnySelection = this.service.regionFilter().size > 0;
 
     if (isSelected) {
       return {
@@ -494,7 +712,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   setRegionFilter(region: string) {
-    this.service.setRegionFilter(region);
+    this.service.toggleFilterValue(this.service.regionFilter, region);
     this.updateRegionsLayerStyle();
   }
 
@@ -502,14 +720,6 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   onSearchInput(event: Event) {
     const value = (event.target as HTMLInputElement).value;
     this.service.searchQuery.set(value);
-
-    // shortcut: set loading placeholder sentinel values immediately
-    this.service.projects.set(null);
-    if (value) {
-      this.service.documents.set(null);
-    } else {
-      this.service.documents.set([]);
-    }
 
     if (this.searchDebounceTimer) {
       clearTimeout(this.searchDebounceTimer);
@@ -520,14 +730,6 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   private searchDebounceTimer: any = null;
-
-  setGatingFilter(state: 'all' | 'admitted' | 'staged') {
-    this.service.setGatingFilter(state);
-  }
-
-  setSectorFilter(sector: string) {
-    this.service.setSectorFilter(sector);
-  }
 
   setActiveTab(tab: 'projects' | 'documents') {
     this.service.activeTab.set(tab);
@@ -548,23 +750,16 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  selectDocument(doc: Document) {
-    this.service.selectDocument(doc);
-  }
-
+  /** Hand the project's name to Index Search, which is where documents are listed. */
   viewProjectDocuments(proj: Project) {
     this.setActiveTab('documents');
     this.service.searchQuery.set(proj.name);
     this.service.loadData();
+    this.router.navigate(['/index']);
   }
 
   getProjDocCount(projId: string | number): number {
     return (this.service.documents() || []).filter(d => d.projectId === projId).length;
-  }
-
-  getFullJson(proj: Project): string {
-    if (!proj || !proj.rawMetadata) return '{}';
-    return JSON.stringify(proj.rawMetadata, null, 2);
   }
 
   private renderBoundaryShapes(boundaries: any[], type: string) {
@@ -597,15 +792,14 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       }))
     };
 
-    const newLayer = L.geoJSON(featureCollection, {
+    const newLayer = L.geoJSON(featureCollection as GeoJSON.FeatureCollection, {
       renderer: this.canvasRenderer,
       smoothFactor: 1.0, // Auto-simplifies geometry at lower zoom levels for premium performance
       style: (feature: any) => {
         const name = feature?.properties?.name;
-        const filterValue = this.service.boundaryFilter() || 'all';
-        const filterLayer = this.service.boundaryFilterLayer() || 'none';
-        const isSelected = filterValue !== 'all' && filterValue !== '' && filterLayer === type && (name || '').toLowerCase() === filterValue.toLowerCase();
-        const hasAnySelection = filterValue !== 'all' && filterValue !== '';
+        const selected = this.boundarySelection(type);
+        const isSelected = selected.has(name);
+        const hasAnySelection = selected.size > 0;
 
         let strokeColor = '#0d9488';
         let fOpacity = 0.06;
@@ -659,10 +853,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         layer.on({
           mouseover: (e: any) => {
             const ly = e.target;
-            const filterValue = this.service.boundaryFilter() || 'all';
-            const filterLayer = this.service.boundaryFilterLayer() || 'none';
-            const isSelected = filterValue !== 'all' && filterValue !== '' && filterLayer === type && (name || '').toLowerCase() === filterValue.toLowerCase();
-            const hasAnySelection = filterValue !== 'all' && filterValue !== '';
+            const selected = this.boundarySelection(type);
+            const isSelected = selected.has(name);
+            const hasAnySelection = selected.size > 0;
 
             let highlightColor = '#6366f1';
             let hoverFillOpacity = 0.20;
@@ -705,25 +898,17 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
             }
           },
           click: (_e: any) => {
-            const currentFilter = this.service.boundaryFilter();
-            if (currentFilter.toLowerCase() === (name || '').toLowerCase()) {
-              this.service.boundaryFilter.set('all');
-              this.service.boundaryFilterLayer.set('none');
-            } else {
-              this.service.boundaryFilter.set(name);
-              this.service.boundaryFilterLayer.set(type);
-              if (layer.getBounds) {
-                const bounds = layer.getBounds();
-                if (bounds && bounds.isValid()) {
-                  this.map.fitBounds(bounds, { padding: [30, 30], maxZoom: 10, animate: true, duration: 0.4 });
-                }
+            this.setBoundaryFilter(type, name);
+            if (this.boundarySelection(type).has(name) && layer.getBounds) {
+              const bounds = layer.getBounds();
+              if (bounds && bounds.isValid()) {
+                this.map.fitBounds(bounds, { padding: [30, 30], maxZoom: 10, animate: true, duration: 0.4 });
               }
             }
-            this.updateBoundaryLayersStyles();
           }
         });
       }
-    }).addTo(this.map);
+    } as L.GeoJSONOptions).addTo(this.map);
 
     this.boundariesLayers.set(type, newLayer);
     newLayer.bringToBack();
@@ -746,102 +931,13 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
 
 
-  setBoundaryFilter(val: string, layerType: string) {
-    this.service.boundaryFilter.set(val);
-    if (val === 'all' || val === '') {
-      this.service.boundaryFilterLayer.set('none');
-    } else {
-      this.service.boundaryFilterLayer.set(layerType);
-      
-      // Automatically enable respective map overlay category on the map
-      const currentLayers = this.service.activeBoundaryLayers();
-      if (!currentLayers.includes(layerType)) {
-        this.service.activeBoundaryLayers.set([...currentLayers, layerType]);
-      }
-    }
-    this.boundariesLayers.forEach((targetLayer) => {
-      targetLayer.eachLayer((layer: any) => {
-        targetLayer.resetStyle(layer);
-      });
-    });
-  }
-
-  onDistrictSearchInput(event: Event) {
-    const value = (event.target as HTMLInputElement).value;
-    this.activeDistrictQuery.set(value);
-    if (!value.trim()) {
-      this.setBoundaryFilter('all', 'none');
-    }
-  }
-
-  selectDistrictOption(name: string) {
-    this.setBoundaryFilter(name, 'regionalDistricts');
-    this.showDistrictDropdown.set(false);
-  }
-
-  onDistrictDropdownBlur() {
-    setTimeout(() => {
-      this.showDistrictDropdown.set(false);
-      const activeFilter = this.service.boundaryFilter();
-      const activeLayer = this.service.boundaryFilterLayer();
-      if (activeLayer === 'regionalDistricts') {
-        this.activeDistrictQuery.set(activeFilter);
-      } else {
-        this.activeDistrictQuery.set('');
-      }
-    }, 200);
-  }
-
-  onMuniSearchInput(event: Event) {
-    const value = (event.target as HTMLInputElement).value;
-    this.activeMuniQuery.set(value);
-    if (!value.trim()) {
-      this.setBoundaryFilter('all', 'none');
-    }
-  }
-
-  selectMuniOption(name: string) {
-    this.setBoundaryFilter(name, 'municipalities');
-    this.showMuniDropdown.set(false);
-  }
-
-  onMuniDropdownBlur() {
-    setTimeout(() => {
-      this.showMuniDropdown.set(false);
-      const activeFilter = this.service.boundaryFilter();
-      const activeLayer = this.service.boundaryFilterLayer();
-      if (activeLayer === 'municipalities') {
-        this.activeMuniQuery.set(activeFilter);
-      } else {
-        this.activeMuniQuery.set('');
-      }
-    }, 200);
-  }
-
-  onElectoralSearchInput(event: Event) {
-    const value = (event.target as HTMLInputElement).value;
-    this.activeElectoralQuery.set(value);
-    if (!value.trim()) {
-      this.setBoundaryFilter('all', 'none');
-    }
-  }
-
-  selectElectoralOption(name: string) {
-    this.setBoundaryFilter(name, 'electoralDistricts');
-    this.showElectoralDropdown.set(false);
-  }
-
-  onElectoralDropdownBlur() {
-    setTimeout(() => {
-      this.showElectoralDropdown.set(false);
-      const activeFilter = this.service.boundaryFilter();
-      const activeLayer = this.service.boundaryFilterLayer();
-      if (activeLayer === 'electoralDistricts') {
-        this.activeElectoralQuery.set(activeFilter);
-      } else {
-        this.activeElectoralQuery.set('');
-      }
-    }, 200);
+  setBoundaryFilter(layer: string, name: string) {
+    this.service.toggleBoundaryFilter(layer, name);
+    // Ticking a boundary whose overlay is off would filter the results against something the map
+    // is not drawing, so turn the overlay on with it.
+    const active = this.service.activeBoundaryLayers();
+    if (!active.includes(layer)) this.service.activeBoundaryLayers.set([...active, layer]);
+    this.updateBoundaryLayersStyles();
   }
 
   highlightText(text: string | undefined, query: string): string {
@@ -856,10 +952,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     const current = this.service.activeBoundaryLayers();
     if (current.includes(layer)) {
       this.service.activeBoundaryLayers.set(current.filter(l => l !== layer));
-      if (this.service.boundaryFilterLayer() === layer) {
-        this.service.boundaryFilter.set('all');
-        this.service.boundaryFilterLayer.set('none');
-      }
+      // Only this layer's selections go: the other layers filter on independently.
+      const selected = this.service.boundaryFilter();
+      if (selected[layer]?.size) this.service.boundaryFilter.set({ ...selected, [layer]: new Set() });
     } else {
       this.service.activeBoundaryLayers.set([...current, layer]);
     }
@@ -918,7 +1013,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
             const customIcon = L.divIcon({
               className: 'wildfire-marker-icon',
-              html: `<div class="wildfire-marker-pill ${isFireOfNote ? 'fire-of-note' : ''}" style="background-color: ${color}; width: ${sizePx}px; height: ${sizePx}px;"><i class="fa-solid fa-fire"></i></div>`,
+              html: `<div class="wildfire-marker-pill ${isFireOfNote ? 'fire-of-note' : ''}" style="background-color: ${color}; width: ${sizePx}px; height: ${sizePx}px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2c1 4 5 5 5 10a5 5 0 0 1-10 0c0-2 1-3 2-4 0 2 1 3 2 3 0-3-1-6 1-9z"/></svg></div>`,
               iconSize: [sizePx, sizePx],
               iconAnchor: [anchorPx, anchorPx]
             });
@@ -942,7 +1037,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
               <div style="font-family: sans-serif; padding: 4px; max-width: 250px;">
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 6px;">
                   <h4 style="margin: 0; color: #d90429; font-size: 0.95rem;">
-                    <i class="fa-solid fa-fire"></i> ${title}
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2c1 4 5 5 5 10a5 5 0 0 1-10 0c0-2 1-3 2-4 0 2 1 3 2 3 0-3-1-6 1-9z"/></svg> ${title}
                   </h4>
                   ${isNote ? '<span style="background: #d90429; color: white; font-size: 0.65rem; font-weight: 700; padding: 2px 6px; border-radius: 4px;">FIRE OF NOTE</span>' : ''}
                 </div>
@@ -955,7 +1050,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
                 ${props.FIRE_URL ? `
                   <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #eee;">
                     <a href="${props.FIRE_URL}" target="_blank" rel="noopener" style="color: #0056b3; font-size: 0.78rem; font-weight: 600; text-decoration: underline; display: inline-flex; align-items: center; gap: 4px;">
-                      View Official BC Wildfire Details <i class="fa-solid fa-arrow-up-right-from-square" style="font-size: 0.7rem;"></i>
+                      View Official BC Wildfire Details <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>
                     </a>
                   </div>
                 ` : ''}

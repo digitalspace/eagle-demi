@@ -199,6 +199,8 @@ exports.updateProject = async (req, res) => {
       id: _ignoredId, trackProjectId: _ignoredTrackId,
       read: _ignoredRead, isPublished,
       status: wireStatus,
+      // The cacPublished predicate reads this, so PUT must not set it (doc §2 item 7).
+      projectCACPublished: _ignoredCACPublished,
       _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
       _ts: _ignoredTs, _etag: _ignoredEtag, sources: _ignoredSources,
       ...changes

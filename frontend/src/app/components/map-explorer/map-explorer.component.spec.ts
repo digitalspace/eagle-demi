@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideRouter } from '@angular/router';
 import { MapExplorerComponent } from './map-explorer.component';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { Project } from '../../models/registry.models';
@@ -26,10 +27,6 @@ describe('MapExplorerComponent wildfire panel', () => {
   let service: RegistryStateService;
 
   beforeEach(async () => {
-    // Leaflet is a script-tag global in index.html; karma serves no such tag, and the component
-    // calls L.canvas() in a field initializer (map-explorer.component.ts:324).
-    (window as any).L = { canvas: () => ({}) };
-
     // RegistryStateService's constructor kicks off I/O — see registry-state.service.spec.ts.
     spyOn(window, 'fetch').and.callFake(() =>
       Promise.resolve(new Response(JSON.stringify([{ searchResults: [] }]), {
@@ -40,17 +37,13 @@ describe('MapExplorerComponent wildfire panel', () => {
 
     await TestBed.configureTestingModule({
       imports: [MapExplorerComponent],
-      providers: [provideHttpClient(withXhr()), provideHttpClientTesting()]
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), provideRouter([])]
     }).compileComponents();
 
     fixture = TestBed.createComponent(MapExplorerComponent);
-    // ngAfterViewInit builds a real Leaflet map; the stub global above cannot.
+    // ngAfterViewInit builds a real Leaflet map; the test fixture has no sized map element.
     spyOn(fixture.componentInstance as any, 'initMap');
     service = TestBed.inject(RegistryStateService);
-  });
-
-  afterEach(() => {
-    delete (window as any).L;
   });
 
   it('renders counts and the fires-of-note warning', () => {
@@ -60,6 +53,8 @@ describe('MapExplorerComponent wildfire panel', () => {
       firesOfNoteNearby: 1,
       lastCalculatedAt: '2026-08-11T05:18:15.746Z'
     }));
+    // Wildfire proximity lives in the detail card's field rows, which only render expanded.
+    fixture.componentInstance.detailsExpanded.set(true);
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
@@ -69,12 +64,13 @@ describe('MapExplorerComponent wildfire panel', () => {
     expect(text).toContain('as of');
   });
 
-  it('hides the panel when sources.wildfire is absent', () => {
+  it('hides the wildfire rows when sources.wildfire is absent', () => {
     service.selectedProject.set(project());
+    fixture.componentInstance.detailsExpanded.set(true);
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('Test Project');
-    expect(text).not.toContain('Active Wildfire Proximity');
+    expect(text).not.toContain('Nearby fires');
   });
 });

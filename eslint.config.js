@@ -30,7 +30,9 @@ module.exports = [
       'dist/**',
       'frontend/**',
       'tmp/**',
-      'public/**'
+      'public/**',
+      'design/**',
+      '.claude/**'
     ]
   }
 ];

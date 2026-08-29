@@ -1,0 +1,88 @@
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>API documentation</h1>
+    <p>The Swagger UI the API serves itself, plus what a caller needs before the first request.</p>
+  </div>
+  @if (swaggerAvailable) {
+    <button type="button" (click)="openSwagger()" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Open Swagger UI</button>
+  }
+</div>
+
+<section class="panel panel--padded">
+  <h2 class="panel__title panel__title--inline">Authenticating</h2>
+  <div style="display: flex; flex-direction: column; gap: var(--layout-margin-medium);">
+    <div>
+      <div class="cell__title">Staff and applications</div>
+      <div class="cell__sub" style="overflow-wrap: anywhere;">Keycloak realm <code class="cell__mono">eao-epic</code>. Applications use a service account — <code class="cell__mono">client_credentials</code>, then a normal bearer token.</div>
+    </div>
+    <div>
+      <div class="cell__title">Callers without a Keycloak client</div>
+      <div class="cell__sub" style="overflow-wrap: anywhere;">A registry API key: <code class="cell__mono">X-Api-Key: demi_&lt;env&gt;_&lt;keyId&gt;_&lt;secret&gt;</code>, issued with its own roles, expiry and revocation.</div>
+    </div>
+  </div>
+</section>
+
+<section class="panel panel--scroll">
+  <h2 class="panel__title">Roles</h2>
+  <table style="min-width: 40rem;">
+    <thead>
+      <tr>
+        <th>Role</th>
+        <th>Reads</th>
+        <th style="width: 8rem;">Writes data</th>
+        <th style="width: 9rem;">Admin routes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="role-chip">public</span></td>
+        <td class="cell--muted">published rows only</td>
+        <td class="cell--muted">no</td>
+        <td class="cell--muted">no</td>
+      </tr>
+      <tr>
+        <td><span class="role-chip">compliance</span></td>
+        <td class="cell--muted">rows whose read[] names it</td>
+        <td class="cell--muted">no</td>
+        <td class="cell--muted">no</td>
+      </tr>
+      <tr>
+        <td><span class="role-chip">demi-service-read</span></td>
+        <td class="cell--muted">everything the ACL allows</td>
+        <td class="cell--muted">no</td>
+        <td class="cell--muted">no</td>
+      </tr>
+      <tr>
+        <td><span class="role-chip">demi-service-write</span></td>
+        <td class="cell--muted">everything the ACL allows</td>
+        <td class="cell--muted">yes</td>
+        <td class="cell--muted">no</td>
+      </tr>
+      <tr>
+        <td>
+          <span class="role-chips">
+            <span class="role-chip">sysadmin</span>
+            <span class="role-chip">staff</span>
+            <span class="role-chip">demi-admin</span>
+          </span>
+        </td>
+        <td class="cell--muted">everything the ACL allows</td>
+        <td class="cell--muted">yes</td>
+        <td class="cell--muted">yes</td>
+      </tr>
+      <tr>
+        <td><span class="role-chip">project:&lt;id&gt;</span></td>
+        <td class="cell--muted">scope, not a privilege — narrows any role to those projects</td>
+        <td class="cell--muted">no</td>
+        <td class="cell--muted">no</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<p class="footnote">
+  Ask for the least privilege that works. A privileged credential carrying a project scope is privileged within those projects only.
+  @if (!swaggerAvailable) {
+    Swagger UI is not linked here: the API serves it on dev and test only, so there is nothing to open in this environment.
+  }
+</p>

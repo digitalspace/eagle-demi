@@ -4,12 +4,12 @@ import { provideRouter } from '@angular/router';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { routes } from './app.routes';
-import { ConfigService } from './services/config.service';
+import { RegistryStateService } from './services/registry-state.service';
 
 describe('AppComponent', () => {
   beforeEach(async () => {
-    // AppComponent injects RegistryStateService (app.component.ts:14), whose constructor kicks off
-    // I/O: initKeycloak() -> authSettled() -> loadData(). Unstubbed, that issued a real request,
+    // AppComponent injects RegistryStateService, whose constructor kicks off I/O:
+    // initKeycloak() -> authSettled() -> loadData(). Unstubbed, that issued a real request,
     // karma answered 404, and the rejection settled after this spec had finished — which jasmine 7
     // reports as a run-level ERROR. See registry-state.service.spec.ts for the full note.
     spyOn(window, 'fetch').and.callFake(() =>
@@ -29,40 +29,48 @@ describe('AppComponent', () => {
     }).compileComponents();
   });
 
-  it('should create the app', () => {
+  /** Renders the shell for the given auth state and returns its root element. */
+  const renderAs = async (authenticated: boolean, unauthorized: boolean) => {
+    const service = TestBed.inject(RegistryStateService);
     const fixture = TestBed.createComponent(AppComponent);
-    const app = fixture.componentInstance;
-    expect(app).toBeTruthy();
+    // The gate renders nothing until Keycloak settles (authReady); settling also resets the
+    // auth signals, so set the scenario after it.
+    await service.authReady;
+    service.isAuthenticated.set(authenticated);
+    service.isUnauthorized.set(unauthorized);
+    fixture.detectChanges();
+    return { el: fixture.nativeElement as HTMLElement, fixture };
+  };
+
+  it('should create the app', () => {
+    expect(TestBed.createComponent(AppComponent).componentInstance).toBeTruthy();
   });
 
-  // The API mounts /api-docs in dev and test only (src/app.js), so in prod the link opened a tab
-  // on a 404. The environment arrives through /api/config, which ConfigService merges into
-  // window.__env — set here and re-read, so this drives the real config path, not the getter.
-  describe('the Swagger link', () => {
-    const swaggerButton = (fixture: any) =>
-      Array.from(fixture.nativeElement.querySelectorAll('button.nav-tab'))
-        .find((b: any) => b.textContent.includes('Swagger'));
+  it('shows the sign-in screen and no navigation to an anonymous visitor', async () => {
+    const { el } = await renderAs(false, false);
+    expect(el.querySelector('app-sign-in')).toBeTruthy();
+    expect(el.querySelector('.app-sidebar')).toBeNull();
+  });
 
-    const renderWith = async (env?: string) => {
-      (window as any)['__env'] = env === undefined ? {} : { ENVIRONMENT: env };
-      await TestBed.inject(ConfigService).init();
-      const fixture = TestBed.createComponent(AppComponent);
-      fixture.detectChanges();
-      return fixture;
-    };
+  // A real account carrying none of sysadmin / staff / demi-admin. Say so — a second login
+  // cannot fix it — rather than bouncing the visitor back to a blank sign-in screen.
+  it('explains the rejection when the account has no staff role', async () => {
+    const { el } = await renderAs(true, true);
+    expect(el.textContent).toContain('no EPIC staff role');
+    expect(el.querySelector('.app-sidebar')).toBeNull();
+  });
 
-    afterEach(() => { delete (window as any)['__env']; });
+  it('shows the four sidebar groups and every screen link to staff', async () => {
+    const { el, fixture } = await renderAs(true, false);
+    expect(el.querySelector('app-sign-in')).toBeNull();
+    // Default route is the map, which collapses the nav; open it to count links.
+    (el.querySelector('.app-sidebar__toggle') as HTMLButtonElement).click();
+    fixture.detectChanges();
 
-    it('is shown in dev and test', async () => {
-      for (const env of ['dev', 'test']) {
-        expect(swaggerButton(await renderWith(env))).toBeTruthy();
-      }
-    });
+    const headings = Array.from(el.querySelectorAll('.app-sidebar__heading')).map(h => h.textContent?.trim());
+    expect(headings).toEqual(['Discover', 'Operate', 'Access', 'Developers']);
 
-    it('is hidden in prod and when the environment is unknown', async () => {
-      for (const env of ['prod', undefined]) {
-        expect(swaggerButton(await renderWith(env))).toBeFalsy();
-      }
-    });
+    // Ten sidebar screens; profile and sessions are reachable from the account menu only.
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(10);
   });
 });

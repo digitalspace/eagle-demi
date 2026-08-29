@@ -8,14 +8,15 @@
 
 const { catalogFor, CATALOGS } = require('./catalog');
 const { LEVELS, levelOf } = require('./level');
+const PREDICATES = require('./predicates');
 const config = require('../config');
 
-// Predicates are Phase 3 (docs/rbac-architecture.md §2 item 7). Throwing at load rather than
-// ignoring `when` stops a half-shipped predicate from silently reading as "always visible".
+// A `when` naming a predicate that does not exist would widen nothing and say nothing. Throwing at
+// load stops a renamed or half-shipped predicate from silently pinning a field to `defaultVis`.
 for (const [entity, catalog] of Object.entries(CATALOGS)) {
   for (const [field, entry] of Object.entries(catalog)) {
-    if (entry && entry.when !== undefined) {
-      throw new Error(`[vis] predicates are not supported yet: ${entity}.${field} declares "when"`);
+    if (entry && entry.when !== undefined && !Object.hasOwn(PREDICATES, entry.when)) {
+      throw new Error(`[vis] unknown predicate "${entry.when}" on ${entity}.${field}`);
     }
   }
 }
@@ -27,10 +28,14 @@ function visible(level, effVis) {
   return level <= effVis;
 }
 
-/** A dial restricts below `defaultVis` and never above `maxVis`; anything else falls back. */
-function effectiveVis(entry, dial) {
-  if (!LEVELS.includes(dial)) return entry.defaultVis;
-  return Math.min(dial, entry.maxVis);
+/**
+ * A dial restricts below `defaultVis` and never above `maxVis`; anything else falls back. A dial
+ * beats the predicate: a classified field stays classified whatever the record says.
+ */
+function effectiveVis(entry, dial, record) {
+  if (LEVELS.includes(dial)) return Math.min(dial, entry.maxVis);
+  if (entry.when && PREDICATES[entry.when](record || {})) return entry.maxVis;
+  return entry.defaultVis;
 }
 
 /** `read[]` is authoritative and `isPublished` mirrors it — same rule as repositories/projects.js. */
@@ -40,7 +45,7 @@ function derivePublished(doc) {
 }
 
 /** The listed children of a dotted catalog key, for a parent the caller cannot see whole. */
-function visibleChildren(catalog, dials, level, key, value) {
+function visibleChildren(catalog, dials, level, key, value, record) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
 
   const prefix = `${key}.`;
@@ -52,7 +57,7 @@ function visibleChildren(catalog, dials, level, key, value) {
     // `sources.*` leaves the API only for the keys ENRICHMENT_SOURCES names (empty in prod) — the
     // allowlist publicView held before this replaced it.
     if (key === 'sources' && !config.enrichmentSources.includes(child)) continue;
-    if (visible(level, effectiveVis(catalog[catalogKey], dials[catalogKey]))) out[child] = value[child];
+    if (visible(level, effectiveVis(catalog[catalogKey], dials[catalogKey], record))) out[child] = value[child];
   }
 
   return Object.keys(out).length ? out : null;
@@ -77,12 +82,12 @@ function redactForAccess(entity, doc, access) {
     const entry = Object.hasOwn(catalog, key) ? catalog[key] : undefined;
     if (!entry) continue;
 
-    if (visible(level, effectiveVis(entry, dials[key]))) {
+    if (visible(level, effectiveVis(entry, dials[key], doc))) {
       out[key] = value;
       continue;
     }
 
-    const children = visibleChildren(catalog, dials, level, key, value);
+    const children = visibleChildren(catalog, dials, level, key, value, doc);
     if (children) out[key] = children;
   }
 
@@ -94,7 +99,7 @@ function redactForAccess(entity, doc, access) {
       Object.entries(out.highlighted).filter(([field]) => Object.hasOwn(out, field)));
   }
 
-  if (catalog.isPublished && visible(level, effectiveVis(catalog.isPublished, dials.isPublished))) {
+  if (catalog.isPublished && visible(level, effectiveVis(catalog.isPublished, dials.isPublished, doc))) {
     out.isPublished = derivePublished(doc);
   }
 
@@ -115,7 +120,7 @@ function refusedWriteKeys(entity, changes, access, existing) {
   const dials = existing && existing.vis && typeof existing.vis === 'object' ? existing.vis : {};
   const level = levelOf(access);
   return Object.keys(changes).filter(key => key === 'vis' || !Object.hasOwn(catalog, key) ||
-    !visible(level, effectiveVis(catalog[key], dials[key])));
+    !visible(level, effectiveVis(catalog[key], dials[key], existing)));
 }
 
 module.exports = { visible, effectiveVis, redactForAccess, redactAllForAccess, refusedWriteKeys };

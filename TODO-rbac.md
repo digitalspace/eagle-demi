@@ -317,8 +317,9 @@ Eagle-only fields (`merge/project.js:48-57`, 31 entries) — `defaultVis: 4, max
       `CEAAInvolvement` · `projectLead` · `responsibleEPD` · `eaoMember` · `sector` · `commodity` ·
       `region` · `fedElecDist` · `provElecDist` · `projectCAC` · `projectCACPublished` ·
       `overallProgress` · `code`
-- [x] `projectLeadEmail` · `responsibleEPDEmail` · `cacEmail` — `defaultVis: 4, maxVis: 4` today.
-      Stay at 4: public by policy (§3 question 2, 2026-08-28).
+- [x] `projectLeadEmail` · `responsibleEPDEmail` — `defaultVis: 4, maxVis: 4` today.
+      Stay at 4: public by policy (§3 question 2, 2026-08-28). `cacEmail` moved to
+      `defaultVis: 2` with the `cacPublished` predicate in P3-8.
 - [x] `complianceLead`, `execProjectDirector` — `defaultVis: 2, maxVis: 4` per doc §2 item 3.
       **This is a byte change** on any row that carries a value. Before merging, count rows:
       `SELECT VALUE COUNT(1) FROM c WHERE IS_DEFINED(c.complianceLead)` over `projects` (via the
@@ -1209,9 +1210,9 @@ Branch: `feat/ladder-widen-endpoint`
         documents 34 → 38. Every new site redacts.
 - Acceptance
   - [x] `node --test test/controllers/nosql/record-level.test.js test/controllers/audit-cud-coverage.test.js` — 0 fail.
-  - [ ] On test: `PUT /api/projects/207/level -d '{"level":4}'` → 400; with `"confirm":true` → 200
-        and anonymous `GET /api/projects/207` → 200. `DemiAudit_CL | where Action == "record.widen"`
-        returns the row with `Detail.from` and `Detail.to`.
+  - [x] On test 2026-08-28: `PUT /api/projects/207/level -d '{"level":4}'` → 400 (confirm), level 9
+        → 400, no credential → 401. Widening 207 for real, and the `DemiAudit_CL` `record.widen`
+        row, wait for a staff login (Daniel); anonymous snapshot diff after deploy: 0 lines.
 
 ## P3-5 dials and the classify endpoint
 
@@ -1232,9 +1233,9 @@ Branch: `feat/vis-classify-endpoint`
         `'400 on an uncatalogued field'`, `'patches, never upserts'`, `'audits before responding'`.
 - Acceptance
   - [x] `node --test test/controllers/nosql/project-visibility.test.js` — 0 fail.
-  - [ ] On test: a `staff` token PATCHing `/visibility` → 403; `sysadmin` → 200; a follow-up
-        anonymous GET omits the dialled field. `DemiAudit_CL | where Action == "project.reclassify"`
-        returns the row.
+  - [x] On test 2026-08-28 with the admin key: uncatalogued field → 400, empty `vis` → 400, no
+        credential → 401. The `staff` 403, the `sysadmin` 200 with a dialled field vanishing from
+        the anonymous GET, and the `project.reclassify` audit row wait for a staff login (Daniel).
 
 ## P3-6 Selected Credentials
 
@@ -1319,18 +1320,18 @@ Acceptance
 
 Branch: `feat/vis-cac-predicate`
 
-- [ ] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:58`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only `PATCH /visibility` (P3-5) or the Eagle push may set it. Merges before the predicate, per doc section 2 item 7.
-- [ ] Only then: `cacPublished: (record) => record.projectCACPublished === true` in `src/vis/predicates.js`, and `when: 'cacPublished'` on `cacEmail` in `src/vis/catalog/projects.js` with `defaultVis: 2, maxVis: 4`.
+- [x] `projectCACPublished` is an ordinary `EAGLE_ONLY_FIELDS` content field (`src/merge/project.js:58`) that any `WRITE_ROLES` caller sets through PUT. Add it to the PUT strip list at `src/controllers/nosql/project.js:187-192` so only the Eagle push sets it. Merges before the predicate, per doc section 2 item 7. The Eagle push shares PUT's `requireWrite` gate, so this is mirror ownership, not a privilege boundary.
+- [x] Only then: `cacPublished: (record) => record.projectCACPublished === true` in `src/vis/predicates.js`, and `when: 'cacPublished'` on `cacEmail` in `src/vis/catalog/projects.js` with `defaultVis: 2, maxVis: 4`.
 
 Tests
 
-- [ ] `test/controllers/nosql/nosql-controllers.test.js` — case `'PUT /api/projects/:id cannot set projectCACPublished'` asserts the stored row is unchanged. Fails today, where the body spreads in at `:211`.
-- [ ] `test/vis/redact-matrix.test.js` — case `'cacEmail is public only while the CAC is published'`: level 4 + `projectCACPublished: true` → present; level 4 + false → absent; level 2 → present in both. Fails if the predicate narrows instead of widening.
-- [ ] Same file, case `'a dial beats the predicate'`: `vis: { cacEmail: 0 }` with `projectCACPublished: true` → absent at level 4 and at level 2. Fails on the source design's AND semantics.
+- [x] `test/controllers/nosql-controllers.test.js` — case `'PUT /api/projects/:id cannot set projectCACPublished'` asserts the stored row is unchanged. Fails today, where the body spreads in at `:211`.
+- [x] `test/vis/redact-matrix.test.js` — case `'cacEmail is public only while the CAC is published'`: level 4 + `projectCACPublished: true` → present; level 4 + false → absent; level 2 → present in both. Fails if the predicate narrows instead of widening.
+- [x] Same file, case `'a dial beats the predicate'`: `vis: { cacEmail: 0 }` with `projectCACPublished: true` → absent at level 4 and at level 2. Fails on the source design's AND semantics.
 
 Acceptance
 
-- [ ] `node --test test/vis/redact-matrix.test.js test/controllers/nosql/nosql-controllers.test.js` — 0 fail.
+- [x] `node --test test/vis/redact-matrix.test.js test/controllers/nosql-controllers.test.js` — 0 fail.
 - [ ] Anonymous `GET /api/projects/<published-CAC-project>` still returns `cacEmail` (today's behaviour, per doc section 2 item 3).
 
 ---
@@ -1351,7 +1352,7 @@ Docs only. Written before P3-4 ships, because P3-4's 403 path points at it.
 - [x] The runbook states plainly that copies already outside EPIC — downloads, mirrors, search
       engine caches — are unrecoverable, and that a takedown is incident response with a recorded
       reason, never a routine correction.
-- [x] Linked from `docs/rbac-architecture.md` §1. The `docs/prod-flip-runbook.md` link is still open.
+- [x] Linked from `docs/rbac-architecture.md` §1 and `docs/prod-flip-runbook.md`.
 - [x] Acceptance: `docs/takedown-runbook.md` exists and its AI Search step names the real helper —
       `grep -n deleteFromIndex src/search/*.js` resolves.
 

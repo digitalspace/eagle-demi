@@ -71,7 +71,7 @@ describe('RegistryStateService', () => {
 
   it('should have correct default signal values', () => {
     expect(service.activeBoundaryLayer()).toBe('regions');
-    expect(service.boundaryFilter()).toBe('all');
+    expect(service.boundaryFilter()).toEqual({});
     expect(service.loadedBoundariesGeoJSON()).toEqual({});
     expect(service.activeBoundaryNames()).toEqual([]);
   });
@@ -155,14 +155,14 @@ describe('RegistryStateService', () => {
     service.projects.set(mockProjects);
     service.searchQuery.set('Mine'); // search query set to 'Mine'
 
-    // When sector filter is 'all', both are returned by filteredProjectsNoQuery because it ignores search query 'Mine'
+    // With no sector ticked, both are returned by filteredProjectsNoQuery because it ignores search query 'Mine'
     expect(service.filteredProjectsNoQuery()).toEqual(mockProjects);
 
     // But filteredProjects should honor the search query 'Mine'
     expect(service.filteredProjects()).toEqual([mockProjects[0]]);
 
-    // If sector filter is set to Energy, filteredProjectsNoQuery should filter by sector
-    service.sectorFilter.set('Energy');
+    // If the sector filter is set to Energy, filteredProjectsNoQuery should filter by sector
+    service.sectorFilter.set(new Set(['Energy']));
     expect(service.filteredProjectsNoQuery()).toEqual([mockProjects[1]]);
     // filteredProjects will be empty because Wind B does not match 'Mine'
     expect(service.filteredProjects()).toEqual([]);
@@ -183,22 +183,18 @@ describe('RegistryStateService', () => {
     ];
     service.projects.set(mockProjects);
 
-    const options = service.sectorOptions();
-
-    // 'all' leads and counts every matching project, including the one with no sector.
-    expect(options[0]).toEqual({ value: 'all', label: 'All Sectors', count: 6 });
     // Sorted by count, and the whitespace pair is ONE entry of 2, not two of 1.
-    expect(options.slice(1)).toEqual([
+    expect(service.sectorOptions()).toEqual([
       { value: 'Coal Mines', label: 'Coal Mines', count: 2 },
       { value: 'Groundwater Extraction', label: 'Groundwater Extraction', count: 2 },
       { value: 'Power Plants', label: 'Power Plants', count: 1 }
     ]);
 
     // Clicking a chip returns exactly the count it advertised.
-    service.sectorFilter.set('Coal Mines');
+    service.sectorFilter.set(new Set(['Coal Mines']));
     expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p1', 'p2']);
 
-    service.sectorFilter.set('Groundwater Extraction');
+    service.sectorFilter.set(new Set(['Groundwater Extraction']));
     expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p4', 'p5']);
   });
 
@@ -208,12 +204,12 @@ describe('RegistryStateService', () => {
       { id: 'p2', name: 'Coal B', sector: 'Coal Mines', gatingState: 'admitted', region: 'Skeena' }
     ];
     service.projects.set(mockProjects);
-    service.regionFilter.set('Peace');
+    service.regionFilter.set(new Set(['Peace']));
 
     const coal = service.sectorOptions().find(o => o.value === 'Coal Mines');
     expect(coal!.count).toBe(1);
 
-    service.sectorFilter.set('Coal Mines');
+    service.sectorFilter.set(new Set(['Coal Mines']));
     expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p1']);
   });
 
@@ -225,12 +221,53 @@ describe('RegistryStateService', () => {
       { id: 'p2', name: 'Plant A', sector: 'Power Plants', gatingState: 'admitted', region: 'Skeena' }
     ];
     service.projects.set(mockProjects);
-    service.sectorFilter.set('Coal Mines');
-    service.regionFilter.set('Skeena');
+    service.sectorFilter.set(new Set(['Coal Mines']));
+    service.regionFilter.set(new Set(['Skeena']));
 
     const coal = service.sectorOptions().find(o => o.value === 'Coal Mines');
     expect(coal).toEqual({ value: 'Coal Mines', label: 'Coal Mines', count: 0 });
     expect(service.filteredProjectsNoQuery()).toEqual([]);
+  });
+
+  it('should OR the values inside one section and AND across sections', () => {
+    const mockProjects: any[] = [
+      { id: 'p1', name: 'Coal A', sector: 'Coal Mines', gatingState: 'admitted', region: 'Peace' },
+      { id: 'p2', name: 'Plant A', sector: 'Power Plants', gatingState: 'admitted', region: 'Peace' },
+      { id: 'p3', name: 'Coal B', sector: 'Coal Mines', gatingState: 'admitted', region: 'Skeena' },
+      { id: 'p4', name: 'Wind A', sector: 'Wind Energy', gatingState: 'admitted', region: 'Peace' }
+    ];
+    service.projects.set(mockProjects);
+
+    // OR inside the sector section.
+    service.sectorFilter.set(new Set(['Coal Mines', 'Power Plants']));
+    expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p1', 'p2', 'p3']);
+
+    // AND across sections: adding a region narrows the sector set rather than replacing it.
+    service.regionFilter.set(new Set(['Peace']));
+    expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p1', 'p2']);
+
+    // Facet counts are taken under every OTHER section, so they stay honest under the AND.
+    const counts = new Map(service.sectorOptions().map(o => [o.value, o.count]));
+    expect(counts.get('Coal Mines')).toBe(1);
+    expect(counts.get('Wind Energy')).toBe(1);
+    expect(counts.get('Power Plants')).toBe(1);
+  });
+
+  it('should constrain by two boundary layers at once', () => {
+    const mockProjects: any[] = [
+      { id: 'p1', name: 'A', gatingState: 'admitted', regionalDistrict: 'Capital', municipality: 'Victoria' },
+      { id: 'p2', name: 'B', gatingState: 'admitted', regionalDistrict: 'Capital', municipality: 'Sooke' },
+      { id: 'p3', name: 'C', gatingState: 'admitted', regionalDistrict: 'Nanaimo', municipality: 'Victoria' }
+    ];
+    service.projects.set(mockProjects);
+
+    service.boundaryFilter.set({
+      regionalDistricts: new Set(['Capital']),
+      municipalities: new Set(['Victoria', 'Sooke'])
+    });
+
+    // Regional district AND municipality, with the two municipalities OR'd.
+    expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p1', 'p2']);
   });
 
   it('should bypass project-matching check for filteredDocuments when on the search page', () => {
@@ -255,13 +292,16 @@ describe('RegistryStateService', () => {
 
     // When on the map page, it should require the parent project to be in filteredProjectsNoQuery
     service.activePage.set('map');
-    service.sectorFilter.set('Energy'); // 'p1' (Mining) is excluded from filteredProjectsNoQuery now
+    service.sectorFilter.set(new Set(['Energy'])); // 'p1' (Mining) is excluded from filteredProjectsNoQuery now
     expect(service.filteredDocuments()).toEqual([]);
   });
 
   // loadData used to swallow any API failure and substitute mock projects, so a broken
   // backend rendered as a healthy demo full of fictional data. It must fail visibly.
   describe('loadData failure handling', () => {
+    // The constructor's own load already cached the empty query; these specs exercise the fetch.
+    beforeEach(() => { (service as unknown as { loadedQuery: string | null }).loadedQuery = null; });
+
     it('should surface an error and NOT substitute mock data when the API fails', async () => {
       sharedFetchSpy.and.rejectWith(new Error('network down'));
 
@@ -297,7 +337,26 @@ describe('RegistryStateService', () => {
   // field from the pair compared across id-spaces: `filteredDocuments` and
   // `map-explorer.getProjDocCount` both match it against `Project.id`, so every per-project
   // document count read 0 and the document list emptied on every page but /search.
+  describe('loadData cache guard', () => {
+    it('refetches when a query is set but the chunks were cleared', async () => {
+      (service as unknown as { loadedQuery: string | null }).loadedQuery = 'mine';
+      service.searchQuery.set('mine');
+      service.projects.set([]);
+      service.documents.set([]);
+      service.documentChunks.set(null);
+      sharedFetchSpy.calls.reset();
+
+      await service.loadData();
+
+      expect(sharedFetchSpy).toHaveBeenCalled();
+      expect(service.documentChunks()).not.toBeNull();
+    });
+  });
+
   describe('document project ids', () => {
+    // The constructor's own load already cached the empty query; these specs exercise the fetch.
+    beforeEach(() => { (service as unknown as { loadedQuery: string | null }).loadedQuery = null; });
+
     const byDataset = (url: string) => {
       if (url.includes('dataset=Project')) {
         return okResponse([{
@@ -406,9 +465,9 @@ describe('RegistryStateService', () => {
       expect(service.resultCountLabel(12, null)).toBe('12');
     });
 
-    it('treats the loading sentinel as zero rather than pairing it with a stale total', () => {
-      expect(service.resultCountLabel(undefined, 1204)).toBe('0');
-      expect(service.resultCountLabel(null, 1204)).toBe('0');
+    it('shows an ellipsis for the loading sentinel rather than pairing it with a stale total', () => {
+      expect(service.resultCountLabel(undefined, 1204)).toBe('…');
+      expect(service.resultCountLabel(null, 1204)).toBe('…');
     });
   });
 

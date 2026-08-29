@@ -24,7 +24,7 @@ DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && { DRY_RUN=1; shift; }
 ORIGIN="${1:-}"
 [[ -z "$ORIGIN" ]] && usage 1
-[[ "$ORIGIN" =~ ^https://[^/]+$ ]] || { echo "origin must be https://host with no path: $ORIGIN" >&2; exit 1; }
+[[ "$ORIGIN" =~ ^https://[^/]+$ || "$ORIGIN" =~ ^http://localhost(:[0-9]+)?$ ]] || { echo "origin must be https://host (or http://localhost[:port]) with no path: $ORIGIN" >&2; exit 1; }
 
 case "$ENV" in
   test) KC_BASE="https://test.loginproxy.gov.bc.ca/auth"; NS="6cdc9e-test" ;;
