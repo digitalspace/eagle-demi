@@ -95,3 +95,25 @@ test('vis is retrievable and never searchable', () => {
   assert.strictEqual(vis.filterable, false, 'so is a filterable one');
   assert.strictEqual(vis.facetable, false, 'a facet count over dials answers the same question');
 });
+
+// The dial keys are stored in the Cosmos vocabulary and applied to a hit in the index one, so the
+// rename map is the third file that has to move when a column is renamed. An entry pointing at a
+// key that no longer exists on either side is silent: the dial simply stops applying.
+test('every rename maps a real stored field onto a real index field', () => {
+  const { PROJECT_TO_INDEX, dialsForIndex } = require('../../src/vis/catalog/index-projects-renames');
+  const stored = catalogFor('projects');
+  const hit = catalogFor('index-projects');
+
+  for (const [from, targets] of Object.entries(PROJECT_TO_INDEX)) {
+    assert.ok(stored[from], `${from} is mapped but is not a projects field`);
+    for (const to of targets) {
+      assert.ok(hit[to], `${from} maps to ${to}, which is not an index-projects field`);
+    }
+  }
+
+  // The two ends of the translation the map exists for, plus the passthrough and the drop.
+  assert.deepStrictEqual(
+    dialsForIndex({ proponentName: 2, description: 2, complianceLead: 2 }),
+    { proponent: 2, description: 2 },
+    'renamed keys translate, same-named keys pass through, index-less keys are dropped');
+});

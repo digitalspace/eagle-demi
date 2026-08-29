@@ -413,6 +413,37 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(row.read, undefined, 'the row still went through the redactor');
   });
 
+  // The dials are stored in the COSMOS vocabulary and applied to an INDEX hit, which the data
+  // source renames on the way in. Without the translation every dial on a renamed column is inert
+  // here while it works on the Cosmos branch — `description` is the one field spelled the same in
+  // both, so a test that dials only it cannot see the hole.
+  await t.test('a dial on a renamed field withholds on the index branch too', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1,
+      items: [{
+        id: '207',
+        name: 'Nicomen Wind Energy',
+        description: 'A wind farm.',
+        proponent: 'Secret Proponent Inc',
+        status: 'Secret Status',
+        read: ['public'],
+        vis: '{"proponentName": 2, "projectState": 2, "description": 2}'
+      }]
+    }));
+
+    let body = null;
+    const res = { json: (b) => { body = b; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'nicomen' }, header: () => null }, res);
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row.proponent.name, 'Proponent Organization',
+      'proponentName dials the index column `proponent`');
+    assert.strictEqual(row.status, 'Active', 'projectState dials the index column `status`');
+    assert.strictEqual(row.description, 'No project description provided.',
+      'the same-named field stays withheld');
+  });
+
   // The catalog gates QUERY keys as well as response fields (P2-3). `read` is the only FILTERABLE
   // field the index catalogs put below level 4, so it is the one key that proves the gate: without
   // it `read/any(x: x eq 'sysadmin')` composes into the caller's own filter.

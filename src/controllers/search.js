@@ -4,6 +4,7 @@
 // from the Cosmos NoSQL repositories — see wiki Search-Query-Construction#project-reads-split-between-cosmos-and-the-index.
 const { resolveAccess } = require('../helpers/access-sql');
 const { redactForAccess, redactAllForAccess } = require('../vis/redact');
+const { dialsForIndex } = require('../vis/catalog/index-projects-renames');
 const { logger } = require('../utils/logger');
 const { filterFor } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
@@ -297,13 +298,15 @@ exports.search = async (req, res) => {
                 // (docs/rbac-architecture.md §2 item 9).
                 // The index has no map type, so the dials arrive as a JSON string. A malformed one
                 // fails closed to no dials — every field at its `defaultVis`, never the raw row.
+                // `dialsForIndex` restates the stored keys as index ones; the data source renames
+                // columns, so an untranslated dial would be inert on exactly the renamed fields.
                 let dials;
                 try {
                   dials = JSON.parse(hit.vis || '{}');
                 } catch {
                   dials = {};
                 }
-                const doc = redactForAccess('index-projects', { ...hit, vis: dials }, access);
+                const doc = redactForAccess('index-projects', { ...hit, vis: dialsForIndex(dials) }, access);
                 return {
                 // THE EAGLE ObjectId — eagle-public re-fetches the project from eagle-api by it.
                 // Falls back to the DEMI id for a Track-only project. See
