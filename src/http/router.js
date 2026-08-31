@@ -104,7 +104,14 @@ function match(method, pathname) {
     const found = route.regex.exec(target);
     if (!found) continue;
     const params = {};
-    route.names.forEach((name, i) => { params[name] = decodeURIComponent(found[i + 1]); });
+    route.names.forEach((name, i) => {
+      try {
+        params[name] = decodeURIComponent(found[i + 1]);
+      } catch {
+        // A malformed percent-escape (e.g. `%ZZ`) is caller error, not a server fault.
+        throw httpError(400, 'Bad Request');
+      }
+    });
     return { ...route, params };
   }
   return null;
@@ -287,8 +294,12 @@ async function dispatch(request, context) {
         }
       }
     } catch (err) {
-      logger.error('Central API Error:', { error: err.message, stack: err.stack });
-      if (!res.finished) res.status(err.status || 500).json({ error: 'Internal Server Error' });
+      const status = err.status || 500;
+      // A 4xx here is caller error the route already classified (bad JSON, oversized body, a
+      // malformed path segment) — the per-request access log below records it at warn, so an
+      // error-level stack for something that isn't a server fault would just be noise.
+      if (status >= 500) logger.error('Central API Error:', { error: err.message, stack: err.stack });
+      if (!res.finished) res.status(status).json({ error: status >= 500 ? 'Internal Server Error' : err.message });
     } finally {
       const ms = Number(process.hrtime.bigint() - started) / 1e6;
       // A logging failure must never turn a served response into an error.

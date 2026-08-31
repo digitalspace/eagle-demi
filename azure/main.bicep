@@ -67,14 +67,6 @@ param doclingApiKey string
 @description('Upstream eagle-api the seed loader reads. Environment-specific — the code default is the DEV instance, so this must be set per environment or staging silently reads dev data.')
 param eagleApiBase string
 
-// PER ENVIRONMENT, because the right value depends on how the browser reaches this API, which is
-// not the same in every environment. Direct browser traffic gives one bucket per caller and 300 is
-// right; behind a reverse proxy the app sees the PROXY's address on every request, so all visitors
-// share one bucket and 300/min is 5 requests per second for the whole site. See the module's own
-// parameter and `src/middleware/rate-limiter.js`.
-@description('Requests per minute per rate-limit bucket. Raise it wherever a proxy collapses every visitor into one bucket.')
-param rateLimitMaxRequests int = 300
-
 @description('Public origin short links redirect from, e.g. https://projects.eao.gov.bc.ca. Per environment: test must not hand back the prod host.')
 param linkBaseUrl string = ''
 
@@ -145,6 +137,11 @@ param ssoAudience string = ''
 // Empty creates demi-plan-<env>. Prod joins an existing plan instead; see the param file.
 @description('App Service plan to join instead of creating one. Must be a Linux plan.')
 param existingServerFarmId string = ''
+
+// Flex needs its own subnet, delegated to `Microsoft.App/environments` — not the serverFarms-
+// delegated one the B1 app integrates into. Empty deploys no Flex app, which is dev's case.
+@description('Delegated subnet for the Flex Consumption API app. Empty skips it and only the B1 app is deployed.')
+param apiFlexSubnetId string = ''
 
 // Phase 3b. The module is written and the argument for it is per-environment isolation rather than
 // cost, but nothing is deployed and nothing is copied — and turning it on needs `Storage Blob
@@ -447,7 +444,52 @@ module apiWebApp './modules/api-web-app.bicep' = {
     auditWorkspaceId: auditLogs.outputs.workspaceId
     // The browser origins that call this API. See the parameter for why they are not derivable.
     frontendHostNames: frontendHostNames
-    rateLimitMaxRequests: rateLimitMaxRequests
+    linkBaseUrl: linkBaseUrl
+  }
+}
+
+// 7a. The same REST API on Flex Consumption, deployed ALONGSIDE the B1 app above for the length of
+// the blue/green: same code, same identity, own plan and own storage. rproxy is flipped to it only
+// after it is proven, and the app above is what a rollback goes back to.
+module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexSubnetId)) {
+  name: 'deploy-api-function-flex'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    minioHost: minioHost
+    minioAccessKey: minioAccessKey
+    minioSecretKey: minioSecretKey
+    minioBucketName: minioBucketName
+    minioKeyPrefix: minioKeyPrefix
+    adminApiKeySecretUri: keyVault.outputs.adminApiKeySecretUri
+    doclingApiKey: doclingApiKey
+    eagleApiBase: eagleApiBase
+    reconcileSchedule: reconcileSchedule
+    trackApiBase: trackApiBase
+    trackClientId: trackClientId
+    trackClientSecretUri: keyVault.outputs.trackClientSecretUri
+    roleSyncClientId: roleSyncClientId
+    roleSyncClientSecretUri: keyVault.outputs.roleSyncClientSecretUri
+    syncTeamsSchedule: syncTeamsSchedule
+    keycloakClientId: keycloakClientId
+    allowedClients: allowedClients
+    ssoAudience: ssoAudience
+    virtualNetworkSubnetId: apiFlexSubnetId
+    identityId: identity.outputs.identityId
+    identityClientId: identity.outputs.clientId
+    identityPrincipalId: identity.outputs.principalId
+    cosmosEndpoint: cosmos.outputs.cosmosEndpoint
+    searchEndpoint: deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
+    appInsightsConnectionString: observability.outputs.connectionString
+    enrichmentSources: enrichmentSources
+    summaryEnabled: summaryEnabled
+    foundryEndpoint: deployFoundry ? foundry!.outputs.foundryEndpoint : ''
+    foundryDeployment: deployFoundry ? foundry!.outputs.deploymentName : ''
+    auditDcrEndpoint: auditLogs.outputs.dcrEndpoint
+    auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
+    auditWorkspaceId: auditLogs.outputs.workspaceId
+    frontendHostNames: frontendHostNames
     linkBaseUrl: linkBaseUrl
   }
 }
@@ -493,6 +535,8 @@ module costBudget './modules/cost-budget.bicep' = {
 
 // Outputs
 output apiWebAppHostName string = apiWebApp.outputs.apiWebAppHostName
+// Empty until the Flex app is deployed. The host rproxy is flipped to in Phase 4.
+output apiFlexHostName string = !empty(apiFlexSubnetId) ? apiFunctionFlex!.outputs.apiFunctionAppHostName : ''
 // COPY THIS INTO eagle-search's Front Door parameters. The profile owns the DEMI route but not the
 // origin, so it needs this hostname to add one; it is stable for the life of the storage account.
 output frontendStaticSiteHostName string = deployStaticSite ? staticSite!.outputs.staticSiteHostName : ''

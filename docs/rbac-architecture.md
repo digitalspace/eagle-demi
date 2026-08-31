@@ -156,9 +156,16 @@ container `credentials`, partition `/party.id`:
 `{ id, party: { type: 'user'|'group'|'apikey', id }, scope: { type: 'document'|'project', ids[] },
 levels: [1..3], start, end, grantedBy, grantedAt, revokedAt, batchId, note }`.
 Loaded once per request by party (`sub`, a `groups` entry, or `req.user.keyId`), expired and
-revoked rows filtered in JS. Evaluated as one extra OR arm in `readClause`, `canRead` and
-`filterFor`: `id ∈ scope.ids AND read[] carries one of levels`. `levels` reuses the ladder tokens,
-so no new SQL. Grant, revoke and bulk revoke (by `batchId`, party or project) go through
+revoked rows filtered in JS, cached 60 seconds per party. Evaluated as one extra OR arm in
+`readClause`, `canRead` and `filterFor`: `id ∈ scope.ids AND levelOfRead(read) ∈ levels`. `levels`
+reuses the ladder tokens, so no new SQL: one `EXISTS` over the granted tokens and one negated
+`EXISTS` over the tokens above them. The second is what makes the arm mean the row's own level —
+levels 2-4 nest in `read[]`, so a level-3 row carries `staff` and containment alone would hand it
+to a `levels: [2]` grant. A row with no ladder token matches neither and stays privileged-only.
+A project-scoped grant compares the partition field (`id` on projects, `projectId` elsewhere); a
+document-scoped one compares the record itself — `id` in Cosmos and on the documents index,
+`documentId` on chunks, nothing on projects. Grant, revoke and bulk revoke (by `batchId`, party or
+project) go through
 `auditEvent`. Credentials never touch the field plane — the holder's own level still governs which
 attributes they see — and level 4 needs none.
 

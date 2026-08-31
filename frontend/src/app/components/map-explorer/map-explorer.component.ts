@@ -227,6 +227,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     for (const [key, value] of Object.entries(p.rawMetadata?.trackAttributes || {})) {
       push('TRACK', this.humanise(key), value);
     }
+    // Track's own column, but it arrives on the mapped project rather than in `trackAttributes`.
+    // `push` drops it when the project has no certificate.
+    push('TRACK', 'EA Certificate', p.eaCertificate);
     for (const [key, value] of Object.entries(p.rawMetadata?.eagleAttributes || {})) {
       push('EPIC', this.humanise(key), value);
     }

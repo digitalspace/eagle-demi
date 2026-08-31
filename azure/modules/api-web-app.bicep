@@ -108,9 +108,6 @@ param cosmosDatabase string = 'demi'
 @allowed([ 'minio', 'azure' ])
 param storageBackend string = 'minio'
 
-@description('Requests per minute per rate-limit bucket. 300 suits direct browser traffic, where one caller is one bucket; behind a reverse proxy every visitor shares a single bucket and this must be raised.')
-param rateLimitMaxRequests int = 300
-
 @description('Public origin short links redirect from, e.g. https://projects.eao.gov.bc.ca. Per-environment: test must not hand back the prod host.')
 param linkBaseUrl string = ''
 
@@ -368,22 +365,9 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'MINIO_USE_SSL'
           value: 'true'
         }
-        // Requests per minute per rate-limit bucket. Declared here BECAUSE this array is a
-        // whole-collection PUT: without a line here the setting has no home, so a hand-set value is
-        // deleted by the next infra deploy and the app silently reverts to its built-in default.
-        //
-        // 300 is right while the browser reaches this app directly, where one caller is one bucket.
-        // It is wrong behind a reverse proxy: eao-nginx sets no X-Forwarded-For, App Service appends
-        // the proxy's own address, and src/middleware/rate-limiter.js keys on the last entry — so
-        // every visitor through eao-nginx's `location = /demi-search/search` shares ONE bucket, and
-        // 300/min is 5 r/s for the whole site. Raise this in the same change that routes public
-        // traffic through that proxy, not after.
-        {
-          name: 'RATE_LIMIT_MAX_REQUESTS'
-          value: string(rateLimitMaxRequests)
-        }
-        // Same whole-collection-PUT reason as RATE_LIMIT_MAX_REQUESTS: a hand-set value dies on the
-        // next infra deploy. Per environment — test must hand back the test host, not prod's.
+        // Declared here BECAUSE this array is a whole-collection PUT: a setting that exists live and
+        // is absent here is deleted by the next infra deploy. Per environment — test must hand back
+        // the test host, not prod's.
         {
           name: 'LINK_BASE_URL'
           value: linkBaseUrl

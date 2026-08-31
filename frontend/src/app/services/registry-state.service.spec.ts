@@ -369,6 +369,82 @@ describe('RegistryStateService', () => {
     });
   });
 
+  describe('eaCertificate', () => {
+    beforeEach(() => { (service as unknown as { loadedQuery: string | null }).loadedQuery = null; });
+
+    const withProjects = (rows: unknown[]) => (url: string) =>
+      url.includes('dataset=Project')
+        ? okResponse([{ searchResults: rows, count: rows.length }])
+        : okResponse([{ searchResults: [], count: 0 }]);
+
+    it('carries the value through verbatim, number or state word', async () => {
+      // Track uses the column for certificate STATE as well as numbers; normalising either end
+      // would drop the ~100 records that say "Withdrawn" or "In progress".
+      sharedFetchSpy.and.callFake((input: any) => Promise.resolve(withProjects([
+        { id: '207', name: 'Site C', eaCertificate: 'E05-01' },
+        { id: '208', name: 'Ajax Mine', eaCertificate: 'Withdrawn' }
+      ])(String(input))));
+
+      await service.loadData();
+
+      expect(service.projects()!.map(p => p.eaCertificate)).toEqual(['E05-01', 'Withdrawn']);
+    });
+
+    it('leaves it undefined rather than inventing one', async () => {
+      // Every other field on this mapping has a fallback; a fabricated certificate number would be
+      // a claim about a legal document, and the card keys its whole row off this being absent.
+      sharedFetchSpy.and.callFake((input: any) => Promise.resolve(
+        withProjects([{ id: '354', name: 'Surrey Langley SkyTrain' }])(String(input))));
+
+      await service.loadData();
+
+      expect(service.projects()![0].eaCertificate).toBeUndefined();
+    });
+  });
+
+  describe('selectProject — eaCertificate hydration', () => {
+    const projA = { id: '207', name: 'Site C', eaCertificate: undefined } as unknown as Project;
+    const projB = { id: '208', name: 'Ajax Mine', eaCertificate: undefined } as unknown as Project;
+
+    it('hydrates eaCertificate from /projects/:id when the search result omitted it', async () => {
+      // A fresh Response per call: a Response body is single-use, and resolveTo hands every
+      // caller the same consumed object.
+      sharedFetchSpy.and.callFake(() => Promise.resolve(new Response(JSON.stringify({ eaCertificate: 'E05-01' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })));
+
+      service.selectProject(projA);
+      // Two macrotask ticks: fetchWithRetry resolves on the first, res.json() and the signal
+      // write land behind the second.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(service.selectedProject()?.eaCertificate).toBe('E05-01');
+      expect(sharedFetchSpy.calls.mostRecent().args[0]).toContain('/projects/207');
+    });
+
+    it('does not let a late hydration response overwrite a newer selection', async () => {
+      const resolvers: ((res: Response) => void)[] = [];
+      sharedFetchSpy.and.callFake(() => new Promise<Response>(resolve => resolvers.push(resolve)));
+
+      service.selectProject(projA);
+      service.selectProject(projB);
+
+      // projA's hydration answers last, after the user already moved on to projB.
+      resolvers[0](new Response(JSON.stringify({ eaCertificate: 'E05-01' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+      // Two ticks, same as the sibling spec: one for fetchWithRetry, one for res.json() + the write.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(service.selectedProject()?.id).toBe('208');
+      expect(service.selectedProject()?.eaCertificate).toBeUndefined();
+    });
+  });
+
   describe('document project ids', () => {
     // The constructor's own load already cached the empty query; these specs exercise the fetch.
     beforeEach(() => { (service as unknown as { loadedQuery: string | null }).loadedQuery = null; });

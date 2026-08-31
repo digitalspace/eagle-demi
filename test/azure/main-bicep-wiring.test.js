@@ -16,39 +16,6 @@ const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'obser
 
 const { summaryLine } = require('../../src/scripts/reconcile-eagle');
 
-// A STRUCTURAL GUARD, and it exists because everything else caught nothing. Deleting the one line
-// that passes `rateLimitMaxRequests` into the module leaves the suite green AND `az bicep build`
-// exiting 0 — it emits only a `no-unused-params` warning, and pr.yaml's job passes on warnings. The
-// app setting would then silently take the module's 300 default while the param file still reads
-// 6000: a value that looks configured and is not.
-//
-// It asserts TEXT, not behaviour, and that is the honest description. It fails on the deletion it is
-// written for and proves nothing else; a real check would compile the template and read the emitted
-// module parameters, which needs `az` in the test runner.
-test('main.bicep passes rateLimitMaxRequests into the API module', () => {
-  assert.match(MAIN, /^param rateLimitMaxRequests int = 300$/m,
-    'declared with the direct-traffic default');
-  assert.match(MAIN, /^\s+rateLimitMaxRequests: rateLimitMaxRequests$/m,
-    'and passed to the module — without this line the param file is inert');
-});
-
-// Test reaches this API through rproxy, which collapses every visitor into one bucket. A revert to
-// the default here is a 5 r/s ceiling for the whole site, not per caller.
-test('the test environment raises the ceiling above the proxy-collapsed default', () => {
-  const match = /^param rateLimitMaxRequests = (\d+)$/m.exec(TEST_PARAMS);
-  assert.ok(match, 'test must set the ceiling explicitly, not inherit the direct-traffic default');
-  assert.ok(Number(match[1]) >= 1000,
-    `${match[1]}/min is ${(Number(match[1]) / 60).toFixed(1)} r/s for every visitor combined`);
-});
-
-// Prod reaches this API the same way test does — through rproxy, one bucket for everyone.
-test('the prod environment raises the ceiling above the proxy-collapsed default', () => {
-  const match = /^param rateLimitMaxRequests = (\d+)$/m.exec(PROD_PARAMS);
-  assert.ok(match, 'prod must set the ceiling explicitly, not inherit the direct-traffic default');
-  assert.ok(Number(match[1]) >= 1000,
-    `${match[1]}/min is ${(Number(match[1]) / 60).toFixed(1)} r/s for every visitor combined`);
-});
-
 // The availability probe has two ways to be green through a real outage, and `az bicep build`
 // catches neither — it is a URL string either way. Both are text-structural, with the same honest
 // limits as the guards above.
@@ -73,10 +40,10 @@ test('the prod availability probe goes through rproxy and reaches AI Search', ()
 });
 
 // The prod parameters turn features OFF through switches, and every one of them has the same blind
-// spot as `rateLimitMaxRequests` above: delete the line that wires it and `az bicep build` still
-// exits 0 with only a `no-unused-params` warning, so the param file reads one thing and the
-// deployment does another — silently reverting to the module default, which is ON in every case.
-// Text-structural, with the same honest limits as the guard above.
+// spot: delete the line that wires it and `az bicep build` still exits 0 with only a
+// `no-unused-params` warning, so the param file reads one thing and the deployment does another —
+// silently reverting to the module default, which is ON in every case.
+// Text-structural, with the same honest limits as the guard below.
 const WIRED = [
   ['deployEnrichment', /^\s+deployEnrichment: deployEnrichment$/m,
     'the cosmos module call — without it prod declares the wildfires container'],
@@ -179,7 +146,7 @@ test('the not-ours search path still creates the shared private link to Cosmos',
 // SCM basic auth is a public credential-guessing path onto the box holding the corpus, and this is
 // the only thing in the repo that can catch it being re-enabled. `az bicep build` (pr.yaml:121)
 // exits 0 whether these children are present, absent, or set to true — the same blind spot the
-// rateLimitMaxRequests guard above exists for.
+// wiring guards above exist for.
 //
 // Text-structural, and honestly so: it fails on the deletion and on the flip it is written for, and
 // proves nothing about what Azure actually applied. The live reading is

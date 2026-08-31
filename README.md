@@ -250,10 +250,9 @@ it at the latter once repointed the live app at an empty database that answered 
 
 Some implementation details worth knowing before you touch them:
 
-- **`api/index.js`** converts Azure Functions v4 `HttpRequest` objects into Node `Readable` streams
-  and hands them to Express directly, with no proxy adapter.
-- **`src/middleware/rate-limiter.js`** switches to `inlineCleanup` when `isServerless`, avoiding
-  `setInterval` timers that leak across execution freeze cycles.
+- **`api/index.js`** registers one catch-all Functions route and hands every request to
+  `src/http/router.js`, which dispatches against the route table in `src/http/routes.js` — no Express,
+  no per-route registrations (the host matches those in discovery order, not by specificity).
 - **There is no nightly sync.** The `nightlySyncTimer` is gone, not disabled — the indexers pull every
   five minutes, so there is nothing left for a nightly job to push.
 - **GeoJSON is `[longitude, latitude]`** end to end. Cosmos stores it, AI Search indexes it as a

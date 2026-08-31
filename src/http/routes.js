@@ -11,6 +11,9 @@ const passiveAuthMiddleware = require('../middleware/passiveAuth');
 // `requireAdmin` is the narrower gate on /admin/*, so a machine writer (demi-service-write) can
 // mirror data without being able to mint itself a wider credential.
 const { requireWrite, requireAdmin, requireRole } = require('../middleware/require-roles');
+// Loads the caller's Selected Credentials. Mounted after the auth layer on the read routes where a
+// grant can widen what one caller sees — see middleware/credentials.js.
+const { credentialsMiddleware } = require('../middleware/credentials');
 
 // One data layer. The `USE_COSMOS_NOSQL` switch and the MongoDB-API controllers behind it are
 // gone — the flag was the rollback path during the Cosmos cutover, and the account it fell back
@@ -29,6 +32,7 @@ const documentController = () => require('../controllers/nosql/document');
 const boundaryController = () => require('../controllers/nosql/boundary');
 const apiKeyController = () => require('../controllers/nosql/api-key');
 const linkController = () => require('../controllers/nosql/link');
+const credentialController = () => require('../controllers/nosql/credentials');
 
 /**
  * Liveness only — the process is up. Deliberately does NOT claim anything about the database; it
@@ -66,18 +70,18 @@ const routes = [
   // timing out. Ranked queries are only meaningful at progress 100, so this gates any bulk load.
   { method: 'get', path: '/admin/index-progress', guards: [authMiddleware], load: () => dbController().getIndexProgressHandler },
 
-  { method: 'get', path: '/search', guards: [passiveAuthMiddleware], load: () => searchController().search },
+  { method: 'get', path: '/search', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => searchController().search },
   // authMiddleware, NOT passiveAuth — the summary is privileged-only in v1 while cost, abuse and the
   // wider disclosure surface of a synthesised paraphrase are measured. See wiki ADR-006.
-  { method: 'get', path: '/search/summary', guards: [authMiddleware], load: () => searchController().summarize },
+  { method: 'get', path: '/search/summary', guards: [authMiddleware, credentialsMiddleware], load: () => searchController().summarize },
 
   // GET /wildfires removed — no consumer. The frontend reads the DataBC WFS directly, and the
   // project-level aggregate this sync writes is served with the project.
   { method: 'post', path: '/admin/sync/wildfires', guards: [authMiddleware, requireAdmin], load: () => wildfireController().syncWildfiresAdmin },
 
   // Projects Routes
-  { method: 'get', path: '/projects', guards: [passiveAuthMiddleware], load: () => projectController().getProjects },
-  { method: 'get', path: '/projects/:id', guards: [passiveAuthMiddleware], load: () => projectController().getProject },
+  { method: 'get', path: '/projects', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => projectController().getProjects },
+  { method: 'get', path: '/projects/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => projectController().getProject },
   { method: 'post', path: '/projects', guards: [authMiddleware, requireWrite], load: () => projectController().createProject },
   { method: 'put', path: '/projects/:id', guards: [authMiddleware, requireWrite], load: () => projectController().updateProject },
   // Ladder moves — docs/rbac-architecture.md §1, "Widening is an act". Nothing else raises a level.
@@ -88,10 +92,10 @@ const routes = [
   { method: 'patch', path: '/projects/:id/visibility', guards: [authMiddleware, requireWrite, requireRole('sysadmin')], load: () => projectController().setVisibility },
 
   // Documents Routes
-  { method: 'get', path: '/documents', guards: [passiveAuthMiddleware], load: () => documentController().getDocuments },
-  { method: 'get', path: '/documents/:id', guards: [passiveAuthMiddleware], load: () => documentController().getDocument },
+  { method: 'get', path: '/documents', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getDocuments },
+  { method: 'get', path: '/documents/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().getDocument },
   // Presigned download link — ACL-gated inside the controller, same as the metadata read.
-  { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware], load: () => documentController().downloadDocument },
+  { method: 'get', path: '/documents/:id/download', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => documentController().downloadDocument },
   { method: 'post', path: '/documents', guards: [authMiddleware, requireWrite], load: () => documentController().createDocument },
   // The multipart upload. The dispatcher writes the part to os.tmpdir() and hands the handler
   // `req.file`; the handler unlinks it, exactly as it did under multer.
@@ -126,6 +130,13 @@ const routes = [
   // Admin-gated too, though it only reads: the credential registry is not application data.
   { method: 'get', path: '/admin/api-keys', guards: [authMiddleware, requireAdmin], load: () => apiKeyController().listApiKeys },
   { method: 'delete', path: '/admin/api-keys/:id', guards: [authMiddleware, requireAdmin], load: () => apiKeyController().revokeApiKey },
+
+  // Selected Credentials. Same gate as the classify endpoint and for the same reason: a grant hands
+  // a named party sight of records nobody widened, which is access policy rather than data. Reading
+  // the registry is gated too — the rows name who may see what.
+  { method: 'post', path: '/credentials', guards: [authMiddleware, requireWrite, requireRole('sysadmin')], load: () => credentialController().createCredential },
+  { method: 'get', path: '/credentials', guards: [authMiddleware, requireWrite, requireRole('sysadmin')], load: () => credentialController().listCredentials },
+  { method: 'post', path: '/credentials/revoke', guards: [authMiddleware, requireWrite, requireRole('sysadmin')], load: () => credentialController().revokeCredentials },
 
   // /s/:code has no auth: it's a public poster/email link, so anonymous browsing is the only caller.
   // Mutations require requireWrite: they decide where a gov.bc.ca URL sends the public.

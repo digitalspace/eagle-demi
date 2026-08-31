@@ -2,6 +2,7 @@
 
 Not scheduled. Added 2026-08-26.
 
+- **Track pulls must keep `ea_certificate`.** The 2026-08-31 refresh of `src/data/track_projects_enriched.json` added it (342 of 382 records); a regenerated export must select it again or the field goes empty. The column holds certificate state as well as numbers ("Withdrawn", "In progress") and DEMI stores it verbatim.
 - **One place for API keys, roles and permissions.** Today: keys minted by `POST /admin/api-keys`
   (registry, `GRANTABLE_ROLES`, `projectScope`, 90-day expiry), roles from Keycloak realm roles,
   `project:<id>` roles for scope, `SECURE_ROLES`/`WRITE_ROLES` hardcoded in `helpers/access-sql.js`.

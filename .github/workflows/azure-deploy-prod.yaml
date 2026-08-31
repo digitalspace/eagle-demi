@@ -16,8 +16,9 @@
 # published only after every deploy job has gone green, which makes a published release mean "this
 # version is in production" rather than "somebody intended to ship it". Nothing else publishes.
 #
-# TWO TARGETS, each gated on the app existing: `demi-api-prod` (live) and the extractor Function
-# App (not stood up in prod). Everything else in prod is ARM — which DEMI's posture bars from CI,
+# THREE TARGETS, each gated on the app existing: `demi-api-prod` (live), `demi-api-fc-prod` (the
+# Flex app, deployed the same zip until it takes the traffic) and the extractor Function App
+# (not stood up in prod). Everything else in prod is ARM — which DEMI's posture bars from CI,
 # see the credential note below — or VNet-bound, and a GitHub runner has no route into the VNet.
 #
 # ── PREREQUISITES, none of which this workflow creates ───────────────────────────────────────
@@ -28,7 +29,7 @@
 #       standalone `az deployment group create` and the traps around it. THIS WORKFLOW SHIPS
 #       CODE ONLY; it never runs an ARM deployment.
 #     - UAMI `demi-cicd-prod`, holding **Website Contributor on `demi-api-prod` ALONE** (add the
-#       same on the extractor once it exists). Nothing at resource-group scope, nothing on
+#       same on the extractor and on `demi-api-fc-prod` once they exist). Nothing at resource-group scope, nothing on
 #       `demi-search-prod`, no Storage roles. That is what makes "CI cannot run an ARM deployment"
 #       a fact rather than a convention.
 #     - a federated credential `gh-env-prod` on `demi-cicd-prod`. Subject
@@ -72,7 +73,10 @@ env:
   # Still `eagle-extractor-*`: the code moved repositories, the deployed app did not. See
   # `azure/modules/extractor.bicep`.
   EXTRACTOR_APP_NAME: eagle-extractor-prod
+  # Two API apps, one zip, for the length of the Flex migration: the B1 app keeps serving prod
+  # while the FC1 app is proven, and rproxy is flipped only in Phase 4.
   API_APP_NAME: demi-api-prod
+  API_FLEX_APP_NAME: demi-api-fc-prod
 
 jobs:
   deploy-extractor:
@@ -234,16 +238,31 @@ jobs:
             echo "⏭️  ${{ env.API_APP_NAME }} not present — skipping the API deploy." >> $GITHUB_STEP_SUMMARY
           fi
 
+      # Same skip-rather-than-fail shape as the extractor above: the Flex app does not exist until
+      # `azure/modules/api-function-flex.bicep` is deployed by hand, and the probe cannot tell that
+      # apart from demi-cicd-prod holding no role on it — both mean nothing to deploy here.
+      - name: Does the Flex app exist yet?
+        id: flex
+        run: |
+          if az functionapp show -g ${{ vars.AZURE_RESOURCE_GROUP }} -n "$API_FLEX_APP_NAME" \
+               --query name -o tsv >/dev/null 2>&1; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "⏭️  $API_FLEX_APP_NAME not present — skipping the Flex deploy." >> $GITHUB_STEP_SUMMARY
+          fi
+
       - name: Setup Node.js
-        if: steps.probe.outputs.found == 'true'
+        if: steps.probe.outputs.found == 'true' || steps.flex.outputs.found == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: '22'
 
       # Dependencies only. Packaging belongs to `scripts/package-api.py`, which the deploy script
-      # calls — same as staging.
+      # calls — same as staging. Gated on EITHER app, so the zip never goes up without node_modules
+      # once the B1 app is gone.
       - name: Install Dependencies
-        if: steps.probe.outputs.found == 'true'
+        if: steps.probe.outputs.found == 'true' || steps.flex.outputs.found == 'true'
         run: |
           corepack enable
           yarn install --immutable
@@ -254,6 +273,40 @@ jobs:
       - name: Deploy API
         if: steps.probe.outputs.found == 'true'
         run: ./scripts/deploy-azure.sh api ${{ vars.AZURE_RESOURCE_GROUP }}
+
+      # `config-zip`, not `scripts/deploy-azure.sh`, for the reason the extractor job gives: a Flex
+      # app has no Kudu wwwroot to POST into — it publishes to the deployment blob container
+      # declared in the module.
+      - name: Deploy API to the Flex app
+        if: steps.flex.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          export BUILD_ID="$(git describe --tags --always --dirty)-$(date -u +%H%M%S)"
+          python3 scripts/package-api.py . /tmp/api-flex.zip
+          az functionapp deployment source config-zip \
+            -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+            -n "$API_FLEX_APP_NAME" \
+            --src /tmp/api-flex.zip
+
+      # The deploy reporting success is not the same fact as the HTTP function being registered:
+      # the host loads an app that registers nothing, and every route then 404s. Trigger sync is
+      # asynchronous after a Flex publish, so poll rather than read once. `api` is the catch-all in
+      # api/index.js, matched exactly — `grep api` also matches `apiRoot` and proves nothing extra.
+      - name: Verify the api function is registered
+        if: steps.flex.outputs.found == 'true'
+        run: |
+          for i in {1..10}; do
+            if az functionapp function list -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+                 -n "$API_FLEX_APP_NAME" --query "[].name" -o tsv 2>/dev/null \
+                 | sed 's#.*/##' | grep -qx api; then
+              echo "✓ api is registered on $API_FLEX_APP_NAME"
+              exit 0
+            fi
+            echo "Attempt $i: not registered yet, waiting..."
+            sleep 20
+          done
+          echo "❌ api never appeared. The app is deployed and every route will 404."
+          exit 1
 
       - name: Report API failure to job summary
         if: failure()

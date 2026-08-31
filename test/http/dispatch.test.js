@@ -55,6 +55,12 @@ test('route params are named and percent-decoded', async (t) => {
   assert.match(res.headers['content-type'], /text\/html/);
 });
 
+test('a malformed percent-escape in a route param is a 400, not a 500', async () => {
+  const res = await call('/s/%ZZ');
+  assert.strictEqual(res.status, 400);
+  assert.deepStrictEqual(JSON.parse(res.body), { error: 'Bad Request' });
+});
+
 test('a short link redirects with no-store, never a cached 301', async (t) => {
   // A cached permanent redirect on a printed poster can never be corrected.
   t.mock.method(links, 'getById', async () => ({ id: 'abc', url: 'https://example.gov.bc.ca/x' }));
