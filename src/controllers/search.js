@@ -454,7 +454,8 @@ exports.search = async (req, res) => {
       // paging: the Cosmos read could not page past its 1000-row clamp, and there is no fallback
       // under this. See wiki Search-Query-Construction#every-document-read-goes-to-the-index.
       try {
-        const acl = filterFor(access);
+        // 'id' is where a document-scoped credential's ids live in THIS index — see filterFor.
+        const acl = filterFor(access, 'projectId', 'id');
         // Projects are scoped on their own id; the same caller, a different index.
         const projectScope = filterFor(access, 'id');
 
@@ -550,7 +551,8 @@ exports.search = async (req, res) => {
       try {
         // The visibility filter is evaluated BY THE SERVICE alongside the match, so ranking is
         // computed only over rows this caller may read. Roles come from the verified token only.
-        const acl = filterFor(access);
+        // A chunk carries its document as `documentId`; its own id is not filterable.
+        const acl = filterFor(access, 'projectId', 'documentId');
 
         // Fail-closed, and it MUST short-circuit here: OData has no `false` literal, so issuing the
         // request with no filter would return everything.
@@ -706,7 +708,8 @@ exports.summarize = async (req, res) => {
 
   try {
     const access = resolveAccess(req);
-    const { filter, empty } = filterFor(access);
+    // Chunks again, so the same document field as the chunk search above.
+    const { filter, empty } = filterFor(access, 'projectId', 'documentId');
 
     // Same fail-closed branch as the chunk search, for the same reason: a caller who may see
     // nothing cannot be expressed as a filter, and issuing one without would summarise everything.

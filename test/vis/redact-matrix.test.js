@@ -8,6 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { visible, effectiveVis, redactForAccess, redactAllForAccess } = require('../../src/vis/redact');
+const { resolveAccess, canRead } = require('../../src/helpers/access-sql');
 const config = require('../../src/config');
 const { code } = require('../helpers/router-source');
 
@@ -119,6 +120,34 @@ test('redactForAccess', async (t) => {
     });
     assert.strictEqual('cacEmail' in redactForAccess('projects', row, { level: 4 }), false);
     assert.strictEqual('cacEmail' in redactForAccess('projects', row, { level: 2 }), false);
+  });
+
+  await t.test('a credential does not widen the field plane', () => {
+    // A credential is a ROW-plane grant: it admits the holder to the record and stops there. Their
+    // own level still decides which attributes they see, so a BCeID holder reads the row at 4.
+    const credential = {
+      id: 'cred-1',
+      party: { type: 'user', id: 'bceid-sub-1' },
+      scope: { type: 'project', ids: ['207'] },
+      levels: [1, 2],
+      start: new Date(Date.now() - 86400000).toISOString(),
+      end: new Date(Date.now() + 86400000).toISOString(),
+      revokedAt: null
+    };
+    const row = storedRow({ read: ['staff', 'sysadmin'], isPublished: false });
+    const access = resolveAccess({
+      user: { sub: 'bceid-sub-1', preferred_username: 'external.person' },
+      credentials: [credential]
+    });
+
+    assert.strictEqual(canRead(row, access, 'id'), true, 'the row plane admits the holder');
+    assert.strictEqual(access.level, 4, 'and the credential grants no level of its own');
+
+    const out = redactForAccess('projects', row, access);
+    assert.strictEqual(out.name, 'Coal Mountain');
+    assert.strictEqual('complianceLead' in out, false, 'defaultVis 2 stays out of reach');
+    assert.strictEqual('read' in out, false);
+    assert.strictEqual('vis' in out, false);
   });
 
   await t.test('the dial map is withheld from everyone below level 0', () => {
