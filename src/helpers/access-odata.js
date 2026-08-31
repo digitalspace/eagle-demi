@@ -11,7 +11,9 @@
  * rides `projectId`. See `access-sql.js` for why they must stay separate.
  */
 
-const { TIER, PUBLIC_ROLES, LEVEL_TOKENS, isPrivileged } = require('./access-sql');
+const {
+  TIER, PUBLIC_ROLES, LEVEL_TOKENS, isPrivileged, levelTokens, credentialField
+} = require('./access-sql');
 
 /**
  * OData string literals are single-quoted, and a literal quote is escaped by DOUBLING it.
@@ -55,12 +57,16 @@ function inClause(expression, values) {
  * filter is UNRESTRICTED, and an empty string is unrestricted too. So "matches nothing" cannot be
  * expressed as a filter and has to be expressed as "do not ask".
  *
+ * `documentField` is what a DOCUMENT-scoped credential compares in THIS index — `id` on documents,
+ * `documentId` on chunks, and null (the default) where the index carries no document identity, so
+ * such a grant matches nothing here rather than filtering on a field that is not filterable.
+ *
  * `partitionField` exists for the same reason `visibilityFor(access, partitionField)` takes one in
  * `access-sql.js`: a project IS its own scope, so on `projects` the field is `id`, while
  * documents and chunks carry `projectId`. Scoping projects on a `projectId` they do not have would
  * match nothing at all — and an empty result is indistinguishable from an empty corpus.
  */
-function filterFor(access, partitionField = 'projectId') {
+function filterFor(access, partitionField = 'projectId', documentField = null) {
   // No access context at all is not a privileged caller — it is a bug upstream. Fail closed.
   if (!access) return { filter: null, empty: true };
 
@@ -73,17 +79,33 @@ function filterFor(access, partitionField = 'projectId') {
     const roles = Array.from(new Set([...(access.roles || []), ...PUBLIC_ROLES]));
     // `read/any(r: ...)` is the collection form. Without `any`, the filter compares the collection
     // itself and matches nothing — silently, which on this path would read as an empty corpus.
-    let arm = `read/any(r: ${inClause('r', roles)})`;
+    const grants = [`read/any(r: ${inClause('r', roles)})`];
 
     // The team arm: level 1, ORed with the role arm exactly as in `readClause`. A grant, so `or`;
     // the scope `and` below is the restriction and stays separate.
     const teams = access.teams || [];
     if (teams.length > 0) {
-      arm = `(${arm} or (read/any(r: r eq ${quote(LEVEL_TOKENS[1])})` +
-        ` and ${inClause(partitionField, teams)}))`;
+      grants.push(`(read/any(r: r eq ${quote(LEVEL_TOKENS[1])})` +
+        ` and ${inClause(partitionField, teams)})`);
     }
 
-    clauses.push(arm);
+    // The credential arm, ORed the same way — the OData twin of `readClause`'s. `not read/any(...)`
+    // is the ceiling that keeps `levels` meaning the row's own level rather than "carries the
+    // token", which nests upward; see `levelTokens`.
+    for (const cred of access.credentials || []) {
+      const field = credentialField(cred, partitionField, documentField);
+      const ids = (cred.scope && cred.scope.ids) || [];
+      const { granted, wider } = levelTokens(cred.levels);
+      if (!field || ids.length === 0 || granted.length === 0) continue;
+
+      grants.push(
+        `(${inClause(field, ids)} and read/any(r: ${inClause('r', granted)})` +
+        (wider.length ? ` and not read/any(r: ${inClause('r', wider)})` : '') +
+        ')'
+      );
+    }
+
+    clauses.push(grants.length > 1 ? `(${grants.join(' or ')})` : grants[0]);
   }
 
   if (access.tier === TIER.SCOPED) {
