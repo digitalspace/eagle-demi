@@ -993,9 +993,10 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     else this.enterLasso();
   }
 
-  /** Escape leaves draw mode and drops the drawn area, the way it closes any other overlay. */
+  /** Only while drawing: an Escape meant for a dialog must not wipe an applied filter. */
   @HostListener('document:keydown.escape')
   onEscape() {
+    if (!this.lassoActive()) return;
     this.service.lassoPolygon.set(null);
     this.exitLasso();
   }
