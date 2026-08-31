@@ -416,6 +416,53 @@ resource apiKeysContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
   }
 }
 
+// Selected Credentials — one item per grant (docs/rbac-architecture.md §1). Partitioned on
+// /party/id, because the read that matters runs on every request: "what does THIS party hold",
+// resolved in a single partition. The admin listing and the bulk revokes go cross-partition, and
+// both are rare and small.
+//
+// /scope/ids and /batchId are indexed: revoking every grant over a closed project and revoking a
+// batch are queries on them. No TTL — `end` is a field the middleware checks, and an expired grant
+// must stay visible to an operator, or the audit trail loses what was granted to whom.
+resource credentialsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'credentials'
+  properties: {
+    resource: {
+      id: 'credentials'
+      partitionKey: {
+        paths: [
+          '/party/id'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/scope/ids/[]/?'
+          }
+          {
+            path: '/batchId/?'
+          }
+          {
+            path: '/grantedAt/?'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/*'
+          }
+          {
+            path: '/_etag/?'
+          }
+        ]
+      }
+    }
+  }
+}
+
 // Runtime configuration for the frontend, one item with id 'config'. Partitioned on /id so the
 // read GET /api/config performs is a point read in a single partition — ~1 RU, and serverless
 // bills consumption, so an idle container costs nothing.
