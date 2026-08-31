@@ -64,7 +64,7 @@ exports.createApiKey = async (req, res) => {
       return res.status(400).json({ error: 'expiresAt must be a future date' });
     }
 
-    if (id !== undefined && !APIM_ROW_ID.test(String(id))) {
+    if (id !== undefined && (typeof id !== 'string' || !APIM_ROW_ID.test(id))) {
       return res.status(400).json({
         error: 'id may only be an APIM subscription identity: apim:<subscription-name>'
       });

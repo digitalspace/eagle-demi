@@ -130,6 +130,8 @@ param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 param syncTeamsSchedule = ''
 
 // APIM Consumption in front of demi-api-fc-test. Test only — prod stays off until this proves out.
-// The gateway secret is created out of band, before this deploy:
-//   az keyvault secret set --vault-name demi-kv-test --name apim-gateway-secret --value <random>
+// The gateway secret is created out of band before this deploy, through the ARM control plane —
+// the data plane is Forbidden on this private-endpoint-only vault, and policy demands
+// contentType/expiry on a data-plane write:
+//   az rest --method PUT --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/apim-gateway-secret?api-version=2023-07-01" --body '{"properties":{"value":"<random>"}}'
 param deployApim = true

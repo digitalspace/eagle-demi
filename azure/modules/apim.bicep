@@ -88,12 +88,14 @@ resource secretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 // The secret VALUE is created out of band — this repo is public and the vault is the source of
-// truth: az keyvault secret set --vault-name <kv> --name apim-gateway-secret --value <random>
+// truth. Through the ARM CONTROL plane, which the vault firewall and the guardrail policies
+// demanding contentType/expiry do not apply to; the data plane (`az keyvault secret set`) is
+// Forbidden against this private-endpoint-only vault:
+//   az rest --method PUT --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/apim-gateway-secret?api-version=2023-07-01" --body '{"properties":{"value":"<random>"}}'
 //
-// The vault is private-endpoint only and Consumption APIM has no VNet, so this resolves through Key
-// Vault's trusted-services bypass, which Microsoft documents as still covering named values after
-// the March 2026 trusted-service retirement. If it ever stops resolving, the fallback is a
-// `secret: true` named value carrying the literal instead.
+// APIM's trusted-service entry covers custom-domain certificates only, so whether a Consumption
+// instance resolves this named value against a publicNetworkAccess:Disabled vault is UNVERIFIED
+// until the first deploy; the fallback is a `secret: true` named value carrying the literal.
 resource gatewaySecret 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = {
   parent: apim
   name: 'gateway-secret'

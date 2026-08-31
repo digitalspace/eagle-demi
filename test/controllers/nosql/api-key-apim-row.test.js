@@ -70,7 +70,9 @@ test('APIM identity rows', async (t) => {
     t.mock.method(apiKeys, 'getById', async () => null);
     t.mock.method(apiKeys, 'upsert', async (record) => { upserted.push(record); return record; });
 
-    for (const id of ['deadbeefdeadbeef', 'apim:Eagle_API', 'apim:', 'admin', '../apim:x', 42, { id: 1 }]) {
+    const rejected = ['deadbeefdeadbeef', 'apim:Eagle_API', 'apim:', 'admin', '../apim:x', 42,
+      { id: 1 }, ['apim:eagle-api']];
+    for (const id of rejected) {
       const res = await create({ id, name: 'x', roles: ['demi-service-read'] });
       assert.strictEqual(res.statusCode, 400, `id ${JSON.stringify(id)} must be refused`);
       assert.match(res.body.error, /apim:<subscription-name>/);
