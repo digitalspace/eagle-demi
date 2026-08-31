@@ -31,6 +31,8 @@ async function loadForParty(partyId, now) {
   if (cached && now - cached.at < CREDENTIAL_CACHE_TTL_MS) return cached.rows;
 
   const rows = await credentials.listForParty(partyId);
+  // ponytail: whole-cache flush at 10k parties bounds heap; per-entry LRU if churn ever matters.
+  if (cache.size >= 10000) cache.clear();
   cache.set(partyId, { rows, at: now });
   return rows;
 }

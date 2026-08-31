@@ -27,7 +27,7 @@ const PARTITION_FIELD = 'party.id';
 /** Not yet revoked. `revokedAt` is absent on a fresh grant and null on one written by the API. */
 const LIVE = '(NOT IS_DEFINED(c.revokedAt) OR IS_NULL(c.revokedAt))';
 
-/** Every grant this party holds, revoked ones included — the middleware filters in JS. */
+/** Every unrevoked grant this party holds; the middleware re-checks revokedAt and the window. */
 async function listForParty(partyId) {
   const { items } = await cosmos.query(CONTAINER, {
     query: `SELECT * FROM c WHERE c.party.id = @party AND ${LIVE}`,

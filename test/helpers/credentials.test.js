@@ -101,6 +101,15 @@ test('a revoked credential grants nothing', () => {
     false, 'a revoked grant leaves no id bound into the query either');
 });
 
+test('a document-scoped grant is no sight of the project with the same id', () => {
+  // On the projects container (partitionField 'id') a document-scoped grant compares nothing:
+  // scope.ids hold DOCUMENT ids, and a project sharing one of those strings must not match.
+  const access = accessWith([grant({ scope: { type: 'document', ids: ['207'] } })]);
+  assert.strictEqual(canRead(LEVEL_2, access, 'id'), false);
+  assert.strictEqual(visibilityFor(access, 'id').params.some(p => p.value === '207'), false,
+    'no document id is bound into a projects query');
+});
+
 test('a credential at levels [3] does not reach a level-1 record', () => {
   const access = accessWith([grant({ levels: [3] })]);
 
