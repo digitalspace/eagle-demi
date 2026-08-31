@@ -146,6 +146,33 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(row.type, '');
   });
 
+  // The EAC number is Track's own column and reaches the demo frontend's project card from here.
+  // The `projects` INDEX has no such column, so only this branch can carry it — the same asymmetry
+  // `location` has.
+  await t.test('the Cosmos project branch emits eaCertificate, and null when there is none', async () => {
+    t.mock.method(projectsRepo, 'listVisible', async () => ({
+      items: [
+        { id: '46', name: 'Caribou Gas Processing Plant', eaCertificate: 'E05-01', read: ['public'] },
+        { id: '354', name: 'Surrey Langley SkyTrain', read: ['public'] },
+        // Track uses the column for certificate STATE as well as numbers, and it reaches the wire
+        // unchanged: nothing on this path parses or filters the value.
+        { id: '38', name: 'Ajax Mine', eaCertificate: 'Withdrawn', read: ['public'] }
+      ]
+    }));
+
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: '', pageSize: '10' }, header: () => null }, res);
+
+    const [certified, uncertified, withdrawn] = jsonResponse[0].searchResults;
+    assert.strictEqual(certified.eaCertificate, 'E05-01');
+    assert.strictEqual(withdrawn.eaCertificate, 'Withdrawn');
+    // NULL, not '': the frontend renders the row only when the field is truthy, and an empty
+    // string would be indistinguishable from a redacted one.
+    assert.strictEqual(uncertified.eaCertificate, null);
+  });
+
   // The index stores the label and the id in two flat columns; the response has to put them back
   // together, or the keyword-search view loses the same three columns the list view just gained.
   await t.test('the AI Search project branch rebuilds the List refs from the flat pair', async () => {
