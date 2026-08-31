@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
 const config = require('../config');
 const apiKeys = require('../repositories/api-keys');
-const { parseKey, verify } = require('./api-key');
+const { parseKey, verify, isLive } = require('./api-key');
 
 /**
  * Verified registry lookups, cached to keep a Cosmos point read off the hot path.
@@ -56,12 +56,48 @@ async function resolveRegistryKey(parsed) {
   // from it.
   if (fresh) apiKeys.touchLastUsed(record.id);
 
+  return identityFor(record);
+}
+
+/** The identity a registry row grants. Shared by the presented-key and APIM paths. */
+function identityFor(record) {
   return {
     preferred_username: `key:${record.name}`,
     keyId: record.id,
     realm_access: { roles: Array.isArray(record.roles) ? record.roles : [] },
     projectScope: Array.isArray(record.projectScope) ? record.projectScope : undefined
   };
+}
+
+/**
+ * Is this request provably from our APIM gateway?
+ *
+ * The Function App host stays publicly reachable — Consumption APIM has no VNet — so both gateway
+ * headers are attacker input until the shared secret matches. Unset secret disables the path, which
+ * is the local and pre-APIM default. A Key Vault reference that failed to resolve arrives as the
+ * literal `@Microsoft.KeyVault(...)` string, which is public in this repo, so it is never a secret.
+ */
+function fromGateway(req) {
+  const secret = process.env.APIM_GATEWAY_SECRET;
+  if (!secret || secret.startsWith('@Microsoft.KeyVault')) return false;
+
+  return matchesConfiguredKey(req.header('X-Gateway-Secret') || '', [secret]);
+}
+
+/**
+ * Resolve an APIM-asserted subscription name to an identity, or null.
+ *
+ * APIM already verified the subscription key, so there is no secret of ours to check; the registry
+ * row exists to carry roles, expiry and revocation. Its id is `apim:<subscription-name>` — a
+ * reserved shape no minted key can collide with, so one container and one cache serve both paths.
+ */
+async function resolveGatewaySubscription(name) {
+  const { record, fresh } = await loadKeyRecord(`apim:${name}`);
+  if (!isLive(record)) return null;
+
+  if (fresh) apiKeys.touchLastUsed(record.id);
+
+  return identityFor(record);
 }
 
 /**
@@ -133,6 +169,26 @@ function authenticate(req, onSuccess, onFailure) {
   // granting sysadmin. A logged request header or a compromised extraction host was therefore
   // full admin. An outbound secret must never be an inbound one.
   const apiKey = req.header('X-Api-Key');
+
+  // APIM edge. A presented X-Api-Key still wins, so the dual-accept window — machine callers on
+  // their old registry keys, direct to the app — is untouched by any of this.
+  const subscription = !apiKey && fromGateway(req) ? String(req.header('X-APIM-Subscription') || '').trim() : '';
+  if (subscription) {
+    resolveGatewaySubscription(subscription)
+      .then((user) => {
+        if (!user) {
+          logger.warn(`[demi-api] APIM subscription '${subscription}' has no registry row; refused.`);
+          return onFailure(401, 'Unauthorized. Unknown API Management subscription.');
+        }
+        logger.info(`[demi-api] Authenticated ${user.preferred_username} via APIM (${subscription})`);
+        return onSuccess(user);
+      })
+      .catch((err) => {
+        logger.error(`[demi-api] APIM subscription lookup failed: ${err.message}`);
+        return onFailure(401, 'Unauthorized. Unknown API Management subscription.');
+      });
+    return;
+  }
 
   // Break-glass FIRST: one shared secret, full privileges, no identity. It exists so the first
   // registry key can be minted and so there is a way in if the registry is unreachable — which is

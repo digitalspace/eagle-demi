@@ -128,3 +128,8 @@ param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 
 // set to '0 0 10 * * *' once the Track endpoint is live
 param syncTeamsSchedule = ''
+
+// APIM Consumption in front of demi-api-fc-test. Test only — prod stays off until this proves out.
+// The gateway secret is created out of band, before this deploy:
+//   az keyvault secret set --vault-name demi-kv-test --name apim-gateway-secret --value <random>
+param deployApim = true

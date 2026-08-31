@@ -151,6 +151,12 @@ param roleSyncClientId string = ''
 @description('Key Vault URI of that service account secret. Same handling as trackClientSecretUri.')
 param roleSyncClientSecretUri string
 
+// @secure() only to satisfy the linter's name heuristic — the value is a Key Vault reference, not
+// a secret; the vault holds the secret itself.
+@description('Key Vault reference for the APIM gateway secret. Empty disables the gateway trust branch.')
+@secure()
+param apimGatewaySecretRef string = ''
+
 @description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty registers no timer.')
 param syncTeamsSchedule string = ''
 
@@ -423,6 +429,12 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SYNC_TEAMS_SCHEDULE'
           value: syncTeamsSchedule
+        }
+        // What proves a request came through APIM. Empty is the off switch: helpers/auth.js then
+        // ignores both gateway headers, which is the only safe default while the host is public.
+        {
+          name: 'APIM_GATEWAY_SECRET'
+          value: apimGatewaySecretRef
         }
         // No key: AI Search has disableLocalAuth, so the app authenticates with the same identity
         // it uses for Cosmos. Absent endpoint degrades the chunk dataset to empty results.
