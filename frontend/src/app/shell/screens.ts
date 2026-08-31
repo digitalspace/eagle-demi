@@ -18,7 +18,6 @@ export const SCREENS: Screen[] = [
   { key: 'index', label: 'Index Search', group: 'Discover', path: '/index' },
   { key: 'content', label: 'Document Content Search', group: 'Discover', path: '/content' },
   { key: 'summary', label: 'AI Summary', group: 'Discover', path: '/summary' },
-  { key: 'intake', label: 'Document Intake', group: 'Operate', path: '/intake' },
   { key: 'notify', label: 'eagle-notify', group: 'Operate', path: '/notify' },
   { key: 'links', label: 'Short URLs', group: 'Operate', path: '/links' },
   { key: 'rbac', label: 'Access model', group: 'Access', path: '/rbac' },
@@ -53,11 +52,6 @@ export const TECH: Record<string, Tech> = {
     title: 'AI Summary',
     chips: ['Azure AI Foundry — gpt-4.1-mini', 'retrieval over chunks index', 'server-side citation resolution', 'managed identity, keyless', 'token-based cost estimate'],
     note: 'The model only ever emits a source number; the API maps those numbers back to real chunk ids under the caller’s access, which is what lets a citation render as a link.'
-  },
-  intake: {
-    title: 'Document Intake',
-    chips: ['Express 5 on Functions v4', 'MinIO / S3 object store', 'Docling (off-platform)', 'chunker.js → Cosmos', 'AI Search indexer PT5M'],
-    note: 'This screen only uploads the file and creates the document row. Extraction runs off-platform and returns as markdown to POST /documents/:id/chunks, where chunker.js assigns each chunk its id; the AI Search indexer picks the new chunks up within five minutes.'
   },
   notify: {
     title: 'eagle-notify',

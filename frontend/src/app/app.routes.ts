@@ -13,7 +13,6 @@ export const routes: Routes = [
   screen('index', () => import('./components/index-search/index-search.component').then(m => m.IndexSearchComponent)),
   screen('content', () => import('./components/content-search/content-search.component').then(m => m.ContentSearchComponent)),
   screen('summary', () => import('./components/summarizer/summarizer.component').then(m => m.SummarizerComponent)),
-  screen('intake', () => import('./components/document-intake/document-intake.component').then(m => m.DocumentIntakeComponent)),
   screen('notify', () => import('./components/notify/notify.component').then(m => m.NotifyComponent)),
   screen('links', () => import('./components/short-links/short-links.component').then(m => m.ShortLinksComponent)),
   screen('rbac', () => import('./components/access-model/access-model.component').then(m => m.AccessModelComponent)),
