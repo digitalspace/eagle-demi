@@ -2,16 +2,15 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const apiRoutes = require('../../src/routes/api');
+const apiRoutes = require('../../src/http/routes');
 const { routeChains } = require('../helpers/router-source');
 
 function routeTable() {
-  return apiRoutes.stack
-    .filter(layer => layer.route)
-    .map(layer => ({
-      path: layer.route.path,
-      middlewareCount: layer.route.stack.length
-    }));
+  return apiRoutes.map(route => ({
+    path: route.path,
+    // The guards plus the handler — the same count the mounted Express stack used to report.
+    middlewareCount: route.guards.length + 1
+  }));
 }
 
 test('DB Management Routes Security Tests', async (t) => {
@@ -19,7 +18,7 @@ test('DB Management Routes Security Tests', async (t) => {
     // TWO assertions per route, and they are complementary rather than redundant — each catches a
     // downgrade the other misses, and only together do they cover every way the gate can go.
     //
-    //   the NAME, from source: a layer count of 2 is equally satisfied by passiveAuthMiddleware,
+    //   the NAME, from source: a guard count of 2 is equally satisfied by passiveAuthMiddleware,
     //   which attaches an anonymous access object instead of rejecting. Swapping it in would make
     //   /db/stats and /admin/index-progress anonymously readable under a green count.
     //
@@ -43,7 +42,7 @@ test('DB Management Routes Security Tests', async (t) => {
       );
 
       const declared = chains.find(r => r.path === p);
-      assert.ok(declared, `Route ${p} must be declared in src/routes/api.js`);
+      assert.ok(declared, `Route ${p} must be declared in src/http/routes.js`);
       assert.ok(
         /\bauthMiddleware\b/.test(declared.chain) &&
         !/\bpassiveAuthMiddleware\b/.test(declared.chain),

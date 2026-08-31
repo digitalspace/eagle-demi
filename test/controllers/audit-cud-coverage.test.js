@@ -141,10 +141,10 @@ test('authenticated CUD audit coverage', async (t) => {
 
     const lines = [JSON.stringify({}), ...Array.from({ length: 8 },
       (_, i) => JSON.stringify(`Block ${i} ${'w'.repeat(500)}`))];
-    const req = Object.assign(
-      Readable.from(lines.map(l => `${l}\n`)),
-      { params: { id: 'd1' }, query: {}, user: STAFF, is: (type) => type === 'application/x-ndjson' }
-    );
+    const req = {
+      stream: Readable.from(lines.map(l => `${l}\n`)),
+      params: { id: 'd1' }, query: {}, user: STAFF, is: (type) => type === 'application/x-ndjson'
+    };
 
     const res = mockRes();
     const written = await rowsFrom(() => documentController.ingestChunks(req, res));

@@ -4,9 +4,10 @@
  * The last line of defence, asserted on raw response TEXT rather than a parsed body.
  *
  * Every other test in this area drives a controller and inspects the object it returned. That
- * cannot see a field re-attached by middleware, a serializer, or an error path — and raw documents
- * now flow through error and log paths too (docs/rbac-architecture.md §2 item 1). So this boots the
- * real app, answers with a row carrying every restricted name at once, and greps the bytes.
+ * cannot see a field re-attached by a guard, a serializer, or an error path — and raw documents
+ * now flow through error and log paths too (docs/rbac-architecture.md §2 item 1). So this drives
+ * the real dispatcher, answers with a row carrying every restricted name at once, and greps the
+ * bytes.
  */
 
 process.env.NODE_ENV = 'test';
@@ -70,13 +71,13 @@ test('no anonymous response carries a restricted field', async (t) => {
     t.mock.method(projects, 'getById', async () => structuredClone(STORED));
     t.mock.method(projects, 'countVisible', async () => 1);
 
-    await withServer(async (base) => {
+    await withServer(async (call) => {
       for (const [label, url] of [
         ['point read', '/api/projects/207'],
         ['list', '/api/projects'],
         ['search', '/api/search?dataset=Project']
       ]) {
-        const res = await fetch(`${base}${url}`);
+        const res = await call(url);
         assert.strictEqual(res.status, 200, `${label} should answer 200`);
         const text = await res.text();
         assertClean(label, text);
@@ -97,8 +98,8 @@ test('no anonymous response carries a restricted field', async (t) => {
       throw new Error(`Cosmos read failed for ${JSON.stringify(STORED)}`);
     });
 
-    await withServer(async (base) => {
-      const res = await fetch(`${base}/api/projects/207`);
+    await withServer(async (call) => {
+      const res = await call('/api/projects/207');
       assert.strictEqual(res.status, 500);
       const text = await res.text();
       assertClean('error', text);

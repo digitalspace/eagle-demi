@@ -74,7 +74,7 @@ function fromEnvironment() {
  * Values come from the `config` container, overlaid on the app settings. Two consequences worth
  * knowing:
  *
- *   - This used to be a fast non-DB route (see the routing comment in src/app.js) and no longer
+ *   - This used to be a fast non-DB route and no longer
  *     is. A Cosmos failure must NOT take the frontend down, so a failed read logs and serves the
  *     app-settings payload — the same answer this endpoint gave before the container existed.
  *

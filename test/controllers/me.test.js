@@ -94,8 +94,8 @@ test('me controller', async (t) => {
   });
 
   await t.test('the mounted route answers an anonymous request with 200', async () => {
-    await withServer(async (base) => {
-      const res = await fetch(`${base}/api/me`);
+    await withServer(async (call) => {
+      const res = await call('/api/me');
       assert.strictEqual(res.status, 200);
       assert.deepStrictEqual(await res.json(), {
         roles: ['public'], level: 4, tier: 'public', privileged: false, staffUi: false

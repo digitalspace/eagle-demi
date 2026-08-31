@@ -5,7 +5,7 @@
   "description": "DEMI central repository and extraction worker API",
   "main": "api/index.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "func start",
     "db:seed-nosql": "NODE_PATH=node_modules node -r dotenv/config src/scripts/seed-nosql.js",
     "db:copy-blobs": "NODE_PATH=node_modules node -r dotenv/config src/scripts/copy-blobs-to-azure.js",
     "db:purge-extraction": "NODE_PATH=node_modules node -r dotenv/config src/scripts/purge-extraction.js",
@@ -26,20 +26,12 @@
     "@azure/identity": "^4.13.2",
     "@azure/monitor-opentelemetry": "^1.19.0",
     "@azure/storage-blob": "^12.33.0",
-    "compression": "^1.8.1",
-    "cors": "^2.8.5",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1",
-    "express-rate-limit": "^8.6.2",
-    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
     "jwks-rsa": "^4.1.0",
     "minio": "^8.0.7",
-    "multer": "^2.2.0",
     "pdf-lib": "^1.17.1",
-    "swagger-ui-express": "^5.0.1",
-    "winston": "^3.19.0",
-    "yamljs": "^0.3.0"
+    "winston": "^3.19.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

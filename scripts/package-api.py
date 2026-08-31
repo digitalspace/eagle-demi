@@ -110,7 +110,7 @@ def package_api(repo_root, zip_path):
     # index.js -> api/index.js -> src/** loads them. They were shipped only because nothing excluded
     # them, which is how wwwroot ended up holding a copy of the repository.
     # `public` is a local build output, untracked by git, and nothing serves it any more — the
-    # express.static mounts and the SPA sendFile routes that read it were deleted from src/app.js
+    # express.static mounts and the SPA sendFile routes that read it are gone
     # (they answered 404 or hung; see the comment there). It is excluded rather than merely unused
     # because this packager runs from whatever working tree the operator happens to have, and a
     # stale local bundle would ship as dead weight. It does not outlive the deploy: the apps run
@@ -134,10 +134,10 @@ def package_api(repo_root, zip_path):
     #
     # The search index definitions are the same shape of problem, and cost more when missed.
     # `src/search/eagle-query.js` builds its field-type gate from `azure/search/indexes/*.json` at
-    # REQUIRE time, and the boot chain reaches it: index.js -> api/index.js -> src/routes/api.js ->
-    # src/controllers/search.js -> eagle-query.js. So a package without them does not lose search,
-    # it loses EVERY endpoint, and the only thing in the log is an ENOENT on a scandir of a path
-    # that does not exist in wwwroot. Verified by unzipping the package and requiring src/app.
+    # REQUIRE time, and the first search reaches it: src/http/routes.js -> src/controllers/search.js
+    # -> eagle-query.js. So a package without them does not degrade search, it kills it outright,
+    # and the only thing in the log is an ENOENT on a scandir of a path that does not exist in
+    # wwwroot.
     # Kept as one source for the same reason as the geojson: a copy under src/ would drift from
     # the definitions that are actually deployed to the search service, and the gate would then be
     # describing an index that is not the one being queried.
