@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, AfterViewInit, inject, effect, signal, computed, untracked, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnInit, OnDestroy, AfterViewInit, HostListener, inject, effect, signal, computed, untracked, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { RegistryStateService } from '../../services/registry-state.service';
@@ -39,6 +39,12 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   private wildfireLayerGroup: any = null;
 
   showWildfires = signal<boolean>(false);
+
+  // --- Lasso ---------------------------------------------------------------------------------
+  lassoActive = signal<boolean>(false);
+  private lassoLayer: any = null;
+  private lassoPreview: any = null;
+  private lassoPoints: any[] = [];
 
   // --- Left rail and detail card -------------------------------------------------------------
   filtersOpen = signal<boolean>(false);
@@ -194,6 +200,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     push('sector', this.service.sectorFilter());
     push('region', this.service.regionFilter());
     for (const [layer, names] of Object.entries(this.service.boundaryFilter())) push(layer, names);
+    if (this.service.lassoPolygon()) rows.push({ id: 'lasso:area', label: 'Lasso area' });
     return rows;
   });
 
@@ -335,6 +342,22 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
       });
     });
 
+    // Draw the committed lasso from the signal, so every clear path — chip, Escape, Clear all —
+    // takes the shape off the map with it.
+    effect(() => {
+      const ring = this.service.lassoPolygon();
+      if (!this.map) return;
+      if (this.lassoLayer) {
+        try {
+          this.map.removeLayer(this.lassoLayer);
+        } catch (e) {}
+        this.lassoLayer = null;
+      }
+      if (!ring) return;
+      this.lassoLayer = L.polygon(ring.map(([lng, lat]) => [lat, lng] as [number, number]),
+        { color: '#013366', weight: 3, fillColor: '#013366', fillOpacity: 0.1 }).addTo(this.map);
+    });
+
     // Reactive effect to render or remove active B.C. Wildfires
     effect(() => {
       const active = this.showWildfires();
@@ -407,6 +430,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     if (sectionId === 'gating') this.service.toggleFilterValue(this.service.gatingFilter, value);
     else if (sectionId === 'sector') this.service.toggleFilterValue(this.service.sectorFilter, value);
     else if (sectionId === 'region') this.setRegionFilter(value);
+    else if (sectionId === 'lasso') this.service.lassoPolygon.set(null);
     else this.setBoundaryFilter(sectionId, value);
   }
 
@@ -962,6 +986,75 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   toggleWildfires() {
     this.showWildfires.set(!this.showWildfires());
+  }
+
+  toggleLasso() {
+    if (this.lassoActive()) this.exitLasso();
+    else this.enterLasso();
+  }
+
+  /** Escape leaves draw mode and drops the drawn area, the way it closes any other overlay. */
+  @HostListener('document:keydown.escape')
+  onEscape() {
+    this.service.lassoPolygon.set(null);
+    this.exitLasso();
+  }
+
+  private enterLasso() {
+    if (!this.map) return;
+    const container = this.map.getContainer();
+    this.map.dragging.disable();
+    container.style.cursor = 'crosshair';
+    // Without this a touch drag pans the page and no pointermove ever reaches us.
+    container.style.touchAction = 'none';
+    container.addEventListener('pointerdown', this.onLassoDown);
+    container.addEventListener('pointermove', this.onLassoMove);
+    container.addEventListener('pointerup', this.onLassoUp);
+    this.lassoActive.set(true);
+  }
+
+  private exitLasso() {
+    this.lassoActive.set(false);
+    this.discardLassoStroke();
+    if (!this.map) return;
+    const container = this.map.getContainer();
+    this.map.dragging.enable();
+    container.style.cursor = '';
+    container.style.touchAction = '';
+    container.removeEventListener('pointerdown', this.onLassoDown);
+    container.removeEventListener('pointermove', this.onLassoMove);
+    container.removeEventListener('pointerup', this.onLassoUp);
+  }
+
+  private onLassoDown = (e: PointerEvent) => {
+    e.preventDefault();
+    this.service.lassoPolygon.set(null);
+    this.lassoPoints = [this.map.mouseEventToLatLng(e)];
+    this.lassoPreview = L.polyline(this.lassoPoints, { color: '#013366', weight: 3, dashArray: '4,4' }).addTo(this.map);
+  };
+
+  private onLassoMove = (e: PointerEvent) => {
+    if (!this.lassoPreview) return;
+    this.lassoPoints.push(this.map.mouseEventToLatLng(e));
+    this.lassoPreview.setLatLngs(this.lassoPoints);
+  };
+
+  private onLassoUp = () => {
+    if (!this.lassoPreview) return;
+    const drawn = this.lassoPoints;
+    this.discardLassoStroke();
+    // Under four points the shape has no interior, so a stray click clears rather than filters.
+    if (drawn.length >= 4) this.service.lassoPolygon.set(drawn.map(ll => [ll.lng, ll.lat]));
+  };
+
+  private discardLassoStroke() {
+    if (this.lassoPreview) {
+      try {
+        this.map?.removeLayer(this.lassoPreview);
+      } catch (e) {}
+      this.lassoPreview = null;
+    }
+    this.lassoPoints = [];
   }
 
   private loadWildfiresOnMap() {

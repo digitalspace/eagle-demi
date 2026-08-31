@@ -188,6 +188,9 @@ export class RegistryStateService {
   // by a regional district AND a municipality at once.
   boundaryFilter = signal<Record<string, Set<string>>>({});
 
+  // One ring of [lng, lat] vertices drawn freehand on the map, or null when nothing is drawn.
+  lassoPolygon = signal<number[][] | null>(null);
+
   // Cache of loaded GeoJSON data with geometry to avoid repeated API fetches
   loadedBoundariesGeoJSON = signal<Record<string, any>>(loadInitialCache());
 
@@ -267,7 +270,8 @@ export class RegistryStateService {
       gating: this.gatingFilter(),
       sector: this.sectorFilter(),
       staff: this.isStaff(),
-      geo: this.geoSelections()
+      geo: this.geoSelections(),
+      lasso: this.lassoPolygon()
     };
   }
 
@@ -353,7 +357,13 @@ export class RegistryStateService {
     if (!skipSector && ctx.sector.size && !ctx.sector.has((p.sector || '').trim())) return false;
 
     // 4. Region and administrative boundaries: OR within a section, AND across them.
-    return ctx.geo.every(sel => this.matchesGeoSelection(p, sel));
+    if (!ctx.geo.every(sel => this.matchesGeoSelection(p, sel))) return false;
+
+    // 5. Freehand lasso. Wrapped in an array because isPointInPolygon reads polygon[0] as the
+    // outer ring. A project with no centroid cannot be inside the drawn shape.
+    if (ctx.lasso && (!p.centroid || !this.isPointInPolygon([Number(p.centroid[0]), Number(p.centroid[1])], [ctx.lasso]))) return false;
+
+    return true;
   }
 
   // Projects matching active filters (excluding query)
@@ -1484,6 +1494,7 @@ export class RegistryStateService {
     this.sectorFilter.set(new Set());
     this.regionFilter.set(new Set());
     this.boundaryFilter.set({});
+    this.lassoPolygon.set(null);
   }
 
   selectProject(proj: Project | null) {
