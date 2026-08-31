@@ -423,6 +423,9 @@ exports.search = async (req, res) => {
             location: row.address || '',
             description: row.description || 'No project description provided.',
             proponent: { name: row.proponentName || 'Proponent Organization' },
+            // THE COSMOS BRANCH ONLY, same as `location` above: `eaCertificate` is not a column of
+            // the `projects` index, so a keyword search carries no certificate number.
+            eaCertificate: row.eaCertificate || null,
             // Cosmos field names again: `p.type` would be undefined on every row of the DEFAULT
             // view, the one a visitor lands on before typing a keyword.
             type: row.projectType || '',

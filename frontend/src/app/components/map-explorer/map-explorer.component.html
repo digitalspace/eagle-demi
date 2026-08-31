@@ -197,6 +197,15 @@
                 <div class="micro-label">Track id</div>
                 <div class="cell__title"><code class="cell__mono">{{ selected.trackProjectId || selected.id }}</code></div>
               </div>
+              <!-- Absent on most projects, so no em-dash placeholder: the cell is there or it is not.
+                   Verbatim, and NOT monospaced — Track puts certificate state in this column too
+                   ("Withdrawn", "In progress"), not only numbers like "E98-05". -->
+              @if (selected.eaCertificate) {
+                <div>
+                  <div class="micro-label">EA Certificate</div>
+                  <div class="cell__title">{{ selected.eaCertificate }}</div>
+                </div>
+              }
             </div>
           } @else {
             <div style="display: flex; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); overflow: hidden; margin-top: var(--layout-margin-medium);">

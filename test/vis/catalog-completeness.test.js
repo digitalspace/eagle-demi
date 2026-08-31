@@ -34,7 +34,8 @@ const TRACK_FIXTURE = {
   project_state_name: 'Operating',
   abbreviation: 'TRK',
   address: '100 Track Road, Victoria BC',
-  is_active: true
+  is_active: true,
+  ea_certificate: 'E05-01'
 };
 
 const EAGLE_FIXTURE = {

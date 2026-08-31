@@ -41,7 +41,11 @@ const TRACK_PRECEDENCE = [
   ['projectState', 'project_state_name', 'status'],
   ['abbreviation', 'abbreviation', 'shortName'],
   ['address', 'address', 'location'],
-  ['isActive', 'is_active', 'activeStatus']
+  ['isActive', 'is_active', 'activeStatus'],
+  // Track-only, and stored VERBATIM: the column carries certificate state as well as numbers
+  // ("E98-05", but also "Withdrawn", "In progress", "N/A"), so nothing here parses or normalises it.
+  // Absent from the checked-in export until the next pull — an empty Track field like any other.
+  ['eaCertificate', 'ea_certificate', null]
 ];
 
 /**
