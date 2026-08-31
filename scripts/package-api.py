@@ -109,13 +109,8 @@ def package_api(repo_root, zip_path):
     # `test`, `azure`, `.github` and `.vscode` are not runtime either — nothing reachable from
     # index.js -> api/index.js -> src/** loads them. They were shipped only because nothing excluded
     # them, which is how wwwroot ended up holding a copy of the repository.
-    # `public` is a local build output, untracked by git, and nothing serves it any more — the
-    # express.static mounts and the SPA sendFile routes that read it are gone
-    # (they answered 404 or hung; see the comment there). It is excluded rather than merely unused
-    # because this packager runs from whatever working tree the operator happens to have, and a
-    # stale local bundle would ship as dead weight. It does not outlive the deploy: the apps run
-    # WEBSITE_RUN_FROM_PACKAGE=1 (azure/modules/api-web-app.bicep:262), so the zip is mounted AS
-    # wwwroot read-only and each deploy replaces the whole tree rather than merging into it.
+    # `public` is an untracked local build output that nothing serves. Excluded because this
+    # packager runs from whatever working tree the operator has, and a stale bundle would ship.
     root_exclude_dirs = {".git", ".claude", "frontend", "extraction-host", "extractor", ".angular",
                          "dist", "coverage", ".deploy_archives", "tmp", "__pycache__",
                          "test", "azure", ".github", ".vscode", "scripts", "public"}

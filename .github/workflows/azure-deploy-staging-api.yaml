@@ -1,7 +1,8 @@
 # =============================================================================
 # Build and Deploy the DEMI API to Azure staging
 # =============================================================================
-# Deploys the Node.js Express API to the Azure Function App `demi-api-test`.
+# Deploys the Node.js API to the Azure Function Apps `demi-api-test` (B1) and, once it exists,
+# `demi-api-fc-test` (Flex Consumption). Same zip to both until the Flex app takes the traffic.
 #
 # API only. The frontend has its own file, `azure-deploy-staging-frontend.yaml`, and its
 # own trigger. They were one workflow until 2026-08-05, which meant an Angular-only
@@ -32,15 +33,13 @@ on:
       - main
     paths:
       # `scripts/package-api.py` is the authority on what ends up in the package, and
-      # these paths mirror it. Two are easy to miss:
-      #   - root `public/` is not in its `root_exclude_dirs`, so it ships.
+      # these paths mirror it. One is easy to miss:
       #   - `frontend/public/assets/geojson/**` is re-included by `include_subpaths` —
       #     the boundary seeder reads it at runtime in Azure. It is the one path under
       #     `frontend/` that belongs to the API package, so it fires BOTH workflows.
       #     That is correct, not a bug.
       - 'src/**'
       - 'api/**'
-      - 'public/**'
       - 'index.js'
       - 'host.json'
       - 'package.json'
@@ -56,6 +55,13 @@ concurrency:
 permissions:
   id-token: write
   contents: read
+
+# Two apps, one zip, for the length of the Flex migration: the B1 app keeps serving test traffic
+# while the FC1 app is proven, and rproxy is flipped only in Phase 4. Both names live here so the
+# steps below carry no literal.
+env:
+  API_APP_NAME: demi-api-test
+  API_FLEX_APP_NAME: demi-api-fc-test
 
 jobs:
   deploy-api:
@@ -117,9 +123,59 @@ jobs:
       # terminal state (4 = success, 3 = failed), and then probes /api/search/summary for a 401 to
       # prove the NEW build is the one answering. A plain `run:` step for the reason above.
       - name: Deploy API
-        env:
-          API_APP_NAME: demi-api-test
         run: ./scripts/deploy-azure.sh api ${{ vars.AZURE_RESOURCE_GROUP }}
+
+      # The Flex app does not exist until `azure/modules/api-function-flex.bicep` is deployed by
+      # hand. Skip rather than fail, so this workflow keeps working before and after that.
+      # The probe cannot tell "not created yet" from "demi-cicd-test holds no role on it" — the
+      # Website Contributor grant on demi-api-fc-test is a manual prerequisite, like the app.
+      - name: Does the Flex app exist yet?
+        id: flex
+        run: |
+          if az functionapp show -g ${{ vars.AZURE_RESOURCE_GROUP }} -n "$API_FLEX_APP_NAME" \
+               --query name -o tsv >/dev/null 2>&1; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "⏭️  $API_FLEX_APP_NAME not present — skipping the Flex deploy." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # `config-zip`, not `scripts/deploy-azure.sh`. That script POSTs to Kudu and then polls
+      # /api/config for its BUILD_ID; a Flex app has no Kudu wwwroot to POST into — it publishes to
+      # the deployment blob container declared in the module. Same zip as the step above, packaged
+      # again because the script deletes nothing behind it and BUILD_ID must be stamped in.
+      - name: Deploy API to the Flex app
+        if: steps.flex.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          export BUILD_ID="$(git describe --tags --always --dirty)-$(date -u +%H%M%S)"
+          python3 scripts/package-api.py . /tmp/api-flex.zip
+          az functionapp deployment source config-zip \
+            -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+            -n "$API_FLEX_APP_NAME" \
+            --src /tmp/api-flex.zip
+
+      # A deploy reporting success is not the same fact as the HTTP function being registered: the
+      # host loads an app that registers nothing quite happily, and every route then 404s. Trigger
+      # sync is asynchronous after a Flex publish, so poll rather than read once.
+      #
+      # `api` is the catch-all route in api/index.js. Matched exactly — `grep api` also matches
+      # `apiRoot`, which registers from the same block and so proves nothing extra.
+      - name: Verify the api function is registered
+        if: steps.flex.outputs.found == 'true'
+        run: |
+          for i in {1..10}; do
+            if az functionapp function list -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+                 -n "$API_FLEX_APP_NAME" --query "[].name" -o tsv 2>/dev/null \
+                 | sed 's#.*/##' | grep -qx api; then
+              echo "✓ api is registered on $API_FLEX_APP_NAME"
+              exit 0
+            fi
+            echo "Attempt $i: not registered yet, waiting..."
+            sleep 20
+          done
+          echo "❌ api never appeared. The app is deployed and every route will 404."
+          exit 1
 
       - name: Report API Failure to Job Summary
         if: failure()

@@ -1,6 +1,6 @@
 {
   "version": "2.0",
-  "_comment_functionTimeout": "For the nightly reconcileEagle timer: a full run measured ~5 minutes against test, too close to the old 00:10:00. A dedicated (Basic) plan allows a longer ceiling than Consumption's 10-minute maximum. The HTTP routes are unaffected — they are bounded by the ~230 s App Service gateway timeout, not by this.",
+  "_comment_functionTimeout": "For the nightly reconcileEagle timer: a full run measured ~5 minutes against test, and Flex Consumption defaults functionTimeout to 30 minutes, so the timers keep their ceiling. The HTTP routes are unaffected — the platform caps a request at ~230 s regardless of this.",
   "functionTimeout": "00:30:00",
   "logging": {
     "logLevel": {
