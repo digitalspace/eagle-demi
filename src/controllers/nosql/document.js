@@ -752,7 +752,7 @@ async function ingestChunksStreaming(req, res, doc) {
     return res.status(status).json({ error: message });
   };
 
-  const rl = readline.createInterface({ input: req, crlfDelay: Infinity });
+  const rl = readline.createInterface({ input: req.stream, crlfDelay: Infinity });
   let lineNo = 0;
 
   try {

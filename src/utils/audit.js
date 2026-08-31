@@ -23,7 +23,7 @@
 const crypto = require('crypto');
 const config = require('../config');
 const { logger } = require('./logger');
-const { callerIp } = require('../middleware/rate-limiter');
+const { callerIp } = require('./caller-ip');
 const { rolesFor } = require('../helpers/access-sql');
 
 const AUDIT_STREAM = 'Custom-DemiAudit_CL';

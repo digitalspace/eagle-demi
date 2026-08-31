@@ -509,15 +509,14 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
   });
 });
 
-test('the router mounts one data layer, unconditionally', async (t) => {
+test('the route table mounts one data layer, unconditionally', async (t) => {
   const load = (env = {}) => {
-    const key = require.resolve('../../src/routes/api');
+    const key = require.resolve('../../src/http/routes');
     delete require.cache[key];
     const prev = { ...process.env };
     Object.assign(process.env, env);
     try {
-      const router = require('../../src/routes/api');
-      return router.stack.filter(l => l.route).map(l => l.route.path).sort();
+      return require('../../src/http/routes').map(r => r.path).sort();
     } finally {
       for (const k of Object.keys(env)) {
         if (prev[k] === undefined) delete process.env[k];
@@ -809,12 +808,13 @@ test('chunk ingest — NDJSON streaming path', async (t) => {
   const { chunkMarkdown } = require('../../src/chunker');
   const DOC = { id: 'd1', projectId: '207', read: ['staff', 'sysadmin'], isPublished: false };
 
-  // A real Readable, not a fake: the handler drives it with readline, and a stub that merely
-  // exposes the lines would not exercise the streaming at all — which is the entire feature.
-  const streamReq = (lines) => Object.assign(
-    Readable.from(lines.map(l => `${l}\n`)),
-    { params: { id: 'd1' }, query: {}, user: ADMIN_USER, is: (t2) => t2 === 'application/x-ndjson' }
-  );
+  // A real Readable on `req.stream`, not a fake: the handler drives it with readline, and a stub
+  // that merely exposes the lines would not exercise the streaming at all — which is the entire
+  // feature. `stream` is what the dispatcher hands over for an unbuffered body.
+  const streamReq = (lines) => ({
+    stream: Readable.from(lines.map(l => `${l}\n`)),
+    params: { id: 'd1' }, query: {}, user: ADMIN_USER, is: (t2) => t2 === 'application/x-ndjson'
+  });
 
   const ndjson = (blocks, meta = {}) =>
     [JSON.stringify(meta), ...blocks.map(b => JSON.stringify(b))];

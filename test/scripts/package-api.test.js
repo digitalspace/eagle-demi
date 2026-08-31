@@ -315,7 +315,7 @@ test('API deploy package', async (t) => {
 
   await t.test('ships the search index definitions — read at REQUIRE time by every route', () => {
     // `src/search/eagle-query.js` runs `const FIELDS = loadFields()` at module scope, and
-    // src/routes/api.js -> src/controllers/search.js reaches it during boot. A package without
+    // src/http/routes.js -> src/controllers/search.js reaches it on the first search. A package without
     // these does not degrade search, it kills the whole API on startup with an ENOENT on a
     // scandir. That shipped once: `azure/` is excluded as infra and the definitions live under it.
     //

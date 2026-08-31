@@ -65,16 +65,6 @@ param deployDocumentStorage = false
 // create and nothing would ever publish into it.
 param deployStaticSite = false
 
-// ── Transport ─────────────────────────────────────────────────────────────────────────────────
-// 6000, the same value and for the same reason as test: prod is reached same-origin through
-// rproxy's /demi-search, rproxy sets no `X-Forwarded-For`, so `callerIp` is rproxy's egress address
-// on every request and this is ONE GLOBAL BUCKET, not a per-caller limit
-// (src/middleware/rate-limiter.js:44-73). At the 300 default that is 5 r/s for the entire public
-// site while rproxy itself admits 10 r/s per IP (limit_req zone=api_search, burst 20) — one
-// search-as-you-type client can 429 everyone. The 300 default stays right for a directly exposed
-// deployment; revert here when `demi.eao.gov.bc.ca` replaces the proxy hop.
-param rateLimitMaxRequests = 6000
-
 param linkBaseUrl = 'https://projects.eao.gov.bc.ca'
 
 // azp values: frontend client id + eagle-admin-console; measured against realm eao-epic.
@@ -91,23 +81,26 @@ param ssoAudience = ''
 param frontendHostNames = []
 
 // ── Compute ───────────────────────────────────────────────────────────────────────────────────
-// Join eagle-search's plan rather than creating demi-plan-prod: B1 Basic, kind linux, one worker —
-// compatible with `functionapp,linux`, and it is the plan already integrated into snet-app-service,
-// which is what makes DEMI's VNet integration into that subnet possible at all.
-// Scaled to B3 before the prod apply (decided 2026-08-26) so two apps do not share one B1 worker.
-// Shared with eagle-search-api-prod until that app retires (TODO 4.9), then it is DEMI's.
-param existingServerFarmId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/rg-eagle-search-prod/providers/Microsoft.Web/serverfarms/plan-eagle-search-prod'
+// No `existingServerFarmId`: a Flex plan cannot be shared, so demi-api-fc-prod owns one. The B1 app
+// in api-web-app.bicep consequently CREATES demi-plan-prod if it is applied from here, and its
+// integration into snet-app-service then collides with plan-eagle-search-prod's service-association
+// link. Read what-if before any prod apply while both apps stand.
 
 // ── Network ───────────────────────────────────────────────────────────────────────────────────
 // Landing-zone subnets in c4b0a8-prod-networking; private DNS is attached by policy from a central
 // subscription this one cannot read, so no zone is named here.
 //
 // snet-app-service carries plan-eagle-search-prod's service-association link (allowDelete: false),
-// which is exactly the plan set above — same plan, same delegated subnet, so no second integration
-// is being asked for. The other Microsoft.Web-delegated subnet, c4b0a8-prod-cond-ext-webapp-subnet,
-// is claimed by asp-condition-extractor-prod and is not available.
+// and a delegated subnet carries one plan's integration at a time. The other Microsoft.Web-delegated
+// subnet, c4b0a8-prod-cond-ext-webapp-subnet, is claimed by asp-condition-extractor-prod and is not
+// available.
 param privateEndpointSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/c4b0a8-prod-cond-ext-pe-subnet'
 param appServiceSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/snet-app-service'
+
+// The Flex app's own subnet, delegated to `Microsoft.App/environments` with an NSG attached (both
+// demanded by policy). A Microsoft.Web-delegated subnet cannot host it, so this is a second subnet
+// rather than the one above.
+param apiFlexSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/snet-demi-func-fc1-prod'
 
 // ── Monitoring ────────────────────────────────────────────────────────────────────────────────
 // THE PUBLIC PATH THROUGH rproxy, which is what eagle-public calls and the only address that fails

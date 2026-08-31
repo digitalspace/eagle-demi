@@ -26,10 +26,10 @@ This repository houses:
 
 ```bash
 yarn install
-yarn start            # Express on :3000
+yarn start            # Azure Functions Core Tools (`func start`) on :7071
 ```
 
-Swagger: `http://localhost:3000/api-docs`
+OpenAPI spec: `http://localhost:7071/api-docs` — the raw YAML, not a UI. Not served in prod.
 
 ### Running anything against the database
 
@@ -72,9 +72,8 @@ Four things to know before running a script this way:
    The `SEARCH_*` four are here because anything that deletes a row deletes its index entry too, and
    `deleteFromIndex` returns 0 instead of throwing when `SEARCH_ENDPOINT` is unset — without them a
    purge looks like it worked and leaves the row searchable.
-2. **`globalThis.crypto` no longer needs shimming.** The container is Node 22, which has it natively;
-   `src/app.js` still shims it defensively. Measured 2026-08-20 — earlier advice here said a
-   standalone script must do it itself.
+2. **`globalThis.crypto` no longer needs shimming.** The container is Node 22, which has it
+   natively. Measured 2026-08-20 — earlier advice here said a standalone script must do it itself.
 3. **Run with `--max-old-space-size=224`.** The container has ~1.85 GB with ~330 MB free, and Node's
    default heap gets the process OOM-killed with no error in the log — it simply vanishes.
 4. **`NODE_PATH=/home/site/wwwroot/node_modules`** if you are running from anywhere else in the
@@ -251,10 +250,9 @@ it at the latter once repointed the live app at an empty database that answered 
 
 Some implementation details worth knowing before you touch them:
 
-- **`api/index.js`** converts Azure Functions v4 `HttpRequest` objects into Node `Readable` streams
-  and hands them to Express directly, with no proxy adapter.
-- **`src/middleware/rate-limiter.js`** switches to `inlineCleanup` when `isServerless`, avoiding
-  `setInterval` timers that leak across execution freeze cycles.
+- **`api/index.js`** registers one catch-all Functions route and hands every request to
+  `src/http/router.js`, which dispatches against the route table in `src/http/routes.js` — no Express,
+  no per-route registrations (the host matches those in discovery order, not by specificity).
 - **There is no nightly sync.** The `nightlySyncTimer` is gone, not disabled — the indexers pull every
   five minutes, so there is nothing left for a nightly job to push.
 - **GeoJSON is `[longitude, latitude]`** end to end. Cosmos stores it, AI Search indexes it as a
@@ -292,9 +290,10 @@ Two transport constraints on this route, both found from real documents rather t
   ingests on one B1 vCPU returned 504; serialising to one uploader took the same document to 111 s.
 
 Documents whose markdown exceeds the 10 MB JSON body limit use `Content-Type: application/x-ndjson`
-on the same route — line 1 provenance, lines 2..n JSON-encoded markdown blocks. `express.json` only
-parses `application/json`, so the body arrives unconsumed. Both paths share `createChunkAccumulator`,
-so a document chunks identically whichever door it came through.
+on the same route — line 1 provenance, lines 2..n JSON-encoded markdown blocks. The dispatcher only
+buffers `application/json`, so an NDJSON body arrives unread and the handler reads it off
+`req.stream`. Both paths share `createChunkAccumulator`, so a document chunks identically whichever
+door it came through.
 
 **Nothing inside Azure extracts text today.** `src/extract.js` holds the only in-repo docling client
 and PDF page-batching code; extraction for new projects is deliberately deferred, not cancelled. Do
@@ -559,8 +558,8 @@ without revisiting that grant. `scripts/validate-deploy.sh` checks the result wh
    problem, because nothing in either deployment was wrong. **List the new origin first, publish
    second, drop the old origin last.**
 
-   An empty array is the pre-Front-Door state and fails closed: `CORS_ORIGIN` is unset, `src/app.js`
-   falls back to an allowlist holding only `http://localhost:4200`, and the frontend's first XHR
+   An empty array is the pre-Front-Door state and fails closed: `CORS_ORIGIN` is unset,
+   `src/http/router.js` falls back to an allowlist holding only `http://localhost:4200`, and the frontend's first XHR
    fails loudly rather than silently reflecting any origin.
 
 3. **Register the AFD hostname with Keycloak, before decommissioning the old App Service.**

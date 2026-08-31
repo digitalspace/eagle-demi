@@ -25,7 +25,7 @@ const cosmos = require('../../../src/db/cosmos-nosql');
 const projects = require('../../../src/repositories/projects');
 const projectController = require('../../../src/controllers/nosql/project');
 const { requireRole } = require('../../../src/middleware/require-roles');
-const apiRouter = require('../../../src/routes/api');
+const apiRoutes = require('../../../src/http/routes');
 
 const SYSADMIN = {
   sub: 'kc-sub-1', preferred_username: 'sys.admin', realm_access: { roles: ['sysadmin'] }
@@ -95,23 +95,22 @@ test('403 without sysadmin', async (t) => {
     assert.strictEqual(res.statusCode, 403);
   });
 
-  await t.test('and the route really mounts that gate, not just requireWrite', () => {
-    // Asserted on the mounted stack because the gate is only real where it is mounted: the
-    // handler itself checks no roles, so a route missing this layer would pass every test above
-    // while being reachable by any staff member.
-    const layer = apiRouter.stack.find(
-      (l) => l.route && l.route.path === '/projects/:id/visibility' && l.route.methods.patch);
-    assert.ok(layer, 'PATCH /projects/:id/visibility must be mounted');
-    const names = layer.route.stack.map((h) => h.handle.name);
-    assert.strictEqual(names.length, 4, 'authMiddleware, requireWrite, requireRole, handler');
-    assert.ok(names.includes('requireWrite'));
+  await t.test('and the route really carries that gate, not just requireWrite', () => {
+    // Asserted on the table because the gate is only real where it is mounted: the handler itself
+    // checks no roles, so a route missing this guard would pass every test above while being
+    // reachable by any staff member.
+    const route = apiRoutes.find(
+      (r) => r.method === 'patch' && r.path === '/projects/:id/visibility');
+    assert.ok(route, 'PATCH /projects/:id/visibility must be in the route table');
+    assert.strictEqual(route.guards.length, 3, 'authMiddleware, requireWrite, requireRole');
+    assert.ok(route.guards.map((g) => g.name).includes('requireWrite'));
 
-    // The third layer is the anonymous closure requireRole returns. Exercised rather than named:
+    // The third guard is the anonymous closure requireRole returns. Exercised rather than named:
     // requireWrite would also sit in an unnamed slot, and only a staff token tells them apart.
     const res = mockRes();
     let nexted = false;
-    layer.route.stack[2].handle({ user: STAFF }, res, () => { nexted = true; });
-    assert.strictEqual(nexted, false, 'staff must be refused by the third layer');
+    route.guards[2]({ user: STAFF }, res, () => { nexted = true; });
+    assert.strictEqual(nexted, false, 'staff must be refused by the third guard');
     assert.strictEqual(res.statusCode, 403);
   });
 });

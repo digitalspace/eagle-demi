@@ -22,7 +22,7 @@ const assert = require('node:assert');
 const audit = require('../../src/utils/audit');
 const cosmos = require('../../src/db/cosmos-nosql');
 const controller = require('../../src/controllers/nosql/credentials');
-const apiRouter = require('../../src/routes/api');
+const apiRoutes = require('../../src/http/routes');
 
 const SYSADMIN = {
   sub: 'kc-sub-1', preferred_username: 'sys.admin', realm_access: { roles: ['sysadmin'] }
@@ -199,19 +199,17 @@ test('the routes mount the sysadmin gate, not requireWrite alone', () => {
   // sight of anything.
   for (const [path, method] of [['/credentials', 'post'], ['/credentials', 'get'],
     ['/credentials/revoke', 'post']]) {
-    const layer = apiRouter.stack.find(
-      (l) => l.route && l.route.path === path && l.route.methods[method]);
-    assert.ok(layer, `${method.toUpperCase()} ${path} must be mounted`);
+    const route = apiRoutes.find((r) => r.method === method && r.path === path);
+    assert.ok(route, `${method.toUpperCase()} ${path} must be in the route table`);
 
-    const names = layer.route.stack.map((h) => h.handle.name);
-    assert.strictEqual(names.length, 4, 'authMiddleware, requireWrite, requireRole, handler');
-    assert.ok(names.includes('requireWrite'));
+    assert.strictEqual(route.guards.length, 3, 'authMiddleware, requireWrite, requireRole');
+    assert.ok(route.guards.map((g) => g.name).includes('requireWrite'));
 
-    // The third layer is the closure requireRole returns — exercised rather than named, since
-    // requireWrite would also sit in an unnamed slot and only a staff token tells them apart.
+    // The third guard is the anonymous closure requireRole returns — exercised rather than named,
+    // since requireWrite would also sit in an unnamed slot and only a staff token tells them apart.
     const res = mockRes();
     let nexted = false;
-    layer.route.stack[2].handle({ user: STAFF }, res, () => { nexted = true; });
+    route.guards[2]({ user: STAFF }, res, () => { nexted = true; });
     assert.strictEqual(nexted, false, `staff must be refused on ${method.toUpperCase()} ${path}`);
     assert.strictEqual(res.statusCode, 403);
   }
