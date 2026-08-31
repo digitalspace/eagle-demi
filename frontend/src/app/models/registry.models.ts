@@ -16,6 +16,12 @@ export interface Project {
   description?: string;
   proponent?: string;
   /**
+   * Track's `ea_certificate`, verbatim. Certificate STATE, not just a number: a real one
+   * ("E98-05", "WD09-01") or a word ("Withdrawn", "In progress", "N/A"). Most projects have none.
+   */
+  // null = known absent (Cosmos said so); undefined = source did not carry the field.
+  eaCertificate?: string | null;
+  /**
    * Pre-escaped `<mark>` markup from AI Search, per field — what the index's own analyzer matched,
    * which is not the same as what a regex in the browser can find. Absent on the Cosmos fallback
    * path, where there is no analyzer to ask, so a renderer must fall back to client marking.

@@ -58,6 +58,52 @@ function levelOfRead(read) {
 }
 
 /**
+ * The tokens a credential's `levels` admit, and the tokens that prove a row sits ABOVE them
+ * (docs/rbac-architecture.md §1, "Selected Credentials").
+ *
+ * Levels 2-4 nest in `read[]`, so "carries a granted token" alone is not "is at a granted level":
+ * a level-3 row carries `staff` too, and a `levels: [2]` credential would reach it. The second set
+ * is the ceiling that makes the arm mean `levelOfRead(read) ∈ levels` exactly, with no SQL shape
+ * the role arm does not already use.
+ *
+ * A row carrying NO ladder token matches neither set, so it stays privileged-only — `levelOfRead`
+ * reads it as 1, and a `levels: [1]` credential must not be a way in.
+ */
+function levelTokens(levels) {
+  const granted = (levels || []).map(l => LEVEL_TOKENS[l]).filter(Boolean);
+  const ceiling = Math.max(...(levels || [0]));
+  return { granted, wider: [2, 3, 4].filter(l => l > ceiling).map(l => LEVEL_TOKENS[l]) };
+}
+
+/** Does this row sit at one of the levels a credential grants? The JS twin of the arm's SQL. */
+function matchesLevels(read, levels) {
+  const tokens = Array.isArray(read) ? read : [];
+  const { granted, wider } = levelTokens(levels);
+  return tokens.some(t => granted.includes(t)) && !tokens.some(t => wider.includes(t));
+}
+
+/**
+ * The field a credential's `scope.ids` are compared against in THIS container, or null when the
+ * grant says nothing about it.
+ *
+ * A project-scoped grant names project ids, which is the partition field — `id` on projects,
+ * `projectId` everywhere else, the same choice the team arm makes.
+ *
+ * A document-scoped grant names the records themselves. In a Cosmos container that is `id`, and on
+ * projects it is nothing at all: sight of a document is not sight of its project. A SEARCH INDEX
+ * names the field instead of inferring it — a chunk carries its document as `documentId`, and the
+ * chunk index's own `id` is not filterable, so the inferred field would be a 400 rather than a
+ * narrower result.
+ */
+function credentialField(credential, partitionField, documentField) {
+  const scope = (credential && credential.scope) || {};
+  if (scope.type === 'project') return partitionField;
+  if (scope.type !== 'document') return null;
+  if (documentField !== undefined) return documentField;
+  return partitionField === 'id' ? null : 'id';
+}
+
+/**
  * Roles that grant PRIVILEGED visibility — read everything, ACL predicate collapses to `true`.
  * `staff` is deliberately NOT here: that's what makes level 1 real. Session eligibility is
  * AUTHENTICATED_ROLES below, a separate question.
@@ -168,6 +214,9 @@ function resolveAccess(req) {
   // set only by verified auth (an API key or a Keycloak token), and a `compliance` key resolves to
   // TIER.PUBLIC while still being an identified caller.
   const authenticated = Boolean(req && req.user);
+  // Live grants for this caller, loaded and window-filtered by middleware/credentials.js. A GRANT
+  // like `teams`, never a restriction; absent (an unmounted route, a failed load) means none.
+  const credentials = Array.isArray(req && req.credentials) ? req.credentials : [];
   // Field visibility is a THIRD dimension: rows and partitions say which records, level says which
   // attributes of one. Carried here so every response boundary has it without re-deriving.
   const level = levelFromRoles(roles);
@@ -182,14 +231,16 @@ function resolveAccess(req) {
   // `canRead` both key privilege off the ROLES, never off the tier, so a SCOPED tier still lifts
   // the role predicate for a privileged role set.
   if (Array.isArray(projectScope)) {
-    return { tier: TIER.SCOPED, roles, projectScope, teams, authenticated, level };
+    return { tier: TIER.SCOPED, roles, projectScope, teams, credentials, authenticated, level };
   }
 
   if (isPrivileged(roles)) {
-    return { tier: TIER.PRIVILEGED, roles, projectScope: null, teams, authenticated, level };
+    return {
+      tier: TIER.PRIVILEGED, roles, projectScope: null, teams, credentials, authenticated, level
+    };
   }
 
-  return { tier: TIER.PUBLIC, roles, projectScope: null, teams, authenticated, level };
+  return { tier: TIER.PUBLIC, roles, projectScope: null, teams, credentials, authenticated, level };
 }
 
 /**
@@ -266,6 +317,7 @@ function systemAccess() {
     roles: [...PUBLIC_ROLES, ...SECURE_ROLES],
     projectScope: null,
     teams: [],
+    credentials: [],
     authenticated: true,
     level: 0
   };
@@ -362,6 +414,43 @@ function readClause(roles, opts = {}) {
     params.push(...teamNames.map((name, i) => ({ name, value: String(teams[i]) })));
   }
 
+  // The credential arm: a named party's sight of named records at named levels, for a fixed window
+  // (docs/rbac-architecture.md §1, "Selected Credentials"). An OR like the team arm — it GRANTS,
+  // and it changes nothing about the row it matches. One arm however many grants the caller holds.
+  const credentials = Array.isArray(opts.credentials) ? opts.credentials : [];
+  const credArms = [];
+  credentials.forEach((cred, i) => {
+    const credField = credentialField(cred, field);
+    // Same allow-list as the team arm, for the same reason: this is the one value reaching SQL
+    // uninterpolated.
+    if (!TEAM_PARTITION_FIELDS.includes(credField)) return;
+
+    const ids = (cred.scope && cred.scope.ids) || [];
+    const { granted, wider } = levelTokens(cred.levels);
+    if (ids.length === 0 || granted.length === 0) return;
+
+    const idNames = ids.map((_, j) => `${prefix}C${i}_${j}`);
+    const grantNames = granted.map((_, j) => `${prefix}CG${i}_${j}`);
+    const widerNames = wider.map((_, j) => `${prefix}CW${i}_${j}`);
+
+    credArms.push(
+      `(${alias}.${credField} IN (${idNames.join(', ')})` +
+      ` AND EXISTS(SELECT VALUE r FROM r IN ${alias}.read WHERE r IN (${grantNames.join(', ')}))` +
+      (widerNames.length
+        ? ` AND NOT EXISTS(SELECT VALUE r FROM r IN ${alias}.read` +
+          ` WHERE r IN (${widerNames.join(', ')}))`
+        : '') +
+      ')'
+    );
+    params.push(
+      ...idNames.map((name, j) => ({ name, value: String(ids[j]) })),
+      ...grantNames.map((name, j) => ({ name, value: granted[j] })),
+      ...widerNames.map((name, j) => ({ name, value: wider[j] }))
+    );
+  });
+
+  if (credArms.length > 0) arms.push(`(${credArms.join(' OR ')})`);
+
   return { clause: `(${arms.join(' OR ')})`, params };
 }
 
@@ -440,7 +529,9 @@ function andClauses(...fragments) {
  */
 function visibilityFor(access, partitionField = 'projectId', opts = {}) {
   return andClauses(
-    readClause(access.roles, { ...opts, teams: access.teams, partitionField }),
+    readClause(access.roles, {
+      ...opts, teams: access.teams, credentials: access.credentials, partitionField
+    }),
     scopeClause(access, partitionField, opts)
   );
 }
@@ -473,9 +564,19 @@ function canRead(doc, access, partitionField = 'projectId') {
 
   // The team arm's JS twin — see readClause. A row with no ladder token at all reaches no
   // unprivileged caller: `isPublished` mirrors `read`, it never grants.
-  return TEAM_PARTITION_FIELDS.includes(partitionField) &&
+  if (TEAM_PARTITION_FIELDS.includes(partitionField) &&
     read.includes(LEVEL_TOKENS[1]) &&
-    (access.teams || []).includes(String(doc[partitionField]));
+    (access.teams || []).includes(String(doc[partitionField]))) {
+    return true;
+  }
+
+  // The credential arm's JS twin — see readClause. Reads the row, never writes it.
+  return (access.credentials || []).some((cred) => {
+    const field = credentialField(cred, partitionField);
+    if (!TEAM_PARTITION_FIELDS.includes(field)) return false;
+    const ids = ((cred.scope && cred.scope.ids) || []).map(String);
+    return ids.includes(String(doc[field])) && matchesLevels(read, cred.levels);
+  });
 }
 
 module.exports = {
@@ -492,6 +593,9 @@ module.exports = {
   pageSizeFor,
   readForLevel,
   levelOfRead,
+  levelTokens,
+  matchesLevels,
+  credentialField,
   rolesFor,
   isPrivileged,
   isAuthenticatedRole,

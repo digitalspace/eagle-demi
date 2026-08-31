@@ -728,6 +728,163 @@ paths:
         '404':
           description: Short link not found.
 
+  /api/credentials:
+    post:
+      summary: Grant a Selected Credential
+      description: |-
+        Gives one named party sight of specified records at levels 1-3, for a fixed window.
+        `sysadmin` only. The grant changes no record, changes nobody else's access and never
+        touches the field plane — the holder's own level still decides which attributes they see.
+
+        `end` is required and enforced here rather than at login; 90 days is what the UI offers,
+        not a cap. Renewal is the norm on EA timelines, so an expiring grant is replaced by a new
+        one rather than edited. Supply `batchId` to mint several grants that one revoke takes back
+        together; omit it and one is generated.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [party, scope, levels, end]
+              properties:
+                party:
+                  type: object
+                  required: [type, id]
+                  properties:
+                    type:
+                      type: string
+                      enum: [user, group, apikey]
+                    id:
+                      type: string
+                      description: Keycloak `sub`, a realm group name, or a registry key id.
+                scope:
+                  type: object
+                  required: [type, ids]
+                  properties:
+                    type:
+                      type: string
+                      enum: [document, project]
+                    ids:
+                      type: array
+                      maxItems: 200
+                      items:
+                        type: string
+                levels:
+                  type: array
+                  description: >-
+                    Record levels this grant admits. 0 is the sealed compartment and 4 is public;
+                    neither can be granted.
+                  items:
+                    type: integer
+                    minimum: 1
+                    maximum: 3
+                start:
+                  type: string
+                  format: date-time
+                end:
+                  type: string
+                  format: date-time
+                batchId:
+                  type: string
+                note:
+                  type: string
+              example:
+                party:
+                  type: user
+                  id: 8f2c1a3e-0000-4b6d-9f11-2c9d5a7e4b10
+                scope:
+                  type: project
+                  ids: ['207']
+                levels: [1, 2]
+                end: '2026-11-29T00:00:00.000Z'
+                note: Working group, Skeena LNG
+      responses:
+        '201':
+          description: The stored grant.
+        '400':
+          description: >-
+            A missing or past `end`, an unknown `party.type` or `scope.type`, an empty scope, more
+            than 200 scope ids, or `levels` naming 0 or 4. The body says which.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Requires role sysadmin.
+    get:
+      summary: List Selected Credentials
+      description: |-
+        Live grants held by one party, or live grants over one project. Exactly one of the two
+        query parameters is required. `projectId` matches project-scoped grants only — a
+        document-scoped grant names document ids.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: party
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: projectId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The grants.
+        '400':
+          description: Neither party nor projectId was supplied.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Requires role sysadmin.
+
+  /api/credentials/revoke:
+    post:
+      summary: Revoke Selected Credentials
+      description: |-
+        Ends grants by `id`, by `batchId`, by `party`, or over a `projectId` — exactly one
+        selector per request. A revoke stamps `revokedAt`; the row stays as the record of what was
+        granted and when it stopped. Each revoked grant is audited, and a set revoke adds one
+        summary row.
+
+        On the instance serving the request the effect is immediate; on any other it lands within
+        the 60-second credential cache TTL.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                batchId:
+                  type: string
+                party:
+                  type: string
+                projectId:
+                  type: string
+                cause:
+                  type: string
+                  description: Recorded in the audit row, e.g. `project-closed`.
+      responses:
+        '200':
+          description: How many grants were revoked, and their ids.
+        '400':
+          description: No selector, or more than one.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Requires role sysadmin.
+
 components:
   securitySchemes:
     ApiKeyAuth:

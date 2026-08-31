@@ -33,6 +33,8 @@ module.exports = {
   abbreviation: { defaultVis: 4, maxVis: 4 },
   address: { defaultVis: 4, maxVis: 4 },
   isActive: { defaultVis: 4, maxVis: 4 },
+  // Certificate number or state — both are published on the EAO's own certificate pages.
+  eaCertificate: { defaultVis: 4, maxVis: 4 },
 
   // Eagle-only EA process record.
   eaStatus: { defaultVis: 4, maxVis: 4 },
