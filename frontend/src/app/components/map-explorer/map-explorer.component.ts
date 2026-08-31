@@ -1011,6 +1011,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     container.addEventListener('pointerdown', this.onLassoDown);
     container.addEventListener('pointermove', this.onLassoMove);
     container.addEventListener('pointerup', this.onLassoUp);
+    container.addEventListener('pointercancel', this.onLassoCancel);
     this.lassoActive.set(true);
   }
 
@@ -1025,11 +1026,14 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     container.removeEventListener('pointerdown', this.onLassoDown);
     container.removeEventListener('pointermove', this.onLassoMove);
     container.removeEventListener('pointerup', this.onLassoUp);
+    container.removeEventListener('pointercancel', this.onLassoCancel);
   }
 
   private onLassoDown = (e: PointerEvent) => {
     e.preventDefault();
     this.service.lassoPolygon.set(null);
+    // Capture so pointerup still fires when the button is released outside the map.
+    this.map.getContainer().setPointerCapture(e.pointerId);
     this.lassoPoints = [this.map.mouseEventToLatLng(e)];
     this.lassoPreview = L.polyline(this.lassoPoints, { color: '#013366', weight: 3, dashArray: '4,4' }).addTo(this.map);
   };
@@ -1047,6 +1051,8 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     // Under four points the shape has no interior, so a stray click clears rather than filters.
     if (drawn.length >= 4) this.service.lassoPolygon.set(drawn.map(ll => [ll.lng, ll.lat]));
   };
+
+  private onLassoCancel = () => this.discardLassoStroke();
 
   private discardLassoStroke() {
     if (this.lassoPreview) {
