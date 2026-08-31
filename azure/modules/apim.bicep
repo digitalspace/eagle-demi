@@ -33,6 +33,18 @@ param gatewaySecretName string = 'apim-gateway-secret'
 var backendUrl = 'https://${apiHostName}/api'
 var machineApiName = 'demi-machine'
 
+// Wildcard operations, NOT an OpenAPI import: swagger.yaml is partial and drifts per deploy, while
+// the gateway is a pure proxy — the app owns routing. Without these APIM 404s every request.
+var proxyMethods = [
+  'GET'
+  'POST'
+  'PUT'
+  'DELETE'
+  'PATCH'
+  'HEAD'
+  'OPTIONS'
+]
+
 // Server-to-server consumers, one subscription each so a key can be rotated or revoked alone.
 var machineConsumers = [
   'eagle-api'
@@ -113,6 +125,16 @@ resource api 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   }
 }
 
+resource apiOperations 'Microsoft.ApiManagement/service/apis/operations@2024-05-01' = [for method in proxyMethods: {
+  parent: api
+  name: toLower(method)
+  properties: {
+    displayName: '${method} *'
+    method: method
+    urlTemplate: '/*'
+  }
+}]
+
 // Machine path. Same backend, reached as /machine/<route> with Ocp-Apim-Subscription-Key.
 resource machineApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
   parent: apim
@@ -127,6 +149,16 @@ resource machineApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
     subscriptionRequired: true
   }
 }
+
+resource machineApiOperations 'Microsoft.ApiManagement/service/apis/operations@2024-05-01' = [for method in proxyMethods: {
+  parent: machineApi
+  name: toLower(method)
+  properties: {
+    displayName: '${method} *'
+    method: method
+    urlTemplate: '/*'
+  }
+}]
 
 resource machineProduct 'Microsoft.ApiManagement/service/products@2024-05-01' = {
   parent: apim

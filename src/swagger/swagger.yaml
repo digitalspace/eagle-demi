@@ -906,6 +906,12 @@ components:
           * `staff`, `sysadmin`, `demi-admin` — data writes AND `/api/admin/*`.
 
         A key carrying any write role must be minted with `allowWrite: true`.
+
+        Machine callers that arrive through API Management present no key of their own: the
+        gateway proves them, and `POST /api/admin/api-keys` with `id: apim:<subscription-name>`
+        (the only id a caller may choose, and only in that shape) records the roles that
+        subscription holds. Such a row carries no secret, never expires on its own — API
+        Management owns the subscription's lifecycle — and 409s if the id already exists.
     BearerAuth:
       type: http
       scheme: bearer
