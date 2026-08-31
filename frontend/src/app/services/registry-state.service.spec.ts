@@ -168,6 +168,22 @@ describe('RegistryStateService', () => {
     expect(service.filteredProjects()).toEqual([]);
   });
 
+  it('should keep only the projects whose centroid falls inside the lasso ring', () => {
+    const mockProjects: any[] = [
+      { id: 'p1', name: 'Inside', gatingState: 'admitted', centroid: [-123.4, 48.5] },
+      { id: 'p2', name: 'Outside', gatingState: 'admitted', centroid: [-119.5, 54.2] },
+      { id: 'p3', name: 'No centroid', gatingState: 'admitted' }
+    ];
+    service.projects.set(mockProjects);
+
+    // Triangle around p1 only. Unclosed on purpose: the ray cast wraps the last vertex to the first.
+    service.lassoPolygon.set([[-124, 48], [-122.5, 48], [-123.4, 49.5]]);
+    expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p1']);
+
+    service.clearFilters();
+    expect(service.filteredProjectsNoQuery()!.map(p => p.id)).toEqual(['p1', 'p2', 'p3']);
+  });
+
   it('should build sector chips from the data, merging whitespace twins, and select them exactly', () => {
     // Every value here is a real one from dev, including the trailing-space twin. The chips this
     // replaced were Energy / Mining / Transportation matched by substring: 'Coal Mines' was

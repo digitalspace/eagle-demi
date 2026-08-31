@@ -167,6 +167,13 @@
           <p class="cell__sub" style="margin: var(--layout-margin-xsmall) 0 0;">Overlays change the map. Filters change the results.</p>
         </div>
       }
+      <button type="button" (click)="toggleLasso()" [attr.aria-pressed]="lassoActive()" title="Hold and drag on the map to draw an area. Escape clears it."
+              [style.background]="lassoActive() ? 'var(--surface-color-primary-default)' : 'var(--surface-color-background-white)'"
+              [style.color]="lassoActive() ? 'var(--surface-color-background-white)' : 'var(--typography-color-primary)'"
+              style="display: inline-flex; align-items: center; gap: 0.4rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); box-shadow: 0 2px 8px rgba(0,0,0,0.18); padding: 0.45rem 0.8rem; font: var(--typography-bold-small-body); cursor: pointer;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><ellipse cx="12" cy="9" rx="8" ry="5"></ellipse><path d="M12 14v4"></path><path d="M12 22a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"></path></svg>
+        Lasso
+      </button>
     </div>
 
     @if (service.selectedProject(); as selected) {

@@ -67,14 +67,14 @@ describe('AppComponent', () => {
     const headings = Array.from(el.querySelectorAll('.app-sidebar__heading')).map(h => h.textContent?.trim());
     expect(headings).toEqual(['Discover', 'Operate', 'Access', 'Developers']);
 
-    // Ten sidebar screens; profile and sessions are reachable from the account menu only.
-    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(10);
+    // Nine sidebar screens; profile and sessions are reachable from the account menu only.
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(9);
   });
 
   it('keeps the sidebar open when navigating to the map', async () => {
     const { el, fixture } = await renderAs(true, false);
     await TestBed.inject(Router).navigateByUrl('/map');
     fixture.detectChanges();
-    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(10);
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(9);
   });
 });
