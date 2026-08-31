@@ -65,16 +65,6 @@ param deployDocumentStorage = false
 // create and nothing would ever publish into it.
 param deployStaticSite = false
 
-// ── Transport ─────────────────────────────────────────────────────────────────────────────────
-// 6000, the same value and for the same reason as test: prod is reached same-origin through
-// rproxy's /demi-search, rproxy sets no `X-Forwarded-For`, so `callerIp` is rproxy's egress address
-// on every request and this is ONE GLOBAL BUCKET, not a per-caller limit
-// (src/middleware/rate-limiter.js:44-73). At the 300 default that is 5 r/s for the entire public
-// site while rproxy itself admits 10 r/s per IP (limit_req zone=api_search, burst 20) — one
-// search-as-you-type client can 429 everyone. The 300 default stays right for a directly exposed
-// deployment; revert here when `demi.eao.gov.bc.ca` replaces the proxy hop.
-param rateLimitMaxRequests = 6000
-
 param linkBaseUrl = 'https://projects.eao.gov.bc.ca'
 
 // azp values: frontend client id + eagle-admin-console; measured against realm eao-epic.

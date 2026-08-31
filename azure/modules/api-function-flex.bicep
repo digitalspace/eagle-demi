@@ -80,9 +80,6 @@ param cosmosDatabase string = 'demi'
 @allowed([ 'minio', 'azure' ])
 param storageBackend string = 'minio'
 
-@description('Requests per minute per rate-limit bucket. Inert: the app dropped in-process rate limiting, rproxy `limit_req` is the control.')
-param rateLimitMaxRequests int = 300
-
 @description('Public origin short links redirect from, e.g. https://projects.eao.gov.bc.ca. Per-environment: test must not hand back the prod host.')
 param linkBaseUrl string = ''
 
@@ -369,12 +366,6 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'MINIO_USE_SSL'
           value: 'true'
-        }
-        // Inert since the app dropped in-process rate limiting. Declared until it is removed from
-        // every param file in one change, so nothing is left orphaned mid-flight.
-        {
-          name: 'RATE_LIMIT_MAX_REQUESTS'
-          value: string(rateLimitMaxRequests)
         }
         // Per environment — test must hand back the test host, not prod's.
         {
