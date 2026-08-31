@@ -510,15 +510,6 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'CORS_ORIGIN'
           value: join(map(frontendHostNames, h => 'https://${h}'), ',')
         }
-        {
-          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
-          value: 'false'
-        }
-        // Oryx must not build on deploy: the zip already carries node_modules.
-        {
-          name: 'ENABLE_ORYX_BUILD'
-          value: 'false'
-        }
         // Flex routes all outbound traffic through the integrated subnet on its own, so this is
         // inert here — kept because it costs nothing and a wrong guess about that is a total
         // outage: every private endpoint would resolve public and be refused.
