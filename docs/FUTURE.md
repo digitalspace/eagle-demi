@@ -2,6 +2,12 @@
 
 Not scheduled. Added 2026-08-26.
 
+- **The next Track pull must include `ea_certificate`.** `src/data/track_projects_enriched.json`
+  has no such column, so `eaCertificate` is carried by `merge/project.js`, catalogued, mapped to the
+  wire and rendered on the project card, but empty on every row. Once the column arrives:
+  `yarn db:backfill-eac-number --live` stamps the existing Cosmos rows; no code change. The column
+  holds certificate state as well as numbers ("Withdrawn", "In progress"), and DEMI stores it
+  verbatim — splitting number from state is a Track-side decision, not one to make on the way in.
 - **One place for API keys, roles and permissions.** Today: keys minted by `POST /admin/api-keys`
   (registry, `GRANTABLE_ROLES`, `projectScope`, 90-day expiry), roles from Keycloak realm roles,
   `project:<id>` roles for scope, `SECURE_ROLES`/`WRITE_ROLES` hardcoded in `helpers/access-sql.js`.
