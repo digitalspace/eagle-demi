@@ -53,6 +53,11 @@ const UNGATED = {
   'api-keys.js':
     'The registry is the credential store itself — there is no caller tier that may read part of ' +
     'it, so every route is admin-gated rather than ACL-filtered.',
+  'credentials.js':
+    'The grant registry, not application data: a row names who may see what, so there is no ' +
+    'caller tier that may read part of it. Every /credentials route is authMiddleware + ' +
+    'requireWrite + requireRole(sysadmin), asserted below; the middleware reads it by party, ' +
+    'internally.',
   'wildfires.js':
     'No read path at all. GET /wildfires was removed for having no consumer — the frontend reads ' +
     'the DataBC WFS directly — leaving only the admin sync.',
@@ -87,7 +92,10 @@ const UNGATED = {
 const gatedPrefixes = {
   '/admin/api-keys': 'requireAdmin',
   '/admin/sync/': 'requireAdmin',
-  '/eagle/': 'requireWrite'
+  '/eagle/': 'requireWrite',
+  // The executable half of the `credentials.js` reason above. `requireRole` is the narrow gate a
+  // grant needs: requireWrite alone would let the machine writer mint one for itself.
+  '/credentials': 'requireRole'
 };
 
 /**

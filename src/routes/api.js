@@ -10,6 +10,9 @@ const passiveAuthMiddleware = require('../middleware/passiveAuth');
 // `requireAdmin` is the narrower gate on /admin/*, so a machine writer (demi-service-write) can
 // mirror data without being able to mint itself a wider credential.
 const { requireWrite, requireAdmin, requireRole } = require('../middleware/require-roles');
+// Loads the caller's Selected Credentials. Mounted after the auth layer on the read routes where a
+// grant can widen what one caller sees — see middleware/credentials.js.
+const { credentialsMiddleware } = require('../middleware/credentials');
 
 // One data layer. The `USE_COSMOS_NOSQL` switch and the MongoDB-API controllers behind it are
 // gone — the flag was the rollback path during the Cosmos cutover, and the account it fell back
@@ -24,6 +27,7 @@ const documentController = require('../controllers/nosql/document');
 const boundaryController = require('../controllers/nosql/boundary');
 const apiKeyController = require('../controllers/nosql/api-key');
 const linkController = require('../controllers/nosql/link');
+const credentialController = require('../controllers/nosql/credentials');
 
 const wildfireController = require('../controllers/wildfire');
 const searchController = require('../controllers/search');
@@ -55,10 +59,10 @@ router.get('/db/stats', authMiddleware, dbController.getDbStats);
 router.get('/admin/index-progress', authMiddleware, dbController.getIndexProgressHandler);
 
 // Search Route
-router.get('/search', passiveAuthMiddleware, searchController.search);
+router.get('/search', passiveAuthMiddleware, credentialsMiddleware, searchController.search);
 // authMiddleware, NOT passiveAuth — the summary is privileged-only in v1 while cost, abuse and the
 // wider disclosure surface of a synthesised paraphrase are measured. See wiki ADR-006.
-router.get('/search/summary', authMiddleware, searchController.summarize);
+router.get('/search/summary', authMiddleware, credentialsMiddleware, searchController.summarize);
 
 // Wildfire Routes
 // GET /wildfires removed — no consumer. The frontend reads the DataBC WFS directly, and the
@@ -66,8 +70,8 @@ router.get('/search/summary', authMiddleware, searchController.summarize);
 router.post('/admin/sync/wildfires', authMiddleware, requireAdmin, wildfireController.syncWildfiresAdmin);
 
 // Projects Routes
-router.get('/projects', passiveAuthMiddleware, projectController.getProjects);
-router.get('/projects/:id', passiveAuthMiddleware, projectController.getProject);
+router.get('/projects', passiveAuthMiddleware, credentialsMiddleware, projectController.getProjects);
+router.get('/projects/:id', passiveAuthMiddleware, credentialsMiddleware, projectController.getProject);
 router.post('/projects', authMiddleware, requireWrite, projectController.createProject);
 router.put('/projects/:id', authMiddleware, requireWrite, projectController.updateProject);
 // Ladder moves — docs/rbac-architecture.md §1, "Widening is an act". Nothing else raises a level.
@@ -82,10 +86,10 @@ const multer = require('multer');
 const config = require('../config');
 const upload = multer({ dest: config.uploadDir });
 
-router.get('/documents', passiveAuthMiddleware, documentController.getDocuments);
-router.get('/documents/:id', passiveAuthMiddleware, documentController.getDocument);
+router.get('/documents', passiveAuthMiddleware, credentialsMiddleware, documentController.getDocuments);
+router.get('/documents/:id', passiveAuthMiddleware, credentialsMiddleware, documentController.getDocument);
 // Presigned download link — ACL-gated inside the controller, same as the metadata read.
-router.get('/documents/:id/download', passiveAuthMiddleware, documentController.downloadDocument);
+router.get('/documents/:id/download', passiveAuthMiddleware, credentialsMiddleware, documentController.downloadDocument);
 router.post('/documents', authMiddleware, requireWrite, documentController.createDocument);
 router.post('/documents/extract', authMiddleware, requireWrite, upload.single('upfile'), documentController.extractDocument);
 router.put('/documents/:id', authMiddleware, requireWrite, documentController.updateDocument);
@@ -129,6 +133,13 @@ router.post('/admin/api-keys', authMiddleware, requireAdmin, apiKeyController.cr
 // consumer, role set and expiry in the deployment.
 router.get('/admin/api-keys', authMiddleware, requireAdmin, apiKeyController.listApiKeys);
 router.delete('/admin/api-keys/:id', authMiddleware, requireAdmin, apiKeyController.revokeApiKey);
+
+// Selected Credentials. Same gate as the classify endpoint and for the same reason: a grant hands
+// a named party sight of records nobody widened, which is access policy rather than data. Reading
+// the registry is gated too — the rows name who may see what.
+router.post('/credentials', authMiddleware, requireWrite, requireRole('sysadmin'), credentialController.createCredential);
+router.get('/credentials', authMiddleware, requireWrite, requireRole('sysadmin'), credentialController.listCredentials);
+router.post('/credentials/revoke', authMiddleware, requireWrite, requireRole('sysadmin'), credentialController.revokeCredentials);
 
 // /s/:code has no auth: it's a public poster/email link, so anonymous browsing is the only caller.
 // Mutations require requireWrite: they decide where a gov.bc.ca URL sends the public.
