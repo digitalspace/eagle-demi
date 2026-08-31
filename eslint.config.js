@@ -30,6 +30,7 @@ module.exports = [
       'dist/**',
       'frontend/**',
       'tmp/**',
+      '.angular/**',
       'public/**',
       'design/**',
       '.claude/**'
