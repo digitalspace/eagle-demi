@@ -1289,9 +1289,11 @@ level, never changes anyone else's access, and never touches the field plane.
         level-4 caller admitted by a credential still sees only `effVis 4` fields.
 - Acceptance
   - [x] `node --test test/helpers/credentials.test.js test/controllers/credentials.test.js` — 0 fail.
-  - [ ] On test: grant a credential over one level-2 document to a throwaway Keycloak user, confirm
-        that user reads it and reads no sibling document; revoke by `batchId`, confirm 404 within
-        the cache TTL. `DemiAudit_CL | where Action startswith "credential."` shows both rows.
+  - [x] On test 2026-08-31: granted over one level-2 document to a throwaway `public`-role registry
+        API key (an apikey party — no throwaway Keycloak user needed): holder read it (200), the
+        sibling 404, anonymous 404; revoked by `batchId`, 404 within the 60 s TTL.
+        `DemiAudit_CL` holds the `credential.grant` and `credential.revoke` rows plus the batch
+        summaries. Throwaway docs, keys and grants deleted after.
 
 ## P3-7 index the `vis` map
 
