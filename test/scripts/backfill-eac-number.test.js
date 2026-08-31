@@ -146,17 +146,18 @@ test('backfillEacNumbers', async (t) => {
     assert.strictEqual(exitCodeFor(summary), 1);
   });
 
-  await t.test('the checked-in export runs clean and patches nothing today', async () => {
-    // The real file has no `ea_certificate` column yet. This pins the "no further code change"
-    // claim: the script already reads it without error, and will start patching when it gains one.
+  await t.test('the checked-in export loads and counts its certificates', async () => {
+    // Pinned to the 2026-08-31 export: 382 records, 342 with a non-empty `ea_certificate`.
+    // A regenerated export moves these numbers; update them with it.
     const patch = fakePatch();
     const summary = await backfillEacNumbers(['--live'], {
       projects: fakeProjects([]), patch: patch.fn
     });
 
-    assert.strictEqual(summary.withCert, 0);
+    assert.strictEqual(summary.total, 382);
+    assert.strictEqual(summary.withCert, 342);
+    assert.strictEqual(summary.missingRow, 342);
     assert.strictEqual(patch.calls.length, 0);
-    assert.ok(summary.total > 300, 'the export loaded, or this passes vacuously');
   });
 });
 
