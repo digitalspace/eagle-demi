@@ -1275,7 +1275,8 @@ export class RegistryStateService {
             description,
             proponent: this.generateFallbackProponent(p, rawMetadata),
             // No fallback: an invented certificate number is a claim about a legal document.
-            eaCertificate: p.eaCertificate || undefined,
+            // null (not undefined) when the row has none, so selectProject skips the point read.
+            eaCertificate: p.eaCertificate === undefined ? undefined : (p.eaCertificate || null),
             rawMetadata: rawMetadata,
             sources: p.sources
           };
@@ -1492,9 +1493,8 @@ export class RegistryStateService {
     this.selectedProject.set(proj);
     this.selectedDocument.set(null);
 
-    // The AI Search branch of `GET /search` omits `eaCertificate`, so a keyword-found project
-    // selected off that list renders no EA Certificate row. Hydrate it from the point-read, which
-    // carries the full record. Guarded on id match so a slow response never clobbers a newer pick.
+    // The AI Search branch of `GET /search` omits `eaCertificate`; hydrate it from the point read,
+    // id-guarded so a slow response never clobbers a newer pick.
     if (proj?.id && proj.eaCertificate === undefined) {
       this.fetchWithRetry(`${this.getBasePath()}/projects/${encodeURIComponent(String(proj.id))}`)
         .then(async (res) => {

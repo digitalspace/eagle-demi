@@ -386,9 +386,6 @@ describe('RegistryStateService', () => {
     });
   });
 
-  // The AI Search branch of `GET /search` omits `eaCertificate`, so a keyword-found project
-  // selected off that list used to render no EA Certificate row. selectProject() hydrates it from
-  // the point-read behind the scenes.
   describe('selectProject — eaCertificate hydration', () => {
     const projA = { id: '207', name: 'Site C', eaCertificate: undefined } as unknown as Project;
     const projB = { id: '208', name: 'Ajax Mine', eaCertificate: undefined } as unknown as Project;
@@ -423,6 +420,8 @@ describe('RegistryStateService', () => {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       }));
+      // Two ticks, same as the sibling spec: one for fetchWithRetry, one for res.json() + the write.
+      await new Promise(resolve => setTimeout(resolve, 0));
       await new Promise(resolve => setTimeout(resolve, 0));
 
       expect(service.selectedProject()?.id).toBe('208');
