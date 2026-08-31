@@ -353,6 +353,39 @@ describe('RegistryStateService', () => {
     });
   });
 
+  describe('eaCertificate', () => {
+    beforeEach(() => { (service as unknown as { loadedQuery: string | null }).loadedQuery = null; });
+
+    const withProjects = (rows: unknown[]) => (url: string) =>
+      url.includes('dataset=Project')
+        ? okResponse([{ searchResults: rows, count: rows.length }])
+        : okResponse([{ searchResults: [], count: 0 }]);
+
+    it('carries the value through verbatim, number or state word', async () => {
+      // Track uses the column for certificate STATE as well as numbers; normalising either end
+      // would drop the ~100 records that say "Withdrawn" or "In progress".
+      sharedFetchSpy.and.callFake((input: any) => Promise.resolve(withProjects([
+        { id: '207', name: 'Site C', eaCertificate: 'E05-01' },
+        { id: '208', name: 'Ajax Mine', eaCertificate: 'Withdrawn' }
+      ])(String(input))));
+
+      await service.loadData();
+
+      expect(service.projects()!.map(p => p.eaCertificate)).toEqual(['E05-01', 'Withdrawn']);
+    });
+
+    it('leaves it undefined rather than inventing one', async () => {
+      // Every other field on this mapping has a fallback; a fabricated certificate number would be
+      // a claim about a legal document, and the card keys its whole row off this being absent.
+      sharedFetchSpy.and.callFake((input: any) => Promise.resolve(
+        withProjects([{ id: '354', name: 'Surrey Langley SkyTrain' }])(String(input))));
+
+      await service.loadData();
+
+      expect(service.projects()![0].eaCertificate).toBeUndefined();
+    });
+  });
+
   describe('document project ids', () => {
     // The constructor's own load already cached the empty query; these specs exercise the fetch.
     beforeEach(() => { (service as unknown as { loadedQuery: string | null }).loadedQuery = null; });

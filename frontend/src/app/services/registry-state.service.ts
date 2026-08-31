@@ -1274,6 +1274,8 @@ export class RegistryStateService {
             region: p.region || 'British Columbia',
             description,
             proponent: this.generateFallbackProponent(p, rawMetadata),
+            // No fallback: an invented certificate number is a claim about a legal document.
+            eaCertificate: p.eaCertificate || undefined,
             rawMetadata: rawMetadata,
             sources: p.sources
           };
