@@ -1244,20 +1244,20 @@ Branch: `feat/selected-credentials`
 Replaces the deleted "groups on dials" unit. Row plane only: a credential never changes a record's
 level, never changes anyone else's access, and never touches the field plane.
 
-- [ ] New container `credentials`, partition `/party.id`, in `azure/modules/cosmos-nosql.bicep`
+- [x] New container `credentials`, partition `/party.id`, in `azure/modules/cosmos-nosql.bicep`
       beside `apikeys`; new `src/repositories/credentials.js` (`listForParty`, `insert`,
       `revokeBy`). Document shape per doc §1. `end` is REQUIRED (90 days is the default the UI
       offers, not a cap); grant refuses a missing `end`, `levels` containing 0 or 4, an `end` in
       the past, or more than 200 ids (`ponytail:` id-list ceiling — a project-scope grant covers a
       whole assessment in one row instead). The human party is a BCeID Business login; a system
       party is a registry API key. IDIR guest only for an external acting as staff.
-- [ ] New `src/middleware/credentials.js`: after auth, load the caller's live credentials by
+- [x] New `src/middleware/credentials.js`: after auth, load the caller's live credentials by
       `req.user.sub`, each entry of `req.user.groups`, and `req.user.keyId`
       (`src/helpers/auth.js:61`), drop `revokedAt` and out-of-window rows in JS, attach
       `access.credentials` in `resolveAccess` (`src/helpers/access-sql.js:111`). 60-second
       in-process cache keyed by party, same shape as the API-key cache (`auth.js:30-37`) —
       `ponytail: a revoke takes effect within the TTL; drop the TTL if that is ever too slow`.
-- [ ] `readClause:257`, `canRead:384`, `filterFor` (`access-odata.js:63`) each gain ONE extra OR
+- [x] `readClause:257`, `canRead:384`, `filterFor` (`access-odata.js:63`) each gain ONE extra OR
       arm: the record's id or projectId is in a credential's `scope.ids` AND `levelOfRead(read)` is in
       the credential's `levels` (doc §1: a credential names the levels it may see). No new SQL shape — the level check is the same
       `EXISTS ... r IN (...)` / `read/any` the role arm already builds.
@@ -1266,27 +1266,29 @@ level, never changes anyone else's access, and never touches the field plane.
       `credential.revoke` with `detail.cause: 'project-closed' | 'work-complete'`. Renewal is the
       norm on EA timelines, so the same job notifies the GRANTOR 7 days before an `end` passes.
       Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer.
-- [ ] Endpoints `POST /api/credentials`, `GET /api/credentials?party=|projectId=`,
+      P3-6 ships the reusable half only: `credentials.revokeForProject(projectId, cause)` revokes
+      and audits, and nothing calls it yet. The feed wiring and the 7-day notice are what is left.
+- [x] Endpoints `POST /api/credentials`, `GET /api/credentials?party=|projectId=`,
       `POST /api/credentials/revoke` (body `{ id | batchId | party | projectId }`), all
       `requireWrite` + `requireRole('sysadmin')`, audited `credential.grant` /
       `credential.revoke` (one row per credential plus a summary row on a bulk revoke). Swagger in
       the same PR.
 - Tests
-  - [ ] `test/helpers/credentials.test.js`: `'a grant without an end is refused'`,
+  - [x] `test/helpers/credentials.test.js`: `'a grant without an end is refused'`,
         `'an expired credential grants nothing'` (`end` yesterday → `canRead` false),
         `'closing a project revokes its credentials'` (2 over the project, 1 over another → 2
         revoked), `'a revoked credential grants nothing'`,
         `'a credential at levels [3] does not reach a level-1 record'` (literal false),
         `'a credential grants only its own ids'`.
-  - [ ] Same file, `'a credential changes no record'` — after `canRead` returns true the row's
+  - [x] Same file, `'a credential changes no record'` — after `canRead` returns true the row's
         `read` array is byte-identical.
-  - [ ] `test/controllers/credentials.test.js`: `'bulk revoke by batchId revokes exactly that
+  - [x] `test/controllers/credentials.test.js`: `'bulk revoke by batchId revokes exactly that
         batch'` (3 granted, 2 in the batch → 2 revoked, 1 untouched) and `'every grant and revoke
         audits'`.
-  - [ ] `test/vis/redact-matrix.test.js` case `'a credential does not widen the field plane'` — a
+  - [x] `test/vis/redact-matrix.test.js` case `'a credential does not widen the field plane'` — a
         level-4 caller admitted by a credential still sees only `effVis 4` fields.
 - Acceptance
-  - [ ] `node --test test/helpers/credentials.test.js test/controllers/credentials.test.js` — 0 fail.
+  - [x] `node --test test/helpers/credentials.test.js test/controllers/credentials.test.js` — 0 fail.
   - [ ] On test: grant a credential over one level-2 document to a throwaway Keycloak user, confirm
         that user reads it and reads no sibling document; revoke by `batchId`, confirm 404 within
         the cache TTL. `DemiAudit_CL | where Action startswith "credential."` shows both rows.
