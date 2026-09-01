@@ -51,8 +51,14 @@ test('links repository', async (t) => {
       return { items: rows };
     });
 
-    assert.deepStrictEqual(await links.list(), rows);
-    assert.match(seenSpec.query, /^SELECT \* FROM c ORDER BY c\.createdAt DESC$/);
-    assert.deepStrictEqual(seenSpec.parameters, []);
+    assert.deepStrictEqual(await links.list('staff.person'), rows);
+    assert.match(seenSpec.query, /ORDER BY c\.createdAt DESC$/);
+    // Shared rows, legacy rows with no flag, plus the caller's own — and the caller only ever
+    // arrives as a parameter, never spliced into the SQL.
+    assert.match(seenSpec.query, /NOT IS_DEFINED\(c\.personal\)/);
+    assert.match(seenSpec.query, /c\.personal = false/);
+    assert.match(seenSpec.query, /c\.createdBy = @me/);
+    assert.ok(!seenSpec.query.includes('staff.person'));
+    assert.deepStrictEqual(seenSpec.parameters, [{ name: '@me', value: 'staff.person' }]);
   });
 });

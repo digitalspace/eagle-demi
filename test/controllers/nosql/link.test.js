@@ -185,7 +185,7 @@ test('short link controller', async (t) => {
 
     assert.strictEqual(res.statusCode, 200);
     assert.deepStrictEqual(Object.keys(res.body).sort(),
-      ['createdAt', 'createdBy', 'id', 'note', 'shortUrl', 'updatedAt', 'url']);
+      ['createdAt', 'createdBy', 'id', 'note', 'personal', 'shortUrl', 'updatedAt', 'url']);
     assert.strictEqual(res.body.url, DEST);
     assert.strictEqual(res.body.shortUrl, `${config.linkBaseUrl}/s/abc12345`);
 
@@ -351,7 +351,7 @@ test('short link controller', async (t) => {
   await t.test('every listed row carries its shortUrl', async () => {
     t.mock.method(links, 'list', async () => [
       { id: 'aaaaaaaa', url: DEST, note: 'poster', createdAt: '2026-08-02T00:00:00.000Z',
-        createdBy: 'staff.person', updatedAt: null },
+        createdBy: 'staff.person', updatedAt: null, personal: false },
       { id: 'bbbbbbbb', url: DEST, createdAt: '2026-08-01T00:00:00.000Z', createdBy: 'key:eagle-notify' }
     ]);
 
@@ -361,9 +361,51 @@ test('short link controller', async (t) => {
     assert.strictEqual(res.body.length, 2);
     for (const row of res.body) {
       assert.deepStrictEqual(Object.keys(row).sort(),
-        ['createdAt', 'createdBy', 'id', 'note', 'shortUrl', 'updatedAt', 'url']);
+        ['createdAt', 'createdBy', 'id', 'note', 'personal', 'shortUrl', 'updatedAt', 'url']);
       assert.strictEqual(row.shortUrl, `${config.linkBaseUrl}/s/${row.id}`);
     }
     assert.strictEqual(res.body[1].note, null, 'a missing note reads as null, not undefined');
+    assert.strictEqual(res.body[1].personal, false, 'a row minted before the flag is shared');
+  });
+
+  await t.test('a personal link is stored, audited and presented as personal', async () => {
+    let stored;
+    t.mock.method(links, 'create', async (record) => { stored = record; return record; });
+
+    const res = mockRes();
+    await linkController.createLink(
+      { body: { url: DEST, personal: true }, params: {}, query: {}, user: STAFF }, res);
+
+    assert.strictEqual(res.statusCode, 201);
+    assert.strictEqual(stored.personal, true);
+
+    const shared = mockRes();
+    await linkController.createLink({ body: { url: DEST }, params: {}, query: {}, user: STAFF }, shared);
+    assert.strictEqual(stored.personal, false, 'omitted means shared, which is the old behaviour');
+  });
+
+  await t.test('a non-boolean personal is a 400', async () => {
+    let created = false;
+    t.mock.method(links, 'create', async () => { created = true; return {}; });
+
+    for (const personal of ['yes', 1, {}, 'true']) {
+      const res = mockRes();
+      await linkController.createLink(
+        { body: { url: DEST, personal }, params: {}, query: {}, user: STAFF }, res);
+      assert.strictEqual(res.statusCode, 400, String(personal));
+    }
+    assert.strictEqual(created, false);
+  });
+
+  await t.test('the list query is scoped to the caller, so personal rows stay theirs', async () => {
+    // The filter lives in the query; the controller's job is to hand it the caller's username.
+    let asked;
+    t.mock.method(links, 'list', async (me) => { asked = me; return []; });
+
+    await linkController.listLinks({ query: {}, user: STAFF }, mockRes());
+    assert.strictEqual(asked, 'staff.person');
+
+    await linkController.listLinks({ query: {} }, mockRes());
+    assert.strictEqual(asked, '', 'no token, no personal rows — never undefined into the query');
   });
 });

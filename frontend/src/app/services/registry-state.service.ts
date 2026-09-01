@@ -1,7 +1,9 @@
-import { Injectable, signal, computed, effect, untracked, inject, WritableSignal } from '@angular/core';
+import { Injectable, Injector, signal, computed, effect, untracked, inject, WritableSignal } from '@angular/core';
 import { Project, Document, DocumentChunk, SummaryCitation } from '../models/registry.models';
 import { MOCK_PROJECTS, MOCK_DOCUMENTS } from '../mocks/mock-registry.data';
 import { ConfigService, AppConfig } from './config.service';
+import { UserdataService } from './userdata.service';
+import { writePrefs } from '../shell/prefs';
 import Keycloak from 'keycloak-js';
 
 const loadInitialCache = (): Record<string, any> => {
@@ -42,6 +44,8 @@ interface GeoSelection {
 })
 export class RegistryStateService {
   private configService = inject(ConfigService);
+  // UserdataService injects this service back, so it is resolved after construction, not injected.
+  private injector = inject(Injector);
 
   get config(): AppConfig {
     return this.configService.config;
@@ -700,7 +704,21 @@ export class RegistryStateService {
     // for /me; only the gate does.
     this.loadData();
     await this.loadVisLevel();
+    await this.loadUserData();
     resolve();
+  }
+
+  /**
+   * Saved areas and preferences held server-side. The server copy wins: localStorage is the cache
+   * that keeps the app working offline and before this answers, not the record. A failed read
+   * leaves the browser's copy alone.
+   */
+  private async loadUserData(): Promise<void> {
+    if (!this.isAuthenticated()) return;
+    const userdata = this.injector.get(UserdataService);
+    await userdata.loadMyData();
+    const prefs = userdata.prefs();
+    if (prefs) writePrefs(prefs);
   }
 
   /** Ask the API what this caller may see; fall back to the token roles when it cannot answer. */

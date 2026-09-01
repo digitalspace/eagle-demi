@@ -45,11 +45,16 @@ async function remove(code) {
   return cosmos.remove(CONTAINER, String(code), String(code));
 }
 
-/** Every link, newest first. Cross-partition; the container holds one row per link, not per click. */
-async function list() {
+/**
+ * Every link the caller may see, newest first: shared ones plus their own personal ones. A row
+ * with no `personal` field predates the flag and is shared. Cross-partition; the container holds
+ * one row per link, not per click.
+ */
+async function list(me) {
   const { items } = await cosmos.query(CONTAINER, {
-    query: 'SELECT * FROM c ORDER BY c.createdAt DESC',
-    parameters: []
+    query: 'SELECT * FROM c WHERE (NOT IS_DEFINED(c.personal)) OR c.personal = false ' +
+      'OR c.createdBy = @me ORDER BY c.createdAt DESC',
+    parameters: [{ name: '@me', value: String(me || '') }]
   });
   return items || [];
 }

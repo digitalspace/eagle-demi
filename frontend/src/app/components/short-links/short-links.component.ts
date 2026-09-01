@@ -1,5 +1,6 @@
-import { ChangeDetectionStrategy, Component, OnInit, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } from '@angular/core';
 import { LinksService, ShortLink } from '../../services/links.service';
+import { RegistryStateService } from '../../services/registry-state.service';
 
 @Component({
   selector: 'app-short-links',
@@ -11,11 +12,29 @@ import { LinksService, ShortLink } from '../../services/links.service';
 })
 export class ShortLinksComponent implements OnInit {
   links = inject(LinksService);
+  private registry = inject(RegistryStateService);
 
   formOpen = signal(false);
   newUrl = signal('');
   newCode = signal('');
   newNote = signal('');
+  newPersonal = signal(false);
+
+  /** Lowercased both sides: the API stores `createdBy` lowercased, the token claim is not. */
+  private me = computed(() =>
+    (this.registry.isAuthenticated() ? this.registry.keycloak?.tokenParsed?.preferred_username || '' : '').toLowerCase()
+  );
+
+  /** Mine first, then everyone's. Empty groups are dropped rather than shown as a bare heading. */
+  linkGroups = computed<{ title: string; rows: ShortLink[] }[]>(() => {
+    const me = this.me();
+    const mine = me ? this.links.links().filter(l => (l.createdBy || '').toLowerCase() === me) : [];
+    const shared = this.links.links().filter(l => !mine.includes(l));
+    return [
+      { title: 'My links', rows: mine },
+      { title: 'Shared links', rows: shared }
+    ].filter(g => g.rows.length > 0);
+  });
 
   /** Code of the row being repointed, '' when none. */
   editingCode = signal('');
@@ -46,11 +65,12 @@ export class ShortLinksComponent implements OnInit {
   async submit() {
     const url = this.newUrl().trim();
     if (!url) return;
-    const created = await this.links.create(url, this.newNote().trim(), this.newCode().trim());
+    const created = await this.links.create(url, this.newNote().trim(), this.newCode().trim(), this.newPersonal());
     if (!created) return;
     this.newUrl.set('');
     this.newCode.set('');
     this.newNote.set('');
+    this.newPersonal.set(false);
     this.formOpen.set(false);
   }
 

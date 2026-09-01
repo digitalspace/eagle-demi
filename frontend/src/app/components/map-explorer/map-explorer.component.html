@@ -32,6 +32,23 @@
           }
         </div>
       }
+
+      @if (service.lassoPolygon() && service.isAuthenticated()) {
+        <div style="margin-top: var(--layout-margin-xsmall);">
+          @if (savingLasso()) {
+            <div style="display: flex; align-items: center; gap: 4px;">
+              <input type="text" placeholder="Name this area" aria-label="Name this area" [value]="lassoName()" (input)="setLassoName($event)" style="flex: 1; min-width: 0; box-sizing: border-box; padding: 0.25rem 0.5rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
+              <button type="button" [disabled]="!lassoName().trim()" (click)="saveLasso()" style="background: none; border: none; padding: 0; font: var(--typography-bold-small-body); color: var(--surface-color-primary-default); text-decoration: underline; cursor: pointer;">Save</button>
+              <button type="button" (click)="savingLasso.set(false)" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--typography-color-secondary); text-decoration: underline; cursor: pointer;">Cancel</button>
+            </div>
+          } @else {
+            <button type="button" (click)="savingLasso.set(true)" style="background: none; border: none; padding: 0; font: var(--typography-regular-label); color: var(--typography-color-link); text-decoration: underline; cursor: pointer;">Save this area</button>
+          }
+          @if (userdata.error()) {
+            <div class="cell__sub" style="color: var(--typography-color-danger); margin-top: 2px;">{{ userdata.error() }}</div>
+          }
+        </div>
+      }
     </div>
 
     @if (filtersOpen()) {
@@ -174,6 +191,26 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><ellipse cx="12" cy="9" rx="8" ry="5"></ellipse><path d="M12 14v4"></path><path d="M12 22a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"></path></svg>
         Lasso
       </button>
+
+      @if (service.isAuthenticated()) {
+        <button type="button" (click)="toggleSaved()" [attr.aria-expanded]="savedOpen()" style="display: inline-flex; align-items: center; gap: 0.4rem; background: var(--surface-color-background-white); color: var(--typography-color-primary); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); box-shadow: 0 2px 8px rgba(0,0,0,0.18); padding: 0.45rem 0.8rem; font: var(--typography-bold-small-body); cursor: pointer;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"></path></svg>
+          Saved areas
+        </button>
+        @if (savedOpen()) {
+          <div style="width: 15rem; box-sizing: border-box; background: var(--surface-color-background-white); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-medium); box-shadow: 0 4px 14px rgba(0,0,0,0.2); padding: var(--layout-padding-medium);">
+            <div class="micro-label" style="margin-bottom: var(--layout-margin-xsmall);">Saved areas</div>
+            @for (area of userdata.lassos(); track area.slug) {
+              <div style="display: flex; align-items: center; gap: 0.4rem; padding: 2px 0;">
+                <button type="button" (click)="applySavedLasso(area)" style="flex: 1; min-width: 0; text-align: left; background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--surface-color-primary-default); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ area.name }}</button>
+                <button type="button" (click)="deleteSavedLasso(area)" [attr.aria-label]="'Delete ' + area.name" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--typography-color-secondary); cursor: pointer;">✕</button>
+              </div>
+            } @empty {
+              <p class="cell__sub" style="margin: 0;">{{ userdata.loading() ? 'Loading…' : 'Draw an area with the lasso, then save it.' }}</p>
+            }
+          </div>
+        }
+      }
     </div>
 
     @if (service.selectedProject(); as selected) {

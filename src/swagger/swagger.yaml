@@ -728,6 +728,115 @@ paths:
         '404':
           description: Short link not found.
 
+  /api/me/data:
+    get:
+      summary: Everything stored for the calling user
+      description: |-
+        One bootstrap read: preferences and saved map areas in a single response. The owner is
+        taken from the bearer token, never from the request — there is no way to ask for another
+        user's data. `prefs` falls back to the defaults (`map`, 6) when the user has saved none.
+
+        A future stored type appears here without a new route.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The caller's data.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyData'
+        '401':
+          description: Unauthorized.
+
+  /api/me/lassos:
+    put:
+      summary: Save a map area
+      description: |-
+        Upsert by name: the name is slugified to `a-z0-9-` and that slug is the key, so saving the
+        same name twice replaces the area rather than adding a second one. No `requireWrite` — this
+        is the caller's own scratch data, so a read-only staff account may still save its own.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, ring]
+              properties:
+                name:
+                  type: string
+                  maxLength: 80
+                ring:
+                  type: array
+                  items:
+                    type: array
+                    items:
+                      type: number
+      responses:
+        '200':
+          description: The saved area.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LassoItem'
+        '400':
+          description: |-
+            The name is empty or over 80 characters, the ring is not 3-500 in-range
+            `[longitude, latitude]` pairs, the body is over 64 KB, an unknown field was sent, or
+            the user already holds 50 saved areas. The body says which.
+        '401':
+          description: Unauthorized.
+
+  /api/me/lassos/{slug}:
+    delete:
+      summary: Delete a saved map area
+      description: Deletes from the caller's own partition only.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Saved area deleted.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: The caller has no saved area with that slug.
+
+  /api/me/prefs:
+    put:
+      summary: Save the calling user's preferences
+      description: |-
+        Whole-object write of `{landing, perPage}`. Stored server-side so the preference follows
+        the user across devices; the frontend keeps localStorage as a cache and the server value
+        wins on load.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Prefs'
+      responses:
+        '200':
+          description: The stored preferences.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Prefs'
+        '400':
+          description: '`landing` is not a known screen key, `perPage` is not 6, 12 or 24, or an unknown field was sent.'
+        '401':
+          description: Unauthorized.
+
   /api/credentials:
     post:
       summary: Grant a Selected Credential
@@ -1084,6 +1193,12 @@ components:
           format: date-time
           nullable: true
           description: Null until the link is repointed.
+        personal:
+          type: boolean
+          description: >-
+            True when the link is listed to its creator only. It is a listing filter, not access
+            control: `GET /s/{code}` stays public, so anyone holding the short URL can still
+            follow it.
 
     ShortLinkInput:
       type: object
@@ -1103,3 +1218,52 @@ components:
             Vanity alias: lowercase letters, digits, `_`, `-`, 3-64 characters. Case-insensitive
             on lookup — an uppercase value is lowercased before validation and storage. Omit for a
             generated 8-character code.
+        personal:
+          type: boolean
+          default: false
+          description: >-
+            Hide the link from other callers' `GET /api/links`. The redirect stays public — anyone
+            with the short URL can still open it.
+
+    MyData:
+      type: object
+      properties:
+        prefs:
+          $ref: '#/components/schemas/Prefs'
+        lassos:
+          type: array
+          items:
+            $ref: '#/components/schemas/LassoItem'
+
+    LassoItem:
+      type: object
+      properties:
+        slug:
+          type: string
+          description: 'Derived from the name: `a-z0-9-`. The delete key, and unique per user.'
+        name:
+          type: string
+          maxLength: 80
+        ring:
+          type: array
+          description: 3-500 `[longitude, latitude]` pairs, GeoJSON order.
+          items:
+            type: array
+            items:
+              type: number
+        updatedAt:
+          type: string
+          format: date-time
+
+    Prefs:
+      type: object
+      required:
+        - landing
+        - perPage
+      properties:
+        landing:
+          type: string
+          description: The screen key the app opens on, e.g. `map`.
+        perPage:
+          type: integer
+          enum: [6, 12, 24]
