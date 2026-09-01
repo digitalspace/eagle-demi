@@ -45,7 +45,7 @@ param identityClientId string
 // `Microsoft.Web/sites/config/list/action`, which no read-only role carries and this identity does
 // not hold (verified against demi-identity-test, 2026-09-01). main.bicep passes the same expressions
 // it passes the app, so the two cannot drift.
-@description('Cosmos DB for NoSQL document endpoint, exported by demi-env.')
+@description('Cosmos DB for NoSQL document endpoint, exported by demi-run.')
 param cosmosEndpoint string
 
 @description('Cosmos database holding the DEMI containers')
@@ -67,23 +67,25 @@ packages:
   - curl
   - gnupg
 write_files:
-  - path: /usr/local/bin/demi-env
+  - path: /usr/local/bin/demi-run
     permissions: '0755'
     content: |
-      #!/bin/sh
-      # eval "$(demi-env)" primes a shell for the repo scripts.
+      #!/bin/bash
+      # demi-run '<command>' — logs in, exports the environment, runs the command as one process.
+      # It RUNS the command rather than printing an environment to eval: a caller's
+      # `eval "$(...)" && cmd` cannot see the login fail, because command substitution drops the
+      # exit status, and the scripts then no-op against an unset COSMOS_ENDPOINT and report success.
+      set -euo pipefail
+      [ $# -gt 0 ] || { echo "usage: demi-run '<command>'" >&2; exit 2; }
       # --client-id, because the VM has ONLY a user-assigned identity: with no id argument the CLI
-      # asks IMDS for a system-assigned one that does not exist. set -e so that failure stops here
-      # rather than printing a half-primed environment that every later az command then fails on.
-      set -e
+      # asks IMDS for a system-assigned one that does not exist.
       az login --identity --client-id __CLIENT_ID__ --allow-no-subscriptions --output none
-      cat <<'ENV'
       export AZURE_CLIENT_ID=__CLIENT_ID__
       export COSMOS_ENDPOINT=__COSMOS_ENDPOINT__
       export COSMOS_NOSQL_DATABASE=__COSMOS_DATABASE__
       export SEARCH_ENDPOINT=__SEARCH_ENDPOINT__
       export EAGLE_API_BASE=__EAGLE_API_BASE__
-      ENV
+      exec bash -lc "$*"
 runcmd:
   - curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg
   - echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ noble main" > /etc/apt/sources.list.d/azure-cli.list
@@ -183,7 +185,7 @@ resource devbox 'Microsoft.Compute/virtualMachines@2024-07-01' = {
         }
       }
       // cloud-init needs egress to packages.microsoft.com, deb.nodesource.com, github.com and the
-      // npm registry through the hub firewall. Without it the VM boots and demi-env is the only
+      // npm registry through the hub firewall. Without it the VM boots and demi-run is the only
       // thing on it that works.
       customData: base64(cloudInit)
     }

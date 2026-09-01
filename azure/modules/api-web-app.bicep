@@ -58,8 +58,8 @@ param searchEndpoint string = ''
 // that legitimately matched less. Nothing in the app can tell the two apart, which is why the gate
 // is a count read off the service rather than a judgement about how long the fill has had.
 //
-// Counting means reaching the data plane, which is `publicNetworkAccess: Disabled` — from inside
-// the app container over the App Service SSH tunnel, per the root `README.md` recipe. The same
+// Counting means reaching the data plane, which is `publicNetworkAccess: Disabled` — the route moved
+// to the devbox (`demi-devbox-<env>`) via `demi-run`, per the root `README.md` recipe. The same
 // place `azure/search/README.md` step 2 is run from, and that file stays the reference for the
 // staged rename; do not restate it here.
 //

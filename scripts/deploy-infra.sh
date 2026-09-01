@@ -176,12 +176,22 @@ require_secrets() {
   local -r MIN_LEN=8
   for name in "${required[@]}"; do
     # Trim surrounding whitespace before judging it, so " " is empty and not a one-character secret.
-    val="$(printf '%s' "${!name}" | tr -d '[:space:]')"
+    # ENDS ONLY for the SSH key: it is `<algorithm> <base64> [comment]`, and the full strip the six
+    # opaque secrets get eats those separators and hands Compute a one-field string ARM rejects.
+    if [ "$name" = 'DEVBOX_SSH_PUBLIC_KEY' ]; then
+      val="$(printf '%s' "${!name}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    else
+      val="$(printf '%s' "${!name}" | tr -d '[:space:]')"
+    fi
     if [ -z "$val" ]; then
       echo -e "${RED}  ✗ ${name} is empty${NC}" >&2
       missing=1
     elif [ "${#val}" -lt "$MIN_LEN" ]; then
       echo -e "${RED}  ✗ ${name} is ${#val} chars — under the ${MIN_LEN}-char floor, refusing${NC}" >&2
+      missing=1
+    elif [ "$name" = 'DEVBOX_SSH_PUBLIC_KEY' ] && ! printf '%s' "$val" | grep -Eq '^ssh-(ed25519|rsa) '; then
+      # A private key, a path, or a mangled value all pass the length floor and all fail at ARM.
+      echo -e "${RED}  ✗ ${name} is not an OpenSSH public key — expected 'ssh-ed25519 …' or 'ssh-rsa …'${NC}" >&2
       missing=1
     else
       # Re-export the trimmed value: a trailing newline from `oc` would be deployed verbatim.

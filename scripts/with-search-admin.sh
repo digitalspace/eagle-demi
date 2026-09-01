@@ -14,7 +14,7 @@
 # WHAT THIS FIXES is the hand-work, not the posture: three separate index changes have each done
 # `az role assignment create` … work … `az role assignment delete` by hand, and the failure that
 # costs something is a grant left standing because the middle step errored. The revoke runs from a
-# trap, so it also fires on a failure, on Ctrl-C, and on a dropped tunnel.
+# trap, so it also fires on a failure, on Ctrl-C, and on a run-command call that dies mid-run.
 #
 # The app identity permanently holds **Search Index Data Contributor**, which covers DOCUMENTS and
 # not DEFINITIONS. Creating or widening an index or an indexer needs **Search Service Contributor**
@@ -22,11 +22,11 @@
 # group. Revocability is not assumed: the `c4b0a8` ABAC condition restricts roleAssignments write
 # and delete to six role GUIDs and this is on neither list, proven by a grant/revoke cycle.
 #
-# Usage — the command runs on THIS machine, so the usual shape is an ssh into the container:
+# Usage — the command runs on THIS machine, so the usual shape is a run-command call onto the devbox:
 #
 #   scripts/with-search-admin.sh -- \
-#     sshpass -p "$CONTAINER_SSH_PASSWORD" ssh -c aes256-cbc -m hmac-sha1 -p 50123 root@127.0.0.1 \
-#     'cd /home/site/wwwroot && node src/scripts/apply-search-definitions.js --live --only projects'
+#     az vm run-command invoke -g c4b0a8-test-rg -n demi-devbox-test --command-id RunShellScript \
+#     --scripts "sudo -u demi /usr/local/bin/demi-run 'cd /opt/eagle-demi && node src/scripts/apply-search-definitions.js --live --only projects'"
 #
 #   RG=c4b0a8-test-rg SERVICE=demi-search-test IDENTITY=demi-identity-test \
 #     scripts/with-search-admin.sh -- <command>

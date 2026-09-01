@@ -24,8 +24,8 @@
  * identical JSON and a later run can be diffed against this one. That is the whole point of
  * committing it rather than throwing it away.
  *
- * Cosmos is private-endpoint-only and keyless, so this must run INSIDE the app container over the
- * App Service SSH tunnel — not Kudu's /api/command, whose SCM container has no managed-identity
+ * Cosmos is private-endpoint-only and keyless, so this must run on the devbox (`demi-devbox-<env>`)
+ * via `demi-run` — not Kudu's /api/command, whose SCM container has no managed-identity
  * endpoint. See README.md for the recipe.
  *
  * Usage:
@@ -138,9 +138,8 @@ async function scoreDocument(doc, chunksPerDoc) {
 }
 
 /**
- * @param {string[]} argv  CLI-style arguments, so the SSH wrapper and the CLI share one entry
- *                         point. See README.md — a standalone script in the app container
- *                         needs /proc/1/environ and a crypto shim, which the wrapper supplies.
+ * @param {string[]} argv  CLI-style arguments, so a run-command invocation and the CLI share one
+ *                         entry point. `demi-run` supplies the environment; see README.md.
  */
 async function audit(argv = []) {
   const args = parseArgs(argv);

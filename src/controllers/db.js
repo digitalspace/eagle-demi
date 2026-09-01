@@ -117,8 +117,8 @@ async function getDbStats(req, res) {
 
 // The seed and nightly-sync handlers are gone with the Mongo-era scripts behind them
 // (sync_from_openshift, seed-and-merge, nightly-sync). `src/scripts/seed-nosql.js` reproduces
-// projects, documents and boundaries from the upstream sources, and is run inside the network
-// over the App Service SSH tunnel — a 60k-document seed outlives any HTTP request, so it never
+// projects, documents and boundaries from the upstream sources, and is run inside the VNet, on
+// the devbox via `demi-run` — a 60k-document seed outlives any HTTP request, so it never
 // belonged behind a route. See README.md for the recipe.
 
 module.exports = {

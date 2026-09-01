@@ -101,6 +101,33 @@ for (const [name, wiring, why] of WIRED) {
   });
 }
 
+// The devbox module's own parameters, which the WIRED entry above cannot cover: four of the six are
+// module outputs and expressions rather than main.bicep params, so `^param <name>` does not apply.
+// Every one is baked into demi-run at deploy time, and a blanked value is not a failed deploy — it
+// is a VM whose scripts warn and no-op (an unset COSMOS_ENDPOINT returns a null container) or delete
+// from Cosmos while silently skipping the index. `az bicep build` compiles all of them.
+test('the devbox is fed the same endpoints the API app gets', () => {
+  const block = MAIN.split(/^module /m).find(b => b.includes("'./modules/devbox.bicep'"));
+  assert.ok(block, 'main.bicep must call the devbox module');
+
+  const wiring = [
+    ['cosmosEndpoint', /^\s+cosmosEndpoint: cosmos\.outputs\.cosmosEndpoint$/m],
+    ['searchEndpoint',
+      /^\s+searchEndpoint: deploySearch \? search!\.outputs\.searchEndpoint : existingSearchEndpoint$/m],
+    ['eagleApiBase', /^\s+eagleApiBase: eagleApiBase$/m],
+    ['identityId', /^\s+identityId: identity\.outputs\.identityId$/m],
+    // Not identityId: the CLI needs the client id to name which identity IMDS should hand back.
+    ['identityClientId', /^\s+identityClientId: identity\.outputs\.clientId$/m],
+    ['subnetId', /^\s+subnetId: devboxSubnetId$/m],
+    // Without this the VM takes an empty key and Microsoft.Compute refuses it mid-apply.
+    ['sshPublicKey', /^\s+sshPublicKey: devboxSshPublicKey$/m]
+  ];
+
+  for (const [name, pattern] of wiring) {
+    assert.match(block, pattern, `the devbox module's ${name} is not wired, or is wired to something else`);
+  }
+});
+
 // src/config.js throws on an empty allowlist in test and prod, so a param file that omits this
 // deploys an app that boot-loops. `az bicep build` says nothing: main.bicep's param has no default,
 // but a `param allowedClients = ''` line satisfies the compiler and fails at runtime.

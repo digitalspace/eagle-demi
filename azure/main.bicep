@@ -569,7 +569,7 @@ module devbox './modules/devbox.bicep' = if (deployDevbox && !empty(devboxSubnet
     sshPublicKey: devboxSshPublicKey
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId
-    // The same expressions the API app gets, so demi-env cannot drift from the running app.
+    // The same expressions the API app gets, so demi-run cannot drift from the running app.
     cosmosEndpoint: cosmos.outputs.cosmosEndpoint
     searchEndpoint: deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
     eagleApiBase: eagleApiBase

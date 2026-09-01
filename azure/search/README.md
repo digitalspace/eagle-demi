@@ -27,8 +27,8 @@ definitions and code defaults first, then the apply script, then the `SEARCH_IND
 new indexes matched their Cosmos totals (393 / 60,578 / 1,128,733).
 
 **The `demi-*` indexes and indexers were DELETED 2026-08-24** (Search Service Contributor granted
-to the app identity at service scope, deleted over the tunnel, grant revoked, identity verified back
-to Search Index Data Contributor only). Rollback is no longer a settings flip: it is a refill from
+to the app identity at service scope, deleted from inside the VNet, grant revoked, identity verified
+back to Search Index Data Contributor only). Rollback is no longer a settings flip: it is a refill from
 Cosmos with `apply-search-definitions.js --live` + indexer run. The three `demi-*-ds` data sources
 stay — they name Cosmos containers and the live indexers use them. Keeping the old set had doubled
 every hand PUT and already rotted once (`demi-projects` 12 vs 20 fields).
@@ -42,8 +42,8 @@ backwards, so the reader doing that needs to know what each step did.
    Only two of the three had ever been settings before, which is why a settings-only cutover was
    impossible until then.
 2. **The indexes and indexers were created** from these files by
-   `node src/scripts/apply-search-definitions.js --live`, run from inside the app container over
-   the App Service SSH tunnel (not Kudu — its SCM container has no managed-identity endpoint; see
+   `node src/scripts/apply-search-definitions.js --live`, run on the devbox (`demi-devbox-<env>`)
+   via `demi-run` (not Kudu — its SCM container has no managed-identity endpoint; see
    the root `README.md` recipe). They filled on their PT5M schedule to
    393 / 60,578 / 1,128,733 while the old indexes kept serving.
    **That command still applies a WIDENING today** — see the restore section below for what it
@@ -177,21 +177,22 @@ reads `null` until the indexer has run over them again.
 ## Restoring one
 
 Public network access is `Disabled` and local auth is off, so this only works from inside the VNet,
-as the managed identity — see the SSH-tunnel recipe in the root `README.md`. The identity holds
+as the managed identity — see "Running anything against the database" in the root `README.md`. The
+identity holds
 **Search Index Data Contributor**, which covers documents but *not* definitions; writing these back
 needs a temporary **Search Service Contributor** grant, revoked afterwards.
 
 **Use `scripts/with-search-admin.sh` rather than granting by hand.** It grants, runs the command you
 give it, and revokes from a `trap` — so the revoke also fires on a failure, on Ctrl-C, and on a
-dropped tunnel. Three index changes have each done this by hand, and the failure that costs
-something is a grant left standing because the middle step errored. The script's header explains why
-the grant stays temporary rather than becoming permanent; the short version is that
+run-command call that dies mid-run. Three index changes have each done this by hand, and the failure
+that costs something is a grant left standing because the middle step errored. The script's header
+explains why the grant stays temporary rather than becoming permanent; the short version is that
 `demi-identity-test` is the identity the **public API** runs as.
 
 ```bash
 scripts/with-search-admin.sh -- \
-  sshpass -p "$CONTAINER_SSH_PASSWORD" ssh -c aes256-cbc -m hmac-sha1 -p 50123 root@127.0.0.1 \
-  'cd /home/site/wwwroot && node src/scripts/apply-search-definitions.js --live --only projects'
+  az vm run-command invoke -g c4b0a8-test-rg -n demi-devbox-test --command-id RunShellScript \
+  --scripts "sudo -u demi /usr/local/bin/demi-run 'cd /opt/eagle-demi && node src/scripts/apply-search-definitions.js --live --only projects'"
 ```
 
 **READ THE LIVE NAMES FIRST — never take them from a filename.** Since the cutover the two agree, so

@@ -20,14 +20,13 @@
  * deliver text that is already public. All 60,661 chunked documents are `read: public`; the 878
  * non-public Eagle documents have no chunks here.
  *
- * MUST RUN INSIDE THE APP CONTAINER, over the App Service SSH tunnel — not Kudu's /api/command,
- * whose SCM container has no managed-identity endpoint. See README.md for the recipe, including the
- * `IDENTITY_ENDPOINT`/`IDENTITY_HEADER` pair: without those two the Cosmos client cannot authenticate
- * and the failure names VS Code and PowerShell rather than the missing variables.
+ * MUST RUN ON THE DEVBOX (`demi-devbox-<env>`) via `demi-run` — not Kudu's /api/command,
+ * whose SCM container has no managed-identity endpoint. `demi-run` is what supplies the endpoints
+ * and logs the CLI in as the identity; without it the Cosmos client cannot authenticate and the
+ * failure names VS Code and PowerShell rather than the missing variables. See README.md.
  *
- * Run it DETACHED — `nohup ... > /home/export.log 2>&1 &`. The SSH tunnel dies on its own schedule
- * and would otherwise take the run with it. `alwaysOn` must be ON for the duration, or App Service
- * unloads the idle app and recycles the container out from under the run.
+ * Run it DETACHED — `nohup ... > /tmp/export.log 2>&1 &`. The run-command call can time out or
+ * the devbox can hit its 19:00 Pacific auto-shutdown and would otherwise take the run with it.
  *
  * MEASURED, prod backfill 2026-08-20: the full 1,128,733-chunk run took **60.3 minutes — 18,726
  * chunks/min** with one push in flight, against the ~5,000/min this header claimed from the first
@@ -70,7 +69,7 @@
  * rather than restart, so anything outside `/home` is gone on the next stop. Write to
  * `/home/backups/chunks-YYYYMMDD.jsonl`, and treat the file as in-transit, not as the backup:
  * a copy that never leaves the container is not one. Pull it off with
- * `az webapp deploy --type static` in reverse, or read it over the same SSH tunnel the run uses.
+ * blob upload from inside the VM — see README "Running anything against the database".
  *
  * SIZE IT BEFORE YOU RUN IT rather than trusting a number in a comment: `--dump f --limit 10000`
  * writes 10k rows, then multiply by 113. `SELECT *` also carries the Cosmos system properties

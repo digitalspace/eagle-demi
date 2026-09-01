@@ -51,18 +51,21 @@ az vm deallocate -g c4b0a8-test-rg -n demi-devbox-test   # compute bills for eve
 
 ```bash
 az vm run-command invoke -g c4b0a8-test-rg -n demi-devbox-test --command-id RunShellScript \
-  --scripts "sudo -u demi bash -lc 'eval \"\$(demi-env)\" && cd /opt/eagle-demi && node src/scripts/reconcile-eagle.js'"
+  --scripts "sudo -u demi /usr/local/bin/demi-run 'cd /opt/eagle-demi && node src/scripts/reconcile-eagle.js'"
 ```
 
-The quoting matters: run-command runs the script as **root**, and everything the run needs — the `az`
-login and the repo checkout alike — belongs to `demi`. `\$` keeps the substitution on the VM inside
-the `demi` shell rather than letting the local shell or root's shell take it.
+`demi-run` is the whole interface. It logs the CLI in as the managed identity, exports
+`AZURE_CLIENT_ID`, `COSMOS_ENDPOINT`, `COSMOS_NOSQL_DATABASE`, `SEARCH_ENDPOINT` and
+`EAGLE_API_BASE`, then runs what you gave it. `sudo -u demi` because run-command runs as root and
+both the `az` login and the checkout belong to `demi`.
 
-`eval "$(demi-env)"` is what makes that work. `/usr/local/bin/demi-env` logs the CLI in as the managed
-identity and prints `AZURE_CLIENT_ID`, `COSMOS_ENDPOINT`, `COSMOS_NOSQL_DATABASE`, `SEARCH_ENDPOINT`
-and `EAGLE_API_BASE`. `SEARCH_ENDPOINT` is in there because anything that deletes a row deletes its
-index entry too, and `deleteFromIndex` returns 0 instead of throwing when it is unset — without it a
-purge looks like it worked and leaves the row searchable.
+**It runs the command rather than printing an environment to `eval`, deliberately.** Under
+`eval "$(prime-the-env)" && node script.js` the shell cannot see the login fail — command
+substitution drops the exit status — so the script runs with nothing set, and the scripts degrade
+rather than fail: an unset `COSMOS_ENDPOINT` makes `getContainer` warn and return null, and an unset
+`SEARCH_ENDPOINT` makes `deleteFromIndex` return 0 instead of throwing. A purge that way exits 0
+having done nothing, which reads exactly like "already clean". `demi-run` is `set -euo pipefail`, so
+a failed login fails the run-command visibly.
 
 Four things to know:
 
@@ -88,10 +91,12 @@ Four things to know:
 
 **Interactive work is Bastion**: `bastion-test` is the Developer SKU, which is the portal's browser
 shell and only that — no native client, no tunnel, no `scp` (those need Standard). Portal → the VM →
-Connect → Bastion, then `eval $(demi-env)` in the shell it gives you.
+Connect → Bastion, then `demi-run bash` in the shell it gives you.
 
-Search *admin* operations are unchanged and do not need the VM: `scripts/with-search-admin.sh` grants
-Search Service Contributor for the length of one command and revokes it afterwards.
+Search *admin* operations run on the VM too — the search service is private-endpoint only, so a
+laptop cannot reach its data plane either. What is unchanged is the grant:
+`scripts/with-search-admin.sh` gives the identity Search Service Contributor for the length of one
+command and revokes it afterwards, and it wraps the same `demi-run` call as anything else.
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write

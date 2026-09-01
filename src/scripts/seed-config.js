@@ -7,11 +7,11 @@
  * returns byte-for-byte what the endpoint returned before the container existed. Parity is by
  * construction rather than by transcription — there is no table here to drift out of date.
  *
- * MUST RUN INSIDE THE APP CONTAINER, over the App Service SSH tunnel. `demi-cosmos-*` is
+ * MUST RUN ON THE DEVBOX (`demi-devbox-<env>`) via `demi-run`. `demi-cosmos-*` is
  * private-endpoint-only and keyless, reachable as the app's managed identity and from nowhere
  * else; a laptop with `az` logged in cannot reach it. Kudu's /api/command will not do either —
  * the SCM container has no managed-identity endpoint. Same constraint as
- * `export-chunks-to-eagle.js`; see README.md for the tunnel recipe.
+ * `export-chunks-to-eagle.js`; see README.md for the recipe.
  *
  * Usage:
  *   node src/scripts/seed-config.js                  # print what would be written, write nothing

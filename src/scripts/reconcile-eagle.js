@@ -10,7 +10,7 @@
  *
  *   node src/scripts/reconcile-eagle.js [--json]
  *
- * Runs inside the app container over the SSH tunnel — same recipe as the other database scripts,
+ * Runs on the devbox via `demi-run` — same recipe as the other database scripts,
  * see README "Running anything against the database". Alert on the one `drift=` line, clean is 0.
  * The API app also runs `run()` nightly on a Functions timer when RECONCILE_SCHEDULE is set — see
  * api/index.js, and azure/modules/observability.bicep for the alert that reads the line.

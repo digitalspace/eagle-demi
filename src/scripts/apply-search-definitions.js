@@ -7,10 +7,10 @@
  * inside it, which is why `azure/search/` exists and why, until this script, the definitions were
  * hand-POSTed from inside the VNet with nothing in git able to replay them.
  *
- * MUST RUN INSIDE THE APP CONTAINER, over the App Service SSH tunnel — not Kudu's /api/command,
+ * MUST RUN ON THE DEVBOX (`demi-devbox-<env>`) via `demi-run` — not Kudu's /api/command,
  * whose SCM container has no managed-identity endpoint. This script's only auth path is
  * `getToken()` -> DefaultAzureCredential -> managed identity, so Kudu cannot work at all. See
- * README.md for the recipe, including the `IDENTITY_ENDPOINT`/`IDENTITY_HEADER` pair.
+ * README.md for the recipe; `demi-run` is what makes that credential resolve.
  *
  * `demi-search-*` is `publicNetworkAccess: Disabled` with local auth off, so a workstation cannot
  * reach the data plane either: it answers 403 "the source is not allowed by applicable rules",
@@ -116,8 +116,8 @@ function assertNotForbidden(status, text, what) {
   if (/publicNetworkAccess|not allowed by applicable rules/i.test(text || '')) {
     throw new Error(
       `HTTP 403 reading ${what}: the SERVICE'S NETWORK RULES rejected this, not its RBAC. ` +
-      `demi-search-* is publicNetworkAccess: Disabled, so no role grant changes this — run from ` +
-      `inside the app container over the App Service SSH tunnel — Kudu's SCM container has no ` +
+      `demi-search-* is publicNetworkAccess: Disabled, so no role grant changes this — run on the ` +
+      `devbox (demi-devbox-<env>) via demi-run — Kudu's SCM container has no ` +
       `managed-identity endpoint, so it cannot authenticate here either.`
     );
   }
