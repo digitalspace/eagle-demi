@@ -969,3 +969,60 @@ describe('RegistryStateService — /api/me gating', () => {
     expect(service.filteredProjects()).toEqual([redacted]);
   });
 });
+
+/**
+ * The server copy of the preferences wins on load. localStorage is the cache that keeps the app
+ * usable offline and before `/me/data` answers — if it kept winning, the landing screen chosen on
+ * one machine would never follow the user to another.
+ */
+describe('RegistryStateService — server preference sync', () => {
+  const BROWSER_PREFS = { landing: 'map', perPage: 6 };
+
+  function makeService(myData: () => Response): RegistryStateService {
+    sharedFetchSpy = spyOn(window, 'fetch').and.callFake((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : input.url);
+      return Promise.resolve(url.endsWith('/me/data') ? myData() : okResponse());
+    });
+
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), RegistryStateService]
+    });
+    return TestBed.inject(RegistryStateService);
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    localStorage.setItem('demi.prefs', JSON.stringify(BROWSER_PREFS));
+  });
+
+  it('overwrites the browser copy with the preferences /me/data returned', async () => {
+    const service = makeService(() => okResponse({ prefs: { landing: 'index', perPage: 24 }, lassos: [] }));
+    await service.authReady;
+    service.isAuthenticated.set(true);
+
+    await (service as any).loadUserData();
+
+    expect(JSON.parse(localStorage.getItem('demi.prefs')!)).toEqual({ landing: 'index', perPage: 24 });
+  });
+
+  it('keeps the browser copy when the read fails', async () => {
+    const service = makeService(() => new Response('{}', { status: 500 }));
+    await service.authReady;
+    service.isAuthenticated.set(true);
+
+    await (service as any).loadUserData();
+
+    expect(JSON.parse(localStorage.getItem('demi.prefs')!)).toEqual(BROWSER_PREFS);
+  });
+
+  it('issues no request for an anonymous visitor', async () => {
+    const service = makeService(() => okResponse({ prefs: null, lassos: [] }));
+    await service.authReady;
+    service.isAuthenticated.set(false);
+    sharedFetchSpy.calls.reset();
+
+    await (service as any).loadUserData();
+
+    expect(sharedFetchSpy).not.toHaveBeenCalled();
+  });
+});

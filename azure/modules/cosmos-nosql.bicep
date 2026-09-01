@@ -522,6 +522,48 @@ resource linksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
   }
 }
 
+// Per-user data — saved lassos, preferences. Partitioned on /userId (the owner's IDIR username):
+// every read and write is one user's partition, and the id carries the type (`lasso:<slug>`).
+// `/ring/*` stays out of the index — a 500-vertex polygon is stored, never filtered on.
+resource userDataContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'userdata'
+  properties: {
+    resource: {
+      id: 'userdata'
+      partitionKey: {
+        paths: [
+          '/userId'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/type/?'
+          }
+          {
+            path: '/updatedAt/?'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/*'
+          }
+          {
+            path: '/ring/*'
+          }
+          {
+            path: '/_etag/?'
+          }
+        ]
+      }
+    }
+  }
+}
+
 // ── Data-plane RBAC ──────────────────────────────────────────────────────────
 // Cosmos NoSQL data-plane role assignments cannot be managed in the Azure portal, so they
 // have to live here. Built-in definitions are used rather than a custom role — a custom

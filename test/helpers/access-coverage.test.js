@@ -73,7 +73,12 @@ const UNGATED = {
     'Rows carry no per-document ACL. GET /api/links is route-gated (authMiddleware only, no ' +
     'ACL predicate needed since every row is staff-visible); create/repoint/delete are ' +
     'admin/write-gated; and /s/:code is a deliberately PUBLIC point read with no caller tier to ' +
-    'filter for — the destination itself, not the row, is what gets validated.'
+    'filter for — the destination itself, not the row, is what gets validated.',
+  'userdata.js':
+    'The partition key IS the access rule: every function takes the owner as its first argument ' +
+    'and the controller only ever passes the caller\'s own token username, so a row of another ' +
+    'user is unreachable rather than filtered out. Rows carry no read[] and no tier can see part ' +
+    'of one, so there is nothing for visibilityFor or canRead to compose.'
 };
 
 /**
@@ -107,7 +112,13 @@ const gatedRoutes = [
   { method: 'get', path: '/links', gate: null },
   { method: 'post', path: '/links', gate: 'requireWrite' },
   { method: 'put', path: '/links/:code', gate: 'requireWrite' },
-  { method: 'delete', path: '/links/:code', gate: 'requireWrite' }
+  { method: 'delete', path: '/links/:code', gate: 'requireWrite' },
+  // /me/* is the caller's own data, so authMiddleware is the whole gate — but it is also the ONLY
+  // thing that supplies the partition key, so an unauthenticated one would write to ''.
+  { method: 'get', path: '/me/data', gate: null },
+  { method: 'put', path: '/me/lassos', gate: null },
+  { method: 'delete', path: '/me/lassos/:slug', gate: null },
+  { method: 'put', path: '/me/prefs', gate: null }
 ];
 
 /** @returns {{name: string, source: string}[]} every repository module, allowlisted or not. */
@@ -279,7 +290,7 @@ test('access gate coverage', async (t) => {
     assert.ok(emissions.some(e => /action: 'upsert'/.test(e)), 'the Eagle push ack is in the scan');
   });
 
-  await t.test('each /links route carries the gate its verb requires', () => {
+  await t.test('each /links and /me route carries the gate its verb requires', () => {
     const routes = routeChains();
 
     for (const { method, path, gate } of gatedRoutes) {

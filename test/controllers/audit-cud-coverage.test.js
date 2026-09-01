@@ -40,6 +40,8 @@ const boundaryController = require('../../src/controllers/nosql/boundary');
 const projectController = require('../../src/controllers/nosql/project');
 const apiKeyController = require('../../src/controllers/nosql/api-key');
 const linkController = require('../../src/controllers/nosql/link');
+const userdata = require('../../src/repositories/userdata');
+const userDataController = require('../../src/controllers/nosql/userdata');
 const wildfireController = require('../../src/controllers/wildfire');
 
 function mockRes() {
@@ -380,6 +382,41 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(removed.length, 1);
     assert.strictEqual(removed[0].Action, 'link.delete');
     assert.strictEqual(removed[0].TargetId, res.body.code);
+  });
+
+  await t.test('saving, deleting an area and setting preferences write one row each', async () => {
+    t.mock.method(userdata, 'getItem', async () => null);
+    t.mock.method(userdata, 'countByType', async () => 0);
+    t.mock.method(userdata, 'put', async (userId, item) => item);
+
+    const ring = [[-123, 49], [-123.1, 49], [-123.1, 49.1]];
+    const saved = await rowsFrom(() => userDataController.saveLasso({
+      body: { name: 'Skeena Estuary', ring }, query: {}, params: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(saved.length, 1);
+    assert.strictEqual(saved[0].Action, 'userdata.lasso.save');
+    assert.strictEqual(saved[0].TargetId, 'lasso:skeena-estuary');
+    assert.strictEqual(saved[0].Detail.vertices, 3);
+    // The shape a user drew is their data, not an audit record kept for seven years.
+    assert.ok(!JSON.stringify(saved[0].Detail).includes('-123'), 'the ring reached the audit row');
+
+    const prefs = await rowsFrom(() => userDataController.putPrefs({
+      body: { landing: 'links', perPage: 12 }, query: {}, params: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(prefs.length, 1);
+    assert.strictEqual(prefs[0].Action, 'userdata.prefs.update');
+    assert.deepStrictEqual(prefs[0].Detail, { landing: 'links', perPage: 12 });
+
+    t.mock.method(userdata, 'remove', async () => true);
+    const removed = await rowsFrom(() => userDataController.deleteLasso({
+      params: { slug: 'skeena-estuary' }, query: {}, user: STAFF
+    }, mockRes()));
+
+    assert.strictEqual(removed.length, 1);
+    assert.strictEqual(removed[0].Action, 'userdata.lasso.delete');
+    assert.strictEqual(removed[0].TargetId, 'lasso:skeena-estuary');
   });
 
   await t.test('the wildfire sync writes one row, not one per project', async () => {

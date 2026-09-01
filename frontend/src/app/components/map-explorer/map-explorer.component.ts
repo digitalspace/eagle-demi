@@ -2,6 +2,7 @@ import { Component, OnInit, OnDestroy, AfterViewInit, HostListener, inject, effe
 import { CommonModule } from '@angular/common';
 import { Router } from '@angular/router';
 import { RegistryStateService } from '../../services/registry-state.service';
+import { UserdataService, SavedLasso } from '../../services/userdata.service';
 import { Project } from '../../models/registry.models';
 import { readPrefs } from '../../shell/prefs';
 import type * as Leaflet from 'leaflet';
@@ -27,6 +28,7 @@ interface FieldRow { key: string; value: string; source: 'TRACK' | 'EPIC' | 'DEM
 })
 export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   service = inject(RegistryStateService);
+  userdata = inject(UserdataService);
   private router = inject(Router);
 
   availableRegions = ['Vancouver Island', 'Lower Mainland', 'Thompson', 'Kootenay', 'Cariboo', 'Skeena', 'Omineca', 'Okanagan', 'Peace'];
@@ -42,6 +44,10 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   // --- Lasso ---------------------------------------------------------------------------------
   lassoActive = signal<boolean>(false);
+  /** Saved-area UI: the name form beside the lasso chip, and the dropdown in the control stack. */
+  savingLasso = signal<boolean>(false);
+  lassoName = signal<string>('');
+  savedOpen = signal<boolean>(false);
   private lassoLayer: any = null;
   private lassoPreview: any = null;
   private lassoPoints: any[] = [];
@@ -994,6 +1000,38 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   toggleLasso() {
     if (this.lassoActive()) this.exitLasso();
     else this.enterLasso();
+  }
+
+  // --- Saved areas -----------------------------------------------------------------------------
+
+  toggleSaved() {
+    const open = !this.savedOpen();
+    this.savedOpen.set(open);
+    // Read on open rather than on entry: most visits never touch this menu.
+    if (open) this.userdata.loadMyData();
+  }
+
+  setLassoName(event: Event) {
+    this.lassoName.set((event.target as HTMLInputElement).value);
+  }
+
+  async saveLasso() {
+    const ring = this.service.lassoPolygon();
+    const name = this.lassoName().trim();
+    if (!ring || !name) return;
+    if (await this.userdata.saveLasso(name, ring)) {
+      this.lassoName.set('');
+      this.savingLasso.set(false);
+    }
+  }
+
+  applySavedLasso(item: SavedLasso) {
+    this.service.lassoPolygon.set(item.ring);
+    this.savedOpen.set(false);
+  }
+
+  deleteSavedLasso(item: SavedLasso) {
+    return this.userdata.deleteLasso(item.slug);
   }
 
   /** Only while drawing: an Escape meant for a dialog must not wipe an applied filter. */

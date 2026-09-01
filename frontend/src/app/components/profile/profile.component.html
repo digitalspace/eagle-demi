@@ -63,6 +63,28 @@
     <div class="panel__actions" style="display: flex; gap: var(--layout-margin-small);">
       <button type="button" (click)="reset()" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Reset to defaults</button>
     </div>
-    <p class="footnote">Preferences are stored in this browser only — server-side preferences are not wired.</p>
+    <p class="footnote">Preferences are stored with your account and in this browser. Signed out, only the browser copy is used.</p>
   </section>
+
+  @if (service.isAuthenticated()) {
+    <section class="panel panel--padded">
+      <h2 class="panel__title panel__title--inline">Saved map areas</h2>
+      <p class="panel__lede">Areas drawn with the lasso on Map Explorer. Only you can see them.</p>
+      @if (userdata.error()) {
+        <div class="callout callout--warning">{{ userdata.error() }}</div>
+      }
+      <div class="kv-grid">
+        @for (area of userdata.lassos(); track area.slug) {
+          <div class="kv-row">
+            <span class="kv-row__key">{{ area.name }}</span>
+            <span class="kv-row__value cell--right">
+              <button type="button" (click)="deleteLasso(area)" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--surface-color-primary-default); text-decoration: underline; cursor: pointer;">Delete</button>
+            </span>
+          </div>
+        } @empty {
+          <p class="cell__sub" style="margin: 0;">{{ userdata.loading() ? 'Loading…' : 'No saved areas yet.' }}</p>
+        }
+      </div>
+    </section>
+  }
 </div>

@@ -54,7 +54,9 @@ function present(record) {
     shortUrl: `${config.linkBaseUrl}/s/${record.id}`,
     createdAt: record.createdAt,
     createdBy: record.createdBy,
-    updatedAt: record.updatedAt ?? null
+    updatedAt: record.updatedAt ?? null,
+    // Absent on every row minted before the flag, and those are shared.
+    personal: record.personal === true
   };
 }
 
@@ -62,9 +64,11 @@ function isConflict(err) {
   return Boolean(err) && (err.code === 409 || err.statusCode === 409);
 }
 
-exports.listLinks = async (_req, res) => {
+exports.listLinks = async (req, res) => {
   try {
-    return res.json((await links.list()).map(present));
+    // Personal links are hidden from everyone but their creator — the `/s/:code` redirect stays
+    // public, so this narrows the list, not access.
+    return res.json((await links.list((req.user && req.user.preferred_username) || '')).map(present));
   } catch (err) {
     return serverError(res, err, 'short link list failed');
   }
@@ -72,7 +76,7 @@ exports.listLinks = async (_req, res) => {
 
 exports.createLink = async (req, res) => {
   try {
-    const { url, note, code } = req.body || {};
+    const { url, note, code, personal } = req.body || {};
 
     const destination = validateDestination(url, config.linkAllowedHosts);
     if (!destination.ok) {
@@ -87,11 +91,15 @@ exports.createLink = async (req, res) => {
     if (custom && !CUSTOM_CODE.test(customCode)) {
       return res.status(400).json({ error: 'code must be 3-64 characters of a-z 0-9 _ - (case-insensitive)' });
     }
+    if (personal !== undefined && personal !== null && typeof personal !== 'boolean') {
+      return res.status(400).json({ error: 'personal must be a boolean' });
+    }
 
     const record = {
       id: custom ? customCode : generateCode(),
       url: destination.url,
       note: note || null,
+      personal: personal === true,
       createdAt: new Date().toISOString(),
       createdBy: (req.user && req.user.preferred_username) || 'unknown',
       updatedAt: null
@@ -113,7 +121,7 @@ exports.createLink = async (req, res) => {
       action: 'link.create',
       targetType: 'link',
       targetId: record.id,
-      detail: { url: record.url, note: record.note, custom }
+      detail: { url: record.url, note: record.note, custom, personal: record.personal }
     });
 
     return res.status(201).json({ code: record.id, shortUrl: present(record).shortUrl, url: record.url });
@@ -146,7 +154,7 @@ exports.updateLink = async (req, res) => {
       action: 'link.update',
       targetType: 'link',
       targetId: code,
-      detail: { from: before.url, to: destination.url }
+      detail: { from: before.url, to: destination.url, personal: before.personal === true }
     });
 
     return res.json(present(updated));
@@ -173,7 +181,7 @@ exports.deleteLink = async (req, res) => {
       action: 'link.delete',
       targetType: 'link',
       targetId: code,
-      detail: { url: existing.url, note: existing.note ?? null }
+      detail: { url: existing.url, note: existing.note ?? null, personal: existing.personal === true }
     });
 
     return res.json({ message: 'Short link deleted' });

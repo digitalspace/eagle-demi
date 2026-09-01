@@ -33,6 +33,7 @@ const boundaryController = () => require('../controllers/nosql/boundary');
 const apiKeyController = () => require('../controllers/nosql/api-key');
 const linkController = () => require('../controllers/nosql/link');
 const credentialController = () => require('../controllers/nosql/credentials');
+const userDataController = () => require('../controllers/nosql/userdata');
 
 /**
  * Liveness only — the process is up. Deliberately does NOT claim anything about the database; it
@@ -144,7 +145,14 @@ const routes = [
   { method: 'post', path: '/links', guards: [authMiddleware, requireWrite], load: () => linkController().createLink },
   { method: 'put', path: '/links/:code', guards: [authMiddleware, requireWrite], load: () => linkController().updateLink },
   { method: 'delete', path: '/links/:code', guards: [authMiddleware, requireWrite], load: () => linkController().deleteLink },
-  { method: 'get', path: '/s/:code', guards: [], load: () => linkController().resolveLink }
+  { method: 'get', path: '/s/:code', guards: [], load: () => linkController().resolveLink },
+
+  // The caller's own data, partitioned by the caller's own token. authMiddleware only, no
+  // requireWrite: a read-only staff credential still gets to save its own scratch data.
+  { method: 'get', path: '/me/data', guards: [authMiddleware], load: () => userDataController().getMyData },
+  { method: 'put', path: '/me/lassos', guards: [authMiddleware], load: () => userDataController().saveLasso },
+  { method: 'delete', path: '/me/lassos/:slug', guards: [authMiddleware], load: () => userDataController().deleteLasso },
+  { method: 'put', path: '/me/prefs', guards: [authMiddleware], load: () => userDataController().putPrefs }
 ];
 
 // NOT SERVED IN PROD. The spec names every route, parameter and role in the system, and this route

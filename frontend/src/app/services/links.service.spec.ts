@@ -14,7 +14,8 @@ const LINK: ShortLink = {
   shortUrl: 'https://demi.gov.bc.ca/s/site-c-eac',
   createdAt: '2026-08-24T00:00:00.000Z',
   createdBy: 'j.okafor',
-  updatedAt: null
+  updatedAt: null,
+  personal: false
 };
 
 describe('LinksService', () => {
@@ -52,9 +53,19 @@ describe('LinksService', () => {
     const [url, init] = fetchSpy.calls.first().args as [string, RequestInit];
     expect(url).toBe('/api/links');
     expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body as string)).toEqual({ url: 'https://demi.gov.bc.ca/x', note: 'poster', code: 'abc' });
+    expect(JSON.parse(init.body as string))
+      .toEqual({ url: 'https://demi.gov.bc.ca/x', note: 'poster', code: 'abc', personal: false });
     // second call is the reload
     expect(fetchSpy.calls.count()).toBe(2);
+  });
+
+  it('POSTs the personal flag when the creator ticks it', async () => {
+    fetchSpy.and.resolveTo(jsonResponse({ code: 'abc' }, 201));
+
+    await service.create('https://demi.gov.bc.ca/x', '', '', true);
+
+    const [, init] = fetchSpy.calls.first().args as [string, RequestInit];
+    expect(JSON.parse(init.body as string).personal).toBeTrue();
   });
 
   it('PUTs a repoint and DELETEs by code', async () => {

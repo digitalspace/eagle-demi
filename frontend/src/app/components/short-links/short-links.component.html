@@ -27,6 +27,13 @@
         <span class="micro-label">Note</span>
         <input type="text" placeholder="Where this link is being used" [value]="newNote()" (input)="newNote.set(value($event))" style="width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-body);">
       </label>
+      <div>
+        <label style="display: flex; align-items: center; gap: 0.5rem; font: var(--typography-regular-body); cursor: pointer;">
+          <input type="checkbox" [checked]="newPersonal()" (change)="newPersonal.set(!newPersonal())">
+          Personal (only visible to me)
+        </label>
+        <span class="cell__sub">Anyone with the short URL can still open it.</span>
+      </div>
     </div>
     <div class="panel__actions">
       <button type="button" [disabled]="!newUrl().trim()" (click)="submit()" style="background: var(--surface-color-primary-default); color: var(--surface-color-background-white); border: none; border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Create link</button>
@@ -50,9 +57,18 @@
       </tr>
     </thead>
     <tbody>
-      @for (link of links.links(); track link.id) {
+      @for (group of linkGroups(); track group.title) {
         <tr>
-          <td><a [href]="link.shortUrl" target="_blank" rel="noopener"><code class="cell__mono" style="overflow-wrap: anywhere; color: inherit;">{{ link.shortUrl }}</code></a></td>
+          <th colspan="6" scope="colgroup" class="micro-label" style="text-align: left; background: var(--surface-color-background-light-gray);">{{ group.title }}</th>
+        </tr>
+        @for (link of group.rows; track link.id) {
+        <tr>
+          <td>
+            <a [href]="link.shortUrl" target="_blank" rel="noopener"><code class="cell__mono" style="overflow-wrap: anywhere; color: inherit;">{{ link.shortUrl }}</code></a>
+            @if (link.personal) {
+              <span class="pill pill--info" style="margin-left: 0.35rem;">Personal</span>
+            }
+          </td>
           <td class="cell--truncate cell--muted">
             @if (editingCode() === link.id) {
               <input type="url" aria-label="New destination" [value]="editUrl()" (input)="editUrl.set(value($event))" style="width: 100%; box-sizing: border-box; padding: 0.35rem 0.6rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
@@ -76,6 +92,7 @@
             </span>
           </td>
         </tr>
+        }
       } @empty {
         @if (links.loading()) {
           @for (i of [1, 2, 3, 4]; track i) {

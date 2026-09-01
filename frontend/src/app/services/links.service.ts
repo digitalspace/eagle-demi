@@ -11,6 +11,8 @@ export interface ShortLink {
   createdAt: string;
   createdBy: string;
   updatedAt: string | null;
+  /** Hidden from other users' lists. `/s/:code` still redirects for anyone holding the URL. */
+  personal: boolean;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -42,8 +44,8 @@ export class LinksService {
   }
 
   /** `code` blank means the API generates one. Returns false and sets `error` on refusal. */
-  async create(url: string, note?: string, code?: string): Promise<boolean> {
-    return this.write('/links', { method: 'POST', ...this.json({ url, note: note || undefined, code: code || undefined }) });
+  async create(url: string, note?: string, code?: string, personal = false): Promise<boolean> {
+    return this.write('/links', { method: 'POST', ...this.json({ url, note: note || undefined, code: code || undefined, personal }) });
   }
 
   async repoint(code: string, url: string): Promise<boolean> {
