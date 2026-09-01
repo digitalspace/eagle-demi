@@ -37,6 +37,18 @@
  *
  *   node src/scripts/apply-search-definitions.js            # report what would change
  *   node src/scripts/apply-search-definitions.js --live     # PUT them
+ *   node src/scripts/apply-search-definitions.js --check    # read-only drift check, see below
+ *
+ * `--check` IS THE OUTAGE DETECTOR. A prod outage happened because the live `projects` index was
+ * missing a field (`vis`) the committed definition and the code both expected, and nothing running
+ * anywhere could have noticed — the plain dry run above only prints exists/absent per index, never
+ * reads the live SCHEMA (that only happens under `--live`, right before a PUT). `--check` runs that
+ * same live-GET for every committed index, WRITES NOTHING, and reports any committed field absent
+ * from the live index. Exit 1 on any drift, exit 0 when every index matches, so it is fit for a
+ * post-deploy CI/devbox gate. Mutually exclusive with `--live` — refuses to run with both.
+ *
+ *   node src/scripts/apply-search-definitions.js --check
+ *   node src/scripts/apply-search-definitions.js --check --only projects
  */
 
 const fs = require('fs');
@@ -56,7 +68,7 @@ const DATASOURCE_DIR = path.join(ROOT, 'azure', 'search', 'datasources');
 const API_VERSION = '2024-07-01';
 
 function parseArgs(argv) {
-  const args = { live: false, only: '' };
+  const args = { live: false, check: false, only: '' };
   let i = 0;
   const value = (flag) => {
     const v = argv[++i];
@@ -68,6 +80,7 @@ function parseArgs(argv) {
   for (; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
+    else if (a === '--check') args.check = true;
     else if (a === '--only') {
       // An EMPTY value is not "no filter". `--only "$IDX"` with IDX unset passes the value() guard
       // (not undefined, no `--` prefix), and select() would then short-circuit its must-match check
@@ -77,6 +90,9 @@ function parseArgs(argv) {
     }
     else throw new Error(`unknown flag ${a}`);
   }
+  // Mutually exclusive: --check reads the live schema and writes nothing, --live PUTs. Letting both
+  // through would make the flag that decided which one happened whichever branch got checked first.
+  if (args.live && args.check) throw new Error('--live and --check are mutually exclusive');
   return args;
 }
 
@@ -226,6 +242,43 @@ function notAdditive(liveBody, committedBody) {
 }
 
 /**
+ * Committed fields absent from the live index — the outage class `--check` exists for. Name-level
+ * only, deliberately: `notAdditive()` above already does the deep field-by-field compare for the
+ * `--live` write guard, and re-deriving that here would be a second copy of the same diff.
+ */
+function missingFields(liveBody, committedBody) {
+  const liveNames = new Set((liveBody.fields || []).map(f => f.name));
+  return (committedBody.fields || []).map(f => f.name).filter(name => !liveNames.has(name));
+}
+
+/**
+ * `--check`: read-only drift report. Never PUTs — see the doc comment at the top of the file for
+ * why this exists. An absent live index counts every committed field as missing rather than
+ * skipping it, because "the index does not exist" is the loudest possible drift, not a pass.
+ */
+async function runCheck({ endpoint, only }) {
+  const { indexes } = select(only);
+  let drifted = 0;
+  for (const { body } of indexes) {
+    const live = await call(endpoint, 'GET', `/indexes/${body.name}?api-version=${API_VERSION}`);
+    assertNotForbidden(live.status, live.text, `index ${body.name}`);
+    if (live.status !== 200 && live.status !== 404) {
+      throw new Error(`index ${body.name} returned HTTP ${live.status} reading it back: ${live.text.slice(0, 200)}`);
+    }
+    const missing = live.status === 404
+      ? (body.fields || []).map(f => f.name)
+      : missingFields(safeJson(live.text) || {}, body);
+    if (missing.length > 0) {
+      drifted++;
+      console.log(`drift ${body.name}: missing fields ${missing.join(',')}`);
+    } else {
+      console.log(`ok ${body.name}`);
+    }
+  }
+  return drifted;
+}
+
+/**
  * Apply the definitions. Exported so the guard below and the dry-run split are reachable from a
  * test — the property that the committed names do not collide with the live ones can be asserted
  * from the files alone, but that says nothing about whether this function still CHECKS it.
@@ -367,8 +420,16 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cfg = aiSearch.config();
   if (!cfg.configured) throw new Error('SEARCH_ENDPOINT is not set — nothing to apply against');
+  const endpoint = cfg.endpoint.replace(/\/$/, '');
+  if (args.check) {
+    const drifted = await runCheck({ endpoint, only: args.only });
+    // Non-zero exit on drift, without throwing — throwing would print the "[apply-search-
+    // definitions]" error prefix over what is a report, not a failure of the script itself.
+    if (drifted > 0) process.exitCode = 1;
+    return;
+  }
   return run({
-    endpoint: cfg.endpoint.replace(/\/$/, ''),
+    endpoint,
     live: args.live,
     only: args.only,
     liveNames: [cfg.index, cfg.projectsIndex, cfg.documentsIndex]
@@ -383,6 +444,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  parseArgs, load, select, run, assertNotForbidden, readCommittedDataSource, safeJson, notAdditive,
-  INDEX_DIR, INDEXER_DIR, DATASOURCE_DIR
+  parseArgs, load, select, run, runCheck, missingFields, assertNotForbidden, readCommittedDataSource,
+  safeJson, notAdditive, INDEX_DIR, INDEXER_DIR, DATASOURCE_DIR
 };
