@@ -62,6 +62,9 @@ const WIRED = [
     'the API module call — without it prod creates demi-plan-prod instead of joining the shared plan'],
   ['keycloakClientId', /^\s+keycloakClientId: keycloakClientId$/m,
     'the API module call — without it no param file can set which client the API trusts'],
+  ['deployLegacyApi', /^module apiWebApp '\.\/modules\/api-web-app\.bicep' = if \(deployLegacyApi\) \{$/m,
+    'the legacy-API module gate — without it a prod apply creates demi-plan-prod and collides ' +
+    'with plan-eagle-search-prod\'s service-association link'],
   ['availabilityUrl',
     /^module availability '\.\/modules\/availability\.bicep' = if \(!empty\(availabilityUrl\)\) \{$/m,
     'the availability module gate — without it every environment gets a prod-only web test'],
@@ -115,6 +118,13 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
       `${envName} must state the audience explicitly, empty or otherwise`);
   });
 }
+
+// The legacy-API off switch. Deleting the prod line silently reverts to the module default (ON),
+// which is exactly the demi-plan-prod collision the gate exists to prevent.
+test('the prod param file turns the legacy API off', () => {
+  assert.match(PROD_PARAMS, /^param deployLegacyApi = false$/m,
+    'prod must keep the B1 module off while demi-api-prod lives on the shared plan');
+});
 
 // The Track team sync's four plain settings. Every one is a whole-collection-PUT app setting, so a
 // param file that omits one takes main.bicep's empty default and the live value is deleted on the

@@ -11,20 +11,18 @@ eagle-api's mirror push.
 
 Test carries near-zero traffic, so a test soak measures nothing. Prod ships behind a
 minutes-grade rollback (one rproxy line + the untouched old app) and the search kill switch
-(`SEARCH_API_PATH: ''`); the first days after the flip ARE the soak — watch prod `requests`
-and the reconcile drift alert.
+(`SEARCH_API_PATH: ''`); the first days after the flip ARE the soak — watch prod `requests`,
+the availability webtest (both envs run one through the rproxy path; its executions also keep a
+Flex instance warm), and the reconcile drift alert.
 
 ## Pre-flight
 
 1. Pick the release tag: the eagle-demi tag running on test, unchanged.
-2. `azure/main.prod.bicepparam` edits, in one commit:
-   - delete the `existingServerFarmId` line (Flex is one app per plan; `plan-eagle-search-prod`
-     stays with eagle-search-api-prod),
-   - `param apiFlexSubnetId` = the `snet-demi-func-fc1-prod` resource id (exists, /27, delegated),
-   - `param deployApim = true`,
-   - `param budgetStartDate` = the live prod budget's `timePeriod.startDate` month
-     (`az rest --method get --url ".../resourceGroups/rg-demi-prod/providers/Microsoft.Consumption/budgets/demi-budget-prod?api-version=2021-10-01"`);
-     an existing budget rejects any startDate change.
+2. `azure/main.prod.bicepparam` already carries the release state (verify, don't re-edit):
+   `deployLegacyApi = false` (the switch that stops a prod apply creating `demi-plan-prod` and
+   colliding with `plan-eagle-search-prod`'s subnet link), `deployApim = true`,
+   `apiFlexSubnetId` = the prod Flex subnet, `budgetStartDate = '2026-08-01'` (read live
+   2026-09-01; an existing budget rejects startDate changes).
 3. Gateway secret, control plane (data plane is blocked by the private endpoint AND the
    `Enforce-GR-KeyVault` guardrail; control plane bypasses both):
 
