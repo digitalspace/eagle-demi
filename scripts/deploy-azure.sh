@@ -267,13 +267,16 @@ deploy_frontend() {
   # Dropping the FIRST field instead — what this did until 2026-08-19 — yields `demi-prod` on
   # prod and then asserts against `demi-api-demi-prod`, an app that cannot exist.
   local env="${RESOURCE_GROUP%-rg}"; env="${env##*-}"
-  if ! grep -qF "https://demi-api-${env}.azurewebsites.net" "$REPO_ROOT/frontend/dist/env.js"; then
-    echo -e "${RED}✗ dist/env.js does not point at demi-api-${env} — this bundle would call the wrong API${NC}" >&2
+  # The deployed bundle calls same-origin /api (Front Door -> APIM) and reads the rest of its
+  # config from /api/config; a bundle with local-dev values would call the wrong API entirely.
+  if ! grep -qF "window.__env.API_LOCATION = ''" "$REPO_ROOT/frontend/dist/env.js" \
+     || ! grep -qF "window.__env.configEndpoint = true" "$REPO_ROOT/frontend/dist/env.js"; then
+    echo -e "${RED}✗ dist/env.js is not deploy-ready: it must keep API_LOCATION empty (same-origin /api) and configEndpoint true${NC}" >&2
     echo -e "${RED}  Apply the rewrites from the 'Point env.js at the test environment' step in${NC}" >&2
     echo -e "${RED}  .github/workflows/azure-deploy-staging-frontend.yaml to frontend/public/env.js, then re-run.${NC}" >&2
     return 1
   fi
-  echo -e "${GREEN}✓ env.js points at demi-api-${env}${NC}"
+  echo -e "${GREEN}✓ env.js is deploy-ready (same-origin /api, configEndpoint on)${NC}"
 
   echo -e "\n${BLUE}[3/4] Uploading to ${YELLOW}${FRONTEND_STORAGE_ACCOUNT}${BLUE}/\$web...${NC}"
   # PASS 1 IS UNFILTERED, DELIBERATELY. `--pattern` takes one fnmatch glob and there is no way to
