@@ -112,6 +112,22 @@ test('API deploy package', async (t) => {
     );
   });
 
+  await t.test('stamps build-id.txt at the zip root with BUILD_ID', () => {
+    // config.js reads exactly this path, at zip root — a stamp that lands anywhere else, or under
+    // any other name, reproduces the "unknown" build id this test exists to catch in advance.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-buildid-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+    const sentinel = `test-build-${Date.now()}`;
+    const out = path.join(dir, 'api.zip');
+    execFileSync('python3', [path.join(REPO_ROOT, 'scripts', 'package-api.py'), repo, out],
+      { stdio: 'pipe', env: { ...process.env, BUILD_ID: sentinel } });
+    const content = execFileSync('unzip', ['-p', out, 'build-id.txt'], { encoding: 'utf8' });
+    fs.rmSync(dir, { recursive: true, force: true });
+    assert.strictEqual(content.trim(), sentinel,
+      'build-id.txt at zip root must hold BUILD_ID');
+  });
+
   await t.test('ships a SYMLINKED node_modules, and does not loop on a cycle', () => {
     // `os.walk` does not descend into a symlinked directory and says nothing when it skips one.
     // Point node_modules at a store — a pnpm linker, a shared install, a git worktree borrowing one
