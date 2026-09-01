@@ -36,11 +36,11 @@
       @if (service.lassoPolygon() && service.isAuthenticated()) {
         <div style="margin-top: var(--layout-margin-xsmall);">
           @if (savingLasso()) {
-            <div style="display: flex; align-items: center; gap: 4px;">
-              <input type="text" placeholder="Name this area" aria-label="Name this area" [value]="lassoName()" (input)="setLassoName($event)" style="flex: 1; min-width: 0; box-sizing: border-box; padding: 0.25rem 0.5rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
-              <button type="button" [disabled]="!lassoName().trim()" (click)="saveLasso()" style="background: none; border: none; padding: 0; font: var(--typography-bold-small-body); color: var(--surface-color-primary-default); text-decoration: underline; cursor: pointer;">Save</button>
-              <button type="button" (click)="savingLasso.set(false)" style="background: none; border: none; padding: 0; font: var(--typography-regular-small-body); color: var(--typography-color-secondary); text-decoration: underline; cursor: pointer;">Cancel</button>
-            </div>
+            <form (ngSubmit)="saveLasso()" style="display: flex; align-items: stretch; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); overflow: hidden;">
+              <input type="text" placeholder="Name this area" aria-label="Name this area" [value]="lassoName()" (input)="setLassoName($event)" style="flex: 1; min-width: 0; box-sizing: border-box; padding: 0.25rem 0.5rem; border: none; font: var(--typography-regular-small-body); background: none;">
+              <button type="submit" [disabled]="!lassoName().trim() || savingArea()" style="flex: 0 0 auto; background: none; border: none; border-left: var(--layout-border-width-small) solid var(--surface-color-border-default); padding: 0.25rem 0.6rem; font: var(--typography-bold-small-body); color: var(--surface-color-primary-default); white-space: nowrap; cursor: pointer;" [style.opacity]="savingArea() ? 0.6 : 1">{{ savingArea() ? 'Saving…' : 'Save' }}</button>
+              <button type="button" (click)="savingLasso.set(false)" aria-label="Cancel" style="flex: 0 0 auto; background: none; border: none; border-left: var(--layout-border-width-small) solid var(--surface-color-border-default); padding: 0.25rem 0.55rem; font: var(--typography-bold-small-body); color: var(--typography-color-secondary); cursor: pointer;">✕</button>
+            </form>
           } @else {
             <button type="button" (click)="savingLasso.set(true)" style="background: none; border: none; padding: 0; font: var(--typography-regular-label); color: var(--typography-color-link); text-decoration: underline; cursor: pointer;">Save this area</button>
           }
@@ -124,18 +124,21 @@
         }
       }
 
-      @for (proj of pagedProjects(); track proj.id) {
-        <button type="button" (click)="selectProject(proj)"
-                [style.background]="service.selectedProject()?.id === proj.id ? 'var(--surface-color-background-light-gray)' : 'var(--surface-color-background-white)'"
-                style="display: block; width: 100%; text-align: left; border: none; border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default); padding: var(--layout-padding-small) var(--layout-padding-large); font: inherit; cursor: pointer;">
-          <span style="display: flex; align-items: baseline; justify-content: space-between; gap: var(--layout-margin-small);">
-            <span class="cell__title" [innerHTML]="service.highlightField(proj.highlighted?.name, proj.name, service.debouncedSearchQuery())"></span>
-            <span [class]="'pill pill--caps ' + pillClass(proj.gatingState)">{{ proj.gatingState }}</span>
-          </span>
-          <span class="cell__sub" style="display: block; margin-top: 2px;">{{ projectMeta(proj) }}</span>
-          <span class="cell__sub" style="display: block; margin-top: 4px;">{{ proj.proponent }}</span>
-        </button>
-      }
+      <div role="listbox" aria-label="Projects">
+        @for (proj of pagedProjects(); track proj.id) {
+          <button type="button" role="option" [id]="'demi-row-' + proj.id" (click)="selectProject(proj)"
+                  [attr.aria-selected]="service.selectedProject()?.id === proj.id"
+                  class="demi-row" [class.kv-row--selected]="service.selectedProject()?.id === proj.id"
+                  style="display: block; width: 100%; text-align: left; padding: var(--layout-padding-small) var(--layout-padding-large); font: inherit; cursor: pointer;">
+            <span style="display: flex; align-items: baseline; justify-content: space-between; gap: var(--layout-margin-small);">
+              <span class="cell__title" [innerHTML]="service.highlightField(proj.highlighted?.name, proj.name, service.debouncedSearchQuery())"></span>
+              <span [class]="'pill pill--caps ' + pillClass(proj.gatingState)">{{ proj.gatingState }}</span>
+            </span>
+            <span class="cell__sub" style="display: block; margin-top: 2px;">{{ projectMeta(proj) }}</span>
+            <span class="cell__sub" style="display: block; margin-top: 4px;">{{ proj.proponent }}</span>
+          </button>
+        }
+      </div>
 
       @if (noResults()) {
         <div style="padding: var(--layout-padding-xlarge) var(--layout-padding-large); text-align: center;">
@@ -214,12 +217,13 @@
     </div>
 
     @if (service.selectedProject(); as selected) {
-      <div [style.max-height]="detailsExpanded() ? '70%' : '16rem'"
+      <div role="region" aria-labelledby="demi-selected-title" [style.max-height]="detailsExpanded() ? '70%' : '16rem'"
            style="position: absolute; left: var(--layout-padding-medium); bottom: var(--layout-padding-medium); z-index: 600; width: 24rem; max-width: calc(100% - 2rem); display: flex; flex-direction: column; background: var(--surface-color-background-white); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-medium); box-shadow: 0 4px 18px rgba(0,0,0,0.22);">
         <div style="flex: 0 0 auto; padding: var(--layout-padding-medium) var(--layout-padding-large) var(--layout-padding-xsmall);">
           <div style="display: flex; align-items: baseline; justify-content: space-between; gap: var(--layout-margin-small);">
-            <h2 class="panel__title panel__title--inline" style="margin: 0;">{{ selected.name }}</h2>
+            <h2 id="demi-selected-title" class="panel__title panel__title--inline" style="margin: 0;">{{ selected.name }}</h2>
             <span [class]="'pill pill--caps ' + pillClass(selected.gatingState)">{{ selected.gatingState }}</span>
+            <button type="button" (click)="clearSelection()" aria-label="Clear selection" style="flex: 0 0 auto; background: none; border: none; cursor: pointer; font: var(--typography-bold-body); color: var(--typography-color-secondary); padding: 0 0 0 0.2rem;">✕</button>
           </div>
           <div class="cell__sub" style="margin-top: 2px;">{{ projectMeta(selected) }}</div>
         </div>

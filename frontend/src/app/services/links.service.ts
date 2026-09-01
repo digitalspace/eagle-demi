@@ -15,6 +15,11 @@ export interface ShortLink {
   personal: boolean;
 }
 
+/** Lowercased both sides: the API stores `createdBy` lowercased, the token claim is not. */
+export function isMine(link: ShortLink, username: string): boolean {
+  return !!username && (link.createdBy || '').toLowerCase() === username.toLowerCase();
+}
+
 @Injectable({ providedIn: 'root' })
 export class LinksService {
   private registry = inject(RegistryStateService);

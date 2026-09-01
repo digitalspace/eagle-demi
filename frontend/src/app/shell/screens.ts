@@ -1,6 +1,6 @@
 /** One entry per screen: adding a page is a row here, a route, and a component. */
 
-export const GROUPS = ['Discover', 'Operate', 'Access', 'Developers'] as const;
+export const GROUPS = ['Discover', 'Account', 'Operate', 'Reference'] as const;
 export type Group = (typeof GROUPS)[number];
 
 export interface Screen {
@@ -12,17 +12,17 @@ export interface Screen {
 }
 
 export const SCREENS: Screen[] = [
-  { key: 'profile', label: 'Profile and preferences', group: null, path: '/profile' },
-  { key: 'sessions', label: 'Active sessions', group: null, path: '/sessions' },
+  { key: 'me', label: 'Overview', group: 'Account', path: '/workspace' },
+  { key: 'sessions', label: 'Active sessions', group: 'Account', path: '/sessions' },
   { key: 'map', label: 'Map Explorer', group: 'Discover', path: '/map' },
   { key: 'index', label: 'Index Search', group: 'Discover', path: '/index' },
   { key: 'content', label: 'Document Content Search', group: 'Discover', path: '/content' },
   { key: 'summary', label: 'AI Summary', group: 'Discover', path: '/summary' },
   { key: 'notify', label: 'eagle-notify', group: 'Operate', path: '/notify' },
   { key: 'links', label: 'Short URLs', group: 'Operate', path: '/links' },
-  { key: 'rbac', label: 'Access model', group: 'Access', path: '/rbac' },
-  { key: 'api', label: 'API documentation', group: 'Developers', path: '/developers' },
-  { key: 'keys', label: 'API keys', group: 'Developers', path: '/keys' }
+  { key: 'rbac', label: 'Access model', group: 'Reference', path: '/rbac' },
+  { key: 'api', label: 'API documentation', group: 'Reference', path: '/developers' },
+  { key: 'keys', label: 'API keys', group: 'Reference', path: '/keys' }
 ];
 
 export interface Tech {
@@ -33,6 +33,11 @@ export interface Tech {
 
 /** Per-screen technology provenance, drawn from the repo README and package manifests. */
 export const TECH: Record<string, Tech> = {
+  me: {
+    title: 'My account',
+    chips: ['Cosmos DB — userdata', 'GET /me/data', 'Keycloak token claims', 'localStorage preferences', 'Cosmos DB — links'],
+    note: 'Saved areas and preferences arrive in one read of /me/data, keyed by the IDIR in the token, so the API never returns another account’s row. Name, email, IDIR, roles and groups are token claims and are read-only here. A preference change is written to this browser’s localStorage first and pushed to the account after, so it holds even when the API call fails. “Apply on map” writes the saved ring into the same shared signal the lasso tool writes, which is why Map Explorer already shows the shape when it opens. The short-link list is filtered in the browser from the rows the API was willing to send.'
+  },
   map: {
     title: 'Map Explorer',
     chips: ['Leaflet + markercluster', 'OpenStreetMap tiles (keyless)', 'DataBC Wildfire WFS (live)', 'AI Search — projects (GeographyPoint)', 'Cosmos DB — boundaries'],
@@ -72,11 +77,6 @@ export const TECH: Record<string, Tech> = {
     title: 'API keys',
     chips: ['Cosmos DB — apikeys', 'SHA-256 + timingSafeEqual', 'Keycloak roles + scope', 'express-rate-limit', 'audit log'],
     note: 'A key’s roles and project scope are resolved before the privilege check, so a privileged key carrying a scope is privileged within those projects only. ADMIN_API_KEY is break-glass: one shared secret with no identity.'
-  },
-  profile: {
-    title: 'Profile and preferences',
-    chips: ['Keycloak realm eao-epic', 'token claims', 'localStorage preferences'],
-    note: 'Name, email, IDIR, roles and groups are token claims and are read-only here. Preferences (landing screen, page size) persist to this browser’s localStorage only — nothing here is written to Cosmos.'
   },
   sessions: {
     title: 'Active sessions',

@@ -18,7 +18,7 @@ export class IndexSearchComponent implements OnInit {
 
   scope = signal<'projects' | 'documents'>('projects');
   sortBy = signal<'relevance' | 'name'>('relevance');
-  /** Rows added per "Load N more" — the profile's "Results per page" pref. */
+  /** Rows added per "Load N more" — the "Results per page" pref. */
   private pageSize = readPrefs().perPage;
   visibleCount = signal<number>(this.pageSize);
 

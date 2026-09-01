@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, OnInit, computed, inject, signal } from '@angular/core';
-import { LinksService, ShortLink } from '../../services/links.service';
+import { LinksService, ShortLink, isMine } from '../../services/links.service';
 import { RegistryStateService } from '../../services/registry-state.service';
 
 @Component({
@@ -20,15 +20,14 @@ export class ShortLinksComponent implements OnInit {
   newNote = signal('');
   newPersonal = signal(false);
 
-  /** Lowercased both sides: the API stores `createdBy` lowercased, the token claim is not. */
   private me = computed(() =>
-    (this.registry.isAuthenticated() ? this.registry.keycloak?.tokenParsed?.preferred_username || '' : '').toLowerCase()
+    this.registry.isAuthenticated() ? this.registry.keycloak?.tokenParsed?.preferred_username || '' : ''
   );
 
   /** Mine first, then everyone's. Empty groups are dropped rather than shown as a bare heading. */
   linkGroups = computed<{ title: string; rows: ShortLink[] }[]>(() => {
     const me = this.me();
-    const mine = me ? this.links.links().filter(l => (l.createdBy || '').toLowerCase() === me) : [];
+    const mine = this.links.links().filter(l => isMine(l, me));
     const shared = this.links.links().filter(l => !mine.includes(l));
     return [
       { title: 'My links', rows: mine },

@@ -24,6 +24,13 @@ const loadInitialCache = (): Record<string, any> => {
   return {};
 };
 
+/** Keycloak puts these on every account in the realm; they say nothing about DEMI access. */
+const KEYCLOAK_BUILTIN_ROLES = ['default-roles-eao-epic', 'offline_access', 'uma_authorization'];
+
+/** Realm roles worth showing a person: the token's list without Keycloak's own boilerplate. */
+export const visibleRoles = (roles: string[] | undefined | null): string[] =>
+  (roles || []).filter(role => !KEYCLOAK_BUILTIN_ROLES.includes(role));
+
 /** Boundary layer id -> the denormalised project field naming that boundary. */
 const BOUNDARY_PROPS = {
   regionalDistricts: 'regionalDistrict',
@@ -194,6 +201,8 @@ export class RegistryStateService {
 
   // One ring of [lng, lat] vertices drawn freehand on the map, or null when nothing is drawn.
   lassoPolygon = signal<number[][] | null>(null);
+  // Label of the applied saved area; null = unnamed drawn shape.
+  lassoLabel = signal<string | null>(null);
 
   // Cache of loaded GeoJSON data with geometry to avoid repeated API fetches
   loadedBoundariesGeoJSON = signal<Record<string, any>>(loadInitialCache());
@@ -1516,6 +1525,7 @@ export class RegistryStateService {
     this.regionFilter.set(new Set());
     this.boundaryFilter.set({});
     this.lassoPolygon.set(null);
+    this.lassoLabel.set(null);
   }
 
   selectProject(proj: Project | null) {
