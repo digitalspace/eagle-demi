@@ -322,6 +322,65 @@ test('apply-search-definitions', async (t) => {
     assert.doesNotThrow(() => script.assertNotForbidden(200, '', 'index chunks'));
   });
 
+  await t.test('missingFields: a committed field absent from live is reported, an identical pair is clean', () => {
+    const committed = { fields: [{ name: 'id' }, { name: 'vis' }] };
+    const live = { fields: [{ name: 'id' }] };
+    assert.deepStrictEqual(script.missingFields(live, committed), ['vis']);
+    assert.deepStrictEqual(script.missingFields(committed, committed), []);
+  });
+
+  await t.test('--check reports drift for a missing field and stays clean when nothing is missing', async (tt) => {
+    const lines = [];
+    const log = console.log;
+    console.log = (...a) => lines.push(a.join(' '));
+    tt.after(() => { console.log = log; });
+
+    // `projects` live is short one field (the outage class); `chunks` and `documents` match exactly.
+    stub(tt, (url, init) => {
+      const m = /\/indexes\/([^?]+)\?/.exec(url);
+      if (init.method === 'GET' && m) {
+        const body = script.load(script.INDEX_DIR).find(d => d.body.name === m[1]).body;
+        const fields = m[1] === 'projects' ? body.fields.slice(1) : body.fields;
+        return { status: 200, text: async () => JSON.stringify({ ...body, fields }) };
+      }
+      return ok(url, init);
+    });
+
+    const drifted = await script.runCheck({ endpoint: ENDPOINT, only: '' });
+    assert.strictEqual(drifted, 1, 'exactly one of the three indexes was made to drift');
+    const out = lines.join('\n');
+    assert.match(out, /^drift projects: missing fields \S/m);
+    assert.match(out, /^ok chunks$/m);
+    assert.match(out, /^ok documents$/m);
+  });
+
+  await t.test('--check treats an absent live index as every committed field missing', async (tt) => {
+    const lines = [];
+    const log = console.log;
+    console.log = (...a) => lines.push(a.join(' '));
+    tt.after(() => { console.log = log; });
+
+    stub(tt, () => ({ status: 404, text: async () => '' }));
+    const drifted = await script.runCheck({ endpoint: ENDPOINT, only: 'projects' });
+    assert.strictEqual(drifted, 1);
+    assert.match(lines.join('\n'), /^drift projects: missing fields /m);
+  });
+
+  await t.test('--check issues no PUT, ever', async (tt) => {
+    const calls = stub(tt, (url, init) =>
+      (init.method === 'GET' && /\/indexes\//.test(url))
+        ? { status: 200, text: async () => JSON.stringify(script.load(script.INDEX_DIR)[0].body) }
+        : ok(url, init));
+    await script.runCheck({ endpoint: ENDPOINT, only: '' });
+    assert.strictEqual(calls.filter(c => c.method === 'PUT').length, 0, '--check must never write');
+  });
+
+  await t.test('--check and --live refuse to run together', () => {
+    assert.throws(() => script.parseArgs(['--check', '--live']), /mutually exclusive/);
+    assert.throws(() => script.parseArgs(['--live', '--check']), /mutually exclusive/);
+    assert.strictEqual(script.parseArgs(['--check']).check, true);
+  });
+
   await t.test('after the cutover the definitions ARE the live indexes, and the guard is what protects them', () => {
     // THIS TEST USED TO ASSERT THE OPPOSITE, and it was right to until 2026-08-22. Before the
     // cutover the committed definitions were renamed AHEAD of the service, so the two sets were

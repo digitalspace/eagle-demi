@@ -98,6 +98,18 @@ laptop cannot reach its data plane either. What is unchanged is the grant:
 `scripts/with-search-admin.sh` gives the identity Search Service Contributor for the length of one
 command and revokes it afterwards, and it wraps the same `demi-run` call as anything else.
 
+**After any deploy that touches `azure/search/` or search code, run the drift check.** It reads the
+live index schema and reports any committed field the live index does not have — the class of bug
+that reached prod once already, undetected. Read-only, exit 1 on drift:
+
+```bash
+bash /root/repos/.claude/scripts/demi-devbox.sh drift [--env test|prod]
+# equivalent, run by hand on the devbox:
+scripts/with-search-admin.sh -- \
+  az vm run-command invoke -g c4b0a8-test-rg -n demi-devbox-test --command-id RunShellScript \
+  --scripts "sudo -u demi /usr/local/bin/demi-run 'cd /opt/eagle-demi && node src/scripts/apply-search-definitions.js --check'"
+```
+
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
 npm run db:seed-nosql -- --reconcile   # also delete rows the fetch did not produce
