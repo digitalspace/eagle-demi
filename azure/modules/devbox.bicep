@@ -71,8 +71,12 @@ write_files:
     permissions: '0755'
     content: |
       #!/bin/sh
-      # eval $(demi-env) primes a shell for the repo scripts.
-      az login --identity --allow-no-subscriptions --output none 2>/dev/null || true
+      # eval "$(demi-env)" primes a shell for the repo scripts.
+      # --client-id, because the VM has ONLY a user-assigned identity: with no id argument the CLI
+      # asks IMDS for a system-assigned one that does not exist. set -e so that failure stops here
+      # rather than printing a half-primed environment that every later az command then fails on.
+      set -e
+      az login --identity --client-id __CLIENT_ID__ --allow-no-subscriptions --output none
       cat <<'ENV'
       export AZURE_CLIENT_ID=__CLIENT_ID__
       export COSMOS_ENDPOINT=__COSMOS_ENDPOINT__

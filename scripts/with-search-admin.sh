@@ -31,12 +31,10 @@
 #   RG=c4b0a8-test-rg SERVICE=demi-search-test IDENTITY=demi-identity-test \
 #     scripts/with-search-admin.sh -- <command>
 #
-# Bring the tunnel up first (see README, "Running anything against the database").
 set -euo pipefail
 
-# The `az` seam exists so the revoke-on-failure path is testable without touching a real tenant —
-# same shape as PULL_SSH_CMD in pull-from-container.sh. A trap nobody can exercise is a trap nobody
-# knows works.
+# The `az` seam exists so the revoke-on-failure path is testable without touching a real tenant.
+# A trap nobody can exercise is a trap nobody knows works.
 AZ="${AZ:-az}"
 
 SUBSCRIPTION="${SUBSCRIPTION:-7897ceb1-9a86-4639-87d7-7f9ff67142b3}"

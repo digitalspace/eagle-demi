@@ -153,6 +153,19 @@ require_secrets() {
   export MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
   export TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET
 
+  local -a required=(MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
+    TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET)
+
+  # The devbox SSH key. A public key, not a credential — but the param file reads it with no
+  # fallback like the six above, so a missing one fails the build, and the same guard is what turns
+  # that into a message. Only where the param file switches the VM on: prod deploys no devbox, and
+  # there is no demi-app-secrets in 6cdc9e-prod to read it from either.
+  if grep -Eq '^param deployDevbox *= *true' "$PARAM_FILE"; then
+    DEVBOX_SSH_PUBLIC_KEY="${DEVBOX_SSH_PUBLIC_KEY:-$(os_secret demi-app-secrets DEVBOX_SSH_PUBLIC_KEY)}"
+    export DEVBOX_SSH_PUBLIC_KEY
+    required+=(DEVBOX_SSH_PUBLIC_KEY)
+  fi
+
   # `val` via indirect expansion, then ${#val}. There is no ${#!name} form — bash rejects it as a
   # bad substitution, and `bash -n` does not catch it because it is a runtime expansion error.
   #
@@ -161,7 +174,7 @@ require_secrets() {
   # here is legitimately shorter than 8 characters — the real ones are 11, 40, 48 and 64.
   local missing=0 val
   local -r MIN_LEN=8
-  for name in MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET; do
+  for name in "${required[@]}"; do
     # Trim surrounding whitespace before judging it, so " " is empty and not a one-character secret.
     val="$(printf '%s' "${!name}" | tr -d '[:space:]')"
     if [ -z "$val" ]; then
@@ -188,6 +201,9 @@ there is no rollback — ARM does not retain @secure() parameter values.
                                            (keys ${MINIO_ACCESS_KEY_FIELD} / ${MINIO_SECRET_KEY_FIELD})
   ADMIN_API_KEY / DOCLING_API_KEY          OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
   TRACK_CLIENT_SECRET / ROLE_SYNC_CLIENT_SECRET  OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
+  DEVBOX_SSH_PUBLIC_KEY                    OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
+                                           (a PUBLIC key — 'ssh-keygen -t ed25519' and store the .pub,
+                                           or export it; only asked for when deployDevbox = true)
 
 There is no demi-app-secrets in 6cdc9e-prod — export all six by hand for a prod run.
 
