@@ -81,10 +81,15 @@ param ssoAudience = ''
 param frontendHostNames = []
 
 // ── Compute ───────────────────────────────────────────────────────────────────────────────────
-// No `existingServerFarmId`: a Flex plan cannot be shared, so demi-api-fc-prod owns one. The B1 app
-// in api-web-app.bicep consequently CREATES demi-plan-prod if it is applied from here, and its
-// integration into snet-app-service then collides with plan-eagle-search-prod's service-association
-// link. Read what-if before any prod apply while both apps stand.
+// No `existingServerFarmId`: a Flex plan cannot be shared, so demi-api-fc-prod owns one. The
+// legacy module stays OFF here: applying it would create demi-plan-prod and collide with
+// plan-eagle-search-prod's service-association link on snet-app-service. The live demi-api-prod
+// keeps serving untouched until decommission.
+param deployLegacyApi = false
+param deployApim = true
+
+// Live budget period — an existing budget rejects startDate changes.
+param budgetStartDate = '2026-08-01'
 
 // ── Network ───────────────────────────────────────────────────────────────────────────────────
 // Landing-zone subnets in c4b0a8-prod-networking; private DNS is attached by policy from a central

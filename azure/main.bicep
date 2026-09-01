@@ -78,6 +78,9 @@ param minioBucketName string = 'eagle-demi'
 @description('Key prefix namespacing this environment inside the bucket.')
 param minioKeyPrefix string = ''
 
+@description('Deploys the legacy B1/B3 app-service API alongside the Flex app. False where the old app pre-exists on a shared plan the template must not touch.')
+param deployLegacyApi bool = true
+
 @description('Pinned first day of the live budget period — an existing budget rejects startDate changes, so this must match what is deployed. Empty = first of the current month (new budgets only).')
 param budgetStartDate string = ''
 
@@ -414,7 +417,9 @@ module foundry './modules/foundry.bicep' = if (deployFoundry) {
 //
 // Not Consumption (Y1) despite `kind: 'functionapp'`: the live plan is B1, because the app holds a
 // warm worker and the 224 MB heap ceiling the scripts are written against is a B1 instance.
-module apiWebApp './modules/api-web-app.bicep' = {
+// Off in prod: applying the B1 module there would CREATE demi-plan-prod and collide with
+// plan-eagle-search-prod's service-association link on snet-app-service (see main.prod.bicepparam).
+module apiWebApp './modules/api-web-app.bicep' = if (deployLegacyApi) {
   name: 'deploy-api-web-app'
   params: {
     location: location
@@ -565,7 +570,7 @@ module costBudget './modules/cost-budget.bicep' = {
 }
 
 // Outputs
-output apiWebAppHostName string = apiWebApp.outputs.apiWebAppHostName
+output apiWebAppHostName string = deployLegacyApi ? apiWebApp!.outputs.apiWebAppHostName : ''
 // Empty until the Flex app is deployed. The host rproxy is flipped to in Phase 4.
 output apiFlexHostName string = !empty(apiFlexSubnetId) ? apiFunctionFlex!.outputs.apiFunctionAppHostName : ''
 // COPY THIS INTO eagle-search's Front Door parameters. The profile owns the DEMI route but not the

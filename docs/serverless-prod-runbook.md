@@ -1,18 +1,18 @@
 # Serverless prod release: Flex + APIM
 
 Brings prod to the test architecture: Front Door > API Management > Functions Flex Consumption >
-Cosmos serverless. Test rollout completed 2026-09-01; prod waits for the soak gate below.
+Cosmos serverless. Test rollout completed 2026-09-01.
 
 Prod scope is smaller than test: there is no DEMI frontend or admin site in prod, so no Front Door
 routes or CSP work. The consumers are eagle-public's `/demi-search` (via the OpenShift rproxy) and
 eagle-api's mirror push.
 
-## Gate: soak
+## Gate: none — prod is the canary
 
-At least one week on test from 2026-09-01. Pass means: no unexplained 5xx or failure-rate rise
-in `requests` (App Insights), cold starts acceptable through the full chain, timers registered.
-Test runs no availability webtest on purpose — a 5-minute probe keeps the app warm and hides
-scale-to-zero behaviour; the soak reads passive telemetry and real traffic.
+Test carries near-zero traffic, so a test soak measures nothing. Prod ships behind a
+minutes-grade rollback (one rproxy line + the untouched old app) and the search kill switch
+(`SEARCH_API_PATH: ''`); the first days after the flip ARE the soak — watch prod `requests`
+and the reconcile drift alert.
 
 ## Pre-flight
 
@@ -64,13 +64,19 @@ scale-to-zero behaviour; the soak reads passive telemetry and real traffic.
    tag, `gh workflow run "Deploy to Prod" -f version=<tag>`; `oc rollout restart deploy/rproxy` in
    `6cdc9e-prod` if config does not roll. eao-nginx flips before anything else, per prod rules.
 2. eagle-public prod search in a real browser.
-3. eagle-api keeps pushing with `demi-service-write` direct to the fc host — dual-accept, no
-   change required at flip time. Moving it to `/machine` + subscription key is a separate
-   eagle-api change. The extractor stays direct permanently (APIM's 30 s cap vs NDJSON ingest).
+3. eagle-api pushes to the OLD `demi-api-prod` host and keeps doing so at flip time — both apps
+   share Cosmos, so nothing breaks. Its `DEMI_API_BASE` MUST move to `demi-api-fc-prod` before
+   the old app stops (decommission list). Moving it to `/machine` + subscription key is a
+   separate eagle-api change. The extractor stays direct to the fc host permanently (APIM's
+   30 s cap vs NDJSON ingest).
 
 ## After one clean week
 
-- `az functionapp stop` old `demi-api-prod` (B1/B3 co-tenant). Delete one week later.
+- FIRST: eagle-api `DEMI_API_BASE` → `https://demi-api-fc-prod.azurewebsites.net` (helm values,
+  6cdc9e-prod) and one mirror write verified. THEN `az functionapp stop` old `demi-api-prod`.
+  Delete one week later — but the old apps' containers are also the only documented SSH-tunnel
+  path to the Cosmos/Search data planes (Flex has no SSH); keep one stopped app per env as the
+  startable jump box, or build a replacement first.
 - Phase 5 deletions in eagle-demi: `azure/modules/api-web-app.bicep`, `deploy-azure.sh` api
   target, `RATE_LIMIT_MAX_REQUESTS` params, `vnet.bicep`.
 - Revoke old machine keys EXCEPT the extractor's.
