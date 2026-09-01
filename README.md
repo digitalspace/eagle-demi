@@ -212,7 +212,7 @@ implementation:
 
 | | |
 |---|---|
-| API | `demi-api-fc-test` — `kind: functionapp,linux` on the **B1 Basic** plan `demi-plan-fc-test` (1 vCPU / 1.75 GB, single worker). Manage with `az webapp` |
+| API | `demi-api-fc-test` — Functions **Flex Consumption** (FC1) on plan `demi-plan-fc-test`, scale 0-20 instances, 2048 MB each. Manage with `az functionapp` |
 | Database | **Azure Cosmos DB for NoSQL** (`@azure/cosmos`), account `demi-cosmos-test` |
 | Search | **Azure AI Search** `demi-search-test` — Basic, keyless, private endpoint only. Live indexes `chunks`, `projects`, `documents` since the cutover on 2026-08-22. The retired `demi-*` indexes are still present and still indexing — they are the rollback target (`azure/search/README.md`) |
 | Object store | `nrs.objectstore.gov.bc.ca`, bucket `asnpnn` (S3-compatible, `minio` client) |
@@ -498,8 +498,8 @@ Door endpoint was verified in a browser. Two things from that generalise, and on
 - **Take the origin out of `frontendHostNames` before deleting the host.** An `*.azurewebsites.net`
   name returns to Azure's global pool on deletion, so an entry left in `CORS_ORIGIN` is a
   cross-origin position against `demi-api-fc-test` that someone else can register.
-- `demi-api-fc-test` was never on that plan — it runs on `demi-plan-fc-test`, which is unaffected. Worth
-  checking before any future plan deletion here, because the two names differ by one token.
+- `demi-api-fc-test` runs on its own plan `demi-plan-fc-test`. Check plan tenancy before any
+  deletion here, because plan names differ by one token.
 
 ### Three manual steps the templates cannot do
 

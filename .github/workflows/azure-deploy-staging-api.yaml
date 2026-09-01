@@ -56,9 +56,7 @@ permissions:
   id-token: write
   contents: read
 
-# Two apps, one zip, for the length of the Flex migration: the B1 app keeps serving test traffic
-# while the FC1 app is proven, and rproxy is flipped only in Phase 4. Both names live here so the
-# steps below carry no literal.
+# The Flex app is the only API target; the name lives here so steps carry no literal.
 env:
   API_FLEX_APP_NAME: demi-api-fc-test
 
@@ -112,28 +110,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-
-      # The Flex app does not exist until `azure/modules/api-function-flex.bicep` is deployed by
-      # hand. Skip rather than fail, so this workflow keeps working before and after that.
-      # The probe cannot tell "not created yet" from "demi-cicd-test holds no role on it" — the
-      # Website Contributor grant on demi-api-fc-test is a manual prerequisite, like the app.
-      - name: Does the Flex app exist yet?
-        id: flex
-        run: |
-          if az functionapp show -g ${{ vars.AZURE_RESOURCE_GROUP }} -n "$API_FLEX_APP_NAME" \
-               --query name -o tsv >/dev/null 2>&1; then
-            echo "found=true" >> $GITHUB_OUTPUT
-          else
-            echo "found=false" >> $GITHUB_OUTPUT
-            echo "⏭️  $API_FLEX_APP_NAME not present — skipping the Flex deploy." >> $GITHUB_STEP_SUMMARY
-          fi
-
       # `config-zip`, not `scripts/deploy-azure.sh`. That script POSTs to Kudu and then polls
       # /api/config for its BUILD_ID; a Flex app has no Kudu wwwroot to POST into — it publishes to
       # the deployment blob container declared in the module. Same zip as the step above, packaged
       # again because the script deletes nothing behind it and BUILD_ID must be stamped in.
+      # No existence probe: the Flex app is permanent; a missing app must fail loudly, not skip.
       - name: Deploy API to the Flex app
-        if: steps.flex.outputs.found == 'true'
         run: |
           set -euo pipefail
           export BUILD_ID="$(git describe --tags --always --dirty)-$(date -u +%H%M%S)"
@@ -150,7 +132,6 @@ jobs:
       # `api` is the catch-all route in api/index.js. Matched exactly — `grep api` also matches
       # `apiRoot`, which registers from the same block and so proves nothing extra.
       - name: Verify the api function is registered
-        if: steps.flex.outputs.found == 'true'
         run: |
           for i in {1..10}; do
             if az functionapp function list -g ${{ vars.AZURE_RESOURCE_GROUP }} \
