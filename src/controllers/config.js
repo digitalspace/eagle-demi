@@ -35,11 +35,20 @@ const OVERRIDABLE_KEYS = [
 //
 // Absent locally (`yarn start`, tests), where the fallback is the env var and then 'unknown'.
 const BUILD_ID = (() => {
-  try {
-    return fs.readFileSync(path.join(__dirname, '../../build-id.txt'), 'utf8').trim();
-  } catch {
-    return process.env.BUILD_ID || 'unknown';
+  const candidates = [
+    path.join(__dirname, '../../build-id.txt'),
+    path.join(process.cwd(), 'build-id.txt')
+  ];
+  const errors = [];
+  for (const candidate of candidates) {
+    try {
+      return fs.readFileSync(candidate, 'utf8').trim();
+    } catch (err) {
+      errors.push(`${candidate} (${err.code})`);
+    }
   }
+  logger.warn(`build-id.txt not found, tried: ${errors.join(', ')}`);
+  return process.env.BUILD_ID || 'unknown';
 })();
 
 /**
