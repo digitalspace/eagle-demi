@@ -88,6 +88,15 @@ function verify(record, secret, now = Date.now()) {
   if (presentedBuf.length !== storedBuf.length) return false;
   if (!crypto.timingSafeEqual(presentedBuf, storedBuf)) return false;
 
+  return isLive(record, now);
+}
+
+/**
+ * Lifecycle half of `verify`: not revoked, not expired. Split out for the APIM path, where the
+ * gateway has already proven the caller and there is no secret of ours to check.
+ */
+function isLive(record, now = Date.now()) {
+  if (!record) return false;
   if (record.revokedAt) return false;
   // An unparseable date must not read as "never expires" — NaN loses every comparison.
   if (record.expiresAt && !(new Date(record.expiresAt).getTime() > now)) return false;
@@ -106,6 +115,7 @@ module.exports = {
   generateKey,
   parseKey,
   verify,
+  isLive,
   defaultExpiry,
   sha256
 };

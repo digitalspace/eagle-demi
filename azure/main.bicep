@@ -244,7 +244,15 @@ param syncTeamsSchedule string = ''
 @description('Absolute URL the availability web test GETs. Empty deploys no test.')
 param availabilityUrl string = ''
 
+// APIM Consumption in front of the Flex app: subscription keys and per-consumer rate limits. Off
+// everywhere but test — a prod re-apply is a separate, deliberate deploy.
+@description('Deploy the API Management gateway. Requires apiFlexSubnetId, since it fronts that app.')
+param deployApim bool = false
+
 // Mandatory Cost Management Tags applied across ALL resources
+// Created out of band in the vault, shared by the gateway (named value) and the app (app setting).
+var apimGatewaySecretName = 'apim-gateway-secret'
+
 var defaultTags = {
   Project: 'DEMI'
   Application: 'eagle-demi'
@@ -491,6 +499,25 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     auditWorkspaceId: auditLogs.outputs.workspaceId
     frontendHostNames: frontendHostNames
     linkBaseUrl: linkBaseUrl
+    // VaultName/SecretName rather than SecretUri: the secret is created out of band, so no module
+    // outputs its versioned identifier. Empty until APIM is deployed, which disables the app's
+    // gateway trust branch entirely.
+    apimGatewaySecretRef: deployApim ? '@Microsoft.KeyVault(VaultName=${keyVault.outputs.vaultName};SecretName=${apimGatewaySecretName})' : ''
+  }
+}
+
+// 7c. The gateway. After the Flex app because it fronts it, and skipped whenever that app is.
+module apim './modules/apim.bicep' = if (deployApim && !empty(apiFlexSubnetId)) {
+  name: 'deploy-apim'
+  params: {
+    location: location
+    tags: defaultTags
+    apimName: 'demi-apim-${environmentName}'
+    // Same list the cost and audit alerts notify; APIM takes one address, not an array.
+    publisherEmail: contactEmails[0]
+    apiHostName: apiFunctionFlex!.outputs.apiFunctionAppHostName
+    keyVaultName: keyVault.outputs.vaultName
+    gatewaySecretName: apimGatewaySecretName
   }
 }
 
@@ -543,6 +570,8 @@ output frontendStaticSiteHostName string = deployStaticSite ? staticSite!.output
 // The publish target for `scripts/deploy-azure.sh frontend` — carries a uniqueString suffix, so it
 // goes into the repository variable AZURE_FRONTEND_STORAGE_ACCOUNT rather than a literal in CI.
 output frontendStorageAccountName string = deployStaticSite ? staticSite!.outputs.storageAccountName : ''
+// The gateway machine and browser traffic is moved onto. Empty until deployApim is set.
+output apimGatewayUrl string = (deployApim && !empty(apiFlexSubnetId)) ? apim!.outputs.gatewayUrl : ''
 output searchEndpoint string = deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
 output cosmosEndpoint string = cosmos.outputs.cosmosEndpoint
 output identityClientId string = identity.outputs.clientId
