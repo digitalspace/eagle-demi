@@ -56,6 +56,8 @@ case "$ENVIRONMENT" in
   test)
     SUBSCRIPTION='7897ceb1-9a86-4639-87d7-7f9ff67142b3'
     RESOURCE_GROUP='c4b0a8-test-rg'
+    # Direct azurewebsites.net access is platform-403'd since the APIM cutover; probe the gateway.
+    APIM_HOST="demi-apim-${ENVIRONMENT}.azure-api.net"
     ;;
   dev)
     SUBSCRIPTION='d2f8d048-2af3-44fd-81cc-858c040001f2'
@@ -118,6 +120,7 @@ if grep -Eq '^param deployLegacyApi *= *false' "$PARAM_FILE"; then
 else
   API_APP="demi-api-${ENVIRONMENT}"
 fi
+PROBE_HOST="${APIM_HOST:-${API_APP}.azurewebsites.net}"
 
 # Read one key out of an OpenShift secret. OpenShift is the source of truth for every credential
 # this template deploys — NOT the app settings.
@@ -260,7 +263,7 @@ assert_secrets_survived() {
   probe_admin_key() {
     curl -s -o /dev/null -w '%{http_code}' --max-time 60 \
       -H "X-Api-Key: ${ADMIN_API_KEY}" \
-      "https://${API_APP}.azurewebsites.net/api/db/stats" 2>/dev/null || echo 000
+      "https://${PROBE_HOST}/api/db/stats" 2>/dev/null || echo 000
   }
   for attempt in 1 2 3; do
     code=$(probe_admin_key)
