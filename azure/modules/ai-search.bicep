@@ -91,8 +91,7 @@ resource search 'Microsoft.Search/searchServices@2025-05-01' = {
     //
     // The consequence is operational, not architectural: nothing outside the VNet can reach the
     // data plane, so index and indexer definitions cannot be POSTed from a workstation. They go in
-    // from inside the VNet — the App Service's Kudu container resolves private endpoints
-    // (verified: the Cosmos endpoint resolves to a 10.x address there).
+    // from the devbox VM (`demi-devbox-<env>`), which sits inside the VNet.
     publicNetworkAccess: 'Disabled'
   }
 }

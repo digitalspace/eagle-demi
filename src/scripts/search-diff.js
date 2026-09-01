@@ -46,11 +46,10 @@
  * Exit code is 1 when any case DIFFs, so it can gate later work.
  */
 
-// `test.projects.eao.gov.bc.ca` is behind rproxy's basic auth. `demi-api-test.azurewebsites.net`
+// `test.projects.eao.gov.bc.ca` is behind rproxy's basic auth. `demi-api-fc-test.azurewebsites.net`
 // is the SAME app answering the same routes anonymously, and a contract comparison gains nothing
-// from the proxy hop. Overridable because needing a secret to read a public contract is the reason
-// this oracle had never been baselined:
-//   DEMI_DIFF_URL=https://demi-api-test.azurewebsites.net/api/search node src/scripts/search-diff.js
+// from the proxy hop:
+//   DEMI_DIFF_URL=https://demi-api-fc-test.azurewebsites.net/api/search node src/scripts/search-diff.js
 const DEMI_URL = process.env.DEMI_DIFF_URL
   || 'https://test.projects.eao.gov.bc.ca/demi-search/search';
 const EAGLE_URL = 'https://projects.eao.gov.bc.ca/eagle-search/search';

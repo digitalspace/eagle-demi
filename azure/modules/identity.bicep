@@ -1,11 +1,10 @@
 // User-assigned managed identity for DEMI.
 //
-// Deliberately created BEFORE the Cosmos and App Service modules and passed into both.
-// Granting Cosmos data-plane roles to the App Service's own system-assigned principal would
-// make cosmos-db depend on api-web-app while api-web-app depends on cosmos-db for its
-// settings — a Bicep module cycle. A user-assigned identity breaks that, and is the better
-// model anyway: it outlives the app, survives an app recreate, and the same identity can be
-// granted to the Function App, a future container job, and operator scripts.
+// Deliberately created BEFORE the Cosmos and API modules and passed into both. Granting Cosmos
+// data-plane roles to the app's own system-assigned principal would make cosmos-nosql depend on
+// the API module while the API module depends on it for settings — a Bicep module cycle. A
+// user-assigned identity breaks that, outlives the app, and is shared by the devbox and the
+// operator scripts.
 
 @description('Location for the managed identity')
 param location string = resourceGroup().location

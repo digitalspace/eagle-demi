@@ -160,13 +160,8 @@ const config = {
   keycloakEnabled:       process.env.KEYCLOAK_ENABLED !== 'false',
   // Tag baked into minted API keys so a dev key is visibly not a prod key. Cosmetic only —
   // nothing authorises on it.
-  // ENVIRONMENT, and only ENVIRONMENT: it is what api-web-app.bicep sets. This used to read
-  // ENVIRONMENT_NAME, which is set nowhere, so it silently resolved to 'dev' in every environment.
-  // Caught when the first staging analytics rollup came back stamped Env: dev. Not cosmetic — this
-  // value labels every audit row with the environment its action happened in, and tags minted API
-  // keys, whose stated purpose is making a dev key visibly not a prod key. Both were lying on test.
-  // ENVIRONMENT_NAME is gone rather than kept as a fallback: a dead name at the head of the chain
-  // reads as the primary and invites the same mistake again.
+  // ENVIRONMENT, and only ENVIRONMENT: it is what api-function-flex.bicep sets. It labels every
+  // audit row and tags minted API keys, so a name no template sets resolves to 'dev' everywhere.
   environmentName:       process.env.ENVIRONMENT || 'dev',
   // Keycloak clients (azp) permitted to call this API at all. Empty admits every client, which is
   // why the guard below refuses to boot test or prod on an empty list. See helpers/auth.isAllowedClient.

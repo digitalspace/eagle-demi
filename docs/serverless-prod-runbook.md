@@ -19,10 +19,8 @@ Flex instance warm), and the reconcile drift alert.
 
 1. Pick the release tag: the eagle-demi tag running on test, unchanged.
 2. `azure/main.prod.bicepparam` already carries the release state (verify, don't re-edit):
-   `deployLegacyApi = false` (the switch that stops a prod apply creating `demi-plan-prod` and
-   colliding with `plan-eagle-search-prod`'s subnet link), `deployApim = true`,
-   `apiFlexSubnetId` = the prod Flex subnet, `budgetStartDate = '2026-08-01'` (read live
-   2026-09-01; an existing budget rejects startDate changes).
+   `deployApim = true`, `apiFlexSubnetId` = the prod Flex subnet, `budgetStartDate = '2026-08-01'`
+   (read live 2026-09-01; an existing budget rejects startDate changes).
 3. Gateway secret, control plane (data plane is blocked by the private endpoint AND the
    `Enforce-GR-KeyVault` guardrail; control plane bypasses both):
 
@@ -37,8 +35,7 @@ Flex instance warm), and the reconcile drift alert.
 
 1. `./scripts/deploy-infra.sh prod` (what-if is the default). Expect ONLY creates: FC1 plan
    `demi-plan-fc-prod`, app `demi-api-fc-prod`, its storage, `demi-apim-prod` and children.
-   Anything touching `plan-eagle-search-prod`, `eagle-search-api-prod`, or the existing
-   `demi-api-prod` beyond app settings = stop and read.
+   Anything touching `plan-eagle-search-prod` or `eagle-search-api-prod` = stop and read.
 2. `CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live`. If the APIM named value fails 403,
    that is the same-deployment RBAC propagation race — plain rerun succeeds.
 3. Deploy the release tag to `demi-api-fc-prod` through the prod workflow's Flex step
@@ -65,26 +62,19 @@ Flex instance warm), and the reconcile drift alert.
    tag, `gh workflow run "Deploy to Prod" -f version=<tag>`; `oc rollout restart deploy/rproxy` in
    `6cdc9e-prod` if config does not roll. eao-nginx flips before anything else, per prod rules.
 2. eagle-public prod search in a real browser.
-3. eagle-api pushes to the OLD `demi-api-prod` host and keeps doing so at flip time — both apps
-   share Cosmos, so nothing breaks. Its `DEMI_API_BASE` MUST move to `demi-api-fc-prod` before
-   the old app stops (decommission list). Moving it to `/machine` + subscription key is a
-   separate eagle-api change. The extractor stays direct to the fc host permanently (APIM's
-   30 s cap vs NDJSON ingest).
+3. eagle-api's `DEMI_API_BASE` must name `demi-api-fc-prod` (helm values, 6cdc9e-prod). Moving it
+   to `/machine` + subscription key is a separate eagle-api change. The extractor stays direct to
+   the fc host permanently (APIM's 30 s cap vs NDJSON ingest).
 
 ## After one clean week
 
 - FIRST: eagle-api `DEMI_API_BASE` → `https://demi-api-fc-prod.azurewebsites.net` (helm values,
-  6cdc9e-prod) and one mirror write verified. THEN `az functionapp stop` old `demi-api-prod`.
-  Delete one week later — but the old apps' containers are also the only SSH-tunnel path to the
-  Cosmos/Search data planes (Flex has no SSH), so `demi-devbox-prod` has to be deployed and proven
-  first (`deployDevbox`, README "Running anything against the database").
-- Phase 5 deletions in eagle-demi: `azure/modules/api-web-app.bicep`, `deploy-azure.sh` api
-  target, `RATE_LIMIT_MAX_REQUESTS` params, `vnet.bicep`.
+  6cdc9e-prod) and one mirror write verified.
 - Revoke old machine keys EXCEPT the extractor's.
 - `plan-eagle-search-prod` B3 downsize is a separate saving, owned by eagle-search-api-prod.
 
 ## Rollback
 
-Any point before the flip: nothing moved, delete nothing, old app untouched. After the flip:
-revert the one `values-prod.yaml` line and redeploy eao-nginx; `az functionapp start demi-api-prod`
-if it was stopped. Cosmos and Search are shared by both apps — no data movement either way.
+Any point before the flip: nothing moved, delete nothing. After the flip: revert the one
+`values-prod.yaml` line and redeploy eao-nginx, or set the `SEARCH_API_PATH` kill switch
+(`prod-flip-runbook.md`) so eagle-api serves search from Mongo.

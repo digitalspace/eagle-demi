@@ -3,7 +3,7 @@
 // The comma-separated CORS_ORIGIN allowlist — the branch every deployed environment runs.
 //
 // `test/router.boot.test.js` pins the UNSET fallback, which no deployed environment takes: Azure
-// always sets CORS_ORIGIN (api-web-app.bicep passes the frontend host name through). So the parsing
+// always sets CORS_ORIGIN (api-function-flex.bicep passes the frontend host name through). So the parsing
 // in `src/http/router.js` was the one part of this with no test at all, and a misconfiguration on
 // exactly that path blocked every API call from the DEMI frontend for a period after the Front Door
 // cutover — with a green suite and every header check passing.

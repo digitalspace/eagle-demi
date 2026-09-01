@@ -1,9 +1,4 @@
-// DEMI REST API on Flex Consumption (FC1) — the serverless replacement for api-web-app.bicep's B1
-// app. Both modules deploy at once during the blue/green: `demi-api-<env>` keeps serving while
-// `demi-api-fc-<env>` is proven, and rproxy is flipped afterwards.
-//
-// Same parameter surface as api-web-app.bicep, minus `existingServerFarmId` (Flex is one app per
-// plan) and plus `identityPrincipalId`, which the storage role assignments below need.
+// DEMI REST API on Flex Consumption (FC1) — `demi-api-fc-<env>`, the only API app.
 //
 // Unlike extractor.bicep — whose header says its connection-string approach must not become the
 // pattern — nothing here holds a storage key: the deployment container and the host's own
@@ -32,8 +27,8 @@ param minioSecretKey string
 @description('Azure AI Search endpoint, e.g. https://demi-search-test.search.windows.net. Empty disables chunk search rather than failing it.')
 param searchEndpoint string = ''
 
-// The three live index names. Flipping them back to `demi-chunks`/`demi-projects`/`demi-documents`
-// is the whole rollback of the 2026-08-22 rename; see api-web-app.bicep for the gate that was met.
+// The three live index names, pinned to the code defaults in src/search/ai-search.js — a name the
+// app reads but this template omits is DELETED by the whole-collection appSettings PUT.
 @description('Azure AI Search index holding document chunks.')
 param searchIndex string = 'chunks'
 
@@ -56,8 +51,7 @@ param enrichmentSources string = ''
 param summaryEnabled bool = false
 
 // Flex needs a subnet delegated to `Microsoft.App/environments`, min /27, not shared with private
-// endpoints. That is NOT the `Microsoft.Web/serverFarms` subnet the B1 app integrates into, so the
-// two apps take different subnets and this is a separate parameter rather than a reused one.
+// endpoints — so it cannot be the private-endpoint subnet.
 @description('Delegated subnet for Flex VNet integration. Required: Cosmos, Key Vault and AI Search are all private-endpoint only.')
 param virtualNetworkSubnetId string
 
@@ -171,8 +165,6 @@ var blobDataOwnerRoleId = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'
 var queueDataContributorRoleId = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
 var tableDataContributorRoleId = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 
-// Its own account, not the B1 app's: both apps are live during the blue/green, and two modules
-// PUTting one storage account would race.
 resource apiStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName
   location: location
@@ -229,8 +221,7 @@ resource tableDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-0
   }
 }
 
-// One app per plan: a Flex plan cannot be shared, which is why `existingServerFarmId` has no
-// counterpart here and prod leaves `plan-eagle-search-prod` behind.
+// One app per plan: a Flex plan cannot be shared, so there is no "join an existing plan" parameter.
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location

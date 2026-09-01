@@ -3,9 +3,6 @@
 # =============================================================================
 # Publishes the Angular bundle to the `$web` container of the static-website storage
 # account, which is the origin for the Front Door profile that lives in eagle-search.
-# It replaces the App Service `demi-frontend-test`, which this change stops deploying to.
-# That App Service and its plan are NOT deleted by the change — ARM deploys incrementally, so
-# they keep running and billing until the decommission commands in the README are run by hand.
 #
 # Frontend only. The API has its own file, `azure-deploy-staging-api.yaml`, and its own
 # trigger. They were one workflow until 2026-08-05, which meant an Angular-only
@@ -19,7 +16,7 @@
 # deployment, and that is deliberate.
 #
 # The credential is scoped to match: `demi-cicd-test` holds Website Contributor on
-# demi-api-test, plus Storage Blob Data Contributor on the static-website account
+# demi-api-fc-test, plus Storage Blob Data Contributor on the static-website account
 # (assigned by `azure/modules/static-site.bicep` from `frontendUploaderPrincipalId`),
 # plus Storage Account Contributor on that SAME account and nothing wider — see below.
 # Nothing at resource-group scope, so it cannot run an ARM deployment even if a job
@@ -70,7 +67,7 @@ jobs:
     # Subscription, resource group and the two Azure ids all come from this
     # environment — only the app names below are pinned in the file.
     #
-    # STAGING IS SPELLED `-test` IN AZURE: `demi-api-test` and the `demiwebtest…`
+    # STAGING IS SPELLED `-test` IN AZURE: `demi-api-fc-test` and the `demiwebtest…`
     # storage account in `c4b0a8-test-rg`, subscription `c4b0a8-test`. The environment
     # model is dev = sandbox (redeployable, not wired to CI), test = staging, prod = prod.
     #

@@ -1,8 +1,8 @@
 // Document blob storage for DEMI — keyless, per-environment container.
 //
-// WHY A SEPARATE ACCOUNT from the `demistg*` one in api-web-app.bicep: that account holds
-// Function host state and its keys are listed by the runtime, so shared-key access cannot be
-// switched off there. Documents are the system of record for 60,661 files and get the opposite
+// WHY A SEPARATE ACCOUNT from the one in api-function-flex.bicep: that account holds Function
+// host state and its keys are listed by the runtime, so shared-key access cannot be switched off
+// there. Documents are the system of record for 60,661 files and get the opposite
 // treatment — no shared keys at all, soft delete, versioning. Storage accounts have no fixed
 // cost, so separating them is free.
 //

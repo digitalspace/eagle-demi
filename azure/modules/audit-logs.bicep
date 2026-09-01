@@ -266,7 +266,7 @@ resource eventsHourlyTable 'Microsoft.OperationalInsights/workspaces/tables@2025
   }
 }
 
-// Resource-log tables fed by the diagnostic settings in api-web-app.bicep and cosmos-nosql.bicep.
+// Resource-log tables fed by the diagnostic settings in api-function-flex.bicep and cosmos-nosql.bicep.
 //
 // Declared for exactly the reason eventsHourlyTable above is: a table that arrives in this
 // workspace on its own inherits the WORKSPACE default of 30 days, and an audit record that expires

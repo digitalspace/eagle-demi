@@ -22,7 +22,7 @@
  * Exit: 0 all cells passed, 1 a cell missed its prediction, 2 aborted, 3 a leg was inconclusive.
  */
 
-const BASE = process.env.DEMI_API_BASE || 'https://demi-api-test.azurewebsites.net';
+const BASE = process.env.DEMI_API_BASE || 'https://demi-api-fc-test.azurewebsites.net';
 const ADMIN = process.env.ADMIN_API_KEY;
 
 // Documents reach the search index only on the indexer's PT5M pass, so the search leg has to wait

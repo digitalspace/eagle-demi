@@ -1206,10 +1206,8 @@ test('the deploy template pins all three index names to the code defaults', () =
   // from the template it deploys alongside points the app at nothing — an unknown index is a 404 per
   // query, which the frontend renders as an empty results table.
   //
-  // This pin is what caught the cutover being done by halves: flipping only the template turned this
-  // test red immediately. Both sides now read `chunks`/`projects`/`documents`, matching the
-  // definitions under `azure/search/` and the live indexes on `demi-search-test` since 2026-08-22.
-  // Rolling back means moving BOTH back together, for the same reason.
+  // Both sides read `chunks`/`projects`/`documents`, matching the definitions under `azure/search/`
+  // and the live indexes on `demi-search-test`. Rolling back means moving BOTH back together.
   //
   // The second half of the pair matters just as much. `appSettings` is a WHOLE-COLLECTION PUT, so a
   // name the app reads but the template omits is DELETED on the next deploy and the value silently
@@ -1217,7 +1215,7 @@ test('the deploy template pins all three index names to the code defaults', () =
   const fs = require('node:fs');
   const path = require('node:path');
   const bicep = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'azure', 'modules', 'api-web-app.bicep'), 'utf8');
+    path.join(__dirname, '..', '..', 'azure', 'modules', 'api-function-flex.bicep'), 'utf8');
 
   const saved = { ...process.env };
   delete process.env.SEARCH_INDEX;

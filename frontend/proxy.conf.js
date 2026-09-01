@@ -12,7 +12,7 @@ const envJs = fs.readFileSync(path.join(__dirname, 'public', 'env.js'), 'utf-8')
 const sandbox = { __env: {} };
 vm.runInNewContext(envJs, sandbox);
 
-const target = sandbox.__env.DEV_PROXY_TARGET || sandbox.__env.API_LOCATION || 'https://demi-api-test.azurewebsites.net';
+const target = sandbox.__env.DEV_PROXY_TARGET || sandbox.__env.API_LOCATION || 'https://demi-apim-test.azure-api.net';
 
 const proxyRule = {
   target,
