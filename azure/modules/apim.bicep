@@ -214,6 +214,7 @@ resource machineSubscriptions 'Microsoft.ApiManagement/service/subscriptions@202
 
 // Global policy. The two backend headers are deleted first because the Function App host stays
 // publicly reachable: anything a client sends under these names is attacker input.
+// No <base/> here: the global scope has no parent, so APIM rejects it; backend forwards explicitly.
 resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-05-01' = {
   parent: apim
   name: 'policy'
@@ -221,7 +222,6 @@ resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-05-01' = {
     format: 'rawxml'
     value: '''<policies>
   <inbound>
-    <base />
     <set-header name="X-Gateway-Secret" exists-action="delete" />
     <set-header name="X-APIM-Subscription" exists-action="delete" />
     <set-header name="X-Gateway-Secret" exists-action="override">
@@ -231,9 +231,9 @@ resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-05-01' = {
       <value>@(context.Subscription?.Name ?? "")</value>
     </set-header>
   </inbound>
-  <backend><base /></backend>
-  <outbound><base /></outbound>
-  <on-error><base /></on-error>
+  <backend><forward-request /></backend>
+  <outbound />
+  <on-error />
 </policies>'''
   }
   dependsOn: [
