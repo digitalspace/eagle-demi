@@ -88,6 +88,9 @@ runcmd:
   - curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg
   - echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ noble main" > /etc/apt/sources.list.d/azure-cli.list
   - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  # Explicit: the azure-cli source list above is unread until an update, and the NodeSource script's
+  # own `apt update` is a side effect that install must not depend on.
+  - apt-get update
   - apt-get install -y azure-cli nodejs
   - corepack enable
   - git clone --depth 1 https://github.com/digitalspace/eagle-demi /opt/eagle-demi
