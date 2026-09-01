@@ -209,7 +209,11 @@ def package_api(repo_root, zip_path):
         # roughly two minutes after a deploy, and that old container reads the new setting when it
         # restarts and reports the new value quite happily. Only a file inside the package can
         # distinguish new code from an old worker with fresh configuration.
-        z.writestr("build-id.txt", os.environ.get("BUILD_ID", "unknown"))
+        # Explicit 0644: writestr's default entry mode is unreadable to the Flex worker user
+        # (EACCES at runtime, BUILD_ID falls back to "unknown"); z.write entries inherit fs modes.
+        stamp = zipfile.ZipInfo("build-id.txt")
+        stamp.external_attr = 0o100644 << 16  # S_IFREG | 0644
+        z.writestr(stamp, os.environ.get("BUILD_ID", "unknown"))
 
     print(f"Packaged {count} files into {zip_path} ({extra} from re-included data dirs)")
 
