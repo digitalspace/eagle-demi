@@ -1283,6 +1283,35 @@ test('the project search selects the vis dial map', () => {
     'without vis every per-record dial is silently inert on the project search path');
 });
 
+// Every searchable projects field is analyzed `en.microsoft`, which strips stopwords: `keywords=mine`
+// matched none of the 32 projects named "... Mine". `nameTokens` is `name` again under the
+// stopword-free `filename` analyzer, and BOTH callers need it — the same query runs against the
+// projects index from `searchProjects` and from `searchDocuments`' project-name leg.
+test('project searches search the stopword-free copy of the name', async (t) => {
+  await t.test('searchProjects', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchProjects({ filter: null, keywords: 'mine' });
+
+    assert.ok(calls[0].body.searchFields.split(',').includes('nameTokens'),
+      `got: ${calls[0].body.searchFields}`);
+  });
+
+  await t.test('the project-name leg of searchDocuments', async (tt) => {
+    const calls = captureFetch(tt, (i) => (i === 1
+      ? { json: { value: [{ id: '207' }], '@odata.count': 1 } }
+      : { json: { value: [{ id: 'd1' }], '@odata.count': 1 } }));
+
+    await aiSearch.searchDocuments({
+      filter: null, projectFilter: null, keywords: 'mine', top: 10
+    });
+
+    // Leg two: direct documents, projects, documents by project.
+    assert.ok(calls[1].body.searchFields.split(',').includes('nameTokens'),
+      `got: ${calls[1].body.searchFields}`);
+  });
+});
+
 // THE INVARIANT THE CHUNK WINDOW RESTS ON. `group-chunks.windowFor` is handed SERVICE_MAX_TOP so a
 // page costs one request; if that ever exceeded MAX_PAGE_ROWS, `runSearch` would clamp `top` below
 // the window while `skip` still advanced by the whole window — the unreachable-chunk gap, back
