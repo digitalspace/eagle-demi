@@ -1,5 +1,6 @@
 import { Component, OnInit, OnDestroy, AfterViewInit, HostListener, inject, effect, signal, computed, untracked, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { UserdataService, SavedLasso } from '../../services/userdata.service';
@@ -12,6 +13,9 @@ import 'leaflet.markercluster';
 // window.L. A namespace import is the bundler's frozen copy and misses it in production.
 const L = (window as unknown as { L: typeof Leaflet }).L;
 
+/** Where a selection picked from a BC-wide view lands. Selecting never zooms in past this. */
+const ORIENTATION_ZOOM = 8;
+
 /** One checkbox row inside the Filters drawer. */
 interface FilterOption { value: string; label: string; checked: boolean }
 interface FilterSection { id: string; label: string; searchable: boolean; searchValue: string; options: FilterOption[] }
@@ -21,7 +25,7 @@ interface FieldRow { key: string; value: string; source: 'TRACK' | 'EPIC' | 'DEM
 @Component({
   selector: 'app-map-explorer',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FormsModule],
   templateUrl: './map-explorer.component.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
@@ -38,6 +42,10 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   private boundariesLayers = new Map<string, any>();
   private markerClusterGroup: any = null;
   private markersMap = new Map<any, any>();
+  /** The selection's stand-in on the `selected-marker` pane, and the clustered original it replaces. */
+  private poppedMarker: any = null;
+  private poppedOriginal: any = null;
+  private poppedProjectId: string | number | null = null;
   private wildfireLayerGroup: any = null;
 
   showWildfires = signal<boolean>(false);
@@ -46,6 +54,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   lassoActive = signal<boolean>(false);
   /** Saved-area UI: the name form beside the lasso chip, and the dropdown in the control stack. */
   savingLasso = signal<boolean>(false);
+  savingArea = signal<boolean>(false);
   lassoName = signal<string>('');
   savedOpen = signal<boolean>(false);
   private lassoLayer: any = null;
@@ -58,7 +67,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   detailsExpanded = signal<boolean>(false);
   sourceTab = signal<'all' | 'track' | 'epic' | 'demi'>('all');
   sortBy = signal<'relevance' | 'name'>('relevance');
-  /** Rows added per "Load N more" in the left rail — the profile's "Results per page" pref. */
+  /** Rows added per "Load N more" in the left rail — the "Results per page" pref. */
   private pageSize = readPrefs().perPage;
   visibleCount = signal<number>(this.pageSize);
   openSections = signal<string[]>(['sector']);
@@ -206,7 +215,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     push('sector', this.service.sectorFilter());
     push('region', this.service.regionFilter());
     for (const [layer, names] of Object.entries(this.service.boundaryFilter())) push(layer, names);
-    if (this.service.lassoPolygon()) rows.push({ id: 'lasso:area', label: 'Lasso area' });
+    if (this.service.lassoPolygon()) rows.push({ id: 'lasso:area', label: this.service.lassoLabel() ?? 'Lasso area' });
     return rows;
   });
 
@@ -367,6 +376,13 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         { color: '#013366', weight: 3, fillColor: '#013366', fillOpacity: 0.1 }).addTo(this.map);
     });
 
+    // Every selection path — rail row, marker click, reset — lands on this signal, so focus,
+    // accent and dimming are driven from one place and cannot disagree.
+    effect(() => {
+      const proj = this.service.selectedProject();
+      untracked(() => this.focusSelectedMarker(proj));
+    });
+
     // Reactive effect to render or remove active B.C. Wildfires
     effect(() => {
       const active = this.showWildfires();
@@ -439,7 +455,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     if (sectionId === 'gating') this.service.toggleFilterValue(this.service.gatingFilter, value);
     else if (sectionId === 'sector') this.service.toggleFilterValue(this.service.sectorFilter, value);
     else if (sectionId === 'region') this.setRegionFilter(value);
-    else if (sectionId === 'lasso') this.service.lassoPolygon.set(null);
+    else if (sectionId === 'lasso') { this.service.lassoPolygon.set(null); this.service.lassoLabel.set(null); }
     else this.setBoundaryFilter(sectionId, value);
   }
 
@@ -491,6 +507,10 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   private initMap() {
     try {
       this.map = L.map('demi-map', { zoomControl: false, preferCanvas: true }).setView([54.0, -125.0], 5);
+      // Above markerPane (600) and below popupPane (700): the selection is never inside a cluster
+      // bubble, so it needs a layer of its own that always draws on top.
+      this.map.createPane('selected-marker').style.zIndex = '650';
+      this.map.on('click', this.onMapClick);
       // The pane is sized by flex after first paint; Leaflet keeps the size it measured at init.
       const host = document.getElementById('demi-map');
       if (host) {
@@ -540,6 +560,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         this.boundariesLayers.clear();
         this.markerClusterGroup = null;
         this.markersMap.clear();
+        this.poppedMarker = null;
+        this.poppedOriginal = null;
+        this.poppedProjectId = null;
       }
     } catch (err) {
       console.warn('Leaflet Map destruction skipped:', err);
@@ -582,7 +605,9 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     if (!this.markerClusterGroup) {
       this.markerClusterGroup = L.markerClusterGroup({
         showCoverageOnHover: false,
-        maxClusterRadius: 40,
+        maxClusterRadius: 30,
+        // Past this zoom every marker stands on its own, so a deep zoom never re-clusters.
+        disableClusteringAtZoom: 13,
         spiderfyOnMaxZoom: true,
         chunkedLoading: true,
         chunkInterval: 50
@@ -617,12 +642,6 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
 
         const marker = L.marker([lat, lng], { icon: customIcon });
 
-        marker.bindPopup(`
-          <div class="popup-title">${p.name}</div>
-          <div class="popup-meta"><strong>Sector:</strong> ${p.sector ?? ''}</div>
-          <div class="popup-meta"><strong>Status:</strong> ${p.status ?? ''}</div>
-        `);
-
         marker.on('click', () => {
           this.selectProject(p);
         });
@@ -631,6 +650,12 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
         this.markersMap.set(p.id, marker);
       }
     });
+
+    // A narrower filter can drop the project that is selected; its popped marker goes with it.
+    if (this.poppedProjectId !== null && !this.markersMap.has(this.poppedProjectId)) {
+      this.releaseSelectedMarker();
+      document.getElementById('demi-map')?.classList.remove('demi-map--selection');
+    }
   }
 
   private loadRegionalBoundaries() {
@@ -769,17 +794,100 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     this.service.resetSelection();
   }
 
+  /** Picking the row that is already selected clears it, the way a toggle button does. */
   selectProject(proj: Project) {
-    this.service.selectProject(proj);
+    if (this.service.selectedProject()?.id === proj.id) this.clearSelection();
+    else this.service.selectProject(proj);
+  }
 
-    if (this.map && proj.centroid) {
-      const [lng, lat] = proj.centroid;
-      this.map.setView([lat, lng], 8, { animate: true });
+  /**
+   * The one deselect. Four doors reach it: the card's ✕, Escape, a click on the map background,
+   * and re-clicking the selected rail row. All the visual teardown runs through the selection
+   * effect's null path, so no door can leave half of it behind.
+   */
+  clearSelection(returnFocus = true) {
+    const id = this.service.selectedProject()?.id;
+    this.service.resetSelection();
+    if (returnFocus && id != null) this.rowElement(id)?.focus();
+  }
 
-      const marker = this.markersMap.get(proj.id);
-      if (marker) {
-        marker.openPopup();
-      }
+  private onMapClick = () => {
+    // While the lasso is armed a stroke ends in a map click; that must not clear the selection.
+    if (!this.lassoActive()) this.clearSelection(false);
+  };
+
+  private rowElement(id: string | number): HTMLElement | null {
+    return document.getElementById(`demi-row-${id}`);
+  }
+
+  /**
+   * Pop the selected marker out of the cluster group onto its own pane, dim the rest, and bring
+   * the map to it.
+   *
+   * markercluster has no way to highlight a marker that is inside a bubble — while clustered the
+   * marker has no DOM node at all. So the original is checked out of the group and a clone is
+   * added to the `selected-marker` pane, where it is visible at every zoom and sits above any
+   * marker sharing its coordinates.
+   */
+  private focusSelectedMarker(proj: Project | null) {
+    this.releaseSelectedMarker();
+
+    const host = document.getElementById('demi-map');
+    const marker = proj ? this.markersMap.get(proj.id) : null;
+    // No centroid, or filtered off the map: nothing to accent, so nothing to dim either.
+    if (!marker || !this.map) {
+      host?.classList.remove('demi-map--selection');
+      return;
+    }
+
+    const latlng = marker.getLatLng();
+    const base = String(marker.options?.icon?.options?.className || 'demi-marker');
+    this.markerClusterGroup?.removeLayer(marker);
+    this.poppedOriginal = marker;
+    this.poppedProjectId = proj!.id;
+
+    this.poppedMarker = L.marker(latlng, {
+      pane: 'selected-marker',
+      icon: L.divIcon({
+        className: `${base} demi-marker--selected demi-marker--arriving`,
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
+      })
+    }).on('click', () => this.clearSelection(false)).addTo(this.map);
+
+    // Only now does the selection have a node of its own, so dimming the rest cannot hide it.
+    host?.classList.add('demi-map--selection');
+    const el = this.poppedMarker.getElement();
+    el?.addEventListener('animationend', () => el.classList.remove('demi-marker--arriving'), { once: true });
+
+    this.rowElement(proj!.id)?.scrollIntoView({ block: 'nearest' });
+    this.moveCameraTo(latlng);
+  }
+
+  /** Take the clone off the map and hand the original back to the cluster group. */
+  private releaseSelectedMarker() {
+    if (this.poppedMarker) {
+      try {
+        this.map?.removeLayer(this.poppedMarker);
+      } catch (e) {}
+      this.poppedMarker = null;
+    }
+    // Skipped when the filters already dropped the project: markersMap no longer holds the marker.
+    if (this.poppedOriginal && this.markersMap.get(this.poppedProjectId) === this.poppedOriginal) {
+      this.markerClusterGroup?.addLayer(this.poppedOriginal);
+    }
+    this.poppedOriginal = null;
+    this.poppedProjectId = null;
+  }
+
+  /** Always centres the selection, so picking a row puts the marker in the same place every time. */
+  private moveCameraTo(latlng: any) {
+    try {
+      // Only from a BC-wide view is a fly-in worth it; any nearer and panning keeps the context.
+      if (this.map.getZoom() < 7) this.map.flyTo(latlng, ORIENTATION_ZOOM);
+      else this.map.panTo(latlng);
+    } catch (err) {
+      console.warn('[MapExplorer] Could not move to the selected marker:', err);
     }
   }
 
@@ -1018,15 +1126,23 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   async saveLasso() {
     const ring = this.service.lassoPolygon();
     const name = this.lassoName().trim();
-    if (!ring || !name) return;
-    if (await this.userdata.saveLasso(name, ring)) {
-      this.lassoName.set('');
-      this.savingLasso.set(false);
+    // Native submit already skips a disabled button, but Enter can still race a pending save.
+    if (!ring || !name || this.savingArea()) return;
+    this.savingArea.set(true);
+    try {
+      if (await this.userdata.saveLasso(name, ring)) {
+        this.service.lassoLabel.set(name);
+        this.lassoName.set('');
+        this.savingLasso.set(false);
+      }
+    } finally {
+      this.savingArea.set(false);
     }
   }
 
   applySavedLasso(item: SavedLasso) {
     this.service.lassoPolygon.set(item.ring);
+    this.service.lassoLabel.set(item.name);
     this.savedOpen.set(false);
   }
 
@@ -1034,12 +1150,20 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
     return this.userdata.deleteLasso(item.slug);
   }
 
-  /** Only while drawing: an Escape meant for a dialog must not wipe an applied filter. */
+  /**
+   * Drawing a lasso owns Escape while it is armed — an Escape meant for that must not wipe an
+   * applied filter, and one meant for the lasso must not clear the selection. Otherwise Escape
+   * is the keyboard deselect.
+   */
   @HostListener('document:keydown.escape')
   onEscape() {
-    if (!this.lassoActive()) return;
-    this.service.lassoPolygon.set(null);
-    this.exitLasso();
+    if (this.lassoActive()) {
+      this.service.lassoPolygon.set(null);
+      this.service.lassoLabel.set(null);
+      this.exitLasso();
+      return;
+    }
+    if (this.service.selectedProject()) this.clearSelection();
   }
 
   private enterLasso() {
@@ -1073,6 +1197,7 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   private onLassoDown = (e: PointerEvent) => {
     e.preventDefault();
     this.service.lassoPolygon.set(null);
+    this.service.lassoLabel.set(null);
     // Capture so pointerup still fires when the button is released outside the map.
     this.map.getContainer().setPointerCapture(e.pointerId);
     this.lassoPoints = [this.map.mouseEventToLatLng(e)];

@@ -45,7 +45,7 @@
                 <div class="account__name">{{ service.userName() || 'Local user' }}</div>
                 <div class="account__meta">{{ service.config.KEYCLOAK_REALM || 'eao-epic' }} · staff</div>
               </div>
-              <button type="button" role="menuitem" class="account__item" routerLink="/profile">Profile and preferences</button>
+              <button type="button" role="menuitem" class="account__item" routerLink="/workspace">My account</button>
               <button type="button" role="menuitem" class="account__item" routerLink="/sessions">Active sessions</button>
               <button type="button" role="menuitem" class="account__item account__item--danger" (click)="logout()">Sign out</button>
             </div>

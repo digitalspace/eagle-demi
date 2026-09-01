@@ -15,7 +15,7 @@
   // proxy locally and through Front Door -> APIM when deployed.
   window.__env.API_LOCATION = '';
   window.__env.API_PATH = '/api';
-  window.__env.DEV_PROXY_TARGET = 'https://demi-api-test.azurewebsites.net';
+  window.__env.DEV_PROXY_TARGET = 'https://demi-apim-test.azure-api.net';
 
   // eagle-notify staff API. Relative locally (dev proxy, see proxy.conf.js); deploy rewrites it
   // to the notify-api host, whose CORS list must carry this site's origin.

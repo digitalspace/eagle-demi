@@ -65,16 +65,23 @@ describe('AppComponent', () => {
     expect(el.querySelector('app-sign-in')).toBeNull();
 
     const headings = Array.from(el.querySelectorAll('.app-sidebar__heading')).map(h => h.textContent?.trim());
-    expect(headings).toEqual(['Discover', 'Operate', 'Access', 'Developers']);
+    expect(headings).toEqual(['Discover', 'Account', 'Operate', 'Reference']);
 
-    // Nine sidebar screens; profile and sessions are reachable from the account menu only.
-    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(9);
+    // Every screen is in the sidebar; My account and sessions also keep their account-menu shortcuts.
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(11);
+  });
+
+  it('sends an old /profile link to My account', async () => {
+    await renderAs(true, false);
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl('/profile');
+    expect(router.url).toBe('/workspace');
   });
 
   it('keeps the sidebar open when navigating to the map', async () => {
     const { el, fixture } = await renderAs(true, false);
     await TestBed.inject(Router).navigateByUrl('/map');
     fixture.detectChanges();
-    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(9);
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(11);
   });
 });

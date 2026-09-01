@@ -1,0 +1,132 @@
+<div class="screen-header">
+  <div class="screen-header__text">
+    <h1>My account</h1>
+    <p>Everything DEMI keeps for you: saved map areas, your short links, and the preferences that follow you to another browser.</p>
+  </div>
+</div>
+
+@if (!service.isAuthenticated()) {
+  <div class="callout callout--warning">Not signed in. Sign in with an IDIR account to see your saved areas and links.</div>
+}
+
+@if (userdata.error()) {
+  <div class="callout callout--warning">{{ userdata.error() }}</div>
+}
+
+<div class="panel-grid" style="grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);">
+  <section class="panel panel--padded">
+    <h2 class="panel__title panel__title--inline">Identity</h2>
+    @if (service.isAuthenticated()) {
+      <div class="identity">
+        <span class="identity__avatar" aria-hidden="true">{{ initials() }}</span>
+        <span>
+          <span class="identity__name" style="display: block;">{{ name() }}</span>
+          <code class="cell__mono">{{ idir() }}</code>
+        </span>
+      </div>
+      <div class="kv-grid" style="grid-template-columns: 1fr;">
+        <div class="kv-row"><span class="kv-row__key">Email</span><span class="kv-row__value">{{ email() }}</span></div>
+        @if (groups().length) {
+          <div class="kv-row"><span class="kv-row__key">Groups</span><span class="kv-row__value">{{ groups().join(', ') }}</span></div>
+        }
+      </div>
+      <div class="micro-label" style="margin-bottom: var(--layout-margin-xsmall);">Roles</div>
+      @if (roles().length) {
+        <span class="role-chips">
+          @for (role of roles(); track role) {
+            <span class="role-chip">{{ role }}</span>
+          }
+        </span>
+      } @else {
+        <p class="cell__sub" style="margin: 0;">None beyond the Keycloak defaults.</p>
+      }
+      <p class="footnote" style="margin-bottom: 0;">Identity comes from Keycloak. To change a role or group, ask an administrator.</p>
+    } @else {
+      <p class="panel__lede" style="margin-bottom: 0;">Sign in to see the identity DEMI reads from your token.</p>
+    }
+  </section>
+
+  <section class="panel panel--padded">
+    <h2 class="panel__title panel__title--inline">Preferences</h2>
+    <div class="kv-grid">
+      <div class="kv-row">
+        <span class="kv-row__key"><label for="pref-landing">Default landing screen</label></span>
+        <span class="kv-row__value">
+          <select id="pref-landing" (change)="setLanding($event)">
+            @for (option of landingOptions; track option.key) {
+              <option [value]="option.key" [selected]="option.key === prefs().landing">{{ option.label }}</option>
+            }
+          </select>
+        </span>
+      </div>
+      <div class="kv-row">
+        <span class="kv-row__key"><label for="pref-per-page">Results per page</label></span>
+        <span class="kv-row__value">
+          <select id="pref-per-page" (change)="setPerPage($event)">
+            @for (size of perPageOptions; track size) {
+              <option [value]="size" [selected]="size === prefs().perPage">{{ size }}</option>
+            }
+          </select>
+        </span>
+      </div>
+    </div>
+    <div class="panel__actions" style="display: flex; gap: var(--layout-margin-small);">
+      <button type="button" (click)="reset()" style="background: var(--surface-color-background-white); color: var(--surface-color-primary-default); border: var(--layout-border-width-small) solid var(--surface-color-primary-default); border-radius: var(--layout-border-radius-small); padding: 0.55rem 1.1rem; font: var(--typography-bold-small-body); cursor: pointer;">Reset to defaults</button>
+    </div>
+  </section>
+</div>
+
+<section class="panel panel--padded">
+  <h2 class="panel__title panel__title--inline">Saved map areas</h2>
+  <p class="panel__lede">Areas drawn with the lasso on Map Explorer. Only you can see them.</p>
+  @if (userdata.lassos().length) {
+    <div class="panel-grid" style="grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); margin-bottom: 0;">
+      <ul style="list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto;">
+        @for (area of userdata.lassos(); track area.slug) {
+          <li class="kv-row" style="padding: 6px 8px; align-items: center;" [class.kv-row--selected]="area.slug === selected()?.slug">
+            <button type="button" (click)="select(area)" [attr.aria-current]="area.slug === selected()?.slug ? 'true' : null"
+              style="background: none; border: none; padding: 0; text-align: left; cursor: pointer;">
+              <span class="cell__title" style="display: block;">{{ area.name }}</span>
+              <span class="cell__sub">{{ area.ring.length }} points · {{ area.updatedAt | date:'dd MMM' }}</span>
+            </button>
+            <span class="row-actions">
+              <button type="button" (click)="applyOnMap(area)" [style]="linkButtonStyle">Apply on map</button>
+              <button type="button" (click)="deleteLasso(area)" [style]="linkButtonStyle">Delete</button>
+            </span>
+          </li>
+        }
+      </ul>
+      <!-- role="group", not img: the container is a live map whose children stay reachable. -->
+      <div #miniMap role="group" [attr.aria-label]="'Map of ' + selected()?.name"
+        style="height: 260px; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-medium);"></div>
+    </div>
+  } @else {
+    <p class="cell__sub" style="margin: 0;">
+      @if (userdata.loading()) { Loading… } @else { Draw a lasso on <a routerLink="/map">Map Explorer</a> and save it to keep it here. }
+    </p>
+  }
+</section>
+
+<section class="panel panel--padded">
+  <h2 class="panel__title panel__title--inline">My short links</h2>
+  <p class="panel__lede">Short URLs you created. Repoint or delete them on <a routerLink="/links">Short URLs</a>.</p>
+  <div class="kv-grid">
+    @for (link of myLinks(); track link.id) {
+      <div class="kv-row">
+        <span class="kv-row__key">
+          <a [href]="link.shortUrl" target="_blank" rel="noopener"><code class="cell__mono">{{ link.shortUrl }}</code></a>
+          @if (link.personal) {
+            <span class="pill pill--info" style="margin-left: 0.35rem;">Personal</span>
+          }
+        </span>
+        <span class="kv-row__value cell--truncate cell--muted">{{ link.note || link.url }}</span>
+      </div>
+    } @empty {
+      <p class="cell__sub" style="margin: 0;">
+        @if (links.loading()) { Loading… } @else { Create one on <a routerLink="/links">Short URLs</a> and mark it Personal. }
+      </p>
+    }
+  </div>
+</section>
+
+<p class="footnote">Saved areas are stored with your account. Preferences are stored with your account and in this browser; signed out, only the browser copy is used. Short links are readable by anyone holding the URL; marking one personal only keeps it off other people's lists.</p>
