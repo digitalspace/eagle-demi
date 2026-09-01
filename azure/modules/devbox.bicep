@@ -152,7 +152,10 @@ resource devbox 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   }
   properties: {
     hardwareProfile: {
-      vmSize: 'Standard_B1s'
+      // B2s, not B1s: prod landing-zone policy installs MDE/AzureMonitor/ChangeTracking, and on
+      // 1 GiB the extension storm wedges the VM agent (run-command dead, 2026-09-01). Deallocated
+      // most of the time, so the size barely prices in.
+      vmSize: 'Standard_B2s'
     }
     storageProfile: {
       // Gen2. `server-gen1` is the Gen1 sku of the same offer, and Bastion/Trusted Launch want Gen2.
