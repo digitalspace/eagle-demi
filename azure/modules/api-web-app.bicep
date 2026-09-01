@@ -273,11 +273,6 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           value: environmentName
         }
         {
-          name: 'API_LOCATION'
-          // Empty like the Flex module: /api/config must say same-origin even from the rollback app.
-          value: ''
-        }
-        {
           name: 'AzureWebJobsStorage'
           value: 'DefaultEndpointsProtocol=https;AccountName=${apiStorage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${apiStorage.listKeys().keys[0].value}'
         }
