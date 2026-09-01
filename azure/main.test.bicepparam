@@ -136,6 +136,15 @@ param syncTeamsSchedule = ''
 //   az rest --method PUT --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/apim-gateway-secret?api-version=2023-07-01" --body '{"properties":{"value":"<random>"}}'
 param deployApim = true
 
+// The dev-access VM, on `snet-servers` — a plain landing-zone subnet with its own NSG, not one of
+// the delegated ones above. The key is a PUBLIC key and never committed; nothing SSHes in, so a
+// throwaway is fine. No fallback, same rule as the six above: an empty value here would reach
+// Microsoft.Compute, which refuses a Linux VM with `disablePasswordAuthentication` and no key —
+// failing the whole infra apply midway instead of failing the build. deploy-infra.sh sources it.
+param deployDevbox = true
+param devboxSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-servers'
+param devboxSshPublicKey = readEnvironmentVariable('DEVBOX_SSH_PUBLIC_KEY')
+
 // Pinned to the live budget period — an existing budget rejects startDate updates.
 param budgetStartDate = '2026-08-01'
 

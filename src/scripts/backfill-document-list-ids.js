@@ -47,8 +47,8 @@
  *
  *   node src/scripts/backfill-document-list-ids.js [--live] [--page-size N] [--batch N]
  *
- * Cosmos is private-endpoint-only and keyless, so a live run must execute INSIDE the app container
- * over the App Service SSH tunnel — not Kudu's /api/command, whose SCM container has no
+ * Cosmos is private-endpoint-only and keyless, so a live run must execute on the devbox
+ * (`demi-devbox-<env>`) via `demi-run` — not Kudu's /api/command, whose SCM container has no
  * managed-identity endpoint. See README.md for the recipe. It needs no search-service grant: this
  * writes to Cosmos only and the indexer does the rest.
  */

@@ -1560,8 +1560,8 @@ UAMI holds the sole Crypto User grant.
 
 # Reindex (P3-7 only)
 
-Procedure from `azure/search/README.md:116-170`. Run inside the `demi-api-test` container over the
-App Service SSH tunnel — the search service is `publicNetworkAccess: Disabled` and a workstation
+Procedure from `azure/search/README.md:116-170`. Run on the devbox (`demi-devbox-test`) via
+`demi-run` — the search service is `publicNetworkAccess: Disabled` and a workstation
 gets a 403, not a connection error. Grant `Search Service Contributor`
 (`7ca78c08-252a-4471-8644-bb5ff32d4ba0`) at the SERVICE scope for the run and revoke it after.
 

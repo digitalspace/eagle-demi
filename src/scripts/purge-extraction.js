@@ -34,8 +34,8 @@
  * Usage:
  *   node src/scripts/purge-extraction.js [--live] [--errors-only] [--error-like STR] [--page-size N]
  *
- * Cosmos is private-endpoint-only and keyless, so a live run must execute INSIDE the app
- * container over the App Service SSH tunnel — not Kudu's /api/command, whose SCM container has no
+ * Cosmos is private-endpoint-only and keyless, so a live run must execute on the devbox
+ * (`demi-devbox-<env>`) via `demi-run` — not Kudu's /api/command, whose SCM container has no
  * managed-identity endpoint. See README.md for the full recipe.
  */
 

@@ -40,8 +40,8 @@
  * makes two runs incomparable, which defeats the point of committing a scorecard. Wait for the run
  * to land.
  *
- * Cosmos and AI Search are both private-endpoint-only and keyless, so this must run INSIDE the app
- * container over the App Service SSH tunnel — not Kudu's /api/command, whose SCM container has no
+ * Cosmos and AI Search are both private-endpoint-only and keyless, so this must run on the devbox
+ * (`demi-devbox-<env>`) via `demi-run` — not Kudu's /api/command, whose SCM container has no
  * managed-identity endpoint. See README.md for the recipe.
  *
  * Usage:

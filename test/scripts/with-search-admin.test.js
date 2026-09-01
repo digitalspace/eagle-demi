@@ -10,7 +10,7 @@
  * a different way — a failing command, SIGTERM, a revoke that itself fails — and asserts the grant
  * came back off, or that the operator was told loudly enough to remove it by hand.
  *
- * `AZ` stands in for the `az` CLI, the same seam `PULL_SSH_CMD` gives `pull-from-container.sh`. The
+ * `AZ` stands in for the `az` CLI. The
  * fake logs every invocation, so "did it revoke" is measured off the log rather than asserted from
  * the script's own output.
  */

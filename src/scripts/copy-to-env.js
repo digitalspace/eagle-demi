@@ -6,9 +6,9 @@
  * Written for the dev → test (staging) migration: demi-cosmos-dev holds the only copy of the
  * extracted corpus, and the copy is the corpus-preservation prerequisite for tearing dev down.
  *
- * Where it runs: inside the SOURCE VNet, over the demi-api SSH tunnel, detached with a log file
- * (same harness as seed-nosql.js — settings from /proc/1/environ, globalThis.crypto shim,
- * --max-old-space-size=224). Both accounts are keyless behind private endpoints, so the TARGET
+ * Where it runs: inside the SOURCE VNet, on the devbox via `demi-run`, detached with a log file
+ * (same harness as seed-nosql.js — `demi-run` supplies the settings, and the heap ceiling is
+ * whatever the VM size allows). Both accounts are keyless behind private endpoints, so the TARGET
  * account needs (1) a private endpoint reachable from the source VNet and (2) a Cosmos data-plane
  * role assignment for this app's identity. Both are temporary and torn down after the copy.
  *

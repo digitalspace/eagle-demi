@@ -15,8 +15,8 @@
  *   node src/scripts/backfill-eac-number.js [--live]
  *
  * **DRY RUN BY DEFAULT.** `--live` is the mutating flag, matching the sibling scripts. Cosmos is
- * private-endpoint-only and keyless, so a live run executes INSIDE the app container over the App
- * Service SSH tunnel — see README "Running anything against the database".
+ * private-endpoint-only and keyless, so a live run executes on the devbox (`demi-devbox-<env>`)
+ * via `demi-run` — see README "Running anything against the database".
  *
  * VERBATIM. Track uses the column for certificate STATE as well as numbers — "E98-05" and
  * "WD09-01", but also "Withdrawn", "In progress", "REFUSED", "N/A". Nothing here parses, filters or
