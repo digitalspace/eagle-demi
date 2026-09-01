@@ -274,7 +274,8 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         {
           name: 'API_LOCATION'
-          value: 'https://demi-api-${environmentName}.azurewebsites.net'
+          // Empty like the Flex module: /api/config must say same-origin even from the rollback app.
+          value: ''
         }
         {
           name: 'AzureWebJobsStorage'
