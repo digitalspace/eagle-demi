@@ -1,8 +1,8 @@
 # =============================================================================
 # Build and Deploy the DEMI API to Azure staging
 # =============================================================================
-# Deploys the Node.js API to the Azure Function Apps `demi-api-test` (B1) and, once it exists,
-# `demi-api-fc-test` (Flex Consumption). Same zip to both until the Flex app takes the traffic.
+# Deploys the Node.js API to the Flex Consumption app `demi-api-fc-test`. The legacy B1 app
+# is deleted; this workflow must never target it again.
 #
 # API only. The frontend has its own file, `azure-deploy-staging-frontend.yaml`, and its
 # own trigger. They were one workflow until 2026-08-05, which meant an Angular-only
@@ -16,7 +16,7 @@
 # deployment, and that is deliberate.
 #
 # The credential is scoped to match: `demi-cicd-test` holds Website Contributor on
-# demi-api-test alone (the frontend is published to blob storage now, under a
+# demi-api-fc-test alone (the frontend is published to blob storage now, under a
 # data-plane role), nothing at resource-group scope,
 # so it cannot run an ARM deployment even if a job were added. Keep it that way — do
 # not add an infra job, and do not widen the role assignment.
@@ -56,11 +56,8 @@ permissions:
   id-token: write
   contents: read
 
-# Two apps, one zip, for the length of the Flex migration: the B1 app keeps serving test traffic
-# while the FC1 app is proven, and rproxy is flipped only in Phase 4. Both names live here so the
-# steps below carry no literal.
+# The Flex app is the only API target; the name lives here so steps carry no literal.
 env:
-  API_APP_NAME: demi-api-test
   API_FLEX_APP_NAME: demi-api-fc-test
 
 jobs:
@@ -70,7 +67,7 @@ jobs:
     # Subscription, resource group and the two Azure ids all come from this
     # environment — only the app names below are pinned in the file.
     #
-    # STAGING IS SPELLED `-test` IN AZURE: `demi-api-test` in `c4b0a8-test-rg`,
+    # STAGING IS SPELLED `-test` IN AZURE: `demi-api-fc-test` in `c4b0a8-test-rg`,
     # subscription `c4b0a8-test`. The environment model is
     # dev = sandbox (redeployable, not wired to CI), test = staging, prod = prod.
     #
@@ -113,39 +110,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # `scripts/deploy-azure.sh`, not `az functionapp deployment source config-zip`. The CLI
-      # reports success from its own exit code, which is not the same fact as the deployment
-      # succeeding: on 2026-08-05 an oversized package left Kudu at status 1 for over thirty
-      # minutes, the client was killed, and Azure went on listing an OLDER deployment as active —
-      # a mismatch that reverts the app on the next container recycle.
-      #
-      # The script instead POSTs /api/zipdeploy?isAsync=true, polls the deployment RECORD to a
-      # terminal state (4 = success, 3 = failed), and then probes /api/search/summary for a 401 to
-      # prove the NEW build is the one answering. A plain `run:` step for the reason above.
-      - name: Deploy API
-        run: ./scripts/deploy-azure.sh api ${{ vars.AZURE_RESOURCE_GROUP }}
-
-      # The Flex app does not exist until `azure/modules/api-function-flex.bicep` is deployed by
-      # hand. Skip rather than fail, so this workflow keeps working before and after that.
-      # The probe cannot tell "not created yet" from "demi-cicd-test holds no role on it" — the
-      # Website Contributor grant on demi-api-fc-test is a manual prerequisite, like the app.
-      - name: Does the Flex app exist yet?
-        id: flex
-        run: |
-          if az functionapp show -g ${{ vars.AZURE_RESOURCE_GROUP }} -n "$API_FLEX_APP_NAME" \
-               --query name -o tsv >/dev/null 2>&1; then
-            echo "found=true" >> $GITHUB_OUTPUT
-          else
-            echo "found=false" >> $GITHUB_OUTPUT
-            echo "⏭️  $API_FLEX_APP_NAME not present — skipping the Flex deploy." >> $GITHUB_STEP_SUMMARY
-          fi
-
       # `config-zip`, not `scripts/deploy-azure.sh`. That script POSTs to Kudu and then polls
       # /api/config for its BUILD_ID; a Flex app has no Kudu wwwroot to POST into — it publishes to
       # the deployment blob container declared in the module. Same zip as the step above, packaged
       # again because the script deletes nothing behind it and BUILD_ID must be stamped in.
+      # No existence probe: the Flex app is permanent; a missing app must fail loudly, not skip.
       - name: Deploy API to the Flex app
-        if: steps.flex.outputs.found == 'true'
         run: |
           set -euo pipefail
           export BUILD_ID="$(git describe --tags --always --dirty)-$(date -u +%H%M%S)"
@@ -162,7 +132,6 @@ jobs:
       # `api` is the catch-all route in api/index.js. Matched exactly — `grep api` also matches
       # `apiRoot`, which registers from the same block and so proves nothing extra.
       - name: Verify the api function is registered
-        if: steps.flex.outputs.found == 'true'
         run: |
           for i in {1..10}; do
             if az functionapp function list -g ${{ vars.AZURE_RESOURCE_GROUP }} \
