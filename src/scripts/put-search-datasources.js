@@ -7,6 +7,11 @@ const fs = require('fs'), path = require('path');
 const DS_DIR = process.env.DS_DIR || path.join(__dirname, '..', '..', 'azure', 'search', 'datasources');
 const { getToken } = require('../search/ai-search');
 const ep = process.env.SEARCH_ENDPOINT, api = '2024-05-01-preview'; // identity block is preview-only
+// A missing env var lands as the literal string "undefined" inside the PUT body, which the service
+// accepts — the indexers then fail on their next run with "Ensure managed identity is enabled".
+for (const k of ['SEARCH_ENDPOINT', 'COSMOS_ENDPOINT', 'COSMOS_NOSQL_DATABASE', 'DS_SUB', 'DS_RG', 'DS_IDENTITY_ID']) {
+  if (!process.env[k]) { console.error(`${k} is not set — refusing to PUT a broken datasource`); process.exit(1); }
+}
 const acct = process.env.COSMOS_ENDPOINT.match(/https:\/\/([^.]+)\./)[1];
 const rid = `/subscriptions/${process.env.DS_SUB}/resourceGroups/${process.env.DS_RG}/providers/Microsoft.DocumentDB/databaseAccounts/${acct}`;
 (async () => {
