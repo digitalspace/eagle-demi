@@ -135,3 +135,6 @@ param syncTeamsSchedule = ''
 // contentType/expiry on a data-plane write:
 //   az rest --method PUT --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/apim-gateway-secret?api-version=2023-07-01" --body '{"properties":{"value":"<random>"}}'
 param deployApim = true
+
+// Pinned to the live budget period — an existing budget rejects startDate updates.
+param budgetStartDate = '2026-08-01'
