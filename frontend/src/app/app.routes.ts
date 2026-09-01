@@ -21,14 +21,13 @@ export const routes: Routes = [
   screen('keys', () => import('./components/api-keys/api-keys.component').then(m => m.ApiKeysComponent)),
   screen('profile', () => import('./components/profile/profile.component').then(m => m.ProfileComponent)),
   screen('sessions', () => import('./components/sessions/sessions.component').then(m => m.SessionsComponent)),
-  // Swagger lives on the API host; this SPA is a static file server with a catch-all, so
-  // people who type /api-docs here would silently land on the dashboard. Bounce them to the
-  // right host, derived from config so it follows the environment.
+  // The spec is a route under the API base; typing /api-docs here would land on the SPA
+  // catch-all, so bounce to the API path, which works relative (via the edge) and absolute.
   {
     path: 'api-docs',
     canActivate: [() => {
-      const apiLocation = inject(ConfigService).config.API_LOCATION || '';
-      window.location.replace(`${apiLocation.replace(/\/$/, '')}/api-docs/`);
+      const basePath = inject(ConfigService).config.API_PATH || '/api';
+      window.location.replace(`${basePath}/api-docs`);
       return false;
     }],
     children: []

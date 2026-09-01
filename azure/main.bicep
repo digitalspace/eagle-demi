@@ -78,6 +78,12 @@ param minioBucketName string = 'eagle-demi'
 @description('Key prefix namespacing this environment inside the bucket.')
 param minioKeyPrefix string = ''
 
+@description('Deploys the legacy B1/B3 app-service API alongside the Flex app. False where the old app pre-exists on a shared plan the template must not touch.')
+param deployLegacyApi bool = true
+
+@description('Pinned first day of the live budget period — an existing budget rejects startDate changes, so this must match what is deployed. Empty = first of the current month (new budgets only).')
+param budgetStartDate string = ''
+
 @description('Monthly anomaly guard in CAD — the subscription\'s billing currency. Sized above the measured run rate of ~350 CAD/month (Cost Management, 2026-08-17); the old 150 came from a 12-day average taken before the resource group had finished billing. The absolute annual ceiling is a separate parameter; see cost-budget.bicep for why one number cannot be both.')
 param budgetAmount int = 400
 
@@ -244,7 +250,15 @@ param syncTeamsSchedule string = ''
 @description('Absolute URL the availability web test GETs. Empty deploys no test.')
 param availabilityUrl string = ''
 
+// APIM Consumption in front of the Flex app: subscription keys and per-consumer rate limits. Off
+// everywhere but test — a prod re-apply is a separate, deliberate deploy.
+@description('Deploy the API Management gateway. Requires apiFlexSubnetId, since it fronts that app.')
+param deployApim bool = false
+
 // Mandatory Cost Management Tags applied across ALL resources
+// Created out of band in the vault, shared by the gateway (named value) and the app (app setting).
+var apimGatewaySecretName = 'apim-gateway-secret'
+
 var defaultTags = {
   Project: 'DEMI'
   Application: 'eagle-demi'
@@ -403,7 +417,9 @@ module foundry './modules/foundry.bicep' = if (deployFoundry) {
 //
 // Not Consumption (Y1) despite `kind: 'functionapp'`: the live plan is B1, because the app holds a
 // warm worker and the 224 MB heap ceiling the scripts are written against is a B1 instance.
-module apiWebApp './modules/api-web-app.bicep' = {
+// Off in prod: applying the B1 module there would CREATE demi-plan-prod and collide with
+// plan-eagle-search-prod's service-association link on snet-app-service (see main.prod.bicepparam).
+module apiWebApp './modules/api-web-app.bicep' = if (deployLegacyApi) {
   name: 'deploy-api-web-app'
   params: {
     location: location
@@ -491,6 +507,25 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     auditWorkspaceId: auditLogs.outputs.workspaceId
     frontendHostNames: frontendHostNames
     linkBaseUrl: linkBaseUrl
+    // VaultName/SecretName rather than SecretUri: the secret is created out of band, so no module
+    // outputs its versioned identifier. Empty until APIM is deployed, which disables the app's
+    // gateway trust branch entirely.
+    apimGatewaySecretRef: deployApim ? '@Microsoft.KeyVault(VaultName=${keyVault.outputs.vaultName};SecretName=${apimGatewaySecretName})' : ''
+  }
+}
+
+// 7c. The gateway. After the Flex app because it fronts it, and skipped whenever that app is.
+module apim './modules/apim.bicep' = if (deployApim && !empty(apiFlexSubnetId)) {
+  name: 'deploy-apim'
+  params: {
+    location: location
+    tags: defaultTags
+    apimName: 'demi-apim-${environmentName}'
+    // Same list the cost and audit alerts notify; APIM takes one address, not an array.
+    publisherEmail: contactEmails[0]
+    apiHostName: apiFunctionFlex!.outputs.apiFunctionAppHostName
+    keyVaultName: keyVault.outputs.vaultName
+    gatewaySecretName: apimGatewaySecretName
   }
 }
 
@@ -530,11 +565,12 @@ module costBudget './modules/cost-budget.bicep' = {
     environmentName: environmentName
     budgetAmount: budgetAmount
     contactEmails: contactEmails
+    startDate: budgetStartDate
   }
 }
 
 // Outputs
-output apiWebAppHostName string = apiWebApp.outputs.apiWebAppHostName
+output apiWebAppHostName string = deployLegacyApi ? apiWebApp!.outputs.apiWebAppHostName : ''
 // Empty until the Flex app is deployed. The host rproxy is flipped to in Phase 4.
 output apiFlexHostName string = !empty(apiFlexSubnetId) ? apiFunctionFlex!.outputs.apiFunctionAppHostName : ''
 // COPY THIS INTO eagle-search's Front Door parameters. The profile owns the DEMI route but not the
@@ -543,6 +579,8 @@ output frontendStaticSiteHostName string = deployStaticSite ? staticSite!.output
 // The publish target for `scripts/deploy-azure.sh frontend` — carries a uniqueString suffix, so it
 // goes into the repository variable AZURE_FRONTEND_STORAGE_ACCOUNT rather than a literal in CI.
 output frontendStorageAccountName string = deployStaticSite ? staticSite!.outputs.storageAccountName : ''
+// The gateway machine and browser traffic is moved onto. Empty until deployApim is set.
+output apimGatewayUrl string = (deployApim && !empty(apiFlexSubnetId)) ? apim!.outputs.gatewayUrl : ''
 output searchEndpoint string = deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
 output cosmosEndpoint string = cosmos.outputs.cosmosEndpoint
 output identityClientId string = identity.outputs.clientId

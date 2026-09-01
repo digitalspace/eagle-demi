@@ -41,8 +41,10 @@ param contactEmails array = [
 // The old hardcoded 2026-08-01 pinned the ANNUAL budget's year to August-August forever, and gave
 // any environment created later a period that had already partly elapsed - so a new environment
 // would start life with months of its ceiling notionally spent.
-@description('First day of the budget period. Defaults to the first of the current month; override only to reproduce a historical period.')
-param startDate string = utcNow('yyyy-MM-01')
+@description('First day of the budget period. Defaults to the first of the current month for a NEW budget; an existing budget REJECTS any startDate change, so param files pin the live value.')
+param startDate string = ''
+param nowMonth string = utcNow('yyyy-MM-01')
+var effectiveStartDate = empty(startDate) ? nowMonth : startDate
 
 var budgetName = 'demi-budget-${environmentName}'
 
@@ -53,7 +55,7 @@ resource costBudget 'Microsoft.Consumption/budgets@2021-10-01' = {
     amount: budgetAmount
     timeGrain: 'Monthly'
     timePeriod: {
-      startDate: '${startDate}T00:00:00Z'
+      startDate: '${effectiveStartDate}T00:00:00Z'
     }
     notifications: {
       Actual_80_Percent: {

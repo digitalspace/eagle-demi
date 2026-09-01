@@ -33,9 +33,18 @@ const config = require('../../config');
 const GRANTABLE_ROLES = Array.from(new Set([...AUTHENTICATED_ROLES, 'compliance', 'public']));
 exports.GRANTABLE_ROLES = GRANTABLE_ROLES;
 
+/**
+ * The only id a caller may choose: an APIM subscription's identity row.
+ *
+ * These rows carry roles and no secret — APIM has already verified the subscription key, and
+ * `helpers/auth.js:resolveGatewaySubscription` looks the row up by exactly this id. Every other id
+ * stays a random one, so no caller can squat an id or overwrite a minted key by naming it.
+ */
+const APIM_ROW_ID = /^apim:[a-z0-9-]+$/;
+
 exports.createApiKey = async (req, res) => {
   try {
-    const { name, roles, projectScope, expiresAt } = req.body || {};
+    const { name, roles, projectScope, expiresAt, id } = req.body || {};
 
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ error: 'Missing required field: name' });
@@ -55,6 +64,17 @@ exports.createApiKey = async (req, res) => {
       return res.status(400).json({ error: 'expiresAt must be a future date' });
     }
 
+    if (id !== undefined && (typeof id !== 'string' || !APIM_ROW_ID.test(id))) {
+      return res.status(400).json({
+        error: 'id may only be an APIM subscription identity: apim:<subscription-name>'
+      });
+    }
+    // Same answer a duplicate short-link code gets. There is no update endpoint, so silently
+    // upserting here would be the one way to widen an existing row's roles.
+    if (id && await apiKeys.getById(id)) {
+      return res.status(409).json({ error: `id ${id} already in use. Revoke it before reissuing.` });
+    }
+
     // Least privilege is the default posture, so granting write is possible but never accidental.
     const grantsWrite = roles.some(r => WRITE_ROLES.includes(r));
     if (grantsWrite && req.body.allowWrite !== true) {
@@ -65,17 +85,22 @@ exports.createApiKey = async (req, res) => {
       });
     }
 
-    const { keyId, plaintext, hash } = generateKey(config.environmentName || 'dev');
+    // No key material for an APIM row: there would be nothing to present it to, and a stored
+    // digest nobody can use is a credential to leak for no reason. `verify` fails closed on a
+    // record with no `hash`, so such a row can never authenticate through the X-Api-Key path.
+    const minted = id ? null : generateKey(config.environmentName || 'dev');
+    const keyId = id || minted.keyId;
 
     const record = {
       id: keyId,
       name,
-      hash,
+      hash: minted ? minted.hash : null,
       roles,
       projectScope: Array.isArray(projectScope) ? projectScope.map(String) : null,
       createdAt: new Date().toISOString(),
       createdBy: (req.user && req.user.preferred_username) || 'unknown',
-      expiresAt: expiresAt || defaultExpiry(),
+      // APIM owns the subscription's lifecycle, so an identity row does not expire on its own.
+      expiresAt: expiresAt || (minted ? defaultExpiry() : null),
       revokedAt: null,
       lastUsedAt: null
     };
@@ -94,14 +119,18 @@ exports.createApiKey = async (req, res) => {
         name,
         roles,
         grantsWrite,
+        viaGateway: Boolean(id),
         projectScope: record.projectScope,
         expiresAt: record.expiresAt
       }
     });
 
     // The plaintext is returned HERE and nowhere else, ever. It is not stored and cannot be
-    // recovered — a lost key is reissued, not looked up.
-    return res.status(201).json({ ...apiKeys.redact(record), key: plaintext });
+    // recovered — a lost key is reissued, not looked up. An APIM row has none: its caller
+    // authenticates at the gateway, and the row only says what that caller may do.
+    return res.status(201).json(minted
+      ? { ...apiKeys.redact(record), key: minted.plaintext }
+      : apiKeys.redact(record));
   } catch (err) {
     return serverError(res, err, 'api key issue failed');
   }

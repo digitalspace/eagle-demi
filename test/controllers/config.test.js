@@ -86,6 +86,19 @@ test('config controller', async (t) => {
     assert.notEqual(res.body.KEYCLOAK_ENABLED, 'False');
   });
 
+  await t.test('API_LOCATION defaults to same-origin, set or not', async () => {
+    // Azure drops empty-valued app settings from the env, so absent and '' must both mean
+    // same-origin /api — an absolute dev default here would pull clients off the edge.
+    t.mock.method(configRepository, 'get', async () => null);
+    for (const setup of [() => { delete process.env.API_LOCATION; }, () => { process.env.API_LOCATION = ''; }]) {
+      setup();
+      const res = mockRes();
+      await configController.getConfig(REQ, res);
+      assert.equal(res.body.API_LOCATION, '');
+    }
+    delete process.env.API_LOCATION;
+  });
+
   await t.test('the document cannot introduce or override non-overridable keys', async () => {
     t.mock.method(configRepository, 'get', async () => ({
       id: 'config',

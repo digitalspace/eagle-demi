@@ -107,10 +107,17 @@ if [ "$ENVIRONMENT" = 'prod' ] && [ "$MODE" = '--live' ] && [ "${CONFIRM_PROD:-}
   exit 2
 fi
 
-API_APP="demi-api-${ENVIRONMENT}"
 PARAM_FILE="${REPO_ROOT}/azure/main.${ENVIRONMENT}.bicepparam"
 # test and prod use main.<env>.bicepparam; dev is the unsuffixed one, matching the repo's naming.
 [ "$ENVIRONMENT" = 'dev' ] && PARAM_FILE="${REPO_ROOT}/azure/main.bicepparam"
+
+# Verify the app this deployment actually writes: with the legacy module off, only the Flex app
+# received the settings, and probing (or stop/starting) the untouched legacy app would be wrong.
+if grep -Eq '^param deployLegacyApi *= *false' "$PARAM_FILE"; then
+  API_APP="demi-api-fc-${ENVIRONMENT}"
+else
+  API_APP="demi-api-${ENVIRONMENT}"
+fi
 
 # Read one key out of an OpenShift secret. OpenShift is the source of truth for every credential
 # this template deploys — NOT the app settings.

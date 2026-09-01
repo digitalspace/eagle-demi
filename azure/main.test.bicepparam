@@ -128,3 +128,17 @@ param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 
 // set to '0 0 10 * * *' once the Track endpoint is live
 param syncTeamsSchedule = ''
+
+// APIM Consumption in front of demi-api-fc-test. Test only — prod stays off until this proves out.
+// The gateway secret is created out of band before this deploy, through the ARM control plane —
+// the data plane is Forbidden on this private-endpoint-only vault, and policy demands
+// contentType/expiry on a data-plane write:
+//   az rest --method PUT --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/apim-gateway-secret?api-version=2023-07-01" --body '{"properties":{"value":"<random>"}}'
+param deployApim = true
+
+// Pinned to the live budget period — an existing budget rejects startDate updates.
+param budgetStartDate = '2026-08-01'
+
+// Same probe as prod, test-shaped: monitors the real user path and its executions keep one
+// Flex instance warm — cheaper than alwaysReady and doubles as monitoring.
+param availabilityUrl = 'https://eagle-test.apps.silver.devops.gov.bc.ca/demi-search/search?dataset=Document&keywords=assessment&pageSize=1'

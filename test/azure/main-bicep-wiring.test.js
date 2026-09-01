@@ -62,6 +62,9 @@ const WIRED = [
     'the API module call — without it prod creates demi-plan-prod instead of joining the shared plan'],
   ['keycloakClientId', /^\s+keycloakClientId: keycloakClientId$/m,
     'the API module call — without it no param file can set which client the API trusts'],
+  ['deployLegacyApi', /^module apiWebApp '\.\/modules\/api-web-app\.bicep' = if \(deployLegacyApi\) \{$/m,
+    'the legacy-API module gate — without it a prod apply creates demi-plan-prod and collides ' +
+    'with plan-eagle-search-prod\'s service-association link'],
   ['availabilityUrl',
     /^module availability '\.\/modules\/availability\.bicep' = if \(!empty\(availabilityUrl\)\) \{$/m,
     'the availability module gate — without it every environment gets a prod-only web test'],
@@ -115,6 +118,13 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
       `${envName} must state the audience explicitly, empty or otherwise`);
   });
 }
+
+// The legacy-API off switch. Deleting the prod line silently reverts to the module default (ON),
+// which is exactly the demi-plan-prod collision the gate exists to prevent.
+test('the prod param file turns the legacy API off', () => {
+  assert.match(PROD_PARAMS, /^param deployLegacyApi = false$/m,
+    'prod must keep the B1 module off while demi-api-prod lives on the shared plan');
+});
 
 // The Track team sync's four plain settings. Every one is a whole-collection-PUT app setting, so a
 // param file that omits one takes main.bicep's empty default and the live value is deleted on the
@@ -339,5 +349,68 @@ test('the API app reads both team-sync secrets through Key Vault references', ()
     assert.match(KEY_VAULT_MODULE, new RegExp(`^output ${paramName}Uri string = \\w+\\.properties\\.secretUri$`, 'm'),
       'and output its VERSIONLESS uri (secretUri, not secretUriWithVersion), so a rotation needs ' +
       'a new secret version and a restart rather than an infrastructure deploy');
+  }
+});
+
+// The gateway secret is what makes the app trust an APIM-asserted subscription, and both halves of
+// that trust are text-structural: a plain-value app setting would put the secret in the template
+// and in ARM history, and a global policy that sets the two headers without deleting the client's
+// copies first would let anyone reach the app directly and assert any subscription they like — the
+// Function App host stays public, because Consumption APIM has no VNet. `az bicep build` exits 0
+// either way. Same honest limits as the guards above.
+const FLEX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'api-function-flex.bicep'), 'utf8');
+const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
+
+test('the Flex app reads APIM_GATEWAY_SECRET through a Key Vault reference', () => {
+  const setting = FLEX_MODULE
+    .split(/^\s+\{$/m)
+    .find(b => /name: 'APIM_GATEWAY_SECRET'/.test(b));
+  assert.ok(setting, 'no APIM_GATEWAY_SECRET app setting declared at all');
+  assert.match(setting, /value: apimGatewaySecretRef$/m,
+    'the setting must carry the reference parameter, never a literal');
+
+  assert.match(MAIN, /apimGatewaySecretRef: deployApim \? '@Microsoft\.KeyVault\(VaultName=\$\{keyVault\.outputs\.vaultName\};SecretName=\$\{apimGatewaySecretName\}\)' : ''/,
+    'main.bicep must compose a Key Vault reference, and empty it when APIM is not deployed — an ' +
+    'empty value is what disables the app trust branch');
+  assert.match(MAIN, /^\s+gatewaySecretName: apimGatewaySecretName$/m,
+    'the gateway and the app must name the SAME secret, or the app compares against another value');
+  assert.match(FLEX_MODULE, /^\s+keyVaultReferenceIdentity: identityId$/m,
+    'the app must resolve references as the identity that holds the grant');
+});
+
+test('the gateway strips client-supplied trust headers before setting its own', () => {
+  // The SERVICE-level policy, not the product one: only this scope sees every request, including
+  // the anonymous browser traffic the strip has to protect against.
+  const global = /service\/policies@[\s\S]*$/.exec(APIM_MODULE);
+  assert.ok(global, 'apim.bicep must declare a service-level policy');
+  const inbound = /<inbound>([\s\S]*?)<\/inbound>/.exec(global[0]);
+  assert.ok(inbound, 'and it must have an inbound section');
+
+  for (const header of ['X-Gateway-Secret', 'X-APIM-Subscription']) {
+    const del = inbound[1].indexOf(`<set-header name="${header}" exists-action="delete" />`);
+    const set = inbound[1].indexOf(`<set-header name="${header}" exists-action="override">`);
+    assert.ok(del >= 0, `${header} must be deleted from the client request`);
+    assert.ok(set > del, `${header} must be deleted BEFORE the gateway sets its own value`);
+  }
+
+  assert.match(APIM_MODULE, /<value>\{\{gateway-secret\}\}<\/value>/,
+    'the secret must come from the named value, never a literal in this repository');
+  assert.match(APIM_MODULE, /<value>@\(context\.Subscription\?\.Name \?\? ""\)<\/value>/,
+    'and the subscription name from APIM itself, which is the only party that verified the key');
+});
+
+// Without operations APIM answers 404 for everything: an API with a backend but no exposed
+// operation proxies nothing, and `az bicep build` cannot see the difference.
+test('both APIM APIs expose wildcard operations over every method', () => {
+  const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'];
+  for (const method of methods) {
+    assert.ok(APIM_MODULE.includes(`  '${method}'`), `proxyMethods must include ${method}`);
+  }
+
+  for (const parent of ['api', 'machineApi']) {
+    const block = new RegExp(
+      `apis/operations@[\\d-]+' = \\[for method in proxyMethods: \\{\\s+parent: ${parent}\\b[\\s\\S]*?urlTemplate: '/\\*'`
+    );
+    assert.match(APIM_MODULE, block, `${parent} must declare a wildcard operation per method`);
   }
 });

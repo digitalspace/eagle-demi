@@ -19,10 +19,9 @@ export class ApiDocsComponent {
     return SWAGGER_ENVIRONMENTS.includes(String(this.configService.config.ENVIRONMENT || '').toLowerCase());
   }
 
-  /** Swagger lives beside the API, not on this SPA's origin. */
+  /** The spec is a route under the API base: /api/api-docs works relative and absolute. */
   openSwagger() {
     const basePath = this.configService.config.API_PATH || '/api';
-    const url = basePath === '/api' ? '/api-docs' : basePath.replace(/\/api$/, '/api-docs');
-    window.open(url, '_blank');
+    window.open(`${basePath}/api-docs`, '_blank');
   }
 }

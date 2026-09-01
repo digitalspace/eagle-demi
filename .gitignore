@@ -64,3 +64,4 @@ __pycache__/
 
 # Impeccable design-hook config (local tooling)
 .impeccable/
+azure/main.json

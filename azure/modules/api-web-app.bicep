@@ -273,10 +273,6 @@ resource apiWebApp 'Microsoft.Web/sites@2023-12-01' = {
           value: environmentName
         }
         {
-          name: 'API_LOCATION'
-          value: 'https://demi-api-${environmentName}.azurewebsites.net'
-        }
-        {
           name: 'AzureWebJobsStorage'
           value: 'DefaultEndpointsProtocol=https;AccountName=${apiStorage.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${apiStorage.listKeys().keys[0].value}'
         }

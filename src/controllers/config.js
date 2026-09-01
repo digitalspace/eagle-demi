@@ -52,7 +52,9 @@ function fromEnvironment() {
     // unauthenticated and must stay free of anything that is not.
     BUILD_ID,
     ENVIRONMENT: process.env.ENVIRONMENT || config.env || 'dev',
-    API_LOCATION: process.env.API_LOCATION || 'https://demi-api-dev.azurewebsites.net',
+    // '' = same-origin /api. Azure drops empty-valued app settings from the env, so the
+    // default lives here and no app setting declares it.
+    API_LOCATION: process.env.API_LOCATION || '',
     API_PATH: process.env.API_PATH || '/api',
     KEYCLOAK_CLIENT_ID: process.env.KEYCLOAK_CLIENT_ID || 'eagle-admin-console',
     KEYCLOAK_URL: process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',

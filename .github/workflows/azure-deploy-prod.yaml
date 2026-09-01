@@ -75,7 +75,6 @@ env:
   EXTRACTOR_APP_NAME: eagle-extractor-prod
   # Two API apps, one zip, for the length of the Flex migration: the B1 app keeps serving prod
   # while the FC1 app is proven, and rproxy is flipped only in Phase 4.
-  API_APP_NAME: demi-api-prod
   API_FLEX_APP_NAME: demi-api-fc-prod
 
 jobs:
@@ -225,19 +224,6 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # The probe cannot tell "does not exist" from "the CI identity holds no role on it"; both
-      # mean there is nothing here to deploy.
-      - name: Does demi-api-prod exist yet?
-        id: probe
-        run: |
-          if az webapp show -g ${{ vars.AZURE_RESOURCE_GROUP }} -n ${{ env.API_APP_NAME }} \
-               --query name -o tsv >/dev/null 2>&1; then
-            echo "found=true" >> $GITHUB_OUTPUT
-          else
-            echo "found=false" >> $GITHUB_OUTPUT
-            echo "⏭️  ${{ env.API_APP_NAME }} not present — skipping the API deploy." >> $GITHUB_STEP_SUMMARY
-          fi
-
       # Same skip-rather-than-fail shape as the extractor above: the Flex app does not exist until
       # `azure/modules/api-function-flex.bicep` is deployed by hand, and the probe cannot tell that
       # apart from demi-cicd-prod holding no role on it — both mean nothing to deploy here.
@@ -253,26 +239,19 @@ jobs:
           fi
 
       - name: Setup Node.js
-        if: steps.probe.outputs.found == 'true' || steps.flex.outputs.found == 'true'
+        if: steps.flex.outputs.found == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: '22'
 
-      # Dependencies only. Packaging belongs to `scripts/package-api.py`, which the deploy script
-      # calls — same as staging. Gated on EITHER app, so the zip never goes up without node_modules
-      # once the B1 app is gone.
+      # Dependencies only. Packaging belongs to `scripts/package-api.py`.
+      # No legacy App Service deploy: demi-api-prod is retired from serving and a deploy onto it
+      # broke it (2026-09-01) — the Flex app is the only API target.
       - name: Install Dependencies
-        if: steps.probe.outputs.found == 'true' || steps.flex.outputs.found == 'true'
+        if: steps.flex.outputs.found == 'true'
         run: |
           corepack enable
           yarn install --immutable
-
-      # `scripts/deploy-azure.sh`, for the reason its own header gives: the CLI's exit code is not
-      # the same fact as the deployment succeeding, and this script polls the deployment record
-      # and then proves the NEW build is the one answering.
-      - name: Deploy API
-        if: steps.probe.outputs.found == 'true'
-        run: ./scripts/deploy-azure.sh api ${{ vars.AZURE_RESOURCE_GROUP }}
 
       # `config-zip`, not `scripts/deploy-azure.sh`, for the reason the extractor job gives: a Flex
       # app has no Kudu wwwroot to POST into — it publishes to the deployment blob container

@@ -11,8 +11,8 @@
   window.__env.ENVIRONMENT = 'test'; // local | dev | test | prod
   window.__env.BANNER_COLOUR = 'blue';
 
-  // API — keep API_LOCATION empty locally so calls stay relative (/api) and go through the
-  // dev-server proxy; proxy.conf.js forwards them to DEV_PROXY_TARGET. Deploy rewrites both.
+  // API — API_LOCATION stays empty everywhere: relative /api goes through the dev-server
+  // proxy locally and through Front Door -> APIM when deployed.
   window.__env.API_LOCATION = '';
   window.__env.API_PATH = '/api';
   window.__env.DEV_PROXY_TARGET = 'https://demi-api-test.azurewebsites.net';
