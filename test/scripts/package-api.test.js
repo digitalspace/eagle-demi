@@ -123,9 +123,13 @@ test('API deploy package', async (t) => {
     execFileSync('python3', [path.join(REPO_ROOT, 'scripts', 'package-api.py'), repo, out],
       { stdio: 'pipe', env: { ...process.env, BUILD_ID: sentinel } });
     const content = execFileSync('unzip', ['-p', out, 'build-id.txt'], { encoding: 'utf8' });
+    const mode = execFileSync('unzip', ['-Z', out, 'build-id.txt'], { encoding: 'utf8' });
     fs.rmSync(dir, { recursive: true, force: true });
     assert.strictEqual(content.trim(), sentinel,
       'build-id.txt at zip root must hold BUILD_ID');
+    // writestr's default entry mode is unreadable to the Flex worker user (EACCES → "unknown").
+    assert.match(mode, /^-rw-r--r--/m,
+      'build-id.txt must be world-readable in the zip');
   });
 
   await t.test('ships a SYMLINKED node_modules, and does not loop on a cycle', () => {
