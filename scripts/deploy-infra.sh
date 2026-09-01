@@ -161,8 +161,9 @@ require_secrets() {
 
   # The devbox SSH key. A public key, not a credential — but the param file reads it with no
   # fallback like the six above, so a missing one fails the build, and the same guard is what turns
-  # that into a message. Only where the param file switches the VM on: prod deploys no devbox, and
-  # there is no demi-app-secrets in 6cdc9e-prod to read it from either.
+  # that into a message. Only where the param file switches the VM on. Prod: no demi-app-secrets
+  # in 6cdc9e-prod yet — export DEVBOX_SSH_PUBLIC_KEY by hand (copy in demi-kv-prod
+  # `devbox-ssh-public-key`; ARM cannot read secret values back, so KV is storage, not a source).
   if grep -Eq '^param deployDevbox *= *true' "$PARAM_FILE"; then
     DEVBOX_SSH_PUBLIC_KEY="${DEVBOX_SSH_PUBLIC_KEY:-$(os_secret demi-app-secrets DEVBOX_SSH_PUBLIC_KEY)}"
     export DEVBOX_SSH_PUBLIC_KEY

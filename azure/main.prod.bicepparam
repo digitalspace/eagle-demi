@@ -148,3 +148,11 @@ param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 
 // Empty until both realm clients exist in the prod realm.
 param syncTeamsSchedule = ''
+
+// ── Devbox ────────────────────────────────────────────────────────────────────────────────────
+// Same shape as test: dev-access VM on `snet-servers`, a plain landing-zone subnet with its own
+// NSG. Public key only, never committed; deploy-infra.sh sources it, no fallback on purpose.
+// Keypair lives in demi-kv-prod (`devbox-ssh-public-key` / `devbox-ssh-private-key`).
+param deployDevbox = true
+param devboxSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/snet-servers'
+param devboxSshPublicKey = readEnvironmentVariable('DEVBOX_SSH_PUBLIC_KEY')
