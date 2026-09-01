@@ -255,6 +255,20 @@ param availabilityUrl string = ''
 @description('Deploy the API Management gateway. Requires apiFlexSubnetId, since it fronts that app.')
 param deployApim bool = false
 
+// The dev-access VM. Off by default: it is a per-environment opt-in, and an environment without the
+// subnet gets nothing rather than a half-built one.
+@description('Deploy the dev-access VM that replaces the App Service SSH tunnel.')
+param deployDevbox bool = false
+
+@description('Non-delegated landing-zone subnet for the devbox NIC. Empty deploys no VM.')
+param devboxSubnetId string = ''
+
+// A PUBLIC key, so no @secure(): masking it would only hide it from what-if. Nothing SSHes in, but
+// the Compute API refuses a Linux VM with no credential at all — the param file reads it from the
+// environment rather than committing one.
+@description('SSH public key for the devbox admin user.')
+param devboxSshPublicKey string = ''
+
 // Mandatory Cost Management Tags applied across ALL resources
 // Created out of band in the vault, shared by the gateway (named value) and the app (app setting).
 var apimGatewaySecretName = 'apim-gateway-secret'
@@ -543,6 +557,25 @@ module availability './modules/availability.bicep' = if (!empty(availabilityUrl)
   }
 }
 
+// 7d. Dev-access VM. Same identity as the API, so a script run here has the app's data-plane access
+// and no more. Deallocated between sessions; see README "Running anything against the database".
+module devbox './modules/devbox.bicep' = if (deployDevbox && !empty(devboxSubnetId)) {
+  name: 'deploy-devbox'
+  params: {
+    location: location
+    environmentName: environmentName
+    tags: defaultTags
+    subnetId: devboxSubnetId
+    sshPublicKey: devboxSshPublicKey
+    identityId: identity.outputs.identityId
+    identityClientId: identity.outputs.clientId
+    // The same expressions the API app gets, so demi-env cannot drift from the running app.
+    cosmosEndpoint: cosmos.outputs.cosmosEndpoint
+    searchEndpoint: deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
+    eagleApiBase: eagleApiBase
+  }
+}
+
 // 8. Angular frontend — a Storage static website, no App Service and no plan. TLS, the hostname,
 // the security headers and the routing rules are supplied by the Front Door profile in
 // eagle-search; this template owns only the origin. See modules/static-site.bicep for the one
@@ -581,6 +614,8 @@ output frontendStaticSiteHostName string = deployStaticSite ? staticSite!.output
 output frontendStorageAccountName string = deployStaticSite ? staticSite!.outputs.storageAccountName : ''
 // The gateway machine and browser traffic is moved onto. Empty until deployApim is set.
 output apimGatewayUrl string = (deployApim && !empty(apiFlexSubnetId)) ? apim!.outputs.gatewayUrl : ''
+// The VM every `az vm run-command invoke` addresses. Empty when the devbox is not deployed.
+output devboxName string = (deployDevbox && !empty(devboxSubnetId)) ? devbox!.outputs.devboxName : ''
 output searchEndpoint string = deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
 output cosmosEndpoint string = cosmos.outputs.cosmosEndpoint
 output identityClientId string = identity.outputs.clientId

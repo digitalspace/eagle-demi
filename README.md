@@ -37,83 +37,61 @@ Cosmos sits behind a private endpoint **and is keyless**, so database scripts ca
 laptop. They also cannot run in Kudu — the SCM container has no managed-identity endpoint, and with
 local auth disabled there is no key to fall back on. Opening the firewall is denied by Azure Policy.
 
-The app container is the only place with both network access and a managed identity. Reach it over
-the App Service SSH tunnel:
+`demi-devbox-test` is where they run: a small VM inside the landing-zone VNet, running as
+`demi-identity-test` — the same identity the API runs as, so a script there has exactly the app's
+Cosmos, Key Vault and Search access and nothing more. It is deallocated between sessions, and a
+schedule shuts it down at 19:00 Pacific, so start it first and deallocate it after:
 
 ```bash
-az webapp create-remote-connection -g c4b0a8-test-rg -n demi-api-test --port 50123 &
-sshpass -p 'Docker!' ssh -c aes256-cbc -m hmac-sha1 -p 50123 root@127.0.0.1
+az vm start      -g c4b0a8-test-rg -n demi-devbox-test   # ~60-90 s
+az vm deallocate -g c4b0a8-test-rg -n demi-devbox-test   # compute bills for every hour it runs
 ```
 
-`-c aes256-cbc` is required — App Service offers only legacy CBC ciphers, which OpenSSH 9+ disables
-by default (`no matching cipher found`).
+**Scripts go over the ARM control plane** — no network path from here, no SSH:
 
-**Keep `az` reasonably current, or this tunnel stops working.** The app declares
-`basicPublishingCredentialsPolicies` `allow: false` for both `scm` and `ftp`, so SCM refuses basic
-auth. `az webapp create-remote-connection` copes: azure-cli checks `basic_auth_supported()` and
-falls back to an AAD bearer (verified on 2.89.1). A pre-2023 CLI has no such fallback and loses the
-tunnel — which is the ONLY route to the private Cosmos and AI Search data planes, so every database
-script goes with it. If the tunnel starts failing to authenticate, check the CLI version before
-anything else.
+```bash
+az vm run-command invoke -g c4b0a8-test-rg -n demi-devbox-test --command-id RunShellScript \
+  --scripts "sudo -u demi bash -lc 'eval \"\$(demi-env)\" && cd /opt/eagle-demi && node src/scripts/reconcile-eagle.js'"
+```
 
-Four things to know before running a script this way:
+The quoting matters: run-command runs the script as **root**, and everything the run needs — the `az`
+login and the repo checkout alike — belongs to `demi`. `\$` keeps the substitution on the VM inside
+the `demi` shell rather than letting the local shell or root's shell take it.
 
-1. **App settings are injected into the app process, not the SSH shell.** Read them from
-   `/proc/1/environ` — and that includes `IDENTITY_ENDPOINT` and `IDENTITY_HEADER`, not just the
-   `COSMOS_*` pair. App Service serves managed identity through those two variables, so without them
-   `@azure/identity` falls through to IMDS and fails with five `CredentialUnavailableError` lines
-   about VS Code, the Azure CLI and PowerShell — none of which is the actual problem:
+`eval "$(demi-env)"` is what makes that work. `/usr/local/bin/demi-env` logs the CLI in as the managed
+identity and prints `AZURE_CLIENT_ID`, `COSMOS_ENDPOINT`, `COSMOS_NOSQL_DATABASE`, `SEARCH_ENDPOINT`
+and `EAGLE_API_BASE`. `SEARCH_ENDPOINT` is in there because anything that deletes a row deletes its
+index entry too, and `deleteFromIndex` returns 0 instead of throwing when it is unset — without it a
+purge looks like it worked and leaves the row searchable.
+
+Four things to know:
+
+1. **run-command truncates stdout at 4 KB**, so anything longer is written to a file and comes back
+   out through blob storage. The identity already holds Storage Blob Data Owner on the API's storage
+   account, which is the one to use:
 
    ```bash
-   export $(tr '\0' '\n' < /proc/1/environ \
-     | grep -E '^(COSMOS_ENDPOINT|COSMOS_NOSQL_DATABASE|AZURE_CLIENT_ID|IDENTITY_ENDPOINT|IDENTITY_HEADER|SEARCH_ENDPOINT|SEARCH_INDEX|SEARCH_INDEX_PROJECTS|SEARCH_INDEX_DOCUMENTS)=')
+   ACCT=$(az storage account list -g c4b0a8-test-rg --query "[?starts_with(name,'demifc')].name" -o tsv)
+   az storage container create --auth-mode login --account-name "$ACCT" -n transfer   # once
+   # inside the run-command script, after the run has written /tmp/out.ndjson:
+   #   az storage blob upload --auth-mode login --account-name <acct> -c transfer -n out.ndjson -f /tmp/out.ndjson
+   az storage blob download --auth-mode login --account-name "$ACCT" -c transfer -n out.ndjson -f ./out.ndjson
    ```
 
-   The `SEARCH_*` four are here because anything that deletes a row deletes its index entry too, and
-   `deleteFromIndex` returns 0 instead of throwing when `SEARCH_ENDPOINT` is unset — without them a
-   purge looks like it worked and leaves the row searchable.
-2. **`globalThis.crypto` no longer needs shimming.** The container is Node 22, which has it
-   natively. Measured 2026-08-20 — earlier advice here said a standalone script must do it itself.
-3. **Run with `--max-old-space-size=224`.** The container has ~1.85 GB with ~330 MB free, and Node's
-   default heap gets the process OOM-killed with no error in the log — it simply vanishes.
-4. **`NODE_PATH=/home/site/wwwroot/node_modules`** if you are running from anywhere else in the
-   container. `wwwroot` itself is **read-only** (`WEBSITE_RUN_FROM_PACKAGE`), so anything a script
-   writes goes under `/home` — which has 30 GB.
+2. **`/opt/eagle-demi` is a shallow clone made at first boot**, not a deploy. `git pull && yarn
+   install` in the same run-command before anything that depends on a recent change.
+3. **The VM is a `Standard_B1s` — 1 GiB of RAM.** A big export needs `node
+   --max-old-space-size=...` and probably `az vm resize --size Standard_B2s` first; Node's default
+   heap gets the process OOM-killed with no error, it simply vanishes.
+4. **A run still going at 19:00 Pacific dies with the auto-shutdown.** Disable the schedule for the
+   day, or start the run earlier.
 
-**A run longer than ~20 minutes needs `alwaysOn`.** App Service unloads an idle app and recycles the
-container, which kills a detached `nohup` run with it. `demi-api-test` ships with `alwaysOn = false`:
+**Interactive work is Bastion**: `bastion-test` is the Developer SKU, which is the portal's browser
+shell and only that — no native client, no tunnel, no `scp` (those need Standard). Portal → the VM →
+Connect → Bastion, then `eval $(demi-env)` in the shell it gives you.
 
-```bash
-az webapp config set -g c4b0a8-test-rg -n demi-api-test --always-on true
-az webapp config set -g c4b0a8-test-rg -n demi-api-test --always-on false  # when the run ends
-```
-
-Turn it back off afterwards. `azure/modules/api-web-app.bicep` sets no `alwaysOn` at all, so leaving
-it on is drift the template will not correct and the next reader cannot see.
-
-**Getting a large file back out needs `scripts/pull-from-container.sh`**, not `scp` or `cat`:
-
-```bash
-scripts/pull-from-container.sh /home/backups/chunks.jsonl.gz ./chunks.jsonl.gz
-```
-
-`scp` fails outright — App Service's SSH has no sftp subsystem. `ssh 'cat big.gz' > local.gz` fails
-worse, because it fails silently: the tunnel drops mid-stream, the redirect keeps whatever arrived,
-and **ssh still exits 0**. Pulling the 2026-08-20 chunk export that way produced 568 MB of a 992 MB
-file and reported success. The script splits the file remotely, refetches any part whose md5 does not
-match, and checks the assembled result against the container's md5 of the original. Nothing is
-written to the destination path until that final md5 matches, so a failed pull leaves no truncated
-file behind pretending to be the real one.
-
-Re-running resumes, which on a file this size is the point: the remote split and the verified local
-parts (`<destination>.parts`) both survive a failure, so a pull that dies at part 700 of 800 fetches
-100 parts on the retry rather than starting over. Both are removed once the whole file checks out.
-Splitting doubles the file's footprint under `/home` — and the parts directory does the same
-locally — for the duration.
-
-The `_seedwrap.js` / `_purgewrap.js` names that used to be cited here are **not in this repo** —
-they were written by hand in the container and are gone with it. The `export $(...)` line above
-is the whole pattern; no wrapper is needed now that the crypto shim is not.
+Search *admin* operations are unchanged and do not need the VM: `scripts/with-search-admin.sh` grants
+Search Service Contributor for the length of one command and revokes it afterwards.
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write

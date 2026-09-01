@@ -72,9 +72,9 @@ Flex instance warm), and the reconcile drift alert.
 
 - FIRST: eagle-api `DEMI_API_BASE` → `https://demi-api-fc-prod.azurewebsites.net` (helm values,
   6cdc9e-prod) and one mirror write verified. THEN `az functionapp stop` old `demi-api-prod`.
-  Delete one week later — but the old apps' containers are also the only documented SSH-tunnel
-  path to the Cosmos/Search data planes (Flex has no SSH); keep one stopped app per env as the
-  startable jump box, or build a replacement first.
+  Delete one week later — but the old apps' containers are also the only SSH-tunnel path to the
+  Cosmos/Search data planes (Flex has no SSH), so `demi-devbox-prod` has to be deployed and proven
+  first (`deployDevbox`, README "Running anything against the database").
 - Phase 5 deletions in eagle-demi: `azure/modules/api-web-app.bicep`, `deploy-azure.sh` api
   target, `RATE_LIMIT_MAX_REQUESTS` params, `vnet.bicep`.
 - Revoke old machine keys EXCEPT the extractor's.

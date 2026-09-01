@@ -87,7 +87,10 @@ const WIRED = [
   ['trackClientId', /^\s+trackClientId: trackClientId$/m,
     'the API module call — without it the sync cannot ask Keycloak for a Track token'],
   ['roleSyncClientId', /^\s+roleSyncClientId: roleSyncClientId$/m,
-    'the API module call — without it the sync has no admin identity to grant roles with']
+    'the API module call — without it the sync has no admin identity to grant roles with'],
+  ['deployDevbox',
+    /^module devbox '\.\/modules\/devbox\.bicep' = if \(deployDevbox && !empty\(devboxSubnetId\)\) \{$/m,
+    'the devbox module gate — without it every environment builds a dev-access VM, prod included']
 ];
 
 for (const [name, wiring, why] of WIRED) {
