@@ -5,8 +5,8 @@ DEMI (Document Extraction & Machine Intelligence) for EPIC, on Azure.
 This repository houses:
 
 1. **demi-api** — the authoritative REST API and geospatial search service for projects, documents,
-   chunks and administrative boundaries, running on Azure App Service (`@azure/functions` v4 on
-   Node.js 22).
+   chunks and administrative boundaries, running on Azure Functions Flex Consumption
+   (`@azure/functions` v4 on Node.js 22).
 2. **demi-frontend** — the Angular document intake and search frontend, published to the `$web`
    container of a Storage static website and served through the Front Door profile that lives in
    `eagle-search`.
@@ -34,8 +34,8 @@ OpenAPI spec: `http://localhost:7071/api-docs` — the raw YAML, not a UI. Not s
 ### Running anything against the database
 
 Cosmos sits behind a private endpoint **and is keyless**, so database scripts cannot run from a
-laptop. They also cannot run in Kudu — the SCM container has no managed-identity endpoint, and with
-local auth disabled there is no key to fall back on. Opening the firewall is denied by Azure Policy.
+laptop. The Flex app has no Kudu or SCM site to run them in either, and with local auth disabled
+there is no key to fall back on. Opening the firewall is denied by Azure Policy.
 
 `demi-devbox-test` is where they run: a small VM inside the landing-zone VNet, running as
 `demi-identity-test` — the same identity the API runs as, so a script there has exactly the app's
@@ -542,7 +542,7 @@ without revisiting that grant. `scripts/validate-deploy.sh` checks the result wh
    code**, so it cannot be composed, guessed or written ahead of the deployment. Take it from
    eagle-search's `edgeEndpointHostNames` output, append it to `frontendHostNames` in
    `azure/main.test.bicepparam`, and redeploy this template. That is what sets `CORS_ORIGIN` on
-   `demi-api-fc-test`, and it also sets the App Service's own platform CORS — **both layers, and the
+   `demi-api-fc-test`, and it also sets the Flex app's own platform CORS — **both layers, and the
    platform one answers the preflight first**, so neither alone is enough.
 
    The parameter is an ARRAY because a cutover has two frontends at once. Getting the order wrong
@@ -702,21 +702,23 @@ It is not a loaded gun, though, and now for two independent reasons. **No dev wo
 infra job at all** — the `deploy-infra` job became a loginless `validate-infra` on 2026-08-04, and
 that in turn moved to `pr.yaml` as `validate-bicep` on 2026-08-05 when the deploy workflows were
 split. A template that will not compile is a pull-request problem; it has no bearing on whether a
-zipdeploy should run, so it no longer blocks one. And the CI identity is scoped to one App Service
-plus a data-plane role on one storage account, so it could not run an ARM deployment even if a job
-came back. Infrastructure changes go through `az` by hand meanwhile.
+zipdeploy should run, so it no longer blocks one. And the CI identity is scoped to the Flex app
+`demi-api-fc-test` plus a data-plane role on one storage account, so it could not run an ARM
+deployment even if a job came back. Infrastructure changes go through `az` by hand meanwhile.
 
 Things that will cost you time if you rediscover them:
 
-- **`az webapp restart` does not recycle the Node worker.** Use `stop` then `start` — and even then,
-  poll a discriminator until it flips. A warm worker served the old build after both, for minutes.
-- **`config-zip` merges rather than clean-deploys.** A file deleted from the repo will not disappear
-  from `wwwroot`.
-- **Verify a deploy by content, not mtime.** The package carries source mtimes, so an old file can
-  look freshly deployed.
+- **`az functionapp restart` does not recycle the Node worker.** Use `stop` then `start` — and even
+  then, poll a discriminator until it flips. A warm worker served the old build after both, for
+  minutes.
+- **`config-zip` replaces the deployment package whole.** Flex has no `wwwroot` to merge into: each
+  deploy uploads a new package to blob storage and the app starts from that package entirely, so
+  there is nothing to prune and no stale-file trap. Verify by `BUILD_ID` in `GET /api/config`, then
+  confirm the trigger synced by polling `az functionapp function list -g <rg> -n <app>` for `api` —
+  that sync runs asynchronously after the package upload succeeds.
 - **Never ship `.env`.** App settings supply every variable in Azure.
 
-More, including the Kudu and basic-auth situation, in
+More in
 [Environment Reality & Operational Gotchas](https://github.com/digitalspace/eagle-demi/wiki/Environment-Reality-and-Operational-Gotchas).
 
 ---
