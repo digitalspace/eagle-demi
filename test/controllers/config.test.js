@@ -86,16 +86,17 @@ test('config controller', async (t) => {
     assert.notEqual(res.body.KEYCLOAK_ENABLED, 'False');
   });
 
-  await t.test('an empty API_LOCATION env survives as empty, not the dev default', async () => {
-    // '' means same-origin /api (Front Door -> APIM); || would silently swap in the dev host.
-    process.env.API_LOCATION = '';
-    t.after(() => { delete process.env.API_LOCATION; });
+  await t.test('API_LOCATION defaults to same-origin, set or not', async () => {
+    // Azure drops empty-valued app settings from the env, so absent and '' must both mean
+    // same-origin /api — an absolute dev default here would pull clients off the edge.
     t.mock.method(configRepository, 'get', async () => null);
-    const res = mockRes();
-
-    await configController.getConfig(REQ, res);
-
-    assert.equal(res.body.API_LOCATION, '');
+    for (const setup of [() => { delete process.env.API_LOCATION; }, () => { process.env.API_LOCATION = ''; }]) {
+      setup();
+      const res = mockRes();
+      await configController.getConfig(REQ, res);
+      assert.equal(res.body.API_LOCATION, '');
+    }
+    delete process.env.API_LOCATION;
   });
 
   await t.test('the document cannot introduce or override non-overridable keys', async () => {
