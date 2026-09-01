@@ -212,7 +212,7 @@ implementation:
 
 | | |
 |---|---|
-| API | `demi-api-test` — `kind: functionapp,linux` on the **B1 Basic** plan `demi-plan-test` (1 vCPU / 1.75 GB, single worker). Manage with `az webapp` |
+| API | `demi-api-fc-test` — `kind: functionapp,linux` on the **B1 Basic** plan `demi-plan-fc-test` (1 vCPU / 1.75 GB, single worker). Manage with `az webapp` |
 | Database | **Azure Cosmos DB for NoSQL** (`@azure/cosmos`), account `demi-cosmos-test` |
 | Search | **Azure AI Search** `demi-search-test` — Basic, keyless, private endpoint only. Live indexes `chunks`, `projects`, `documents` since the cutover on 2026-08-22. The retired `demi-*` indexes are still present and still indexing — they are the rollback target (`azure/search/README.md`) |
 | Object store | `nrs.objectstore.gov.bc.ca`, bucket `asnpnn` (S3-compatible, `minio` client) |
@@ -421,7 +421,7 @@ what produced 3,382 synthetic project rows in the old database.
 ## Deployment
 
 **The environment model: Azure dev is a sandbox, test is staging, prod is prod** (decided
-2026-08-10). Staging lives in `c4b0a8-test-rg` (subscription `c4b0a8-test`) as `demi-api-test` plus
+2026-08-10). Staging lives in `c4b0a8-test-rg` (subscription `c4b0a8-test`) as `demi-api-fc-test` plus
 the `demiwebtest…` static-website storage account, deployed from `azure/main.test.bicepparam`.
 
 `FRONTEND_STORAGE_ACCOUNT` has **no default and cannot be guessed** — the account name carries a
@@ -429,7 +429,10 @@ the `demiwebtest…` static-website storage account, deployed from `azure/main.t
 script aborts rather than inventing one, and `all` therefore needs it too.
 
 ```bash
-API_APP_NAME=demi-api-test ./scripts/deploy-azure.sh api c4b0a8-test-rg
+# API by hand (Flex has no Kudu — config-zip, not deploy-azure.sh):
+BUILD_ID="$(git describe --tags --always)-$(date -u +%H%M%S)" python3 scripts/package-api.py . /tmp/api.zip
+az functionapp deployment source config-zip -g c4b0a8-test-rg -n demi-api-fc-test --src /tmp/api.zip
+
 FRONTEND_STORAGE_ACCOUNT=$(az deployment group show -g c4b0a8-test-rg -n main \
   --query properties.outputs.frontendStorageAccountName.value -o tsv) \
   ./scripts/deploy-azure.sh frontend c4b0a8-test-rg
@@ -494,8 +497,8 @@ Door endpoint was verified in a browser. Two things from that generalise, and on
   Cosmos and AI Search included. Orphans go by hand or not at all.
 - **Take the origin out of `frontendHostNames` before deleting the host.** An `*.azurewebsites.net`
   name returns to Azure's global pool on deletion, so an entry left in `CORS_ORIGIN` is a
-  cross-origin position against `demi-api-test` that someone else can register.
-- `demi-api-test` was never on that plan — it runs on `demi-plan-test`, which is unaffected. Worth
+  cross-origin position against `demi-api-fc-test` that someone else can register.
+- `demi-api-fc-test` was never on that plan — it runs on `demi-plan-fc-test`, which is unaffected. Worth
   checking before any future plan deletion here, because the two names differ by one token.
 
 ### Three manual steps the templates cannot do
@@ -530,7 +533,7 @@ without revisiting that grant. `scripts/validate-deploy.sh` checks the result wh
    code**, so it cannot be composed, guessed or written ahead of the deployment. Take it from
    eagle-search's `edgeEndpointHostNames` output, append it to `frontendHostNames` in
    `azure/main.test.bicepparam`, and redeploy this template. That is what sets `CORS_ORIGIN` on
-   `demi-api-test`, and it also sets the App Service's own platform CORS — **both layers, and the
+   `demi-api-fc-test`, and it also sets the App Service's own platform CORS — **both layers, and the
    platform one answers the preflight first**, so neither alone is enough.
 
    The parameter is an ARRAY because a cutover has two frontends at once. Getting the order wrong
@@ -597,7 +600,7 @@ not redeploy the other:
 | Workflow | Deploys | Fires on a push to `main` touching |
 |---|---|---|
 | `azure-deploy-staging-frontend.yaml` | `$web` on the static-website storage account (repo variable `AZURE_FRONTEND_STORAGE_ACCOUNT`) | `frontend/**` |
-| `azure-deploy-staging-api.yaml` | `demi-api-test` | `src/**`, `api/**`, `public/**`, `index.js`, `host.json`, `package.json`, `yarn.lock`, `frontend/public/assets/geojson/**` |
+| `azure-deploy-staging-api.yaml` | `demi-api-fc-test` | `src/**`, `api/**`, `public/**`, `index.js`, `host.json`, `package.json`, `yarn.lock`, `frontend/public/assets/geojson/**` |
 | `draft-release.yaml` | nothing — mints the tag and draft release for the same push (see [Releases](#releases)) | *any path* |
 
 **The two staging workflows stay separate, and `draft-release.yaml` is a third.** Folding the deploys
@@ -622,7 +625,7 @@ federated credential, with no client secret anywhere:
 |---|---|
 | Identity | `demi-cicd-test`, in `c4b0a8-test-rg` |
 | Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:digitalspace/eagle-demi:environment:test`, audience `api://AzureADTokenExchange` |
-| RBAC | Website Contributor on `demi-api-test` **individually** — and, until that app is deleted, on `demi-frontend-test` as well — plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
+| RBAC | Website Contributor on `demi-api-fc-test` **individually** — and, until that app is deleted, on `demi-frontend-test` as well — plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
 | Config | All four values live on the **`test` GitHub environment**, nothing at repo scope and nothing hardcoded: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`; variables `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` |
 
 **Declaring `environment: test` changes the OIDC subject claim, and that is the trap.** With an
@@ -809,7 +812,7 @@ unlike push protection, those sit behind paid Secret Protection.
 **Reading the Dependabot count.** The raw number overstates the exposure. Only `frontend/dist` is
 deployed, never `frontend/node_modules`, so advisories on the Angular build toolchain are a CI
 supply-chain concern and not a production one. The API is the opposite — its package includes
-`node_modules`, so a root-lockfile advisory does reach `demi-api-test`. Group by
+`node_modules`, so a root-lockfile advisory does reach `demi-api-fc-test`. Group by
 `dependency.manifest_path` and `dependency.scope` before deciding anything:
 
 ```bash

@@ -149,12 +149,15 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   });
 }
 
-// The legacy-API off switch. Deleting the prod line silently reverts to the module default (ON),
-// which is exactly the demi-plan-prod collision the gate exists to prevent.
-test('the prod param file turns the legacy API off', () => {
-  assert.match(PROD_PARAMS, /^param deployLegacyApi = false$/m,
-    'prod must keep the B1 module off while demi-api-prod lives on the shared plan');
-});
+// The legacy-API off switch. Deleting either line silently reverts to the module default (ON):
+// prod would create demi-plan-prod into the shared-plan collision, test would resurrect the
+// deleted B1 app and plan.
+for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+  test(`the ${envName} param file turns the legacy API off`, () => {
+    assert.match(params, /^param deployLegacyApi = false$/m,
+      `${envName} must keep the B1 module off — its legacy app is retired or deleted`);
+  });
+}
 
 // The Track team sync's four plain settings. Every one is a whole-collection-PUT app setting, so a
 // param file that omits one takes main.bicep's empty default and the live value is deleted on the
