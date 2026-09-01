@@ -302,9 +302,11 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'ENVIRONMENT'
           value: environmentName
         }
+        // Empty on purpose: /api/config hands this to browsers, and same-origin /api is what
+        // keeps them on the Front Door -> APIM path instead of this host directly.
         {
           name: 'API_LOCATION'
-          value: 'https://${apiAppName}.azurewebsites.net'
+          value: ''
         }
         // Identity-based, so no account key lands in app settings. The three role assignments above
         // are what make it work; without them the host cannot start.

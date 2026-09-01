@@ -86,6 +86,18 @@ test('config controller', async (t) => {
     assert.notEqual(res.body.KEYCLOAK_ENABLED, 'False');
   });
 
+  await t.test('an empty API_LOCATION env survives as empty, not the dev default', async () => {
+    // '' means same-origin /api (Front Door -> APIM); || would silently swap in the dev host.
+    process.env.API_LOCATION = '';
+    t.after(() => { delete process.env.API_LOCATION; });
+    t.mock.method(configRepository, 'get', async () => null);
+    const res = mockRes();
+
+    await configController.getConfig(REQ, res);
+
+    assert.equal(res.body.API_LOCATION, '');
+  });
+
   await t.test('the document cannot introduce or override non-overridable keys', async () => {
     t.mock.method(configRepository, 'get', async () => ({
       id: 'config',
