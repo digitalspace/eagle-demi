@@ -11,9 +11,7 @@
 // THE NETWORK IS NOT OURS. There is no VNet in this resource group and there must not be. The
 // landing zone provides one in `c4b0a8-dev-networking` (`c4b0a8-dev-vwan-spoke`), and both the
 // private endpoints and the app's VNet integration point into its subnets. So subnet IDs are
-// PARAMETERS here. `modules/vnet.bicep` is left in the tree unreferenced rather than deleted,
-// because it is the only written record of the topology this was designed against before the
-// landing zone supplied one — but instantiating it would build a second, disconnected network.
+// PARAMETERS here.
 //
 // WHAT IS DELIBERATELY ABSENT.
 //   - Static Web App. The frontend is a Storage static website (module 8) fronted by the Front
@@ -45,11 +43,10 @@ param minioAccessKey string
 param minioSecretKey string
 
 // `adminApiKey` is written to the Key Vault secret the app then reads by reference; `doclingApiKey`
-// still reaches an app setting directly (api-web-app.bicep). Until now main.bicep did not pass them
-// at all, so the module default of '' applied and the first successful deploy would have written
-// ADMIN_API_KEY='' and DOCLING_API_KEY='' over the live values — destroying the break-glass
+// reaches an app setting directly. Both must be passed: a module default of '' would write
+// ADMIN_API_KEY='' and DOCLING_API_KEY='' over the live values, destroying the break-glass
 // credential and the extraction host's key. `what-if` cannot surface that, because @secure() values
-// are masked in its output, which is why it stayed invisible through several reviews.
+// are masked in its output.
 //
 // The live app settings are the source of truth; the deploy round-trips them in. Empty is still
 // permitted so a fresh environment can be stood up before the credentials exist.
@@ -78,9 +75,6 @@ param minioBucketName string = 'eagle-demi'
 @description('Key prefix namespacing this environment inside the bucket.')
 param minioKeyPrefix string = ''
 
-@description('Deploys the legacy B1/B3 app-service API alongside the Flex app. False where the old app pre-exists on a shared plan the template must not touch.')
-param deployLegacyApi bool = true
-
 @description('Pinned first day of the live budget period — an existing budget rejects startDate changes, so this must match what is deployed. Empty = first of the current month (new budgets only).')
 param budgetStartDate string = ''
 
@@ -99,9 +93,6 @@ param contactEmails array = [
 // account without its private endpoint is unreachable rather than merely public.
 @description('Existing landing-zone subnet for inbound private endpoints (c4b0a8-dev-networking).')
 param privateEndpointSubnetId string = ''
-
-@description('Existing landing-zone subnet for App Service VNet integration (c4b0a8-dev-networking).')
-param appServiceSubnetId string = ''
 
 @description('Object ID of a human principal granted read access to data planes. Empty grants none.')
 param readerPrincipalId string = ''
@@ -140,13 +131,9 @@ param allowedClients string
 @description('Expected JWT aud claim. Empty disables audience verification.')
 param ssoAudience string = ''
 
-// Empty creates demi-plan-<env>. Prod joins an existing plan instead; see the param file.
-@description('App Service plan to join instead of creating one. Must be a Linux plan.')
-param existingServerFarmId string = ''
-
-// Flex needs its own subnet, delegated to `Microsoft.App/environments` — not the serverFarms-
-// delegated one the B1 app integrates into. Empty deploys no Flex app, which is dev's case.
-@description('Delegated subnet for the Flex Consumption API app. Empty skips it and only the B1 app is deployed.')
+// Flex needs its own subnet, delegated to `Microsoft.App/environments`. Empty deploys no API app
+// at all, so an environment that wants one must supply it.
+@description('Delegated subnet for the Flex Consumption API app. Empty deploys no API.')
 param apiFlexSubnetId string = ''
 
 // Phase 3b. The module is written and the argument for it is per-environment isolation rather than
@@ -199,9 +186,8 @@ param summaryEnabled bool = true
 // depends on the account id — is then rejected with AccountProvisioningStateInvalid. It is
 // deterministic, not flaky: three consecutive runs failed identically on 2026-08-13.
 //
-// foundry.bicep's header says to read that failure as "the PE already exists" and move on, which
-// was true when nothing consumed the module's outputs. It no longer is: a Failed module means
-// `foundry.outputs.foundryEndpoint` never resolves, so `deploy-api-web-app` never runs at all.
+// A Failed foundry module means `foundry.outputs.foundryEndpoint` never resolves, so
+// `deploy-api-function-flex` never runs at all — the failure is not safe to read past.
 //
 // So: false once the PE exists and is Approved, which reuses the module's existing
 // `if (!empty(peSubnetId))` gate to skip re-PUTting a resource that is already correct. Leave it
@@ -427,60 +413,7 @@ module foundry './modules/foundry.bicep' = if (deployFoundry) {
   }
 }
 
-// 7. REST API — Linux App Service on a B1 plan, integrated into the landing-zone subnet.
-//
-// Not Consumption (Y1) despite `kind: 'functionapp'`: the live plan is B1, because the app holds a
-// warm worker and the 224 MB heap ceiling the scripts are written against is a B1 instance.
-// Off in prod: applying the B1 module there would CREATE demi-plan-prod and collide with
-// plan-eagle-search-prod's service-association link on snet-app-service (see main.prod.bicepparam).
-module apiWebApp './modules/api-web-app.bicep' = if (deployLegacyApi) {
-  name: 'deploy-api-web-app'
-  params: {
-    location: location
-    environmentName: environmentName
-    tags: defaultTags
-    minioHost: minioHost
-    minioAccessKey: minioAccessKey
-    minioSecretKey: minioSecretKey
-    minioBucketName: minioBucketName
-    minioKeyPrefix: minioKeyPrefix
-    adminApiKeySecretUri: keyVault.outputs.adminApiKeySecretUri
-    doclingApiKey: doclingApiKey
-    eagleApiBase: eagleApiBase
-    reconcileSchedule: reconcileSchedule
-    trackApiBase: trackApiBase
-    trackClientId: trackClientId
-    trackClientSecretUri: keyVault.outputs.trackClientSecretUri
-    roleSyncClientId: roleSyncClientId
-    roleSyncClientSecretUri: keyVault.outputs.roleSyncClientSecretUri
-    syncTeamsSchedule: syncTeamsSchedule
-    keycloakClientId: keycloakClientId
-    allowedClients: allowedClients
-    ssoAudience: ssoAudience
-    apiSubnetId: appServiceSubnetId
-    existingServerFarmId: existingServerFarmId
-    identityId: identity.outputs.identityId
-    identityClientId: identity.outputs.clientId
-    cosmosEndpoint: cosmos.outputs.cosmosEndpoint
-    searchEndpoint: deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
-    appInsightsConnectionString: observability.outputs.connectionString
-    enrichmentSources: enrichmentSources
-    summaryEnabled: summaryEnabled
-    foundryEndpoint: deployFoundry ? foundry!.outputs.foundryEndpoint : ''
-    foundryDeployment: deployFoundry ? foundry!.outputs.deploymentName : ''
-    auditDcrEndpoint: auditLogs.outputs.dcrEndpoint
-    auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
-    // Deploy-access auditing: who signed in to Kudu/SCM and published.
-    auditWorkspaceId: auditLogs.outputs.workspaceId
-    // The browser origins that call this API. See the parameter for why they are not derivable.
-    frontendHostNames: frontendHostNames
-    linkBaseUrl: linkBaseUrl
-  }
-}
-
-// 7a. The same REST API on Flex Consumption, deployed ALONGSIDE the B1 app above for the length of
-// the blue/green: same code, same identity, own plan and own storage. rproxy is flipped to it only
-// after it is proven, and the app above is what a rollback goes back to.
+// 7. REST API — Functions on Flex Consumption, in its own delegated subnet. The only API app.
 module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexSubnetId)) {
   name: 'deploy-api-function-flex'
   params: {
@@ -603,8 +536,7 @@ module costBudget './modules/cost-budget.bicep' = {
 }
 
 // Outputs
-output apiWebAppHostName string = deployLegacyApi ? apiWebApp!.outputs.apiWebAppHostName : ''
-// Empty until the Flex app is deployed. The host rproxy is flipped to in Phase 4.
+// Empty when no Flex subnet is supplied, which is the only way to deploy no API app.
 output apiFlexHostName string = !empty(apiFlexSubnetId) ? apiFunctionFlex!.outputs.apiFunctionAppHostName : ''
 // COPY THIS INTO eagle-search's Front Door parameters. The profile owns the DEMI route but not the
 // origin, so it needs this hostname to add one; it is stable for the life of the storage account.

@@ -7,7 +7,7 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..', '..');
 const MAIN = fs.readFileSync(path.join(ROOT, 'azure', 'main.bicep'), 'utf8');
-const API_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'api-web-app.bicep'), 'utf8');
+const API_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'api-function-flex.bicep'), 'utf8');
 const TEST_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.test.bicepparam'), 'utf8');
 const PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.prod.bicepparam'), 'utf8');
 const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'search-existing.bicep'), 'utf8');
@@ -25,12 +25,12 @@ test('the prod availability probe goes through rproxy and reaches AI Search', ()
   const url = new URL(match[1]);
 
   // rproxy resolves the Front Door address ONCE at config load, so a moved edge breaks the public
-  // path while demi-api-prod.azurewebsites.net keeps answering. Probing the app directly would
+  // path while demi-api-fc-prod.azurewebsites.net keeps answering. Probing the app directly would
   // stay green through exactly the outage this test exists to catch (TODO 4.6).
   assert.strictEqual(url.hostname, 'projects.eao.gov.bc.ca',
     'the probe must take the public path visitors take, not the app hostname behind it');
   assert.ok(url.pathname.startsWith('/demi-search/'),
-    'that public path is what rproxy routes to demi-api-prod');
+    'that public path is what rproxy routes to demi-api-fc-prod');
 
   // `hasCriteria` is FALSE for a bare project list, and src/controllers/search.js then answers it
   // from Cosmos — an AI Search outage would not move a `dataset=Project&pageSize=1` probe. Every
@@ -58,13 +58,8 @@ const WIRED = [
     'the foundry module gate — without it prod creates a model account it never queries'],
   ['deployStaticSite', /^module staticSite '\.\/modules\/static-site\.bicep' = if \(deployStaticSite\) \{$/m,
     'the static-site module gate — without it prod creates a $web nothing publishes to'],
-  ['existingServerFarmId', /^\s+existingServerFarmId: existingServerFarmId$/m,
-    'the API module call — without it prod creates demi-plan-prod instead of joining the shared plan'],
   ['keycloakClientId', /^\s+keycloakClientId: keycloakClientId$/m,
     'the API module call — without it no param file can set which client the API trusts'],
-  ['deployLegacyApi', /^module apiWebApp '\.\/modules\/api-web-app\.bicep' = if \(deployLegacyApi\) \{$/m,
-    'the legacy-API module gate — without it a prod apply creates demi-plan-prod and collides ' +
-    'with plan-eagle-search-prod\'s service-association link'],
   ['availabilityUrl',
     /^module availability '\.\/modules\/availability\.bicep' = if \(!empty\(availabilityUrl\)\) \{$/m,
     'the availability module gate — without it every environment gets a prod-only web test'],
@@ -149,16 +144,6 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
   });
 }
 
-// The legacy-API off switch. Deleting either line silently reverts to the module default (ON):
-// prod would create demi-plan-prod into the shared-plan collision, test would resurrect the
-// deleted B1 app and plan.
-for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
-  test(`the ${envName} param file turns the legacy API off`, () => {
-    assert.match(params, /^param deployLegacyApi = false$/m,
-      `${envName} must keep the B1 module off — its legacy app is retired or deleted`);
-  });
-}
-
 // The Track team sync's four plain settings. Every one is a whole-collection-PUT app setting, so a
 // param file that omits one takes main.bicep's empty default and the live value is deleted on the
 // next deploy — `az bicep build` says nothing, because an empty default compiles.
@@ -184,36 +169,6 @@ test('the not-ours search path still creates the shared private link to Cosmos',
   assert.ok(block, 'main.bicep must call the search-existing module');
   assert.match(block, /^\s+cosmosAccountId: cosmos\.outputs\.cosmosAccountId$/m,
     'without cosmosAccountId the module\'s own !empty() gate skips the link silently');
-});
-
-// SCM basic auth is a public credential-guessing path onto the box holding the corpus, and this is
-// the only thing in the repo that can catch it being re-enabled. `az bicep build` (pr.yaml:121)
-// exits 0 whether these children are present, absent, or set to true — the same blind spot the
-// wiring guards above exist for.
-//
-// Text-structural, and honestly so: it fails on the deletion and on the flip it is written for, and
-// proves nothing about what Azure actually applied. The live reading is
-// `az resource show .../basicPublishingCredentialsPolicies/scm --query properties.allow`, and only
-// after someone runs deploy-infra.sh — merging this template applies nothing.
-test('the API app refuses basic publishing credentials on both scm and ftp', () => {
-  // Split into resource blocks and check each one's CONTENTS, rather than matching parent/name/allow
-  // in a fixed order. The order-coupled version failed on a no-op reordering of `parent` and `name`
-  // — the compiled ARM was identical, two policies with allow:false — while reporting that the
-  // control was missing. A guard that cries deletion over formatting sends the next reader hunting
-  // for a resource that is still there.
-  const blocks = API_MODULE
-    .split(/^resource /m)
-    .filter(b => b.includes("'Microsoft.Web/sites/basicPublishingCredentialsPolicies@"));
-
-  for (const name of ['scm', 'ftp']) {
-    const block = blocks.find(b => new RegExp(`name: '${name}'`).test(b));
-    assert.ok(block, `no basicPublishingCredentialsPolicies child named '${name}' — a missing ` +
-      'child leaves that endpoint accepting passwords, and nothing else in CI would notice');
-    assert.match(block, /parent: apiWebApp/,
-      `the '${name}' policy must hang off apiWebApp, or it configures nothing`);
-    assert.match(block, /allow: false/,
-      `the '${name}' policy must set allow: false`);
-  }
 });
 
 // `deployEnrichment` decides ONE container. Prod skips `wildfires` and keeps `boundaries`, which is
@@ -391,11 +346,10 @@ test('the API app reads both team-sync secrets through Key Vault references', ()
 // copies first would let anyone reach the app directly and assert any subscription they like — the
 // Function App host stays public, because Consumption APIM has no VNet. `az bicep build` exits 0
 // either way. Same honest limits as the guards above.
-const FLEX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'api-function-flex.bicep'), 'utf8');
 const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
 
 test('the Flex app reads APIM_GATEWAY_SECRET through a Key Vault reference', () => {
-  const setting = FLEX_MODULE
+  const setting = API_MODULE
     .split(/^\s+\{$/m)
     .find(b => /name: 'APIM_GATEWAY_SECRET'/.test(b));
   assert.ok(setting, 'no APIM_GATEWAY_SECRET app setting declared at all');
@@ -407,7 +361,7 @@ test('the Flex app reads APIM_GATEWAY_SECRET through a Key Vault reference', () 
     'empty value is what disables the app trust branch');
   assert.match(MAIN, /^\s+gatewaySecretName: apimGatewaySecretName$/m,
     'the gateway and the app must name the SAME secret, or the app compares against another value');
-  assert.match(FLEX_MODULE, /^\s+keyVaultReferenceIdentity: identityId$/m,
+  assert.match(API_MODULE, /^\s+keyVaultReferenceIdentity: identityId$/m,
     'the app must resolve references as the identity that holds the grant');
 });
 

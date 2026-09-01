@@ -312,7 +312,7 @@ for the full rationale.
 **Authentication.** Keycloak (BC Gov loginproxy), realm `eao-epic`. Tokens are verified against JWKS
 with `RS256` pinned and the issuer checked (`src/helpers/auth.js`). `KEYCLOAK_URL`, `KEYCLOAK_REALM`,
 `SSO_ISSUER` and `SSO_JWKSURI` must be set per environment — they are, in
-`azure/modules/api-web-app.bicep`. Without them the API falls back to *dev* realm defaults.
+`azure/modules/api-function-flex.bicep`. Without them the API falls back to *dev* realm defaults.
 
 **Service-to-service.** Applications authenticate with a **Keycloak service account** —
 `client_credentials` against realm `eao-epic`, then a normal `Authorization: Bearer`. Callers that
@@ -441,7 +441,7 @@ the `demiwebtest…` static-website storage account, deployed from `azure/main.t
 script aborts rather than inventing one, and `all` therefore needs it too.
 
 ```bash
-# API by hand (Flex has no Kudu — config-zip, not deploy-azure.sh):
+# API by hand (Flex publishes through config-zip; deploy-azure.sh is frontend-only):
 BUILD_ID="$(git describe --tags --always)-$(date -u +%H%M%S)" python3 scripts/package-api.py . /tmp/api.zip
 az functionapp deployment source config-zip -g c4b0a8-test-rg -n demi-api-fc-test --src /tmp/api.zip
 
@@ -476,22 +476,19 @@ Approval opens the route but grants nothing: `demi-search-prod` runs its indexer
 (`existingSearchIndexerPrincipalId`) the Cosmos SQL Data Reader role. Without both, indexers get a
 403 instead of a connection error.
 
-The App Service plan is `plan-eagle-search-prod` in `rg-eagle-search-prod`, shared with
-`eagle-search-api-prod` until that app retires. **Scale it to B3 first**: the apply puts a second
-Node app on it, and B1 is one worker with 1 vCPU and 1.75 GB.
+The API is `demi-api-fc-prod` on its own FC1 plan — a Flex plan cannot be shared, so there is no
+App Service plan to size or join. Data-plane work goes through `demi-devbox-prod`, the VM in the
+landing-zone VNet; see "Running anything against the database".
 
 Object-store credentials come from the `nr-object-store-credential` secret in `6cdc9e-prod`
 (`user_account` / `password`), not `eagle-api-minio-keys`. `demi-app-secrets` does not exist in
 `6cdc9e-prod` yet — create it, or export `ADMIN_API_KEY` and `DOCLING_API_KEY` by hand.
 
 ```bash
-# 1. scale the shared plan
-az appservice plan update -g rg-eagle-search-prod -n plan-eagle-search-prod --sku B3
-
-# 2. what-if — the default, nothing is applied
+# what-if — the default, nothing is applied
 ./scripts/deploy-infra.sh prod
 
-# 3. apply
+# apply
 CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live
 ```
 
@@ -637,7 +634,7 @@ federated credential, with no client secret anywhere:
 |---|---|
 | Identity | `demi-cicd-test`, in `c4b0a8-test-rg` |
 | Federated credential | issuer `https://token.actions.githubusercontent.com`, subject `repo:digitalspace/eagle-demi:environment:test`, audience `api://AzureADTokenExchange` |
-| RBAC | Website Contributor on `demi-api-fc-test` **individually** — and, until that app is deleted, on `demi-frontend-test` as well — plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
+| RBAC | Website Contributor on `demi-api-fc-test` **individually**, plus Storage Blob Data Contributor (publish the bundle) **and** Storage Account Contributor (enable static website hosting) on the static-website account — both assigned by `static-site.bicep` from `frontendUploaderPrincipalId`. Nothing at resource-group scope. Website Contributor gives nothing at all on a storage account, and the data role alone cannot turn `$web` on |
 | Config | All four values live on the **`test` GitHub environment**, nothing at repo scope and nothing hardcoded: secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`; variables `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP` |
 
 **Declaring `environment: test` changes the OIDC subject claim, and that is the trap.** With an
@@ -684,11 +681,8 @@ its GitHub environment — its own role assignments, and for prod a decision abo
 on the environment. Build them from the dev pair when that work actually starts.
 
 **`azure/main.bicep` now describes and manages staging**, and was first applied to `c4b0a8-test-rg`
-on 2026-08-13. It instantiates every module except `vnet.bicep` — the landing zone owns the VNet, and
-secrets are app settings rather than Key Vault references. (`static-web-app.bicep` and
-`frontend-web-app.bicep` used to be named here as well; both were deleted when the frontend moved to
-`static-site.bicep`. `key-vault.bicep` is gone too — unreferenced, with no Key Vault in any
-environment.)
+on 2026-08-13. It instantiates every module in `azure/modules/`; the landing zone owns the VNet, so
+subnet ids are parameters rather than resources.
 
 That first apply found two defects the template had carried for months, both invisible to
 `what-if`:
@@ -696,7 +690,7 @@ That first apply found two defects the template had carried for months, both inv
 - `documents` and `boundaries` declared `/id/?` in their Cosmos `indexingPolicy`. Cosmos rejects the
   whole policy — `id` is a system property, always indexed, and cannot be named in a policy — so the
   module could never deploy. `what-if` does not validate indexing rules.
-- `main.bicep` did not pass `adminApiKey` or `doclingApiKey` to `api-web-app.bicep`, so the module's
+- `main.bicep` did not pass `adminApiKey` or `doclingApiKey` to the API module, so the module's
   `''` defaults would have overwritten `ADMIN_API_KEY` and `DOCLING_API_KEY` in live app settings.
   `what-if` masks `@secure()` values, so it showed nothing.
 

@@ -48,8 +48,6 @@ var proxyMethods = [
 // Server-to-server consumers, one subscription each so a key can be rotated or revoked alone.
 var machineConsumers = [
   'eagle-api'
-  'extractor'
-  'admin'
 ]
 
 resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {

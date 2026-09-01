@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Bicep infrastructure deployment for DEMI.
-# Usage: ./scripts/deploy-infra.sh [test|dev|prod] [--what-if|--live]
+# Usage: ./scripts/deploy-infra.sh [test|prod] [--what-if|--live]
 #
 # WHAT-IF IS THE DEFAULT. Nothing is applied without `--live`, and prod additionally refuses to
 # apply unless CONFIRM_PROD=yes is exported. The old default was the deployment itself, which put
@@ -16,7 +16,7 @@ set -euo pipefail
 #
 # ── WHY THIS EXISTS AT ALL ────────────────────────────────────────────────────────────────────
 #
-# `siteConfig.appSettings` in api-web-app.bicep is a WHOLE-COLLECTION PUT: every setting the
+# `siteConfig.appSettings` in api-function-flex.bicep is a WHOLE-COLLECTION PUT: every setting the
 # template does not supply is deleted from the running app. Six of them are secrets the template
 # cannot derive, so a deploy has to be told all six. That made the procedure a multi-command
 # hand-export across two clouds, documented only in a comment, and getting it wrong overwrote the
@@ -59,10 +59,6 @@ case "$ENVIRONMENT" in
     # Direct azurewebsites.net access is platform-403'd since the APIM cutover; probe the gateway.
     APIM_HOST="demi-apim-${ENVIRONMENT}.azure-api.net"
     ;;
-  dev)
-    SUBSCRIPTION='d2f8d048-2af3-44fd-81cc-858c040001f2'
-    RESOURCE_GROUP='c4b0a8-dev-rg'
-    ;;
   prod)
     SUBSCRIPTION='be5924ac-1083-4a1b-be92-7b444882cfd9'
     RESOURCE_GROUP='rg-demi-prod'
@@ -73,7 +69,7 @@ case "$ENVIRONMENT" in
     OC_CONTEXT='6cdc9e-prod/api-silver-devops-gov-bc-ca:6443/system:serviceaccount:6cdc9e-tools:github-cicd'
     ;;
   *)
-    echo -e "${RED}✗ unknown environment '${ENVIRONMENT}'. Use: test | dev | prod${NC}" >&2
+    echo -e "${RED}✗ unknown environment '${ENVIRONMENT}'. Use: test | prod${NC}" >&2
     exit 2
     ;;
 esac
@@ -110,16 +106,9 @@ if [ "$ENVIRONMENT" = 'prod' ] && [ "$MODE" = '--live' ] && [ "${CONFIRM_PROD:-}
 fi
 
 PARAM_FILE="${REPO_ROOT}/azure/main.${ENVIRONMENT}.bicepparam"
-# test and prod use main.<env>.bicepparam; dev is the unsuffixed one, matching the repo's naming.
-[ "$ENVIRONMENT" = 'dev' ] && PARAM_FILE="${REPO_ROOT}/azure/main.bicepparam"
 
-# Verify the app this deployment actually writes: with the legacy module off, only the Flex app
-# received the settings, and probing (or stop/starting) the untouched legacy app would be wrong.
-if grep -Eq '^param deployLegacyApi *= *false' "$PARAM_FILE"; then
-  API_APP="demi-api-fc-${ENVIRONMENT}"
-else
-  API_APP="demi-api-${ENVIRONMENT}"
-fi
+# The app this deployment writes: the Flex app is the only API app in every environment.
+API_APP="demi-api-fc-${ENVIRONMENT}"
 PROBE_HOST="${APIM_HOST:-${API_APP}.azurewebsites.net}"
 
 # Read one key out of an OpenShift secret. OpenShift is the source of truth for every credential

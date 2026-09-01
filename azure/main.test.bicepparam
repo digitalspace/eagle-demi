@@ -59,7 +59,7 @@ param deployReconcileDriftAlert = false
 // The browser origins allowed to call the API.
 //
 // `siteConfig.appSettings` is a whole-collection PUT, so whatever stands here is what CORS_ORIGIN
-// becomes on the running demi-api-test. An origin missing from this list is an origin whose every
+// becomes on the running demi-api-fc-test. An origin missing from this list is an origin whose every
 // request fails — and it fails in the browser, not in the deploy. On 2026-08-15 the Front Door
 // frontend was published while this named only the old App Service: the app loaded fine and then
 // failed /api/config and both /api/search calls with "No 'Access-Control-Allow-Origin' header".
@@ -84,19 +84,14 @@ param frontendUploaderPrincipalId = '39682a03-8b4c-4b05-84c6-b8e06c0a21a4'
 
 // pe-demi-foundry-test already exists, connection plsc-demi-foundry-test, state Approved. Leaving
 // this true re-PUTs it, which loses a race against the account PUT and fails the whole deployment
-// — including deploy-api-web-app, which never runs because it consumes foundry's outputs.
+// — including deploy-api-function-flex, which never runs because it consumes foundry's outputs.
 param deployFoundryPrivateEndpoint = false
 
-// Landing-zone subnets in c4b0a8-test-networking. The PE subnet mirrors dev's. App Service VNet
-// integration uses snet-app-service, NOT c4b0a8-test-cond-ext-webapp-subnet — that one is claimed
-// by asp-condition-extractor through a service-association link (allowDelete: false), and a
-// delegated subnet carries one plan's integration at a time.
+// Landing-zone subnet in c4b0a8-test-networking, carrying the inbound private endpoints.
 param privateEndpointSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/c4b0a8-test-cond-ext-pe-subnet'
-param appServiceSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-app-service'
 
 // The Flex app's own subnet, delegated to `Microsoft.App/environments` with an NSG attached (both
-// demanded by policy). A Microsoft.Web-delegated subnet cannot host it, so this is a second subnet
-// rather than the one above.
+// demanded by policy). The private-endpoint subnet above cannot host it.
 param apiFlexSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-demi-func-fc1-test'
 
 // Both, deliberately. These carry the audit-drop and ingestion-quota alerts, and a gap in the
@@ -151,6 +146,3 @@ param budgetStartDate = '2026-08-01'
 // Same probe as prod, test-shaped: monitors the real user path and its executions keep one
 // Flex instance warm — cheaper than alwaysReady and doubles as monitoring.
 param availabilityUrl = 'https://eagle-test.apps.silver.devops.gov.bc.ca/demi-search/search?dataset=Document&keywords=assessment&pageSize=1'
-
-// Deleted 2026-09-01: the devbox VM is the dev-access path; a deploy must not resurrect the B1 app.
-param deployLegacyApi = false

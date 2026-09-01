@@ -94,10 +94,8 @@ jobs:
         with:
           node-version: '22'
 
-      # Dependencies only. Packaging belongs to `scripts/package-api.py`, which the deploy script
-      # calls. The inline zip that used to live here pruned only frontend/.git/dist/.angular, so it
-      # shipped .claude, test, azure, .github and scripts into wwwroot — exactly the debris
-      # `scripts/validate-deploy.sh` checks for.
+      # Dependencies only. Packaging belongs to `scripts/package-api.py`: an inline zip prunes by
+      # hand and ships .claude, test, azure, .github and scripts into the app.
       - name: Install Dependencies
         run: |
           corepack enable
@@ -110,10 +108,9 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # `config-zip`, not `scripts/deploy-azure.sh`. That script POSTs to Kudu and then polls
-      # /api/config for its BUILD_ID; a Flex app has no Kudu wwwroot to POST into — it publishes to
-      # the deployment blob container declared in the module. Same zip as the step above, packaged
-      # again because the script deletes nothing behind it and BUILD_ID must be stamped in.
+      # `config-zip`: a Flex app has no Kudu wwwroot to POST a zip into — it publishes to the
+      # deployment blob container declared in the module. BUILD_ID is stamped into the package, so
+      # the zip is built here rather than reused.
       # No existence probe: the Flex app is permanent; a missing app must fail loudly, not skip.
       - name: Deploy API to the Flex app
         run: |

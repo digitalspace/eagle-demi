@@ -37,7 +37,7 @@ The staged history — all three steps are DONE. Past tense on purpose: the roll
 backwards, so the reader doing that needs to know what each step did.
 
 1. **Definitions took the plain names**, and `SEARCH_INDEX`, `SEARCH_INDEX_PROJECTS` and
-   `SEARCH_INDEX_DOCUMENTS` became app settings in `azure/modules/api-web-app.bicep`. They were
+   `SEARCH_INDEX_DOCUMENTS` became app settings in `azure/modules/api-function-flex.bicep`. They were
    pinned to the old `demi-` names at that point, so that deploy changed nothing the app queried.
    Only two of the three had ever been settings before, which is why a settings-only cutover was
    impossible until then.
@@ -49,7 +49,7 @@ backwards, so the reader doing that needs to know what each step did.
    **That command still applies a WIDENING today** — see the restore section below for what it
    refuses and what to do instead.
 3. **The three defaults were flipped** and the template deployed, which is the cutover itself.
-   Deploying `api-web-app.bicep` is therefore no longer a no-op: those defaults are what land in the
+   Deploying `api-function-flex.bicep` is therefore no longer a no-op: those defaults are what land in the
    live app settings. Rolling back now means refilling under the old names first (they no longer exist).
 
 `src/search/eagle-query.js`'s `DATASET_INDEX` is the one thing that moves in step 1 rather than
@@ -206,7 +206,7 @@ being fixed.
 
 ```bash
 # ALWAYS start here. One command, and it settles which branch below applies.
-az functionapp config appsettings list -n demi-api-test -g c4b0a8-test-rg \
+az functionapp config appsettings list -n demi-api-fc-test -g c4b0a8-test-rg \
   --query "[?starts_with(name,'SEARCH_INDEX')].{name:name,value:value}" -o table
 ```
 

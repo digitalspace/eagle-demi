@@ -81,11 +81,6 @@ param ssoAudience = ''
 param frontendHostNames = []
 
 // ── Compute ───────────────────────────────────────────────────────────────────────────────────
-// No `existingServerFarmId`: a Flex plan cannot be shared, so demi-api-fc-prod owns one. The
-// legacy module stays OFF here: applying it would create demi-plan-prod and collide with
-// plan-eagle-search-prod's service-association link on snet-app-service. The live demi-api-prod
-// keeps serving untouched until decommission.
-param deployLegacyApi = false
 param deployApim = true
 
 // Live budget period, read from demi-budget-prod 2026-09-01 (az rest: 2026-08-01T00:00:00Z) —
@@ -95,22 +90,16 @@ param budgetStartDate = '2026-08-01'
 // ── Network ───────────────────────────────────────────────────────────────────────────────────
 // Landing-zone subnets in c4b0a8-prod-networking; private DNS is attached by policy from a central
 // subscription this one cannot read, so no zone is named here.
-//
-// snet-app-service carries plan-eagle-search-prod's service-association link (allowDelete: false),
-// and a delegated subnet carries one plan's integration at a time. The other Microsoft.Web-delegated
-// subnet, c4b0a8-prod-cond-ext-webapp-subnet, is claimed by asp-condition-extractor-prod and is not
-// available.
 param privateEndpointSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/c4b0a8-prod-cond-ext-pe-subnet'
 
 // The Flex app's own subnet, delegated to `Microsoft.App/environments` with an NSG attached (both
-// demanded by policy). A Microsoft.Web-delegated subnet cannot host it, so this is a second subnet
-// rather than the one above.
+// demanded by policy). The private-endpoint subnet above cannot host it.
 param apiFlexSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/snet-demi-func-fc1-prod'
 
 // ── Monitoring ────────────────────────────────────────────────────────────────────────────────
 // THE PUBLIC PATH THROUGH rproxy, which is what eagle-public calls and the only address that fails
 // when the Front Door address moves — rproxy resolves it once at config load. Aiming this at
-// demi-api-prod.azurewebsites.net instead would stay green through exactly that outage.
+// demi-api-fc-prod.azurewebsites.net instead would stay green through exactly that outage.
 //
 // `dataset=Document` is what forces the request through AI Search: `hasCriteria` is false for a
 // bare project list, and the Project branch then answers from Cosmos, so an AI Search outage would

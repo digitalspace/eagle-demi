@@ -11,7 +11,7 @@ concluding the change did not land.
 
 | Value | Meaning |
 |---|---|
-| `/demi-search` | Live: eagle-public calls `demi-api-prod` for Project/Document search. |
+| `/demi-search` | Live: eagle-public calls `demi-api-fc-prod` for Project/Document search. |
 | `''` | Kill switch: eagle-api serves search itself from Mongo. |
 
 ## Statements
@@ -39,11 +39,11 @@ db.epic.updateOne({ _schemaName: 'Config' }, { $set: { SEARCH_API_PATH: '<value>
 
 ## After a change
 
-Watch for 1 h: the App Insights 5xx rate on `demi-api-prod` and the `demi-search-availability-prod`
+Watch for 1 h: the App Insights 5xx rate on `demi-api-fc-prod` and the `demi-search-availability-prod`
 webtest. Run the ACL probe against prod explicitly (the script defaults to test):
 
 ```
-DEMI_API_BASE=https://demi-api-prod.azurewebsites.net ADMIN_API_KEY=<ADMIN_API_KEY from secret demi-app-secrets in 6cdc9e-prod> \
+DEMI_API_BASE=https://demi-api-fc-prod.azurewebsites.net ADMIN_API_KEY=<ADMIN_API_KEY from secret demi-app-secrets in 6cdc9e-prod> \
   node src/scripts/probe-acl.js
 ```
 
@@ -59,7 +59,7 @@ Pulling a published record back from the public is a different procedure: `taked
 Owner: Daniel Truong — the only holder of a prod write login, and the only person who can run
 `CONFIRM_PROD=yes ./scripts/deploy-infra.sh prod --live`.
 
-`ADMIN_API_KEY` is a Key Vault reference on the App Service, not a stored value. The app setting
+`ADMIN_API_KEY` is a Key Vault reference on the app, not a stored value. The app setting
 reads `@Microsoft.KeyVault(SecretUri=https://demi-kv-prod.vault.azure.net/secrets/admin-api-key)`
 — versionless, so a new secret version is picked up without an infrastructure deploy.
 
@@ -74,7 +74,7 @@ Order matters. Do all four, in this order:
 4. Every other holder of the same value — the GPU extraction box's env file at minimum. A holder
    skipped keeps presenting the old key and 401s.
 
-Verify: `curl -H "X-Api-Key: <new>" https://demi-api-prod.azurewebsites.net/api/db/stats` → 200.
+Verify: `curl -H "X-Api-Key: <new>" https://demi-api-fc-prod.azurewebsites.net/api/db/stats` → 200.
 A literal `@Microsoft.KeyVault(...)` string in the live app setting means the reference did not
 resolve — check the `Key Vault Secrets User` grant on `demi-identity-prod` and that the app's
 `keyVaultReferenceIdentity` names that identity.

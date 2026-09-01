@@ -46,7 +46,7 @@ const SECURITY_HEADERS = Object.freeze({
 //
 // The deployed frontends cannot be listed here: since the move to a Storage static website behind
 // Front Door the browser origin is an AFD endpoint whose hostname carries a deploy-time hash,
-// supplied by CORS_ORIGIN (api-web-app.bicep sets it from the frontendHostName parameter).
+// supplied by CORS_ORIGIN (api-function-flex.bicep sets it from the frontendHostNames parameter).
 const DEFAULT_ALLOWED_ORIGINS = ['http://localhost:4200'];
 
 const corsOriginEnv = (process.env.CORS_ORIGIN || '').trim();
