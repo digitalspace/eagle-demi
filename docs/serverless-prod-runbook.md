@@ -9,8 +9,10 @@ eagle-api's mirror push.
 
 ## Gate: soak
 
-At least one week on test from 2026-09-01. Pass means: availability probe green, no unexplained
-5xx in `requests`, cold starts acceptable through the full chain, timers registered.
+At least one week on test from 2026-09-01. Pass means: no unexplained 5xx or failure-rate rise
+in `requests` (App Insights), cold starts acceptable through the full chain, timers registered.
+Test runs no availability webtest on purpose — a 5-minute probe keeps the app warm and hides
+scale-to-zero behaviour; the soak reads passive telemetry and real traffic.
 
 ## Pre-flight
 
