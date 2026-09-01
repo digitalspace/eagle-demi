@@ -13,6 +13,8 @@ const indexProjects = require('./index-projects');
  * dial that resolves to no field on a hit and is dropped without an error.
  */
 const PROJECT_TO_INDEX = {
+  // `name` reaches the index twice: itself, and again as `nameTokens` under the `filename` analyzer.
+  name: ['name', 'nameTokens'],
   abbreviation: ['displayName'],
   proponentName: ['proponent'],
   projectState: ['status'],

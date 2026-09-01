@@ -809,7 +809,9 @@ async function searchProjects(opts = {}) {
   const { value, count } = await runSearch(projectsIndex, {
     ...opts,
     prefix: true,
-    searchFields: 'name,displayName,description,proponent',
+    // `nameTokens` is `name` under the `filename` analyzer — `keywords=mine` matches "Mine Project",
+    // which `en.microsoft` strips as a stopword from every other field here.
+    searchFields: 'name,displayName,description,proponent,nameTokens',
     // Every name here must exist in the index — a stray one is a 400 on EVERY query, not a
     // missing field in the response. `trackProjectId` was in this list and is not in the index
     // (it is an int in Cosmos), which turned all project search into a silent fallback.
@@ -915,7 +917,7 @@ async function searchDocuments(opts = {}) {
       fuzzy: opts.fuzzy,
       prefix: true,
       filter: opts.projectFilter,
-      searchFields: 'name,displayName,proponent',
+      searchFields: 'name,displayName,proponent,nameTokens',
       select: 'id',
       top: MAX_PROJECT_FANOUT
     });

@@ -106,3 +106,21 @@ test('the 3.3 fields are declared and sourced as intended', () => {
   assert.ok(projected.has('documentFileName'),
     'the plain column must stay: dropping it would re-analyze documentFileName, which is a rebuild');
 });
+
+// `nameTokens` exists because `en.microsoft` strips stopwords like "mine" from every other
+// searchable projects field, so a name search for one matched nothing. Same trade as
+// `fileNameTokens`: the text a second time under a stopword-free analyzer, plain column untouched.
+test('the projects nameTokens field is declared and sourced as intended', () => {
+  const [idx, ds] = PAIRS[1];
+  const field = idx.fields.find(f => f.name === 'nameTokens');
+  const projected = projectedColumns(ds.container.query);
+
+  assert.strictEqual(field.analyzer, 'filename');
+  assert.strictEqual(field.searchable, true);
+  assert.strictEqual(projected.get('nameTokens'), 'name');
+  assert.ok(projected.has('name'),
+    'the plain column must stay: dropping it would re-analyze name, which is a rebuild');
+  // Analyzers are index-scoped: naming one the index does not define is a 400 on the PUT.
+  assert.ok(idx.analyzers.some(a => a.name === 'filename'));
+  assert.ok(idx.tokenizers.some(t => t.name === 'filename_tokenizer'));
+});

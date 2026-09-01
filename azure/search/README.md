@@ -100,7 +100,9 @@ is not academic there. `retrievable` being on the cheap side of that line is wha
 squarely on the rebuild side. So the text is added a SECOND time instead: a new
 `searchable`/non-retrievable field carrying `c.documentFileName` under the new analyzer, with the
 plain column left exactly as it was. Two copies of one string is the cheap half of that trade — the
-alternative is dropping and refilling 60,578 rows. `proponentId` is deliberately NOT added the same
+alternative is dropping and refilling 60,578 rows. `nameTokens` on `projects` is the same field for
+the same reason, carrying `c.name`: every searchable projects field is `en.microsoft`, so
+`keywords=mine` matched none of the projects named "... Mine". `proponentId` is deliberately NOT added the same
 way: the value is not in Cosmos until 3.7, and an empty field turns `and[proponent]` from a filter
 that is dropped and named in `meta.dropped` into one that is applied and matches nothing — a silent
 zero-row 200.

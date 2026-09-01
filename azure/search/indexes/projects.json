@@ -379,13 +379,49 @@
       "vectorSearchProfile": null,
       "vectorEncoding": null,
       "synonymMaps": []
+    },
+    {
+      "name": "nameTokens",
+      "type": "Edm.String",
+      "searchable": true,
+      "filterable": false,
+      "retrievable": false,
+      "stored": true,
+      "sortable": false,
+      "facetable": false,
+      "key": false,
+      "indexAnalyzer": null,
+      "searchAnalyzer": null,
+      "analyzer": "filename",
+      "dimensions": null,
+      "vectorSearchProfile": null,
+      "vectorEncoding": null,
+      "synonymMaps": []
     }
   ],
   "scoringProfiles": [],
   "corsOptions": null,
   "suggesters": [],
-  "analyzers": [],
-  "tokenizers": [],
+  "analyzers": [
+    {
+      "@odata.type": "#Microsoft.Azure.Search.CustomAnalyzer",
+      "name": "filename",
+      "tokenizer": "filename_tokenizer",
+      "tokenFilters": [
+        "lowercase"
+      ],
+      "charFilters": []
+    }
+  ],
+  "tokenizers": [
+    {
+      "@odata.type": "#Microsoft.Azure.Search.PatternTokenizer",
+      "name": "filename_tokenizer",
+      "pattern": "[^A-Za-z0-9]+",
+      "flags": null,
+      "group": -1
+    }
+  ],
   "tokenFilters": [],
   "charFilters": [],
   "encryptionKey": null,
