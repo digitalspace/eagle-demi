@@ -138,3 +138,7 @@ param deployApim = true
 
 // Pinned to the live budget period — an existing budget rejects startDate updates.
 param budgetStartDate = '2026-08-01'
+
+// Same probe as prod, test-shaped: monitors the real user path and its executions keep one
+// Flex instance warm — cheaper than alwaysReady and doubles as monitoring.
+param availabilityUrl = 'https://eagle-test.apps.silver.devops.gov.bc.ca/demi-search/search?dataset=Document&keywords=assessment&pageSize=1'

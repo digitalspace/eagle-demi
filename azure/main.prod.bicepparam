@@ -81,10 +81,16 @@ param ssoAudience = ''
 param frontendHostNames = []
 
 // ── Compute ───────────────────────────────────────────────────────────────────────────────────
-// No `existingServerFarmId`: a Flex plan cannot be shared, so demi-api-fc-prod owns one. The B1 app
-// in api-web-app.bicep consequently CREATES demi-plan-prod if it is applied from here, and its
-// integration into snet-app-service then collides with plan-eagle-search-prod's service-association
-// link. Read what-if before any prod apply while both apps stand.
+// No `existingServerFarmId`: a Flex plan cannot be shared, so demi-api-fc-prod owns one. The
+// legacy module stays OFF here: applying it would create demi-plan-prod and collide with
+// plan-eagle-search-prod's service-association link on snet-app-service. The live demi-api-prod
+// keeps serving untouched until decommission.
+param deployLegacyApi = false
+param deployApim = true
+
+// Live budget period, read from demi-budget-prod 2026-09-01 (az rest: 2026-08-01T00:00:00Z) —
+// an existing budget rejects startDate changes.
+param budgetStartDate = '2026-08-01'
 
 // ── Network ───────────────────────────────────────────────────────────────────────────────────
 // Landing-zone subnets in c4b0a8-prod-networking; private DNS is attached by policy from a central
@@ -95,7 +101,6 @@ param frontendHostNames = []
 // subnet, c4b0a8-prod-cond-ext-webapp-subnet, is claimed by asp-condition-extractor-prod and is not
 // available.
 param privateEndpointSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/c4b0a8-prod-cond-ext-pe-subnet'
-param appServiceSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/snet-app-service'
 
 // The Flex app's own subnet, delegated to `Microsoft.App/environments` with an NSG attached (both
 // demanded by policy). A Microsoft.Web-delegated subnet cannot host it, so this is a second subnet
@@ -125,7 +130,6 @@ param reconcileSchedule = '0 0 10 * * *'
 param deployReconcileDriftAlert = true
 
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────
-// rg-demi-prod has no budget at all today. 400 CAD matches the test guard; prod carries no Foundry
 // account and no second search service, but does carry a plan, Cosmos and the private endpoints.
 param budgetAmount = 400
 
