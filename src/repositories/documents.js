@@ -9,7 +9,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
-const { canRead, readForLevel, levelOfRead } = require('../helpers/access-sql');
+const { canRead, readForLevel, levelOfRead, SEALED_TOKEN } = require('../helpers/access-sql');
 const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'documents';
@@ -95,6 +95,28 @@ async function listVisible(access, opts = {}) {
   });
 
   return cosmos.query(CONTAINER, spec, options);
+}
+
+/**
+ * Sealed documents only — level 0, the compliance compartment.
+ *
+ * The criterion NARROWS; the visibility predicate is still composed first, so this returns nothing
+ * at all to a caller without `compliance`. The token is our own literal, never a caller value, and
+ * is written inline for the same reason `readClause` writes it inline.
+ *
+ * Projected to the four columns `GET /api/sealed` answers with: a list is for finding a sealed
+ * record, not for reading one.
+ */
+async function listSealed(access, opts = {}) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [{ clause: `ARRAY_CONTAINS(c.read, '${SEALED_TOKEN}')`, params: [] }],
+    select: 'c.id, c.projectId, c.sealedAt, c.displayName',
+    orderBy: 'c.id ASC'
+  });
+
+  return cosmos.query(CONTAINER, spec, pageOptions(opts));
 }
 
 async function countVisible(access, opts = {}) {
@@ -406,6 +428,7 @@ module.exports = {
   EXTRACTION_FIELDS,
   buildCriteria,
   listVisible,
+  listSealed,
   countVisible,
   getById,
   listByIds,

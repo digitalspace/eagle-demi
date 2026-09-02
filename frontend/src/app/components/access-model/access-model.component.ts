@@ -41,7 +41,7 @@ const ROLE_OPTIONS: { key: string; note: string; locked?: boolean }[] = [
   { key: 'demi-admin', note: 'Row-plane superuser.' },
   { key: 'demi-service-read', note: 'Service account. Privileged for reads, holds no write role.' },
   { key: 'demi-service-write', note: 'Service account. Privileged, and permitted to write.' },
-  { key: 'compliance', note: 'The only role a sealed level-0 row matches. Not a ladder rung.' }
+  { key: 'compliance', note: 'Reads sealed level-0 rows, only through /api/sealed. Not a ladder rung.' }
 ];
 
 /** The ladder as docs/rbac-architecture.md §1 states it. The stored `read[]` comes from the engine. */

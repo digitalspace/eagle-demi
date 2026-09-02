@@ -14,6 +14,8 @@ const { requireWrite, requireAdmin, requireRole } = require('../middleware/requi
 // Loads the caller's Selected Credentials. Mounted after the auth layer on the read routes where a
 // grant can widen what one caller sees — see middleware/credentials.js.
 const { credentialsMiddleware } = require('../middleware/credentials');
+// The sealed compartment's own verifier. NOT authMiddleware — see middleware/sealed-auth.js.
+const sealedAuth = require('../middleware/sealed-auth');
 
 // One data layer. The `USE_COSMOS_NOSQL` switch and the MongoDB-API controllers behind it are
 // gone — the flag was the rollback path during the Cosmos cutover, and the account it fell back
@@ -35,6 +37,7 @@ const apiKeyController = () => require('../controllers/nosql/api-key');
 const linkController = () => require('../controllers/nosql/link');
 const credentialController = () => require('../controllers/nosql/credentials');
 const userDataController = () => require('../controllers/nosql/userdata');
+const sealedController = () => require('../controllers/nosql/sealed');
 
 /**
  * Liveness only — the process is up. Deliberately does NOT claim anything about the database; it
@@ -115,6 +118,16 @@ const routes = [
   // from the live document inside the controller, so an extraction host cannot widen visibility.
   { method: 'post', path: '/documents/:id/chunks', guards: [authMiddleware, requireWrite], load: () => documentController().ingestChunks },
   { method: 'delete', path: '/documents/:id', guards: [authMiddleware, requireWrite], load: () => documentController().deleteDocument },
+
+  // The sealed compartment — level 0 (docs/rbac-architecture.md §1). ONE chain on all five routes,
+  // and it is not authMiddleware: that gate 403s `compliance`, which is the only role that belongs
+  // here. Every route audits, reads included.
+  { method: 'post', path: '/sealed', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().createSealed },
+  { method: 'get', path: '/sealed', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().listSealed },
+  { method: 'get', path: '/sealed/:id', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().getSealed },
+  { method: 'get', path: '/sealed/:id/download', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().downloadSealed },
+  // The only exit from level 0; PUT /documents/:id/level refuses it in both directions.
+  { method: 'post', path: '/sealed/:id/release', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().releaseSealed },
 
   // Eagle mirror. eagle-api pushes fire-and-forget on every write it makes, keyed by its own `_id`;
   // DEMI holds the merge rules, so the body is the RAW Eagle record rather than a DEMI-shaped one.

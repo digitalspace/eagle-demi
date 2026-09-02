@@ -54,6 +54,13 @@ the kill switch is reversed the same way.
 
 Pulling a published record back from the public is a different procedure: `takedown-runbook.md`.
 
+Nothing outside `/api/sealed` reads a sealed record: only that controller builds the access context
+that lifts the exclusion, so a `compliance` holder on `GET /api/documents` or `/api/search` sees no
+more than anyone else. Exports and backups stay locked down for the same reason plus a second one —
+no seed, export or reconcile script adds the `compliance` role to its access context
+(docs/rbac-architecture.md §1, condition 2). `test/controllers/nosql/sealed.test.js` fails if a
+script under `src/scripts/` names the role.
+
 ## Rotating ADMIN_API_KEY
 
 Owner: Daniel Truong — the only holder of a prod write login, and the only person who can run

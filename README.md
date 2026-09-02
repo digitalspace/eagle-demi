@@ -326,7 +326,7 @@ Ask for the least privilege that works.
 | Role | Reads | Writes data | `/api/admin/*` |
 |---|---|---|---|
 | `public` | published rows only | no | no |
-| `compliance` | rows whose `read[]` names it | no | no |
+| `compliance` | sealed rows, on `/api/sealed` only | no | no |
 | `demi-service-read` | everything the ACL allows | no | no |
 | `demi-service-write` | everything the ACL allows | yes | **no** |
 | `staff`, `sysadmin`, `demi-admin` | everything the ACL allows | yes | yes |

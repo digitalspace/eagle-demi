@@ -1462,8 +1462,8 @@ Acceptance
 
 Later phase, after Phase 3 has carried test traffic for a week. Level 0 is a row-plane token, not a
 separate store: a sealed record carries `read: ['compliance']` and stays in its ordinary container
-(doc §1). No new container, no key, no encryption. The work is the EXCLUSION — every privileged
-system caller must stop seeing these rows — plus one release path.
+(doc §1). No new container, no key, no encryption. The work is the EXCLUSION — every caller outside
+`/api/sealed` must stop seeing these rows — plus one release path.
 
 ## P5-1 `readForLevel(0)` and the privileged exclusion
 
@@ -1472,12 +1472,13 @@ Branch: `feat/level-zero-token`
 - [x] `src/helpers/access-sql.js` (home of `readForLevel`/`levelOfRead` since P3-2) — `readForLevel(0)` returns `['compliance']`, and
       `levelOfRead(['compliance'])` returns 0; the ladder tokens stay 1-4 and `0` is the only
       non-ladder value `readForLevel` accepts.
-- [x] `src/helpers/access-sql.js` — `readClause:257` stops returning bare `true` for a privileged
-      caller: when the caller's roles do not include `compliance` it returns
-      `NOT ARRAY_CONTAINS(c.read, 'compliance')` (alias-aware), for privileged and unprivileged
-      callers alike, ANDed onto the role arm in the unprivileged case. `canRead:384` gets the same
-      guard BEFORE the `isPrivileged` short-circuit at `:399` — that early `return true` is the
-      whole leak.
+- [x] `src/helpers/access-sql.js` — `readClause` stops returning bare `true` for a privileged
+      caller: it returns `NOT ARRAY_CONTAINS(c.read, 'compliance')` (alias-aware) for every caller
+      on every ordinary path, ANDed onto the role arm in the unprivileged case. `canRead` gets the
+      same guard BEFORE the `isPrivileged` short-circuit — that early `return true` is the whole
+      leak. Holding `compliance` does NOT lift it: `opensSealed(roles, compartment)` wants the role
+      AND an access context carrying `compartment: true`, which only `controllers/nosql/sealed.js`
+      builds. Otherwise a holder reads sealed rows through the ladder routes, which audit nothing.
 - [x] `systemAccess():206` keeps its role list unchanged (no `compliance`), so the exclusion applies
       to it too: exports, seed, reconcile and the extraction worker never read a sealed row. Assert
       it rather than rely on it.
@@ -1499,8 +1500,9 @@ Branch: `feat/level-zero-token`
   - [x] `'systemAccess excludes compliance-only rows'` — literal false on the same row.
   - [x] `'break-glass key has no compliance role'` — the admin-key identity's roles do not include
         `compliance`.
-  - [x] `'compliance reads it'` — `canRead` true for `['compliance']`, and a level-2 row is NOT
-        visible to a compliance-only caller.
+  - [x] `'compliance reads it through the compartment and nowhere else'` — `canRead` true for
+        `['compliance']` WITH `compartment: true` and false without it, the flag alone opens
+        nothing, and a level-2 row is NOT visible to a compliance-only caller.
   - [x] `test/controllers/nosql/api-key.test.js` (new file)
         `'an admin without compliance cannot mint a compliance key'` — caller roles
         `['sysadmin']`, body `roles: ['compliance']` → status 400 and body literal
@@ -1515,35 +1517,44 @@ Branch: `feat/level-zero-token`
 
 Branch: `feat/level-zero-routes`
 
-- [ ] `src/controllers/nosql/sealed.js`: `POST /api/sealed` (write a record at
+- [x] `src/controllers/nosql/sealed.js`: `POST /api/sealed` (write a record at
       `readForLevel(0)`), `GET /api/sealed/:id`, `GET /api/sealed` (ids, `sealedAt` and `title`
       only), and the release route below.
-- [ ] ONE chain for all four routes, and it is not `authMiddleware` — that gate 403s `compliance`
+- [x] `GET /api/sealed/:id/download` — presigned URL for the sealed row's `s3Key`, same helper
+      `GET /api/documents/:id/download` calls, gated the same way `GET /api/sealed/:id` is, audited
+      as `sealed.download`. The ladder's own download route still 404s a sealed row.
+- [x] ONE chain for all five routes, and it is not `authMiddleware` — that gate 403s `compliance`
       and keeps doing so after P3-2. Mount `authenticate` (the raw verifier in
       `src/helpers/auth.js`) then `requireRole('compliance')`.
       Test: `'a compliance-only token reaches the sealed routes and nothing else'`.
-- [ ] `POST /api/sealed/:id/release` — same chain; body requires `caseNumber` and
+- [x] `POST /api/sealed/:id/release` — same chain; body requires `caseNumber` and
       `decision` (400 without either). Rewrites `read[]` to `readForLevel(1)`, audits
       `sealed.release` with `{ targetId, caseNumber, decision }`, and notifies the C&E lead.
       Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer; log the
       intent through `src/utils/logger.js` until it exists. One holder is enough; two-person
       release is a later policy toggle. This is the ONLY exit; `PUT /:id/level` (P3-4) 400s on
       level 0.
-- [ ] `auditEvent` on every route including reads: `sealed.read`, `sealed.create`,
+- [x] `auditEvent` on every route including reads: `sealed.read`, `sealed.create`,
       `sealed.release`. Reads are audited here and nowhere else in DEMI — that asymmetry is the
       compartment's point.
-- [ ] Swagger, and one line in `docs/prod-flip-runbook.md`: doc §1 condition 2, exports and backups
+- [x] Swagger, and one line in `docs/prod-flip-runbook.md`: doc §1 condition 2, exports and backups
       stay locked down — no seed, export or reconcile script may add a `compliance` role to its
       access context (`grep -n systemAccess src/scripts/*.js` must not grow).
 - Tests: `test/controllers/nosql/sealed.test.js`
-  - [ ] `'sysadmin gets 403 on every sealed route'` — literal, all four routes.
-  - [ ] `'a sealed row is never returned to the ladder'` — `GET /api/projects` and
-        `GET /api/search` with a sealed row present return nothing from it.
-  - [ ] `'release lands at level 1'` — `deepStrictEqual(saved.read, ['team'])`.
-  - [ ] `'release without a caseNumber is 400'` and `'release without a decision is 400'`.
-  - [ ] `'every sealed route audits, reads included'`.
+  - [x] `'sysadmin gets 403 on every sealed route'` — literal, all five routes.
+  - [x] `'a sealed row is never returned to the ladder'` — `GET /api/documents`,
+        `GET /api/documents/:id`, `GET /api/documents/:id/download` and `GET /api/search` with a
+        sealed row present return nothing from it and write no audit row, for a `sysadmin` AND for
+        a `compliance` caller. The compartment route reads and downloads the same row at 200 and
+        audits both.
+  - [x] `test/repositories/repositories.test.js` — `listSealed` emits the level-0 criterion ON TOP
+        OF the visibility predicate, and a caller outside the compartment gets a self-contradicting
+        predicate. The controller tests mock it, so nothing else sees its SQL.
+  - [x] `'release lands at level 1'` — `deepStrictEqual(saved.read, ['team'])`.
+  - [x] `'release without a caseNumber is 400'` and `'release without a decision is 400'`.
+  - [x] `'every sealed route audits, reads included'`.
 - Acceptance
-  - [ ] `node --test test/controllers/nosql/sealed.test.js` — 0 fail.
+  - [x] `node --test test/controllers/nosql/sealed.test.js` — 0 fail.
   - [ ] On test, with a `compliance` API key: seal, read back, release; confirm the released record
         answers 404 to a staff caller with no `project:` role and 200 to a team member, and that a
         `sysadmin` key gets nothing while it is sealed. `DemiAudit_CL | where Action startswith

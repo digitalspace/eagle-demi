@@ -538,6 +538,208 @@ paths:
         '409':
           description: The document's project is not published.
 
+  /api/sealed:
+    post:
+      summary: Seal a record
+      description: >-
+        Write a document into the sealed compartment — level 0
+        (docs/rbac-architecture.md §1, "Level 0"). The row is an ordinary document in the ordinary
+        container carrying `read: ['compliance']`, and only these routes read it — every other
+        route excludes level 0 from every caller, the privileged ones, `systemAccess()` and the
+        `compliance` holder alike. Requires the `compliance` role; every other role, `sysadmin`
+        included, gets 403. Audited as `sealed.create`.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project, displayName, s3Key]
+              properties:
+                project:
+                  type: string
+                  description: Parent project id. The project must exist; its own level is not a cap.
+                displayName:
+                  type: string
+                s3Key:
+                  type: string
+      responses:
+        '201':
+          description: Record sealed.
+        '400':
+          description: project, displayName or s3Key is missing.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: The caller does not hold the compliance role.
+        '404':
+          description: Parent project not found.
+    get:
+      summary: List sealed records
+      description: >-
+        Ids, seal timestamps and titles of the sealed records this caller may read — enough to find
+        a record and ask for it, never enough to read one. Audited as `sealed.list`.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: continuationToken
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: A list of `{ id, projectId, sealedAt, title }`.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    projectId: { type: string }
+                    sealedAt: { type: string, format: date-time }
+                    title: { type: string }
+        '401':
+          description: Unauthorized.
+        '403':
+          description: The caller does not hold the compliance role.
+
+  /api/sealed/{id}:
+    get:
+      summary: Read a sealed record
+      description: >-
+        The record, redacted by the field catalog like any other document read. A record that is
+        not sealed answers 404 here: this route is the compartment, not a second door onto the
+        ladder. Audited as `sealed.read` — reads are audited here and nowhere else in DEMI.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Parent project id, the partition key. Avoids a cross-partition lookup.
+      responses:
+        '200':
+          description: The sealed record.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: The caller does not hold the compliance role.
+        '404':
+          description: No sealed record with this id.
+
+  /api/sealed/{id}/download:
+    get:
+      summary: Presigned download for a sealed record's bytes
+      description: >-
+        The same short-lived presigned URL `GET /api/documents/{id}/download` hands out, gated the
+        same way `GET /api/sealed/{id}` is: only the compartment's own access opens a level-0 row.
+        A record that is not sealed answers 404 here, same as the metadata read. Audited as
+        `sealed.download`.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Parent project id, the partition key. Avoids a cross-partition lookup.
+      responses:
+        '200':
+          description: A presigned download URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+                  expiresIn: { type: integer, description: Seconds until the URL expires. }
+                  fileName: { type: string }
+                  displayName: { type: string, nullable: true }
+        '401':
+          description: Unauthorized.
+        '403':
+          description: The caller does not hold the compliance role.
+        '404':
+          description: No sealed record with this id, or it has no stored file.
+
+  /api/sealed/{id}/release:
+    post:
+      summary: Release a sealed record to level 1
+      description: >-
+        The ONLY exit from the sealed compartment — `PUT /api/documents/{id}/level` refuses level 0
+        in both directions. Rewrites `read[]` to level 1 (team only), re-derives the record's chunk
+        ACLs and its search-index row, and audits `sealed.release` with the case number and the
+        decision. One compliance holder is enough; two-person release is a later policy toggle.
+        The C&E lead is not emailed — this repo has no mailer, so the intent is logged.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [caseNumber, decision]
+              properties:
+                caseNumber:
+                  type: string
+                decision:
+                  type: string
+      responses:
+        '200':
+          description: Record released to level 1.
+        '400':
+          description: caseNumber or decision is missing or empty.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: The caller does not hold the compliance role.
+        '404':
+          description: No sealed record with this id.
+        '500':
+          description: Released, but the record's extracted text was not fully updated.
+
   /api/eagle/projects/{eagleId}:
     put:
       summary: Mirror a project from eagle-api
@@ -1035,11 +1237,12 @@ components:
 
           * `public`             — no privilege; the anonymous tier, named explicitly.
           * `compliance`         — the sealed compartment (level 0). Matched against each row's
-                                   `read[]`, not privileged, and the only role that reads a sealed
-                                   row: every other caller, privileged ones included, carries an
-                                   exclusion. Only a caller that already holds it may mint a key
-                                   carrying it — anyone else gets 400 `compliance is not grantable
-                                   by this caller`.
+                                   `read[]`, not privileged, and the only role admitted to
+                                   `/api/sealed` — which is the only place it reads a sealed row.
+                                   Every other route excludes level 0 from every caller, its holder
+                                   included, so no sealed read goes unaudited. Only a caller that
+                                   already holds it may mint a key carrying it — anyone else gets
+                                   400 `compliance is not grantable by this caller`.
           * `demi-service-read`  — reads every row the ACL allows. Writes nothing.
           * `demi-service-write` — the same reads, plus every data write: projects, documents,
                                    chunks, boundaries and the Eagle mirror. Refused on

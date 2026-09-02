@@ -119,14 +119,19 @@ reading a level-1 team row, and for every credential holder.
 
 **Level 0 — sealed compartment.** Outside the ladder, but on the same row plane as every other
 level: a sealed record carries `read: ['compliance']` (`readForLevel(0)`) and stays in its ordinary
-container. Only the `compliance` role matches that token. No new store, no separate ACL mechanism.
+container. Only the `compliance` role matches that token, and only on the `/api/sealed` routes —
+those audit every read, which is the compartment's whole mechanism. No new store, no separate ACL
+mechanism.
 
-The privileged short-circuit must EXCLUDE these rows. `readClause`, `canRead` and `filterFor` add
+EVERY OTHER READ EXCLUDES THESE ROWS. `readClause`, `canRead` and `filterFor` add
 `NOT ARRAY_CONTAINS(c.read, 'compliance')` — `not read/any(r: r eq 'compliance')` in OData — for
-every caller that does not itself hold `compliance`, including the privileged ones (`isPrivileged`:
-`sysadmin`, `demi-admin`, `demi-service-read`, `demi-service-write`), whose predicate otherwise
-collapses to `true`. `systemAccess()` holds no `compliance` role and carries the same exclusion, so
-exports, seed and reconcile never read a sealed row.
+every caller on every ordinary path: the privileged ones (`isPrivileged`: `sysadmin`, `demi-admin`,
+`demi-service-read`, `demi-service-write`), whose predicate otherwise collapses to `true`, and the
+`compliance` holder itself, which is what keeps `GET /api/documents`, `/api/documents/{id}`,
+`/api/documents/{id}/download` and `/api/search` from answering with a sealed row unaudited. The
+exclusion is lifted only by an access context carrying `compartment: true`, which
+`controllers/nosql/sealed.js` builds and nothing else does; `opensSealed` requires the flag AND the
+role. `systemAccess()` sets neither, so exports, seed and reconcile never read a sealed row.
 
 Sealing is an application-layer guarantee. Cosmos data-plane operators, backups and the
 `ADMIN_API_KEY` break-glass sit outside it, so the seal is real only under three conditions:

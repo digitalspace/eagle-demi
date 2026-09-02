@@ -217,6 +217,6 @@ exports.simulate = (req, res) => {
       documents: fieldsFor('documents', access)
     },
     predicatesAssumedFalse: true,
-    notes: { sealedCompartment: 'designed, not built (Phase 5)' }
+    notes: { sealedCompartment: 'live, /api/sealed only' }
   });
 };

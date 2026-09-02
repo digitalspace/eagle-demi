@@ -180,7 +180,7 @@
           <span class="attention-row__dot attention-row__dot--neutral"></span>
           <div class="attention-row__text" style="min-width: 15rem;">
             <div class="attention-row__title">Level 0 — sealed compartment</div>
-            <div class="attention-row__detail">A sealed row carries read: ['compliance'], sits outside the ladder, and is excluded from the privileged short-circuit — sysadmin included. It is not a rung, so no caller here can be given it.</div>
+            <div class="attention-row__detail">A sealed row carries read: ['compliance'], sits outside the ladder, and is excluded on every ordinary route for every caller — sysadmin included. Only the /api/sealed routes, gated on compliance, read it, and each read is audited. It is not a rung, so no caller here can be given it.</div>
           </div>
           <div class="attention-row__action"><span class="pill pill--neutral pill--caps">{{ sealedNote() }}</span></div>
         </div>

@@ -40,6 +40,7 @@ const boundaryController = require('../../src/controllers/nosql/boundary');
 const projectController = require('../../src/controllers/nosql/project');
 const apiKeyController = require('../../src/controllers/nosql/api-key');
 const linkController = require('../../src/controllers/nosql/link');
+const sealedController = require('../../src/controllers/nosql/sealed');
 const userdata = require('../../src/repositories/userdata');
 const userDataController = require('../../src/controllers/nosql/userdata');
 const wildfireController = require('../../src/controllers/wildfire');
@@ -507,6 +508,46 @@ test('authenticated CUD audit coverage', async (t) => {
     assert.strictEqual(written[0].ProjectId, '207');
     assert.strictEqual(written[0].Detail.from, 3);
     assert.strictEqual(written[0].Detail.to, 1);
+  });
+
+  await t.test('sealing and releasing write one row each', async () => {
+    // The compartment's two mutations. Its READS are audited as well, which no other route does —
+    // that half is asserted in test/controllers/nosql/sealed.test.js.
+    const COMPLIANCE = {
+      sub: 'kc-sub-c', preferred_username: 'ce.officer', realm_access: { roles: ['compliance'] }
+    };
+    t.mock.method(projects, 'getById', async () => ({ id: '207', read: ['staff'] }));
+    t.mock.method(documents, 'upsert', async (item) => item);
+
+    const res = mockRes();
+    const created = await rowsFrom(() => sealedController.createSealed({
+      body: { project: '207', displayName: 'Warrant.pdf', s3Key: '207/warrant.pdf' },
+      query: {}, params: {}, user: COMPLIANCE
+    }, res));
+
+    assert.strictEqual(res.statusCode, 201);
+    assert.strictEqual(created.length, 1);
+    assert.strictEqual(created[0].Action, 'sealed.create');
+    assert.strictEqual(created[0].ProjectId, '207');
+
+    t.mock.method(documents, 'getById', async () => ({
+      id: 's1', projectId: '207', displayName: 'Warrant.pdf', read: ['compliance']
+    }));
+    t.mock.method(documents, 'setPublished', async () => ({ id: 's1', read: ['team'] }));
+    t.mock.method(aiSearch, 'indexes', () => ({ documents: 'documents' }));
+    t.mock.method(aiSearch, 'writeAcls', async () => 1);
+    t.mock.method(chunksRepo, 'setAclForDocument', async () => ({ succeeded: 0, failed: 0 }));
+
+    const released = await rowsFrom(() => sealedController.releaseSealed({
+      params: { id: 's1' }, query: {},
+      body: { caseNumber: 'CE-2026-014', decision: 'released to the project team' },
+      user: COMPLIANCE
+    }, mockRes()));
+
+    assert.strictEqual(released.length, 1);
+    assert.strictEqual(released[0].Action, 'sealed.release');
+    assert.strictEqual(released[0].TargetId, 's1');
+    assert.strictEqual(released[0].Detail.caseNumber, 'CE-2026-014');
   });
 
   await t.test('a failed mutation writes no row at all', async () => {

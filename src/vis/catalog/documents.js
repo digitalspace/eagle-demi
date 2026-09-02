@@ -19,6 +19,9 @@ module.exports = {
   isDeleted: { defaultVis: 4, maxVis: 4 },
   createdAt: { defaultVis: 4, maxVis: 4 },
   updatedAt: { defaultVis: 4, maxVis: 4 },
+  // Only a sealed record carries one, and only a `compliance` caller (level 2) reads a sealed
+  // record — so a released row keeps the timestamp without publishing it.
+  sealedAt: { defaultVis: 2, maxVis: 2 },
 
   // Descriptive metadata, all of it rendered by eagle-public's document list today.
   displayName: { defaultVis: 4, maxVis: 4 },

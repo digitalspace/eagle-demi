@@ -39,8 +39,12 @@ test('readClause — role ACL predicate', async (t) => {
       assert.deepStrictEqual(params, []);
     }
 
-    // A privileged caller that DOES hold it is the one caller with nothing to exclude.
-    assert.strictEqual(readClause(['public', 'sysadmin', 'compliance']).clause, 'true');
+    // A privileged caller that holds it is STILL excluded on an ordinary route; only a compartment
+    // read (`/api/sealed`, which audits) lifts it.
+    assert.strictEqual(readClause(['public', 'sysadmin', 'compliance']).clause,
+      "NOT ARRAY_CONTAINS(c.read, 'compliance')");
+    assert.strictEqual(
+      readClause(['public', 'sysadmin', 'compliance'], { compartment: true }).clause, 'true');
   });
 
   await t.test('anonymous emits an indexed EXISTS subquery, never a bare true', () => {
@@ -524,11 +528,24 @@ test('level 0 — the sealed compartment', async (t) => {
     assert.strictEqual(canRead(SEALED, resolveAccess({ user: identity })), false);
   });
 
-  await t.test('compliance reads it', () => {
+  await t.test('compliance reads it through the compartment and nowhere else', () => {
     const holder = access(['compliance']);
-    assert.strictEqual(canRead(SEALED, holder), true);
-    assert.strictEqual(readClause(holder.roles).clause.includes('NOT ARRAY_CONTAINS'), false,
-      'the holder is the one caller with nothing to exclude');
+    // The role alone is NOT the key: on an ordinary route the holder carries the exclusion like
+    // everyone else, which is what keeps `/api/sealed` the only audited door onto a level-0 row.
+    assert.strictEqual(canRead(SEALED, holder), false);
+    assert.match(readClause(holder.roles).clause, /NOT ARRAY_CONTAINS/,
+      'a compliance caller on an ordinary route is still excluded');
+
+    const compartment = { ...holder, compartment: true };
+    assert.strictEqual(canRead(SEALED, compartment), true);
+    assert.strictEqual(
+      readClause(holder.roles, { compartment: true }).clause.includes('NOT ARRAY_CONTAINS'), false,
+      'the compartment read is the one with nothing to exclude');
+
+    // The flag alone is not the key either — both conditions, so nothing that leaks the flag onto
+    // another caller's access lets it read the compartment.
+    assert.strictEqual(canRead(SEALED, { ...access(['sysadmin']), compartment: true }), false);
+    assert.match(readClause(['sysadmin'], { compartment: true }).clause, /NOT ARRAY_CONTAINS/);
 
     // And the compartment is not a wider tier: `compliance` is not privileged, so a level-2 row
     // is no more visible to it than to any other unprivileged caller.

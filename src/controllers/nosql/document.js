@@ -970,3 +970,5 @@ exports.ingestChunks = async (req, res) => {
 };
 
 exports.resolveDocumentAcl = resolveDocumentAcl;
+// Shared with controllers/nosql/sealed.js's own download route, so both quote the same TTL.
+exports.DOWNLOAD_URL_TTL_SECONDS = DOWNLOAD_URL_TTL_SECONDS;

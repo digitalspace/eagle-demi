@@ -14,6 +14,7 @@ const { TIER, systemAccess } = require('../../src/helpers/access-sql');
 const PUBLIC = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null };
 const ADMIN = { tier: TIER.PRIVILEGED, roles: ['public', 'sysadmin'], projectScope: null };
 const SCOPED = { tier: TIER.SCOPED, roles: ['public', 'project-team'], projectScope: ['207'] };
+const COMPLIANCE = { tier: TIER.PUBLIC, roles: ['public', 'compliance'], projectScope: null };
 
 /**
  * Capture the spec and options a repository hands to the data layer.
@@ -256,6 +257,37 @@ test('documents repository', async (t) => {
     await documents.getById(PUBLIC, 'doc1');
     assert.match(calls[0].spec.query, /EXISTS/,
       'an unreadable document must never reach this process');
+  });
+
+  // `listSealed` is mocked at its only call site, so the SQL it emits is invisible to every
+  // controller test: without this, dropping its criterion turns GET /api/sealed into a projected
+  // list of every document the caller can see, with the whole suite green.
+  await t.test('listSealed narrows to level 0 ON TOP OF the visibility predicate', async () => {
+    const calls = captureQuery(t);
+    await documents.listSealed({ ...COMPLIANCE, compartment: true }, {});
+
+    const { spec } = calls[0];
+    assert.match(spec.query, /ARRAY_CONTAINS\(c\.read, 'compliance'\)/,
+      'the criterion is what makes this the sealed list rather than a document list');
+    assert.match(spec.query, /EXISTS\(SELECT VALUE r FROM r IN c\.read/,
+      'the ACL predicate composes first — the criterion narrows, it never replaces');
+    assert.ok(spec.parameters.some(p => p.value === 'compliance'),
+      'the caller\'s own role is bound in, not assumed');
+    assert.ok(!spec.query.includes('NOT ARRAY_CONTAINS'),
+      'a compartment read is the one read that lifts the exclusion');
+  });
+
+  await t.test('listSealed answers a caller outside the compartment with nothing', async () => {
+    const calls = captureQuery(t);
+    // Both halves of the seal: the role without the compartment flag, and the flag without the
+    // role. Each keeps the exclusion, which contradicts the criterion — the query matches nothing.
+    await documents.listSealed(COMPLIANCE, {});
+    await documents.listSealed({ ...ADMIN, compartment: true }, {});
+
+    for (const { spec } of calls) {
+      assert.match(spec.query, /NOT ARRAY_CONTAINS\(c\.read, 'compliance'\)/);
+      assert.match(spec.query, /ARRAY_CONTAINS\(c\.read, 'compliance'\)/);
+    }
   });
 });
 
