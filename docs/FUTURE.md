@@ -2,7 +2,7 @@
 
 Not scheduled. Added 2026-08-26.
 
-- **Track pulls must keep `ea_certificate`.** The 2026-08-31 refresh of `src/data/track_projects_enriched.json` added it (342 of 382 records); a regenerated export must select it again or the field goes empty. The column holds certificate state as well as numbers ("Withdrawn", "In progress") and DEMI stores it verbatim.
+- **The Track mapper must keep `ea_certificate`.** `trackApiToExtract` (`src/seed/sources.js`) names every column DEMI takes off the live feed, so a column dropped there empties that field on every record. `ea_certificate` is the one to watch: 342 of the 382 rows in the 2026-08-31 export carried a value, and the column holds certificate state as well as numbers ("Withdrawn", "In progress"), which DEMI stores verbatim.
 - **One place for API keys, roles and permissions.** Today: keys minted by `POST /admin/api-keys`
   (registry, `GRANTABLE_ROLES`, `projectScope`, 90-day expiry), roles from Keycloak realm roles,
   `project:<id>` roles for scope, `SECURE_ROLES`/`WRITE_ROLES` hardcoded in `helpers/access-sql.js`.
@@ -10,9 +10,10 @@ Not scheduled. Added 2026-08-26.
   No UI, no single view of who holds what; eagle-api has its own separate `INTERNAL_API_KEY`
   mechanism that skips scope checks. Target: one admin surface (likely in the demo frontend's
   auth-guarded area) listing keys, roles, scopes, expiry, last use; revoke; mint.
-- **One engine for data sources with visible syncs.** Today each source is bespoke: Track static
-  file + `merge/project.js`, Eagle via seed (`seed-nosql.js`, on demand) and push (`/eagle/*`
-  routes), wildfire via `sync-wildfires.js` (manual POST). No registry of sources, no last-run /
+- **One engine for data sources with visible syncs.** Today each source is bespoke: Track nightly
+  over its API (`sync-track-projects.js`) + `merge/project.js`, Eagle via seed (`seed-nosql.js`, on
+  demand) and push (`/eagle/*` routes), wildfire via `sync-wildfires.js` (manual POST). No registry
+  of sources, no last-run /
   row-count / error surface, no schedule. Target: a `sources` registry (name, kind, schedule, last
   run, counts, errors) + one runner that the existing scripts plug into, exposed on `/admin`.
   Supersedes the 2026-08-24 "no adapter layer" call once a second real source exists; until then
