@@ -82,7 +82,7 @@ const UNGATED = {
 };
 
 /**
- * Path prefixes that must carry a named gate on EVERY method, checked against the router.
+ * Path prefixes that must carry the named guards on EVERY method, checked against the router.
  *
  * The `/admin/*` entries are what the allowlist reasons above assert, expressed as something that
  * can fail. They demand `requireAdmin`, the NARROWER gate: `requireWrite` there would let a
@@ -93,14 +93,22 @@ const UNGATED = {
  * so the write gate is the only thing standing between a read-only credential and the mirror. It
  * is deliberately NOT `requireAdmin` — the Eagle push is exactly the consumer that should hold
  * `demi-service-write` and nothing more.
+ *
+ * Every guard of the chain is listed, auth included, because `/sealed` is the one prefix that does
+ * not mount `authMiddleware` — see its entry.
  */
 const gatedPrefixes = {
-  '/admin/api-keys': 'requireAdmin',
-  '/admin/sync/': 'requireAdmin',
-  '/eagle/': 'requireWrite',
+  '/admin/api-keys': ['authMiddleware', 'requireAdmin'],
+  '/admin/sync/': ['authMiddleware', 'requireAdmin'],
+  '/eagle/': ['authMiddleware', 'requireWrite'],
   // The executable half of the `credentials.js` reason above. `requireRole` is the narrow gate a
   // grant needs: requireWrite alone would let the machine writer mint one for itself.
-  '/credentials': 'requireRole'
+  '/credentials': ['authMiddleware', 'requireRole'],
+  // The sealed compartment (docs/rbac-architecture.md §1). `authMiddleware` is ABSENT on purpose:
+  // it demands AUTHENTICATED_ROLES, which excludes `compliance`, so requiring it here would demand
+  // the gate that locks the compartment's only caller out. `sealedAuth` verifies the credential and
+  // the named role is the whole authorisation.
+  '/sealed': ['sealedAuth', "requireRole('compliance')"]
 };
 
 /**
@@ -200,15 +208,19 @@ test('access gate coverage', async (t) => {
 
     assert.ok(routes.length >= 20, `expected the router, parsed ${routes.length} routes`);
 
-    for (const [prefix, gate] of Object.entries(gatedPrefixes)) {
+    for (const [prefix, gates] of Object.entries(gatedPrefixes)) {
       const matching = routes.filter(r => r.path.startsWith(prefix));
       assert.ok(matching.length > 0, `no route matches ${prefix} — the allowlist reason is stale`);
       for (const r of matching) {
-        assert.ok(
-          /\bauthMiddleware\b/.test(r.chain) && new RegExp(`\\b${gate}\\b`).test(r.chain),
-          `${r.method.toUpperCase()} ${r.path} is not behind authMiddleware + ${gate}, ` +
-          'so the repository it reaches can no longer be allowlisted out of the ACL gate.'
-        );
+        for (const gate of gates) {
+          // `\b` and not `includes`, so `passiveAuthMiddleware` cannot satisfy `authMiddleware`.
+          const named = new RegExp(`\\b${gate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+          assert.ok(
+            named.test(r.chain),
+            `${r.method.toUpperCase()} ${r.path} is not behind ${gate}, ` +
+            'so the repository it reaches can no longer be allowlisted out of the ACL gate.'
+          );
+        }
       }
     }
 
