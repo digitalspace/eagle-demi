@@ -441,6 +441,26 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
       'the unconstrained Eagle ACL is what the cascade restores from on re-publish');
   });
 
+  await t.test('an unpublished Eagle document still lands at level 2, not level 1', async () => {
+    // The level-1 admission default is for DEMI-NATIVE creates only. The mirror carries Eagle's
+    // own published/unpublished mapping, or a push would silently narrow the whole corpus to the
+    // team arm and hide it from every staff caller.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject({
+      isPublished: false, read: ['sysadmin', 'staff', 'demi-admin']
+    }));
+    t.mock.method(documents, 'getById', async () => null);
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ read: ['sysadmin', 'staff', 'demi-admin'] }) }, user: STAFF
+    }, mockRes());
+
+    assert.deepStrictEqual(written.read, ['staff']);
+    assert.strictEqual(written.isPublished, false);
+  });
+
   await t.test('a document that moved project leaves no row in the old partition', async () => {
     t.mock.method(projects, 'getByEagleId', async () => storedProject({ id: 'NEWPROJ' }));
     t.mock.method(documents, 'getById', async () => ({

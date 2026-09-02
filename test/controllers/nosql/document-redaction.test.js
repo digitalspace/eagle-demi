@@ -144,9 +144,9 @@ test('document field redaction', async (t) => {
 });
 
 
-// P3-2 converts every write site to `readForLevel` at the level it already meant, so no stored
-// row's visibility moves. The unpublished default drops to level 1 in P3-3, not here.
-test('a written document carries the ladder tokens for its level', async (t) => {
+// P3-3: a document is admitted at level 1 whatever its parent's level and whatever the body asks
+// for. Widening is `PUT /api/documents/:id/level`.
+test('a written document is admitted at level 1', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   const PUBLISHED_PARENT = { id: '207', read: ['public', 'staff'], isPublished: true };
@@ -164,17 +164,19 @@ test('a written document carries the ladder tokens for its level', async (t) => 
     return saved;
   }
 
-  await t.test('a new unpublished document still reads as level 2 after P3-2', async () => {
-    const saved = await create(false);
+  await t.test('a new document is admitted at level 1', async () => {
+    // The parent is PUBLISHED, so any inherited-publication shortcut fails here.
+    const saved = await create(undefined);
 
-    assert.deepStrictEqual(saved.read, ['staff'], 'the level the legacy ACL already meant');
+    assert.deepStrictEqual(saved.read, ['team']);
     assert.strictEqual(saved.isPublished, false);
   });
 
-  await t.test('a published document reads as level 4', async () => {
+  await t.test('a create body cannot publish', async () => {
+    // Ignored, not refused: the key is dropped on the floor.
     const saved = await create(true);
 
-    assert.deepStrictEqual(saved.read, ['staff', 'idir', 'public']);
-    assert.strictEqual(saved.isPublished, true);
+    assert.deepStrictEqual(saved.read, ['team']);
+    assert.strictEqual(saved.isPublished, false);
   });
 });

@@ -173,9 +173,9 @@ test('nosql project controller', async (t) => {
   });
 
 
-  // P3-2 converts the write sites to `readForLevel` at the level they already meant. Literal
-  // tokens, because reading them off a constant would pass whatever that constant becomes.
-  await t.test('a new unpublished project still reads as level 2 after P3-2', async () => {
+  // Admission is level 1 (P3-3). Literal tokens, because reading them off a constant would pass
+  // whatever that constant becomes.
+  await t.test('a new project is admitted at level 1', async () => {
     let saved;
     t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
 
@@ -183,20 +183,23 @@ test('nosql project controller', async (t) => {
       body: { trackProjectId: 5, name: 'U', centroid: { coordinates: [0, 0] } }
     }, mockRes());
 
-    assert.deepStrictEqual(saved.read, ['staff']);
+    assert.deepStrictEqual(saved.read, ['team']);
     assert.strictEqual(saved.isPublished, false);
   });
 
-  await t.test('a published project reads as level 4', async () => {
+  await t.test('a create body cannot publish', async () => {
+    // Ignored, not refused: the key is dropped on the floor, and widening is `PUT /:id/level`.
     let saved;
+    const res = mockRes();
     t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
 
     await projectController.createProject({
       body: { trackProjectId: 6, name: 'V', isPublished: true, centroid: { coordinates: [0, 0] } }
-    }, mockRes());
+    }, res);
 
-    assert.deepStrictEqual(saved.read, ['staff', 'idir', 'public']);
-    assert.strictEqual(saved.isPublished, true);
+    assert.strictEqual(res.statusCode, 201);
+    assert.deepStrictEqual(saved.read, ['team']);
+    assert.strictEqual(saved.isPublished, false);
   });
 
   // ONE STORED NAME FOR THE PROJECT STATE. `status` is the wire name and the index alias
@@ -403,14 +406,15 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
   });
 
   await t.test('a level-1 parent caps the document at level 1', () => {
-    // The default is level 2, and taking it here would let the document out-rank its project.
     const acl = resolveDocumentAcl({ read: ['team'], isPublished: false }, false);
     assert.deepStrictEqual(acl.read, ['team']);
   });
 
   await t.test('a level-2 parent cannot be passed by a publish request', () => {
+    // Admission is level 1 from P3-3, so the request loses twice over: the parent is not public,
+    // and nothing reaches level 2 by being created.
     const acl = resolveDocumentAcl({ read: ['staff'], isPublished: false }, true);
-    assert.deepStrictEqual(acl.read, ['staff']);
+    assert.deepStrictEqual(acl.read, ['team']);
     assert.strictEqual(acl.published, false);
   });
 
@@ -1026,21 +1030,25 @@ test('PUT bodies cannot hand-craft an ACL', async (t) => {
     assert.strictEqual(saved.isPublished, false);
   });
 
-  await t.test('a project ACL is derived from isPublished, never taken verbatim', async () => {
-    const existing = { id: 'p1', trackProjectId: 1, name: 'Old', read: ['sysadmin'], isPublished: false };
+  await t.test('PUT no longer changes a level', async () => {
+    // Widening is an act: `PUT /api/projects/:id/level` is the only door (P3-4). A body that asks
+    // for publication is ignored, not refused, and the stored ACL is carried through untouched.
+    const existing = { id: 'p1', trackProjectId: 1, name: 'Old', read: ['team'], isPublished: false };
     let saved;
     t.mock.method(projects, 'getById', async () => existing);
     t.mock.method(projects, 'upsert', async (doc) => { saved = doc; return doc; });
 
+    const res = mockRes();
     await projectController.updateProject({
       params: { id: 'p1' }, query: {}, user: ADMIN_USER,
       body: { name: 'New', read: ['some-invented-role'], isPublished: true }
-    }, mockRes());
+    }, res);
 
+    assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(saved.name, 'New');
     assert.ok(!saved.read.includes('some-invented-role'), 'no unvetted role reaches read[]');
-    assert.deepStrictEqual(saved.read, ['staff', 'idir', 'public'], 'publishing derives level 4');
-    assert.strictEqual(saved.isPublished, true, 'read[] and isPublished cannot disagree');
+    assert.deepStrictEqual(saved.read, ['team'], 'the stored level is carried, never moved');
+    assert.strictEqual(saved.isPublished, false);
   });
 
   await t.test('omitting isPublished leaves visibility untouched', async () => {
@@ -1058,11 +1066,12 @@ test('PUT bodies cannot hand-craft an ACL', async (t) => {
   });
 });
 
-// The same invariant one level up: a document must never out-rank its project. `PUT
-// /documents/:id/published` enforces it upwards with a 409; nothing enforced it downwards, so
-// unpublishing a project left every document under it carrying `public` — and `listVisible` gates
-// on the document's own ACL, so they stayed listable and searchable.
-test('unpublishing a project restricts its documents too', async (t) => {
+// The same invariant one level up: a document must never out-rank its project. The document level
+// route enforces it upwards with a 409; nothing enforced it downwards, so narrowing a project left
+// every document under it carrying `public` — and `listVisible` gates on the document's own ACL,
+// so they stayed listable and searchable. Driven through `PUT /:id/level`, the only route that
+// moves a project's level.
+test('narrowing a project restricts its documents too', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
   const published = { id: 'p1', trackProjectId: 1, name: 'P', read: ['public', 'sysadmin'], isPublished: true };
@@ -1077,8 +1086,9 @@ test('unpublishing a project restricts its documents too', async (t) => {
     });
 
     const res = mockRes();
-    await projectController.updateProject({
-      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: false }
+    await projectController.setLevel({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER,
+      body: { level: 2, reason: 'published in error' }
     }, res);
 
     assert.strictEqual(res.statusCode, 200);
@@ -1108,8 +1118,9 @@ test('unpublishing a project restricts its documents too', async (t) => {
       return { failed: 0 };
     });
 
-    await projectController.updateProject({
-      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: true }
+    await projectController.setLevel({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER,
+      body: { level: 4, confirm: true, reason: 'cleared by the EAO' }
     }, mockRes());
 
     assert.ok(sentRead, 'a re-publish must reach the documents, or nothing can restore them');
@@ -1147,8 +1158,9 @@ test('unpublishing a project restricts its documents too', async (t) => {
     }));
 
     const res = mockRes();
-    await projectController.updateProject({
-      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: false }
+    await projectController.setLevel({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER,
+      body: { level: 2, reason: 'published in error' }
     }, res);
 
     assert.strictEqual(res.statusCode, 500, 'a half-restricted project must not report success');
@@ -1273,7 +1285,7 @@ test('a visibility change is written into the search index, not left to the inde
     assert.deepStrictEqual(writes[0].rows, [{ id: 'd1', read: ['staff'], isPublished: false }]);
   });
 
-  await t.test('unpublishing a project writes the project row AND every cascaded document', async () => {
+  await t.test('narrowing a project writes the project row AND every cascaded document', async () => {
     const cascadeRows = [
       { id: 'd1', read: ['sysadmin'], isPublished: false },
       { id: 'd2', read: ['sysadmin', 'project-team'], isPublished: false }
@@ -1286,8 +1298,9 @@ test('a visibility change is written into the search index, not left to the inde
     const writes = captureWrites(t);
 
     const res = mockRes();
-    await projectController.updateProject({
-      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: false }
+    await projectController.setLevel({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER,
+      body: { level: 2, reason: 'published in error' }
     }, res);
 
     assert.strictEqual(res.statusCode, 200);
@@ -1314,8 +1327,9 @@ test('a visibility change is written into the search index, not left to the inde
     const writes = captureWrites(t);
 
     const res = mockRes();
-    await projectController.updateProject({
-      params: { id: 'p1' }, query: {}, user: ADMIN_USER, body: { isPublished: false }
+    await projectController.setLevel({
+      params: { id: 'p1' }, query: {}, user: ADMIN_USER,
+      body: { level: 2, reason: 'published in error' }
     }, res);
 
     assert.strictEqual(res.statusCode, 500);

@@ -48,9 +48,9 @@ function resolveDocumentAcl(parentProject, isPublished) {
     : parentProject.isPublished === true;
   const wanted = requested && parentIsPublic;
 
-  // Capped at the parent's own level, so a document under a level-1 project is admitted at
-  // level 1 rather than handed the level-2 default that would out-rank it.
-  const read = readForLevel(Math.min(wanted ? 4 : 2, levelOfRead(parentProject.read)));
+  // Admission is level 1 (docs/rbac-architecture.md §1, "Default on admission is level 1"),
+  // still capped at the parent's own level so a document can never out-rank its project.
+  const read = readForLevel(Math.min(wanted ? 4 : 1, levelOfRead(parentProject.read)));
 
   // `published` is READ OFF the capped read[], never off `wanted` — read[] is authoritative,
   // isPublished only mirrors it.
@@ -158,7 +158,8 @@ exports.downloadDocument = async (req, res) => {
 exports.createDocument = async (req, res) => {
   try {
     const access = resolveAccess(req);
-    const { project, displayName, s3Key, region, edrmsRecordNumber, orcsClassification, isPublished } = req.body;
+    // No `isPublished`: a create body cannot publish. Widening is `PUT /api/documents/:id/level`.
+    const { project, displayName, s3Key, region, edrmsRecordNumber, orcsClassification } = req.body;
 
     if (!project || !displayName || !s3Key) {
       return res.status(400).json({ error: 'Missing required fields: project, displayName, s3Key' });
@@ -169,7 +170,7 @@ exports.createDocument = async (req, res) => {
       return res.status(404).json({ error: `Parent Project with id ${project} not found.` });
     }
 
-    const acl = resolveDocumentAcl(parentProject, isPublished);
+    const acl = resolveDocumentAcl(parentProject);
     const now = new Date().toISOString();
 
     const saved = await documents.upsert({
@@ -207,7 +208,7 @@ exports.extractDocument = async (req, res) => {
   try {
     const access = resolveAccess(req);
     const file = req.file;
-    const { project, displayName, region, edrmsRecordNumber, orcsClassification, isPublished } = req.body;
+    const { project, displayName, region, edrmsRecordNumber, orcsClassification } = req.body;
 
     if (!file) {
       return res.status(400).json({ error: 'No file uploaded.' });
@@ -233,7 +234,7 @@ exports.extractDocument = async (req, res) => {
     await storage.putFile(objectPath, file.path, file.mimetype);
     fs.promises.unlink(file.path).catch(() => {});
 
-    const acl = resolveDocumentAcl(parentProject, isPublished);
+    const acl = resolveDocumentAcl(parentProject);
     const now = new Date().toISOString();
 
     const saved = await documents.upsert({
