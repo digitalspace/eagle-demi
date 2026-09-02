@@ -1034,7 +1034,12 @@ components:
         `src/controllers/nosql/api-key.js`), least privilege first:
 
           * `public`             — no privilege; the anonymous tier, named explicitly.
-          * `compliance`         — matched against each row's `read[]`; not privileged.
+          * `compliance`         — the sealed compartment (level 0). Matched against each row's
+                                   `read[]`, not privileged, and the only role that reads a sealed
+                                   row: every other caller, privileged ones included, carries an
+                                   exclusion. Only a caller that already holds it may mint a key
+                                   carrying it — anyone else gets 400 `compliance is not grantable
+                                   by this caller`.
           * `demi-service-read`  — reads every row the ACL allows. Writes nothing.
           * `demi-service-write` — the same reads, plus every data write: projects, documents,
                                    chunks, boundaries and the Eagle mirror. Refused on

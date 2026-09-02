@@ -1469,43 +1469,43 @@ system caller must stop seeing these rows — plus one release path.
 
 Branch: `feat/level-zero-token`
 
-- [ ] `src/helpers/access-sql.js` (home of `readForLevel`/`levelOfRead` since P3-2) — `readForLevel(0)` returns `['compliance']`, and
+- [x] `src/helpers/access-sql.js` (home of `readForLevel`/`levelOfRead` since P3-2) — `readForLevel(0)` returns `['compliance']`, and
       `levelOfRead(['compliance'])` returns 0; the ladder tokens stay 1-4 and `0` is the only
       non-ladder value `readForLevel` accepts.
-- [ ] `src/helpers/access-sql.js` — `readClause:257` stops returning bare `true` for a privileged
+- [x] `src/helpers/access-sql.js` — `readClause:257` stops returning bare `true` for a privileged
       caller: when the caller's roles do not include `compliance` it returns
       `NOT ARRAY_CONTAINS(c.read, 'compliance')` (alias-aware), for privileged and unprivileged
       callers alike, ANDed onto the role arm in the unprivileged case. `canRead:384` gets the same
       guard BEFORE the `isPrivileged` short-circuit at `:399` — that early `return true` is the
       whole leak.
-- [ ] `systemAccess():206` keeps its role list unchanged (no `compliance`), so the exclusion applies
+- [x] `systemAccess():206` keeps its role list unchanged (no `compliance`), so the exclusion applies
       to it too: exports, seed, reconcile and the extraction worker never read a sealed row. Assert
       it rather than rely on it.
-- [ ] `src/helpers/access-odata.js` `filterFor` — same exclusion as
+- [x] `src/helpers/access-odata.js` `filterFor` — same exclusion as
       `not read/any(r: r eq 'compliance')`, so AI Search cannot return one either.
-- [ ] `ADMIN_API_KEY` break-glass must not resolve `compliance` (`src/helpers/auth.js`): the
+- [x] `ADMIN_API_KEY` break-glass must not resolve `compliance` (`src/helpers/auth.js`): the
       break-glass identity's role list is fixed and `compliance` is not in it. Doc §1 condition 1.
-- [ ] `src/controllers/nosql/api-key.js` create path — only a caller that already holds
+- [x] `src/controllers/nosql/api-key.js` create path — only a caller that already holds
       `compliance` may mint a `compliance` key. After the unknown-role check (`:45-48`), when
-      `roles.includes('compliance')` and `(req.user.roles || [])` does not, return 400
+      `roles.includes('compliance')` and `rolesFor(req)` does not, return 400
       `{ error: 'compliance is not grantable by this caller' }`. `compliance` stays in
       `GRANTABLE_ROLES:31`; the gate is per caller. Without it the route's own gate is
       `requireAdmin` (`api.js:122`), which every `staff`, `sysadmin` and `demi-admin` caller passes,
       so any of them mints itself into the compartment. Doc §1 condition 3.
 - Tests: `test/helpers/access-sql.test.js` and `test/helpers/access-odata.test.js`
-  - [ ] `'sysadmin cannot read a compliance-only row'` — `canRead({ read: ['compliance'] },
+  - [x] `'sysadmin cannot read a compliance-only row'` — `canRead({ read: ['compliance'] },
         access(['sysadmin'])) === false`, and `readClause(['sysadmin']).clause` contains
         `NOT ARRAY_CONTAINS`.
-  - [ ] `'systemAccess excludes compliance-only rows'` — literal false on the same row.
-  - [ ] `'break-glass key has no compliance role'` — the admin-key identity's roles do not include
+  - [x] `'systemAccess excludes compliance-only rows'` — literal false on the same row.
+  - [x] `'break-glass key has no compliance role'` — the admin-key identity's roles do not include
         `compliance`.
-  - [ ] `'compliance reads it'` — `canRead` true for `['compliance']`, and a level-2 row is NOT
+  - [x] `'compliance reads it'` — `canRead` true for `['compliance']`, and a level-2 row is NOT
         visible to a compliance-only caller.
-  - [ ] `test/controllers/nosql/api-key.test.js` (new file)
-        `'an admin without compliance cannot mint a compliance key'` — `req.user.roles`
+  - [x] `test/controllers/nosql/api-key.test.js` (new file)
+        `'an admin without compliance cannot mint a compliance key'` — caller roles
         `['sysadmin']`, body `roles: ['compliance']` → status 400 and body literal
         `{ error: 'compliance is not grantable by this caller' }`, and nothing written to `apikeys`.
-  - [ ] Same file, `'a compliance holder can mint a compliance key'` — `req.user.roles`
+  - [x] Same file, `'a compliance holder can mint a compliance key'` — caller roles
         `['sysadmin','compliance']`, same body → 201 and the saved record's `roles` is
         `['compliance']`.
 - Acceptance: `node --test test/helpers/access-sql.test.js test/helpers/access-odata.test.js test/controllers/nosql/api-key.test.js`

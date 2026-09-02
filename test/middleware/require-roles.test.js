@@ -137,9 +137,13 @@ test('staff and compliance API keys can still be minted', async (t) => {
     { body: { name: 'staff key', roles: ['staff'], allowWrite: true } }, staff);
   assert.strictEqual(staff.statusCode, 201);
 
+  // A compliance key is minted BY the compartment: the caller must hold the role it grants
+  // (docs/rbac-architecture.md §1, condition 3), which test/controllers/nosql/api-key.test.js owns.
   const compliance = mintRes();
-  await apiKeyController.createApiKey(
-    { body: { name: 'compliance key', roles: ['compliance'] } }, compliance);
+  await apiKeyController.createApiKey({
+    body: { name: 'compliance key', roles: ['compliance'] },
+    user: { realm_access: { roles: ['sysadmin', 'compliance'] } }
+  }, compliance);
   assert.strictEqual(compliance.statusCode, 201);
 });
 

@@ -14,7 +14,9 @@
 
 const apiKeys = require('../../repositories/api-keys');
 const { generateKey, defaultExpiry } = require('../../helpers/api-key');
-const { AUTHENTICATED_ROLES, WRITE_ROLES } = require('../../helpers/access-sql');
+const {
+  AUTHENTICATED_ROLES, WRITE_ROLES, SEALED_TOKEN, rolesFor, holdsSealed
+} = require('../../helpers/access-sql');
 const { forgetCachedKey } = require('../../helpers/auth');
 const { logger } = require('../../utils/logger');
 const { serverError } = require('../../helpers/response');
@@ -30,7 +32,7 @@ const config = require('../../config');
  * Exported for the test that asserts the derivation still reaches `demi-service-write` — a role
  * the mint route rejects as unknown is a role nobody can hold.
  */
-const GRANTABLE_ROLES = Array.from(new Set([...AUTHENTICATED_ROLES, 'compliance', 'public']));
+const GRANTABLE_ROLES = Array.from(new Set([...AUTHENTICATED_ROLES, SEALED_TOKEN, 'public']));
 exports.GRANTABLE_ROLES = GRANTABLE_ROLES;
 
 /**
@@ -56,6 +58,13 @@ exports.createApiKey = async (req, res) => {
     const unknown = roles.filter(r => !GRANTABLE_ROLES.includes(r));
     if (unknown.length > 0) {
       return res.status(400).json({ error: `Unknown role(s): ${unknown.join(', ')}` });
+    }
+
+    // The compartment issues its own keys. This route's gate is `requireAdmin`, which every staff,
+    // sysadmin and demi-admin caller passes, so without this any of them mints itself into level 0
+    // (docs/rbac-architecture.md §1, condition 3). The list stays grantable; the caller is gated.
+    if (roles.includes(SEALED_TOKEN) && !holdsSealed(rolesFor(req))) {
+      return res.status(400).json({ error: `${SEALED_TOKEN} is not grantable by this caller` });
     }
 
     // A typo here used to mint a key with a junk expiry; verify() now fails closed on one, so
