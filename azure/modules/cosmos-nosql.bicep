@@ -568,6 +568,47 @@ resource userDataContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
   }
 }
 
+// Bulk download jobs. Partitioned on /id — the job id is a UUID the requester holds as its
+// capability token, so every read is a point read in its own partition. `defaultTtl: -1` enables
+// per-item `ttl`: a finished job expires itself, and the row outlives the zip so the sweep still
+// sees who owned it. The big arrays stay out of the index — a 2,500-id list is stored, never
+// filtered on.
+//
+// Also holds one `quota:<requester>` counter row per requester (repositories/bulk-downloads.js),
+// read and patched by id like everything else here.
+resource bulkDownloadsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'bulkDownloads'
+  properties: {
+    resource: {
+      id: 'bulkDownloads'
+      partitionKey: {
+        paths: [
+          '/id'
+        ]
+        kind: 'Hash'
+      }
+      defaultTtl: -1
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            // The cleanup sweep is the only query over this container; everything else — a status
+            // poll, a quota row — is a point read. It filters on both of these.
+            path: '/status/?'
+          }
+          {
+            path: '/finishedAt/?'
+          }
+        ]
+        // `/*` already excludes the id list, the access snapshot, the errors and the parts.
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
 // ── Data-plane RBAC ──────────────────────────────────────────────────────────
 // Cosmos NoSQL data-plane role assignments cannot be managed in the Azure portal, so they
 // have to live here. Built-in definitions are used rather than a custom role — a custom

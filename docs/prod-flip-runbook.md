@@ -61,6 +61,49 @@ no seed, export or reconcile script adds the `compliance` role to its access con
 (docs/rbac-architecture.md §1, condition 2). `test/controllers/nosql/sealed.test.js` fails if a
 script under `src/scripts/` names the role.
 
+## Level-0 material on the devbox
+
+These scripts read with `systemAccess()`, the level-0 context that passes every ACL, so anything
+they print or write out is unredacted and is handled as level-0 material:
+
+`src/scripts/audit-chunk-quality.js`, `backfill-document-list-ids.js`, `backfill-eac-number.js`,
+`close-unpublished-track-projects.js`, `probe-phrase-presence.js`, `purge-extraction.js`,
+`reconcile-eagle.js`, `score-retrieval.js`, `seed-nosql.js`, `sync-wildfires.js`.
+
+`grep -n systemAccess src/scripts/*.js` is that list; a script added to one is added to the other.
+
+`src/scripts/export-chunks-to-eagle.js` and `src/scripts/copy-to-env.js` are level-0 material as
+well and are deliberately absent from that grep: both query a container directly (`SELECT * FROM c`,
+`export-chunks-to-eagle.js` over `chunks` on a `--dump` run, `copy-to-env.js` over `projects`,
+`documents`, `boundaries` and `chunks`), with no access predicate at all — wider than
+`systemAccess()`, not narrower.
+
+Five of them leave a file behind rather than only printing: `export-chunks-to-eagle.js --dump`,
+`audit-chunk-quality.js --out`, `probe-phrase-presence.js --out`, `score-retrieval.js --out` and
+`copy-to-env.js` (its `--checkpoint` file, written on every `--live` run, not only `--dump`).
+
+### Delete the dump
+
+`--dump` writes every chunk it reads, `read[]` and full text included, to the working directory of
+the devbox it ran on (`demi-devbox-test`, `demi-devbox-prod`). The file is in transit, not a
+backup — it is deleted as soon as it reaches its destination, on the same connection that made it:
+
+```
+shred -u /home/backups/chunks-YYYYMMDD.jsonl   # the path passed to --dump
+ls -l /home/backups                            # confirm nothing is left
+```
+
+`copy-to-env.js --live` writes its own file, the `--checkpoint` path (default `./copy-checkpoint.json`),
+on every run, not only a `--dump` one — resume state per container, not chunk text, but still level-0
+material off the devbox once the copy is verified complete:
+
+```
+shred -u <path passed to --checkpoint, or ./copy-checkpoint.json>
+```
+
+A devbox is stop/start operated and only `/home` survives a stop, so a dump left there outlives the
+session that made it.
+
 ## Rotating ADMIN_API_KEY
 
 Owner: Daniel Truong — the only holder of a prod write login, and the only person who can run

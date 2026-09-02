@@ -148,6 +148,7 @@ function parseCitations(text, sourceCount) {
  * @returns {Promise<{summary: string|null, citations: number[], usage: object|null, reason?: string}>}
  */
 async function summarize(keywords, chunks) {
+  // Chunk `content` is all this reads: no project or document row ever reaches the model.
   // Nothing retrieved means nothing to summarise. Returning early is not an optimisation — it is
   // the grounding guarantee, and it is what the nonsense-term probe measures. A model asked to
   // summarise an empty list will happily answer from its own knowledge.

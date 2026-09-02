@@ -74,6 +74,11 @@ const UNGATED = {
     'ACL predicate needed since every row is staff-visible); create/repoint/delete are ' +
     'admin/write-gated; and /s/:code is a deliberately PUBLIC point read with no caller tier to ' +
     'filter for — the destination itself, not the row, is what gets validated.',
+  'bulk-downloads.js':
+    'Job rows are not application data: a row records what its own requester asked for, carries no ' +
+    'read[] and is never listed. The unguessable job id is the capability, and the controller binds ' +
+    'an authenticated job to its requester and answers 404 on a mismatch. Its DOCUMENT read is ' +
+    'documents.listByIdsUnscoped, gated there with every other document read and asserted above.',
   'userdata.js':
     'The partition key IS the access rule: every function takes the owner as its first argument ' +
     'and the controller only ever passes the caller\'s own token username, so a row of another ' +
@@ -113,7 +118,11 @@ const gatedPrefixes = {
   // it demands AUTHENTICATED_ROLES, which excludes `compliance`, so requiring it here would demand
   // the gate that locks the compartment's only caller out. `sealedAuth` verifies the credential and
   // the named role is the whole authorisation.
-  '/sealed': ['sealedAuth', "requireRole('compliance')"]
+  '/sealed': ['sealedAuth', "requireRole('compliance')"],
+  // Both bulk routes read as the caller: the POST filters the requested ids through the caller's
+  // access, and a grant can widen what it sees. passiveAuth rather than authMiddleware because an
+  // anonymous caller gets the public tier, exactly as on /documents/:id/download.
+  '/bulk-downloads': ['passiveAuthMiddleware', 'credentialsMiddleware']
 };
 
 /**
@@ -292,7 +301,10 @@ test('access gate coverage', async (t) => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'document.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    assert.strictEqual(emissions.length, 38,
+    // 34, down from 38: the presigned-download handler now returns `{ status, body }` from
+    // resolveDownload — POST /bulk-downloads answers a one-document request from the same helper —
+    // so its four sites left the scan. The payload is asserted directly below instead.
+    assert.strictEqual(emissions.length, 34,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     const ROW_SOURCES = /\b(saved|updated|existing|doc|items)\b(?!\s*\.)/;
@@ -303,8 +315,15 @@ test('access gate coverage', async (t) => {
 
     // Proves the filter above is not vacuous: the hand-built sites really are in the scan, so a new
     // one that DID name a row bare would be caught rather than silently skipped.
-    assert.ok(emissions.some(e => /expiresIn/.test(e)), 'the download URL site is in the scan');
     assert.ok(emissions.some(e => /action: 'upsert'/.test(e)), 'the Eagle push ack is in the scan');
+    assert.ok(emissions.some(e => /chunks:/.test(e)), 'a chunk ingest ack is in the scan');
+
+    // The download payload is no longer a res.json site, so the scan cannot see it. It is the one
+    // response built from a document row outside the emission set — assert it stays hand-built.
+    const download = /return \{\s*status: 200,\s*body: \{([^}]*)\}/.exec(code(controller));
+    assert.ok(download, 'resolveDownload no longer returns a literal body — re-check what it emits');
+    assert.ok(!/\bdoc\b(?!\s*\.)/.test(download[1]),
+      'the download body names the stored document row bare, so it ships read[] and s3Key');
   });
 
   await t.test('each /links and /me route carries the gate its verb requires', () => {

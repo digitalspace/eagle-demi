@@ -4,6 +4,14 @@ const { logger } = require('../utils/logger');
 const { callerIp } = require('../utils/caller-ip');
 
 /**
+ * A bulk-download job id is a bearer capability — whoever holds it can fetch the zip — so it is
+ * masked out of the access log. The route is the grouping anybody wants anyway.
+ */
+function maskIds(url) {
+  return String(url).replace(/\/bulk-downloads\/[^/?]+/, '/bulk-downloads/<id>');
+}
+
+/**
  * The per-request access log, called by the dispatcher once the response is complete.
  *
  * Not a `res.on('finish')` wrapper any more: there is no ServerResponse under the Functions host,
@@ -11,7 +19,8 @@ const { callerIp } = require('../utils/caller-ip');
  */
 function logRequest(req, res, durationMs) {
   const timeMs = Number(durationMs).toFixed(2);
-  const { method, originalUrl } = req;
+  const { method } = req;
+  const originalUrl = maskIds(req.originalUrl);
   // Same resolver the audit trail keys on, so the two can never disagree about who a caller is.
   const ip = callerIp(req);
   const { statusCode } = res;

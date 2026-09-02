@@ -94,17 +94,23 @@ exports.getDocument = async (req, res) => {
 /**
  * Short-lived presigned download URL, gated by the same visibility rule as the metadata — a
  * caller who cannot see the document must not be able to fetch its bytes.
+ *
+ * Returns the answer rather than sending it, because POST /bulk-downloads serves a one-document
+ * request from here too: the ACL check, the analytics event, the audit row and the presign are one
+ * implementation, so the two routes cannot drift apart on any of them.
+ *
+ * @returns {Promise<{status: number, body: object}>}
  */
-exports.downloadDocument = async (req, res) => {
+async function resolveDownload(req, id) {
   try {
     const access = resolveAccess(req);
-    const doc = await documents.getById(access, req.params.id, req.query.project);
+    const doc = await documents.getById(access, id, req.query.project);
 
     if (!doc) {
-      return res.status(404).json({ error: 'Document not found' });
+      return { status: 404, body: { error: 'Document not found' } };
     }
     if (!doc.s3Key) {
-      return res.status(404).json({ error: 'Document has no stored file.' });
+      return { status: 404, body: { error: 'Document has no stored file.' } };
     }
 
     const fileName = doc.s3Key.split('/').pop();
@@ -135,16 +141,21 @@ exports.downloadDocument = async (req, res) => {
       });
     }
 
-    return res.json({
-      url,
-      expiresIn: DOWNLOAD_URL_TTL_SECONDS,
-      fileName,
-      displayName: doc.displayName || null
-    });
+    return {
+      status: 200,
+      body: { url, expiresIn: DOWNLOAD_URL_TTL_SECONDS, fileName, displayName: doc.displayName || null }
+    };
   } catch (err) {
     logger.error(`[Document Controller] Presigned download failed: ${err.message}`);
-    return res.status(500).json({ error: 'Failed to generate download link.' });
+    return { status: 500, body: { error: 'Failed to generate download link.' } };
   }
+}
+
+exports.resolveDownload = resolveDownload;
+
+exports.downloadDocument = async (req, res) => {
+  const { status, body } = await resolveDownload(req, req.params.id);
+  return res.status(status).json(body);
 };
 
 exports.createDocument = async (req, res) => {

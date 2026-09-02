@@ -425,16 +425,61 @@ async function deleteById(id, projectId) {
   return cosmos.remove(CONTAINER, String(id), String(projectId));
 }
 
+/**
+ * Fields `listByIdsUnscoped` may project. The projection is interpolated into the SQL text, so it
+ * is an allowlist rather than a validation: a caller cannot widen the read to `*` and ship `read[]`
+ * to a bulk manifest, and cannot smuggle a clause in through the column list.
+ */
+// `vis` is here for `redactForAccess` on the entry names, never for the caller.
+const MANIFEST_FIELDS = [
+  'id', 'projectId', 'fileSize', 'isPublished',
+  'displayName', 'documentFileName', 's3Key', 'fileExt', 'mimeType', 'vis'
+];
+
+/**
+ * The documents of a bounded id set with NO project context — cross-partition by necessity, so the
+ * CALLER batches (≤200 ids per call).
+ *
+ * `listByIds` cannot serve this: it also demands the project ids, and a bulk download request
+ * carries none. `access` is composed exactly as everywhere else, sealed-compartment exclusion
+ * included — never pass a compartment here.
+ *
+ * @param {string} select comma-separated `c.<field>`, each field one of MANIFEST_FIELDS
+ */
+async function listByIdsUnscoped(access, ids, select) {
+  const unique = Array.from(new Set((ids || []).map(String)));
+  if (unique.length === 0) return [];
+
+  const unknown = String(select).split(',')
+    .map(field => field.trim().replace(/^c\./, ''))
+    .filter(field => !MANIFEST_FIELDS.includes(field));
+  if (unknown.length > 0) {
+    throw new Error(`[documents] projection not allowed here: ${unknown.join(', ')}`);
+  }
+
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [inList('id', unique, '@bid')],
+    select
+  });
+
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items;
+}
+
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
   EXTRACTION_FIELDS,
+  MANIFEST_FIELDS,
   buildCriteria,
   listVisible,
   listSealed,
   countVisible,
   getById,
   listByIds,
+  listByIdsUnscoped,
   aclRowsForProject,
   constrainToProject,
   setAclForProject,

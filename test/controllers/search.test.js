@@ -2274,7 +2274,9 @@ test('the answer matches the request that was made', async (t) => {
     t.mock.method(aiSearch, 'searchChunks', async () => ({
       items: [{ chunkId: 'c1', documentId: 'd1', projectId: '207', pageNumber: 5 }]
     }));
-    t.mock.method(chunksRepo, 'getById', async () => ({ id: 'c1', content: 'text of c1' }));
+    t.mock.method(chunksRepo, 'getById', async () => ({
+      id: 'c1', documentId: 'd1', projectId: '207', pageNumber: 5, content: 'text of c1'
+    }));
     t.mock.method(documentsRepo, 'listByIds', async () => ([{
       id: 'd1',
       displayName: 'First',
@@ -2310,5 +2312,56 @@ test('the answer matches the request that was made', async (t) => {
       documentName: 'Untitled Document',
       projectName: 'Associated Project'
     }]);
+  });
+
+  // Pins the fix: `summarize` must read chunk metadata off the REDACTED chunk row, not off the raw
+  // Cosmos row or the raw AI Search hit. `projectId` here carries a per-record dial that hides it
+  // from this (anonymous, level 4) caller — if the response ever goes back to reading the raw
+  // `fetched` row instead of the redacted one, `projectId` leaks through and this test goes red.
+  await t.test('an uncatalogued or classified chunk field never reaches a citation', async () => {
+    t.mock.method(aiSearch, 'searchChunks', async () => ({
+      items: [{ chunkId: 'c1', documentId: 'd1', projectId: '207', pageNumber: 9 }]
+    }));
+    t.mock.method(chunksRepo, 'getById', async () => ({
+      id: 'c1',
+      documentId: 'd1',
+      pageNumber: 9,
+      content: 'text of c1',
+      // Classified below this caller's level: must not survive redaction.
+      projectId: '207',
+      vis: { projectId: 1 },
+      // Not in the chunk catalog at all, and the ACL snapshot itself: neither belongs in a response.
+      secretField: 'must not leak',
+      read: ['staff']
+    }));
+    t.mock.method(documentsRepo, 'listByIds', async () => ([{
+      id: 'd1',
+      displayName: 'First',
+      documentFileName: 'first.pdf',
+      vis: { displayName: 2, documentFileName: 2 },
+      read: ['staff'],
+      _etag: 'e'
+    }]));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([]));
+    t.mock.method(summarizer, 'summarize', async () => ({
+      summary: 'a grounded answer',
+      citations: [0],
+      usage: null,
+      estimatedCostCad: 0
+    }));
+
+    const { out, res } = capture();
+    await searchController.summarize({ query: { keywords: 'caribou' }, header: () => null }, res);
+
+    assert.deepStrictEqual(out.body.citations, [{
+      n: 1,
+      chunkId: 'c1',
+      documentId: 'd1',
+      projectId: '',
+      pageNumber: 9,
+      documentName: 'Untitled Document',
+      projectName: 'Associated Project'
+    }], 'documentId/pageNumber reach the response; the dialled-down projectId, the uncatalogued ' +
+      'key, and the vis/read fields must not');
   });
 });
