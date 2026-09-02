@@ -303,7 +303,7 @@ test('eagle-query sort', async (t) => {
   // eagle-public sends sortBy TWICE and the second is frequently empty (api.ts:176-177).
   await t.test('the empty second sortBy is ignored, not treated as a field', () => {
     const { orderby } = eagleQuery.buildOrderBy(['-displayName', ''], 'Document');
-    assert.strictEqual(orderby, 'displayName desc, id asc');
+    assert.strictEqual(orderby, 'displayNameSort desc, id asc');
   });
 
   // Relevance is ORDERED, not left to the service. `$skip` paging over an unspecified tie order
@@ -356,11 +356,11 @@ test('eagle-query sort', async (t) => {
   await t.test('a repeated sort field is emitted once', () => {
     const { orderby } = eagleQuery.buildOrderBy(
       ['-displayName', '+displayName'], 'Document', false);
-    assert.strictEqual(orderby, 'displayName desc, id asc', 'the second mention adds no clause');
+    assert.strictEqual(orderby, 'displayNameSort desc, id asc', 'the second mention adds no clause');
 
     const many = Array.from({ length: 60 }, (_, i) => `field${i}`).concat('displayName');
     const { orderby: capped, dropped } = eagleQuery.buildOrderBy(many, 'Document', false);
-    assert.strictEqual(capped, 'displayName asc, id asc');
+    assert.strictEqual(capped, 'displayNameSort asc, id asc');
     assert.strictEqual(dropped.length, 60, 'a name the index lacks is dropped, never emitted');
   });
 
@@ -595,3 +595,77 @@ test('DEFAULT_ORDER fields are defaultVis 4', () => {
       `DEFAULT_ORDER.${dataset} sorts on '${field}', which cannot be dialled up to public`);
   }
 });
+
+/**
+ * `displayNameSort` is the zero-padded copy of `displayName` (src/helpers/natural-sort.js): the
+ * index orders strings by codepoint, so eagle-public's `sortBy=displayName` puts "Item 10" ahead of
+ * "Item 2" without it. The mapping is SORT ONLY — a filter redirected onto the padded key would
+ * match nothing under a 200.
+ */
+test('eagle-query natural-sort key', async (t) => {
+  await t.test('sortBy=displayName orders on the padded key', () => {
+    const { orderby, dropped } = eagleQuery.buildOrderBy('displayName', 'Document', false);
+    assert.deepStrictEqual(dropped, []);
+    assert.strictEqual(orderby, 'displayNameSort asc, id asc');
+  });
+
+  await t.test('the keywordless default document order goes through the same mapping', () => {
+    const { orderby } = eagleQuery.buildOrderBy(null, 'Document', false, anonymous());
+    assert.strictEqual(orderby, 'displayNameSort asc, id asc');
+  });
+
+  await t.test('an and[displayName] FILTER is not redirected onto the sort key', () => {
+    // The stored key is lowercased and padded, so `displayNameSort eq 'Item 2'` matches zero rows
+    // — a silent empty table rather than an error.
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[displayName]': 'Item 2' }, 'Document', anonAcl());
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes("displayName eq 'Item 2'"));
+    assert.ok(!filter.includes('displayNameSort'), 'the filter must name the readable column');
+  });
+
+  // The app ships before the index PUT that adds the field — the order in azure/search/README.md is
+  // index first, but a deploy that raced it would otherwise emit `$orderby displayNameSort`, which
+  // is a 400 the controller answers 502 to.
+  await t.test('falls back to displayName while the live index lacks the field', (t) => {
+    const eagleQueryWithout = reloadWithoutField(t, 'documents', 'displayNameSort');
+
+    assert.strictEqual(eagleQueryWithout.buildOrderBy('displayName', 'Document', false).orderby,
+      'displayName asc, id asc');
+    assert.strictEqual(eagleQueryWithout.buildOrderBy(null, 'Document', false).orderby,
+      'displayName asc, id asc', 'the default order falls back too');
+  });
+
+  await t.test('every SORT_KEYS target is a defaultVis 4 index field', () => {
+    for (const [dataset, keys] of Object.entries(eagleQuery.SORT_KEYS)) {
+      for (const [wireKey, field] of Object.entries(keys)) {
+        const entry = catalogFor(INDEX_CATALOG[dataset])[field];
+        assert.ok(entry, `${dataset}.${wireKey} -> '${field}' is not catalogued`);
+        assert.strictEqual(entry.defaultVis, 4,
+          `${dataset}.${wireKey} -> '${field}' is restricted, so every sort on it would be dropped`);
+      }
+    }
+  });
+});
+
+/**
+ * eagle-query reads index metadata ONCE at require time, so the only way to ask it what it does
+ * against a narrower live index is to reload it against a narrower definition file.
+ */
+function reloadWithoutField(t, index, field) {
+  const MODULE = require.resolve('../../src/search/eagle-query');
+  const cached = require.cache[MODULE];
+  const readFileSync = fs.readFileSync;
+
+  t.mock.method(fs, 'readFileSync', (file, ...rest) => {
+    const raw = readFileSync(file, ...rest);
+    if (path.basename(String(file)) !== `${index}.json`) return raw;
+    const def = JSON.parse(raw);
+    def.fields = def.fields.filter(f => f.name !== field);
+    return JSON.stringify(def);
+  });
+
+  delete require.cache[MODULE];
+  t.after(() => { require.cache[MODULE] = cached; });
+  return require(MODULE);
+}

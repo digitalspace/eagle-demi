@@ -9,6 +9,7 @@ const {
   seedAcl, toNumber, toIsoOrNull, resolveListLabel,
   transformDocument, transformBoundary
 } = require('../../src/seed/transform');
+const { naturalSortKey } = require('../../src/helpers/natural-sort');
 
 const NOW = '2026-07-30T00:00:00.000Z';
 const OPTS = { now: NOW };
@@ -135,6 +136,22 @@ test('transformDocument', async (t) => {
 
     assert.ok(transformDocument(EAGLE_DOC, '207', LIST, OPTS).read.includes('public'),
       'with no projectRead — a notification parent — the ACL stays verbatim');
+  });
+
+  await t.test('carries the natural-sort key beside the display name', () => {
+    // The index cannot compute it (Cosmos SQL has no zero-pad, and a sortable field is never
+    // analyzed), so a seeded row without this key sorts by codepoint — "Item 10" before "Item 2".
+    assert.strictEqual(doc.displayNameSort, naturalSortKey(doc.displayName));
+
+    const numbered = transformDocument(
+      { ...EAGLE_DOC, displayName: 'Appendix 2' }, '207', LIST, OPTS);
+    assert.strictEqual(numbered.displayNameSort, 'appendix 000000000002');
+  });
+
+  await t.test('the sort key follows the display name onto the filename fallback', () => {
+    const noName = transformDocument({ ...EAGLE_DOC, displayName: '' }, '207', LIST, OPTS);
+    assert.strictEqual(noName.displayName, EAGLE_DOC.documentFileName);
+    assert.strictEqual(noName.displayNameSort, naturalSortKey(EAGLE_DOC.documentFileName));
   });
 
   await t.test('extraction state is reset, not carried', () => {

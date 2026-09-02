@@ -75,6 +75,12 @@ param allowedClients = 'eagle-admin-console'
 // set after measuring aud on a live token
 param ssoAudience = ''
 
+// Empty until the rproxy egress address is measured: one request through
+// projects.eao.gov.bc.ca/demi-search, then read `callerIp` off the App Insights
+// request row. Until it is set, every eagle-public visitor shares one anonymous
+// bulk-download quota key.
+param trustedProxyIps = ''
+
 // Empty, deliberately. There is no DEMI frontend in prod — eagle-public is the consumer and it
 // reaches this API same-origin through rproxy, so no browser origin needs allowing. Empty leaves
 // CORS_ORIGIN unset and src/app.js falls back to localhost only: fail closed, not open.

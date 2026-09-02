@@ -74,6 +74,18 @@ const ALIASES = {
 };
 
 /**
+ * Wire key → the field to ORDER BY instead, per dataset. Consulted by `buildOrderBy` and by
+ * NOTHING else: an ALIASES entry would redirect `and[displayName]` filters onto a padded key that
+ * no caller value can match, which is a silent zero-row 200.
+ *
+ * `displayNameSort` is `displayName` zero-padded (helpers/natural-sort), because `$orderby` on a
+ * string is codepoint order and puts "Item 10" before "Item 2".
+ */
+const SORT_KEYS = {
+  Document: { displayName: 'displayNameSort' }
+};
+
+/**
  * Wire keys that name a REAL field of the index and must still never be filtered on.
  *
  * `proponent` is the whole reason this exists: it passes every gate in `buildFilter` and emits
@@ -472,7 +484,6 @@ function hasCriteria(query) {
  */
 function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
   const fields = fieldsFor(dataset);
-  const aliases = ALIASES[dataset] || {};
   const tiebreak = fields.get('id')?.sortable ? 'id asc' : null;
 
   const raw = sortEntries(sortBy);
@@ -484,11 +495,7 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
     const desc = entry.startsWith('-');
     const name = entry.replace(/^[+-]/, '');
     if (name === 'score') continue;
-    // The aliases are FILTER redirects (`_id` → `legacyEagleId`). Sorting is the opposite: fall back
-    // to the caller's own name when the redirect target cannot sort but the original can.
-    const aliased = aliases[name] || name;
-    const aliasMeta = fields.get(aliased);
-    const field = aliasMeta && aliasMeta.sortable ? aliased : name;
+    const field = sortFieldFor(name, dataset, fields);
     if (!fieldVisible(dataset, field, access)) {
       dropped.push(name);
       continue;
@@ -517,10 +524,13 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
       return { orderby: tiebreak ? `search.score() desc, ${tiebreak}` : undefined, dropped };
     }
     if (!DEFAULT_ORDER[dataset]) return { orderby: undefined, dropped };
-    // The default sort goes through the SAME visibility gate as the caller's own keys: a field this
-    // caller cannot read cannot order their page either.
-    if (fieldVisible(dataset, DEFAULT_ORDER[dataset].split(' ')[0], access)) {
-      parts.push(DEFAULT_ORDER[dataset]);
+    // The default sort goes through the SAME mapping and the SAME visibility gate as the caller's
+    // own keys: a field this caller cannot read cannot order their page either, and the default
+    // document order is the one `displayNameSort` exists to fix.
+    const [defaultName, direction] = DEFAULT_ORDER[dataset].split(' ');
+    const defaultField = sortFieldFor(defaultName, dataset, fields);
+    if (fieldVisible(dataset, defaultField, access)) {
+      parts.push(`${defaultField} ${direction}`);
     }
   }
 
@@ -528,6 +538,21 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
   // `id asc, id asc`. `_id` reaches here as `id` too, through the alias table.
   if (tiebreak && !seen.has(tiebreak.split(' ')[0])) parts.push(tiebreak);
   return { orderby: parts.join(', ') || undefined, dropped };
+}
+
+/**
+ * The index field a sort key lands on.
+ *
+ * The sort mapping first, then the FILTER alias (`_id` → `legacyEagleId`), and the caller's own
+ * name whenever the target cannot sort — which is what lets this app deploy BEFORE the index PUT
+ * that adds `displayNameSort`, and what keeps `sortBy=type` ordering on the label rather than the
+ * ObjectId its filter alias names.
+ */
+function sortFieldFor(name, dataset, fields) {
+  const target = (SORT_KEYS[dataset] || {})[name] || (ALIASES[dataset] || {})[name];
+  if (!target) return name;
+  const meta = fields.get(target);
+  return meta && meta.sortable ? target : name;
 }
 
 /**
@@ -591,6 +616,7 @@ module.exports = {
   // Exported for the ratchet tests: an alias or a default sort naming a restricted field would
   // filter and order over something the caller cannot see.
   ALIASES,
+  SORT_KEYS,
   DEFAULT_ORDER,
   buildFilter,
   buildOrderBy,

@@ -14,6 +14,7 @@
  */
 
 const { readForLevel } = require('../helpers/access-sql');
+const { naturalSortKey } = require('../helpers/natural-sort');
 
 /**
  * ACL for a seeded item.
@@ -110,6 +111,8 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     ? constrainToProject(seedAcl(doc.read), opts.projectRead)
     : seedAcl(doc.read);
 
+  const displayName = doc.displayName || doc.documentFileName || '';
+
   return {
     // The Eagle _id is the stable natural key. Reusing it means a re-seed is idempotent and
     // epic.submit can later merge onto the same identity rather than creating a duplicate.
@@ -118,7 +121,10 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     eagleId: String(doc._id),
     sourceSystem: 'eagle',
 
-    displayName: doc.displayName || doc.documentFileName || '',
+    displayName,
+    // The index sorts strings by codepoint, so the padded key is what puts "Item 2" before
+    // "Item 10". Derived here rather than in the data source: Cosmos SQL cannot zero-pad.
+    displayNameSort: naturalSortKey(displayName),
     documentFileName: doc.documentFileName || '',
     description: doc.description || '',
 

@@ -109,6 +109,11 @@ param allowedClients string = ''
 @description('Expected JWT aud claim. Empty disables audience verification.')
 param ssoAudience string = ''
 
+// Empty keys every visitor arriving through one of our proxies on that proxy's address, which is
+// one shared anonymous bulk-download quota for all of them. src/utils/caller-ip.js.
+@description('Comma-separated egress IPs of proxies we run (the OpenShift rproxy). For an APIM-asserted address on this list the browser hop of X-Forwarded-For is the caller.')
+param trustedProxyIps string = ''
+
 @description('Application Insights connection string. Empty disables telemetry, which is the local-development case.')
 param appInsightsConnectionString string = ''
 
@@ -663,6 +668,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'AzureWebJobsFeatureFlags'
           value: 'EnableWorkerIndexing'
+        }
+        {
+          name: 'TRUSTED_PROXY_IPS'
+          value: trustedProxyIps
         }
       ]
       // Platform-level CORS, in front of the app's own, and it answers the preflight itself — so

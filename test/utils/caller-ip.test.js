@@ -3,8 +3,18 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { callerIp } = require('../../src/utils/caller-ip');
+const config = require('../../src/config');
 
 const GATEWAY_SECRET = 'test-gateway-secret';
+
+/** The rproxy egress address, as TRUSTED_PROXY_IPS would name it. */
+const RPROXY = '142.34.64.10';
+
+function withTrustedProxies(list, fn) {
+  const previous = config.trustedProxyIps;
+  config.trustedProxyIps = list;
+  try { return fn(); } finally { config.trustedProxyIps = previous; }
+}
 
 function req(headers, socket) {
   return { headers, socket };
@@ -90,5 +100,82 @@ test('callerIp behind APIM', async (t) => {
       'x-gateway-secret': 'not-the-secret', 'x-client-ip': '9.9.9.9', 'x-forwarded-for': '142.34.7.9'
     });
     assert.strictEqual(callerIp(spoofed), '142.34.7.9');
+  });
+});
+
+test('callerIp behind our own rproxy', async (t) => {
+  t.beforeEach(() => { process.env.APIM_GATEWAY_SECRET = GATEWAY_SECRET; });
+  t.afterEach(() => { delete process.env.APIM_GATEWAY_SECRET; });
+
+  await t.test('takes the rightmost hop that is not ours', () => {
+    // Every eagle-public visitor arrives through the rproxy, so keying on what APIM saw would put
+    // all of them in one anonymous quota bucket. The chain APIM hands us is
+    // `<browser>, <nginx egress>`: nginx passes the router's header through untouched and APIM
+    // appends its peer.
+    const throughRproxy = viaGateway({
+      'x-client-ip': RPROXY,
+      'x-forwarded-for': '198.51.100.7, 142.34.64.10'
+    });
+    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(throughRproxy)), '198.51.100.7');
+  });
+
+  await t.test('a forged prefix cannot become the quota key', () => {
+    // THE reason this walks from the right. Everything left of the real client is whatever the
+    // caller chose to send, so taking the first hop would let one browser mint a key per request.
+    const forged = viaGateway({
+      'x-client-ip': RPROXY,
+      'x-forwarded-for': '9.9.9.9, 1.2.3.4, 142.34.64.10'
+    });
+    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(forged)), '1.2.3.4');
+  });
+
+  await t.test('a CIDR entry matches the in-cluster router hop', () => {
+    const throughRouter = viaGateway({
+      'x-client-ip': RPROXY,
+      'x-forwarded-for': '198.51.100.7, 10.97.4.31, 142.34.64.10'
+    });
+    assert.strictEqual(
+      withTrustedProxies([RPROXY, '10.0.0.0/8'], () => callerIp(throughRouter)), '198.51.100.7');
+  });
+
+  await t.test('strips a port off the browser hop', () => {
+    const withPort = viaGateway({
+      'x-client-ip': RPROXY, 'x-forwarded-for': '198.51.100.7:52344, 142.34.64.10'
+    });
+    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(withPort)), '198.51.100.7');
+  });
+
+  await t.test('a chain of nothing but our own hops falls back to the asserted address', () => {
+    const allOurs = viaGateway({ 'x-client-ip': RPROXY, 'x-forwarded-for': '10.97.4.31, 142.34.64.10' });
+    assert.strictEqual(
+      withTrustedProxies([RPROXY, '10.0.0.0/8'], () => callerIp(allOurs)), RPROXY);
+  });
+
+  await t.test('an untrusted asserted address is still the answer', () => {
+    // A direct caller: nothing of ours in front of them, so their own address is the quota key and
+    // the forwarded chain they sent is theirs to forge.
+    const direct = viaGateway({
+      'x-client-ip': '203.0.113.5', 'x-forwarded-for': '198.51.100.7, 20.151.0.5'
+    });
+    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(direct)), '203.0.113.5');
+  });
+
+  await t.test('a trusted proxy with no forwarded chain keeps the asserted address', () => {
+    const noChain = viaGateway({ 'x-client-ip': RPROXY });
+    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(noChain)), RPROXY);
+  });
+
+  await t.test('the chain is not walked without the gateway secret', () => {
+    // Without the secret the whole chain is attacker input: naming a trusted proxy in X-Client-Ip
+    // would otherwise let any caller pick which hop becomes their quota key.
+    const spoofed = req({ 'x-client-ip': RPROXY, 'x-forwarded-for': '198.51.100.7, 142.34.7.9' });
+    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(spoofed)), '142.34.7.9');
+  });
+
+  await t.test('an empty trusted list leaves the APIM behaviour untouched', () => {
+    const throughRproxy = viaGateway({
+      'x-client-ip': RPROXY, 'x-forwarded-for': '198.51.100.7, 142.34.64.10'
+    });
+    assert.strictEqual(withTrustedProxies([], () => callerIp(throughRproxy)), RPROXY);
   });
 });

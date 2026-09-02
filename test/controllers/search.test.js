@@ -1456,7 +1456,9 @@ test('the eagle-public response contract', async (t) => {
       header: () => null
     }, res);
 
-    assert.strictEqual(sent.orderby, 'displayName desc, id asc');
+    // `displayNameSort`, not `displayName`: SORT_KEYS maps the wire key onto the padded sort key
+    // so "Item 2" pages before "Item 10" (src/helpers/natural-sort.js).
+    assert.strictEqual(sent.orderby, 'displayNameSort desc, id asc');
   });
 
   // eagle-public holds Eagle ObjectIds; the indexes hold DEMI project ids. Comparing one with the
@@ -1790,7 +1792,7 @@ test('the answer matches the request that was made', async (t) => {
       // DEFAULT_ORDER, not `search.score() desc`. `search: '*'` scores every row the same, so a
       // relevance order leaves ties wherever the service computed them and `$skip` paging then
       // repeats and omits rows across pages — data loss, as far as the reader is concerned.
-      assert.match(sent.orderby, /^displayName asc/,
+      assert.match(sent.orderby, /^displayNameSort asc/,
         `a keywordless page needs a stable order, got ${sent.orderby}`);
       assert.strictEqual(out.body[0].meta[0].searchResultsTotal, 2,
         'the total is the filtered one, never the corpus');
