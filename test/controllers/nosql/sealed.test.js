@@ -223,6 +223,43 @@ test('the sealed compartment routes', async (t) => {
     assert.deepStrictEqual(saved.read, ['team']);
   });
 
+  await t.test('seal writes the record at level 0', async () => {
+    let saved;
+    t.mock.method(projects, 'getById', async () => ({ id: '207', read: ['staff'] }));
+    t.mock.method(documents, 'upsert', async (item) => { saved = item; return item; });
+
+    const res = mockRes();
+    await sealedController.createSealed({
+      params: {}, query: {}, user: COMPLIANCE,
+      body: { project: '207', displayName: 'Warrant.pdf', s3Key: '207/warrant.pdf' }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 201);
+    assert.deepStrictEqual(saved.read, ['compliance']);
+    assert.strictEqual(saved.isPublished, false);
+    assert.ok(saved.sealedAt, 'a sealed row records when it was sealed');
+  });
+
+  await t.test('a row that is not sealed is not the compartment\'s to read or release', async () => {
+    // Without this guard a compliance holder could pull any public document down to level 1.
+    t.mock.method(documents, 'getById', async () => ({ ...PUBLIC_ROW }));
+    let released = false;
+    t.mock.method(documents, 'setPublished', async () => { released = true; return PUBLIC_ROW; });
+    stubCascade(t);
+
+    const read = mockRes();
+    await sealedController.getSealed({ params: { id: 'd1' }, query: {}, user: COMPLIANCE }, read);
+    assert.strictEqual(read.statusCode, 404);
+
+    const release = mockRes();
+    await sealedController.releaseSealed({
+      params: { id: 'd1' }, query: {},
+      body: { caseNumber: 'CE-2026-014', decision: 'released' }, user: COMPLIANCE
+    }, release);
+    assert.strictEqual(release.statusCode, 404);
+    assert.strictEqual(released, false, 'a public row is never rewritten by the release route');
+  });
+
   await t.test('release without a caseNumber is 400', async () => {
     t.mock.method(documents, 'setPublished',
       async () => assert.fail('a refused release must not write'));
