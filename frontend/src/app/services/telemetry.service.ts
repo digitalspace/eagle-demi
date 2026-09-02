@@ -20,14 +20,16 @@ const records = (value: unknown): Record<string, unknown>[] =>
   Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
 
 /**
- * Query strings can carry tokens, so `?key=value[&key=value...]` goes — even mid-stack.
- * Requires `key=` after `?` so a stray `?` in prose or a stack line number (`:42:9)`) survives.
+ * Query strings can carry tokens, so `?key=value&key=value...` goes, colons in the value included
+ * (an ISO timestamp would otherwise truncate the match at its first `:`). Requires `key=` after `?`
+ * so a stray `?` in prose survives. Cost: a stack frame URL with a query loses its trailing `:line:col`
+ * too — parsedStack keeps those in separate fields, so nothing is lost there.
  */
 function scrub(target: Record<string, unknown>, fields: string[]): void {
   for (const field of fields) {
     const value = target[field];
     if (typeof value === 'string') {
-      target[field] = value.replace(/\?[\w%.~-]+=[^\s:)#'"]*(?:&[\w%.~-]+=[^\s:)#'"]*)*/g, '');
+      target[field] = value.replace(/\?[\w%.~-]+=[^\s)#'"]*/g, '');
     }
   }
 }
@@ -80,7 +82,9 @@ export class TelemetryService {
           enableCorsCorrelation: true,
           correlationHeaderDomains: hosts,
           enableAutoRouteTracking: false,
-          enableUnhandledPromiseRejectionTracking: true
+          enableUnhandledPromiseRejectionTracking: true,
+          // Blocks the SDK's own fetch to js.monitor.azure.com for remote config on a public site.
+          extensionConfig: { AppInsightsCfgSyncPlugin: { cfgUrl: '', blkCdnCfg: true } }
         }
       });
       appInsights.loadAppInsights();

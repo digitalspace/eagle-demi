@@ -58,6 +58,24 @@ describe('TelemetryService', () => {
     service.trackException(new Error('after init'));
     expect(sent.length).toBe(21);
   });
+
+  it('blocks the SDK config-sync plugin from calling out on init', async () => {
+    let capturedConfig: { config?: { extensionConfig?: unknown } } | undefined;
+    const fake = { loadAppInsights: () => undefined, addTelemetryInitializer: () => undefined };
+    const load = (() =>
+      Promise.resolve({
+        ApplicationInsights: function (config: { config?: { extensionConfig?: unknown } }) {
+          capturedConfig = config;
+          return fake;
+        }
+      })) as unknown as SdkLoader;
+
+    await service.init('InstrumentationKey=0-0-0-0-0', 'eagle-demi-frontend', [], load);
+
+    expect(capturedConfig?.config?.extensionConfig).toEqual({
+      AppInsightsCfgSyncPlugin: { cfgUrl: '', blkCdnCfg: true }
+    });
+  });
 });
 
 describe('errorsOnly', () => {
@@ -89,10 +107,11 @@ describe('errorsOnly', () => {
     expect(data['message']).toBe('failed /api/search');
   });
 
-  it('leaves stack positions and prose questions marks alone', () => {
-    const stackFrame = item('ExceptionData', { message: 'x.ts?t=1717:42:9)' });
+  it('strips a query value across colons, leaving only prose question marks alone', () => {
+    // A query value can hide a colon (an ISO date, a stack line:col) — the whole value must still go.
+    const stackFrame = item('ExceptionData', { message: 'x.js?v=1:42:9)' });
     keep(stackFrame);
-    expect((stackFrame.baseData as Record<string, string>)['message']).toBe('x.ts:42:9)');
+    expect((stackFrame.baseData as Record<string, string>)['message']).toBe('x.js)');
 
     const prose = item('ExceptionData', { message: "Unexpected token '?' at line 3" });
     keep(prose);
@@ -105,6 +124,10 @@ describe('errorsOnly', () => {
     const multi = item('ExceptionData', { message: '/x?a=1&b=2 tail' });
     keep(multi);
     expect((multi.baseData as Record<string, string>)['message']).toBe('/x tail');
+
+    const dated = item('ExceptionData', { message: '/r?date=2026-09-02T10:00:00Z&sig=SECRET 401' });
+    keep(dated);
+    expect((dated.baseData as Record<string, string>)['message']).toBe('/r 401');
   });
 
   it('cuts a query string out of an exception, wherever it sits', () => {
