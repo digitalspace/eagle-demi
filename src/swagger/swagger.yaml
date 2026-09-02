@@ -355,7 +355,10 @@ paths:
   /api/documents/extract:
     post:
       summary: Upload and extract document
-      description: Uploads document file to S3 MinIO and queues/processes text extraction.
+      description: >-
+        Uploads document file to S3 MinIO and queues/processes text extraction. The new record is
+        admitted at level 1 (team only), like `POST /api/documents`; widen it with
+        `PUT /api/documents/{id}/level`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
