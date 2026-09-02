@@ -87,11 +87,17 @@ async function getDbStats(req, res) {
 
     // Eagle rows Track has no counterpart for are retained and flagged (TODO F17), so the only
     // place their number is visible is here. Counted off `sourceSystem`, the flag itself.
-    const [projects, eagleOnlyProjects, documents, boundaries] = await Promise.all([
+    const [
+      projects, eagleOnlyProjects, documents, boundaries,
+      projectsWithCentroid, documentsExtracted, documentsExtractionErrors
+    ] = await Promise.all([
       projectsRepo.countVisible(access),
       projectsRepo.countEagleOnlyIds(access),
       documentsRepo.countVisible(access),
-      boundariesRepo.countVisible(access)
+      boundariesRepo.countVisible(access),
+      projectsRepo.countWithCentroid(access),
+      documentsRepo.countVisible(access, { extracted: true }),
+      documentsRepo.countVisible(access, { extractionError: true })
     ]);
 
     const indexProgress = await getIndexProgress();
@@ -106,7 +112,10 @@ async function getDbStats(req, res) {
         trackProjects: projects - eagleOnlyProjects,
         unlinkedProjects: eagleOnlyProjects,
         documents,
-        boundaries
+        boundaries,
+        projectsWithCentroid,
+        documentsExtracted,
+        documentsExtractionErrors
       },
       ...(indexProgress ? { indexProgress } : {})
     });
