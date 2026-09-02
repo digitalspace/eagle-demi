@@ -6,6 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const meController = require('../../src/controllers/me');
+const { routeChains } = require('../helpers/router-source');
 const { withServer } = require('../helpers/with-server');
 
 function mockRes() {
@@ -28,7 +29,8 @@ test('me controller', async (t) => {
     meController.getMe({}, res);
 
     assert.deepStrictEqual(res.body, {
-      roles: ['public'], level: 4, tier: 'public', privileged: false, staffUi: false
+      roles: ['public'], level: 4, tier: 'public', privileged: false, staffUi: false,
+      credentials: []
     });
   });
 
@@ -39,7 +41,8 @@ test('me controller', async (t) => {
     meController.getMe(req, res);
 
     assert.deepStrictEqual(
-      Object.keys(res.body).sort(), ['level', 'privileged', 'roles', 'staffUi', 'tier']);
+      Object.keys(res.body).sort(),
+      ['credentials', 'level', 'privileged', 'roles', 'staffUi', 'tier']);
   });
 
   // `privileged` is the whole reason this field exists: a client that re-derived it from `tier`
@@ -75,7 +78,8 @@ test('me controller', async (t) => {
       level: 2,
       tier: 'public',
       privileged: false,
-      staffUi: true
+      staffUi: true,
+      credentials: []
     });
   });
 
@@ -89,8 +93,46 @@ test('me controller', async (t) => {
       level: 2,
       tier: 'scoped',
       privileged: false,
-      staffUi: true
+      staffUi: true,
+      credentials: []
     });
+  });
+
+  // The holder's only sight of its own expiry. Renewal is the norm on EA timelines, so a grant
+  // that says nothing about `end` anywhere the holder can read is one that lapses unannounced.
+  await t.test('a holder sees its own live grants, end included', () => {
+    const stored = {
+      id: 'cred-1',
+      party: { type: 'user', id: 'bceid-sub' },
+      scope: { type: 'project', ids: ['207'] },
+      levels: [1, 2],
+      start: '2026-08-01T00:00:00.000Z',
+      end: '2026-11-01T00:00:00.000Z',
+      revokedAt: null,
+      _etag: 'e0'
+    };
+    const res = mockRes();
+
+    meController.getMe(
+      { user: { realm_access: { roles: ['public'] }, sub: 'bceid-sub' }, credentials: [stored] },
+      res);
+
+    // Exact, not a subset: `party` and the Cosmos system fields are the holder's own row, but
+    // emitting them here would make /api/me a second, unreviewed shape of the grant registry.
+    assert.deepStrictEqual(res.body.credentials, [{
+      id: 'cred-1',
+      scope: { type: 'project', ids: ['207'] },
+      levels: [1, 2],
+      end: '2026-11-01T00:00:00.000Z'
+    }]);
+  });
+
+  // `end` reaches the holder only if the loader runs, and it reads `req.user`, so the order is the
+  // behaviour: credentialsMiddleware ahead of passive auth attaches nothing on every request.
+  await t.test('GET /me loads credentials after passive auth', () => {
+    const route = routeChains().find(r => r.method === 'get' && r.path === '/me');
+    assert.ok(route, 'no GET /me in the route table');
+    assert.match(route.chain, /passiveAuthMiddleware\s*,\s*credentialsMiddleware/);
   });
 
   await t.test('the mounted route answers an anonymous request with 200', async () => {
@@ -98,7 +140,8 @@ test('me controller', async (t) => {
       const res = await call('/api/me');
       assert.strictEqual(res.status, 200);
       assert.deepStrictEqual(await res.json(), {
-        roles: ['public'], level: 4, tier: 'public', privileged: false, staffUi: false
+        roles: ['public'], level: 4, tier: 'public', privileged: false, staffUi: false,
+        credentials: []
       });
     });
   });

@@ -1290,7 +1290,7 @@ level, never changes anyone else's access, and never touches the field plane.
       arm: the record's id or projectId is in a credential's `scope.ids` AND `levelOfRead(read)` is in
       the credential's `levels` (doc §1: a credential names the levels it may see). No new SQL shape — the level check is the same
       `EXISTS ... r IN (...)` / `read/any` the role arm already builds.
-- [ ] Auto-revoke on state change, not only on the clock.
+- [x] Auto-revoke on state change, not only on the clock. The one arm still open waits on Track.
   - [x] Project closed. 2026-09-02: `sync-track-teams.js` reads `GET ${TRACK_API_BASE}/api/v1/projects`
         on the same bearer, takes every project with `is_project_closed === true` or
         `project_state === 'Closed'`, then reads the live project-scoped grants ONCE
@@ -1304,8 +1304,12 @@ level, never changes anyone else's access, and never touches the field plane.
         `project:<id>` roles are untouched — they follow Track staff, not project state.
   - [ ] Work complete. Track's project feed exposes no such field, so there is nothing to act on
         yet; `detail.cause: 'work-complete'` is unused.
-  - [ ] The 7-day pre-expiry notice to the GRANTOR (renewal is the norm on EA timelines).
-        Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer.
+  - [x] Expiry is visible, not announced. 2026-09-02 (Daniel): renewal is the norm on EA
+        timelines, so both sides read `end` off the API instead of waiting for a message. The
+        holder gets their own live grants (`id`, `scope`, `levels`, `end`) on `GET /api/me`, behind
+        `credentialsMiddleware`; the grantor lists the same rows on `GET /api/credentials`. No
+        mailer, and no credential screen — the holders are external parties who do not use the
+        staff registry.
 - [x] Endpoints `POST /api/credentials`, `GET /api/credentials?party=|projectId=`,
       `POST /api/credentials/revoke` (body `{ id | batchId | party | projectId }`), all
       `requireWrite` + `requireRole('sysadmin')`, audited `credential.grant` /
@@ -1579,9 +1583,8 @@ Branch: `feat/level-zero-routes`
       Test: `'a compliance-only token reaches the sealed routes and nothing else'`.
 - [x] `POST /api/sealed/:id/release` — same chain; body requires `caseNumber` and
       `decision` (400 without either). Rewrites `read[]` to `readForLevel(1)`, audits
-      `sealed.release` with `{ targetId, caseNumber, decision }`, and notifies the C&E lead.
-      Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer; log the
-      intent through `src/utils/logger.js` until it exists. One holder is enough; two-person
+      `sealed.release` with `{ targetId, caseNumber, decision }`. That audit row is the record of
+      the release and nobody is emailed (2026-09-02, Daniel). One holder is enough; two-person
       release is a later policy toggle. This is the ONLY exit; `PUT /:id/level` (P3-4) 400s on
       level 0.
 - [x] `auditEvent` on every route including reads: `sealed.read`, `sealed.create`,
