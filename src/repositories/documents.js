@@ -358,6 +358,26 @@ async function countSeededIds(access) {
   return value || 0;
 }
 
+/**
+ * Every `projectId` value actually present in this container — the true partition set, one row
+ * per partition rather than one per document.
+ *
+ * `projects.listVisible()` is NOT this list: an Eagle-only project (no Track counterpart, retained
+ * and flagged per workspace CLAUDE.md §DFL) has documents but no row in `projects`, so a caller
+ * that walked project ids instead would never enumerate — and never scan — that partition. See
+ * backfill-display-name-sort.js.
+ *
+ * NO ORDER BY, same reason listSeededIds has none: DISTINCT VALUE is cross-partition regardless.
+ */
+async function listDistinctProjectIds(access) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    select: 'DISTINCT VALUE c.projectId'
+  });
+  return fetchAll(CONTAINER, spec);
+}
+
 async function upsert(document) {
   return cosmos.upsert(CONTAINER, document);
 }
@@ -486,6 +506,7 @@ module.exports = {
   extractionRowsForProject,
   listSeededIds,
   countSeededIds,
+  listDistinctProjectIds,
   upsert,
   bulkUpsertForProject,
   patchExtraction,
