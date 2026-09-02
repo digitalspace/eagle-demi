@@ -52,7 +52,7 @@ Flex instance warm), and the reconcile drift alert.
 - `/machine/<auth route>` 401 without a key, 200 with the `eagle-api` subscription key
   (`az apim subscription list-keys`) resolving `demi-service-write`.
 - Cold start after 30 min idle recorded.
-- Search index drift check: `bash /root/repos/.claude/scripts/demi-devbox.sh drift --env prod`
+- Search index drift check: `demi-devbox.sh drift --env prod`
   (README "Search admin operations"). Exit 1 means a committed field is missing from the live
   index — the class of bug this deploy could otherwise reintroduce undetected.
 

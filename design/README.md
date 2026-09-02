@@ -1,22 +1,19 @@
 # Design handoffs
 
-How a design made in Claude Design becomes code in this repo.
+How a design mockup becomes code in this repo.
 
 ## The loop
 
-1. Design in the Claude Design canvas.
-2. Export a handoff bundle from Claude Design. Ask for an **HTML spec export**, not an app
+1. Design in the design system canvas.
+2. Export a handoff bundle. Ask for an **HTML spec export**, not an app
    export — the useful bundle is a `.dc.html` mockup plus a `README.md` of instructions, not a
    compiled SPA.
 3. Unzip it to `design/handoffs/<name>/`, where `<name>` is short and dated or sequenced
    (`2026-09-04-audit-filters`, `handoff-B3`).
-4. Tell Claude Code: **"do handoff-<name>"**.
+4. Implement it following the rules below.
 
-There is no `/design-sync` here. This is an Angular app, not React, so Claude Design's component
-sync (which pushes real React components back into the design system) does not apply. The vendor
-CSS files below are the only channel between this repo and the design system.
 
-## What "do handoff-X" means
+## What implementing a handoff means
 
 Read `design/handoffs/<name>/README.md` first. It is the spec: tokens, layout, per-screen data
 shapes, interaction notes. Then:

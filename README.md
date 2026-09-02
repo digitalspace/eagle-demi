@@ -103,7 +103,7 @@ live index schema and reports any committed field the live index does not have â
 that reached prod once already, undetected. Read-only, exit 1 on drift:
 
 ```bash
-bash /root/repos/.claude/scripts/demi-devbox.sh drift [--env test|prod]
+demi-devbox.sh drift [--env test|prod]
 # equivalent, run by hand on the devbox:
 scripts/with-search-admin.sh -- \
   az vm run-command invoke -g c4b0a8-test-rg -n demi-devbox-test --command-id RunShellScript \
