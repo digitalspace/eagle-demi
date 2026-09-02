@@ -63,7 +63,7 @@ const routes = [
 
   { method: 'get', path: '/config', guards: [], load: () => configController().getConfig },
   // Passive, not authMiddleware: an anonymous caller gets the public tier, not a 401.
-  { method: 'get', path: '/me', guards: [passiveAuthMiddleware], load: () => meController().getMe },
+  { method: 'get', path: '/me', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => meController().getMe },
   // Authenticated, though the body describes a HYPOTHETICAL caller and the handler reads no
   // container: the answer is the whole field catalog plus a role-privilege oracle, the same
   // disclosure /api-docs is gated for below. The Access Model screen is staff-gated anyway.

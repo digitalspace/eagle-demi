@@ -96,5 +96,5 @@ Not scheduled. Added 2026-08-26.
 
   Until this lands, the two corpora drift: test's DEMI corpus was seeded from prod, so its project
   list names projects the test eagle-api has never held and those pages 404. Remedy is
-  `.claude/scripts/epic-backfill-projects.py --missing` in the workspace root, which copies the
+  `epic-backfill-projects.py --missing` (workspace script, not in this repo), which copies the
   gap across; the frontend renders a "Project not found" page rather than an alert.

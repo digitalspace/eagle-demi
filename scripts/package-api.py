@@ -91,7 +91,7 @@ def package_api(repo_root, zip_path):
     # loads. Shipping it would put worker.py and three systemd units at the app root, which is the
     # same class of debris the 2026-08-04 wwwroot sweep had to clean out by hand. Excluded at the
     # root only, like `frontend`.
-    # `.claude` holds agent scratch AND `.claude/worktrees/*`, which are full git checkouts of this
+    # `.claude` holds local tool state AND `.claude/worktrees/*`, which are full git checkouts of this
     # same repository. Without this exclusion the package was 202 MB — 697 MB of it uncompressed
     # `.claude` against under 1 MB of actual `src` — and the deploy hung: Kudu sat at status 1 for
     # over thirty minutes where a healthy deploy of this app finishes in about thirty seconds.

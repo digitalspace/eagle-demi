@@ -65,7 +65,7 @@ const DEFAULT_PAGE_SIZE = 200;
 /**
  * Operations per bulk request. 100 is `cosmos-nosql.js`'s `BULK_MAX_OPERATIONS`, which is the
  * Cosmos hard limit, and `bulkVerified` already retries the 429s a smaller batch is meant to
- * avoid — so the code, not the 50 in `.claude/skills/eagle-cosmosdb/SKILL.md`, is what this
+ * avoid — so 100 is what this
  * follows. `--batch` exists to drop to 50 if a run reports a lot of 429s; it can never go above
  * 100, because Cosmos rejects the request outright rather than splitting it.
  */

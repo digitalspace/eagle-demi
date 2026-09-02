@@ -63,7 +63,7 @@ case "$ENVIRONMENT" in
     SUBSCRIPTION='be5924ac-1083-4a1b-be92-7b444882cfd9'
     RESOURCE_GROUP='rg-demi-prod'
     # This box has NO prod write context. The name below is the read-only ServiceAccount context
-    # from the workspace CLAUDE.md, used here to read the MinIO secret and demi-app-secrets
+    # for this workspace, used here to read the MinIO secret and demi-app-secrets
     # (ADMIN_API_KEY, DOCLING_API_KEY, TRACK_CLIENT_SECRET, ROLE_SYNC_CLIENT_SECRET,
     # NOTIFY_API_KEY) out of
     # 6cdc9e-prod. Export any of them by hand to override.
