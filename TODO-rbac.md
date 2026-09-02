@@ -1413,18 +1413,18 @@ Acceptance
 
 Branch: `docs/vis-level-zero-exports`
 
-- [ ] `docs/prod-flip-runbook.md`: name `src/scripts/export-chunks-to-eagle.js --dump`, `src/scripts/audit-chunk-quality.js` and `src/scripts/probe-phrase-presence.js` as level-0 material — all three read under `systemAccess()` (`src/scripts/audit-chunk-quality.js:111`, `src/scripts/probe-phrase-presence.js:241`).
-- [ ] Add the deletion step for the `--dump` output on the devbox (`demi-devbox-test`, `demi-devbox-prod`) working directory after any `--dump`.
-- [ ] `src/ai/summarize.js`: one comment line stating it consumes chunk `content` only and never a project or document row. No code change.
+- [x] `docs/prod-flip-runbook.md`: name `src/scripts/export-chunks-to-eagle.js --dump`, `src/scripts/audit-chunk-quality.js` and `src/scripts/probe-phrase-presence.js` as level-0 material. `audit-chunk-quality.js:111` and `probe-phrase-presence.js:241` read under `systemAccess()`; `export-chunks-to-eagle.js` does not — it queries the container directly, which is wider. The runbook lists every `systemAccess()` script, not only these.
+- [x] Add the deletion step for the `--dump` output on the devbox (`demi-devbox-test`, `demi-devbox-prod`) working directory after any `--dump`.
+- [x] `src/ai/summarize.js`: one comment line stating it consumes chunk `content` only and never a project or document row. No code change.
 
 Tests
 
-- [ ] `test/ai/summarize.test.js` — case `'summarize reads no project or document field'` asserts the prompt builder is called with objects whose only keys are chunk keys. Fails if a future change feeds it a project row.
+- [x] `test/ai/summarize.test.js` — case `'summarize reads no project or document field'` asserts the prompt builder is called with objects whose only keys are chunk keys. Fails if a future change feeds it a project row.
 
 Acceptance
 
-- [ ] `node --test test/ai/summarize.test.js` — 0 fail.
-- [ ] `grep -n systemAccess src/scripts/*.js` output matches the runbook list exactly.
+- [x] `node --test test/ai/summarize.test.js` — 0 fail.
+- [x] `grep -n systemAccess src/scripts/*.js` output matches the runbook list exactly.
 
 ## P4-3 dual issuer in auth.js
 
