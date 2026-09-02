@@ -129,6 +129,12 @@ param roleSyncClientId = 'demi-role-sync'
 param trackClientSecret = readEnvironmentVariable('TRACK_CLIENT_SECRET')
 param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 
+// ── eagle-notify ──────────────────────────────────────────────────────────────────────────────
+// Where a published Update is announced. The key comes from OpenShift `demi-app-secrets` through
+// deploy-infra.sh, never from this file.
+param notifyApiBase = 'https://notify-api-test.azurewebsites.net'
+param notifyApiKey = readEnvironmentVariable('NOTIFY_API_KEY', '')
+
 // Nightly 10:00 UTC. Armed 2026-09-02 after the first live run against epictrack-api-c8b80a-test.
 param syncTeamsSchedule = '0 0 10 * * *'
 

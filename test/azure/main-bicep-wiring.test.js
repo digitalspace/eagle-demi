@@ -3,7 +3,9 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
+const os = require('node:os');
 const path = require('path');
+const { spawnSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
 const MAIN = fs.readFileSync(path.join(ROOT, 'azure', 'main.bicep'), 'utf8');
@@ -13,6 +15,8 @@ const PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.prod.biceppar
 const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'search-existing.bicep'), 'utf8');
 const COSMOS_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
 const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'observability.bicep'), 'utf8');
+const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
+const DEPLOY = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-infra.sh'), 'utf8');
 
 const { summaryLine } = require('../../src/scripts/reconcile-eagle');
 
@@ -193,6 +197,51 @@ test('deployEnrichment gates the wildfires container and only that one', () => {
   assert.ok(boundaries, 'no boundaries container declared in cosmos-nosql.bicep');
   assert.doesNotMatch(boundaries.split('\n')[0], /= if \(/,
     'boundaries must NOT be gated — every environment serves it, empty in prod');
+});
+
+// eagle-notify is two settings and the key is OPTIONAL, which is a shape three files have to agree
+// on: an empty key writes no Key Vault secret, an empty secret URI leaves the app setting empty,
+// and the deploy script demands the key only where a host is named. Break any one and either a
+// prod deploy is blocked on a credential prod does not use, or a test environment goes dark while
+// looking configured. `az bicep build` says nothing about either.
+test('the eagle-notify key is demanded exactly where a host is named', () => {
+  assert.match(KEY_VAULT, /var hasNotifyKey = !empty\(notifyApiKey\)/);
+  assert.match(KEY_VAULT, /resource notifyApiKeySecret [^\n]+ = if \(hasNotifyKey\) \{/,
+    'an empty key must write no secret — there is no empty secret value to write');
+  assert.match(API_MODULE, /value: empty\(notifyApiKeySecretUri\) \?/,
+    'without the empty branch a dark environment gets a Key Vault reference to no secret');
+
+  const base = (params) => /^param notifyApiBase = '([^']*)'$/m.exec(params);
+  assert.ok(base(TEST_PARAMS), 'test must state notifyApiBase');
+  assert.ok(base(PROD_PARAMS), 'prod must state notifyApiBase, empty or otherwise');
+  assert.strictEqual(base(PROD_PARAMS)[1], '', 'prod has no eagle-notify to announce to yet');
+
+  assert.match(DEPLOY, /os_secret demi-app-secrets NOTIFY_API_KEY/,
+    'the key comes from OpenShift, like every other secret this script sources');
+  assert.match(DEPLOY, /notifyApiBase[^\n]*PARAM_FILE[\s\S]{0,120}required\+=\(NOTIFY_API_KEY\)/,
+    'the key must be required only where the param file names a host — otherwise prod is blocked ' +
+    'on a credential it does not use, or test deploys a host with no key and stays dark');
+
+  // Reading the script proves the gate is wired, not that it discriminates: widen `[^']+` to
+  // `[^']*` and every assertion above still passes while prod is blocked on a key it does not use.
+  // So run the script's own expression, with the script's own grep, against both shapes of value.
+  const gate = /grep -Eq "(\^param notifyApiBase[^"]*)" "\$PARAM_FILE"/.exec(DEPLOY);
+  assert.ok(gate, 'the gate must be a grep -Eq of the param file, or this cannot be exercised');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'notify-gate-'));
+  const demands = (line) => {
+    const file = path.join(dir, 'x.bicepparam');
+    fs.writeFileSync(file, `${line}\n`);
+    return spawnSync('grep', ['-Eq', gate[1], file]).status === 0;
+  };
+  try {
+    assert.strictEqual(demands("param notifyApiBase = ''"), false,
+      'an empty host is a dark environment — demanding the key there blocks the prod deploy');
+    assert.strictEqual(demands("param notifyApiBase = 'https://eagle-notify.example.gov.bc.ca'"), true,
+      'a named host must demand the key, or the environment deploys looking configured and dark');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // Two params, one feature, and each is useless alone: the schedule is what writes the drift line,

@@ -154,6 +154,12 @@ param roleSyncClientId string = ''
 @description('Key Vault URI of that service account secret. Same handling as trackClientSecretUri.')
 param roleSyncClientSecretUri string
 
+@description('eagle-notify base URL a published Update is announced to. Empty leaves the push dark.')
+param notifyApiBase string = ''
+
+@description('Key Vault URI of the eagle-notify function key. Not the value: the app resolves it through a Key Vault reference. Empty leaves the push dark.')
+param notifyApiKeySecretUri string = ''
+
 // @secure() only to satisfy the linter's name heuristic — the value is a Key Vault reference, not
 // a secret; the vault holds the secret itself.
 @description('Key Vault reference for the APIM gateway secret. Empty disables the gateway trust branch.')
@@ -473,6 +479,16 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'TRACK_CLIENT_SECRET'
           value: '@Microsoft.KeyVault(SecretUri=${trackClientSecretUri})'
+        }
+        // eagle-notify. BOTH are required before anything is sent — src/services/notify.js is
+        // dark on either being empty, and the mirror then takes no notification claim at all.
+        {
+          name: 'NOTIFY_API_BASE'
+          value: notifyApiBase
+        }
+        {
+          name: 'NOTIFY_API_KEY'
+          value: empty(notifyApiKeySecretUri) ? '' : '@Microsoft.KeyVault(SecretUri=${notifyApiKeySecretUri})'
         }
         // The realm-management service account the sync grants `project:<id>` roles with. Distinct
         // from KEYCLOAK_CLIENT_ID, which is the client whose user tokens this API accepts.

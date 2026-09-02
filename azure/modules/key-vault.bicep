@@ -32,6 +32,10 @@ param trackClientSecret string
 @secure()
 param roleSyncClientSecret string
 
+@description('Function key DEMI presents to eagle-notify when an Update is published. Same handling as adminApiKey, except that it is OPTIONAL: empty writes no secret at all, which is what a dark environment wants.')
+@secure()
+param notifyApiKey string = ''
+
 // 3-24 characters, alphanumeric and hyphens, must start with a letter. `demi-kv-prod` is 12.
 var vaultName = 'demi-kv-${environmentName}'
 
@@ -85,6 +89,18 @@ resource roleSyncClientSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-0
   }
 }
 
+// A bool, not `!empty(notifyApiKey)` inline: the output below has to branch on it too, and the
+// linter reads a secure param named in an output as a leaked secret.
+var hasNotifyKey = !empty(notifyApiKey)
+
+resource notifyApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (hasNotifyKey) {
+  parent: vault
+  name: 'notify-api-key'
+  properties: {
+    value: notifyApiKey
+  }
+}
+
 // Key Vault Secrets User — read of secret VALUES, nothing else. Not Secrets Officer: the app never
 // writes a secret, and rotation happens at the vault, not through the app.
 var keyVaultSecretsUser = '4633458b-17de-408a-b874-0445c86b69e6'
@@ -131,3 +147,6 @@ output vaultName string = vault.name
 output adminApiKeySecretUri string = adminApiKeySecret.properties.secretUri
 output trackClientSecretUri string = trackClientSecretSecret.properties.secretUri
 output roleSyncClientSecretUri string = roleSyncClientSecretSecret.properties.secretUri
+// Empty where no key was supplied — the app then gets an empty NOTIFY_API_KEY and stays dark,
+// rather than a Key Vault reference that resolves to nothing.
+output notifyApiKeySecretUri string = hasNotifyKey ? notifyApiKeySecret!.properties.secretUri : ''

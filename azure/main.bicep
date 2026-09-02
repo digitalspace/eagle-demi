@@ -67,6 +67,9 @@ param eagleApiBase string
 @description('Public origin short links redirect from, e.g. https://projects.eao.gov.bc.ca. Per environment: test must not hand back the prod host.')
 param linkBaseUrl string = ''
 
+@description('eagle-notify base URL DEMI announces published Updates to. Empty leaves the push dark.')
+param notifyApiBase string = ''
+
 // Bucket and prefix were previously set out of band, so every template deploy silently reset them
 // to the module defaults ('eagle-demi', ''). Exposed here so the template describes reality.
 @description('Object-store bucket name (dev: asnpnn, test: zdspnb).')
@@ -227,6 +230,10 @@ param roleSyncClientId string = ''
 @secure()
 param roleSyncClientSecret string
 
+@description('Function key eagle-notify accepts on POST /api/events. OPTIONAL, unlike trackClientSecret: empty writes no Key Vault secret and leaves the push dark, which is what an environment with no notifyApiBase wants.')
+@secure()
+param notifyApiKey string = ''
+
 @description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty runs it never.')
 param syncTeamsSchedule string = ''
 
@@ -334,6 +341,7 @@ module keyVault './modules/key-vault.bicep' = {
     adminApiKey: adminApiKey
     trackClientSecret: trackClientSecret
     roleSyncClientSecret: roleSyncClientSecret
+    notifyApiKey: notifyApiKey
   }
 }
 
@@ -475,6 +483,8 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     trackClientSecretUri: keyVault.outputs.trackClientSecretUri
     roleSyncClientId: roleSyncClientId
     roleSyncClientSecretUri: keyVault.outputs.roleSyncClientSecretUri
+    notifyApiBase: notifyApiBase
+    notifyApiKeySecretUri: keyVault.outputs.notifyApiKeySecretUri
     syncTeamsSchedule: syncTeamsSchedule
     bulkDownloadsQueue: bulkDownloadsQueue
     bulkCleanupSchedule: bulkCleanupSchedule

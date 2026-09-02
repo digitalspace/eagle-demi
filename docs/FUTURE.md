@@ -63,9 +63,10 @@ Not scheduled. Added 2026-08-26.
      `demi.eao.gov.bc.ca` resolves (BC Gov DNS request outstanding) and `SEARCH_API_PATH` becomes an
      absolute URL the browser calls directly; until then the site's CSP `connect-src 'self'
      https://*.gov.bc.ca` also rejects `demi-api-*.azurewebsites.net`.
-  2. *Missing data.* No comment periods, no pins, no recent activities, no organization records
-     exist here. Pins arrive on the Eagle push but survive only inside `sources.eagle`, which the
-     field catalog strips from every response at every level (`src/vis/catalog/projects.js:85`).
+  2. *Missing data.* No comment periods, no pins, no organization records exist here; recent
+     activities are mirrored into the `updates` container but have no read route yet. Pins arrive
+     on the Eagle push but survive only inside `sources.eagle`, which the field catalog strips from
+     every response at every level (`src/vis/catalog/projects.js:85`).
   3. *Missing key.* `GET /projects/:id` takes the DEMI id — the Track id, or `eagle-<objectid>` for
      an Eagle-only project — not the Eagle `_id` the site holds. The only Eagle-keyed path is
      `/search?dataset=Project&and[_id]=`, aliased onto `legacyEagleId`.

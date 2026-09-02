@@ -231,6 +231,45 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
   }
 }
 
+// Public Updates (Eagle `RecentActivity`), mirrored on every eagle-api write. Small and read
+// whole, so /id gives perfect distribution and 1 RU point reads. No TTL: an update is retired by
+// unpublishing it, not by expiring. /notifiedAt is indexed because the publish-notify claim is a
+// conditional patch on it.
+resource updatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'updates'
+  properties: {
+    resource: {
+      id: 'updates'
+      partitionKey: {
+        paths: [
+          '/id'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/projectId/?'
+          }
+          {
+            path: '/isPublished/?'
+          }
+          {
+            path: '/dateAdded/?'
+          }
+          {
+            path: '/notifiedAt/?'
+          }
+        ]
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
 // Extracted document text. replaceChunks deletes then reinserts every chunk for a document,
 // which /documentId confines to a single logical partition. /content stays unindexed.
 resource chunksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
