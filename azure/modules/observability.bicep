@@ -19,6 +19,9 @@ param environmentName string
 @description('Default resource tags')
 param tags object
 
+@description('Principal id of the API identity. Granted Log Analytics Reader so the admin panel can read request health back through the API.')
+param apiPrincipalId string
+
 @description('Alert when the nightly reconcile reports drift. Off by default — an environment that does not set RECONCILE_SCHEDULE never writes the line this rule reads, and a rule that can only ever be silent is one more thing to keep.')
 param deployReconcileDriftAlert bool = false
 
@@ -64,6 +67,21 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
     }
     publicNetworkAccessForIngestion: 'Enabled'
     publicNetworkAccessForQuery: 'Enabled'
+  }
+}
+
+// Log Analytics Reader. Read-only, and narrower than it looks: the app already WRITES here
+// through Application Insights — this only lets it query AppRequests back (src/azure/monitor.js).
+// A new assignment takes minutes to be honoured — retry a 403, do not re-grant.
+var logAnalyticsReaderRoleId = '73c42c96-874c-492b-b04d-ab87d138a893'
+
+resource appLogsReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: workspace
+  name: guid(workspace.id, apiPrincipalId, logAnalyticsReaderRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', logAnalyticsReaderRoleId)
+    principalId: apiPrincipalId
+    principalType: 'ServicePrincipal'
   }
 }
 
@@ -210,3 +228,6 @@ output workspaceId string = workspace.id
 
 @description('Name of the Log Analytics workspace, for KQL queries')
 output workspaceName string = workspace.name
+
+@description('Workspace GUID, which is what the Log Analytics query API keys on — not the resource id')
+output workspaceCustomerId string = workspace.properties.customerId

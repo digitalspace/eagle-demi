@@ -25,6 +25,7 @@ const config = require('../config');
 const { logger } = require('./logger');
 const { callerIp } = require('./caller-ip');
 const { rolesFor } = require('../helpers/access-sql');
+const azureCredential = require('./azure-credential');
 
 const AUDIT_STREAM = 'Custom-DemiAudit_CL';
 const EVENTS_STREAM = 'Custom-DemiEvents_CL';
@@ -36,7 +37,6 @@ const buffers = new Map([
 ]);
 
 let flushTimer = null;
-let credential = null;
 let warnedDisabled = false;
 
 // Injection seam for the tests. Real code never passes anything here; `test/audit.test.js`
@@ -325,19 +325,7 @@ function redactForLog(stream, row) {
 }
 
 async function fetchIngestionToken() {
-  if (!credential) {
-    // Required lazily, matching src/db/cosmos-nosql.js: importing this module must not pull in
-    // @azure/identity in environments that never publish.
-    const { DefaultAzureCredential } = require('@azure/identity');
-    credential = new DefaultAzureCredential(
-      process.env.AZURE_CLIENT_ID
-        ? { managedIdentityClientId: process.env.AZURE_CLIENT_ID }
-        : undefined
-    );
-  }
-  // The credential caches and refreshes internally, so this is not a network call per flush.
-  const token = await credential.getToken('https://monitor.azure.com/.default');
-  return token && token.token;
+  return azureCredential.getToken('https://monitor.azure.com/.default');
 }
 
 async function postToIngestionApi(stream, rows) {

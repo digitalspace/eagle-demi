@@ -100,6 +100,11 @@ const UNGATED = {
 const gatedPrefixes = {
   '/admin/api-keys': ['authMiddleware', 'requireAdmin'],
   '/admin/sync/': ['authMiddleware', 'requireAdmin'],
+  // The Azure read routes: the audit trail names every actor, and the usage and cost figures are
+  // operator data. None of them touch a repository, so this file is the only thing gating them.
+  '/admin/audit': ['authMiddleware', 'requireAdmin'],
+  '/admin/analytics': ['authMiddleware', 'requireAdmin'],
+  '/admin/cost': ['authMiddleware', 'requireAdmin'],
   '/eagle/': ['authMiddleware', 'requireWrite'],
   // The executable half of the `credentials.js` reason above. `requireRole` is the narrow gate a
   // grant needs: requireWrite alone would let the machine writer mint one for itself.
