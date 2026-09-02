@@ -70,10 +70,11 @@ test('projects repository', async (t) => {
     assert.match(calls[1].spec.query, /^SELECT \* FROM c WHERE /, 'level 0 reads the whole row');
   });
 
-  await t.test('privileged list is unrestricted but still well-formed', async () => {
+  await t.test('privileged list is unrestricted but for the sealed compartment', async () => {
     const calls = captureQuery(t);
     await projects.listVisible(ADMIN, {});
-    assert.match(calls[0].spec.query, /WHERE true/);
+    assert.match(calls[0].spec.query, /WHERE \(\(NOT ARRAY_CONTAINS\(c\.read, 'compliance'\)\)\)/);
+    assert.ok(!/EXISTS/.test(calls[0].spec.query), 'the role predicate is still lifted');
   });
 
   await t.test('scoped list restricts to the caller partitions, keeping the ACL', async () => {
@@ -273,10 +274,11 @@ test('chunks repository', async (t) => {
     assert.match(spec.query, /EXISTS\(SELECT VALUE r FROM r IN c\.read/);
   });
 
-  await t.test('privileged list is unrestricted — the whole-corpus read source', async () => {
+  await t.test('privileged list is the whole-corpus read source, bar the sealed compartment', async () => {
     const calls = captureQuery(t);
     await chunks.listVisible(ADMIN, {});
-    assert.match(calls[0].spec.query, /WHERE true/);
+    assert.match(calls[0].spec.query, /WHERE \(\(NOT ARRAY_CONTAINS\(c\.read, 'compliance'\)\)\)/);
+    assert.ok(!/EXISTS/.test(calls[0].spec.query), 'the role predicate is still lifted');
   });
 
   // THE regression test for this repository. `chunks` is the only container whose partition key

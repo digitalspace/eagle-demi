@@ -15,10 +15,16 @@ const SCOPED = {
 };
 
 test('access-odata filter', async (t) => {
-  await t.test('privileged callers get no filter at all', () => {
+  await t.test('privileged callers carry only the sealed exclusion', () => {
+    // Not null any more: an unrestricted filter is what would let AI Search return a level-0 row
+    // to a privileged caller (docs/rbac-architecture.md §1, "Level 0").
     const { filter, empty } = filterFor(ADMIN);
-    assert.strictEqual(filter, null, 'privileged is unrestricted, the same shape as SQL true');
+    assert.strictEqual(filter, "not read/any(r: r eq 'compliance')");
     assert.strictEqual(empty, false);
+
+    // The holder is the one caller with nothing to exclude, and only then is the filter null.
+    assert.deepStrictEqual(filterFor({ ...ADMIN, roles: [...ADMIN.roles, 'compliance'] }),
+      { filter: null, empty: false });
   });
 
   await t.test('a privileged caller carrying a scope is still narrowed by it', () => {
@@ -30,8 +36,9 @@ test('access-odata filter', async (t) => {
     };
     const { filter, empty } = filterFor(scopedAdmin);
     assert.strictEqual(empty, false);
-    assert.strictEqual(filter, "search.in(projectId, '207', ',')",
-      'the role clause is lifted, the scope clause is not');
+    assert.strictEqual(filter,
+      "not read/any(r: r eq 'compliance') and search.in(projectId, '207', ',')",
+      'the role clause is lifted, the scope clause and the sealed exclusion are not');
   });
 
   await t.test('anonymous callers are restricted to the roles they hold', () => {
@@ -133,6 +140,19 @@ test('access-odata filter', async (t) => {
 
   // A comma is the separator search.in() uses, so a value containing one would silently split
   // into two roles — granting a role nobody holds.
+  // The sealed compartment. AI Search holds each row's read[] verbatim, so without this clause a
+  // level-0 row is findable by anyone the index answers at all.
+  await t.test('every caller without compliance excludes the sealed rows', () => {
+    for (const access of [PUBLIC, ADMIN, SCOPED]) {
+      assert.ok(filterFor(access).filter.includes("not read/any(r: r eq 'compliance')"),
+        `${access.tier} must exclude level 0`);
+    }
+
+    const holder = { tier: TIER.PUBLIC, roles: ['public', 'compliance'], projectScope: null };
+    assert.ok(!filterFor(holder).filter.includes('not read/any'),
+      'the holder is the one caller with nothing to exclude');
+  });
+
   await t.test('a value containing a comma falls back to an eq chain', () => {
     const { filter } = filterFor({
       tier: TIER.PUBLIC,

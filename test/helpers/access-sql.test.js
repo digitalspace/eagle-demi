@@ -21,18 +21,26 @@ const {
   canRead,
   systemAccess
 } = require('../../src/helpers/access-sql');
+// The break-glass identity is asserted from the real verifier, not from a copy of its role list.
+const { authenticate } = require('../../src/helpers/auth');
 
 // These tests assert the EMITTED SQL and parameters, not just behaviour. Authorization is the
 // highest-consequence surface here and this repo has already shipped a filter that failed
 // open once, so an edit that widens the predicate must fail a test rather than a review.
 
 test('readClause — role ACL predicate', async (t) => {
-  await t.test('privileged roles short-circuit to true with no params', () => {
+  await t.test('privileged roles lift the role predicate, all but the sealed exclusion', () => {
+    // Not a bare `true` any more: that short-circuit was what handed a privileged caller a level-0
+    // row (docs/rbac-architecture.md §1, "Level 0").
     for (const role of ['sysadmin', 'demi-admin', 'demi-service-read']) {
       const { clause, params } = readClause(['public', role]);
-      assert.strictEqual(clause, 'true', `${role} should be unrestricted`);
+      assert.strictEqual(clause, "NOT ARRAY_CONTAINS(c.read, 'compliance')",
+        `${role} should be unrestricted apart from the sealed compartment`);
       assert.deepStrictEqual(params, []);
     }
+
+    // A privileged caller that DOES hold it is the one caller with nothing to exclude.
+    assert.strictEqual(readClause(['public', 'sysadmin', 'compliance']).clause, 'true');
   });
 
   await t.test('anonymous emits an indexed EXISTS subquery, never a bare true', () => {
@@ -137,9 +145,10 @@ test('visibilityFor — the predicate controllers actually use', async (t) => {
     assert.ok(!clause.includes('projectId IN'));
   });
 
-  await t.test('privileged: unrestricted', () => {
+  await t.test('privileged: unrestricted but for the sealed compartment', () => {
     const access = { tier: TIER.PRIVILEGED, roles: ['public', 'sysadmin'], projectScope: null };
-    assert.strictEqual(visibilityFor(access, 'projectId').clause, 'true');
+    assert.strictEqual(visibilityFor(access, 'projectId').clause,
+      "(NOT ARRAY_CONTAINS(c.read, 'compliance'))");
   });
 
   await t.test('scoped: ACL AND partition restriction, both present', () => {
@@ -225,9 +234,12 @@ test('the ladder vocabulary', async (t) => {
     assert.deepStrictEqual(readForLevel(3), ['staff', 'idir']);
     assert.deepStrictEqual(readForLevel(4), ['staff', 'idir', 'public']);
 
-    // 0 is the sealed compartment and is not on the ladder.
-    assert.throws(() => readForLevel(0), /not a ladder level/);
+    // 0 is the sealed compartment: off the ladder, sharing no token with it, and the only
+    // non-ladder level readForLevel accepts.
+    assert.deepStrictEqual(readForLevel(0), ['compliance']);
+    assert.strictEqual(levelOfRead(['compliance']), 0);
     assert.throws(() => readForLevel(5), /not a ladder level/);
+    assert.throws(() => readForLevel(-1), /not a ladder level/);
   });
 
   await t.test('a legacy ACL reads as level 2', () => {
@@ -358,7 +370,8 @@ test('teams grant, key scope restricts — two different project facts', async (
 
     // Privilege lifts the ROLE predicate; the project narrowing survives.
     const { clause, params } = visibilityFor(access, 'projectId');
-    assert.strictEqual(clause, '(c.projectId IN (@scope0))');
+    assert.strictEqual(clause,
+      "(NOT ARRAY_CONTAINS(c.read, 'compliance')) AND (c.projectId IN (@scope0))");
     assert.deepStrictEqual(params, [{ name: '@scope0', value: '207' }]);
   });
 
@@ -371,11 +384,12 @@ test('teams grant, key scope restricts — two different project facts', async (
       'scope binds the point read too');
   });
 
-  await t.test('an unscoped privileged caller is unrestricted, as before', () => {
+  await t.test('an unscoped privileged caller is unrestricted, bar the sealed compartment', () => {
     const access = resolveAccess(withRoles('sysadmin'));
     assert.strictEqual(access.tier, TIER.PRIVILEGED);
     assert.strictEqual(access.projectScope, null);
-    assert.strictEqual(visibilityFor(access, 'projectId').clause, 'true');
+    assert.strictEqual(visibilityFor(access, 'projectId').clause,
+      "(NOT ARRAY_CONTAINS(c.read, 'compliance'))");
   });
 
   await t.test('systemAccess() cannot be scoped — it takes no request', () => {
@@ -383,7 +397,8 @@ test('teams grant, key scope restricts — two different project facts', async (
     assert.strictEqual(access.tier, TIER.PRIVILEGED);
     assert.strictEqual(access.projectScope, null);
     assert.deepStrictEqual(access.teams, []);
-    assert.strictEqual(visibilityFor(access, 'projectId').clause, 'true');
+    assert.strictEqual(visibilityFor(access, 'projectId').clause,
+      "(NOT ARRAY_CONTAINS(c.read, 'compliance'))");
   });
 
   await t.test('systemAccess is level 0', () => {
@@ -447,5 +462,68 @@ test('canRead — point reads bypass the query predicate', async (t) => {
     };
     assert.strictEqual(canRead({ projectId: '207', read: ['public'] }, scoped), true);
     assert.strictEqual(canRead({ projectId: '999', read: ['public'] }, scoped), false);
+  });
+});
+
+// The sealed compartment (docs/rbac-architecture.md §1, "Level 0"). A level-0 row sits in its
+// ordinary container with `read: ['compliance']`, so the ONLY thing keeping it sealed is that
+// every caller without that role carries an exclusion — the privileged ones especially, whose
+// predicate would otherwise collapse to `true`.
+test('level 0 — the sealed compartment', async (t) => {
+  const SEALED = { id: 'p1', projectId: 'p1', read: readForLevel(0) };
+  const access = (roles, extra = {}) => resolveAccess({ user: { realm_access: { roles } }, ...extra });
+
+  await t.test('sysadmin cannot read a compliance-only row', () => {
+    assert.strictEqual(canRead(SEALED, access(['sysadmin'])), false);
+    assert.match(readClause(['sysadmin']).clause, /NOT ARRAY_CONTAINS/);
+
+    // Every other privileged role, since each of them short-circuits the same way.
+    for (const role of ['demi-admin', 'demi-service-read', 'demi-service-write', 'staff']) {
+      assert.strictEqual(canRead(SEALED, access([role])), false, `${role} must not read a sealed row`);
+    }
+  });
+
+  await t.test('systemAccess excludes compliance-only rows', () => {
+    // Exports, seed, reconcile and the extraction worker all read through it.
+    assert.ok(!systemAccess().roles.includes('compliance'), 'the role list must stay compliance-free');
+    assert.strictEqual(canRead(SEALED, systemAccess()), false);
+  });
+
+  await t.test('break-glass key has no compliance role', () => {
+    // One shared secret must not open the compartment (doc §1, condition 1).
+    process.env.ADMIN_API_KEY = 'break-glass-for-this-test';
+    t.after(() => { delete process.env.ADMIN_API_KEY; });
+
+    let identity;
+    authenticate(
+      { header: (name) => (name === 'X-Api-Key' ? 'break-glass-for-this-test' : null) },
+      (user) => { identity = user; },
+      (status, error) => assert.fail(`break-glass refused: ${status} ${error}`)
+    );
+
+    assert.ok(identity, 'the break-glass path must still authenticate');
+    assert.ok(!identity.realm_access.roles.includes('compliance'));
+    assert.strictEqual(canRead(SEALED, resolveAccess({ user: identity })), false);
+  });
+
+  await t.test('compliance reads it', () => {
+    const holder = access(['compliance']);
+    assert.strictEqual(canRead(SEALED, holder), true);
+    assert.strictEqual(readClause(holder.roles).clause.includes('NOT ARRAY_CONTAINS'), false,
+      'the holder is the one caller with nothing to exclude');
+
+    // And the compartment is not a wider tier: `compliance` is not privileged, so a level-2 row
+    // is no more visible to it than to any other unprivileged caller.
+    assert.strictEqual(canRead({ id: 'p2', projectId: 'p2', read: readForLevel(2) }, holder), false);
+  });
+
+  await t.test('a credential can never name the sealed level', () => {
+    // `levels` are 1-3, and levelTokens() maps nothing else, so the credential arm cannot match a
+    // row whose only token is `compliance` — the exclusion is not what carries this, the vocabulary is.
+    const credentialed = access(['public']);
+    credentialed.credentials = [{ scope: { type: 'project', ids: ['p1'] }, levels: [0, 1, 2, 3] }];
+    assert.strictEqual(canRead(SEALED, credentialed), false);
+    assert.ok(!readClause(credentialed.roles, { credentials: credentialed.credentials })
+      .params.some(p => p.value === 'compliance'), 'no arm binds the sealed token as a grant');
   });
 });

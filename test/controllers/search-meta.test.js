@@ -372,8 +372,9 @@ test('chunk filters are resolved through the documents index', async (t) => {
       privileged({ dataset: 'DocumentChunk', keywords: 'river', 'and[type]': '5cf00c03a266b7e1877504e9' }), res);
 
     assert.ok(!/undefined|null/.test(scopeFilter), `no placeholder may reach the service: ${scopeFilter}`);
-    assert.strictEqual(scopeFilter, "search.in(documentId, 'd1', ',')",
-      'an unfiltered caller gets the scope alone, not a clause wrapped around nothing');
+    assert.strictEqual(scopeFilter,
+      "(not read/any(r: r eq 'compliance')) and search.in(documentId, 'd1', ',')",
+      'an unfiltered caller gets the sealed exclusion and the scope, not a clause wrapped around nothing');
     assert.strictEqual(out.status, undefined, 'and it is a 200, not the 502 a 400 becomes');
   });
 });

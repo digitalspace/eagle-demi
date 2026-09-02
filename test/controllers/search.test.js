@@ -265,10 +265,10 @@ test('Search Controller Tests', async (t) => {
       'provenance must not decide which projects a caller can see');
   });
 
-  await t.test('an unscoped PRIVILEGED caller sends no filter at all', async () => {
-    // `filterFor` returns `{filter: null, empty: false}` for such a caller — an unfiltered read,
-    // not an empty one. Interpolating that into a filter string emits `(undefined) and …`, which
-    // Azure answers 400 and this route turns into 502.
+  await t.test('an unscoped PRIVILEGED caller sends only the sealed exclusion', async () => {
+    // `filterFor` returns `{filter: null, empty: false}` for a caller with nothing to restrict — an
+    // unfiltered read, not an empty one. Interpolating that into a filter string emits
+    // `(undefined) and …`, which Azure answers 400 and this route turns into 502.
     let sent = null;
     t.mock.method(aiSearch, 'searchProjects', async (opts) => {
       sent = opts;
@@ -276,13 +276,20 @@ test('Search Controller Tests', async (t) => {
     });
 
     const res = { json: () => res, status: () => res };
-    await searchController.search({
+    const ask = (roles) => searchController.search({
       query: { dataset: 'Project', keywords: 'mine' },
-      user: { realm_access: { roles: ['sysadmin'] } },
+      user: { realm_access: { roles } },
       header: () => null
     }, res);
 
-    // `=== undefined`, not a regex on the coerced string, which passes on garbage as readily.
+    await ask(['sysadmin']);
+    assert.strictEqual(sent.filter, "not read/any(r: r eq 'compliance')",
+      'privilege lifts the role clause, never the sealed compartment');
+
+    // The null-filter case still exists — it is now the compliance holder — so the placeholder
+    // regression stays covered. `=== undefined`, not a regex on the coerced string, which passes
+    // on garbage as readily.
+    await ask(['sysadmin', 'compliance']);
     assert.strictEqual(sent.filter, undefined, 'nothing to scope means no filter, not "(undefined)"');
   });
 
@@ -536,7 +543,8 @@ test('Search Controller Tests', async (t) => {
     assert.deepStrictEqual(body[0].meta[0].dropped.filter, ['read']);
     assert.ok(!/sysadmin/.test(sent.filter),
       'a filter the caller cannot see must never reach the service');
-    assert.strictEqual(sent.filter, "read/any(r: search.in(r, 'public', ','))",
+    assert.strictEqual(sent.filter,
+      "read/any(r: search.in(r, 'public', ',')) and not read/any(r: r eq 'compliance')",
       'and the ACL clause is still the only thing scoping the read');
   });
 
@@ -1241,7 +1249,8 @@ test('a scoped privileged caller searches only its own projects', async (t) => {
 
     assert.ok(sent, 'the request must still be issued — this caller can see something');
     assert.match(sent.filter, /search\.in\(projectId, '207'/, 'the scope survives privilege');
-    assert.ok(!/read\/any/.test(sent.filter), 'privilege lifts the ROLE clause, not the scope');
+    assert.ok(!/read\/any\(r: search\.in/.test(sent.filter),
+      'privilege lifts the ROLE clause, not the scope or the sealed exclusion');
   });
 });
 
