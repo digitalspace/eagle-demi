@@ -19,12 +19,8 @@ export function correlationHosts(apiPath?: string): string[] {
 const records = (value: unknown): Record<string, unknown>[] =>
   Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
 
-/**
- * Query strings can carry tokens, so `?key=value&key=value...` goes, colons in the value included
- * (an ISO timestamp would otherwise truncate the match at its first `:`). Requires `key=` after `?`
- * so a stray `?` in prose survives. Cost: a stack frame URL with a query loses its trailing `:line:col`
- * too — parsedStack keeps those in separate fields, so nothing is lost there.
- */
+// Strips `?key=value...` runs (tokens, search terms). Needs `key=` after `?` so prose question marks
+// survive; no `:` stop, so ISO dates scrub whole even though a `file.js?v=1:42:9)` frame loses `:42:9`.
 function scrub(target: Record<string, unknown>, fields: string[]): void {
   for (const field of fields) {
     const value = target[field];
