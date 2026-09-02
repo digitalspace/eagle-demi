@@ -92,11 +92,11 @@ Code and the `DEMI_ALLOWED_CLIENTS` app setting ship in two pipelines, so infra 
 ## P3-6 residue — Selected Credentials auto-revoke
 
 Auto-revoke on state change. The closed-project arm runs nightly inside `sync-track-teams.js`.
+Expiry is visible, not mailed (2026-09-02): the holder reads `end` on `GET /api/me`, the grantor on
+`GET /api/credentials`. No mailer.
 
 - [ ] Work complete. Track's project feed exposes no such field, so `detail.cause: 'work-complete'`
       is unused and there is nothing to act on.
-- [ ] The 7-day pre-expiry notice to the grantor; renewal is the norm on EA timelines. Notification
-      path is undecided — ACS Email is EPIC's send path and this repo has no mailer.
 
 ## P4-3 dual issuer in auth.js
 
