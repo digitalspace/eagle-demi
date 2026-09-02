@@ -1,16 +1,15 @@
 'use strict';
 
 /**
- * Stamp `eaCertificate` onto the project rows already in Cosmos, from the checked-in Track export.
+ * Stamp `eaCertificate` onto the project rows already in Cosmos, from Track.
+ *
+ * Reads Track through `loadTrackProjects()`, so it takes the live feed when one is configured and
+ * the checked-in export otherwise.
  *
  * WHY A SCRIPT. `merge/project.js` carries `ea_certificate` through as `eaCertificate`, but the
  * merge only runs on a re-seed, and `seed-nosql.js` rewrites the whole corpus including documents —
  * `transformDocument` resets `contentExtracted`, sending ~60,578 documents back through the GPU.
  * This touches one field on the project rows. Same argument as close-unpublished-track-projects.js.
- *
- * THE EXPORT DOES NOT CARRY THE COLUMN YET. `src/data/track_projects_enriched.json` (382 records,
- * 2026-07-29) has no `ea_certificate`, so a run today reports `withCert=0` and patches nothing.
- * That is the expected result until the next Track pull adds it; nothing here needs changing then.
  *
  *   node src/scripts/backfill-eac-number.js [--live]
  *
