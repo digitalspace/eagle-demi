@@ -124,7 +124,7 @@ param ssoAudience = 'account'
 // eagle-test.apps.silver.devops.gov.bc.ca/demi-search, then read `callerIp` off the App Insights
 // request row. Until it is set, every eagle-public visitor shares one anonymous
 // bulk-download quota key.
-param trustedProxyIps = ''
+param trustedProxyIps = '142.34.194.121,142.34.194.123'
 
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
