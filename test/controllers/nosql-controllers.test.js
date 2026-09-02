@@ -388,50 +388,28 @@ test('nosql document controller — ACL cannot out-rank the parent project', asy
 
   const { resolveDocumentAcl } = documentController;
 
-  await t.test('private parent + requested public -> stays private', () => {
-    const acl = resolveDocumentAcl({ read: ['sysadmin'], isPublished: false }, 'true');
+  await t.test('published parent -> new document still admits at level 1', () => {
+    const acl = resolveDocumentAcl({ read: ['public', 'sysadmin'], isPublished: true });
     assert.strictEqual(acl.published, false);
-    assert.ok(!acl.read.includes('public'));
-  });
-
-  await t.test('public parent + requested public -> public', () => {
-    const acl = resolveDocumentAcl({ read: ['public', 'sysadmin'], isPublished: true }, 'true');
-    assert.strictEqual(acl.published, true);
-    assert.ok(acl.read.includes('public'));
-  });
-
-  await t.test('public parent, publish not requested -> stays private', () => {
-    const acl = resolveDocumentAcl({ read: ['public'], isPublished: true }, undefined);
-    assert.strictEqual(acl.published, false);
+    assert.deepStrictEqual(acl.read, ['team']);
   });
 
   await t.test('a level-1 parent caps the document at level 1', () => {
-    const acl = resolveDocumentAcl({ read: ['team'], isPublished: false }, false);
+    const acl = resolveDocumentAcl({ read: ['team'], isPublished: false });
     assert.deepStrictEqual(acl.read, ['team']);
   });
 
-  await t.test('a level-2 parent cannot be passed by a publish request', () => {
-    // Admission is level 1 from P3-3, so the request loses twice over: the parent is not public,
-    // and nothing reaches level 2 by being created.
-    const acl = resolveDocumentAcl({ read: ['staff'], isPublished: false }, true);
-    assert.deepStrictEqual(acl.read, ['team']);
+  await t.test('a sealed (level 0) parent caps the document below level 1', () => {
+    const acl = resolveDocumentAcl({ read: ['compliance'] });
+    assert.deepStrictEqual(acl.read, ['compliance']);
     assert.strictEqual(acl.published, false);
   });
 
-  await t.test('a public parent lets a publish request reach level 4', () => {
-    const acl = resolveDocumentAcl({ read: ['staff', 'idir', 'public'], isPublished: true }, true);
-    assert.deepStrictEqual(acl.read, ['staff', 'idir', 'public']);
-    assert.strictEqual(acl.published, true);
-  });
-
-  // `published` is read off the CAPPED read[], not off the request. A legacy parent carrying no
-  // read[] at all caps the document at level 1, so publishing it would otherwise have stamped
-  // `isPublished: true` on a row only its own team can see.
-  await t.test('published mirrors the capped read[], never the request', () => {
+  // `published` is read off the CAPPED read[]. A legacy parent carrying no read[] at all still
+  // caps the document at level 1, so it is never published on creation.
+  await t.test('published mirrors the capped read[], never isPublished', () => {
     assert.deepStrictEqual(
-      resolveDocumentAcl({ isPublished: true }, true), { read: ['team'], published: false });
-    assert.deepStrictEqual(
-      resolveDocumentAcl({ read: ['public'], isPublished: true }, true).published, true);
+      resolveDocumentAcl({ isPublished: true }), { read: ['team'], published: false });
   });
 
   await t.test('delete removes the record but NEVER the stored file', async () => {

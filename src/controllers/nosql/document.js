@@ -38,22 +38,14 @@ const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
 const LEGACY_PUBLISH = Symbol('legacy publish alias');
 
 /**
- * Resolve a new document's ACL. Fail closed, and never let a document out-rank its parent.
- * EVERY document write path must go through this.
+ * Resolve a new document's ACL: admits at level 1 (docs/rbac-architecture.md §1, "Default on
+ * admission is level 1"), capped at the parent's own level so a document can never out-rank
+ * its project. EVERY document write path must go through this.
  */
-function resolveDocumentAcl(parentProject, isPublished) {
-  const requested = isPublished === true || isPublished === 'true';
-  const parentIsPublic = Array.isArray(parentProject.read) && parentProject.read.length > 0
-    ? parentProject.read.includes('public')
-    : parentProject.isPublished === true;
-  const wanted = requested && parentIsPublic;
+function resolveDocumentAcl(parentProject) {
+  const read = readForLevel(Math.min(1, levelOfRead(parentProject.read)));
 
-  // Admission is level 1 (docs/rbac-architecture.md §1, "Default on admission is level 1"),
-  // still capped at the parent's own level so a document can never out-rank its project.
-  const read = readForLevel(Math.min(wanted ? 4 : 1, levelOfRead(parentProject.read)));
-
-  // `published` is READ OFF the capped read[], never off `wanted` — read[] is authoritative,
-  // isPublished only mirrors it.
+  // `published` is READ OFF the capped read[] — read[] is authoritative, isPublished mirrors it.
   return { published: read.includes('public'), read };
 }
 
