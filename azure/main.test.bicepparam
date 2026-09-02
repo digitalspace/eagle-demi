@@ -122,7 +122,7 @@ param trackClientSecret = readEnvironmentVariable('TRACK_CLIENT_SECRET')
 param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 
 // set to '0 0 10 * * *' once the Track endpoint is live
-param syncTeamsSchedule = ''
+param syncTeamsSchedule = '0 0 10 * * *'
 
 // APIM Consumption in front of demi-api-fc-test. Test only — prod stays off until this proves out.
 // The gateway secret is created out of band before this deploy, through the ARM control plane —
