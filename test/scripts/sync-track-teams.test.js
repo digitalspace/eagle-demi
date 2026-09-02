@@ -80,6 +80,11 @@ const fakeFetch = (teams, seen = {}) => async (url, headers) => {
   return teams;
 };
 
+test('usernameFor never doubles the @idir suffix Track already carries', () => {
+  assert.strictEqual(usernameFor({ idir_user_id: 'AAAA1111@idir' }), 'aaaa1111@idir');
+  assert.strictEqual(usernameFor({ idir_user_id: 'AAAA1111' }), 'aaaa1111@idir');
+});
+
 test('a user on two projects is granted both roles, and the feed is read with a bearer', async () => {
   const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
   const seen = {};
