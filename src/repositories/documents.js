@@ -359,15 +359,8 @@ async function countSeededIds(access) {
 }
 
 /**
- * Every `projectId` value actually present in this container — the true partition set, one row
- * per partition rather than one per document.
- *
- * `projects.listVisible()` is NOT this list: an Eagle-only project (no Track counterpart, retained
- * and flagged per workspace CLAUDE.md §DFL) has documents but no row in `projects`, so a caller
- * that walked project ids instead would never enumerate — and never scan — that partition. See
- * backfill-display-name-sort.js.
- *
- * NO ORDER BY, same reason listSeededIds has none: DISTINCT VALUE is cross-partition regardless.
+ * Partitions come from the documents themselves, not `projects.listVisible()`, since an
+ * Eagle-only project's documents may have no row there. NO ORDER BY: cross-partition DISTINCT rejects it.
  */
 async function listDistinctProjectIds(access) {
   const spec = selectWhere({

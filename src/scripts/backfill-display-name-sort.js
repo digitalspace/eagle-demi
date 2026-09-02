@@ -101,11 +101,8 @@ async function backfillDisplayNameSort(argv = [], deps = {}) {
   // a paging loop stops after one page and reports success (backfill-document-list-ids.js).
   // A bulk write cannot span partition keys either, so the writes are grouped this way regardless.
   //
-  // Enumerated from `documents` itself, NOT from `projects`: an Eagle-only project (no Track
-  // counterpart) has documents but no row in `projects`, and walking project ids left its
-  // partition — and every other partition like it — never scanned. `''` is a real partition too:
-  // documents with no project live there, and it only appears here because a document actually
-  // carries it.
+  // Enumerated from `documents`, NOT `projects`: an Eagle-only project has documents but no
+  // `projects` row, so walking project ids would leave its partition never scanned.
   const partitions = (await documentsRepo.listDistinctProjectIds(access)).map(v => String(v ?? ''));
   summary.expected = await documentsRepo.countVisible(access, {});
 
