@@ -129,7 +129,7 @@ test('GET /admin/analytics', async (t) => {
     configure(t, { auditWorkspaceCustomerId: 'ws-audit', appLogsWorkspaceCustomerId: 'ws-logs' });
     const sent = spyLogs(t, (query) => {
       if (query.startsWith('AppRequests')) return [{ requests: 40, failed: 1, p95DurationMs: 250 }];
-      if (query.includes('bin(TimeGenerated')) {
+      if (query.includes('bin(hour, 1d)')) {
         return [{ day: '2026-09-01T00:00:00Z', events: 5, peakHourUsers: 3 }];
       }
       if (query.includes('EventName')) return [{ EventName: 'search', c: 12 }];
@@ -175,9 +175,9 @@ test('GET /admin/analytics', async (t) => {
     }
   });
 
-  await t.test('takes the peak hour for users and the sum for events', async () => {
-    // Users is a per-hour distinct count, so summing it across hours would double-count anyone
-    // who came back later in the window.
+  await t.test('rebuilds the hour before taking the peak, and sums events', async () => {
+    // The rollup is one row per (hour, EventName, ActorType, ProjectId, Env), so a max over raw
+    // rows reads the biggest bucket rather than the busiest hour.
     configure(t, { auditWorkspaceCustomerId: 'ws-audit', appLogsWorkspaceCustomerId: 'ws-logs' });
     const sent = spyLogs(t, () => []);
 
@@ -186,10 +186,15 @@ test('GET /admin/analytics', async (t) => {
     const users = sent.filter((call) => call.query.includes('Users'));
     assert.strictEqual(users.length, 2);
     for (const call of users) {
-      assert.ok(call.query.includes('peakHourUsers = max(Users)'), call.query);
-      assert.ok(!call.query.includes('sum(Users)'), call.query);
-      assert.ok(call.query.includes('events = sum(Events)'), call.query);
+      const perHour = call.query.indexOf('hourUsers = sum(Users) by hour = bin(TimeGenerated, 1h)');
+      assert.ok(perHour > 0, call.query);
+      assert.ok(call.query.indexOf('max(') > perHour, 'the peak comes after the hours are rebuilt');
+      assert.ok(call.query.includes('peakHourUsers = max(hourUsers)'), call.query);
+      assert.ok(call.query.includes('events = sum(hourEvents)'), call.query);
     }
+
+    const top = sent.find((call) => call.query.includes('by EventName'));
+    assert.ok(top.query.includes('c = sum(Events) by EventName'), top.query);
   });
 
   await t.test('answers 503 when only one of the two workspaces is configured', async () => {

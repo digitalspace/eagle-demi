@@ -1506,8 +1506,9 @@ paths:
       description: >-
         The DemiEventsHourly_CL rollup over the window (events per day, top event names) beside
         AppRequests from the application workspace, for the same window and for the last 24 hours.
-        The raw DemiEvents_CL table is Auxiliary-plan and is not read here. `peakHourUsers` is the
-        busiest hour's distinct-user count, not a window total: users are counted from AnonId, a
+        The raw DemiEvents_CL table is Auxiliary-plan and is not read here. `peakHourUsers` is an
+        upper bound: per-bucket distinct users summed within the busiest hour, so a user seen under
+        two event names counts twice. It is not a window total — users are counted from AnonId, a
         daily-salted value, and per-hour distinct counts cannot be added together.
       security:
         - ApiKeyAuth: []

@@ -103,16 +103,19 @@ async function getAnalytics(req, res) {
   const requestStats =
     'AppRequests | summarize requests = count(), failed = countif(Success == false),' +
     ' p95DurationMs = percentile(DurationMs, 95)';
+  // The rollup holds one row per (hour, EventName, ActorType, ProjectId, Env), so the hour has to
+  // be rebuilt before any max: max(Users) on its own reads the biggest bucket, not the busiest hour.
+  const perHour =
+    'DemiEventsHourly_CL | summarize hourEvents = sum(Events), hourUsers = sum(Users)' +
+    ' by hour = bin(TimeGenerated, 1h)';
+  const rollup = 'summarize events = sum(hourEvents), peakHourUsers = max(hourUsers)';
 
   try {
     // DemiEvents_CL is an Auxiliary-plan table, which answers interactive queries with nothing:
     // usage comes from the summary rule's hourly rollup instead.
     const [perDay, totals, topEvents, window, last24h] = await Promise.all([
-      monitor.queryLogs(events,
-        'DemiEventsHourly_CL | summarize events = sum(Events), peakHourUsers = max(Users)' +
-        ' by day = bin(TimeGenerated, 1d) | order by day asc', timespan),
-      monitor.queryLogs(events,
-        'DemiEventsHourly_CL | summarize events = sum(Events), peakHourUsers = max(Users)', timespan),
+      monitor.queryLogs(events, `${perHour} | ${rollup} by day = bin(hour, 1d) | order by day asc`, timespan),
+      monitor.queryLogs(events, `${perHour} | ${rollup}`, timespan),
       monitor.queryLogs(events,
         'DemiEventsHourly_CL | summarize c = sum(Events) by EventName | top 10 by c desc', timespan),
       monitor.queryLogs(logs, requestStats, timespan),
@@ -123,8 +126,8 @@ async function getAnalytics(req, res) {
     return res.json({
       success: true,
       days,
-      // Distinct users are per hour and cannot be summed across hours, so the busiest hour stands
-      // in for the window.
+      // Upper bound: per-bucket distinct users summed within the busiest hour, so anyone seen
+      // under two event names counts twice. Per-hour distinct counts cannot be added across hours.
       totals: { events: total.events || 0, peakHourUsers: total.peakHourUsers || 0 },
       perDay: perDay.map((row) => ({
         day: row.day, events: row.events, peakHourUsers: row.peakHourUsers
