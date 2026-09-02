@@ -28,6 +28,7 @@ const cosmos = require('../../../src/db/cosmos-nosql');
 const documents = require('../../../src/repositories/documents');
 const projects = require('../../../src/repositories/projects');
 const chunksRepo = require('../../../src/repositories/chunks');
+const storage = require('../../../src/storage');
 const aiSearch = require('../../../src/search/ai-search');
 const sealedController = require('../../../src/controllers/nosql/sealed');
 const documentController = require('../../../src/controllers/nosql/document');
@@ -54,11 +55,12 @@ const PUBLIC_ROW = {
   read: ['staff', 'idir', 'public'], isPublished: true
 };
 
-/** The four routes, named the way the router declares them. */
+/** The five routes, named the way the router declares them. */
 const SEALED_ROUTES = [
   ['post', '/sealed'],
   ['get', '/sealed'],
   ['get', '/sealed/:id'],
+  ['get', '/sealed/:id/download'],
   ['post', '/sealed/:id/release']
 ];
 
@@ -207,6 +209,17 @@ test('the sealed compartment routes', async (t) => {
 
       assert.strictEqual(fetched.statusCode, 404, `getDocument answered ${who} with a sealed row`);
 
+      // GET /api/documents/:id/download — the ordinary download route, same exclusion, no second
+      // door onto the bytes.
+      t.mock.method(storage, 'getDownloadUrl',
+        async () => assert.fail(`downloadDocument presigned a sealed row for ${who}`));
+      const downloaded = mockRes();
+      await documentController.downloadDocument(
+        { query: {}, params: { id: 's1' }, user: caller, headers: {} }, downloaded);
+
+      assert.strictEqual(downloaded.statusCode, 404,
+        `downloadDocument answered ${who} with a sealed row`);
+
       // GET /api/search, same row present in the index.
       t.mock.method(aiSearch, 'searchDocuments', fakeIndex([PUBLIC_ROW, SEALED_ROW]));
       t.mock.method(projects, 'listByIds', async () => [{ id: '207', name: 'Skeena LNG' }]);
@@ -240,6 +253,44 @@ test('the sealed compartment routes', async (t) => {
     await audit.flush();
     assert.strictEqual(auditRows().length, 1, 'and it is audited');
     assert.strictEqual(auditRows()[0].Action, 'sealed.read');
+  });
+
+  await t.test('the compartment route downloads the row the ladder refused', async () => {
+    t.mock.method(cosmos, 'query', fakeCosmosQuery([PUBLIC_ROW, SEALED_ROW]));
+    t.mock.method(storage, 'getDownloadUrl', async (key, opts) => {
+      assert.strictEqual(key, SEALED_ROW.s3Key);
+      assert.strictEqual(opts.fileName, 'warrant.pdf');
+      return 'https://presigned.example/warrant.pdf';
+    });
+
+    const res = mockRes();
+    await sealedController.downloadSealed(
+      { params: { id: 's1' }, query: {}, user: COMPLIANCE }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.url, 'https://presigned.example/warrant.pdf');
+    assert.strictEqual(res.body.fileName, 'warrant.pdf');
+    assert.strictEqual(res.body.displayName, SEALED_ROW.displayName);
+
+    await audit.flush();
+    assert.strictEqual(auditRows().length, 1, 'a sealed download is audited too');
+    assert.strictEqual(auditRows()[0].Action, 'sealed.download');
+    assert.strictEqual(auditRows()[0].TargetId, 's1');
+  });
+
+  await t.test('a public row is not the download route\'s to serve', async () => {
+    t.mock.method(cosmos, 'query', fakeCosmosQuery([PUBLIC_ROW, SEALED_ROW]));
+    t.mock.method(storage, 'getDownloadUrl',
+      async () => assert.fail('a row outside the compartment must never be presigned here'));
+
+    const res = mockRes();
+    await sealedController.downloadSealed(
+      { params: { id: 'd1' }, query: {}, user: COMPLIANCE }, res);
+
+    assert.strictEqual(res.statusCode, 404);
+
+    await audit.flush();
+    assert.deepStrictEqual(auditRows(), [], 'a refused download is not an act');
   });
 
   await t.test('release lands at level 1', async () => {

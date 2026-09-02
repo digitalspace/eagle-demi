@@ -1520,7 +1520,10 @@ Branch: `feat/level-zero-routes`
 - [x] `src/controllers/nosql/sealed.js`: `POST /api/sealed` (write a record at
       `readForLevel(0)`), `GET /api/sealed/:id`, `GET /api/sealed` (ids, `sealedAt` and `title`
       only), and the release route below.
-- [x] ONE chain for all four routes, and it is not `authMiddleware` — that gate 403s `compliance`
+- [x] `GET /api/sealed/:id/download` — presigned URL for the sealed row's `s3Key`, same helper
+      `GET /api/documents/:id/download` calls, gated the same way `GET /api/sealed/:id` is, audited
+      as `sealed.download`. The ladder's own download route still 404s a sealed row.
+- [x] ONE chain for all five routes, and it is not `authMiddleware` — that gate 403s `compliance`
       and keeps doing so after P3-2. Mount `authenticate` (the raw verifier in
       `src/helpers/auth.js`) then `requireRole('compliance')`.
       Test: `'a compliance-only token reaches the sealed routes and nothing else'`.
@@ -1538,11 +1541,12 @@ Branch: `feat/level-zero-routes`
       stay locked down — no seed, export or reconcile script may add a `compliance` role to its
       access context (`grep -n systemAccess src/scripts/*.js` must not grow).
 - Tests: `test/controllers/nosql/sealed.test.js`
-  - [x] `'sysadmin gets 403 on every sealed route'` — literal, all four routes.
+  - [x] `'sysadmin gets 403 on every sealed route'` — literal, all five routes.
   - [x] `'a sealed row is never returned to the ladder'` — `GET /api/documents`,
-        `GET /api/documents/:id` and `GET /api/search` with a sealed row present return nothing
-        from it and write no audit row, for a `sysadmin` AND for a `compliance` caller. The
-        compartment route reads the same row at 200 and audits it.
+        `GET /api/documents/:id`, `GET /api/documents/:id/download` and `GET /api/search` with a
+        sealed row present return nothing from it and write no audit row, for a `sysadmin` AND for
+        a `compliance` caller. The compartment route reads and downloads the same row at 200 and
+        audits both.
   - [x] `test/repositories/repositories.test.js` — `listSealed` emits the level-0 criterion ON TOP
         OF the visibility predicate, and a caller outside the compartment gets a self-contradicting
         predicate. The controller tests mock it, so nothing else sees its SQL.

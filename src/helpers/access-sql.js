@@ -152,7 +152,7 @@ const WRITE_ROLES = Object.freeze([...ADMIN_ROLES, 'demi-service-write']);
 /**
  * Roles permitted to HOLD A SESSION on the routes behind `middleware/auth.js` — a separate set
  * from SECURE_ROLES so `staff` isn't locked out once it left the privileged set. `compliance` is
- * deliberately out: those four routes mount their own gate.
+ * deliberately out: those sealed routes mount their own gate.
  */
 const AUTHENTICATED_ROLES = Object.freeze([...new Set([...SECURE_ROLES, ...WRITE_ROLES])]);
 

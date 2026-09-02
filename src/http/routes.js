@@ -119,12 +119,13 @@ const routes = [
   { method: 'post', path: '/documents/:id/chunks', guards: [authMiddleware, requireWrite], load: () => documentController().ingestChunks },
   { method: 'delete', path: '/documents/:id', guards: [authMiddleware, requireWrite], load: () => documentController().deleteDocument },
 
-  // The sealed compartment — level 0 (docs/rbac-architecture.md §1). ONE chain on all four routes,
+  // The sealed compartment — level 0 (docs/rbac-architecture.md §1). ONE chain on all five routes,
   // and it is not authMiddleware: that gate 403s `compliance`, which is the only role that belongs
   // here. Every route audits, reads included.
   { method: 'post', path: '/sealed', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().createSealed },
   { method: 'get', path: '/sealed', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().listSealed },
   { method: 'get', path: '/sealed/:id', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().getSealed },
+  { method: 'get', path: '/sealed/:id/download', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().downloadSealed },
   // The only exit from level 0; PUT /documents/:id/level refuses it in both directions.
   { method: 'post', path: '/sealed/:id/release', guards: [sealedAuth, requireRole('compliance')], load: () => sealedController().releaseSealed },
 

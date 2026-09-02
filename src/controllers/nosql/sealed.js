@@ -11,7 +11,7 @@
  * `compartmentAccess` below is what makes it true: holding `compliance` opens a sealed row only on
  * an access context these routes built, so the ordinary ladder routes cannot answer with one.
  *
- * Separate from `controllers/nosql/document.js` on purpose: these four routes run their own guard
+ * Separate from `controllers/nosql/document.js` on purpose: these five routes run their own guard
  * chain (`sealed-auth` + `requireRole('compliance')`), and nothing on the ladder may reach them.
  */
 
@@ -20,6 +20,7 @@ const crypto = require('crypto');
 const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const chunks = require('../../repositories/chunks');
+const storage = require('../../storage');
 const {
   resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
 } = require('../../helpers/access-sql');
@@ -28,6 +29,8 @@ const aiSearch = require('../../search/ai-search');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { redactForAccess } = require('../../vis/redact');
+// The TTL, so both routes hand out a link that expires after the same window.
+const { DOWNLOAD_URL_TTL_SECONDS } = require('./document');
 
 /** The level a released record lands on — team only, never back onto the ladder above it. */
 const RELEASE_LEVEL = 1;
@@ -138,6 +141,47 @@ exports.getSealed = async (req, res) => {
     });
 
     return res.json(redactForAccess('documents', doc, access));
+  } catch (err) {
+    return serverError(res, err, 'sealed controller failed');
+  }
+};
+
+/**
+ * Presigned download for a sealed record's bytes — the same URL `document.js`'s own download
+ * route hands out, gated the same way `getSealed` is: only the compartment's own access opens a
+ * level-0 row, and a row that is not sealed is not this route's to serve.
+ */
+exports.downloadSealed = async (req, res) => {
+  try {
+    const access = compartmentAccess(req);
+    const doc = await documents.getById(access, req.params.id, req.query.project);
+
+    if (!doc || levelOfRead(doc.read) !== 0) {
+      return res.status(404).json({ error: 'Sealed record not found' });
+    }
+    if (!doc.s3Key) {
+      return res.status(404).json({ error: 'Document has no stored file.' });
+    }
+
+    const fileName = doc.s3Key.split('/').pop();
+    const url = await storage.getDownloadUrl(doc.s3Key, {
+      expirySeconds: DOWNLOAD_URL_TTL_SECONDS,
+      fileName
+    });
+
+    auditEvent(req, {
+      action: 'sealed.download',
+      targetType: 'document',
+      targetId: doc.id,
+      projectId: doc.projectId
+    });
+
+    return res.json({
+      url,
+      expiresIn: DOWNLOAD_URL_TTL_SECONDS,
+      fileName,
+      displayName: doc.displayName || null
+    });
   } catch (err) {
     return serverError(res, err, 'sealed controller failed');
   }
