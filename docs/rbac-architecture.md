@@ -102,7 +102,8 @@ stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` ve
 body field and answer 400 without it; on every other move `reason` is optional, because the audit
 row already carries actor, time, from and to. Nothing widens automatically — no job, no push, no
 merge raises a record's level. A document still cannot out-rank its project; a project's change
-cascades to its documents as it does today.
+cascades to its documents as it does today. The audit buffer flushes on graceful instance shutdown;
+a forced kill can drop up to one second of buffered rows.
 
 Pulling a record BACK from level 4 is `sysadmin` only, always audited as `record.takedown`, and is
 incident response — an error or a privacy breach, never a routine correction, which publishes a
@@ -156,7 +157,9 @@ container `credentials`, partition `/party.id`:
 `{ id, party: { type: 'user'|'group'|'apikey', id }, scope: { type: 'document'|'project', ids[] },
 levels: [1..3], start, end, grantedBy, grantedAt, revokedAt, batchId, note }`.
 Loaded once per request by party (`sub`, a `groups` entry, or `req.user.keyId`), expired and
-revoked rows filtered in JS, cached 60 seconds per party. Evaluated as one extra OR arm in
+revoked rows filtered in JS, cached 60 seconds per party. The cache is per Function instance; with
+up to 20 ephemeral instances a revoke can take up to the TTL on each, never less than immediately
+on the instance that served it. Evaluated as one extra OR arm in
 `readClause`, `canRead` and `filterFor`: `id ∈ scope.ids AND levelOfRead(read) ∈ levels`. `levels`
 reuses the ladder tokens, so no new SQL: one `EXISTS` over the granted tokens and one negated
 `EXISTS` over the tokens above them. The second is what makes the arm mean the row's own level —
@@ -337,7 +340,7 @@ Each item below overrides the corresponding section of the source document.
 - `rolesFor` has no `|| user.roles` fallback today.
 - PUT already accepts arbitrary body keys; POST already drops them (`project.js:115-118,191-196`).
 - `export-chunks-to-eagle.js` pushes a four-field projection by default; `SELECT *` only under
-  `--dump`, which writes to the App Service `/home` filesystem, not to a storage account.
+  `--dump`, which writes to the devbox working directory, not to a storage account.
 - `src/ai/summarize.js` consumes chunk `content` only, never a project or document row.
 - No AI Search index has any staff, email, or `sources` field retrievable or searchable.
 - ADR-004 is `eagle-demi.wiki/ADR-004-Read-ACL-Authorization-Model.md`.
