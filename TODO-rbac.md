@@ -51,17 +51,17 @@ P4-3 → P4-4 → P4-5. P3-2 and P3-6 residues are independent. P5b is optional 
 
 ## Pick-up checks (do these first)
 
-- [ ] First live Track mirror on test ran 2026-09-03 10:00 UTC. Read the `[track-teams]` summary
+- [ ] First live Track mirror on test runs 2026-09-03 10:00 UTC. Afterwards read the `[track-teams]` summary
       line in App Insights for `demi-api-fc-test`; expected `trackProjects=384 created=2 updated=17
       failures=0` (dry run 2026-09-02). Anything else: `src/scripts/sync-track-projects.js`.
 - [ ] Staff-login checks on test, with Daniel signed in as IDIR staff on a Track team: a level-1
       row of that team returns 200, `PATCH` on a project as `staff` returns 403, and the audit
       container holds the rows. Closes the P3-2 residue staff-token box too.
-- [ ] Prod runs v0.58.3; main carries #288 (trusted proxy), #290 (`/api/me` credentials), #294. Tag
-      and deploy when wanted: `gh workflow run "Deploy DEMI to Azure production" --ref <tag> -f
-      version=<tag>`; a dispatch from `main` is rejected by the environment tag policy.
-- [ ] Rotate the prod `demi-user` Keycloak password (it passed through a terminal 2026-09-02) and
-      update `demi-keycloak-admin` in `6cdc9e-prod`.
+- [ ] Prod runs v0.58.3; main is tagged v0.62.0, 19 commits ahead (#285-#295: Updates mirror,
+      bulk-download UI, trusted proxy, `/api/me` credentials, frontend App Insights, docs). Read
+      `git log v0.58.3..<tag>` before choosing the tag, then `gh workflow run "Deploy DEMI to Azure
+      production" --ref <tag> -f version=<tag>`; a dispatch from `main` is rejected by the
+      environment tag policy.
 
 ## U1 — ADR
 
