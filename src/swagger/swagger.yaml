@@ -1583,9 +1583,13 @@ paths:
       summary: Month-to-date Azure spend
       description: >-
         Actual cost for the resource group so far this month, by resource and by service, with the
-        monthly budget beside it. Cached for an hour per instance, so `asOf` is when the figures
-        were fetched rather than when they were asked for. `budget.spend` comes from Azure's own
-        `currentSpend`, which has been seen reporting 0 — `total` is the figure to trust.
+        monthly budget beside it. Cached for an hour in Cosmos and shared by every instance, so
+        `asOf` is when the figures were fetched rather than when they were asked for.
+        `budget.spend` comes from Azure's own `currentSpend`, which has been seen reporting 0 —
+        `total` is the figure to trust.
+
+        Cost Management rate-limits per tenant. When it refuses, the last cached figures are
+        returned with `stale: true` whatever their age; with nothing cached the answer is 503.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1602,6 +1606,11 @@ paths:
                   asOf:
                     type: string
                     format: date-time
+                  stale:
+                    type: boolean
+                    description: >-
+                      Present and true only when Cost Management refused the refresh and these are
+                      the cached figures. Read `asOf` for how old they are.
                   currency:
                     type: string
                     description: The subscription's billing currency, CAD here.
@@ -1643,7 +1652,10 @@ paths:
         '403':
           description: Forbidden. Requires an admin role.
         '503':
-          description: '`{ "error": "not configured" }` — COST_SCOPE is unset in this environment.'
+          description: >-
+            `not configured` when COST_SCOPE is unset in this environment, or `cost data
+            rate-limited by Azure, retry in a few minutes` when Cost Management refused and
+            nothing is cached yet.
 
 components:
   securitySchemes:

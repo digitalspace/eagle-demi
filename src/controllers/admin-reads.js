@@ -2,6 +2,7 @@
 
 const config = require('../config');
 const monitor = require('../azure/monitor');
+const cache = require('../repositories/cache');
 const { sendError, serverError } = require('../helpers/response');
 const { logger } = require('../utils/logger');
 
@@ -17,9 +18,7 @@ const ACTION_RE = /^[a-z][a-z.]{0,40}$/;
 const ACTOR_RE = /^[\w.@-]{1,80}$/;
 
 const COST_TTL_MS = 60 * 60 * 1000;
-// ponytail: per-instance cache, so each Flex instance pays its own first call. Move it to the
-// config container if the Cost Management API starts rate-limiting (429).
-let costCache = null;
+const COST_CACHE_ID = 'cost-mtd';
 
 function notConfigured(res) {
   return sendError(res, 'not configured', 503);
@@ -144,7 +143,14 @@ async function getAnalytics(req, res) {
 async function getCost(req, res) {
   if (!config.costScope) return notConfigured(res);
 
-  if (costCache && Date.now() - costCache.at < COST_TTL_MS) return res.json(costCache.body);
+  let cached = null;
+  try {
+    cached = await cache.get(COST_CACHE_ID);
+    if (cached && Date.now() - Date.parse(cached.storedAt) < COST_TTL_MS) return res.json(cached.body);
+  } catch (err) {
+    // An unreachable cache costs a Cost Management call, not the route.
+    logger.warn('GET /admin/cost: cache read failed', { error: err.message });
+  }
 
   try {
     const [rows, budget] = await Promise.all([
@@ -182,17 +188,20 @@ async function getCost(req, res) {
       byService: [...byService].map(([service, cost]) => ({ service, cost })).sort(descending),
       budget
     };
-    costCache = { at: Date.now(), body };
+    await cache.put(COST_CACHE_ID, { body }).catch((err) =>
+      logger.warn('GET /admin/cost: cache write failed', { error: err.message }));
     return res.json(body);
   } catch (err) {
-    return serverError(res, err, 'GET /admin/cost');
+    // Cost Management rate-limits per tenant (429). This figure moves once a day, so any cached
+    // one — however old — beats a 500; only a cold cache leaves nothing to answer with.
+    logger.warn('GET /admin/cost: cost query failed', { error: err.message });
+    if (cached && cached.body) return res.json({ ...cached.body, stale: true });
+    return sendError(res, 'cost data rate-limited by Azure, retry in a few minutes', 503);
   }
 }
 
 module.exports = {
   getAudit,
   getAnalytics,
-  getCost,
-  // Test seam only.
-  _resetCostCache: () => { costCache = null; }
+  getCost
 };

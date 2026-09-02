@@ -69,6 +69,11 @@ const UNGATED = {
     'that may read only part of it and nothing to filter. What bounds the payload is the ' +
     "controller's explicit OVERRIDABLE_KEYS allowlist, not a permission field — a key added to " +
     'the document is not published until it is added there too.',
+  'cache.js':
+    'Holds no application data. The only caller is GET /admin/cost, itself admin-gated and ' +
+    'asserted below, and what it stores is the answer that route already computed for an ' +
+    'admin — so there is no tier that may read part of a row, and nothing here a caller reaches ' +
+    'except through that gate.',
   'links.js':
     'Rows carry no per-document ACL. GET /api/links is route-gated (authMiddleware only, no ' +
     'ACL predicate needed since every row is staff-visible); create/repoint/delete are ' +
