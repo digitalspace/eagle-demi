@@ -145,7 +145,7 @@ test('a user on two projects is granted both roles, and the feed is read with a 
   assert.strictEqual(summaryLine(summary),
     '[track-teams] mode=live projects=2 users=2 grants=3 revokes=0 unmatched=0 ' +
     'closedProjects=0 credentialsRevoked=0 trackProjects=0 created=0 updated=0 orphaned=0 ' +
-    'failures=0');
+    'relinked=0 skippedApiRows=0 failures=0');
 });
 
 test('a departed staff member loses every project role they held', async () => {

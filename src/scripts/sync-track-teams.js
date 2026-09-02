@@ -257,6 +257,8 @@ async function sync(argv = [], deps = {}) {
     created: 0,
     updated: 0,
     orphaned: 0,
+    relinked: 0,
+    skippedApiRows: 0,
     failures: 0,
     plan: decided
   };
@@ -318,7 +320,9 @@ async function sync(argv = [], deps = {}) {
         trackProjects: mirrored.trackProjects,
         created: mirrored.created,
         updated: mirrored.updated,
-        orphaned: mirrored.orphaned
+        orphaned: mirrored.orphaned,
+        relinked: mirrored.relinked,
+        skippedApiRows: mirrored.skippedApiRows
       });
       summary.failures += mirrored.failures;
     } catch (err) {
@@ -368,7 +372,8 @@ function summaryLine(s) {
     `grants=${s.grants} revokes=${s.revokes} unmatched=${s.unmatched} ` +
     `closedProjects=${s.closedProjects} credentialsRevoked=${s.credentialsRevoked} ` +
     `trackProjects=${s.trackProjects} created=${s.created} updated=${s.updated} ` +
-    `orphaned=${s.orphaned} failures=${s.failures}`;
+    `orphaned=${s.orphaned} relinked=${s.relinked} skippedApiRows=${s.skippedApiRows} ` +
+    `failures=${s.failures}`;
 }
 
 /**
