@@ -13,8 +13,9 @@
  * `requireRole('sysadmin')`. Nobody should later "fix" the missing visibility predicate by wiring
  * this into a public read.
  *
- * A row is never deleted or edited. A grant is revoked by stamping `revokedAt`, so the row stays
- * as the record of what was granted, to whom, by whom, and when it stopped.
+ * A row is never deleted. A grant is revoked by stamping `revokedAt`, so the row stays as the
+ * record of what was granted, to whom, by whom, and when it stopped. The one edit is `scope.ids`,
+ * narrowed when a single project of a multi-project grant closes.
  */
 
 const crypto = require('crypto');
@@ -82,6 +83,15 @@ async function find(selector) {
 /** Live grants over one project — what `GET /api/credentials?projectId=` reads. */
 const listForProject = (projectId) => find({ projectId });
 
+/** Every live project-scoped grant, in one cross-partition read. The nightly close sweep reads
+ *  this once and intersects the ids itself, rather than a query per closed project. */
+async function listLiveProjectScoped() {
+  const { items } = await cosmos.query(CONTAINER, {
+    query: `SELECT * FROM c WHERE c.scope.type = 'project' AND ${LIVE}`
+  });
+  return items || [];
+}
+
 async function insert(record) {
   return cosmos.create(CONTAINER, { id: crypto.randomUUID(), ...record });
 }
@@ -94,39 +104,60 @@ async function insert(record) {
  *
  * @returns {object[]} the rows revoked, as they were before the stamp
  */
+const stampRevoked = (row, at) => cosmos.patch(CONTAINER, row.id, String(row.party.id), [
+  { op: 'set', path: '/revokedAt', value: at }
+]);
+
 async function revokeBy(selector, at = new Date().toISOString()) {
   const rows = await find(selector);
 
-  for (const row of rows) {
-    await cosmos.patch(CONTAINER, row.id, String(row.party.id), [
-      { op: 'set', path: '/revokedAt', value: at }
-    ]);
-  }
+  for (const row of rows) await stampRevoked(row, at);
   return rows;
 }
 
 /**
- * Revoke every grant over a project because its state changed — it closed, or its work completed.
+ * Close out one project's grants because its state changed — it closed, or its work completed.
  *
- * NOTHING CALLS THIS YET. The P3-0 Track feed is the caller: `src/scripts/sync-track-teams.js`
- * already reads Track's project feed on the `syncTrackTeams` timer, and
- * `close-unpublished-track-projects.js` is where a close is decided today. Wiring it in is that
- * unit's work, not this one's — and the 7-day pre-expiry notice needs a mailer this repo does not
- * have (TODO-rbac.md P3-6).
+ * A grant that names other projects as well keeps them: the closed id is dropped from
+ * `scope.ids` and the row stays live. Only a grant left with no id is revoked.
+ *
+ * Document-scoped grants name document ids, not project ids, and nothing here resolves a document
+ * to its project, so a project close leaves them alone.
+ *
+ * Called by `src/scripts/sync-track-teams.js` on the `syncTrackTeams` timer with
+ * `cause: 'project-closed'`. Work-complete is not in Track's feed, and the 7-day pre-expiry notice
+ * needs a mailer this repo does not have (TODO-rbac.md P3-6).
+ *
+ * @returns {object[]} the rows touched, narrowed or revoked, as they were before the write
  */
-async function revokeForProject(projectId, cause) {
-  const revoked = await revokeBy({ projectId });
+async function revokeForProject(projectId, cause, at = new Date().toISOString()) {
+  const id = String(projectId);
+  const rows = await find({ projectId: id });
 
-  for (const row of revoked) {
+  for (const row of rows) {
+    const remaining = (row.scope.ids || []).filter(one => String(one) !== id);
+    const event = { targetType: 'credential', targetId: row.id, projectId: id };
+
+    if (remaining.length) {
+      await cosmos.patch(CONTAINER, row.id, String(row.party.id), [
+        { op: 'set', path: '/scope/ids', value: remaining }
+      ]);
+      auditEvent(null, {
+        ...event,
+        action: 'credential.narrow',
+        detail: { cause, removed: [id], remaining: remaining.length }
+      });
+      continue;
+    }
+
+    await stampRevoked(row, at);
     auditEvent(null, {
+      ...event,
       action: 'credential.revoke',
-      targetType: 'credential',
-      targetId: row.id,
-      projectId,
       detail: { cause, party: row.party, levels: row.levels, batchId: row.batchId }
     });
   }
-  return revoked;
+  return rows;
 }
 
 module.exports = {
@@ -134,6 +165,7 @@ module.exports = {
   PARTITION_FIELD,
   listForParty,
   listForProject,
+  listLiveProjectScoped,
   insert,
   revokeBy,
   revokeForProject

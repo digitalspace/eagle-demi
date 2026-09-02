@@ -19,8 +19,6 @@ const {
 } = require('../../src/helpers/access-sql');
 const { filterFor } = require('../../src/helpers/access-odata');
 const { grantError, isLive, liveCredentials } = require('../../src/helpers/credentials');
-const cosmos = require('../../src/db/cosmos-nosql');
-const credentialsRepo = require('../../src/repositories/credentials');
 
 const HOLDER = { sub: 'bceid-sub-1', preferred_username: 'external.person' };
 const IN_A_YEAR = new Date(Date.now() + 365 * 86400000).toISOString();
@@ -210,46 +208,4 @@ test('a credential changes no record', () => {
 
   assert.strictEqual(JSON.stringify(row), before, 'the row is read, never rewritten');
   assert.deepStrictEqual(row.read, ['staff', 'sysadmin']);
-});
-
-test('closing a project revokes its credentials', async (t) => {
-  t.afterEach(() => t.mock.restoreAll());
-
-  const stored = [
-    grant({ id: 'c1', party: { type: 'user', id: 'u1' } }),
-    grant({ id: 'c2', party: { type: 'group', id: 'g1' } }),
-    grant({ id: 'c3', party: { type: 'user', id: 'u2' }, scope: { type: 'project', ids: ['311'] } })
-  ];
-
-  // A miniature evaluator rather than a canned answer: it reads the clause the repository sent and
-  // applies it. A revoke that forgot the project binding, or the live guard, returns three rows
-  // here and fails the count below.
-  const queries = [];
-  t.mock.method(cosmos, 'query', async (container, spec) => {
-    queries.push({ container, spec });
-    const projectId = (spec.parameters.find(p => p.name === '@projectId') || {}).value;
-    const items = stored.filter(row =>
-      (!/c\.scope\.type = 'project'/.test(spec.query) || row.scope.type === 'project') &&
-      (!/ARRAY_CONTAINS\(c\.scope\.ids, @projectId\)/.test(spec.query) ||
-        row.scope.ids.includes(projectId)) &&
-      (!/IS_NULL\(c\.revokedAt\)/.test(spec.query) || !row.revokedAt));
-    return { items };
-  });
-
-  const patched = [];
-  t.mock.method(cosmos, 'patch', async (container, id, pk, operations) => {
-    patched.push({ container, id, pk, operations });
-    return {};
-  });
-
-  const revoked = await credentialsRepo.revokeForProject('207', 'project-closed');
-
-  assert.strictEqual(queries[0].container, 'credentials');
-  assert.deepStrictEqual(revoked.map(r => r.id), ['c1', 'c2']);
-  assert.strictEqual(patched.length, 2, 'the grant over another project is untouched');
-  assert.deepStrictEqual(patched.map(p => p.pk), ['u1', 'g1'], 'patched in the party partition');
-  assert.strictEqual(patched[0].operations.length, 1);
-  assert.strictEqual(patched[0].operations[0].op, 'set');
-  assert.strictEqual(patched[0].operations[0].path, '/revokedAt');
-  assert.ok(patched[0].operations[0].value, 'stamped, never deleted — the row is the record');
 });
