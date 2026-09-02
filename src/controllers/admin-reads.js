@@ -3,6 +3,7 @@
 const config = require('../config');
 const monitor = require('../azure/monitor');
 const { sendError, serverError } = require('../helpers/response');
+const { logger } = require('../utils/logger');
 
 // Log Analytics bounds a query by `timespan`, so the window is a service-side parameter and never
 // reaches the KQL text. These are the only windows offered; anything else is a 400.
@@ -21,7 +22,7 @@ const COST_TTL_MS = 60 * 60 * 1000;
 let costCache = null;
 
 function notConfigured(res) {
-  return res.status(503).json({ error: 'not configured' });
+  return sendError(res, 'not configured', 503);
 }
 
 /** The `hours`/`days`/`action`/`actor`/`limit` inputs, or an `error` naming the bad one. */
@@ -144,8 +145,14 @@ async function getCost(req, res) {
   try {
     const [rows, budget] = await Promise.all([
       monitor.queryCost(config.costScope),
-      // A missing budget name is not a reason to withhold the spend figures.
-      config.budgetName ? monitor.getBudget(config.costScope, config.budgetName) : null
+      // Neither a missing budget name nor a failed budget read is a reason to withhold the
+      // spend figures — the budget is context beside them, not the answer.
+      config.budgetName
+        ? monitor.getBudget(config.costScope, config.budgetName).catch((err) => {
+          logger.warn('GET /admin/cost: budget read failed', { error: err.message });
+          return null;
+        })
+        : null
     ]);
 
     const byResource = new Map();

@@ -1,6 +1,7 @@
 'use strict';
 
-const { getToken } = require('../utils/azure-credential');
+// Module object, not a destructured function, so a test can stub the token call (src/utils/audit.js does the same).
+const azureCredential = require('../utils/azure-credential');
 
 const LOGS_SCOPE = 'https://api.loganalytics.io/.default';
 const ARM_SCOPE = 'https://management.azure.com/.default';
@@ -12,7 +13,7 @@ const ARM_SCOPE = 'https://management.azure.com/.default';
  * cold start, and the identity is already here.
  */
 async function call(url, scope, body) {
-  const token = await getToken(scope);
+  const token = await azureCredential.getToken(scope);
   if (!token) throw new Error(`no token for ${scope}`);
 
   const res = await fetch(url, {

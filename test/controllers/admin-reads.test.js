@@ -107,7 +107,7 @@ test('GET /admin/audit', async (t) => {
     await controller.getAudit({ query: {} }, res);
 
     assert.strictEqual(res.statusCode, 503);
-    assert.deepStrictEqual(res.body, { error: 'not configured' });
+    assert.deepStrictEqual(res.body, { success: false, error: 'not configured' });
     assert.deepStrictEqual(sent, []);
   });
 });
@@ -162,7 +162,7 @@ test('GET /admin/analytics', async (t) => {
     await controller.getAnalytics({ query: {} }, res);
 
     assert.strictEqual(res.statusCode, 503);
-    assert.deepStrictEqual(res.body, { error: 'not configured' });
+    assert.deepStrictEqual(res.body, { success: false, error: 'not configured' });
     assert.deepStrictEqual(sent, []);
   });
 });
@@ -226,6 +226,24 @@ test('GET /admin/cost', async (t) => {
     assert.strictEqual(res.body.total, 3);
   });
 
+  await t.test('reports the spend when the budget read is refused', async () => {
+    // The budget is a role grant away from the cost query, so a 403 on it must not take the spend
+    // figures down with it.
+    configure(t, { costScope: '/subscriptions/s/resourceGroups/rg', budgetName: 'demi-budget-test' });
+    t.mock.method(monitor, 'queryCost', async () => [
+      { Cost: 12, ResourceId: '/rg/a', ServiceName: 'A', Currency: 'CAD' }
+    ]);
+    t.mock.method(monitor, 'getBudget', async () => { throw new Error('403 forbidden'); });
+
+    const res = mockRes();
+    await controller.getCost({}, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.budget, null);
+    assert.strictEqual(res.body.total, 12);
+    assert.strictEqual(res.body.currency, 'CAD');
+  });
+
   await t.test('answers 503 when no cost scope is configured', async () => {
     configure(t, {});
     t.mock.method(monitor, 'queryCost', async () => { throw new Error('must not be called'); });
@@ -234,6 +252,6 @@ test('GET /admin/cost', async (t) => {
     await controller.getCost({}, res);
 
     assert.strictEqual(res.statusCode, 503);
-    assert.deepStrictEqual(res.body, { error: 'not configured' });
+    assert.deepStrictEqual(res.body, { success: false, error: 'not configured' });
   });
 });
