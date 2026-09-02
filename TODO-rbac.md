@@ -31,9 +31,10 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 
 ## External dependencies (owner and date before the unit that needs them)
 
-- [ ] Realm roles: DEMI reuses Eagle's vocabulary, no `demi-*` realm roles (decided 2026-08-28). Test done; prod open.
-      `eao-epic` test held only `sysadmin` of the names eagle-api checks; `staff` created there
-      2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
+- [x] Realm roles: DEMI reuses Eagle's vocabulary, no `demi-*` realm roles (decided 2026-08-28).
+      `eao-epic` held only `sysadmin` of the names eagle-api checks; `staff` created on test
+      2026-08-28 by `demi-user` (`realm-management` grant), `staff` and `compliance` (P5) on test
+      and prod 2026-09-02 by `kc-create-demi-clients.sh`. Owner: Daniel.
       Level 3 is the `identity_provider` claim and level 1 is project scope: neither is a new realm
       role. Classifying (P3-5) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
 - [x] Track read endpoint `GET /api/v1/projects/team-members` — Track PR, owner Daniel, reviewer
@@ -41,7 +42,10 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 - [x] Realm clients `demi-track-reader` and `demi-role-sync` in `eao-epic` (test, then prod),
       secrets in `demi-app-secrets`. Owner: Daniel. Delivered: test 2026-09-02
       (`/root/scripts/kc-create-demi-clients.sh test`; `demi-user` needed realm-management
-      `manage-users` first). Prod: ______
+      `manage-users` first). Prod: 2026-09-02 (prod `demi-user` + `demi-keycloak-admin` in
+      `6cdc9e-prod` created by Daniel; roles `staff`/`compliance` and both clients created;
+      secrets in `demi-app-secrets`). Prod schedule stays empty: Track prod (last deploy
+      2026-05-20) lacks `/projects/team-members`.
 - [x] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
       records. Minted by P3-0's sync. Delivered: test 2026-09-02 (96 roles, 115 mappings; 53 Track
       staff have no test-realm user yet). Prod: ______
@@ -215,7 +219,7 @@ creates one; it is the largest Phase 0 item and merges alone.
       `'@Microsoft.KeyVault(SecretUri=${adminApiKeySecretUri})'`; keep `param adminApiKey` only if
       the vault module still needs it via main (it does — main writes the secret, the app reads it).
 - [x] `docs/prod-flip-runbook.md`: name the rotation owner and the sequence (OpenShift
-      `demi-app-secrets` → vault secret new version → app restart). `docs/FUTURE.md:23-27` already
+      `demi-app-secrets` → vault secret new version → app restart). `docs/FUTURE.md` (Key manager / rotator) already
       describes the hand sequence; link it.
 - Tests: `test/azure/main-bicep-wiring.test.js`
   - [x] `the API app reads ADMIN_API_KEY through a Key Vault reference` — assert
@@ -896,7 +900,7 @@ registry (B5) — Track is the live source of project identity, read over the sa
   - Acceptance: `az bicep build -f azure/main.bicep` exits 0;
         `node --test test/azure/main-bicep-wiring.test.js` — 0 fail;
         `scripts/deploy-infra.sh test --what-if` before `--live`.
-- [x] B4 realm clients (test 2026-09-02, prod open): confidential client `demi-track-reader`, service
+- [x] B4 realm clients (test and prod 2026-09-02): confidential client `demi-track-reader`, service
       account on, standard flow off, granted `epictrack-web` client role `view` (audience mapper
       if `aud` lacks `epictrack-web`). Confidential client `demi-role-sync`, service account with
       realm-management `manage-realm`, `manage-users`, `view-users`. Secrets into
