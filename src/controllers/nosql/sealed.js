@@ -224,11 +224,6 @@ exports.releaseSealed = async (req, res) => {
       detail: { caseNumber, decision }
     });
 
-    // No mailer in this repo; ACS Email is EPIC's send path and wiring it is TBD
-    // (docs/rbac-architecture.md §1). The intent is logged so a release is never silent.
-    logger.warn(`[sealed] release of ${existing.id} (case ${caseNumber}) — ` +
-      'the C&E lead still has to be notified by hand; no mailer is wired.');
-
     const acl = readForLevel(RELEASE_LEVEL);
     await aiSearch.writeAcls(aiSearch.indexes().documents, [
       { id: existing.id, read: acl, isPublished: false }
