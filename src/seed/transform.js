@@ -13,10 +13,7 @@
  * record with no resolvable project is dropped instead of given a fabricated parent.
  */
 
-// Named SECURE_ROLES here for historical reasons; the value is access-sql's ADMIN_ROLES.
-// Widening it to access-sql's 5-entry SECURE_ROLES is an ACL data change, not a refactor.
-const { ADMIN_ROLES } = require('../helpers/access-sql');
-const SECURE_ROLES = ADMIN_ROLES;
+const { readForLevel } = require('../helpers/access-sql');
 
 /**
  * ACL for a seeded item.
@@ -33,7 +30,9 @@ function seedAcl(upstreamRead) {
   if (Array.isArray(upstreamRead) && upstreamRead.length > 0) {
     return upstreamRead.filter(r => typeof r === 'string' && r.trim() !== '');
   }
-  return [...SECURE_ROLES];
+  // Level 2, the level the legacy admin-role list already meant, written in ladder tokens so a
+  // re-seed does not rewrite what a controller wrote.
+  return readForLevel(2);
 }
 
 /** `internalSize` arrives as a number OR a numeric string (261 of 2,961 sampled were strings). */
@@ -199,7 +198,7 @@ function transformBoundary(item, opts = {}) {
   // shapefile keeps its restriction through a re-seed instead of being republished.
   const read = Array.isArray(item.read) && item.read.length > 0
     ? seedAcl(item.read)
-    : ['public', ...SECURE_ROLES];
+    : readForLevel(4);
 
   return {
     id: String(item._id),
@@ -215,7 +214,6 @@ function transformBoundary(item, opts = {}) {
 }
 
 module.exports = {
-  SECURE_ROLES,
   EXTRACTION_FIELDS,
   seedAcl,
   toNumber,

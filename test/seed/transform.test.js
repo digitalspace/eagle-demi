@@ -7,8 +7,7 @@ const assert = require('node:assert');
 
 const {
   seedAcl, toNumber, toIsoOrNull, resolveListLabel,
-  transformDocument, transformBoundary,
-  SECURE_ROLES
+  transformDocument, transformBoundary
 } = require('../../src/seed/transform');
 
 const NOW = '2026-07-30T00:00:00.000Z';
@@ -51,9 +50,11 @@ test('seedAcl — every seeded item gets an explicit read[]', async (t) => {
   });
 
   await t.test('fails closed with no upstream ACL', () => {
-    assert.deepStrictEqual(seedAcl(undefined), SECURE_ROLES);
-    assert.deepStrictEqual(seedAcl([]), SECURE_ROLES);
-    assert.deepStrictEqual(seedAcl(null), SECURE_ROLES);
+    // Literal level-2 tokens, not read off `readForLevel`: a re-seed must write exactly what a
+    // controller writes, and reading the value off the helper would pass whatever it becomes.
+    assert.deepStrictEqual(seedAcl(undefined), ['staff']);
+    assert.deepStrictEqual(seedAcl([]), ['staff']);
+    assert.deepStrictEqual(seedAcl(null), ['staff']);
     assert.ok(!seedAcl([]).includes('public'));
   });
 
@@ -241,8 +242,10 @@ test('transformBoundary — simplified geometry only', async (t) => {
     // This used to assert the OPPOSITE — that boundaries carry no read[] at all — which is what
     // made a staff-only shapefile inexpressible. Reference geography is still public by default;
     // the difference is that "public" is now written down rather than assumed.
+    // Literal level-4 tokens: a re-seed must write what a controller writes, and `includes` alone
+    // let the two lists drift apart on the same row.
     const b = transformBoundary(RAW, OPTS);
-    assert.ok(b.read.includes('public'));
+    assert.deepStrictEqual(b.read, ['staff', 'idir', 'public']);
     assert.strictEqual(b.isPublished, true);
   });
 

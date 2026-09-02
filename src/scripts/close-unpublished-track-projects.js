@@ -62,11 +62,8 @@ const projects = require('../repositories/projects');
 const documents = require('../repositories/documents');
 const cosmos = require('../db/cosmos-nosql');
 const { systemAccess } = require('../helpers/access-sql');
-// The ACL comes from the MERGE, by calling it — not from a SECURE_ROLES literal. There are THREE
-// such lists (`merge/project.js:22` and `seed/transform.js:16` have three roles,
-// `helpers/access-sql.js:30` has four — the first two are byte-identical and the third is the
-// superset, so no behaviour differs today, only the drift risk), and this
-// script exists to write what a re-seed would have written. Importing the wrong one leaves the
+// The ACL comes from the MERGE, by calling it, so this script writes exactly what a re-seed
+// would write (`readForLevel` tokens). Importing a role literal here would leave the
 // backfill and a later re-seed with different arrays on the same rows. No access difference either
 // way — `readClause` short-circuits for any of them — but neither module's tests can see the drift,
 // because each asserts against its own constant. Asking the merge sidesteps the choice entirely.
@@ -98,7 +95,8 @@ function parseArgs(argv) {
  * `sources.track` REQUIRED, because `sources.eagle` alone does not separate a merge-produced row
  * from an API-created one. `createProject` writes `sources: {}` — deliberately, so the wildfire
  * sync can patch `/sources/wildfire` — together with `eagleId: null`, `sourceSystem: 'track'` and
- * `read: ['public', ...SECURE_ROLES]` when published. That is byte-identical to a Track-only row
+ * `read: readForLevel(1)` on admission (widened later through `PUT /:id/level`). Once widened to
+ * level 4 that is byte-identical to a Track-only row
  * under a `sources.eagle` test, so without this half a `--live` run would strip `public` from
  * projects somebody deliberately and auditably published through `POST /projects` — the same route
  * the eagle-api-pushes-to-DEMI ingest path will use.

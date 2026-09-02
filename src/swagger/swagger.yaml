@@ -113,7 +113,10 @@ paths:
           description: pageSize above 100 on an unauthenticated request.
     post:
       summary: Create project
-      description: Ingest a new project with name and geographic centroid coordinates.
+      description: >-
+        Ingest a new project with name and geographic centroid coordinates. The project is
+        admitted at level 1 (team only): `isPublished` and `read` in the body are ignored, not
+        refused. Raising a project's level is `PUT /api/projects/{id}/level`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -153,7 +156,10 @@ paths:
           description: Project not found.
     put:
       summary: Update project
-      description: Modify metadata, coordinates, or publication state of an existing project.
+      description: >-
+        Modify an existing project's metadata or coordinates. It does not change visibility:
+        `isPublished` and `read` in the body are ignored and the stored ACL is kept. Use
+        `PUT /api/projects/{id}/level`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -327,7 +333,10 @@ paths:
           description: pageSize above 100 on an unauthenticated request.
     post:
       summary: Create document
-      description: Register document metadata record in the database.
+      description: >-
+        Register a document metadata record. The document is admitted at level 1 (team only),
+        capped at its parent project's level: `isPublished` and `read` in the body are ignored,
+        not refused. Raising a document's level is `PUT /api/documents/{id}/level`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -346,7 +355,10 @@ paths:
   /api/documents/extract:
     post:
       summary: Upload and extract document
-      description: Uploads document file to S3 MinIO and queues/processes text extraction.
+      description: >-
+        Uploads document file to S3 MinIO and queues/processes text extraction. The new record is
+        admitted at level 1 (team only), like `POST /api/documents`; widen it with
+        `PUT /api/documents/{id}/level`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

@@ -1122,7 +1122,7 @@ Branch: `feat/ladder-default-level-1`
 
 Merges only after the `project:<id>` roles dependency above carries a date.
 
-- [ ] `src/controllers/nosql/document.js:36-49` `resolveDocumentAcl` — the unpublished arm drops
+- [x] `src/controllers/nosql/document.js:36-49` `resolveDocumentAcl` — the unpublished arm drops
       from `readForLevel(2)` (what P3-2 left) to `readForLevel(1)`; the published arm stays
       `readForLevel(4)`. The ceiling itself — `Math.min(..., levelOfRead(parentProject.read))` — is
       already in place from P3-2. Every other write site converted in P3-2 keeps the level it has;
@@ -1132,31 +1132,31 @@ Merges only after the `project:<id>` roles dependency above carries a date.
       two levels, no set intersection. A level-1 document keeps `team` under a level-2 project
       instead of falling to a fail-closed branch that flattened its `ownRead` snapshot. Landed
       before the default moves, as this line required.
-- [ ] `src/seed/transform.js:202` and `src/merge/project.js:195` write a local `SECURE_ROLES`
+- [x] `src/seed/transform.js:202` and `src/merge/project.js:195` write a local `SECURE_ROLES`
       that aliases `ADMIN_ROLES` (`['sysadmin','staff','demi-admin']`), so `levelOfRead` reads
       the private form as 2 and the published form as 4 — correct today, but a re-seed rewrites
       the tokens a controller wrote. Convert both to `readForLevel(...)` in this unit.
-- [ ] `src/controllers/nosql/project.js:123,152,223-228` — `createProject` ignores `isPublished`
+- [x] `src/controllers/nosql/project.js:123,152,223-228` — `createProject` ignores `isPublished`
       from the body and admits at level 1; `updateProject`'s `isPublished` arm is deleted (widening
       moves to P3-4) and the ACL is carried from `existing` unconditionally.
 - [x] ~~`frontend/src/app/services/registry-state.service.ts` — gate on `level <= 2` from
       `/api/me`, not on `privileged`, which is now false for staff (doc §5, "Still valid").~~ done
       in P3-2 B: `privileged` went false for staff there, so the gate could not wait for this unit.
       Specs `'level 2 clears isUnauthorized'` and `'level 3 keeps isUnauthorized'`.
-- [ ] `src/swagger/swagger.yaml` — `POST /api/documents` and `POST /api/projects`: new records are
+- [x] `src/swagger/swagger.yaml` — `POST /api/documents` and `POST /api/projects`: new records are
       admitted at level 1 and `isPublished` in a create body is ignored.
 - Tests
-  - [ ] `test/controllers/nosql/document-redaction.test.js` case `'a new document is admitted at
+  - [x] `test/controllers/nosql/document-redaction.test.js` case `'a new document is admitted at
         level 1'` — `deepStrictEqual(saved.read, ['team'])` and `saved.isPublished === false`, with
         a PUBLISHED parent project. Fails on any inherited-publication shortcut.
-  - [ ] Same file, `'a create body cannot publish'` — `{ isPublished: true }` → `saved.read` is
+  - [x] Same file, `'a create body cannot publish'` — `{ isPublished: true }` → `saved.read` is
         `['team']`.
-  - [ ] `test/controllers/nosql/nosql-controllers.test.js` case `'PUT no longer changes a level'` —
+  - [x] `test/controllers/nosql-controllers.test.js` case `'PUT no longer changes a level'` —
         `{ isPublished: true }` on a level-1 project → the stored `read` is unchanged.
   - [x] ~~`frontend/.../registry-state.service.spec.ts` case `'level 2 with privileged false clears
         isUnauthorized'`~~ done in P3-2 B with the line above.
 - Acceptance
-  - [ ] `node --test test/controllers/nosql/*.test.js`; `cd frontend && yarn lint && yarn test && yarn build`.
+  - [x] `node --test test/controllers/nosql/*.test.js`; `cd frontend && yarn lint && yarn test && yarn build`.
   - [ ] On test: create a document as a staff user holding `project:207`, then `GET` it back as the
         same user (200) and as a staff user with no project role (404). The second call is the
         acceptance for the whole ladder.

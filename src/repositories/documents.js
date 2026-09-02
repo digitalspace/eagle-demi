@@ -254,8 +254,8 @@ function constrainToProject(ownRead, projectRead) {
  *
  * The one lossy set is documents a PREVIOUS cascade already flattened: their Eagle ACL is gone, so
  * capture records the flattened value and a re-publish leaves them private. Fail-closed, bounded,
- * and enumerable from audit rows (`project.update` with `isPublishedTo: false`) — recovery is a
- * re-seed of that project, which rewrites `read` and drops `ownRead`.
+ * and enumerable from audit rows (`record.narrow` / `record.takedown` from `setLevel`, project
+ * controller) — recovery is a re-seed of that project, which rewrites `read` and drops `ownRead`.
  *
  * A bulk PATCH, not an upsert: an upsert would have to read every document back first. All of a
  * project's documents share one partition, so this is normally a single request.
