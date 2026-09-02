@@ -900,9 +900,9 @@ not a source (doc §3 question 10).
 
 Acceptance (test, end to end)
 
-- [ ] Track PR merged to `develop` → `epictrack-api-c72cba-test`. Client-credentials token for
+- [ ] Track PR merged to `develop` → `epictrack-api-c8b80a-test`. Client-credentials token for
       `demi-track-reader`:
-      `curl -H "Authorization: Bearer $t" https://epictrack-api-c72cba-test.apps.gold.devops.gov.bc.ca/api/v1/projects/team-members`
+      `curl -H "Authorization: Bearer $t" https://epictrack-api-c8b80a-test.apps.gold.devops.gov.bc.ca/api/v1/projects/team-members`
       → 200, non-empty. 403 = `view` grant missing; 401 = audience mapper needed.
 - [ ] DEMI B1-B3 merged; `scripts/deploy-infra.sh test --live` before the schedule is non-empty.
 - [ ] Dry run locally against test: summary line shows plausible `grants`, `revokes=0`.

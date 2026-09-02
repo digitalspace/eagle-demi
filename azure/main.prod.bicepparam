@@ -129,7 +129,7 @@ param contactEmails = [
 
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // Same job as test. Secrets come from OpenShift `demi-app-secrets` through deploy-infra.sh.
-param trackApiBase = 'https://epictrack-api-c72cba-prod.apps.gold.devops.gov.bc.ca'
+param trackApiBase = 'https://epictrack-api-c8b80a-prod.apps.gold.devops.gov.bc.ca'
 param trackClientId = 'demi-track-reader'
 param roleSyncClientId = 'demi-role-sync'
 param trackClientSecret = readEnvironmentVariable('TRACK_CLIENT_SECRET')
