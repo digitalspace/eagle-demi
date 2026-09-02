@@ -27,8 +27,16 @@ async function getById(access, id) {
   return canRead(item, access, 'projectId') ? item : null;
 }
 
-async function upsert(item) {
-  return cosmos.upsert(CONTAINER, item);
+/**
+ * Whole-item write, guarded by what the caller read.
+ *
+ * A plain upsert would carry a `notifiedAt` read before a concurrent push claimed it, handing the
+ * claim back and announcing the same publication twice. Create when the row is absent, etag-guarded
+ * replace when it is not: either way a racing writer gets 409/412 instead of a silent overwrite.
+ */
+async function upsert(item, existing) {
+  if (!existing) return cosmos.create(CONTAINER, item);
+  return cosmos.replace(CONTAINER, item.id, item.id, item, existing._etag);
 }
 
 /**

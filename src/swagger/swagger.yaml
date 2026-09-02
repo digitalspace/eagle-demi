@@ -940,10 +940,12 @@ paths:
       summary: Mirror an Update from eagle-api
       description: |-
         Receives one Update (Eagle `RecentActivity`) pushed by eagle-api, keyed by the Eagle `_id`.
-        The body carries the RAW Eagle record. Idempotent: the same eagleId replaces. DEMI owns
-        Updates, so it is also what tells eagle-notify about a publication — once per update, and
-        again as a cancellation when a published update is withdrawn. A notification that fails is
-        logged and retried by the next push; it never fails the mirror.
+        The body carries the RAW Eagle record. Idempotent: the same eagleId replaces. Publication
+        follows `read[]`, not `active`: an update whose ACL keeps it off the public site is
+        mirrored but never announced. DEMI owns Updates, so it is also what tells eagle-notify
+        about a publication — once per update, and again as a cancellation when a published update
+        is withdrawn. A notification that fails is logged and retried by the next push; it never
+        fails the mirror.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []

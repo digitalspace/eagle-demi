@@ -20,7 +20,8 @@ const notify = require('../../services/notify');
  * Tell eagle-notify what changed, if anything did.
  *
  * Never throws and never fails the push: a mirrored record is worth keeping even when the
- * notification does not land, and the claim is released so the next push retries.
+ * notification does not land, and a failed send leaves the claim in the state the next push
+ * retries from — released for a publication, still held for a cancellation.
  */
 async function announce(item, existing) {
   // Not configured: claim NOTHING. A claim taken while dark would suppress the first real
@@ -41,8 +42,10 @@ async function announce(item, existing) {
     }
 
     if (existing && existing.notifiedAt) {
-      await updates.releaseNotify(item.id);
-      await notify.updateCancelled(item);
+      // Release only once the cancellation is out. Keeping the claim on a failed send is what makes
+      // the next unpublish push try again.
+      const sent = await notify.updateCancelled(item);
+      if (sent) await updates.releaseNotify(item.id);
     }
   } catch (err) {
     logger.error('[Update Controller] notify failed', {
@@ -50,6 +53,33 @@ async function announce(item, existing) {
     });
   }
 }
+
+/** The mirror row: the raw Eagle record, plus what DEMI already holds about it. */
+function mirrorItem(eagleId, doc, existing) {
+  const read = Array.isArray(doc.read) ? doc.read : null;
+  return {
+    id: eagleId,
+    eagleId,
+    projectId: doc.project ? String(doc.project) : null,
+    headline: doc.headline,
+    content: doc.content,
+    type: doc.type,
+    pinned: doc.pinned,
+    dateAdded: doc.dateAdded,
+    dateUpdated: doc.dateUpdated,
+    // read[] is authoritative and isPublished mirrors it (ADR-004), as the project and document
+    // mirrors do. `active` is the fallback for a record pushed without an ACL.
+    isPublished: read ? read.includes('public') : doc.active === true,
+    read: doc.read,
+    // A Cosmos write REPLACES the item, so the claim has to be carried across or every push of
+    // a published update notifies again.
+    notifiedAt: (existing && existing.notifiedAt) || null,
+    sources: { ...(existing && existing.sources), eagle: doc }
+  };
+}
+
+/** 409 (created behind us) and 412 (etag moved) both mean: somebody else wrote this row. */
+const raced = (err) => [409, 412].includes(err.code || err.statusCode);
 
 /**
  * Receive one Update pushed by eagle-api, keyed by its Eagle `_id`.
@@ -65,27 +95,18 @@ exports.upsertFromEagle = async (req, res) => {
     }
 
     // systemAccess: the mirror must find a row it is about to republish while that row is private.
-    const existing = await updates.getById(systemAccess(), eagleId);
+    let existing = await updates.getById(systemAccess(), eagleId);
 
-    const item = {
-      id: eagleId,
-      eagleId,
-      projectId: doc.project ? String(doc.project) : null,
-      headline: doc.headline,
-      content: doc.content,
-      type: doc.type,
-      pinned: doc.pinned,
-      dateAdded: doc.dateAdded,
-      dateUpdated: doc.dateUpdated,
-      isPublished: doc.active === true,
-      read: doc.read,
-      // A Cosmos upsert REPLACES the item, so the claim has to be carried across or every push of
-      // a published update notifies again.
-      notifiedAt: (existing && existing.notifiedAt) || null,
-      sources: { ...(existing && existing.sources), eagle: doc }
-    };
-
-    const saved = await updates.upsert(item);
+    let saved;
+    try {
+      saved = await updates.upsert(mirrorItem(eagleId, doc, existing), existing);
+    } catch (err) {
+      // The row moved between the read and the write, so the `notifiedAt` carried above is stale
+      // and writing it would hand back a claim another push is holding. Re-read, write again.
+      if (!raced(err)) throw err;
+      existing = await updates.getById(systemAccess(), eagleId);
+      saved = await updates.upsert(mirrorItem(eagleId, doc, existing), existing);
+    }
 
     auditEvent(req, {
       action: 'update.push',
