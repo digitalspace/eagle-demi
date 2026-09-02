@@ -153,9 +153,10 @@ jobs:
           DOCLING_API_KEY: ci-placeholder-not-a-real-key
           TRACK_CLIENT_SECRET: ci-placeholder-not-a-real-key
           ROLE_SYNC_CLIENT_SECRET: ci-placeholder-not-a-real-key
+          DEVBOX_SSH_PUBLIC_KEY: ci-placeholder-not-a-real-key
         run: az bicep build-params --file ./azure/main.test.bicepparam --outfile /dev/null
 
-      # Same placeholders, same reason: main.prod.bicepparam reads the same six credentials.
+      # Same placeholders, same reason: main.prod.bicepparam reads the same seven values.
       - name: Validate Prod Parameters
         env:
           MINIO_ACCESS_KEY: ci-placeholder-not-a-real-key
@@ -164,6 +165,7 @@ jobs:
           DOCLING_API_KEY: ci-placeholder-not-a-real-key
           TRACK_CLIENT_SECRET: ci-placeholder-not-a-real-key
           ROLE_SYNC_CLIENT_SECRET: ci-placeholder-not-a-real-key
+          DEVBOX_SSH_PUBLIC_KEY: ci-placeholder-not-a-real-key
         run: az bicep build-params --file ./azure/main.prod.bicepparam --outfile /dev/null
 
       - name: Report Validation Failure to Job Summary
