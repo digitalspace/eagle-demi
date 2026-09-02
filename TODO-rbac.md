@@ -23,7 +23,7 @@ P4-3 → P4-4 → P4-5. P3-2 and P3-6 residues are independent. P5b is optional 
    `api/index.js:58` requires `src/http/router` inside the request handler, so the Function App
    starts and answers 500 on every request instead. This is why the app setting deploys before the
    code that needs it.
-2. `aud` is verified only when `SSO_AUDIENCE` is non-empty (`src/helpers/auth.js:274-279`). Test
+2. `aud` is verified only when `SSO_AUDIENCE` is non-empty (`src/helpers/auth.js:275-280`). Test
    carries `account`; prod carries `''` (`azure/main.prod.bicepparam:76`), so prod verifies no
    audience.
 
@@ -88,6 +88,9 @@ Code and the `DEMI_ALLOWED_CLIENTS` app setting ship in two pipelines, so infra 
       those names would forge a ladder token. Test carried zero of each on 2026-08-28.
 - [ ] With a staff token on test: `GET /api/projects` returns the same ids as before the deploy
       (every stored row carries `staff`) and `GET /api/me` reports `level: 2`, `privileged: false`.
+- [ ] Anonymous `GET /api/search?dataset=Project&pageSize=5` on test, `jq -S` against a pre-P3-2
+      capture: 0 lines. P3-3 measured `/api/projects` and `/api/documents` only; the search-side
+      team arm (`access-odata.js` `filterFor`) has no recorded anonymous diff.
 
 ## P3-6 residue — Selected Credentials auto-revoke
 
@@ -212,7 +215,7 @@ Closing that means per-record envelope encryption under a Key Vault key in `demi
 | P3-6 | Selected Credentials: container, middleware, endpoints, closed-project revoke | #231, #273, #278, #290 | 2026-08-31 |
 | P3-7 | `vis` indexed in AI Search, reindex run (393 processed, 0 failed) | #226 | 2026-08-29 |
 | P3-8 | `projectCACPublished` and the `cacPublished` predicate gated | #225 | 2026-08-28 |
-| P3-9 | Takedown runbook | | |
+| P3-9 | Takedown runbook | #221 | 2026-08-28 |
 | P4-1 | Chunks catalogue | #275 | 2026-09-02 |
 | P4-2 | Level-0 material in the runbook | #275 | 2026-09-02 |
 | P5-1 | `readForLevel(0)` and the privileged exclusion | #264 | 2026-09-02 |

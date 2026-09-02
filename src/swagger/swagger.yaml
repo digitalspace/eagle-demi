@@ -1803,7 +1803,7 @@ components:
               count: { type: integer }
               expiresIn: { type: integer }
               fileName: { type: string }
-    Me:
+    MeBase:
       type: object
       properties:
         roles:
@@ -1826,6 +1826,10 @@ components:
           type: boolean
           description: >-
             True when the caller passes authMiddleware; the frontend gates staff screens on it.
+    Me:
+      allOf:
+        - $ref: '#/components/schemas/MeBase'
+      properties:
         credentials:
           type: array
           description: >-
@@ -1915,7 +1919,7 @@ components:
         The `Me` answer for the simulated caller, plus what it reaches on the row plane and the
         field plane.
       allOf:
-        - $ref: '#/components/schemas/Me'
+        - $ref: '#/components/schemas/MeBase'
       properties:
         rows:
           type: object
