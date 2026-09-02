@@ -483,6 +483,24 @@ test('level 0 — the sealed compartment', async (t) => {
     }
   });
 
+  await t.test('an unprivileged caller carries the exclusion on its own arm', () => {
+    // The anonymous clause ends in the exclusion; deleting the AND leaves `staff` reading a row
+    // that carries both `public` and `compliance`.
+    const anon = readClause([]);
+    assert.match(anon.clause, /AND NOT ARRAY_CONTAINS\(c\.read, 'compliance'\)$/);
+    assert.match(readClause(['staff']).clause, /AND NOT ARRAY_CONTAINS/);
+    assert.strictEqual(canRead({ id: 'p2', projectId: 'p2', read: ['public', 'compliance'] }, access([])), false);
+    assert.strictEqual(canRead({ id: 'p2', projectId: 'p2', read: ['staff', 'compliance'] }, access(['staff'])), false);
+  });
+
+  await t.test('a row without read[] is dropped by the point read as by the list', () => {
+    // `NOT ARRAY_CONTAINS` is undefined on a row with no `read`, so lists drop it for every caller;
+    // canRead answers the same, privileged callers and systemAccess included.
+    for (const a of [access(['sysadmin']), systemAccess(), access([])]) {
+      assert.strictEqual(canRead({ id: 'p3', projectId: 'p3' }, a), false);
+    }
+  });
+
   await t.test('systemAccess excludes compliance-only rows', () => {
     // Exports, seed, reconcile and the extraction worker all read through it.
     assert.ok(!systemAccess().roles.includes('compliance'), 'the role list must stay compliance-free');

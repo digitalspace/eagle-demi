@@ -581,7 +581,10 @@ function canRead(doc, access, partitionField = 'projectId') {
     if (!scope.includes(String(doc[partitionField]))) return false;
   }
 
-  const read = Array.isArray(doc.read) ? doc.read : [];
+  // No `read[]` at all: the SQL twin's `NOT ARRAY_CONTAINS` is undefined on such a row and drops
+  // it from every list, so the point read drops it too — same answer from both paths.
+  if (!Array.isArray(doc.read)) return false;
+  const read = doc.read;
 
   // BEFORE the privilege short-circuit, which is the whole leak: `sysadmin` returning early here
   // reads a sealed row. The SQL twin is readClause's `NOT ARRAY_CONTAINS`.
