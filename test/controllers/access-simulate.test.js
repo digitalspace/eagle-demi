@@ -14,7 +14,11 @@ const assert = require('node:assert');
 
 const { simulate } = require('../../src/controllers/access-simulate');
 const { CATALOGS } = require('../../src/vis/catalog');
+const config = require('../../src/config');
 const { withServer } = require('../helpers/with-server');
+
+/** The suite credential src/helpers/auth.js honours only under NODE_ENV=test. */
+const AUTHED = { 'content-type': 'application/json', 'x-api-key': 'eagle-demi-api-key' };
 
 function run(body) {
   const res = {
@@ -195,11 +199,25 @@ test('access simulate', async (t) => {
     assert.strictEqual(staff.visible, true);
   });
 
-  await t.test('the mounted route answers an anonymous POST', async () => {
+  await t.test('sources.wildfire reports what the redactor publishes, not the catalog', (t) => {
+    // The catalog pins the field at 4/4, but the redactor lets `sources.*` out only for the keys
+    // ENRICHMENT_SOURCES names — empty in prod. Reading the catalog alone over-reported it.
+    const wildfire = () => run({}).body.fields.projects.find(f => f.field === 'sources.wildfire');
+    t.after(() => { config.enrichmentSources = []; });
+
+    config.enrichmentSources = [];
+    assert.deepStrictEqual(wildfire(),
+      { field: 'sources.wildfire', defaultVis: 4, maxVis: 4, when: null, visible: false });
+
+    config.enrichmentSources = ['wildfire'];
+    assert.strictEqual(wildfire().visible, true);
+  });
+
+  await t.test('the mounted route answers an authenticated POST', async () => {
     await withServer(async (call) => {
       const res = await call('/api/access/simulate', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: AUTHED,
         body: JSON.stringify({ roles: ['staff'], teams: ['207'] })
       });
 
@@ -210,10 +228,23 @@ test('access simulate', async (t) => {
 
       const refused = await call('/api/access/simulate', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: AUTHED,
         body: JSON.stringify({ nope: true })
       });
       assert.strictEqual(refused.status, 400);
+    });
+  });
+
+  await t.test('an anonymous POST is refused before anything is simulated', async () => {
+    await withServer(async (call) => {
+      const res = await call('/api/access/simulate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ roles: ['staff'] })
+      });
+
+      assert.strictEqual(res.status, 401);
+      assert.strictEqual((await res.json()).rows, undefined);
     });
   });
 });

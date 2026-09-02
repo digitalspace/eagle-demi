@@ -58,11 +58,10 @@ const routes = [
   { method: 'get', path: '/config', guards: [], load: () => configController().getConfig },
   // Passive, not authMiddleware: an anonymous caller gets the public tier, not a 401.
   { method: 'get', path: '/me', guards: [passiveAuthMiddleware], load: () => meController().getMe },
-  // No guards at all, and none needed: the body describes a HYPOTHETICAL caller, the handler reads
-  // no container and returns only what the access helpers compute for it. Nothing here grants the
-  // real caller anything, so authenticating one would only stop the Access Model screen loading.
-  // Volume is APIM's problem, like every other anonymous route.
-  { method: 'post', path: '/access/simulate', guards: [], load: () => accessSimulateController().simulate },
+  // Authenticated, though the body describes a HYPOTHETICAL caller and the handler reads no
+  // container: the answer is the whole field catalog plus a role-privilege oracle, the same
+  // disclosure /api-docs is gated for below. The Access Model screen is staff-gated anyway.
+  { method: 'post', path: '/access/simulate', guards: [authMiddleware], load: () => accessSimulateController().simulate },
 
   // Database Management Routes
   // Removed: /db/import and /db/query (generic bulk-write and arbitrary-query endpoints over

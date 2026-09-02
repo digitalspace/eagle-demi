@@ -3,19 +3,20 @@
 /**
  * `POST /api/access/simulate` — what THIS engine answers for a hypothetical caller.
  *
- * Anonymous and data-free: it reads no container, writes nothing, and grants nothing. Every value
- * in the response comes from the helpers the real reads compose — `resolveAccess`, `canRead`, the
- * field catalogs — so the Access Model screen renders the rules instead of a second copy of them
- * that drifts. Nothing here may re-encode a rule; if an answer is not available from a helper,
- * the helper is what needs the export.
+ * Data-free: it reads no container, writes nothing, and grants nothing. Every value in the response
+ * comes from the helpers the real reads compose — `resolveAccess`, `canRead`, `redactForAccess` —
+ * so the Access Model screen renders the rules instead of a second copy of them that drifts.
+ * Nothing here may re-encode a rule; if an answer is not available from a helper, the helper is
+ * what needs the export. Authenticated, because the answer is the whole field catalog and a
+ * role-privilege oracle even though the caller it describes is hypothetical.
  */
 
 const {
   resolveAccess, canRead, readForLevel, LEVEL_TOKENS, PROJECT_ROLE_PREFIX
 } = require('../helpers/access-sql');
-const { grantError, liveCredentials, MAX_SCOPE_IDS } = require('../helpers/credentials');
+const { grantError, MAX_SCOPE_IDS } = require('../helpers/credentials');
 const { catalogFor } = require('../vis/catalog');
-const { effectiveVis, visible } = require('../vis/redact');
+const { redactForAccess } = require('../vis/redact');
 const { getMe } = require('./me');
 
 const BODY_KEYS = ['roles', 'identityProvider', 'teams', 'projectScope', 'credential'];
@@ -104,10 +105,8 @@ function syntheticRequest(body, now) {
     user.keyId = SIMULATED_KEY_ID;
   }
 
-  // liveCredentials is the middleware's own window filter, so a grant that would not be loaded
-  // cannot be simulated as if it had been.
   const credentials = body.credential
-    ? liveCredentials([{ ...body.credential, end: new Date(now + SIMULATED_END_MS).toISOString() }], now)
+    ? [{ ...body.credential, end: new Date(now + SIMULATED_END_MS).toISOString() }]
     : [];
 
   return { user, credentials };
@@ -148,15 +147,54 @@ function rowsFor(access, probe) {
   return rows;
 }
 
-/** Every catalogued field of one entity, and whether this level sees it. Plumbing keys included. */
-function fieldsFor(entity, level) {
-  return Object.entries(catalogFor(entity)).map(([field, entry]) => ({
+/**
+ * One record carrying every catalogued key, so the real redactor can be asked what survives.
+ *
+ * Values are `1`: truthy, so a key is never dropped for being empty, and not `true`, so the
+ * `=== true` predicates read false and each field sits at its `defaultVis`.
+ * ponytail: a future predicate testing mere truthiness would widen its own field here; give the
+ * probe per-field values if one lands.
+ */
+function probeRecord(catalog) {
+  const record = {};
+  for (const key of Object.keys(catalog)) {
+    const dot = key.indexOf('.');
+    if (dot === -1) continue;
+    const parent = key.slice(0, dot);
+    record[parent] = { ...record[parent], [key.slice(dot + 1)]: 1 };
+  }
+  for (const key of Object.keys(catalog)) {
+    if (!key.includes('.') && !(key in record)) record[key] = 1;
+  }
+  return record;
+}
+
+/** Did this catalog key survive redaction — a dotted key under its parent, everything else at top. */
+function survives(seen, field) {
+  const dot = field.indexOf('.');
+  if (dot === -1) return Object.hasOwn(seen, field);
+
+  const parent = seen[field.slice(0, dot)];
+  return Boolean(parent) && typeof parent === 'object' && Object.hasOwn(parent, field.slice(dot + 1));
+}
+
+/**
+ * Every catalogued field of one entity, and whether this caller sees it. Plumbing keys included.
+ *
+ * The answer comes from `redactForAccess` over a probe record rather than from the catalog, so
+ * rules the catalog does not carry — `sources.*` gated on ENRICHMENT_SOURCES, and whatever the
+ * redactor grows next — are reported as the response boundary actually applies them.
+ */
+function fieldsFor(entity, access) {
+  const catalog = catalogFor(entity);
+  const seen = redactForAccess(entity, probeRecord(catalog), access);
+
+  return Object.entries(catalog).map(([field, entry]) => ({
     field,
     defaultVis: entry.defaultVis,
     maxVis: entry.maxVis,
     when: entry.when || null,
-    // No record is simulated, so every `when` reads false and each field sits at its defaultVis.
-    visible: visible(level, effectiveVis(entry, undefined, {}))
+    visible: survives(seen, field)
   }));
 }
 
@@ -175,8 +213,8 @@ exports.simulate = (req, res) => {
     ...me,
     rows: rowsFor(access, probeId(body.teams || [], body.credential)),
     fields: {
-      projects: fieldsFor('projects', me.level),
-      documents: fieldsFor('documents', me.level)
+      projects: fieldsFor('projects', access),
+      documents: fieldsFor('documents', access)
     },
     predicatesAssumedFalse: true,
     notes: { sealedCompartment: 'designed, not built (Phase 5)' }

@@ -55,8 +55,11 @@ paths:
       summary: What a hypothetical caller could see
       description: >-
         Runs the access engine over a described caller and returns the answer, without reading any
-        data and without granting the real caller anything. Unauthenticated: the body describes
-        somebody else, so requiring a login would only stop the Access Model screen loading.
+        data and without granting the real caller anything. Authenticated: the body describes
+        somebody else, but the answer is the whole field catalog and a role-privilege oracle.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
       requestBody:
         required: false
         content:
@@ -72,6 +75,8 @@ paths:
                 $ref: '#/components/schemas/AccessSimulateResponse'
         '400':
           description: Unknown field, malformed list, or a credential the registry would refuse.
+        '401':
+          description: Unauthorized.
 
   /api/projects:
     get:
