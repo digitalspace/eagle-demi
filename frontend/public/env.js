@@ -23,6 +23,10 @@
   window.__env.DEV_NOTIFY_PROXY_TARGET = 'https://notify-api-test.azurewebsites.net';
   window.__env.USE_MOCK_DATA = false;
 
+  // Application Insights. Empty = no browser telemetry. Staging deploy rewrites this from the
+  // APPINSIGHTS_CONNECTION_STRING_TEST repo variable; an empty variable keeps telemetry off.
+  window.__env.APPINSIGHTS_CONNECTION_STRING = '';
+
   // Keycloak Authentication Configuration
   window.__env.KEYCLOAK_CLIENT_ID = 'eagle-admin-console';
   window.__env.KEYCLOAK_URL = 'https://test.loginproxy.gov.bc.ca/auth';

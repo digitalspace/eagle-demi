@@ -104,6 +104,8 @@ jobs:
       # fails the job. A silent no-op is the exact failure being guarded against, and the
       # only way to see one is to assert the result.
       - name: Point env.js at the test environment
+        env:
+          APPINSIGHTS_CONNECTION_STRING: ${{ vars.APPINSIGHTS_CONNECTION_STRING_TEST }}
         run: |
           ENV_JS=frontend/public/env.js
           # API_LOCATION stays empty and API_PATH stays /api: the deployed bundle calls
@@ -120,6 +122,13 @@ jobs:
           sed -i "s|window.__env.ENVIRONMENT = 'dev'|window.__env.ENVIRONMENT = 'test'|" "$ENV_JS"
           grep -qF "window.__env.ENVIRONMENT = 'test'" "$ENV_JS" \
             || { echo "::error file=$ENV_JS::ENVIRONMENT rewrite did not take — the banner would read 'dev'"; exit 1; }
+
+          # Empty repository variable writes an empty string, same as local dev: telemetry off.
+          # Escape backslash, & and the sed delimiter so the connection string can't break the s|||.
+          ESCAPED_CONN=$(printf '%s' "$APPINSIGHTS_CONNECTION_STRING" | sed -e 's/[\&|]/\\&/g')
+          sed -i "s|window.__env.APPINSIGHTS_CONNECTION_STRING = ''|window.__env.APPINSIGHTS_CONNECTION_STRING = '${ESCAPED_CONN}'|" "$ENV_JS"
+          grep -qF "window.__env.APPINSIGHTS_CONNECTION_STRING = '${APPINSIGHTS_CONNECTION_STRING}'" "$ENV_JS" \
+            || { echo "::error file=$ENV_JS::APPINSIGHTS_CONNECTION_STRING rewrite did not take"; exit 1; }
 
       # 24 to match pr.yaml, so the build that deploys runs on the runtime the build
       # that gated it ran on. Angular 22 floors Node at ^22.22.3 || ^24.15.0, which

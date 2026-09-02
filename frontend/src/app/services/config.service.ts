@@ -14,6 +14,8 @@ export interface AppConfig {
   KEYCLOAK_ENABLED?: boolean;
   REDIRECT_KEY?: string;
   BANNER_COLOUR?: string;
+  /** Application Insights connection string. Empty means no browser telemetry. */
+  APPINSIGHTS_CONNECTION_STRING?: string;
   /** eagle-notify's base: the `/notify-api` dev proxy path locally, its own origin when deployed. */
   NOTIFY_API_LOCATION?: string;
   [key: string]: any;
