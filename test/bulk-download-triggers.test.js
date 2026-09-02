@@ -136,3 +136,11 @@ test('a failing sweep is logged and does not throw at the host', async (t) => {
     'the poison alert matches "[bulk] job failed" — a sweep failure must not fire it');
   assert.strictEqual(errors[0].meta.error, 'object store unreachable');
 });
+
+test('the stale-running threshold is the queue visibility timeout, read from host.json', () => {
+  const config = require('../src/config');
+  const [h, m, s] = require('../host.json').extensions.queues.visibilityTimeout.split(':').map(Number);
+  // A copy of the number drifts silently; a poll would then call a hidden job dead, or a returned
+  // one alive.
+  assert.strictEqual(config.bulkStaleRunningMs, ((h * 60 + m) * 60 + s) * 1000);
+});

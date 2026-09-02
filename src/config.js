@@ -33,6 +33,13 @@ function intFromEnv(name, fallback) {
   return value;
 }
 
+/** `HH:MM:SS` from host.json into milliseconds; throws at load on any other shape. */
+function timeSpanMs(value) {
+  const m = /^(\d{1,2}):(\d{2}):(\d{2})$/.exec(String(value));
+  if (!m) throw new Error(`[config] not a time span: ${value}`);
+  return ((Number(m[1]) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1000;
+}
+
 const config = {
   minioHost:    process.env.MINIO_HOST       || 'localhost',
   minioPort:    parseInt(process.env.MINIO_PORT || '9000', 10),
@@ -119,10 +126,10 @@ const config = {
   // the caller's roles at submit time, so a message that sat in the queue past this is refused
   // rather than run against credentials nobody has re-checked since.
   bulkMaxJobAgeMs:      intFromEnv('BULK_MAX_JOB_AGE_MS', 7_200_000),
-  // When a `running` job is reported as failed instead. MUST MATCH host.json
-  // `extensions.queues.visibilityTimeout` (01:00:00): below it a job whose message is still hidden
-  // reads as dead, above it a job whose message was returned to the queue reads as alive.
-  bulkStaleRunningMs:   intFromEnv('BULK_STALE_RUNNING_MS', 3_600_000),
+  // When a `running` job is reported as failed instead: the queue's visibility timeout, read from
+  // host.json so the two cannot drift (below it a hidden message reads as dead, above it a
+  // returned one reads as alive).
+  bulkStaleRunningMs:   timeSpanMs(require('../host.json').extensions.queues.visibilityTimeout),
   bulkZipRetentionDays: intFromEnv('BULK_ZIP_RETENTION_DAYS', 7),
   bulkJobTtlDays:       intFromEnv('BULK_JOB_TTL_DAYS', 30),
   // Empty = the feature is OFF. Azure drops an app setting whose value is '', so an unset variable

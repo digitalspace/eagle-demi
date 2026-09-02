@@ -269,9 +269,6 @@ param bulkMaxPerDay int = 20
 @description('Milliseconds a queued job may wait before the worker refuses it as too old to trust its access snapshot.')
 param bulkMaxJobAgeMs int = 7200000
 
-@description('Milliseconds after which a `running` job reads as failed. MUST MATCH host.json extensions.queues.visibilityTimeout.')
-param bulkStaleRunningMs int = 3600000
-
 // THE PUBLIC URL, not this API's own hostname. rproxy resolves the Front Door address once at
 // config load, so a probe aimed straight at the app stays green through a moved edge — the failure
 // this exists to catch. Not composable here for the same reason `frontendHostNames` is not.
@@ -489,7 +486,6 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     bulkJobTtlDays: bulkJobTtlDays
     bulkMaxPerDay: bulkMaxPerDay
     bulkMaxJobAgeMs: bulkMaxJobAgeMs
-    bulkStaleRunningMs: bulkStaleRunningMs
     keycloakClientId: keycloakClientId
     allowedClients: allowedClients
     ssoAudience: ssoAudience

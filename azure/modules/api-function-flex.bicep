@@ -187,9 +187,6 @@ param bulkMaxPerDay int = 20
 @description('Milliseconds a queued job may wait before the worker refuses it. The job row carries an access snapshot, and a stale one is credentials nobody has re-checked.')
 param bulkMaxJobAgeMs int = 7200000
 
-@description('Milliseconds after which a `running` job reads as failed. MUST MATCH host.json extensions.queues.visibilityTimeout.')
-param bulkStaleRunningMs int = 3600000
-
 @description('NCRONTAB schedule for the zip cleanup timer, e.g. `0 30 3 * * *`. Empty registers no timer.')
 param bulkCleanupSchedule string = ''
 
@@ -524,10 +521,6 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'BULK_MAX_JOB_AGE_MS'
           value: string(bulkMaxJobAgeMs)
-        }
-        {
-          name: 'BULK_STALE_RUNNING_MS'
-          value: string(bulkStaleRunningMs)
         }
         {
           name: 'BULK_CLEANUP_SCHEDULE'
