@@ -154,6 +154,9 @@ test('listLiveProjectScoped reads every live project grant in one query', async 
   assert.deepStrictEqual((await credentials.listLiveProjectScoped()).map(r => r.id), ['c1']);
   assert.strictEqual(specs.length, 1);
   assert.match(specs[0].spec.query, /c\.scope\.type = 'project'/);
+  // The Cosmos wrapper refuses a spec without a parameters ARRAY; the fake above does not, and
+  // that gap let the nightly close-out fail on test until 2026-09-02.
+  assert.deepStrictEqual(specs[0].spec.parameters, []);
   assert.match(specs[0].spec.query, /IS_NULL\(c\.revokedAt\)/);
   assert.strictEqual(specs[0].options, undefined, 'cross-partition: no partition key');
 });

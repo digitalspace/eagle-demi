@@ -87,7 +87,8 @@ const listForProject = (projectId) => find({ projectId });
  *  this once and intersects the ids itself, rather than a query per closed project. */
 async function listLiveProjectScoped() {
   const { items } = await cosmos.query(CONTAINER, {
-    query: `SELECT * FROM c WHERE c.scope.type = 'project' AND ${LIVE}`
+    query: `SELECT * FROM c WHERE c.scope.type = 'project' AND ${LIVE}`,
+    parameters: []
   });
   return items || [];
 }

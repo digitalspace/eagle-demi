@@ -1429,7 +1429,7 @@ Tests
 Acceptance
 
 - [x] `node --test test/vis/catalog-completeness.test.js test/vis/search-drift.test.js` — 0 fail.
-- [ ] `curl -s "$API/api/search?dataset=DocumentChunk&keywords=water" | jq '.[0].searchResults[0].content'` → `""`.
+- [x] `curl -s "$API/api/search?dataset=DocumentChunk&keywords=water" | jq '.[0].searchResults[0].content'` → `""`. Verified on test 2026-09-02.
 
 ## P4-2 level-0 material in the runbook
 
