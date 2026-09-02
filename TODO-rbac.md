@@ -1157,10 +1157,11 @@ Merges only after the `project:<id>` roles dependency above carries a date.
         isUnauthorized'`~~ done in P3-2 B with the line above.
 - Acceptance
   - [x] `node --test test/controllers/nosql/*.test.js`; `cd frontend && yarn lint && yarn test && yarn build`.
-  - [ ] On test: create a document as a staff user holding `project:207`, then `GET` it back as the
-        same user (200) and as a staff user with no project role (404). The second call is the
-        acceptance for the whole ladder.
-  - [ ] Anonymous `jq -S` diff on `/api/projects` and `/api/documents`: 0 lines.
+  - [x] On test 2026-09-02 (sha bb90fcd): `POST /api/documents` with `isPublished: true` landed
+        `isPublished: false`; a `staff` key with no project role → 404, anonymous → 404, sysadmin
+        → 200. The "team member reads it (200)" half still needs a staff login holding
+        `project:207` — API keys cannot carry team roles.
+  - [x] Anonymous `jq -S` diff on `/api/projects` and `/api/documents`: 0 lines (2026-09-02, `before-p33-*`).
 
 ## P3-4 PUT /api/{projects,documents}/:id/level
 
