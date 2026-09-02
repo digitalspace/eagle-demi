@@ -1,73 +1,73 @@
-import { Component, OnInit, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnDestroy, computed, effect, inject, signal } from '@angular/core';
 import { RegistryStateService } from '../../services/registry-state.service';
 
-export type RbacGroupKey = 'public' | 'idir' | 'eao' | 'team' | 'credential' | 'ce';
-export type RbacGroups = Record<RbacGroupKey, boolean>;
-
-interface RbacProject { id: number; name: string; level: number; team: boolean; }
-
-/** The EAO sharing model: four ladder levels, one sealed compartment, one credential lane. */
-const LEVELS = [
-  { n: 4, name: 'Public', audience: 'Anyone, no credential, through EPIC.public', detail: 'Finalized products. Moving a file here is an explicit human action, warned and logged.' },
-  { n: 3, name: 'All IDIR', audience: 'Any BC Government employee with an IDIR account', detail: 'Chosen because government-wide sharing is intended, not because the file is uncontroversial.' },
-  { n: 2, name: 'All EAO', audience: 'Every EAO staff member, any project or business unit', detail: 'Approved internal records — settled enough to be relied on across the organization.' },
-  { n: 1, name: 'Team Only', audience: 'The group that originated the file', detail: 'The default on admission. Unapproved, in-progress and working records live here.' }
-];
-
-const RBAC_GROUPS: { key: RbacGroupKey; label: string; note: string; locked?: boolean }[] = [
-  { key: 'public', label: 'Public (no credential)', note: 'Always in effect — the floor of the ladder', locked: true },
-  { key: 'idir', label: 'All IDIR', note: 'A BC Government IDIR account' },
-  { key: 'eao', label: 'All EAO staff', note: 'Any EAO business unit or project' },
-  { key: 'team', label: 'Site C project team', note: 'Originating group for Site C files only' },
-  { key: 'credential', label: 'Selected credential — proponent', note: 'Site C content at Level 2, expires 31 Dec 2026' },
-  { key: 'ce', label: 'Compliance & Enforcement', note: 'Named role for the sealed Level 0 compartment' }
-];
-
-const RBAC_PROJECTS: RbacProject[] = [
-  { id: 402, name: 'Site C Clean Energy Project', level: 4, team: true },
-  { id: 111, name: 'Ajax Mine', level: 4, team: false },
-  { id: 404, name: 'KSM Project', level: 1, team: false }
-];
-
-const RBAC_FIELDS = [
-  { key: 'name', label: 'Project name', value: 'Site C Clean Energy Project', level: 4 },
-  { key: 'proponent', label: 'Proponent', value: 'BC Hydro', level: 4 },
-  { key: 'region', label: 'Region', value: 'Peace', level: 4 },
-  { key: 'status', label: 'Decision status', value: 'In Progress', level: 4 },
-  { key: 'capital', label: 'Capital investment', value: '$16.0 B', level: 2 },
-  { key: 'contact', label: 'Proponent contact', value: 'k.wells@bchydro.com', level: 2 },
-  { key: 'risk', label: 'Internal risk assessment', value: 'Elevated — schedule and reservoir clearing', level: 1 },
-  { key: 'rationale', label: 'Draft decision rationale', value: 'Working draft, not for reliance', level: 1 },
-  { key: 'investigation', label: 'C&E investigation file', value: 'CE-2026-0114 — open', level: 0 }
-];
-
-const RBAC_DOCS = [
-  { id: 'd1', name: 'Environmental Assessment Certificate #14-02', projectId: 402, level: 4 },
-  { id: 'd2', name: 'Site C Compliance Report 2026', projectId: 402, level: 3 },
-  { id: 'd3', name: 'Reservoir clearing cost schedule', projectId: 402, level: 2 },
-  { id: 'd4', name: 'Draft condition amendment, internal', projectId: 402, level: 1 },
-  { id: 'd5', name: 'Ajax Mine Project Assessment Report', projectId: 111, level: 4 },
-  { id: 'd6', name: 'KSM pre-application working notes', projectId: 404, level: 1 },
-  { id: 'd7', name: 'CE-2026-0114 investigation record', projectId: 402, level: 0 }
-];
-
-/**
- * Levels this simulated user can read for one project. Level 0 is a sealed compartment, not a
- * step: `ce` opens it without granting any rung of the ladder.
- */
-export function levelsFor(groups: RbacGroups, project: { team: boolean }): Set<number> {
-  const set = new Set<number>([4]);
-  if (groups.idir) set.add(3);
-  if (groups.eao) { set.add(3); set.add(2); }
-  if (groups.team && project.team) { set.add(3); set.add(2); set.add(1); }
-  // A credential grants sight of specified content without joining that level's audience.
-  if (groups.credential && project.team) set.add(2);
-  if (groups.ce) set.add(0);
-  return set;
+/** One catalogued field, exactly as `POST /api/access/simulate` reports it. */
+export interface SimulateField {
+  field: string;
+  defaultVis: number;
+  maxVis: number;
+  when: string | null;
+  visible: boolean;
 }
 
-const ROW = 'display: flex; gap: var(--layout-margin-medium); align-items: flex-start; justify-content: space-between; padding: var(--layout-padding-small) var(--layout-padding-large);';
-const ROW_RULED = ROW + ' border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);';
+export interface SimulateResponse {
+  roles: string[];
+  level: number;
+  tier: string;
+  privileged: boolean;
+  staffUi: boolean;
+  rows: Record<string, { readable: boolean; via: string | null }>;
+  fields: { projects: SimulateField[]; documents: SimulateField[] };
+  predicatesAssumedFalse: boolean;
+  notes?: { sealedCompartment?: string };
+}
+
+export interface SimulateRequest {
+  roles: string[];
+  identityProvider?: string;
+  teams?: string[];
+  projectScope?: string[];
+  credential?: { scope: { type: string; ids: string[] }; levels: number[] };
+}
+
+/**
+ * Realm roles the engine understands. `team` and `idir` are deliberately absent: `rolesFor` strips
+ * both from a real token, so offering them here would let the screen forge a ladder token.
+ */
+const ROLE_OPTIONS: { key: string; note: string; locked?: boolean }[] = [
+  { key: 'public', note: 'Resolved onto every caller — the floor of the ladder.', locked: true },
+  { key: 'staff', note: 'Matches the staff token, which levels 2, 3 and 4 all carry.' },
+  { key: 'sysadmin', note: 'Row-plane superuser: every ladder row, no sealed row.' },
+  { key: 'demi-admin', note: 'Row-plane superuser.' },
+  { key: 'demi-service-read', note: 'Service account. Privileged for reads, holds no write role.' },
+  { key: 'demi-service-write', note: 'Service account. Privileged, and permitted to write.' },
+  { key: 'compliance', note: 'The only role a sealed level-0 row matches. Not a ladder rung.' }
+];
+
+/** The ladder as docs/rbac-architecture.md §1 states it: name, stored `read[]`, who matches. */
+const LADDER = [
+  { level: 1, name: 'Team only', read: ['team'], detail: 'Reached only through the team arm: the row carries team and its project is one of the caller’s.' },
+  { level: 2, name: 'All EAO', read: ['staff'], detail: 'Every EAO staff member, any project or business unit.' },
+  { level: 3, name: 'All IDIR', read: ['staff', 'idir'], detail: 'Any BC Government IDIR account. idir comes from the identity_provider claim, never a role.' },
+  { level: 4, name: 'Public', read: ['staff', 'idir', 'public'], detail: 'Anyone, no credential.' }
+];
+
+const IDENTITY_PROVIDERS = [
+  { value: '', label: 'None', note: 'No identity provider claim.' },
+  { value: 'idir', label: 'IDIR', note: 'The only provider that moves a caller to level 3.' },
+  { value: 'bceid', label: 'BCeID', note: 'Where a Selected Credential holder signs in. Never level 3.' }
+];
+
+/** What moves a record between levels. Row plane only — none of it touches the field catalog. */
+const LEVEL_CHANGES = [
+  { dot: 'attention-row__dot--warning', title: 'Publishing to level 4', detail: 'PUT /:id/level with confirm: true and a reason. Without either it answers 400. Audited as record.widen.' },
+  { dot: 'attention-row__dot--danger', title: 'Pulling back from level 4', detail: 'sysadmin only, audited as record.takedown, and handled as incident response — a routine correction publishes a replacement instead.' },
+  { dot: 'attention-row__dot--info', title: 'Holding a Selected Credential', detail: 'One extra OR arm for the named party at levels 1–3. It changes no record’s level and no field.' }
+];
+
+const FIELDSET = 'border: 0; margin: 0; padding: 0;';
+const CHECK_ROW = 'display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer; padding: 3px 0;';
+const TEXT_INPUT = 'width: 100%; box-sizing: border-box; padding: 0.45rem 0.6rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);';
 
 @Component({
   selector: 'app-access-model',
@@ -77,126 +77,184 @@ const ROW_RULED = ROW + ' border-bottom: var(--layout-border-width-small) solid 
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
 })
-export class AccessModelComponent implements OnInit {
-  service = inject(RegistryStateService);
+export class AccessModelComponent implements OnDestroy {
+  private service = inject(RegistryStateService);
 
-  readonly rowLevel0Style = ROW_RULED + ' background: var(--surface-color-background-light-gray);';
-  readonly rowLaneStyle = ROW;
+  /** Static so a spec can shorten it before the component is created. */
+  static debounceMs = 150;
 
-  groups = signal<RbacGroups>({ public: true, idir: false, eao: false, team: false, credential: false, ce: false });
+  readonly roleOptions = ROLE_OPTIONS;
+  readonly identityProviders = IDENTITY_PROVIDERS;
+  readonly ladder = LADDER;
+  readonly levelChanges = LEVEL_CHANGES;
+  readonly fieldsetStyle = FIELDSET;
+  readonly checkRowStyle = CHECK_ROW;
+  readonly textInputStyle = TEXT_INPUT;
 
-  /** What the API says about the real caller, unlike everything else on this screen. */
-  me = signal<{ roles: string[]; level: number; tier: string; privileged: boolean } | null>(null);
+  // Described caller.
+  roles = signal<Record<string, boolean>>({ public: true });
+  identityProvider = signal('');
+  teamsText = signal('');
+  scopeText = signal('');
+  credentialOn = signal(false);
+  credentialType = signal<'project' | 'document'>('project');
+  credentialIdsText = signal('');
+  credentialLevels = signal<Record<number, boolean>>({ 2: true });
 
-  realm = this.service.config.KEYCLOAK_REALM || '—';
+  showPlumbing = signal(false);
 
-  /** Null `me` means both "still fetching" and "no answer"; this separates them for the UI. */
-  meLoading = signal(true);
+  // Engine answer.
+  result = signal<SimulateResponse | null>(null);
+  error = signal<string | null>(null);
+  loading = signal(true);
 
-  async ngOnInit() {
-    await this.service.authReady;
+  /** The real caller, from the service that already asked `/api/me` — never re-fetched here. */
+  readonly realm = this.service.config.KEYCLOAK_REALM || '—';
+  yourLevel = this.service.visLevel;
+  yourStaffUi = this.service.isStaff;
+
+  /** The simulator sits behind authMiddleware, so without a session there is nothing to ask. */
+  signedIn = this.service.isAuthenticated;
+
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private seq = 0;
+
+  constructor() {
+    // Every input change re-asks the engine; nothing on this screen is computed from a local copy
+    // of the rules. The bearer token is attached by the service's fetch interceptor, which owns
+    // every Authorization header the app sends to its own API.
+    effect(() => {
+      const body = this.body();
+      if (!this.signedIn()) {
+        this.loading.set(false);
+        return;
+      }
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = setTimeout(() => this.simulate(body), AccessModelComponent.debounceMs);
+    });
+  }
+
+  ngOnDestroy() {
+    if (this.timer) clearTimeout(this.timer);
+  }
+
+  /** The request body for the described caller. Optional keys are omitted, not sent empty. */
+  body = computed<SimulateRequest>(() => {
+    const roles = this.roles();
+    const request: SimulateRequest = { roles: ROLE_OPTIONS.filter(r => roles[r.key]).map(r => r.key) };
+
+    if (this.identityProvider()) request.identityProvider = this.identityProvider();
+
+    const teams = idList(this.teamsText());
+    if (teams.length > 0) request.teams = teams;
+
+    // Sent only when asked for: `projectScope` present at all makes the tier `scoped`.
+    if (this.scopeText().trim()) request.projectScope = idList(this.scopeText());
+
+    if (this.credentialOn()) {
+      const levels = this.credentialLevels();
+      request.credential = {
+        scope: { type: this.credentialType(), ids: idList(this.credentialIdsText()) },
+        levels: [1, 2, 3].filter(l => levels[l])
+      };
+    }
+    return request;
+  });
+
+  private async simulate(body: SimulateRequest) {
+    const mine = ++this.seq;
+    this.loading.set(true);
     try {
-      const res = await fetch(`${this.service.getBasePath()}/me`);
-      this.me.set(res.ok ? await res.json() : null);
+      const res = await fetch(`${this.service.getBasePath()}/access/simulate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json().catch(() => null);
+      if (mine !== this.seq) return;
+      if (res.ok && data) {
+        this.result.set(data as SimulateResponse);
+        this.error.set(null);
+      } else {
+        // A refusal is an answer too — the registry would refuse this caller's credential — so the
+        // stale result is dropped rather than left on screen under a new description.
+        this.result.set(null);
+        this.error.set((data && data.error) || `The access engine answered ${res.status}.`);
+      }
     } catch {
-      this.me.set(null);
+      if (mine !== this.seq) return;
+      this.result.set(null);
+      this.error.set('The access engine did not answer.');
     } finally {
-      this.meLoading.set(false);
+      if (mine === this.seq) this.loading.set(false);
     }
   }
 
-  meLabel = computed(() => {
-    const me = this.me();
-    return me ? `${me.level} (${me.tier})` : 'Unavailable';
-  });
-
-  toggle(key: RbacGroupKey) {
-    this.groups.update(g => ({ ...g, [key]: !g[key] }));
+  toggleRole(key: string) {
+    this.roles.update(r => ({ ...r, [key]: !r[key] }));
   }
 
-  private siteCLevels = computed(() => levelsFor(this.groups(), RBAC_PROJECTS[0]));
+  toggleCredentialLevel(level: number) {
+    this.credentialLevels.update(l => ({ ...l, [level]: !l[level] }));
+  }
 
-  groupRows = computed(() => {
-    const g = this.groups();
-    return RBAC_GROUPS.map(row => ({ ...row, checked: !!g[row.key], disabled: !!row.locked }));
-  });
+  /** Typed value of an input or textarea event, for the template. */
+  value(event: Event): string {
+    return (event.target as HTMLInputElement).value;
+  }
 
-  audienceSummary = computed(() =>
-    'Levels ' + Array.from(this.siteCLevels()).sort((a, b) => b - a).join(', ')
-  );
-
-  ladder = computed(() => {
-    const levels = this.siteCLevels();
-    return LEVELS.map(lv => {
-      const can = levels.has(lv.n);
+  ladderRows = computed(() => {
+    const rows = this.result()?.rows || {};
+    return LADDER.map(rung => {
+      const row = rows[String(rung.level)];
+      const readable = !!row?.readable;
       return {
-        heading: `Level ${lv.n} — ${lv.name}`,
-        audience: lv.audience,
-        detail: lv.detail,
-        pillClass: can ? 'pill pill--success' : 'pill pill--neutral',
-        verdict: can ? 'You can read' : 'Withheld',
-        rowStyle: can
-          ? ROW_RULED + ' box-shadow: inset 3px 0 0 var(--surface-color-primary-default);'
-          : ROW_RULED + ' opacity: 0.55;'
+        ...rung,
+        heading: `Level ${rung.level} — ${rung.name}`,
+        readable,
+        dotClass: readable ? 'attention-row__dot--success' : 'attention-row__dot--neutral',
+        pillClass: readable ? 'pill pill--success' : 'pill pill--neutral',
+        verdict: readable ? 'Readable' : 'Withheld',
+        via: row?.via ? `via ${row.via}` : null
       };
     });
   });
 
-  sealedVerdict = computed(() => this.siteCLevels().has(0) ? 'You can read' : 'Sealed');
-  sealedPillClass = computed(() => this.siteCLevels().has(0) ? 'pill pill--success' : 'pill pill--danger');
+  /** Readable levels, narrowest first, for the live summary. */
+  private readableLevels = computed(() => this.ladderRows().filter(r => r.readable).map(r => r.level));
 
-  fields = computed(() => {
-    const levels = this.siteCLevels();
-    return RBAC_FIELDS.map(f => {
-      const visible = levels.has(f.level);
-      return {
-        label: f.label,
-        shown: visible ? f.value : '▮▮▮▮▮▮▮▮',
-        levelLabel: f.level === 0 ? 'Level 0 · sealed' : `Level ${f.level}`,
-        valueStyle: visible
-          ? 'font: var(--typography-regular-small-body); color: var(--typography-color-primary);'
-          : 'font: var(--typography-regular-small-body); color: var(--typography-color-secondary); letter-spacing: 1px;',
-        pillClass: visible ? 'pill pill--success pill--caps' : 'pill pill--neutral pill--caps',
-        verdict: visible ? 'Visible' : 'Redacted'
-      };
-    });
+  projectFields = computed(() => this.catalog('projects'));
+  documentFields = computed(() => this.catalog('documents'));
+
+  private catalog(entity: 'projects' | 'documents') {
+    const all = this.result()?.fields?.[entity] || [];
+    const rows = (this.showPlumbing() ? all : all.filter(f => f.maxVis > 0))
+      // Most fields are 4/4 with no predicate. Tinting the rest is what makes the exceptions
+      // findable in a catalog of sixty.
+      .map(f => ({ ...f, notable: f.defaultVis !== 4 || f.maxVis !== 4 || !!f.when }));
+    const hidden = all.length - rows.length;
+    return {
+      rows,
+      caption: `${rows.filter(f => f.visible).length} of ${rows.length} returned` +
+        (hidden > 0 ? ` · ${hidden} plumbing key${hidden === 1 ? '' : 's'} hidden` : '')
+    };
+  }
+
+  sealedNote = computed(() => this.result()?.notes?.sealedCompartment || null);
+
+  /** One sentence for the live region: the whole answer, without reading every table row aloud. */
+  summary = computed(() => {
+    const result = this.result();
+    if (!result) return 'Asking the access engine…';
+    const levels = this.readableLevels();
+    return `Level ${result.level}, tier ${result.tier}. ` +
+      (levels.length ? `Reads records at level ${levels.join(', ')}. ` : 'Reads no records. ') +
+      `${this.projectFields().rows.filter(f => f.visible).length} project fields and ` +
+      `${this.documentFields().rows.filter(f => f.visible).length} document fields returned.`;
   });
+}
 
-  projects = computed(() => {
-    const groups = this.groups();
-    return RBAC_PROJECTS.map(p => {
-      const visible = levelsFor(groups, p).has(p.level);
-      return {
-        name: p.name,
-        levelLabel: `Level ${p.level}`,
-        pillClass: visible ? 'pill pill--success pill--caps' : 'pill pill--neutral pill--caps',
-        verdict: visible ? 'In results' : 'Not in results'
-      };
-    });
-  });
-
-  private docVisibility = computed(() => {
-    const groups = this.groups();
-    return RBAC_DOCS.map(d => {
-      const project = RBAC_PROJECTS.find(p => p.id === d.projectId)!;
-      return { doc: d, project, visible: levelsFor(groups, project).has(d.level) };
-    });
-  });
-
-  docs = computed(() => this.docVisibility().map(({ doc, project, visible }) => ({
-    id: doc.id,
-    projectName: project.name,
-    levelLabel: doc.level === 0 ? 'Level 0 · sealed' : `Level ${doc.level}`,
-    shown: visible ? doc.name : 'Withheld — not returned by the query',
-    nameStyle: visible
-      ? 'font: var(--typography-bold-small-body); color: var(--typography-color-primary);'
-      : 'font: var(--typography-regular-small-body); color: var(--typography-color-secondary); font-style: italic;',
-    pillClass: visible ? 'pill pill--success pill--caps' : 'pill pill--neutral pill--caps',
-    verdict: visible ? 'Returned' : '404'
-  })));
-
-  docSummary = computed(() => {
-    const vis = this.docVisibility().filter(d => d.visible).length;
-    return `${vis} of ${RBAC_DOCS.length} documents returned · ${RBAC_DOCS.length - vis} withheld`;
-  });
+/** "402, 111" → ['402', '111']. Blanks dropped so a trailing comma is not an empty id. */
+function idList(text: string): string[] {
+  return text.split(',').map(id => id.trim()).filter(Boolean);
 }
