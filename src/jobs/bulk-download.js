@@ -484,4 +484,4 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
   }
 }
 
-module.exports = { run };
+module.exports = { run, DOCUMENT_FIELDS };

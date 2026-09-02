@@ -36,6 +36,7 @@ const MANIFEST_BATCH = 200;
 // What the manifest needs and nothing else: the size to pack against, the key to prove the file
 // exists, and the publication state the audit rule below reads.
 const MANIFEST_SELECT = 'c.id, c.fileSize, c.isPublished, c.s3Key';
+exports.MANIFEST_SELECT = MANIFEST_SELECT;
 
 // Same short window as GET /documents/:id/download: a presigned URL carries no auth of its own.
 const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;

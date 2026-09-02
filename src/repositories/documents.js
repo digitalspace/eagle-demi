@@ -427,9 +427,10 @@ async function deleteById(id, projectId) {
  * is an allowlist rather than a validation: a caller cannot widen the read to `*` and ship `read[]`
  * to a bulk manifest, and cannot smuggle a clause in through the column list.
  */
+// `vis` is here for `redactForAccess` on the entry names, never for the caller.
 const MANIFEST_FIELDS = [
   'id', 'projectId', 'fileSize', 'isPublished',
-  'displayName', 'documentFileName', 's3Key', 'fileExt', 'mimeType'
+  'displayName', 'documentFileName', 's3Key', 'fileExt', 'mimeType', 'vis'
 ];
 
 /**
