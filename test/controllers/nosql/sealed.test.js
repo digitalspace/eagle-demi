@@ -35,6 +35,7 @@ const documentController = require('../../../src/controllers/nosql/document');
 const searchController = require('../../../src/controllers/search');
 const routes = require('../../../src/http/routes');
 const { readForLevel } = require('../../../src/helpers/access-sql');
+const { naturalSortKey } = require('../../../src/helpers/natural-sort');
 const { code } = require('../../helpers/router-source');
 
 const SCRIPTS_DIR = path.join(__dirname, '..', '..', '..', 'src', 'scripts');
@@ -330,6 +331,7 @@ test('the sealed compartment routes', async (t) => {
     assert.deepStrictEqual(saved.read, ['compliance']);
     assert.strictEqual(saved.isPublished, false);
     assert.ok(saved.sealedAt, 'a sealed row records when it was sealed');
+    assert.strictEqual(saved.displayNameSort, naturalSortKey('Warrant.pdf'));
   });
 
   await t.test('a row that is not sealed is not the compartment\'s to read or release', async () => {

@@ -85,7 +85,9 @@ const WIRED = [
     'the API module call — without it the sync has no admin identity to grant roles with'],
   ['deployDevbox',
     /^module devbox '\.\/modules\/devbox\.bicep' = if \(deployDevbox && !empty\(devboxSubnetId\)\) \{$/m,
-    'the devbox module gate — without it every environment builds a dev-access VM, prod included']
+    'the devbox module gate — without it every environment builds a dev-access VM, prod included'],
+  ['trustedProxyIps', /^\s+trustedProxyIps: trustedProxyIps$/m,
+    'the API module call — without it TRUSTED_PROXY_IPS is empty and caller-ip trusts no proxy hop']
 ];
 
 for (const [name, wiring, why] of WIRED) {

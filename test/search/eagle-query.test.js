@@ -624,10 +624,11 @@ test('eagle-query natural-sort key', async (t) => {
     assert.ok(!filter.includes('displayNameSort'), 'the filter must name the readable column');
   });
 
-  // The app ships before the index PUT that adds the field — the order in azure/search/README.md is
-  // index first, but a deploy that raced it would otherwise emit `$orderby displayNameSort`, which
-  // is a 400 the controller answers 502 to.
-  await t.test('falls back to displayName while the live index lacks the field', (t) => {
+  // Field metadata comes from the committed azure/search/indexes/*.json, always in step with the
+  // live index by the README's own rollout order (index PUT -> datasource PUT -> app deploy), so
+  // this can never see a live index mismatch. What it can see is a SORT_KEYS target the committed
+  // JSON does not define — sortFieldFor's actual guard.
+  await t.test('falls back to displayName when the committed index JSON lacks the target field', (t) => {
     const eagleQueryWithout = reloadWithoutField(t, 'documents', 'displayNameSort');
 
     assert.strictEqual(eagleQueryWithout.buildOrderBy('displayName', 'Document', false).orderby,
@@ -650,7 +651,7 @@ test('eagle-query natural-sort key', async (t) => {
 
 /**
  * eagle-query reads index metadata ONCE at require time, so the only way to ask it what it does
- * against a narrower live index is to reload it against a narrower definition file.
+ * against a committed JSON missing a field is to reload it against a narrower definition file.
  */
 function reloadWithoutField(t, index, field) {
   const MODULE = require.resolve('../../src/search/eagle-query');

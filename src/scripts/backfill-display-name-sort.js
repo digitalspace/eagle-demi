@@ -15,9 +15,13 @@
  * private-endpoint-only and keyless, so a live run executes on the devbox (`demi-devbox-<env>`) via
  * `demi-run` — see README "Running anything against the database".
  *
- * ORDER. Index PUT and data-source PUT first (azure/search/README.md), then this. Patching moves
- * `_ts`, so the PT5M indexer re-pulls the patched rows on its own — no indexer reset. Rows this
- * script leaves alone are rows that already agree, so they need no re-pull.
+ * ORDER. index PUT -> datasource PUT -> app deploy -> this backfill -> indexer cycle
+ * (azure/search/README.md). Patching moves `_ts`, so the PT5M indexer re-pulls the patched rows on
+ * its own — no indexer reset. Rows this script leaves alone are rows that already agree, so they
+ * need no re-pull.
+ *
+ * Sealed (level-0) rows are not scanned: systemAccess() carries the sealed exclusion the same as
+ * every other ladder read. That's fine — a sealed row never appears in a sortable result either.
  */
 
 const documents = require('../repositories/documents');

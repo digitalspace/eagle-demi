@@ -544,9 +544,11 @@ function buildOrderBy(sortBy, dataset, hasKeywords = false, access) {
  * The index field a sort key lands on.
  *
  * The sort mapping first, then the FILTER alias (`_id` → `legacyEagleId`), and the caller's own
- * name whenever the target cannot sort — which is what lets this app deploy BEFORE the index PUT
- * that adds `displayNameSort`, and what keeps `sortBy=type` ordering on the label rather than the
- * ObjectId its filter alias names.
+ * name whenever the target cannot sort. `fields` comes from the committed `azure/search/indexes/
+ * *.json` shipped with the app (README rollout order: index PUT -> datasource PUT -> app deploy),
+ * so a deployed app always sees a field the index already has; this guard exists for a SORT_KEYS
+ * target the committed JSON does not define, not for a live index the app has outrun. It also keeps
+ * `sortBy=type` ordering on the label rather than the ObjectId its filter alias names.
  */
 function sortFieldFor(name, dataset, fields) {
   const target = (SORT_KEYS[dataset] || {})[name] || (ALIASES[dataset] || {})[name];
