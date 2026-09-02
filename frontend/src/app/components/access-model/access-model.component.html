@@ -1,140 +1,262 @@
 <div class="screen-header">
   <div class="screen-header__text">
     <h1>Access model</h1>
-    <p>Assign a theoretical DEMI user to groups and watch what the registry returns. The same rules run on projects, on documents, and on individual fields.</p>
+    <p>Describe a caller and the registry answers what it could read. Every line below comes from the access engine itself — this screen keeps no second copy of the rules.</p>
   </div>
 </div>
 
-<div class="callout callout--warning">
-  <strong>Work in progress.</strong> The EAO sharing model is still being defined. Field-level rules in particular are illustrative here — the levels, the sealed compartment and the credential lane follow the current draft.
-</div>
+@if (!signedIn()) {
+  <div class="callout callout--warning" role="status">
+    <p><strong>Sign in to run the simulator.</strong> Asking the engine about a caller is itself a staff request: <code class="cell__mono">POST /api/access/simulate</code> answers 401 without a DEMI session. The rules on this page hold either way — only the answer for a described caller needs a session.</p>
+  </div>
+}
 
-<div class="panel-grid" style="grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); align-items: start;">
-  <section class="panel panel--padded">
-    <h2 class="panel__title panel__title--inline">Simulated user</h2>
-    <div class="kv-grid" style="margin-bottom: var(--layout-margin-medium);">
-      <div class="kv-row"><span class="kv-row__key">Your level</span><span class="kv-row__value" [attr.aria-busy]="meLoading() ? 'true' : null">@if (meLoading()) {<span class="skeleton skeleton--text" style="width: 6rem;" aria-hidden="true"></span>} @else {{{ meLabel() }}}</span></div>
-      <div class="kv-row"><span class="kv-row__key">Realm</span><span class="kv-row__value"><code class="cell__mono">{{ realm }}</code></span></div>
-      <div class="kv-row"><span class="kv-row__key">Simulated reads</span><span class="kv-row__value">{{ audienceSummary() }}</span></div>
-    </div>
+@if (signedIn()) {
+<section class="panel panel--padded">
+  <h2 class="panel__title panel__title--inline">Describe a caller</h2>
+  <p class="panel__lede">Nothing here signs anyone in or grants you anything: the body describes somebody else, and the engine reads no data to answer it.</p>
 
-    <div class="micro-label" style="margin-bottom: var(--layout-margin-xsmall);">Group membership</div>
-    <div style="display: flex; flex-direction: column; gap: var(--layout-margin-small);">
-      @for (g of groupRows(); track g.key) {
-        <label style="display: flex; align-items: flex-start; gap: 0.6rem; cursor: pointer;">
-          <input type="checkbox" [checked]="g.checked" [disabled]="g.disabled" (change)="toggle(g.key)" style="margin-top: 3px;">
+  <div style="display: grid; gap: var(--layout-margin-large); grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));">
+    <fieldset [style]="fieldsetStyle">
+      <legend class="micro-label" style="padding: 0; margin-bottom: var(--layout-margin-xsmall);">Realm roles</legend>
+      @for (role of roleOptions; track role.key) {
+        <div [style]="checkRowStyle">
+          <input type="checkbox" [id]="'role-' + role.key" [checked]="!!roles()[role.key]" [disabled]="!!role.locked" [attr.aria-describedby]="'role-note-' + role.key" (change)="toggleRole(role.key)" style="margin-top: 4px;">
           <span>
-            <span class="cell__title">{{ g.label }}</span>
-            <span class="cell__sub" style="display: block;">{{ g.note }}</span>
+            <label class="cell__title" [for]="'role-' + role.key" style="cursor: pointer;"><code class="cell__mono">{{ role.key }}</code></label>
+            <span class="cell__sub" style="display: block;" [id]="'role-note-' + role.key">{{ role.note }}</span>
           </span>
-        </label>
+        </div>
+      }
+      <p class="cell__sub" style="margin: var(--layout-margin-small) 0 0;">team and idir are not offered here. A real token has both stripped, so a realm role can never forge a ladder token.</p>
+    </fieldset>
+
+    <fieldset [style]="fieldsetStyle">
+      <legend class="micro-label" style="padding: 0; margin-bottom: var(--layout-margin-xsmall);">Identity provider</legend>
+      @for (idp of identityProviders; track idp.value) {
+        <div [style]="checkRowStyle">
+          <input type="radio" name="identityProvider" [id]="'idp-' + idp.label" [value]="idp.value" [checked]="identityProvider() === idp.value" [attr.aria-describedby]="'idp-note-' + idp.label" (change)="identityProvider.set(idp.value)" style="margin-top: 4px;">
+          <span>
+            <label class="cell__title" [for]="'idp-' + idp.label" style="cursor: pointer;">{{ idp.label }}</label>
+            <span class="cell__sub" style="display: block;" [id]="'idp-note-' + idp.label">{{ idp.note }}</span>
+          </span>
+        </div>
+      }
+    </fieldset>
+
+    <fieldset [style]="fieldsetStyle">
+      <legend class="micro-label" style="padding: 0; margin-bottom: var(--layout-margin-xsmall);">Project ids</legend>
+      <p class="cell__sub" style="margin: 0 0 var(--layout-margin-small);">Two different facts, and the engine never merges them: one grants, one restricts.</p>
+      <label style="display: block; margin-bottom: var(--layout-margin-medium);">
+        <span class="cell__title">Team membership — grants</span>
+        <input type="text" inputmode="text" placeholder="402, 111" [value]="teamsText()" (input)="teamsText.set(value($event))" [style]="textInputStyle" style="margin-top: 4px;">
+        <span class="cell__sub" style="display: block;">The caller’s project:&lt;id&gt; realm roles. Opens the level-1 team arm on those projects only.</span>
+      </label>
+      <label style="display: block;">
+        <span class="cell__title">Key project scope — restricts</span>
+        <input type="text" inputmode="text" placeholder="402" [value]="scopeText()" (input)="scopeText.set(value($event))" [style]="textInputStyle" style="margin-top: 4px;">
+        <span class="cell__sub" style="display: block;">A minted key’s projectScope. ANDed into every read, and it sets the tier to scoped.</span>
+      </label>
+    </fieldset>
+
+    <fieldset [style]="fieldsetStyle">
+      <legend class="micro-label" style="padding: 0; margin-bottom: var(--layout-margin-xsmall);">Selected credential</legend>
+      <div [style]="checkRowStyle">
+        <input type="checkbox" id="credential-on" [checked]="credentialOn()" aria-describedby="credential-note" (change)="credentialOn.set(!credentialOn())" style="margin-top: 4px;">
+        <span>
+          <label class="cell__title" for="credential-on" style="cursor: pointer;">The caller holds one</label>
+          <span class="cell__sub" style="display: block;" id="credential-note">Row plane only, levels 1–3, exact level match. The registry validates it exactly as it would validate a real grant.</span>
+        </span>
+      </div>
+
+      @if (credentialOn()) {
+        <div style="margin-top: var(--layout-margin-small); padding-left: 1.6rem;">
+          <fieldset [style]="fieldsetStyle" style="margin-bottom: var(--layout-margin-small);">
+            <legend class="cell__title" style="padding: 0;">Scope</legend>
+            <label [style]="checkRowStyle">
+              <input type="radio" name="credentialType" value="project" [checked]="credentialType() === 'project'" (change)="credentialType.set('project')" style="margin-top: 4px;">
+              <span class="cell__sub">project — every row of those projects</span>
+            </label>
+            <label [style]="checkRowStyle">
+              <input type="radio" name="credentialType" value="document" [checked]="credentialType() === 'document'" (change)="credentialType.set('document')" style="margin-top: 4px;">
+              <span class="cell__sub">document — the named records themselves</span>
+            </label>
+          </fieldset>
+
+          <label style="display: block; margin-bottom: var(--layout-margin-small);">
+            <span class="cell__title">Scope ids</span>
+            <input type="text" placeholder="402" [value]="credentialIdsText()" (input)="credentialIdsText.set(value($event))" [style]="textInputStyle" style="margin-top: 4px;">
+          </label>
+
+          <fieldset [style]="fieldsetStyle">
+            <legend class="cell__title" style="padding: 0;">Granted levels</legend>
+            @for (level of [1, 2, 3]; track level) {
+              <label [style]="checkRowStyle">
+                <input type="checkbox" [checked]="!!credentialLevels()[level]" (change)="toggleCredentialLevel(level)" style="margin-top: 4px;">
+                <span class="cell__sub">Level {{ level }}</span>
+              </label>
+            }
+            <p class="cell__sub" style="margin: 4px 0 0;">Level 0 is sealed and level 4 is public, so neither can be granted.</p>
+          </fieldset>
+        </div>
+      }
+    </fieldset>
+  </div>
+</section>
+
+<div [attr.aria-busy]="loading() ? 'true' : null" [style.opacity]="loading() && result() ? 0.6 : null">
+  <h2 class="panel__title panel__title--inline" style="margin-bottom: 2px;">The engine’s answer</h2>
+  <!-- One region announces the answer, so a screen reader is not read every table row again. -->
+  <div aria-live="polite">
+    @if (error(); as refusal) {
+      <div class="callout callout--warning">
+        <p><strong>The registry refuses this caller.</strong> {{ refusal }}</p>
+      </div>
+    } @else {
+      <p class="footnote" style="margin: 0 0 var(--layout-margin-medium);">{{ summary() }}</p>
+    }
+  </div>
+
+  @if (result(); as answer) {
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="micro-label">Level</div>
+        <div class="stat-card__value">{{ answer.level }}</div>
+        <div class="stat-card__note">Which attributes of a visible record come back.</div>
+      </div>
+      <div class="stat-card">
+        <div class="micro-label">Tier</div>
+        <div class="stat-card__value">{{ answer.tier }}</div>
+        <div class="stat-card__note">scoped means a key’s project scope is ANDed into every read.</div>
+      </div>
+      <div class="stat-card">
+        <div class="micro-label">Privileged</div>
+        <div class="stat-card__value">{{ answer.privileged ? 'Yes' : 'No' }}</div>
+        <div class="stat-card__note">The row-plane short-circuit. staff is not privileged.</div>
+      </div>
+      <div class="stat-card">
+        <div class="micro-label">Staff UI</div>
+        <div class="stat-card__value">{{ answer.staffUi ? 'Yes' : 'No' }}</div>
+        <div class="stat-card__note">The gate authMiddleware 403s on.</div>
+      </div>
+    </div>
+
+    <section class="panel panel--padded">
+      <h2 class="panel__title panel__title--inline">Roles after the engine resolves them</h2>
+      <div class="role-chips">
+        @for (role of answer.roles; track role) {
+          <span class="role-chip">{{ role }}</span>
+        }
+      </div>
+      <p class="cell__sub" style="margin: var(--layout-margin-small) 0 0;">You, right now: level {{ yourLevel() }}, {{ yourStaffUi() ? 'staff UI' : 'public UI' }}, realm <code class="cell__mono">{{ realm }}</code>. Simulating a caller changes none of that.</p>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel__title">Records this caller reads</h2>
+      @for (rung of ladderRows(); track rung.level) {
+        <div class="attention-row" style="flex-wrap: wrap;">
+          <span class="attention-row__dot" [class]="'attention-row__dot ' + rung.dotClass"></span>
+          <div class="attention-row__text" style="min-width: 15rem;">
+            <div class="attention-row__title">{{ rung.heading }}</div>
+            <div class="attention-row__detail">{{ rung.detail }}</div>
+            <div class="role-chips" style="margin-top: 5px;">
+              <span class="cell__sub">read[]</span>
+              @for (token of rung.read; track token) {
+                <span class="role-chip">{{ token }}</span>
+              }
+            </div>
+          </div>
+          <div class="attention-row__action" style="display: flex; gap: var(--layout-margin-xsmall); align-items: center;">
+            @if (rung.via) {
+              <span class="pill pill--info pill--caps">{{ rung.via }}</span>
+            }
+            <span [class]="rung.pillClass">{{ rung.verdict }}</span>
+          </div>
+        </div>
+      }
+
+      @if (sealedNote()) {
+        <div class="attention-row" style="background: var(--surface-color-background-light-gray); flex-wrap: wrap;">
+          <span class="attention-row__dot attention-row__dot--neutral"></span>
+          <div class="attention-row__text" style="min-width: 15rem;">
+            <div class="attention-row__title">Level 0 — sealed compartment</div>
+            <div class="attention-row__detail">A sealed row carries read: ['compliance'], sits outside the ladder, and is excluded from the privileged short-circuit — sysadmin included. It is not a rung, so no caller here can be given it.</div>
+          </div>
+          <div class="attention-row__action"><span class="pill pill--neutral pill--caps">{{ sealedNote() }}</span></div>
+        </div>
+      }
+    </section>
+
+    <div style="display: flex; align-items: center; gap: var(--layout-margin-medium); margin-bottom: var(--layout-margin-medium); flex-wrap: wrap;">
+      <h2 class="panel__title panel__title--inline" style="margin: 0;">Fields of a record this caller can read</h2>
+      <label style="display: flex; align-items: center; gap: 0.5rem; font: var(--typography-regular-small-body); cursor: pointer;">
+        <input type="checkbox" [checked]="showPlumbing()" (change)="showPlumbing.set(!showPlumbing())">
+        Show plumbing keys
+      </label>
+    </div>
+
+    <div class="panel-grid" style="grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));">
+      @for (catalog of [{ title: 'Projects', data: projectFields() }, { title: 'Documents', data: documentFields() }]; track catalog.title) {
+        <section class="panel panel--scroll">
+          <h3 class="panel__title">{{ catalog.title }} · {{ catalog.data.caption }}</h3>
+          <table style="min-width: 20rem; width: 100%;">
+            <thead>
+              <tr>
+                <th>Field</th>
+                <th>Default</th>
+                <th>Max</th>
+                <th>Predicate</th>
+                <th>At level {{ answer.level }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (field of catalog.data.rows; track field.field) {
+                <tr [style.background]="field.notable ? 'var(--surface-color-background-light-gray)' : null">
+                  <td><code class="cell__mono cell__mono--wrap">{{ field.field }}</code></td>
+                  <td class="cell--muted cell--nowrap">{{ field.defaultVis }}</td>
+                  <td class="cell--muted cell--nowrap">{{ field.maxVis }}</td>
+                  <td class="cell--nowrap">
+                    @if (field.when) {
+                      <code class="cell__mono">{{ field.when }}</code>
+                    } @else {
+                      <span class="cell--muted">—</span>
+                    }
+                  </td>
+                  <td class="cell--nowrap">
+                    @if (field.visible) {
+                      <span class="cell--muted">Returned</span>
+                    } @else {
+                      <span class="pill pill--neutral pill--caps">Removed</span>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </section>
       }
     </div>
-  </section>
 
-  <div>
-    <section class="panel">
-      <h2 class="panel__title">The sharing ladder, as this user</h2>
-      @for (lv of ladder(); track lv.heading) {
-        <div [style]="lv.rowStyle">
-          <div>
-            <div class="cell__title">{{ lv.heading }}</div>
-            <div class="cell__sub">{{ lv.audience }}</div>
-            <div class="cell__sub" style="margin-top: 2px;">{{ lv.detail }}</div>
-          </div>
-          <span [class]="lv.pillClass">{{ lv.verdict }}</span>
-        </div>
-      }
-
-      <div [style]="rowLevel0Style">
-        <div>
-          <div class="cell__title">Level 0 — Sensitive</div>
-          <div class="cell__sub">A sealed compartment beside the ladder, not a step below it</div>
-          <div class="cell__sub" style="margin-top: 2px;">Restricted to a named set of roles and encrypted, so it is unreadable to front-end users including Superusers, and through the data layer. A file cannot be elevated out of it through the sharing interface.</div>
-        </div>
-        <span [class]="sealedPillClass()">{{ sealedVerdict() }}</span>
-      </div>
-
-      <div [style]="rowLaneStyle">
-        <div>
-          <div class="cell__title">Special — Selected Credentials</div>
-          <div class="cell__sub">A lane alongside the ladder for First Nations, proponents, certificate holders, partner agencies and local governments</div>
-          <div class="cell__sub" style="margin-top: 2px;">Grants a named external party sight of specified content at Levels 1–3 without making them a member of that audience. The file's level does not change and no one else's access changes with it. Time-bound, renewable, revocable — singly or in bulk.</div>
-        </div>
-        <span class="pill pill--info">Lane</span>
-      </div>
-    </section>
-  </div>
+    @if (answer.predicatesAssumedFalse) {
+      <p class="footnote" style="margin-top: calc(-1 * var(--layout-margin-small)); margin-bottom: var(--layout-margin-large);">
+        No record is simulated, so every predicate reads false and each field sits at its default. A per-record dial moves a field anywhere between 0 and its own maximum; an invalid dial falls back to the default. Plumbing keys are pinned at maximum 0 and never leave the API.
+      </p>
+    }
+  }
 </div>
+}
 
-<section class="panel panel--scroll">
-  <h2 class="panel__title">Field-level access — Site C Clean Energy Project</h2>
-  <table style="min-width: 52rem; table-layout: fixed; width: 100%;">
-    <thead>
-      <tr>
-        <th style="width: 14rem;">Field</th>
-        <th style="width: 22rem;">Value returned</th>
-        <th style="width: 8rem;">Field level</th>
-        <th style="width: 7rem;">Result</th>
-      </tr>
-    </thead>
-    <tbody>
-      @for (f of fields(); track f.label) {
-        <tr>
-          <td class="cell__title">{{ f.label }}</td>
-          <td><span [style]="f.valueStyle">{{ f.shown }}</span></td>
-          <td class="cell--muted cell--nowrap">{{ f.levelLabel }}</td>
-          <td class="cell--nowrap"><span [class]="f.pillClass">{{ f.verdict }}</span></td>
-        </tr>
-      }
-    </tbody>
-  </table>
+<section class="panel">
+  <h2 class="panel__title">What changes a record’s level</h2>
+  @for (change of levelChanges; track change.title) {
+    <div class="attention-row">
+      <span class="attention-row__dot" [class]="'attention-row__dot ' + change.dot"></span>
+      <div class="attention-row__text">
+        <div class="attention-row__title">{{ change.title }}</div>
+        <div class="attention-row__detail">{{ change.detail }}</div>
+      </div>
+    </div>
+  }
 </section>
 
-<section class="panel panel--scroll">
-  <h2 class="panel__title">Projects in results</h2>
-  <table style="min-width: 30rem; table-layout: fixed; width: 100%;">
-    <thead>
-      <tr>
-        <th style="width: 16rem;">Project</th>
-        <th style="width: 6rem;">Level</th>
-        <th style="width: 8rem;">Result</th>
-      </tr>
-    </thead>
-    <tbody>
-      @for (p of projects(); track p.name) {
-        <tr>
-          <td class="cell__title">{{ p.name }}</td>
-          <td class="cell--muted cell--nowrap">{{ p.levelLabel }}</td>
-          <td class="cell--nowrap"><span [class]="p.pillClass">{{ p.verdict }}</span></td>
-        </tr>
-      }
-    </tbody>
-  </table>
-</section>
-
-<section class="panel panel--scroll">
-  <h2 class="panel__title">Documents · {{ docSummary() }}</h2>
-  <table style="min-width: 45rem; table-layout: fixed; width: 100%;">
-    <thead>
-      <tr>
-        <th style="width: 19rem;">Document</th>
-        <th style="width: 11rem;">Project</th>
-        <th style="width: 9rem;">Level</th>
-        <th style="width: 6rem;">Result</th>
-      </tr>
-    </thead>
-    <tbody>
-      @for (d of docs(); track d.id) {
-        <tr>
-          <td><span [style]="d.nameStyle">{{ d.shown }}</span></td>
-          <td class="cell--muted">{{ d.projectName }}</td>
-          <td class="cell--muted cell--nowrap">{{ d.levelLabel }}</td>
-          <td class="cell--nowrap"><span [class]="d.pillClass">{{ d.verdict }}</span></td>
-        </tr>
-      }
-    </tbody>
-  </table>
-</section>
-
-<p class="footnote">A record a caller cannot see returns 404, never 403 — a 403 would confirm the id exists. Broadening access is always a deliberate act by a permitted user, and it is always logged.</p>
+<p class="footnote">A record a caller may not read answers 404, never 403 — a 403 would confirm the id exists. A write it may not make answers 403, because the caller is already known.</p>

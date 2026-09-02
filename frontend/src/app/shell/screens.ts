@@ -70,8 +70,8 @@ export const TECH: Record<string, Tech> = {
   },
   rbac: {
     title: 'Access model',
-    chips: ['Keycloak realm eao-epic', 'GET /me', 'access-sql.js / access-odata.js', 'read[] + project scope', 'field-level redaction (preview)'],
-    note: 'A record is visible when its read[] array intersects the caller’s roles. Project scope is a second, orthogonal dimension: privilege lifts the role predicate, never the project one. Field-level rules are being defined — this screen previews the intended behaviour.'
+    chips: ['Keycloak realm eao-epic', 'POST /access/simulate', 'access-sql.js resolveAccess / canRead', 'read[] + project scope', 'field catalog + dials'],
+    note: 'Describe a caller — roles, identity provider, team projects, key project scope, a Selected Credential — and the screen posts it to the access engine, which answers with that caller’s level, tier, ladder rows and field catalogs. The screen holds no rules of its own, so it cannot drift from the API. Team project ids are a grant, opening the level-1 team arm; a projectScope list is the opposite, a restriction ANDed into every read that shows as tier scoped.'
   },
   keys: {
     title: 'API keys',
