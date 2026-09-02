@@ -191,7 +191,13 @@ registers a nightly `syncTrackTeams` timer; unset, no timer is registered. It re
 `GET /api/v1/projects/team-members` from Track (`TRACK_API_BASE`, client-credentials
 `TRACK_CLIENT_ID`/`TRACK_CLIENT_SECRET`) and reconciles `project:<id>` realm roles in Keycloak as
 client `KEYCLOAK_ADMIN_CLIENT_ID`/`_SECRET` — only roles for projects Track lists are touched, every
-other role is left alone. `--live` refuses until the P3-2 team-grant model lands. CLI:
+other role is left alone.
+
+The same run reads `GET /api/v1/projects` and closes out Selected Credentials over the projects
+Track reports closed, writing to the `credentials` container: a grant that names other projects as
+well loses only the closed id, and a grant left with no project is revoked. The credentials are read
+once per run and matched to the closed set in memory, so the cost does not grow with the number of
+closed projects. `--live` refuses until the P3-2 team-grant model lands. CLI:
 `yarn rbac:sync-teams` (dry run) / `-- --live`. One summary log line: `[track-teams] mode=… …`.
 
 ---

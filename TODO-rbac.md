@@ -1266,11 +1266,16 @@ level, never changes anyone else's access, and never touches the field plane.
       `EXISTS ... r IN (...)` / `read/any` the role arm already builds.
 - [ ] Auto-revoke on state change, not only on the clock.
   - [x] Project closed. 2026-09-02: `sync-track-teams.js` reads `GET ${TRACK_API_BASE}/api/v1/projects`
-        on the same bearer and calls `credentials.revokeForProject(String(id), 'project-closed')`
-        for every project with `is_project_closed === true` or `project_state === 'Closed'`; a dry
-        run counts them through `listForProject` instead. Summary gains `closedProjects=…
-        credentialsRevoked=…`. `project:<id>` roles are untouched — they follow Track staff, not
-        project state.
+        on the same bearer, takes every project with `is_project_closed === true` or
+        `project_state === 'Closed'`, then reads the live project-scoped grants ONCE
+        (`credentials.listLiveProjectScoped()`) and intersects the ids in memory —
+        `revokeForProject(String(id), 'project-closed')` runs only for a closed project some grant
+        names, and a dry run counts the same matches without writing. `revokeForProject` narrows a
+        grant that names other projects (patch `/scope/ids`, audit `credential.narrow`) and revokes
+        only one left with no project. Document-scoped grants are left alone: their ids are document
+        ids and nothing here resolves them to a project. Summary gains `closedProjects=…
+        credentialsRevoked=…`, and `exitCodeFor` makes a failed write a non-zero CLI exit.
+        `project:<id>` roles are untouched — they follow Track staff, not project state.
   - [ ] Work complete. Track's project feed exposes no such field, so there is nothing to act on
         yet; `detail.cause: 'work-complete'` is unused.
   - [ ] The 7-day pre-expiry notice to the GRANTOR (renewal is the norm on EA timelines).
@@ -1294,10 +1299,16 @@ level, never changes anyone else's access, and never touches the field plane.
         audits'`.
   - [x] `test/scripts/sync-track-teams.test.js`: `'closing a project revokes its credentials and
         leaves an open project alone'` (2 over the closed project, 1 over an open one → 2 revoked),
-        `'a dry run revokes no credential and still counts them'`, `'a closed project with no
-        credentials revokes nothing and does not fail'`, `'project_state Closed counts even when
-        is_project_closed is false'`, `'no COSMOS_ENDPOINT reports zero instead of reaching for
-        Cosmos'`.
+        `'a dry run revokes no credential and still counts them'`, `'a grant over several projects
+        is narrowed, not revoked, when one of them closes'`, `'the credentials container is read
+        once, however many projects are closed'` (40 closed, 1 read), `'one project whose revoke
+        fails is counted and does not stop the next'` (`failures=1`, `exitCodeFor` 1), `'a closed
+        project with no credentials revokes nothing and does not fail'`, `'project_state Closed
+        counts even when is_project_closed is false'`, `'no COSMOS_ENDPOINT reports zero instead of
+        reaching for Cosmos'`.
+  - [x] `test/repositories/credentials.test.js`: narrow vs revoke on close (multi-project grant
+        keeps its other ids, single-project grant is stamped, mixed set does both, document-scoped
+        grant untouched) and `listLiveProjectScoped` reading live project grants in one query.
   - [x] `test/vis/redact-matrix.test.js` case `'a credential does not widen the field plane'` — a
         level-4 caller admitted by a credential still sees only `effVis 4` fields.
 - Acceptance
