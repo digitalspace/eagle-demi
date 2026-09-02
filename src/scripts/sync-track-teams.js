@@ -26,9 +26,10 @@
  * no Track team to sync it from and must survive every run. The `project:` prefix is re-checked
  * after the Keycloak search rather than trusted, since `search=` is a substring match.
  *
- * IT ALSO CLOSES CREDENTIALS. The same run reads `GET /api/v1/projects` and revokes every live
- * Selected Credential over a project Track reports closed (TODO-rbac.md P3-6). "Work complete" is
- * not in the feed, so `project-closed` is the only cause acted on here.
+ * IT ALSO CLOSES CREDENTIALS. The same run reads `GET /api/v1/projects` and closes out every live
+ * Selected Credential over a project Track reports closed (TODO-rbac.md P3-6) — narrowed if it
+ * names other projects, revoked if it does not. "Work complete" is not in the feed, so
+ * `project-closed` is the only cause acted on here.
  *
  * Two client-credentials identities, both confidential clients in the same realm:
  * `TRACK_CLIENT_ID` reads Track, `KEYCLOAK_ADMIN_CLIENT_ID` (`demi-role-sync`) holds
@@ -70,7 +71,7 @@ const isClosed = (project) => project.is_project_closed === true || project.proj
 function credentialsRepository() {
   if (process.env.COSMOS_ENDPOINT) return require('../repositories/credentials');
   logger.warn('[track-teams] COSMOS_ENDPOINT not set: credential auto-revoke reported as 0');
-  return { listForProject: async () => [], revokeForProject: async () => [] };
+  return { listLiveProjectScoped: async () => [], revokeForProject: async () => [] };
 }
 
 const countRoles = (entries) => entries.reduce((n, e) => n + e.roles.length, 0);
@@ -312,13 +313,21 @@ async function sync(argv = [], deps = {}) {
   // that role follows Track staff. Only the credentials granted over the project end here.
   const projects = await get(`${config.trackApiBase}/api/v1/projects`,
     { Authorization: `Bearer ${trackToken}` });
-  for (const project of (projects || []).filter(isClosed)) {
-    const id = String(project.id);
-    summary.closedProjects++;
+  const closed = new Set((projects || []).filter(isClosed).map(p => String(p.id)));
+  summary.closedProjects = closed.size;
+
+  // One cross-partition read for the whole sweep, intersected here: the closed set only grows, and
+  // a query per closed project re-asked every night about projects closed years ago.
+  const liveGrants = await credentials.listLiveProjectScoped();
+  const grantsOver = (id) => liveGrants.filter(row =>
+    (row.scope && row.scope.ids || []).some(one => String(one) === id));
+
+  for (const id of closed) {
+    const grants = grantsOver(id);
+    if (!grants.length) continue;
     try {
-      const rows = args.live
-        ? await credentials.revokeForProject(id, 'project-closed')
-        : await credentials.listForProject(id);
+      // A grant over several projects is narrowed, not revoked; the count is the rows touched.
+      const rows = args.live ? await credentials.revokeForProject(id, 'project-closed') : grants;
       summary.credentialsRevoked += rows.length;
     } catch (err) {
       summary.failures++;
@@ -362,7 +371,12 @@ async function run({ live = false, deps } = {}) {
   return summary;
 }
 
-module.exports = { parseArgs, usernameFor, plan, keycloakClient, sync, summaryLine, run };
+/** 1 on any failed write, matching close-unpublished-track-projects.js. */
+const exitCodeFor = (summary) => (summary.failures > 0 ? 1 : 0);
+
+module.exports = {
+  parseArgs, usernameFor, plan, keycloakClient, sync, summaryLine, run, exitCodeFor
+};
 
 if (require.main === module) {
   let args;
@@ -374,6 +388,7 @@ if (require.main === module) {
   }
 
   run({ live: args.live })
+    .then(summary => process.exit(exitCodeFor(summary)))
     .catch(err => {
       logger.error(`[track-teams] ${err.stack || err.message}`);
       process.exit(1);
