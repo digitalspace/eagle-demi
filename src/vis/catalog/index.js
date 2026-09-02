@@ -2,6 +2,7 @@
 
 const projects = require('./projects');
 const documents = require('./documents');
+const chunks = require('./chunks');
 // Keyed on AI SEARCH field names, not Cosmos ones — the indexer renames columns
 // (docs/rbac-architecture.md §2 item 9).
 const indexProjects = require('./index-projects');
@@ -11,6 +12,7 @@ const indexDocuments = require('./index-documents');
 const CATALOGS = {
   projects,
   documents,
+  chunks,
   'index-projects': indexProjects,
   'index-documents': indexDocuments
 };

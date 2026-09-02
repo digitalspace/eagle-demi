@@ -745,15 +745,20 @@ exports.summarize = async (req, res) => {
     const docById = new Map(redactAllForAccess('documents', parentDocs, access)
       .map(d => [String(d.id), d]));
 
+    // The chunk rows are redacted too, so anything a later edit reads off one is already filtered.
+    // `content` is maxVis 0 and does not survive that — deliberately: it is never a response field,
+    // and the model call below is its only consumer, gated by the parent document above.
+    const rows = redactAllForAccess('chunks', fetched, access);
+
     const chunks = items
-      .map((item, i) => ({ item, row: fetched[i] }))
-      .filter(({ item, row }) => row && row.content && docById.has(String(item.documentId)))
-      .map(({ item, row }) => ({
+      .map((item, i) => ({ item, row: rows[i], text: fetched[i] && fetched[i].content }))
+      .filter(({ item, row, text }) => row && text && docById.has(String(item.documentId)))
+      .map(({ item, text }) => ({
         chunkId: String(item.chunkId),
         documentId: String(item.documentId || ''),
         projectId: String(item.projectId || ''),
         pageNumber: item.pageNumber ?? 0,
-        content: row.content
+        content: text
       }));
 
     // Logged like the chunk-SEARCH path: a withheld count here is the visible symptom of a stale
