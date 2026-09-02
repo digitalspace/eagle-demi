@@ -41,6 +41,7 @@ audit._setTransport(async (_stream, batch) => { rows.push(...batch); });
 function fakeCosmos(t, stored) {
   const patched = [];
   t.mock.method(cosmos, 'query', async (_container, spec) => {
+    cosmos.assertQuerySpec(spec, 'credentials');
     const projectId = (spec.parameters || []).find(p => p.name === '@projectId');
     return {
       items: stored.filter(row =>
@@ -145,6 +146,7 @@ test('listLiveProjectScoped reads every live project grant in one query', async 
   ];
   const specs = [];
   t.mock.method(cosmos, 'query', async (_container, spec, options) => {
+    cosmos.assertQuerySpec(spec, 'credentials');
     specs.push({ spec, options });
     return {
       items: stored.filter(row => row.scope.type === 'project' && !row.revokedAt)
@@ -154,6 +156,7 @@ test('listLiveProjectScoped reads every live project grant in one query', async 
   assert.deepStrictEqual((await credentials.listLiveProjectScoped()).map(r => r.id), ['c1']);
   assert.strictEqual(specs.length, 1);
   assert.match(specs[0].spec.query, /c\.scope\.type = 'project'/);
+  assert.deepStrictEqual(specs[0].spec.parameters, []);
   assert.match(specs[0].spec.query, /IS_NULL\(c\.revokedAt\)/);
   assert.strictEqual(specs[0].options, undefined, 'cross-partition: no partition key');
 });
