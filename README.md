@@ -195,9 +195,10 @@ other role is left alone.
 
 The same run reads `GET /api/v1/projects` and closes out Selected Credentials over the projects
 Track reports closed, writing to the `credentials` container: a grant that names other projects as
-well loses only the closed id, and a grant left with no project is revoked. The credentials are read
-once per run and matched to the closed set in memory, so the cost does not grow with the number of
-closed projects. `--live` refuses until the P3-2 team-grant model lands. CLI:
+well loses only the closed id, and a grant left with no project is revoked. The listing is read once
+per run and matched to the closed set in memory, plus one further read per credential actually
+narrowed or revoked, so the cost does not grow with the number of closed projects that have no live
+grant. `--live` refuses until the P3-2 team-grant model lands. CLI:
 `yarn rbac:sync-teams` (dry run) / `-- --live`. One summary log line: `[track-teams] mode=… …`.
 
 ---

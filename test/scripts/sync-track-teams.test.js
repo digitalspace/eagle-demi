@@ -14,7 +14,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  plan, sync, summaryLine, usernameFor, run, keycloakClient, exitCodeFor
+  plan, sync, summaryLine, usernameFor, run, keycloakClient, exitCodeFor, drainAudit
 } = require('../../src/scripts/sync-track-teams');
 const accessSql = require('../../src/helpers/access-sql');
 
@@ -366,7 +366,7 @@ test('a grant over several projects is narrowed, not revoked, when one of them c
   assert.strictEqual(summary.credentialsRevoked, 1);
 });
 
-test('the credentials container is read once, however many projects are closed', async () => {
+test('the credentials listing is read once per run, however many projects are closed', async () => {
   const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
   const credentials = fakeCredentials(TWO_AND_ONE);
   const closed = Array.from({ length: 40 }, (_, i) => ({ id: i + 1, is_project_closed: true }));
@@ -418,6 +418,35 @@ test('project_state Closed counts even when is_project_closed is false', async (
 
   assert.strictEqual(summary.closedProjects, 1);
   assert.strictEqual(summary.credentialsRevoked, 2);
+});
+
+test('a thrown /api/v1/projects read is caught: grants stand and the summary still logs', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const fetchProjectsThrows = async (url) => {
+    if (url.endsWith('/team-members')) return TEAMS;
+    throw new Error('Track is down');
+  };
+
+  const summary = await sync(['--live'], { fetchJson: fetchProjectsThrows, kc });
+
+  assert.deepStrictEqual(kc.log, [
+    ['grant', 'u-ada', ['project:1']],
+    ['grant', 'u-bo', ['project:1', 'project:2']]
+  ], 'the Keycloak writes already applied are not rolled back');
+  assert.strictEqual(summary.failures, 1);
+  assert.strictEqual(summary.closedProjects, 0);
+  assert.strictEqual(summary.credentialsRevoked, 0);
+  assert.ok(summaryLine(summary).includes('failures=1'), summaryLine(summary));
+});
+
+test('drainAudit awaits flush before the CLI would exit', async () => {
+  const calls = [];
+  await drainAudit({ flush: async () => { calls.push('flush'); } });
+  assert.deepStrictEqual(calls, ['flush']);
+});
+
+test('drainAudit logs rather than throws when flush rejects', async () => {
+  await drainAudit({ flush: async () => { throw new Error('DCR unreachable'); } });
 });
 
 test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t) => {

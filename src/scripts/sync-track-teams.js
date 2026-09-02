@@ -311,29 +311,36 @@ async function sync(argv = [], deps = {}) {
 
   // Project state, not team membership: a closed project keeps its `project:<id>` role, because
   // that role follows Track staff. Only the credentials granted over the project end here.
-  const projects = await get(`${config.trackApiBase}/api/v1/projects`,
-    { Authorization: `Bearer ${trackToken}` });
-  const closed = new Set((projects || []).filter(isClosed).map(p => String(p.id)));
-  summary.closedProjects = closed.size;
+  // Guarded end to end: a throw here must not swallow the grants/revokes already applied above,
+  // or the summary line that reports them.
+  try {
+    const projects = await get(`${config.trackApiBase}/api/v1/projects`,
+      { Authorization: `Bearer ${trackToken}` });
+    const closed = new Set((projects || []).filter(isClosed).map(p => String(p.id)));
+    summary.closedProjects = closed.size;
 
-  // One cross-partition read for the whole sweep, intersected here: the closed set only grows, and
-  // a query per closed project re-asked every night about projects closed years ago.
-  const liveGrants = await credentials.listLiveProjectScoped();
-  const grantsOver = (id) => liveGrants.filter(row =>
-    (row.scope && row.scope.ids || []).some(one => String(one) === id));
+    // One cross-partition read for the whole sweep, intersected here: the closed set only grows,
+    // and a query per closed project re-asked every night about projects closed years ago.
+    const liveGrants = await credentials.listLiveProjectScoped();
+    const grantsOver = (id) => liveGrants.filter(row =>
+      (row.scope && row.scope.ids || []).some(one => String(one) === id));
 
-  for (const id of closed) {
-    const grants = grantsOver(id);
-    if (!grants.length) continue;
-    try {
-      // A grant over several projects is narrowed, not revoked; the count is the rows touched.
-      const rows = args.live ? await credentials.revokeForProject(id, 'project-closed') : grants;
-      summary.credentialsRevoked += rows.length;
-    } catch (err) {
-      summary.failures++;
-      logger.error(`[track-teams] credential revoke for project ${id} failed`,
-        { error: err.message });
+    for (const id of closed) {
+      const grants = grantsOver(id);
+      if (!grants.length) continue;
+      try {
+        // A grant over several projects is narrowed, not revoked; the count is the rows touched.
+        const rows = args.live ? await credentials.revokeForProject(id, 'project-closed') : grants;
+        summary.credentialsRevoked += rows.length;
+      } catch (err) {
+        summary.failures++;
+        logger.error(`[track-teams] credential revoke for project ${id} failed`,
+          { error: err.message });
+      }
     }
+  } catch (err) {
+    summary.failures++;
+    logger.error(`[track-teams] credential close-out failed`, { error: err.message });
   }
 
   // Without the names, `unmatched=N` is a number nobody can act on.
@@ -374,8 +381,19 @@ async function run({ live = false, deps } = {}) {
 /** 1 on any failed write, matching close-unpublished-track-projects.js. */
 const exitCodeFor = (summary) => (summary.failures > 0 ? 1 : 0);
 
+/**
+ * credentials.revokeForProject audits through src/repositories/credentials.js; the audit buffer
+ * flushes on an unref'd timer, so a CLI process.exit would drop rows still queued. Split out from
+ * the exit call itself so a test can drive it without killing the test process.
+ *
+ * @param {object} [auditModule] test seam, defaults to the real src/utils/audit
+ */
+async function drainAudit(auditModule = require('../utils/audit')) {
+  await auditModule.flush().catch(err => logger.error(`[track-teams] audit flush: ${err.message}`));
+}
+
 module.exports = {
-  parseArgs, usernameFor, plan, keycloakClient, sync, summaryLine, run, exitCodeFor
+  parseArgs, usernameFor, plan, keycloakClient, sync, summaryLine, run, exitCodeFor, drainAudit
 };
 
 if (require.main === module) {
@@ -388,7 +406,10 @@ if (require.main === module) {
   }
 
   run({ live: args.live })
-    .then(summary => process.exit(exitCodeFor(summary)))
+    .then(async summary => {
+      await drainAudit();
+      process.exit(exitCodeFor(summary));
+    })
     .catch(err => {
       logger.error(`[track-teams] ${err.stack || err.message}`);
       process.exit(1);
