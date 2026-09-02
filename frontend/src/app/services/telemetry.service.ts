@@ -19,12 +19,15 @@ export function correlationHosts(apiPath?: string): string[] {
 const records = (value: unknown): Record<string, unknown>[] =>
   Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
 
-/** Query strings can carry tokens, so every `?...` token goes — including ones mid-stack. */
+/**
+ * Query strings can carry tokens, so `?key=value[&key=value...]` goes — even mid-stack.
+ * Requires `key=` after `?` so a stray `?` in prose or a stack line number (`:42:9)`) survives.
+ */
 function scrub(target: Record<string, unknown>, fields: string[]): void {
   for (const field of fields) {
     const value = target[field];
     if (typeof value === 'string') {
-      target[field] = value.replace(/\?\S*/g, '');
+      target[field] = value.replace(/\?[\w%.~-]+=[^\s:)#'"]*(?:&[\w%.~-]+=[^\s:)#'"]*)*/g, '');
     }
   }
 }
@@ -66,18 +69,25 @@ export class TelemetryService {
     if (!connectionString) {
       return false;
     }
-    const { ApplicationInsights: AppInsights } = await load();
-    const appInsights = new AppInsights({
-      config: {
-        connectionString,
-        enableCorsCorrelation: true,
-        correlationHeaderDomains: hosts,
-        enableAutoRouteTracking: false,
-        enableUnhandledPromiseRejectionTracking: true
-      }
-    });
-    appInsights.loadAppInsights();
-    appInsights.addTelemetryInitializer(errorsOnly(role));
+    let appInsights: ApplicationInsights;
+    try {
+      // A stale hashed chunk after a redeploy makes this dynamic import reject.
+      // Telemetry staying off is an acceptable failure; an unhandled rejection is not.
+      const { ApplicationInsights: AppInsights } = await load();
+      appInsights = new AppInsights({
+        config: {
+          connectionString,
+          enableCorsCorrelation: true,
+          correlationHeaderDomains: hosts,
+          enableAutoRouteTracking: false,
+          enableUnhandledPromiseRejectionTracking: true
+        }
+      });
+      appInsights.loadAppInsights();
+      appInsights.addTelemetryInitializer(errorsOnly(role));
+    } catch {
+      return false;
+    }
     this.appInsights = appInsights;
 
     const held = this.pending;

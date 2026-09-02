@@ -18,6 +18,13 @@ describe('TelemetryService', () => {
     expect(await service.init('', 'eagle-demi-frontend', [])).toBe(false);
   });
 
+  it('resolves false, not rejects, when the SDK chunk fails to load', async () => {
+    const load = (() => Promise.reject(new Error('stale chunk'))) as unknown as SdkLoader;
+    await expectAsync(service.init('InstrumentationKey=0-0-0-0-0', 'eagle-demi-frontend', [], load))
+      .toBeResolvedTo(false);
+    expect(() => service.trackException(new Error('after failed init'))).not.toThrow();
+  });
+
   it('trackException before init is held, not thrown away', () => {
     expect(() => service.trackException(new Error('boom'))).not.toThrow();
     expect(() => service.trackException('a string')).not.toThrow();
@@ -80,6 +87,24 @@ describe('errorsOnly', () => {
     expect(data['target']).toBe('demi.example');
     expect(data['name']).toBe('GET /api/search');
     expect(data['message']).toBe('failed /api/search');
+  });
+
+  it('leaves stack positions and prose questions marks alone', () => {
+    const stackFrame = item('ExceptionData', { message: 'x.ts?t=1717:42:9)' });
+    keep(stackFrame);
+    expect((stackFrame.baseData as Record<string, string>)['message']).toBe('x.ts:42:9)');
+
+    const prose = item('ExceptionData', { message: "Unexpected token '?' at line 3" });
+    keep(prose);
+    expect((prose.baseData as Record<string, string>)['message']).toBe("Unexpected token '?' at line 3");
+
+    const token = item('ExceptionData', { message: '/api/projects?token=SECRET 401' });
+    keep(token);
+    expect((token.baseData as Record<string, string>)['message']).toBe('/api/projects 401');
+
+    const multi = item('ExceptionData', { message: '/x?a=1&b=2 tail' });
+    keep(multi);
+    expect((multi.baseData as Record<string, string>)['message']).toBe('/x tail');
   });
 
   it('cuts a query string out of an exception, wherever it sits', () => {
