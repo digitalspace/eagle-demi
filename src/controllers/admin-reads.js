@@ -105,18 +105,16 @@ async function getAnalytics(req, res) {
     ' p95DurationMs = percentile(DurationMs, 95)';
 
   try {
-    const [perDay, totals, topEvents, topSearches, window, last24h] = await Promise.all([
+    // DemiEvents_CL is an Auxiliary-plan table, which answers interactive queries with nothing:
+    // usage comes from the summary rule's hourly rollup instead.
+    const [perDay, totals, topEvents, window, last24h] = await Promise.all([
       monitor.queryLogs(events,
-        'DemiEvents_CL | summarize events = count(), visitors = dcount(AnonId)' +
+        'DemiEventsHourly_CL | summarize events = sum(Events), peakHourUsers = max(Users)' +
         ' by day = bin(TimeGenerated, 1d) | order by day asc', timespan),
-      // dcount over the whole window, which is not the sum of the daily counts.
       monitor.queryLogs(events,
-        'DemiEvents_CL | summarize events = count(), visitors = dcount(AnonId)', timespan),
+        'DemiEventsHourly_CL | summarize events = sum(Events), peakHourUsers = max(Users)', timespan),
       monitor.queryLogs(events,
-        'DemiEvents_CL | summarize c = count() by EventName | top 10 by c desc', timespan),
-      monitor.queryLogs(events,
-        'DemiEvents_CL | where isnotempty(SearchTerm) | summarize c = count() by SearchTerm' +
-        ' | top 10 by c desc', timespan),
+        'DemiEventsHourly_CL | summarize c = sum(Events) by EventName | top 10 by c desc', timespan),
       monitor.queryLogs(logs, requestStats, timespan),
       monitor.queryLogs(logs, requestStats, 'PT24H')
     ]);
@@ -125,10 +123,13 @@ async function getAnalytics(req, res) {
     return res.json({
       success: true,
       days,
-      totals: { events: total.events || 0, visitors: total.visitors || 0 },
-      perDay: perDay.map((row) => ({ day: row.day, events: row.events, visitors: row.visitors })),
+      // Distinct users are per hour and cannot be summed across hours, so the busiest hour stands
+      // in for the window.
+      totals: { events: total.events || 0, peakHourUsers: total.peakHourUsers || 0 },
+      perDay: perDay.map((row) => ({
+        day: row.day, events: row.events, peakHourUsers: row.peakHourUsers
+      })),
       topEvents: topEvents.map((row) => ({ name: row.EventName, count: row.c })),
-      topSearches: topSearches.map((row) => ({ term: row.SearchTerm, count: row.c })),
       requests: { window: window[0] || null, last24h: last24h[0] || null }
     });
   } catch (err) {
