@@ -36,13 +36,15 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
       2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
       Level 3 is the `identity_provider` claim and level 1 is project scope: neither is a new realm
       role. Classifying (P3-5) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
-- [ ] Track read endpoint `GET /api/v1/projects/team-members` — Track PR, owner Daniel, reviewer
-      Track team. Opened: 2026-08-28 (bcgov/EPIC.track#2829). Merged: ____
-- [ ] Realm clients `demi-track-reader` and `demi-role-sync` in `eao-epic` (test, then prod),
-      secrets in `demi-app-secrets`. Owner: Daniel. Delivered: ______
-- [ ] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
-      records. Minted by P3-0's timer once the two lines above carry a date; hand-granted until
-      then. Blocks P3-3. Owner: Daniel. Delivered: ______
+- [x] Track read endpoint `GET /api/v1/projects/team-members` — Track PR, owner Daniel, reviewer
+      Track team. Opened: 2026-08-28 (bcgov/EPIC.track#2829). Merged: 2026-09-01, on test 2026-09-02.
+- [x] Realm clients `demi-track-reader` and `demi-role-sync` in `eao-epic` (test, then prod),
+      secrets in `demi-app-secrets`. Owner: Daniel. Delivered: test 2026-09-02
+      (`/root/scripts/kc-create-demi-clients.sh test`; `demi-user` needed realm-management
+      `manage-users` first). Prod: ______
+- [x] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
+      records. Minted by P3-0's sync. Delivered: test 2026-09-02 (96 roles, 115 mappings; 53 Track
+      staff have no test-realm user yet). Prod: ______
 - [x] EAO question 1 (nested vs lateral groups). Answered 2026-08-28: ladder 1-4 on the row plane,
       level 0 a sealed compartment, Selected Credentials a time-bound grant (doc §1, §5).
 - [x] EAO question 2: public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2). Emails stay `defaultVis: 4`; no tightening list.
@@ -892,7 +894,7 @@ not a source (doc §3 question 10).
   - Acceptance: `az bicep build -f azure/main.bicep` exits 0;
         `node --test test/azure/main-bicep-wiring.test.js` — 0 fail;
         `scripts/deploy-infra.sh test --what-if` before `--live`.
-- [ ] B4 realm clients (Daniel, test then prod): confidential client `demi-track-reader`, service
+- [x] B4 realm clients (test 2026-09-02, prod open): confidential client `demi-track-reader`, service
       account on, standard flow off, granted `epictrack-web` client role `view` (audience mapper
       if `aud` lacks `epictrack-web`). Confidential client `demi-role-sync`, service account with
       realm-management `manage-realm`, `manage-users`, `view-users`. Secrets into
@@ -900,15 +902,14 @@ not a source (doc §3 question 10).
 
 Acceptance (test, end to end)
 
-- [ ] Track PR merged to `develop` → `epictrack-api-c8b80a-test`. Client-credentials token for
+- [x] Track PR merged to `develop` → `epictrack-api-c8b80a-test`. Client-credentials token for
       `demi-track-reader`:
       `curl -H "Authorization: Bearer $t" https://epictrack-api-c8b80a-test.apps.gold.devops.gov.bc.ca/api/v1/projects/team-members`
       → 200, non-empty. 403 = `view` grant missing; 401 = audience mapper needed.
-- [ ] DEMI B1-B3 merged; `scripts/deploy-infra.sh test --live` before the schedule is non-empty.
-- [ ] Dry run locally against test: summary line shows plausible `grants`, `revokes=0`.
-- [ ] `--live`; verify one named user: Keycloak admin `GET /users?username=<guid>@idir` →
-      `/role-mappings/realm` lists `project:<id>`; a fresh login token carries it in
-      `realm_access.roles`.
+- [x] DEMI B1-B3 merged; `scripts/deploy-infra.sh test --live` before the schedule is non-empty. Done 2026-09-02.
+- [x] Dry run locally against test: summary line shows plausible `grants`, `revokes=0`. 2026-09-02: `projects=103 users=72 grants=356 revokes=0 unmatched=53 failures=0` (Track ids already carry `@idir`; fixed in #268).
+- [x] `--live` 2026-09-02: 356 grants, 0 failures; 96 `project:` realm roles, 115 user mappings
+      (e.g. `project:104` has a holder). Fresh-login token check still open (needs a staff login).
 - [ ] `node --test test/scripts/sync-track-teams.test.js test/sync-teams-timer.test.js test/azure/main-bicep-wiring.test.js`;
       `yarn test`; Track `make lint` + pytest.
 - [ ] Prod: `syncTeamsSchedule` stays `''` until both realm clients exist in the prod realm.
