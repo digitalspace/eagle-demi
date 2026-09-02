@@ -26,7 +26,6 @@ const credentials = require('../repositories/credentials');
 const projects = require('../repositories/projects');
 const { liveCredentials } = require('../helpers/credentials');
 const { redactForAccess } = require('../vis/redact');
-const { packParts } = require('./pack-parts');
 const { logger } = require('../utils/logger');
 
 // Ids per lookup. Both reads are cross-partition — a bulk job carries no project context — so the
@@ -142,17 +141,27 @@ function errorsText(errors) {
   return errors.map(e => `${e.documentId}\t${e.name || ''}\t${e.reason}`).join('\n') + '\n';
 }
 
+/** The size the row recorded, or 0 — an unrecorded size is not a size, so it predicts nothing. */
+function knownSize(doc) {
+  const size = Number(doc && doc.fileSize);
+  return Number.isFinite(size) && size > 0 ? size : 0;
+}
+
 /**
- * Build one part: start the upload, then stream the documents into it.
+ * Build one part: start the upload, then stream documents into it until it is full.
  *
  * The upload is started BEFORE the first entry and awaited after `finish()`, which is what keeps
  * the zip out of memory — the backend multiparts whatever the archive emits.
+ *
+ * Where the part ENDS is decided here, against the bytes the archive has actually written, because
+ * a recorded `fileSize` is missing on plenty of documents and a plan made from those sizes packs
+ * the wrong files. Returns the index it stopped at, so the caller opens the next part there.
  *
  * ponytail: one object streams at a time, so a part takes as long as its files do in series. Swap
  * for a small append pool (3-4) if wall time is ever the complaint — memory is the reason it is
  * serial today, one multipart buffer per instance.
  */
-async function buildPart({ jobId, n, docs, projectNames, access, errors, withErrorsFile, maxBytes }) {
+async function buildPart({ jobId, n, docs, from, projectNames, access, errors, maxBytes, partMaxBytes }) {
   const key = `zips/${jobId}-part${n}.zip`;
   const archive = new ZipStream({ store: true });
   const uploaded = storage.putObjectStream(key, archive, 'application/zip');
@@ -171,8 +180,16 @@ async function buildPart({ jobId, n, docs, projectNames, access, errors, withErr
 
   const taken = new Set();
   let included = 0;
+  let i = from;
 
-  for (const doc of docs) {
+  for (; i < docs.length; i += 1) {
+    const doc = docs[i];
+    // Roll BEFORE appending, never after: a part already at the cap must not take one more file.
+    // Both clauses matter — the first closes a part filled by documents nobody recorded a size for,
+    // the second keeps a document whose size IS known from overshooting a part that still has room.
+    const written = archive.getBytesWritten();
+    if (i > from && (written >= partMaxBytes || written + knownSize(doc) > partMaxBytes)) break;
+
     const folder = clean(projectNames.get(String(doc.projectId))).slice(0, MAX_FOLDER_LENGTH) ||
       UNKNOWN_PROJECT;
     const name = uniqueName(taken, folder, fileNameFor(doc, access));
@@ -198,19 +215,23 @@ async function buildPart({ jobId, n, docs, projectNames, access, errors, withErr
       included += 1;
     }
 
-    // The running total, not the estimate: a document whose `fileSize` was never recorded is
-    // packed alone but still unbounded, so the cap has to be enforced against real bytes.
+    // The whole job's budget, against real bytes — the estimate the caller was refused on could
+    // not see the documents whose size was never recorded.
     if (archive.getBytesWritten() > maxBytes) throw new Error('over the size limit');
   }
 
-  if (withErrorsFile && errors.length > 0) {
+  // errors.txt rides in the last part, which is the one that ran out of documents rather than room.
+  if (i >= docs.length && errors.length > 0) {
     await orDie(addEntry(archive, Buffer.from(errorsText(errors), 'utf8'), 'errors.txt'));
   }
 
   archive.finish();
   await orDie(uploaded);
 
-  return { n, key, bytes: archive.getBytesWritten(), count: included };
+  return {
+    part: { n, key, bytes: archive.getBytesWritten(), count: included },
+    next: i
+  };
 }
 
 /** The documents of this job that are still visible, in the order they were asked for. */
@@ -257,13 +278,18 @@ async function projectNamesFor(access, docs) {
  * Roles are frozen at submit on purpose — that is the selection the caller asked for. A CREDENTIAL
  * is different: it is a row somebody can revoke, and a zip built an hour later must not carry
  * documents a revoked grant opened. Narrowing only, never widening.
+ *
+ * Every party the request carried is re-read, not just the requester: a grant can be held by a
+ * realm group, and checking the subject alone would drop it and quietly omit files the caller may
+ * see. `job.parties` is what `middleware/credentials.js` loaded from, stored at submit.
  */
 async function freshAccess(job, now) {
   const access = job.access || {};
   const held = Array.isArray(access.credentials) ? access.credentials : [];
-  if (!job.requesterId || held.length === 0) return access;
+  const parties = Array.isArray(job.parties) ? job.parties : [];
+  if (parties.length === 0 || held.length === 0) return access;
 
-  const rows = await credentials.listForParty(job.requesterId);
+  const rows = (await Promise.all(parties.map(p => credentials.listForParty(p)))).flat();
   const live = new Set(liveCredentials(rows, now).map(row => String(row.id)));
   return { ...access, credentials: held.filter(row => live.has(String(row.id))) };
 }
@@ -289,11 +315,23 @@ async function claim(job, now) {
   return claimed;
 }
 
-/** Best effort in both directions: the counter is the controller's, and it may not exist yet. */
+/**
+ * Give this job's quota slot back, ONCE for its whole life.
+ *
+ * The counter is per requester, not per job, so a second release frees a slot one of that
+ * requester's other jobs is holding — which is how a retried message hands out extra capacity.
+ * `slotReleasedAt` on the row is what a redelivery (and the cleanup sweep) reads to know it is
+ * already done. Best effort in both directions: the counter is the controller's and may not exist.
+ */
 async function releaseSlot(job) {
   if (typeof bulkDownloads.releaseSlot !== 'function' || !job || !job.requesterKey) return;
+  if (job.slotReleasedAt) return;
   try {
     await bulkDownloads.releaseSlot(job.requesterKey);
+    // Stamped only once the counter really moved: a release that threw has not happened, and the
+    // sweep still has to find that slot.
+    job.slotReleasedAt = new Date().toISOString();
+    await bulkDownloads.patch(job.id, { slotReleasedAt: job.slotReleasedAt });
   } catch (err) {
     logger.warn(`[bulk] could not release slot for ${job.id}`, { error: err.message });
   }
@@ -373,30 +411,35 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     const docs = await manifest(job, access, errors);
     const projectNames = await projectNamesFor(access, docs);
 
-    const parts = packParts(docs, config.bulkMaxBytes);
-    // Everything went away between submit and now — still ship one part so errors.txt says why.
-    if (parts.length === 0 && errors.length > 0) parts.push([]);
-
     const done = [];
     let bytes = 0;
     let includedCount = 0;
-    for (let n = 1; n <= parts.length; n += 1) {
-      const part = await buildPart({
+    let from = 0;
+    // The second clause: everything went away between submit and now, so ship one part anyway —
+    // it carries errors.txt, which is the only thing left to tell the caller.
+    while (from < docs.length || (done.length === 0 && errors.length > 0)) {
+      const { part, next } = await buildPart({
         jobId: id,
-        n,
-        docs: parts[n - 1],
+        n: done.length + 1,
+        docs,
+        from,
         projectNames,
         access,
         errors,
-        withErrorsFile: n === parts.length,
-        maxBytes: config.bulkMaxTotalBytes - bytes
+        maxBytes: config.bulkMaxTotalBytes - bytes,
+        partMaxBytes: config.bulkMaxBytes
       });
       done.push(part);
       bytes += part.bytes;
       includedCount += part.count;
+      from = next;
       // Patched per part so a poll reports progress rather than silence.
       await bulkDownloads.patch(id, { parts: done });
     }
+
+    // Before the row says `ready`: the build is over, so the slot is not this job's any more, and
+    // releasing here keeps the status the LAST thing a poll can see change.
+    await releaseSlot(job);
 
     // Two patches because Cosmos caps one at PATCH_MAX_OPERATIONS, and in this order because the
     // status is what a poll acts on: `ready` must never be visible before the parts it names.
@@ -410,7 +453,6 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
       ttl: config.bulkJobTtlDays * SECONDS_PER_DAY
     });
     await bulkDownloads.patch(id, { status: 'ready', finishedAt: new Date().toISOString() });
-    await releaseSlot(job);
 
     // No telemetry call: auditEvent and analyticsEvent both take a request, and there is no request
     // here — src/utils/audit.js has no request-less variant to use.
@@ -434,7 +476,9 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     await patchQuietly(id, {
       status: 'failed', error: err.message, finishedAt: new Date().toISOString()
     }, 'failed');
-    await releaseSlot(job);
+    // Only the delivery that runs out of retries: an intermediate failure still has an attempt
+    // coming, and a slot given back now is one this requester's other jobs are still holding.
+    if (final) await releaseSlot(job);
     // Rethrown so the queue retries and then poisons; the retry re-runs a failed job on purpose.
     throw err;
   }

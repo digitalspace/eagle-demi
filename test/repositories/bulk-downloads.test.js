@@ -153,7 +153,10 @@ test('listExpired', async (t) => {
     assert.strictEqual(options.maxItemCount, 50);
     // The sweep needs the parts to delete, the finish time for what is left of the row TTL, and
     // the requester whose slot goes back.
-    assert.match(spec.query, /SELECT c\.id, c\.status, c\.parts, c\.finishedAt, c\.requesterKey/);
+    // createdAt because a 'running' row has no finishedAt, and the sweep dates the row's
+    // remaining ttl from one of them; slotReleasedAt so it does not release a slot twice.
+    assert.match(spec.query,
+      /SELECT c\.id, c\.status, c\.parts, c\.finishedAt, c\.createdAt, c\.requesterKey, c\.slotReleasedAt/);
     // A row still 'running' past the cutoff is an instance that died with retries exhausted; the
     // worker never released its slot, so the sweep must see it.
     assert.match(spec.query, /c\.status = 'running' AND c\.startedAt < @cutoff/);

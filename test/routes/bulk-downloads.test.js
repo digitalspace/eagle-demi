@@ -236,7 +236,7 @@ test('POST /bulk-downloads', async (t) => {
     assert.strictEqual(response.statusCode, 202);
     assert.strictEqual(body(response).status, 'queued');
     assert.strictEqual(body(response).documentCount, 3);
-    assert.strictEqual(body(response).partCount, 1);
+    assert.strictEqual(body(response).estimatedPartCount, 1);
     assert.strictEqual(body(response).statusUrl, `/api/bulk-downloads/${body(response).id}`);
     // A worker that dequeues an id with no row can only give up; the reverse order is recoverable.
     assert.deepStrictEqual(order, ['create', 'enqueue']);
@@ -272,6 +272,30 @@ test('POST /bulk-downloads', async (t) => {
     assert.strictEqual(stored.ttl, config.bulkJobTtlDays * 86400);
   });
 
+  await t.test('the job carries every party a credential could be granted to', async (t2) => {
+    const stored = allow(t2, { manifest: visibleRows(2) });
+    const user = { ...STAFF, groups: ['group-A'] };
+
+    await controller.createBulkDownload(post(['d0', 'd1'], user), res());
+
+    assert.deepStrictEqual(stored.parties, ['kc-sub-1', 'group-A'],
+      'the worker re-checks the snapshot grants against these; the subject alone drops a ' +
+      'group-held grant and the zip silently omits documents');
+  });
+
+  await t.test('a request that blows up gives the slot back exactly once', async (t2) => {
+    t2.mock.method(bulkDownloads, 'acquireSlot', async () => true);
+    const released = t2.mock.method(bulkDownloads, 'releaseSlot', async () => true);
+    t2.mock.method(documents, 'listByIdsUnscoped', async () => { throw new Error('cosmos down'); });
+
+    const response = res();
+    await controller.createBulkDownload(post(['d0', 'd1']), response);
+
+    assert.strictEqual(response.statusCode, 500);
+    assert.strictEqual(released.mock.callCount(), 1,
+      'a slot held after a transient failure locks this requester out for the two-day quota TTL');
+  });
+
   await t.test('an anonymous job is bound to nobody', async () => {
     const stored = allow(t, { manifest: visibleRows(2) });
 
@@ -293,7 +317,7 @@ test('POST /bulk-downloads', async (t) => {
     await controller.createBulkDownload(post(['d0', 'd1', 'd2']), response);
 
     assert.strictEqual(response.statusCode, 202);
-    assert.strictEqual(stored.partCount, 3);
+    assert.strictEqual(stored.estimatedPartCount, 3);
   });
 
   await t.test('the audit row names the restricted documents, and only those', async () => {

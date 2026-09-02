@@ -25,8 +25,7 @@ test('packParts', async (t) => {
       { id: 'b', fileSize: 100 },
       { id: 'c', fileSize: 900 }
     ];
-    assert.deepStrictEqual(ids(packParts(docs, 1000)), [['a', 'b'], ['c']],
-      'the controller and the worker pack the same list, so a reorder here is a partCount that lies');
+    assert.deepStrictEqual(ids(packParts(docs, 1000)), [['a', 'b'], ['c']]);
   });
 
   await t.test('a document over the cap gets a part to itself rather than a refusal', () => {
@@ -38,12 +37,18 @@ test('packParts', async (t) => {
     assert.deepStrictEqual(ids(packParts(docs, 1000)), [['a'], ['big'], ['b']]);
   });
 
-  await t.test('an unrecorded size is packed alone, not as zero', () => {
+  await t.test('an unrecorded size predicts nothing, so it counts as nothing', () => {
     for (const fileSize of [undefined, null, 0, -1, NaN, 'not a number']) {
       const docs = [{ id: 'a', fileSize: 100 }, { id: 'x', fileSize }, { id: 'b', fileSize: 100 }];
-      assert.deepStrictEqual(ids(packParts(docs, 1000)), [['a'], ['x'], ['b']],
-        `fileSize ${String(fileSize)} must not be treated as a size that fits`);
+      assert.deepStrictEqual(ids(packParts(docs, 1000)), [['a', 'x', 'b']],
+        `fileSize ${String(fileSize)} must not open a part of its own — this is an estimate, and ` +
+        'a part per size-less document estimates 2,500 parts for a 2,500-file selection');
     }
+  });
+
+  await t.test('sizes nobody recorded do not multiply the estimate', () => {
+    const docs = Array.from({ length: 2500 }, (_, i) => ({ id: `d${i}` }));
+    assert.strictEqual(packPartCount(docs, 1000), 1);
   });
 
   await t.test('no documents is no parts', () => {

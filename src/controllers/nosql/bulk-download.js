@@ -6,6 +6,11 @@
  * The zip is built by a queue worker, so this side only validates, caps, records the job and
  * enqueues it. The job id is the capability: an anonymous job is pure bearer, an authenticated one
  * is bound to its requester and a mismatch answers 404 rather than 403.
+ *
+ * `estimatedPartCount` in the 202 is an ESTIMATE and says so in its name: it is packed from the
+ * `fileSize` on each row, which plenty of documents do not carry. The worker packs against the
+ * bytes it writes, and the real `partCount` appears on the status body once the job is ready.
+ * Wiki [[Bulk-Download]] §Part splitting.
  */
 
 const crypto = require('crypto');
@@ -18,6 +23,7 @@ const queue = require('../../jobs/bulk-download-queue');
 const { packPartCount } = require('../../jobs/pack-parts');
 const { resolveDownload } = require('./document');
 const { resolveAccess } = require('../../helpers/access-sql');
+const { partiesFor } = require('../../middleware/credentials');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
@@ -60,6 +66,16 @@ function requesterOf(req) {
 }
 
 exports.createBulkDownload = async (req, res) => {
+  // The slot this request took, given back exactly once — a refusal and the catch below both come
+  // through here, and a double release would free a slot another of this requester's jobs holds.
+  let heldKey = null;
+  const releaseHeldSlot = async () => {
+    if (!heldKey) return;
+    const key = heldKey;
+    heldKey = null;
+    await bulkDownloads.releaseSlot(key);
+  };
+
   try {
     const access = resolveAccess(req);
     const body = req.body || {};
@@ -125,8 +141,9 @@ exports.createBulkDownload = async (req, res) => {
 
     // Every exit from here on has taken a slot. A refused request that kept one would lock its
     // requester out until the quota row expired.
+    heldKey = requester.key;
     const refuse = async (status, payload) => {
-      await bulkDownloads.releaseSlot(requester.key);
+      await releaseHeldSlot();
       return res.status(status).json(payload);
     };
 
@@ -170,9 +187,12 @@ exports.createBulkDownload = async (req, res) => {
       requesterKey: requester.key,
       requesterId: requester.id,
       requesterType: requester.type,
+      // Every identity a credential can be granted to for this caller — subject, key id and realm
+      // groups. The worker re-checks the snapshot's grants against all of them, as the request did.
+      parties: partiesFor(req.user),
       documentCount: docs.length,
       estimatedBytes,
-      partCount: packPartCount(docs, config.bulkMaxBytes),
+      estimatedPartCount: packPartCount(docs, config.bulkMaxBytes),
       parts: [],
       // Read at hand-out time: the download of a restricted document is auditable when it happens,
       // and by then the rows that said so have been re-read by the worker, not this request.
@@ -219,10 +239,15 @@ exports.createBulkDownload = async (req, res) => {
       id,
       status: (saved && saved.status) || job.status,
       documentCount: job.documentCount,
-      partCount: job.partCount,
+      estimatedPartCount: job.estimatedPartCount,
       statusUrl: `/api/bulk-downloads/${id}`
     });
   } catch (err) {
+    // Whatever failed, the slot must not outlive the request: holding it locks this requester out
+    // of bulk download until the quota row expires, which is two days.
+    await releaseHeldSlot().catch(
+      slotErr => logger.warn(`[bulk] could not release slot: ${slotErr.message}`)
+    );
     return serverError(res, err, 'bulk download controller failed');
   }
 };

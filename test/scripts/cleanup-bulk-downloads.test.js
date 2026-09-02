@@ -63,7 +63,10 @@ test('cleanup-bulk-downloads', async (t) => {
     const rows = [
       row('job-done', { status: 'ready' }),
       row('job-dead', { status: 'running', finishedAt: undefined,
-        startedAt: new Date(Date.now() - 8 * DAY_MS).toISOString() })
+        startedAt: new Date(Date.now() - 8 * DAY_MS).toISOString() }),
+      row('job-released', { status: 'running', finishedAt: undefined,
+        startedAt: new Date(Date.now() - 8 * DAY_MS).toISOString(),
+        slotReleasedAt: new Date(Date.now() - 8 * DAY_MS).toISOString() })
     ];
     t.mock.method(bulkDownloads, 'listExpired', async () => (page++ === 0 ? rows : []));
     t.mock.method(storage, 'removeObject', async () => {});
@@ -72,8 +75,9 @@ test('cleanup-bulk-downloads', async (t) => {
 
     await cleanup.run();
 
-    // The worker released the finished job's slot when it finished; releasing it again would free
-    // a slot the requester may be using. The dead job's slot was never released by anyone.
+    // The worker released the finished job's slot when it finished, and stamped slotReleasedAt on
+    // the one it failed; releasing either again frees a slot the requester's other jobs hold. Only
+    // the dead instance's slot was never released by anyone.
     assert.deepStrictEqual(released, ['key-job-dead']);
   });
 
@@ -93,6 +97,28 @@ test('cleanup-bulk-downloads', async (t) => {
     const expected = (config.bulkJobTtlDays - 8) * 24 * 60 * 60;
     assert.ok(Math.abs(fields.ttl - expected) < 60,
       `ttl ${fields.ttl} should be the ~${expected}s the row had left, not the full window`);
+  });
+
+  await t.test('a row that never finished is dated from when it was created', async () => {
+    let fields;
+    const running = row('job-dead', {
+      status: 'running',
+      finishedAt: undefined,
+      createdAt: new Date(Date.now() - 8 * DAY_MS).toISOString(),
+      startedAt: new Date(Date.now() - 8 * DAY_MS).toISOString()
+    });
+    t.mock.method(bulkDownloads, 'listExpired', async () => (fields ? [] : [running]));
+    t.mock.method(storage, 'removeObject', async () => {});
+    t.mock.method(bulkDownloads, 'releaseSlot', async () => {});
+    t.mock.method(bulkDownloads, 'patch', async (id, patched) => { fields = patched; });
+
+    await cleanup.run();
+
+    // Without a ttl the patch hands the row another full bulkJobTtlDays, and a row nobody ever
+    // finished is exactly the one that must not be kept alive by the sweep that found it.
+    const expected = (config.bulkJobTtlDays - 8) * 24 * 60 * 60;
+    assert.ok(Math.abs(fields.ttl - expected) < 60,
+      `ttl ${fields.ttl} should be the ~${expected}s left of the window, dated from createdAt`);
   });
 
   await t.test('failed jobs are swept too, not only ready ones', async () => {

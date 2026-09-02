@@ -595,9 +595,10 @@ paths:
           description: >-
             This requester is at a quota: either the maximum number of jobs in flight, or the
             number of jobs one requester may start in 24 hours. Both are counted per API key, per
-            signed-in user, or per client address for anonymous callers. A job that finishes,
-            fails, or is refused gives its in-flight slot back immediately; the daily count only
-            resets 24 hours after the requester's first job of the window.
+            signed-in user, or per client address for anonymous callers. A job gives its in-flight
+            slot back when it is refused, when it finishes, or when it runs out of retries — a
+            failure that will be retried keeps its slot. The daily count only resets 24 hours after
+            the requester's first job of the window.
         '503':
           description: >-
             Bulk download is disabled in this environment (no queue configured), or the job was
@@ -1373,7 +1374,7 @@ components:
         id: { type: string, format: uuid, description: The job id, and the capability that reads it back. }
         status: { type: string, enum: [queued] }
         documentCount: { type: integer, description: Documents visible to this caller, so possibly fewer than were asked for. }
-        partCount: { type: integer, description: Zip parts the selection packs into. }
+        estimatedPartCount: { type: integer, description: Zip parts the selection is expected to pack into. An estimate — a document with no recorded size counts as nothing here, so the real count can differ. Poll for `partCount`. }
         statusUrl: { type: string, example: /api/bulk-downloads/6f1c4b9e-0d2a-4d9d-9c3e-1f5f9a2b7c40 }
     BulkDownloadStatus:
       type: object
@@ -1381,8 +1382,8 @@ components:
         id: { type: string, format: uuid }
         status: { type: string, enum: [queued, running, ready, failed, expired] }
         documentCount: { type: integer }
-        partCount: { type: integer }
-        partsReady: { type: integer, description: Parts finished so far — progress against partCount. }
+        partCount: { type: integer, description: Zip parts the job actually produced. 0 until the job is ready. }
+        partsReady: { type: integer, description: Parts finished so far. }
         includedCount: { type: integer, description: Documents actually written into the zip. }
         errorCount: { type: integer }
         errors:

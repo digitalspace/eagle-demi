@@ -50,9 +50,10 @@ async function markExpired(job, now) {
   if (ttl !== null) fields.ttl = ttl;
   await bulkDownloads.patch(job.id, fields);
 
-  // The worker releases the slot when it finishes; only a row still 'running' (instance died,
-  // retries exhausted) was never released.
-  if (job.status === 'running' && typeof bulkDownloads.releaseSlot === 'function' && job.requesterKey) {
+  // The worker releases the slot when it finishes and stamps `slotReleasedAt` when it does; only a
+  // row still 'running' with no stamp (instance died, retries exhausted) was never released.
+  if (job.status === 'running' && !job.slotReleasedAt &&
+    typeof bulkDownloads.releaseSlot === 'function' && job.requesterKey) {
     await bulkDownloads.releaseSlot(job.requesterKey);
   }
 }

@@ -49,8 +49,9 @@ async function patch(id, fields) {
 }
 
 /**
- * Jobs whose zips are past retention: the parts to delete, when the job finished (what is left of
- * its row TTL) and whose slot to give back.
+ * Jobs whose zips are past retention: the parts to delete, when the job finished or was created
+ * (what is left of its row TTL — a row still `running` has no finish time) and whose slot to give
+ * back, if the worker never did.
  *
  * `limit` is a page, not a filter: the read takes one page and stops, so a backlog is swept over
  * several nights rather than draining an unbounded result set into one timer invocation.
@@ -58,7 +59,8 @@ async function patch(id, fields) {
 async function listExpired(cutoffIso, { statuses = ['ready', 'failed'], limit = 500 } = {}) {
   const names = statuses.map((_, i) => `@status${i}`);
   const { items } = await cosmos.query(CONTAINER, {
-    query: `SELECT c.id, c.status, c.parts, c.finishedAt, c.requesterKey FROM c ` +
+    query: `SELECT c.id, c.status, c.parts, c.finishedAt, c.createdAt, c.requesterKey, ` +
+      `c.slotReleasedAt FROM c ` +
       `WHERE (c.status IN (${names.join(', ')}) AND c.finishedAt < @cutoff) ` +
       "OR (c.status = 'running' AND c.startedAt < @cutoff)",
     parameters: [

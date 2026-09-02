@@ -20,7 +20,6 @@ const cosmos = require('../../src/db/cosmos-nosql');
 const bulkDownloads = require('../../src/repositories/bulk-downloads');
 const credentials = require('../../src/repositories/credentials');
 const projects = require('../../src/repositories/projects');
-const { packPartCount } = require('../../src/jobs/pack-parts');
 const { logger } = require('../../src/utils/logger');
 
 const worker = require('../../src/jobs/bulk-download');
@@ -76,6 +75,7 @@ function harness(t, { row, docs, getObjectStream, putObjectStream } = {}) {
   const claims = [];
   const removed = [];
   const reads = [];
+  const released = [];
 
   t.mock.method(bulkDownloads, 'getById', async () => row);
   // Snapshotted, because Cosmos serialises each patch as it is made and the worker keeps appending
@@ -96,17 +96,22 @@ function harness(t, { row, docs, getObjectStream, putObjectStream } = {}) {
     return (docs || []).filter(d => ids.includes(String(d.id))).reverse();
   });
   t.mock.method(projects, 'listByIds', async () => [PROJECT]);
+  t.mock.method(bulkDownloads, 'releaseSlot', async key => { released.push(key); return true; });
   t.mock.method(storage, 'removeObject', async key => { removed.push(key); });
   t.mock.method(storage, 'putObjectStream', putObjectStream ||
     (async (key, stream) => { uploads.set(key, await collect(stream)); return key; }));
   t.mock.method(storage, 'getObjectStream', getObjectStream ||
     (async key => Readable.from([`bytes of ${key}`])));
 
-  return { patches, uploads, claims, removed, reads, zipText: key => uploads.get(key).toString('latin1') };
+  return {
+    patches, uploads, claims, removed, reads, released,
+    zipText: key => uploads.get(key).toString('latin1')
+  };
 }
 
 const finalPatch = patches => patches[patches.length - 1];
 const readyPatch = patches => patches.find(p => p.partCount !== undefined) || {};
+const failedPatch = patches => patches.find(p => p.status === 'failed') || {};
 
 test('the bulk download worker', async (t) => {
   const maxBytes = config.bulkMaxBytes;
@@ -286,8 +291,6 @@ test('the bulk download worker', async (t) => {
 
     await worker.run('job-1');
 
-    assert.strictEqual(uploads.size, packPartCount(docs, 1000),
-      'the worker and the controller must pack identically or partCount lies');
     assert.deepStrictEqual([...uploads.keys()],
       ['zips/job-1-part1.zip', 'zips/job-1-part2.zip']);
     assert.match(zipText('zips/job-1-part1.zip'), /d0\.pdf/,
@@ -298,6 +301,63 @@ test('the bulk download worker', async (t) => {
     assert.strictEqual(ready.partCount, uploads.size);
     assert.ok(ready.bytes > 0, 'the row carries the bytes the caller will download');
     assert.strictEqual(ready.ttl, config.bulkJobTtlDays * 24 * 60 * 60);
+  });
+
+  await t.test('documents nobody recorded a size for still pack into one part', async () => {
+    // The estimate counts an unknown size as nothing, so the WORKER's own byte counter is the only
+    // thing that can close a part here. A packer that gave each one its own part would upload 2,500
+    // zips of one file for a selection this size.
+    const docs = Array.from({ length: 2500 }, (_, i) => doc(`d${i}`, { fileSize: undefined }));
+    const { uploads, patches } = harness(t, {
+      row: job(docs),
+      docs,
+      getObjectStream: async () => Readable.from([Buffer.alloc(1024, 0x41)])
+    });
+
+    await worker.run('job-1');
+
+    assert.strictEqual(uploads.size, 1);
+    assert.strictEqual(readyPatch(patches).partCount, 1);
+    assert.strictEqual(readyPatch(patches).includedCount, 2500);
+  });
+
+  await t.test('a part is closed by the bytes actually written, not by the sizes on the rows', async () => {
+    config.bulkMaxBytes = 2000;
+    // No recorded size at all, so nothing but the counter can say when a part is full.
+    const docs = [doc('d1'), doc('d2'), doc('d3')].map(d => ({ ...d, fileSize: undefined }));
+    const { uploads, zipText } = harness(t, {
+      row: job(docs),
+      docs,
+      getObjectStream: async () => Readable.from([Buffer.alloc(1500, 0x41)])
+    });
+
+    await worker.run('job-1');
+
+    assert.strictEqual(uploads.size, 2, '4.5 KiB of files cannot fit in one 2,000-byte part');
+    assert.match(zipText('zips/job-1-part1.zip'), /d2\.pdf/,
+      'the part takes the second file, then closes on the bytes it has written');
+    assert.match(zipText('zips/job-1-part2.zip'), /d3\.pdf/);
+  });
+
+  await t.test('a document bigger than the part cap gets a part to itself', async () => {
+    config.bulkMaxBytes = 1000;
+    const docs = [doc('d1'), doc('big', { fileSize: 5000 }), doc('d2')];
+    const { uploads, zipText } = harness(t, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => Readable.from([
+        Buffer.alloc(key === 'etl/big.pdf' ? 5000 : 10, 0x41)
+      ])
+    });
+
+    await worker.run('job-1');
+
+    assert.strictEqual(uploads.size, 3);
+    assert.match(zipText('zips/job-1-part1.zip'), /d1\.pdf/);
+    assert.match(zipText('zips/job-1-part2.zip'), /big\.pdf/,
+      'a known size that overflows the part opens a new one rather than blowing the cap');
+    assert.doesNotMatch(zipText('zips/job-1-part2.zip'), /d1\.pdf/);
+    assert.match(zipText('zips/job-1-part3.zip'), /d2\.pdf/);
   });
 
   await t.test('status is patched last, after the parts it names', async () => {
@@ -393,6 +453,7 @@ test('the bulk download worker', async (t) => {
     const docs = [doc('d1')];
     const row = job(docs, {
       requesterId: 'user-1',
+      parties: ['user-1'],
       access: { authenticated: true, roles: ['idir'], level: 3, credentials: [{ id: 'c1' }, { id: 'c2' }] }
     });
     const { reads } = harness(tt, { row, docs });
@@ -402,6 +463,68 @@ test('the bulk download worker', async (t) => {
 
     assert.deepStrictEqual(reads[0].credentials, [{ id: 'c1' }],
       'c2 was revoked after submit; c3 was granted after it and is not part of what was asked for');
+  });
+
+  await t.test('a grant held by a group the caller belongs to survives the re-check', async (tt) => {
+    const end = new Date(Date.now() + 86400000).toISOString();
+    const docs = [doc('d1')];
+    const row = job(docs, {
+      requesterId: 'user-1',
+      // What middleware/credentials.js loaded the request's own grants from: subject, key id, groups.
+      parties: ['user-1', 'group-A'],
+      access: { authenticated: true, roles: ['idir'], level: 3, credentials: [{ id: 'c1' }] }
+    });
+    const { reads } = harness(tt, { row, docs });
+    tt.mock.method(credentials, 'listForParty',
+      async party => (party === 'group-A' ? [{ id: 'c1', end }] : []));
+
+    await worker.run('job-1');
+
+    assert.deepStrictEqual(reads[0].credentials, [{ id: 'c1' }],
+      'the grant is on the group, not the subject — re-checking the subject alone drops it and ' +
+      'the caller gets a zip missing documents they may see');
+  });
+
+  await t.test('a finished job gives its quota slot back once', async (tt) => {
+    const docs = [doc('d1')];
+    const { released } = harness(tt, { row: job(docs), docs });
+
+    await worker.run('job-1');
+
+    assert.deepStrictEqual(released, ['198.51.100.7']);
+  });
+
+  await t.test('a failing job releases its slot once, on the delivery that runs out of retries', async (tt) => {
+    const docs = [doc('d1')];
+    const { released, patches } = harness(tt, { row: job(docs, { requesterKey: 'ip-1' }), docs });
+    tt.mock.method(bulkDownloads, 'listDocumentsByIds', async () => { throw new Error('cosmos down'); });
+    tt.mock.method(logger, 'error', () => {});
+
+    for (const attempt of [1, 2]) {
+      await assert.rejects(worker.run('job-1', { attempt, maxAttempts: 3 }), /cosmos down/);
+    }
+    assert.deepStrictEqual(released, [],
+      'the job still has a retry coming, so it still needs the slot it is holding');
+
+    await assert.rejects(worker.run('job-1', { attempt: 3, maxAttempts: 3 }), /cosmos down/);
+
+    assert.deepStrictEqual(released, ['ip-1']);
+    assert.ok(patches.some(p => p.slotReleasedAt),
+      'the row has to carry the release, or a redelivery does it again');
+  });
+
+  await t.test('a redelivery after the last attempt does not release the slot twice', async (tt) => {
+    const docs = [doc('d1')];
+    // The stamp the failing delivery left behind: the counter is per requester, so releasing again
+    // hands this requester a free slot one of their other jobs is using.
+    const row = job(docs, { requesterKey: 'ip-1', status: 'failed', slotReleasedAt: new Date().toISOString() });
+    const { released } = harness(tt, { row, docs });
+    tt.mock.method(bulkDownloads, 'listDocumentsByIds', async () => { throw new Error('cosmos down'); });
+    tt.mock.method(logger, 'error', () => {});
+
+    await assert.rejects(worker.run('job-1', { attempt: 3, maxAttempts: 3 }), /cosmos down/);
+
+    assert.deepStrictEqual(released, []);
   });
 
   await t.test('a rejected upload fails the part instead of hanging on it', async (tt) => {
@@ -418,7 +541,7 @@ test('the bulk download worker', async (t) => {
     const started = Date.now();
     await assert.rejects(worker.run('job-1'), /403 from the object store/);
     assert.ok(Date.now() - started < 500, 'an upload nobody watches parks a Function instance for 30 minutes');
-    assert.strictEqual(finalPatch(patches).status, 'failed');
+    assert.strictEqual(failedPatch(patches).status, 'failed');
   });
 
   await t.test('a selection that outgrows the total cap while streaming fails the job', async (tt) => {
@@ -433,7 +556,7 @@ test('the bulk download worker', async (t) => {
     tt.mock.method(logger, 'error', () => {});
 
     await assert.rejects(worker.run('job-1'), /over the size limit/);
-    assert.strictEqual(finalPatch(patches).error, 'over the size limit');
+    assert.strictEqual(failedPatch(patches).error, 'over the size limit');
   });
 
   await t.test('a message with no job row is logged and dropped', async (tt) => {
@@ -459,7 +582,7 @@ test('the bulk download worker', async (t) => {
 
     assert.strictEqual(errors[0].message, '[bulk] job failed job-1: cosmos down',
       'the poison alert matches this string — changing it silently disables the alert');
-    const failed = finalPatch(patches);
+    const failed = failedPatch(patches);
     assert.strictEqual(failed.status, 'failed');
     assert.strictEqual(failed.error, 'cosmos down');
     assert.ok(failed.finishedAt);
