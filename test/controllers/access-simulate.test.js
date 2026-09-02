@@ -31,9 +31,13 @@ function run(body) {
   return res;
 }
 
+/** The `read[]` each ladder level stores, as docs/rbac-architecture.md §1 states it. */
+const READ = { 1: ['team'], 2: ['staff'], 3: ['staff', 'idir'], 4: ['staff', 'idir', 'public'] };
+
 /** `via` is the whole row: a level is readable exactly when some arm reached it. */
 function rows(via) {
-  return Object.fromEntries(Object.entries(via).map(([l, v]) => [l, { readable: v !== null, via: v }]));
+  return Object.fromEntries(Object.entries(via)
+    .map(([l, v]) => [l, { readable: v !== null, via: v, read: READ[l] }]));
 }
 
 const PROJECT_207 = { scope: { type: 'project', ids: ['207'] }, levels: [2] };
@@ -171,8 +175,8 @@ test('access simulate', async (t) => {
     assert.deepStrictEqual(granted.fields, plain.fields);
     assert.strictEqual(granted.level, plain.level);
     // Not vacuous: the grant really was applied, it just applied on the row plane.
-    assert.deepStrictEqual(granted.rows['1'], { readable: true, via: 'credential' });
-    assert.deepStrictEqual(plain.rows['1'], { readable: false, via: null });
+    assert.deepStrictEqual(granted.rows['1'], { readable: true, via: 'credential', read: ['team'] });
+    assert.deepStrictEqual(plain.rows['1'], { readable: false, via: null, read: ['team'] });
   });
 
   await t.test('every catalogued field is listed, plumbing keys included', () => {
@@ -224,7 +228,9 @@ test('access simulate', async (t) => {
       assert.strictEqual(res.status, 200);
       const body = await res.json();
       assert.strictEqual(body.level, 2);
-      assert.deepStrictEqual(body.rows['1'], { readable: true, via: 'team' });
+      assert.deepStrictEqual(body.rows['1'], { readable: true, via: 'team', read: ['team'] });
+      // The screen draws its read[] chips off this, so the tokens are the endpoint's answer.
+      assert.deepStrictEqual(body.rows['3'].read, ['staff', 'idir']);
 
       const refused = await call('/api/access/simulate', {
         method: 'POST',

@@ -16,7 +16,7 @@ export interface SimulateResponse {
   tier: string;
   privileged: boolean;
   staffUi: boolean;
-  rows: Record<string, { readable: boolean; via: string | null }>;
+  rows: Record<string, { readable: boolean; via: string | null; read: string[] }>;
   fields: { projects: SimulateField[]; documents: SimulateField[] };
   predicatesAssumedFalse: boolean;
   notes?: { sealedCompartment?: string };
@@ -44,12 +44,12 @@ const ROLE_OPTIONS: { key: string; note: string; locked?: boolean }[] = [
   { key: 'compliance', note: 'The only role a sealed level-0 row matches. Not a ladder rung.' }
 ];
 
-/** The ladder as docs/rbac-architecture.md §1 states it: name, stored `read[]`, who matches. */
+/** The ladder as docs/rbac-architecture.md §1 states it. The stored `read[]` comes from the engine. */
 const LADDER = [
-  { level: 1, name: 'Team only', read: ['team'], detail: 'Reached only through the team arm: the row carries team and its project is one of the caller’s.' },
-  { level: 2, name: 'All EAO', read: ['staff'], detail: 'Every EAO staff member, any project or business unit.' },
-  { level: 3, name: 'All IDIR', read: ['staff', 'idir'], detail: 'Any BC Government IDIR account. idir comes from the identity_provider claim, never a role.' },
-  { level: 4, name: 'Public', read: ['staff', 'idir', 'public'], detail: 'Anyone, no credential.' }
+  { level: 1, name: 'Team only', detail: 'Reached only through the team arm: the row carries team and its project is one of the caller’s.' },
+  { level: 2, name: 'All EAO', detail: 'Every EAO staff member, any project or business unit.' },
+  { level: 3, name: 'All IDIR', detail: 'Any BC Government IDIR account. idir comes from the identity_provider claim, never a role.' },
+  { level: 4, name: 'Public', detail: 'Anyone, no credential.' }
 ];
 
 const IDENTITY_PROVIDERS = [
@@ -148,8 +148,10 @@ export class AccessModelComponent implements OnDestroy {
     const teams = idList(this.teamsText());
     if (teams.length > 0) request.teams = teams;
 
-    // Sent only when asked for: `projectScope` present at all makes the tier `scoped`.
-    if (this.scopeText().trim()) request.projectScope = idList(this.scopeText());
+    // Sent only when asked for: `projectScope` present at all makes the tier `scoped`, so a text
+    // box holding nothing but separators must not describe a caller scoped to no project.
+    const scope = idList(this.scopeText());
+    if (scope.length > 0) request.projectScope = scope;
 
     if (this.credentialOn()) {
       const levels = this.credentialLevels();
@@ -210,6 +212,7 @@ export class AccessModelComponent implements OnDestroy {
       const readable = !!row?.readable;
       return {
         ...rung,
+        read: row?.read || [],
         heading: `Level ${rung.level} — ${rung.name}`,
         readable,
         dotClass: readable ? 'attention-row__dot--success' : 'attention-row__dot--neutral',

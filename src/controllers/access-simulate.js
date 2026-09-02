@@ -123,7 +123,7 @@ function meFor(request) {
 }
 
 /**
- * One row per ladder level: can this caller read a row at that level, and which arm got it there.
+ * One row per ladder level: the stored `read[]` it carries, can this caller read it, which arm.
  *
  * The arms are separated by REMOVING one grant at a time from the resolved access and asking the
  * real `canRead` again — a caller that reads the row with neither team nor credential is there on
@@ -142,7 +142,7 @@ function rowsFor(access, probe) {
       : readableAt(noCredentials, level) ? 'team'
         : readableAt(noTeams, level) ? 'credential'
           : null;
-    rows[level] = { readable: readableAt(access, level), via };
+    rows[level] = { readable: readableAt(access, level), via, read: readForLevel(level) };
   }
   return rows;
 }

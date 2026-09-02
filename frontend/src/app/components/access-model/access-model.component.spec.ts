@@ -12,10 +12,10 @@ const answer = (over: Partial<SimulateResponse> = {}): SimulateResponse => ({
   privileged: false,
   staffUi: true,
   rows: {
-    1: { readable: true, via: 'team' },
-    2: { readable: true, via: 'role' },
-    3: { readable: true, via: 'role' },
-    4: { readable: true, via: 'role' }
+    1: { readable: true, via: 'team', read: ['team'] },
+    2: { readable: true, via: 'role', read: ['staff'] },
+    3: { readable: true, via: 'role', read: ['staff', 'idir'] },
+    4: { readable: true, via: 'role', read: ['staff', 'idir', 'public'] }
   },
   fields: {
     projects: [
@@ -100,6 +100,13 @@ describe('AccessModelComponent', () => {
     });
   });
 
+  it('omits a scope box holding only separators — an empty scope reads nothing', async () => {
+    fixture.componentInstance.scopeText.set(',');
+    await settle();
+
+    expect(JSON.parse(simulatePosts()[0].body as string).projectScope).toBeUndefined();
+  });
+
   it('omits every optional key for a caller with nothing but the public floor', async () => {
     await settle();
 
@@ -148,10 +155,19 @@ describe('AccessModelComponent', () => {
     expect(level2).toContain('via role');
   });
 
+  it('draws the read[] chips from the response, never from a local copy of the ladder', async () => {
+    const el = await settle();
+
+    const level3 = Array.from(el.querySelectorAll('.attention-row'))
+      .find(r => (r.textContent || '').includes('Level 3 — All IDIR'));
+    expect(Array.from(level3!.querySelectorAll('.role-chip')).map(c => c.textContent))
+      .toEqual(['staff', 'idir']);
+  });
+
   it('marks an unreachable level withheld and shows no arm', async () => {
     fetchSpy.and.callFake((url: RequestInfo | URL) => Promise.resolve(new Response(
       String(url).includes('/access/simulate')
-        ? JSON.stringify(answer({ rows: { 1: { readable: false, via: null }, 2: { readable: false, via: null }, 3: { readable: false, via: null }, 4: { readable: true, via: 'role' } } }))
+        ? JSON.stringify(answer({ rows: { 1: { readable: false, via: null, read: ['team'] }, 2: { readable: false, via: null, read: ['staff'] }, 3: { readable: false, via: null, read: ['staff', 'idir'] }, 4: { readable: true, via: 'role', read: ['staff', 'idir', 'public'] } } }))
         : '[]',
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     )));
@@ -197,14 +213,18 @@ describe('AccessModelComponent', () => {
     expect(sealed!.querySelector('input')).toBeNull();
   });
 
-  it('drops the answer and reports the engine‘s own refusal', async () => {
+  it('drops the answer it was showing and reports the engine‘s own refusal', async () => {
+    const el = await settle();
+    expect(fixture.componentInstance.result()).not.toBeNull();
+
     fetchSpy.and.callFake((url: RequestInfo | URL) => Promise.resolve(new Response(
       String(url).includes('/access/simulate')
         ? JSON.stringify({ error: 'scope.ids must be a non-empty array' })
         : '[]',
       { status: String(url).includes('/access/simulate') ? 400 : 200, headers: { 'Content-Type': 'application/json' } }
     )));
-    const el = await settle();
+    fixture.componentInstance.teamsText.set('402');
+    await settle();
 
     expect(el.textContent).toContain('scope.ids must be a non-empty array');
     expect(fixture.componentInstance.result()).toBeNull();

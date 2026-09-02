@@ -1154,8 +1154,9 @@ components:
         rows:
           type: object
           description: >-
-            One entry per ladder level, keyed `1`-`4`. `via` names the arm that got the caller
-            there: `role`, `team`, `credential`, or null when the row is out of reach.
+            One entry per ladder level, keyed `1`-`4`. `read` is the `read[]` a record at that
+            level stores. `via` names the arm that got the caller there: `role`, `team`,
+            `credential`, or null when the row is out of reach.
           additionalProperties:
             type: object
             properties:
@@ -1165,6 +1166,10 @@ components:
                 type: string
                 nullable: true
                 enum: [role, team, credential]
+              read:
+                type: array
+                items:
+                  type: string
         fields:
           type: object
           description: >-
