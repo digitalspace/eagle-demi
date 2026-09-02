@@ -7,6 +7,7 @@ const assert = require('node:assert');
 
 const config = require('../../src/config');
 const monitor = require('../../src/azure/monitor');
+const cache = require('../../src/repositories/cache');
 const controller = require('../../src/controllers/admin-reads');
 
 function mockRes() {
@@ -31,6 +32,14 @@ function configure(t, values) {
     ...values
   });
   t.after(() => Object.assign(config, saved));
+}
+
+/** Serves `stored` as the cached document and records what the controller writes back. */
+function spyCache(t, stored) {
+  const puts = [];
+  t.mock.method(cache, 'get', async () => stored);
+  t.mock.method(cache, 'put', async (id, doc) => { puts.push({ id, doc }); return doc; });
+  return puts;
 }
 
 /** Records every KQL string the controller sends, so a test can assert nothing was sent at all. */
@@ -211,11 +220,9 @@ test('GET /admin/analytics', async (t) => {
 });
 
 test('GET /admin/cost', async (t) => {
-  t.beforeEach(() => controller._resetCostCache());
-  t.after(() => controller._resetCostCache());
-
   await t.test('sums the month to date by resource and by service', async () => {
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg', budgetName: 'demi-budget-test' });
+    spyCache(t, null);
     t.mock.method(monitor, 'queryCost', async () => [
       { Cost: 100, ResourceId: '/rg/search', ServiceName: 'Azure AI Search', Currency: 'CAD' },
       { Cost: 25, ResourceId: '/rg/cosmos', ServiceName: 'Azure Cosmos DB', Currency: 'CAD' },
@@ -238,26 +245,71 @@ test('GET /admin/cost', async (t) => {
     assert.strictEqual(res.body.budget.amount, 400);
   });
 
-  await t.test('a second call inside the hour is served from the cache', async () => {
-    // Cost Management rate-limits, and this figure moves once a day at most.
+  await t.test('stores the fresh figures so the other instances need not fetch them', async () => {
+    // The whole point of moving the cache off the instance: up to 20 Flex instances, each of
+    // which otherwise spends its own call against the same tenant quota.
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg' });
-    let calls = 0;
-    t.mock.method(monitor, 'queryCost', async () => {
-      calls += 1;
-      return [{ Cost: 1, ResourceId: '/rg/a', ServiceName: 'A', Currency: 'CAD' }];
+    const puts = spyCache(t, null);
+    t.mock.method(monitor, 'queryCost', async () => [
+      { Cost: 9, ResourceId: '/rg/a', ServiceName: 'A', Currency: 'CAD' }
+    ]);
+
+    const res = mockRes();
+    await controller.getCost({}, res);
+
+    assert.strictEqual(puts.length, 1, 'the answer must be written back to the shared cache');
+    assert.strictEqual(puts[0].id, 'cost-mtd');
+    assert.deepStrictEqual(puts[0].doc.body, res.body);
+  });
+
+  await t.test('a cached document under an hour old answers without a cost query', async () => {
+    configure(t, { costScope: '/subscriptions/s/resourceGroups/rg' });
+    const body = { success: true, asOf: '2026-09-02T00:00:00.000Z', total: 42 };
+    spyCache(t, { id: 'cost-mtd', storedAt: new Date(Date.now() - 60_000).toISOString(), body });
+    t.mock.method(monitor, 'queryCost', async () => { throw new Error('must not be called'); });
+
+    const res = mockRes();
+    await controller.getCost({}, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(res.body, body);
+  });
+
+  await t.test('answers a stale cached figure when Cost Management returns 429', async () => {
+    // Cost Management rate-limits per tenant. A figure from yesterday is worth more than a 500,
+    // as long as the response says which it is.
+    configure(t, { costScope: '/subscriptions/s/resourceGroups/rg' });
+    const body = { success: true, asOf: '2026-09-01T00:00:00.000Z', total: 42 };
+    spyCache(t, { id: 'cost-mtd', storedAt: '2026-09-01T00:00:00.000Z', body });
+    t.mock.method(monitor, 'queryCost', async () => { throw new Error('429 Too many requests'); });
+
+    const res = mockRes();
+    await controller.getCost({}, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.stale, true);
+    assert.strictEqual(res.body.total, 42);
+    assert.strictEqual(res.body.asOf, '2026-09-01T00:00:00.000Z', 'asOf stays the cache\'s own');
+  });
+
+  await t.test('answers 503, never 500, when a 429 finds nothing cached', async () => {
+    configure(t, { costScope: '/subscriptions/s/resourceGroups/rg' });
+    spyCache(t, null);
+    t.mock.method(monitor, 'queryCost', async () => { throw new Error('429 Too many requests'); });
+
+    const res = mockRes();
+    await controller.getCost({}, res);
+
+    assert.strictEqual(res.statusCode, 503);
+    assert.deepStrictEqual(res.body, {
+      success: false,
+      error: 'cost data rate-limited by Azure, retry in a few minutes'
     });
-
-    const first = mockRes();
-    await controller.getCost({}, first);
-    const second = mockRes();
-    await controller.getCost({}, second);
-
-    assert.strictEqual(calls, 1, 'the second call must not reach Cost Management');
-    assert.strictEqual(second.body, first.body, 'and must answer with the cached body');
   });
 
   await t.test('omits the budget rather than the spend when no budget is named', async () => {
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg' });
+    spyCache(t, null);
     t.mock.method(monitor, 'queryCost', async () => [{ Cost: 3, ResourceId: '/rg/a', ServiceName: 'A', Currency: 'CAD' }]);
     t.mock.method(monitor, 'getBudget', async () => { throw new Error('must not be called'); });
 
@@ -273,6 +325,7 @@ test('GET /admin/cost', async (t) => {
     // The budget is a role grant away from the cost query, so a 403 on it must not take the spend
     // figures down with it.
     configure(t, { costScope: '/subscriptions/s/resourceGroups/rg', budgetName: 'demi-budget-test' });
+    spyCache(t, null);
     t.mock.method(monitor, 'queryCost', async () => [
       { Cost: 12, ResourceId: '/rg/a', ServiceName: 'A', Currency: 'CAD' }
     ]);
