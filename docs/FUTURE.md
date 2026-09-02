@@ -22,6 +22,10 @@ Not scheduled. Added 2026-08-26.
   boundaries (checked-in GeoJSON → `boundaries`), the map's live DataBC layer. Same engine as
   above, geo-flavoured: bbox/centroid validation, `[lon, lat]` invariant, staleness shown on `/map`
   (`lastCalculatedAt` already rendered). Test-only until prod wants any enrichment.
+- **Key Vault as credential truth.** Today OpenShift `demi-app-secrets` / `demi-keycloak-admin` feed
+  Key Vault through `deploy-infra.sh` (ARM writes), because human logins hold no Key Vault data-plane
+  role (`demi-kv-prod` answers Forbidden). Target: Secrets Officer for the operators, secrets born in
+  Key Vault, scripts read Key Vault first. Folds into the key manager below.
 - **Key manager / rotator.** Today rotation is a hand sequence across holders that nothing
   records together: `ADMIN_API_KEY` lives in OpenShift `demi-app-secrets` (source of truth),
   the App Service setting, and the GPU box env file; the Eagle push key in `demi-push-secret`;

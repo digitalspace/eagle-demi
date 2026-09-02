@@ -41,7 +41,10 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 - [x] Realm clients `demi-track-reader` and `demi-role-sync` in `eao-epic` (test, then prod),
       secrets in `demi-app-secrets`. Owner: Daniel. Delivered: test 2026-09-02
       (`/root/scripts/kc-create-demi-clients.sh test`; `demi-user` needed realm-management
-      `manage-users` first). Prod: ______
+      `manage-users` first). Prod: 2026-09-02 (prod `demi-user` + `demi-keycloak-admin` in
+      `6cdc9e-prod` created by Daniel; roles `staff`/`compliance` and both clients created;
+      secrets in `demi-app-secrets`). Prod schedule stays empty: Track prod (last deploy
+      2026-05-20) lacks `/projects/team-members`.
 - [x] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
       records. Minted by P3-0's sync. Delivered: test 2026-09-02 (96 roles, 115 mappings; 53 Track
       staff have no test-realm user yet). Prod: ______
@@ -896,7 +899,7 @@ registry (B5) — Track is the live source of project identity, read over the sa
   - Acceptance: `az bicep build -f azure/main.bicep` exits 0;
         `node --test test/azure/main-bicep-wiring.test.js` — 0 fail;
         `scripts/deploy-infra.sh test --what-if` before `--live`.
-- [x] B4 realm clients (test 2026-09-02, prod open): confidential client `demi-track-reader`, service
+- [x] B4 realm clients (test and prod 2026-09-02): confidential client `demi-track-reader`, service
       account on, standard flow off, granted `epictrack-web` client role `view` (audience mapper
       if `aud` lacks `epictrack-web`). Confidential client `demi-role-sync`, service account with
       realm-management `manage-realm`, `manage-users`, `view-users`. Secrets into
