@@ -6,7 +6,7 @@ info:
     administrative region boundaries.
 
     NOT THE CONTRACT. This file is hand-maintained, covers 27 of the 41 paths in src/http/routes.js
-    (37 of its 54 operations), and has drifted from what the API actually serves. Undocumented here:
+    (37 of its 55 operations), and has drifted from what the API actually serves. Undocumented here:
     /config, /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
     browser redirect rather than an API call and is documented in the wiki. The routes in
     src/http/routes.js are authoritative; read them, or the endpoint itself, before relying on

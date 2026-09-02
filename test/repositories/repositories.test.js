@@ -135,7 +135,14 @@ test('projects repository', async (t) => {
     await projects.listWithCentroid(PUBLIC);
     await projects.countWithCentroid(PUBLIC);
 
-    assert.strictEqual(calls[1].spec.query.split(' WHERE ')[1], calls[0].spec.query.split(' WHERE ')[1]);
+    // The TRAILING criterion, not `split(' WHERE ')[1]`: the ACL predicate nests its own
+    // `EXISTS(... WHERE ...)`, so a split truncates both sides to the same constant and the
+    // comparison holds even with no criterion at all.
+    const trailing = q => q.slice(q.lastIndexOf(' AND '));
+    assert.strictEqual(trailing(calls[1].spec.query), trailing(calls[0].spec.query));
+    // `centroid.type` and not `centroid`: only the scalar leaf is in the container indexing
+    // policy, so filtering on the object path scans.
+    assert.match(trailing(calls[0].spec.query), /c\.centroid\.type/);
     assert.match(calls[1].spec.query, /SELECT VALUE COUNT\(1\)/);
   });
 
