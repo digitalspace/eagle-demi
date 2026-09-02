@@ -105,6 +105,11 @@ const UNGATED = {
 const gatedPrefixes = {
   '/admin/api-keys': ['authMiddleware', 'requireAdmin'],
   '/admin/sync/': ['authMiddleware', 'requireAdmin'],
+  // The Azure read routes: the audit trail names every actor, and the usage and cost figures are
+  // operator data. None of them touch a repository, so this file is the only thing gating them.
+  '/admin/audit': ['authMiddleware', 'requireAdmin'],
+  '/admin/analytics': ['authMiddleware', 'requireAdmin'],
+  '/admin/cost': ['authMiddleware', 'requireAdmin'],
   '/eagle/': ['authMiddleware', 'requireWrite'],
   // The executable half of the `credentials.js` reason above. `requireRole` is the narrow gate a
   // grant needs: requireWrite alone would let the machine writer mint one for itself.
@@ -261,7 +266,7 @@ test('access gate coverage', async (t) => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'project.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    assert.strictEqual(emissions.length, 29,
+    assert.strictEqual(emissions.length, 28,
       `the project controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     // A site emitting a stored row names it BARE (`redactForAccess('projects', saved, access)`) or

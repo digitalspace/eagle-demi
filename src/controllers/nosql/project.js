@@ -114,18 +114,18 @@ exports.getProject = async (req, res) => {
 exports.createProject = async (req, res) => {
   try {
     const access = resolveAccess(req);
+    // No `isPublished`: a create body cannot publish. Widening is `PUT /api/projects/:id/level`.
     const {
-      trackProjectId, name, description, sector, region, status, projectState,
-      centroid, isPublished
+      trackProjectId, name, description, sector, region, status, projectState, centroid
     } = req.body;
 
     if (!trackProjectId || !name || !centroid || !centroid.coordinates) {
       return res.status(400).json({ error: 'Missing required fields: trackProjectId, name, centroid' });
     }
 
-    // Fail closed: private unless explicitly published.
-    const published = isPublished === true || isPublished === 'true';
-    const read = readForLevel(published ? 4 : 2);
+    // Admission is level 1 (docs/rbac-architecture.md §1, "Default on admission is level 1"):
+    // nothing reaches level 2 or above by being created.
+    const read = readForLevel(1);
     const now = new Date().toISOString();
 
     const saved = await projects.upsert({
@@ -153,7 +153,7 @@ exports.createProject = async (req, res) => {
       projectState: projectState || status || '',
       centroid,
       read,
-      isPublished: published,
+      isPublished: false,
       // Empty, but present: the wildfire sync patches `/sources/wildfire`, and a Cosmos patch
       // cannot create a path recursively — without `/sources` on the document it fails the whole
       // sync run, not just this project (sync-wildfires.js loops unguarded).
@@ -187,9 +187,8 @@ exports.updateProject = async (req, res) => {
     // The partition key is the id, so it must not be reassigned by a request body — in Cosmos
     // that is a delete-and-reinsert, not an update.
     //
-    // `read` is derived from `isPublished` rather than taken verbatim, so the two cannot disagree:
-    // read[] is authoritative and isPublished mirrors it. Spreading the body straight in let a
-    // writer hand-craft an ACL that no gate had ever seen.
+    // `read` and its `isPublished` mirror are carried from `existing`, never taken from the body:
+    // PUT does not move a level. Widening is an act — `PUT /api/projects/:id/level`.
     //
     // The Cosmos bookkeeping keys are dropped for a different reason: a caller who GETs a project
     // and PUTs the response back sends them, and they are catalogued at maxVis 0 (or 2 for
@@ -197,7 +196,7 @@ exports.updateProject = async (req, res) => {
     // the real values.
     const {
       id: _ignoredId, trackProjectId: _ignoredTrackId,
-      read: _ignoredRead, isPublished,
+      read: _ignoredRead, isPublished: _ignoredPublished,
       status: wireStatus,
       // The cacPublished predicate reads this, so PUT must not set it (doc §2 item 7).
       projectCACPublished: _ignoredCACPublished,
@@ -226,17 +225,9 @@ exports.updateProject = async (req, res) => {
       });
     }
 
-    const acl = isPublished === undefined
-      ? { read: existing.read, isPublished: existing.isPublished }
-      : {
-        isPublished: isPublished === true,
-        read: readForLevel(isPublished === true ? 4 : 2)
-      };
-
     const saved = await projects.upsert({
       ...existing,
       ...changes,
-      ...acl,
       id: existing.id,
       trackProjectId: existing.trackProjectId,
       updatedAt: new Date().toISOString()
@@ -244,12 +235,8 @@ exports.updateProject = async (req, res) => {
 
     // Field NAMES, not values: an audit row records who changed what and when, and a full
     // before/after of arbitrary request bodies would put project content into a table kept for
-    // seven years. `isPublished` is the exception — a visibility flip is the change most likely
-    // to be asked about later, so both sides of it are recorded.
-    //
-    // Before the cascade below, not after: the project write has already happened by here, and the
-    // cascade can return 500. A visibility flip that left documents over-permissive is the row
-    // someone will come looking for, so it must not be the one path that records nothing.
+    // seven years. The visibility pair is recorded too, unchanged though PUT now leaves it — a
+    // reader of this table should not have to know which route could move it.
     auditEvent(req, {
       action: 'project.update',
       targetType: 'project',
@@ -261,13 +248,6 @@ exports.updateProject = async (req, res) => {
         isPublishedTo: saved.isPublished
       }
     });
-
-    // `!==` over the two states, so `isPublished: undefined` — a rename, a description edit — is
-    // equal to itself and cascades nothing.
-    if (acl.isPublished !== existing.isPublished) {
-      const failure = await cascadeProjectVisibility(existing.id, acl);
-      if (failure) return res.status(500).json({ success: false, error: failure });
-    }
 
     // `existing` and `saved` went to upsert whole. Only the copy that leaves over HTTP is
     // narrowed.

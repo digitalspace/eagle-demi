@@ -135,16 +135,25 @@ async function listByIds(access, ids) {
   return items;
 }
 
+/** The leaf, not the object: only scalar paths are indexed (Bicep includes /centroid/type/?). */
+const centroidCriteria = () => [isDefinedAndNotNull('centroid.type')];
+
 /** Projects with a usable centroid — for boundary tagging. */
 async function listWithCentroid(access) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
-    // The leaf, not the object: only scalar paths are indexed (Bicep includes /centroid/type/?).
-    criteria: [isDefinedAndNotNull('centroid.type')],
+    criteria: centroidCriteria(),
     select: 'c.id, c.name, c.centroid'
   });
   return cosmos.query(CONTAINER, spec);
+}
+
+/** COUNT of exactly what listWithCentroid reads. */
+async function countWithCentroid(access) {
+  const spec = countWhere({ access, partitionField: PARTITION_FIELD, criteria: centroidCriteria() });
+  const value = await cosmos.queryValue(CONTAINER, spec);
+  return value || 0;
 }
 
 /** The reconcile predicate, shared so the enumeration and its COUNT cannot drift apart. */
@@ -275,6 +284,7 @@ module.exports = {
   getByEagleId,
   listByIds,
   listWithCentroid,
+  countWithCentroid,
   listEagleOnlyIds,
   countEagleOnlyIds,
   listWithEagleId,

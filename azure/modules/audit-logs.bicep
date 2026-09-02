@@ -234,6 +234,21 @@ resource publisherAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01
   }
 }
 
+// Log Analytics Reader, on the workspace rather than the DCR: the admin panel reads the audit
+// trail back through the API, which queries with this same identity (src/azure/monitor.js).
+// A new assignment takes minutes to be honoured — retry a 403, do not re-grant.
+var logAnalyticsReaderRoleId = '73c42c96-874c-492b-b04d-ab87d138a893'
+
+resource auditReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: workspace
+  name: guid(workspace.id, apiPrincipalId, logAnalyticsReaderRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', logAnalyticsReaderRoleId)
+    principalId: apiPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // The rollup destination is declared rather than left to the summary rule.
 //
 // The rule creates the table on its first run if it is absent, but it creates it with the

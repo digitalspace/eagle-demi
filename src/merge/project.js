@@ -19,10 +19,7 @@
  * instead of erroring — so every rule here is data, and tested as data.
  */
 
-// Named SECURE_ROLES here for historical reasons; the value is access-sql's ADMIN_ROLES.
-// Widening it to access-sql's 5-entry SECURE_ROLES is an ACL data change, not a refactor.
-const { ADMIN_ROLES } = require('../helpers/access-sql');
-const SECURE_ROLES = ADMIN_ROLES;
+const { readForLevel } = require('../helpers/access-sql');
 
 /**
  * Fields Track owns. Track wins for these, but ONLY when it actually supplies a value:
@@ -196,7 +193,9 @@ function resolveProjectAcl(eagle) {
   if (eagle && Array.isArray(eagle.read) && eagle.read.length > 0) {
     return eagle.read;
   }
-  return [...SECURE_ROLES];
+  // Level 2, the level the legacy admin-role list already meant, written in ladder tokens so a
+  // re-merge does not rewrite what a controller wrote.
+  return readForLevel(2);
 }
 
 /**
@@ -410,7 +409,6 @@ function buildProjectIndex(projects) {
 }
 
 module.exports = {
-  SECURE_ROLES,
   TRACK_PRECEDENCE,
   LEGISLATION_KEYS,
   EAGLE_ONLY_FIELDS,

@@ -36,13 +36,15 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
       2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
       Level 3 is the `identity_provider` claim and level 1 is project scope: neither is a new realm
       role. Classifying (P3-5) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
-- [ ] Track read endpoint `GET /api/v1/projects/team-members` — Track PR, owner Daniel, reviewer
-      Track team. Opened: 2026-08-28 (bcgov/EPIC.track#2829). Merged: ____
-- [ ] Realm clients `demi-track-reader` and `demi-role-sync` in `eao-epic` (test, then prod),
-      secrets in `demi-app-secrets`. Owner: Daniel. Delivered: ______
-- [ ] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
-      records. Minted by P3-0's timer once the two lines above carry a date; hand-granted until
-      then. Blocks P3-3. Owner: Daniel. Delivered: ______
+- [x] Track read endpoint `GET /api/v1/projects/team-members` — Track PR, owner Daniel, reviewer
+      Track team. Opened: 2026-08-28 (bcgov/EPIC.track#2829). Merged: 2026-09-01, on test 2026-09-02.
+- [x] Realm clients `demi-track-reader` and `demi-role-sync` in `eao-epic` (test, then prod),
+      secrets in `demi-app-secrets`. Owner: Daniel. Delivered: test 2026-09-02
+      (`/root/scripts/kc-create-demi-clients.sh test`; `demi-user` needed realm-management
+      `manage-users` first). Prod: ______
+- [x] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
+      records. Minted by P3-0's sync. Delivered: test 2026-09-02 (96 roles, 115 mappings; 53 Track
+      staff have no test-realm user yet). Prod: ______
 - [x] EAO question 1 (nested vs lateral groups). Answered 2026-08-28: ladder 1-4 on the row plane,
       level 0 a sealed compartment, Selected Credentials a time-bound grant (doc §1, §5).
 - [x] EAO question 2: public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2). Emails stay `defaultVis: 4`; no tightening list.
@@ -859,7 +861,8 @@ not a source (doc §3 question 10).
       `idir_user_id` (`<guid>@idir`, `exact=true`) then email; reconcile: create missing
       `project:<id>` roles (409 ignored), grant, REVOKE stale, touching only the `project:<id>`
       names Track's feed lists — a hand-granted scope like `project:eagle-abc` is never revoked. One summary line
-      `[track-teams] mode=… projects=… users=… grants=… revokes=… unmatched=… failures=…`
+      `[track-teams] mode=… projects=… users=… grants=… revokes=… unmatched=… closedProjects=…
+      credentialsRevoked=… failures=…`
       via `src/utils/logger.js`. `package.json` script `rbac:sync-teams`.
       `ponytail: union over all works. Per-work roles only if the business ever needs them.`
   - Tests: `test/scripts/sync-track-teams.test.js`, in-memory `kc` fake, literals only
@@ -892,7 +895,7 @@ not a source (doc §3 question 10).
   - Acceptance: `az bicep build -f azure/main.bicep` exits 0;
         `node --test test/azure/main-bicep-wiring.test.js` — 0 fail;
         `scripts/deploy-infra.sh test --what-if` before `--live`.
-- [ ] B4 realm clients (Daniel, test then prod): confidential client `demi-track-reader`, service
+- [x] B4 realm clients (test 2026-09-02, prod open): confidential client `demi-track-reader`, service
       account on, standard flow off, granted `epictrack-web` client role `view` (audience mapper
       if `aud` lacks `epictrack-web`). Confidential client `demi-role-sync`, service account with
       realm-management `manage-realm`, `manage-users`, `view-users`. Secrets into
@@ -900,15 +903,14 @@ not a source (doc §3 question 10).
 
 Acceptance (test, end to end)
 
-- [ ] Track PR merged to `develop` → `epictrack-api-c8b80a-test`. Client-credentials token for
+- [x] Track PR merged to `develop` → `epictrack-api-c8b80a-test`. Client-credentials token for
       `demi-track-reader`:
       `curl -H "Authorization: Bearer $t" https://epictrack-api-c8b80a-test.apps.gold.devops.gov.bc.ca/api/v1/projects/team-members`
       → 200, non-empty. 403 = `view` grant missing; 401 = audience mapper needed.
-- [ ] DEMI B1-B3 merged; `scripts/deploy-infra.sh test --live` before the schedule is non-empty.
-- [ ] Dry run locally against test: summary line shows plausible `grants`, `revokes=0`.
-- [ ] `--live`; verify one named user: Keycloak admin `GET /users?username=<guid>@idir` →
-      `/role-mappings/realm` lists `project:<id>`; a fresh login token carries it in
-      `realm_access.roles`.
+- [x] DEMI B1-B3 merged; `scripts/deploy-infra.sh test --live` before the schedule is non-empty. Done 2026-09-02.
+- [x] Dry run locally against test: summary line shows plausible `grants`, `revokes=0`. 2026-09-02: `projects=103 users=72 grants=356 revokes=0 unmatched=53 failures=0` (Track ids already carry `@idir`; fixed in #268).
+- [x] `--live` 2026-09-02: 356 grants, 0 failures; 96 `project:` realm roles, 115 user mappings
+      (e.g. `project:104` has a holder). Fresh-login token check still open (needs a staff login).
 - [ ] `node --test test/scripts/sync-track-teams.test.js test/sync-teams-timer.test.js test/azure/main-bicep-wiring.test.js`;
       `yarn test`; Track `make lint` + pytest.
 - [ ] Prod: `syncTeamsSchedule` stays `''` until both realm clients exist in the prod realm.
@@ -1121,7 +1123,7 @@ Branch: `feat/ladder-default-level-1`
 
 Merges only after the `project:<id>` roles dependency above carries a date.
 
-- [ ] `src/controllers/nosql/document.js:36-49` `resolveDocumentAcl` — the unpublished arm drops
+- [x] `src/controllers/nosql/document.js:36-49` `resolveDocumentAcl` — the unpublished arm drops
       from `readForLevel(2)` (what P3-2 left) to `readForLevel(1)`; the published arm stays
       `readForLevel(4)`. The ceiling itself — `Math.min(..., levelOfRead(parentProject.read))` — is
       already in place from P3-2. Every other write site converted in P3-2 keeps the level it has;
@@ -1131,35 +1133,36 @@ Merges only after the `project:<id>` roles dependency above carries a date.
       two levels, no set intersection. A level-1 document keeps `team` under a level-2 project
       instead of falling to a fail-closed branch that flattened its `ownRead` snapshot. Landed
       before the default moves, as this line required.
-- [ ] `src/seed/transform.js:202` and `src/merge/project.js:195` write a local `SECURE_ROLES`
+- [x] `src/seed/transform.js:202` and `src/merge/project.js:195` write a local `SECURE_ROLES`
       that aliases `ADMIN_ROLES` (`['sysadmin','staff','demi-admin']`), so `levelOfRead` reads
       the private form as 2 and the published form as 4 — correct today, but a re-seed rewrites
       the tokens a controller wrote. Convert both to `readForLevel(...)` in this unit.
-- [ ] `src/controllers/nosql/project.js:123,152,223-228` — `createProject` ignores `isPublished`
+- [x] `src/controllers/nosql/project.js:123,152,223-228` — `createProject` ignores `isPublished`
       from the body and admits at level 1; `updateProject`'s `isPublished` arm is deleted (widening
       moves to P3-4) and the ACL is carried from `existing` unconditionally.
 - [x] ~~`frontend/src/app/services/registry-state.service.ts` — gate on `level <= 2` from
       `/api/me`, not on `privileged`, which is now false for staff (doc §5, "Still valid").~~ done
       in P3-2 B: `privileged` went false for staff there, so the gate could not wait for this unit.
       Specs `'level 2 clears isUnauthorized'` and `'level 3 keeps isUnauthorized'`.
-- [ ] `src/swagger/swagger.yaml` — `POST /api/documents` and `POST /api/projects`: new records are
+- [x] `src/swagger/swagger.yaml` — `POST /api/documents` and `POST /api/projects`: new records are
       admitted at level 1 and `isPublished` in a create body is ignored.
 - Tests
-  - [ ] `test/controllers/nosql/document-redaction.test.js` case `'a new document is admitted at
+  - [x] `test/controllers/nosql/document-redaction.test.js` case `'a new document is admitted at
         level 1'` — `deepStrictEqual(saved.read, ['team'])` and `saved.isPublished === false`, with
         a PUBLISHED parent project. Fails on any inherited-publication shortcut.
-  - [ ] Same file, `'a create body cannot publish'` — `{ isPublished: true }` → `saved.read` is
+  - [x] Same file, `'a create body cannot publish'` — `{ isPublished: true }` → `saved.read` is
         `['team']`.
-  - [ ] `test/controllers/nosql/nosql-controllers.test.js` case `'PUT no longer changes a level'` —
+  - [x] `test/controllers/nosql-controllers.test.js` case `'PUT no longer changes a level'` —
         `{ isPublished: true }` on a level-1 project → the stored `read` is unchanged.
   - [x] ~~`frontend/.../registry-state.service.spec.ts` case `'level 2 with privileged false clears
         isUnauthorized'`~~ done in P3-2 B with the line above.
 - Acceptance
-  - [ ] `node --test test/controllers/nosql/*.test.js`; `cd frontend && yarn lint && yarn test && yarn build`.
-  - [ ] On test: create a document as a staff user holding `project:207`, then `GET` it back as the
-        same user (200) and as a staff user with no project role (404). The second call is the
-        acceptance for the whole ladder.
-  - [ ] Anonymous `jq -S` diff on `/api/projects` and `/api/documents`: 0 lines.
+  - [x] `node --test test/controllers/nosql/*.test.js`; `cd frontend && yarn lint && yarn test && yarn build`.
+  - [x] On test 2026-09-02 (sha bb90fcd): `POST /api/documents` with `isPublished: true` landed
+        `isPublished: false`; a `staff` key with no project role → 404, anonymous → 404, sysadmin
+        → 200. The "team member reads it (200)" half still needs a staff login holding
+        `project:207` — API keys cannot carry team roles.
+  - [x] Anonymous `jq -S` diff on `/api/projects` and `/api/documents`: 0 lines (2026-09-02, `before-p33-*`).
 
 ## P3-4 PUT /api/{projects,documents}/:id/level
 
@@ -1261,13 +1264,22 @@ level, never changes anyone else's access, and never touches the field plane.
       arm: the record's id or projectId is in a credential's `scope.ids` AND `levelOfRead(read)` is in
       the credential's `levels` (doc §1: a credential names the levels it may see). No new SQL shape — the level check is the same
       `EXISTS ... r IN (...)` / `read/any` the role arm already builds.
-- [ ] Auto-revoke on state change, not only on the clock: the P3-0 Track feed revokes every live
-      credential over a project when that project closes or its work completes, audited
-      `credential.revoke` with `detail.cause: 'project-closed' | 'work-complete'`. Renewal is the
-      norm on EA timelines, so the same job notifies the GRANTOR 7 days before an `end` passes.
-      Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer.
-      P3-6 ships the reusable half only: `credentials.revokeForProject(projectId, cause)` revokes
-      and audits, and nothing calls it yet. The feed wiring and the 7-day notice are what is left.
+- [ ] Auto-revoke on state change, not only on the clock.
+  - [x] Project closed. 2026-09-02: `sync-track-teams.js` reads `GET ${TRACK_API_BASE}/api/v1/projects`
+        on the same bearer, takes every project with `is_project_closed === true` or
+        `project_state === 'Closed'`, then reads the live project-scoped grants ONCE
+        (`credentials.listLiveProjectScoped()`) and intersects the ids in memory —
+        `revokeForProject(String(id), 'project-closed')` runs only for a closed project some grant
+        names, and a dry run counts the same matches without writing. `revokeForProject` narrows a
+        grant that names other projects (patch `/scope/ids`, audit `credential.narrow`) and revokes
+        only one left with no project. Document-scoped grants are left alone: their ids are document
+        ids and nothing here resolves them to a project. Summary gains `closedProjects=…
+        credentialsRevoked=…`, and `exitCodeFor` makes a failed write a non-zero CLI exit.
+        `project:<id>` roles are untouched — they follow Track staff, not project state.
+  - [ ] Work complete. Track's project feed exposes no such field, so there is nothing to act on
+        yet; `detail.cause: 'work-complete'` is unused.
+  - [ ] The 7-day pre-expiry notice to the GRANTOR (renewal is the norm on EA timelines).
+        Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer.
 - [x] Endpoints `POST /api/credentials`, `GET /api/credentials?party=|projectId=`,
       `POST /api/credentials/revoke` (body `{ id | batchId | party | projectId }`), all
       `requireWrite` + `requireRole('sysadmin')`, audited `credential.grant` /
@@ -1285,6 +1297,18 @@ level, never changes anyone else's access, and never touches the field plane.
   - [x] `test/controllers/credentials.test.js`: `'bulk revoke by batchId revokes exactly that
         batch'` (3 granted, 2 in the batch → 2 revoked, 1 untouched) and `'every grant and revoke
         audits'`.
+  - [x] `test/scripts/sync-track-teams.test.js`: `'closing a project revokes its credentials and
+        leaves an open project alone'` (2 over the closed project, 1 over an open one → 2 revoked),
+        `'a dry run revokes no credential and still counts them'`, `'a grant over several projects
+        is narrowed, not revoked, when one of them closes'`, `'the credentials container is read
+        once, however many projects are closed'` (40 closed, 1 read), `'one project whose revoke
+        fails is counted and does not stop the next'` (`failures=1`, `exitCodeFor` 1), `'a closed
+        project with no credentials revokes nothing and does not fail'`, `'project_state Closed
+        counts even when is_project_closed is false'`, `'no COSMOS_ENDPOINT reports zero instead of
+        reaching for Cosmos'`.
+  - [x] `test/repositories/credentials.test.js`: narrow vs revoke on close (multi-project grant
+        keeps its other ids, single-project grant is stamped, mixed set does both, document-scoped
+        grant untouched) and `listLiveProjectScoped` reading live project grants in one query.
   - [x] `test/vis/redact-matrix.test.js` case `'a credential does not widen the field plane'` — a
         level-4 caller admitted by a credential still sees only `effVis 4` fields.
 - Acceptance

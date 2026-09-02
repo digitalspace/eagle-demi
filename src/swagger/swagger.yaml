@@ -5,9 +5,9 @@ info:
     Central authoritative storage and spatial search engine for projects, documents, and
     administrative region boundaries.
 
-    NOT THE CONTRACT. This file is hand-maintained, covers 28 of the 43 paths in src/http/routes.js
-    (38 of its 57 operations), and has drifted from what the API actually serves. Undocumented here:
-    /config, /db/stats, /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
+    NOT THE CONTRACT. This file is hand-maintained, covers 29 of the 43 paths in src/http/routes.js
+    (39 of its 57 operations), and has drifted from what the API actually serves. Undocumented here:
+    /config, /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
     browser redirect rather than an API call and is documented in the wiki. The routes in
     src/http/routes.js are authoritative; read them, or the endpoint itself, before relying on
     anything here.
@@ -113,7 +113,10 @@ paths:
           description: pageSize above 100 on an unauthenticated request.
     post:
       summary: Create project
-      description: Ingest a new project with name and geographic centroid coordinates.
+      description: >-
+        Ingest a new project with name and geographic centroid coordinates. The project is
+        admitted at level 1 (team only): `isPublished` and `read` in the body are ignored, not
+        refused. Raising a project's level is `PUT /api/projects/{id}/level`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -153,7 +156,10 @@ paths:
           description: Project not found.
     put:
       summary: Update project
-      description: Modify metadata, coordinates, or publication state of an existing project.
+      description: >-
+        Modify an existing project's metadata or coordinates. It does not change visibility:
+        `isPublished` and `read` in the body are ignored and the stored ACL is kept. Use
+        `PUT /api/projects/{id}/level`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -327,7 +333,10 @@ paths:
           description: pageSize above 100 on an unauthenticated request.
     post:
       summary: Create document
-      description: Register document metadata record in the database.
+      description: >-
+        Register a document metadata record. The document is admitted at level 1 (team only),
+        capped at its parent project's level: `isPublished` and `read` in the body are ignored,
+        not refused. Raising a document's level is `PUT /api/documents/{id}/level`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -346,7 +355,10 @@ paths:
   /api/documents/extract:
     post:
       summary: Upload and extract document
-      description: Uploads document file to S3 MinIO and queues/processes text extraction.
+      description: >-
+        Uploads document file to S3 MinIO and queues/processes text extraction. The new record is
+        admitted at level 1 (team only), like `POST /api/documents`; widen it with
+        `PUT /api/documents/{id}/level`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1318,6 +1330,328 @@ paths:
         '403':
           description: Forbidden. Requires role sysadmin.
 
+  /api/db/stats:
+    get:
+      summary: Item counts per container
+      description: >-
+        An operational reading of the whole database, counted under systemAccess() — the numbers
+        are the container totals, not what the caller may read. Index-build state is on
+        GET /api/admin/index-progress, which issues no container query.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: One count per container, plus index-build progress when available.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  database:
+                    type: string
+                  connectionState:
+                    type: string
+                  driver:
+                    type: string
+                  stats:
+                    type: object
+                    properties:
+                      projects:
+                        type: integer
+                        description: Every project row.
+                      trackProjects:
+                        type: integer
+                        description: Projects with a Track counterpart.
+                      unlinkedProjects:
+                        type: integer
+                        description: Eagle-sourced projects Track has no counterpart for.
+                      documents:
+                        type: integer
+                        description: Every document row.
+                      boundaries:
+                        type: integer
+                        description: Every administrative region boundary.
+                      projectsWithCentroid:
+                        type: integer
+                        description: Projects carrying a usable centroid, so they can be map-placed.
+                      documentsExtracted:
+                        type: integer
+                        description: Documents whose content has been extracted.
+                      documentsExtractionErrors:
+                        type: integer
+                        description: Documents whose last extraction attempt failed.
+                  indexProgress:
+                    type: object
+                    description: Index-build percentage per container, omitted when unreadable.
+        '401':
+          description: Unauthorized.
+
+  /api/admin/audit:
+    get:
+      summary: The audit trail
+      description: >-
+        Rows from DemiAudit_CL over the chosen window, newest first, with a count per action over
+        the whole window. The API queries Log Analytics with its own managed identity — the caller
+        never reaches Azure. `action` and `actor` are matched against a fixed pattern before they
+        reach the query; anything else is a 400.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: hours
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [24, 168, 720]
+            default: 24
+        - name: action
+          in: query
+          required: false
+          description: Exact Action value, lower case and dots only.
+          schema:
+            type: string
+            pattern: '^[a-z][a-z.]{0,40}$'
+        - name: actor
+          in: query
+          required: false
+          description: Matches either ActorId or ActorName.
+          schema:
+            type: string
+            pattern: '^[\w.@-]{1,80}$'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: The rows, and the per-action counts behind the window total.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  hours:
+                    type: integer
+                  total:
+                    type: integer
+                    description: Rows in the window, which `limit` does not cap.
+                  byAction:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        action:
+                          type: string
+                        count:
+                          type: integer
+                  rows:
+                    type: array
+                    items:
+                      type: object
+                      description: One DemiAudit_CL row. SourceIp arrives already masked.
+                      properties:
+                        TimeGenerated:
+                          type: string
+                          format: date-time
+                        EventId:
+                          type: string
+                        Action:
+                          type: string
+                        Outcome:
+                          type: string
+                        ActorId:
+                          type: string
+                        ActorName:
+                          type: string
+                        ActorType:
+                          type: string
+                        ActorRoles:
+                          type: string
+                        SourceIp:
+                          type: string
+                        TargetType:
+                          type: string
+                        TargetId:
+                          type: string
+                        ProjectId:
+                          type: string
+                        CorrelationId:
+                          type: string
+                        Env:
+                          type: string
+                        Detail:
+                          type: string
+        '400':
+          description: An unlisted `hours`, a `limit` outside 1-500, or an `action`/`actor` that does not match its pattern.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Requires an admin role.
+        '503':
+          description: '`{ "error": "not configured" }` — AUDIT_WORKSPACE_CUSTOMER_ID is unset in this environment.'
+
+  /api/admin/analytics:
+    get:
+      summary: DEMI usage and API request health
+      description: >-
+        DemiEvents_CL summarised over the window (events and distinct visitors per day, top event
+        names, top search terms) beside AppRequests from the application workspace, for the same
+        window and for the last 24 hours. Visitors are counted from AnonId, a daily-salted value
+        that identifies nobody across days.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [7, 30]
+            default: 7
+      responses:
+        '200':
+          description: Usage and request health.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  days:
+                    type: integer
+                  totals:
+                    type: object
+                    properties:
+                      events:
+                        type: integer
+                      visitors:
+                        type: integer
+                  perDay:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        day:
+                          type: string
+                          format: date-time
+                        events:
+                          type: integer
+                        visitors:
+                          type: integer
+                  topEvents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        count:
+                          type: integer
+                  topSearches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        term:
+                          type: string
+                        count:
+                          type: integer
+                  requests:
+                    type: object
+                    description: Null on either side when the workspace returned no rows for that window.
+                    properties:
+                      window:
+                        $ref: '#/components/schemas/RequestStats'
+                      last24h:
+                        $ref: '#/components/schemas/RequestStats'
+        '400':
+          description: '`days` was neither 7 nor 30.'
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Requires an admin role.
+        '503':
+          description: '`{ "error": "not configured" }` — AUDIT_WORKSPACE_CUSTOMER_ID or APP_LOGS_WORKSPACE_CUSTOMER_ID is unset.'
+
+  /api/admin/cost:
+    get:
+      summary: Month-to-date Azure spend
+      description: >-
+        Actual cost for the resource group so far this month, by resource and by service, with the
+        monthly budget beside it. Cached for an hour per instance, so `asOf` is when the figures
+        were fetched rather than when they were asked for. `budget.spend` comes from Azure's own
+        `currentSpend`, which has been seen reporting 0 — `total` is the figure to trust.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: The month-to-date breakdown.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  asOf:
+                    type: string
+                    format: date-time
+                  currency:
+                    type: string
+                    description: The subscription's billing currency, CAD here.
+                  total:
+                    type: number
+                  byResource:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        resourceId:
+                          type: string
+                        cost:
+                          type: number
+                  byService:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        service:
+                          type: string
+                        cost:
+                          type: number
+                  budget:
+                    type: object
+                    nullable: true
+                    description: Null when BUDGET_NAME is unset; the spend figures still come back.
+                    properties:
+                      name:
+                        type: string
+                      amount:
+                        type: number
+                      spend:
+                        type: number
+                      currency:
+                        type: string
+        '401':
+          description: Unauthorized.
+        '403':
+          description: Forbidden. Requires an admin role.
+        '503':
+          description: '`{ "error": "not configured" }` — COST_SCOPE is unset in this environment.'
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -1368,6 +1702,18 @@ components:
         401. Empty, which is what every environment ships today, means the claim is not checked.
 
   schemas:
+    RequestStats:
+      type: object
+      nullable: true
+      properties:
+        requests:
+          type: integer
+        failed:
+          type: integer
+          description: Requests AppRequests recorded as unsuccessful.
+        p95DurationMs:
+          type: number
+      description: One AppRequests summary row.
     BulkDownloadAccepted:
       type: object
       properties:

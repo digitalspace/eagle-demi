@@ -118,6 +118,15 @@ param auditDcrEndpoint string = ''
 @description('Immutable ID of the audit DCR. Both this and the endpoint are required before anything is sent.')
 param auditDcrImmutableId string = ''
 
+@description('Workspace GUID holding DemiAudit_CL and DemiEvents_CL. Empty makes GET /admin/audit and /admin/analytics answer 503.')
+param auditWorkspaceCustomerId string = ''
+
+@description('Workspace GUID holding AppRequests. Empty makes GET /admin/analytics answer 503.')
+param appLogsWorkspaceCustomerId string = ''
+
+@description('Name of the monthly budget read by GET /admin/cost. Empty omits the budget from the answer; the spend figures still come back.')
+param budgetName string = ''
+
 @description('Resource id of the demi-audit-<env> workspace. Empty skips deploy-access auditing rather than failing the deployment.')
 param auditWorkspaceId string = ''
 
@@ -577,6 +586,25 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'AUDIT_DCR_IMMUTABLE_ID'
           value: auditDcrImmutableId
+        }
+        // Reading the same data back for the admin panel. The query API keys on the workspace
+        // GUID, not the resource id, so this is not auditWorkspaceId above.
+        {
+          name: 'AUDIT_WORKSPACE_CUSTOMER_ID'
+          value: auditWorkspaceCustomerId
+        }
+        {
+          name: 'APP_LOGS_WORKSPACE_CUSTOMER_ID'
+          value: appLogsWorkspaceCustomerId
+        }
+        // This resource group, which is the scope both the cost query and the budget read at.
+        {
+          name: 'COST_SCOPE'
+          value: resourceGroup().id
+        }
+        {
+          name: 'BUDGET_NAME'
+          value: budgetName
         }
         // Keycloak / SSO — MUST be pinned per environment. Without these the API falls back to
         // src/config.js defaults, which point at the DEV realm.

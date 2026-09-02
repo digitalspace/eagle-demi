@@ -11,7 +11,9 @@ const {
 const merge = require('../../src/merge/project');
 
 const NOW = '2026-08-23T00:00:00.000Z';
-const PUBLIC_ACL = ['public', ...merge.SECURE_ROLES];
+// A level-4 row, written out: these are fixtures for the SELECTION rule, not assertions about
+// which tokens the merge writes. `it writes exactly what a re-seed would write` covers that.
+const PUBLIC_ACL = ['staff', 'idir', 'public'];
 
 /** `sources.eagle` populated — the merge matched an Eagle record. */
 const MATCHED = { _id: '58851172aaecd9001b820335', read: ['public'] };
@@ -77,7 +79,7 @@ const EAGLE_ONLY = {
   sources: { track: null, eagle: MATCHED }
 };
 const ALREADY_CLOSED = {
-  id: '360', name: 'Berg Mine', eagleId: null, read: [...merge.SECURE_ROLES],
+  id: '360', name: 'Berg Mine', eagleId: null, read: ['staff'],
   sources: { track: {}, eagle: null }
 };
 // `POST /projects` writes `sources: {}` deliberately — the wildfire sync patches
@@ -178,10 +180,9 @@ test('closeUnpublished', async (t) => {
   });
 
   await t.test('it writes exactly what a re-seed would write', async () => {
-    // Two SECURE_ROLES lists exist and they differ. Asserting against either constant would pass
-    // while the backfill and a re-seed left different arrays on the same row, and neither module's
-    // own tests could see it. Comparing against the merge's OWN output is drift-proof: whichever
-    // list moves, this fails.
+    // Asserting against a constant would pass while the backfill and a re-seed left different
+    // arrays on the same row, and neither module's own tests could see it. Comparing against the
+    // merge's OWN output is drift-proof: whichever side moves, this fails.
     const reseeded = merge.mergeTrackProject({ track_project_id: 354 }, null, { now: NOW });
     assert.deepStrictEqual(closedAcl(), reseeded.read);
     assert.strictEqual(reseeded.isPublished, false, 'and the mirror agrees');

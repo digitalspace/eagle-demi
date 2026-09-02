@@ -130,6 +130,22 @@ test('projects repository', async (t) => {
     assert.match(calls[0].spec.query, /ORDER BY c\.name ASC$/);
   });
 
+  await t.test('countWithCentroid uses the IDENTICAL predicate as listWithCentroid', async () => {
+    const calls = captureQuery(t);
+    await projects.listWithCentroid(PUBLIC);
+    await projects.countWithCentroid(PUBLIC);
+
+    // The TRAILING criterion, not `split(' WHERE ')[1]`: the ACL predicate nests its own
+    // `EXISTS(... WHERE ...)`, so a split truncates both sides to the same constant and the
+    // comparison holds even with no criterion at all.
+    const trailing = q => q.slice(q.lastIndexOf(' AND '));
+    assert.strictEqual(trailing(calls[1].spec.query), trailing(calls[0].spec.query));
+    // `centroid.type` and not `centroid`: only the scalar leaf is in the container indexing
+    // policy, so filtering on the object path scans.
+    assert.match(trailing(calls[0].spec.query), /c\.centroid\.type/);
+    assert.match(calls[1].spec.query, /SELECT VALUE COUNT\(1\)/);
+  });
+
   await t.test('getById gates the point read', async () => {
     t.mock.method(cosmos, 'readItem', async () => ({
       id: '207', read: ['sysadmin'], isPublished: false
@@ -231,6 +247,17 @@ test('documents repository', async (t) => {
     // naively here would silently skip every document. Defaults-on-write make it an equality.
     assert.match(calls[0].spec.query, /c\.contentExtracted = @extracted/);
     assert.ok(!calls[0].spec.query.includes('!='));
+  });
+
+  // A successful extraction writes the field back as an explicit null, so IS_DEFINED alone would
+  // count every document ever extracted as a failure.
+  await t.test('extractionError:true excludes the null the success path writes', async () => {
+    const calls = captureQuery(t);
+    await documents.countVisible(ADMIN, { extractionError: true });
+
+    assert.match(calls[0].spec.query, /SELECT VALUE COUNT\(1\)/);
+    assert.match(calls[0].spec.query,
+      /IS_DEFINED\(c\.contentExtractionError\) AND NOT IS_NULL\(c\.contentExtractionError\)/);
   });
 
   await t.test('a junk, zero or negative pageSize still caps maxItemCount', async () => {

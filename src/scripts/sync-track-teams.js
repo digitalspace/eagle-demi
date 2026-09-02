@@ -26,6 +26,11 @@
  * no Track team to sync it from and must survive every run. The `project:` prefix is re-checked
  * after the Keycloak search rather than trusted, since `search=` is a substring match.
  *
+ * IT ALSO CLOSES CREDENTIALS. The same run reads `GET /api/v1/projects` and closes out every live
+ * Selected Credential over a project Track reports closed (TODO-rbac.md P3-6) — narrowed if it
+ * names other projects, revoked if it does not. "Work complete" is not in the feed, so
+ * `project-closed` is the only cause acted on here.
+ *
  * Two client-credentials identities, both confidential clients in the same realm:
  * `TRACK_CLIENT_ID` reads Track, `KEYCLOAK_ADMIN_CLIENT_ID` (`demi-role-sync`) holds
  * `realm-management` on the realm. Neither secret lives here; both arrive as app settings.
@@ -57,6 +62,16 @@ function usernameFor(staff, usernameByEmail = new Map()) {
   if (staff.idir_user_id) return `${String(staff.idir_user_id).trim().toLowerCase().replace(/@idir$/, '')}@idir`;
   const email = emailKey(staff);
   return email ? usernameByEmail.get(email) || null : null;
+}
+
+/** Track reports a close both ways; either one closes the project (measured on test 2026-09-02). */
+const isClosed = (project) => project.is_project_closed === true || project.project_state === 'Closed';
+
+/** Cosmos is private-endpoint-only, so a CLI dry run off-platform has no repository to ask. */
+function credentialsRepository() {
+  if (process.env.COSMOS_ENDPOINT) return require('../repositories/credentials');
+  logger.warn('[track-teams] COSMOS_ENDPOINT not set: credential auto-revoke reported as 0');
+  return { listLiveProjectScoped: async () => [], revokeForProject: async () => [] };
 }
 
 const countRoles = (entries) => entries.reduce((n, e) => n + e.roles.length, 0);
@@ -200,12 +215,13 @@ function keycloakClient() {
 
 /**
  * @param {string[]} argv
- * @param {object} [deps] test seam: {fetchJson, kc}
+ * @param {object} [deps] test seam: {fetchJson, kc, credentials}
  */
 async function sync(argv = [], deps = {}) {
   const args = parseArgs(argv);
   const get = deps.fetchJson || fetchJson;
   const kc = deps.kc || keycloakClient();
+  const credentials = deps.credentials || credentialsRepository();
 
   const trackToken = await kc.clientToken(config.trackClientId, config.trackClientSecret);
   const teams = await get(`${config.trackApiBase}/api/v1/projects/team-members`,
@@ -245,6 +261,8 @@ async function sync(argv = [], deps = {}) {
     grants: countRoles(decided.grants),
     revokes: countRoles(decided.revokes),
     unmatched: decided.unmatched.length,
+    closedProjects: 0,
+    credentialsRevoked: 0,
     failures: 0,
     plan: decided
   };
@@ -291,6 +309,40 @@ async function sync(argv = [], deps = {}) {
   await apply(decided.grants, kc.grant, 'grant');
   await apply(decided.revokes, kc.revoke, 'revoke');
 
+  // Project state, not team membership: a closed project keeps its `project:<id>` role, because
+  // that role follows Track staff. Only the credentials granted over the project end here.
+  // Guarded end to end: a throw here must not swallow the grants/revokes already applied above,
+  // or the summary line that reports them.
+  try {
+    const projects = await get(`${config.trackApiBase}/api/v1/projects`,
+      { Authorization: `Bearer ${trackToken}` });
+    const closed = new Set((projects || []).filter(isClosed).map(p => String(p.id)));
+    summary.closedProjects = closed.size;
+
+    // One cross-partition read for the whole sweep, intersected here: the closed set only grows,
+    // and a query per closed project re-asked every night about projects closed years ago.
+    const liveGrants = await credentials.listLiveProjectScoped();
+    const grantsOver = (id) => liveGrants.filter(row =>
+      (row.scope && row.scope.ids || []).some(one => String(one) === id));
+
+    for (const id of closed) {
+      const grants = grantsOver(id);
+      if (!grants.length) continue;
+      try {
+        // A grant over several projects is narrowed, not revoked; the count is the rows touched.
+        const rows = args.live ? await credentials.revokeForProject(id, 'project-closed') : grants;
+        summary.credentialsRevoked += rows.length;
+      } catch (err) {
+        summary.failures++;
+        logger.error(`[track-teams] credential revoke for project ${id} failed`,
+          { error: err.message });
+      }
+    }
+  } catch (err) {
+    summary.failures++;
+    logger.error(`[track-teams] credential close-out failed`, { error: err.message });
+  }
+
   // Without the names, `unmatched=N` is a number nobody can act on.
   if (noUser.length) {
     logger.warn(`[track-teams] no realm user for ${noUser.slice(0, 20).join(', ')}` +
@@ -303,7 +355,9 @@ async function sync(argv = [], deps = {}) {
 /** The line a log alert matches. */
 function summaryLine(s) {
   return `[track-teams] mode=${s.mode} projects=${s.projects} users=${s.users} ` +
-    `grants=${s.grants} revokes=${s.revokes} unmatched=${s.unmatched} failures=${s.failures}`;
+    `grants=${s.grants} revokes=${s.revokes} unmatched=${s.unmatched} ` +
+    `closedProjects=${s.closedProjects} credentialsRevoked=${s.credentialsRevoked} ` +
+    `failures=${s.failures}`;
 }
 
 /**
@@ -324,7 +378,23 @@ async function run({ live = false, deps } = {}) {
   return summary;
 }
 
-module.exports = { parseArgs, usernameFor, plan, keycloakClient, sync, summaryLine, run };
+/** 1 on any failed write, matching close-unpublished-track-projects.js. */
+const exitCodeFor = (summary) => (summary.failures > 0 ? 1 : 0);
+
+/**
+ * credentials.revokeForProject audits through src/repositories/credentials.js; the audit buffer
+ * flushes on an unref'd timer, so a CLI process.exit would drop rows still queued. Split out from
+ * the exit call itself so a test can drive it without killing the test process.
+ *
+ * @param {object} [auditModule] test seam, defaults to the real src/utils/audit
+ */
+async function drainAudit(auditModule = require('../utils/audit')) {
+  await auditModule.flush().catch(err => logger.error(`[track-teams] audit flush: ${err.message}`));
+}
+
+module.exports = {
+  parseArgs, usernameFor, plan, keycloakClient, sync, summaryLine, run, exitCodeFor, drainAudit
+};
 
 if (require.main === module) {
   let args;
@@ -336,6 +406,10 @@ if (require.main === module) {
   }
 
   run({ live: args.live })
+    .then(async summary => {
+      await drainAudit();
+      process.exit(exitCodeFor(summary));
+    })
     .catch(err => {
       logger.error(`[track-teams] ${err.stack || err.message}`);
       process.exit(1);

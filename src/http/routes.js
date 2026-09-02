@@ -28,6 +28,7 @@ const configController = () => require('../controllers/config');
 const meController = () => require('../controllers/me');
 const accessSimulateController = () => require('../controllers/access-simulate');
 const dbController = () => require('../controllers/db');
+const adminReadsController = () => require('../controllers/admin-reads');
 const searchController = () => require('../controllers/search');
 const wildfireController = () => require('../controllers/wildfire');
 const projectController = () => require('../controllers/nosql/project');
@@ -88,6 +89,12 @@ const routes = [
   // GET /wildfires removed — no consumer. The frontend reads the DataBC WFS directly, and the
   // project-level aggregate this sync writes is served with the project.
   { method: 'post', path: '/admin/sync/wildfires', guards: [authMiddleware, requireAdmin], load: () => wildfireController().syncWildfiresAdmin },
+
+  // Reading Azure back for the admin panel. The panel holds a Keycloak token and Azure wants an
+  // Entra one, so the API queries with its own identity — see src/azure/monitor.js.
+  { method: 'get', path: '/admin/audit', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getAudit },
+  { method: 'get', path: '/admin/analytics', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getAnalytics },
+  { method: 'get', path: '/admin/cost', guards: [authMiddleware, requireAdmin], load: () => adminReadsController().getCost },
 
   // Projects Routes
   { method: 'get', path: '/projects', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => projectController().getProjects },
