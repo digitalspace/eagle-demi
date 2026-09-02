@@ -53,7 +53,8 @@ const emailKey = (staff) => (staff.email ? String(staff.email).trim().toLowerCas
 
 /** The Keycloak username for a Track staff row, or null when nothing identifies them. */
 function usernameFor(staff, usernameByEmail = new Map()) {
-  if (staff.idir_user_id) return `${String(staff.idir_user_id).trim().toLowerCase()}@idir`;
+  // Track stores the id either bare or already suffixed (`<guid>@idir`, measured on test 2026-09-02).
+  if (staff.idir_user_id) return `${String(staff.idir_user_id).trim().toLowerCase().replace(/@idir$/, '')}@idir`;
   const email = emailKey(staff);
   return email ? usernameByEmail.get(email) || null : null;
 }
