@@ -69,9 +69,14 @@ describe('AccessModelComponent', () => {
   });
 
   /** Renders, then lets the debounce fire and the answer land. */
+  // Event-bound, not clock-bound: wait past the debounce, then until the in-flight request has
+  // landed (loading() false), capped so a hang still fails instead of spinning.
   async function settle(): Promise<HTMLElement> {
     fixture.detectChanges();
     await new Promise(resolve => setTimeout(resolve, 30));
+    for (let i = 0; i < 50 && fixture.componentInstance.loading(); i++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
     fixture.detectChanges();
     return fixture.nativeElement as HTMLElement;
   }
