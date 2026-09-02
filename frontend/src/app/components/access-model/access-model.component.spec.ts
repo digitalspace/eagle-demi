@@ -107,6 +107,13 @@ describe('AccessModelComponent', () => {
     expect(JSON.parse(simulatePosts()[0].body as string).projectScope).toBeUndefined();
   });
 
+  it('omits a ticked credential until it has ids and levels — half-typed is not refusable', async () => {
+    fixture.componentInstance.credentialOn.set(true);
+    await settle();
+
+    expect(JSON.parse(simulatePosts()[0].body as string).credential).toBeUndefined();
+  });
+
   it('omits every optional key for a caller with nothing but the public floor', async () => {
     await settle();
 

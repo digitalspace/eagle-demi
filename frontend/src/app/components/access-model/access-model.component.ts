@@ -153,11 +153,14 @@ export class AccessModelComponent implements OnDestroy {
     const scope = idList(this.scopeText());
     if (scope.length > 0) request.projectScope = scope;
 
-    if (this.credentialOn()) {
-      const levels = this.credentialLevels();
+    // A ticked box with no ids or no levels is a half-typed credential, not a caller to refuse:
+    // leave it out until it is complete, so the answer stays on screen while the user types.
+    const credentialIds = idList(this.credentialIdsText());
+    const credentialLevels = [1, 2, 3].filter(l => this.credentialLevels()[l]);
+    if (this.credentialOn() && credentialIds.length > 0 && credentialLevels.length > 0) {
       request.credential = {
-        scope: { type: this.credentialType(), ids: idList(this.credentialIdsText()) },
-        levels: [1, 2, 3].filter(l => levels[l])
+        scope: { type: this.credentialType(), ids: credentialIds },
+        levels: credentialLevels
       };
     }
     return request;
