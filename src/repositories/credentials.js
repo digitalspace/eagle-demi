@@ -126,8 +126,8 @@ async function revokeBy(selector, at = new Date().toISOString()) {
  * to its project, so a project close leaves them alone.
  *
  * Called by `src/scripts/sync-track-teams.js` on the `syncTrackTeams` timer with
- * `cause: 'project-closed'`. Work-complete is not in Track's feed. Nothing announces an ordinary
- * expiry: the holder reads each `end` on GET /api/me, the grantor on GET /api/credentials.
+ * `cause: 'project-closed'`. Work-complete is not in Track's feed, and the 7-day pre-expiry notice
+ * needs a mailer this repo does not have (TODO-rbac.md P3-6).
  *
  * @returns {object[]} the rows touched, narrowed or revoked, as they were before the write
  */

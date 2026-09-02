@@ -358,6 +358,19 @@ async function countSeededIds(access) {
   return value || 0;
 }
 
+/**
+ * Partitions come from the documents themselves, not `projects.listVisible()`, since an
+ * Eagle-only project's documents may have no row there. NO ORDER BY: cross-partition DISTINCT rejects it.
+ */
+async function listDistinctProjectIds(access) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    select: 'DISTINCT VALUE c.projectId'
+  });
+  return fetchAll(CONTAINER, spec);
+}
+
 async function upsert(document) {
   return cosmos.upsert(CONTAINER, document);
 }
@@ -486,6 +499,7 @@ module.exports = {
   extractionRowsForProject,
   listSeededIds,
   countSeededIds,
+  listDistinctProjectIds,
   upsert,
   bulkUpsertForProject,
   patchExtraction,

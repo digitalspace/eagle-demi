@@ -119,9 +119,6 @@ function syntheticRequest(body, now) {
 function meFor(request) {
   let body;
   getMe(request, { json: (data) => { body = data; } });
-  // Minus `credentials`: /api/me lists the caller's OWN live grants, while the one here is the
-  // hypothetical from the request body, already answered by the `rows` arms below.
-  delete body.credentials;
   return body;
 }
 

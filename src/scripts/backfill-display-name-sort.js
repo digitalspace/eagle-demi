@@ -25,7 +25,6 @@
  */
 
 const documents = require('../repositories/documents');
-const projects = require('../repositories/projects');
 const cosmos = require('../db/cosmos-nosql');
 const { systemAccess } = require('../helpers/access-sql');
 const { naturalSortKey } = require('../helpers/natural-sort');
@@ -64,12 +63,11 @@ function summaryLine(s) {
 
 /**
  * @param {string[]} argv
- * @param {object} [deps] test seam: {documents, projects, bulkVerified, now}
+ * @param {object} [deps] test seam: {documents, bulkVerified, now}
  */
 async function backfillDisplayNameSort(argv = [], deps = {}) {
   const args = parseArgs(argv);
   const documentsRepo = deps.documents || documents;
-  const projectsRepo = deps.projects || projects;
   // documentsRepo, not the module: a caller who injects a read seam and not a write seam would
   // otherwise read the double and write the real container.
   const write = deps.bulkVerified ||
@@ -102,9 +100,10 @@ async function backfillDisplayNameSort(argv = [], deps = {}) {
   // cross-partition `ORDER BY c.id ASC` read returns its first page with NO continuation token, so
   // a paging loop stops after one page and reports success (backfill-document-list-ids.js).
   // A bulk write cannot span partition keys either, so the writes are grouped this way regardless.
-  // `''` is a real partition: documents with no project live there.
-  const projectPage = await projectsRepo.listVisible(access, {});
-  const partitions = ['', ...projectPage.items.map(p => String(p.id))];
+  //
+  // Enumerated from `documents`, NOT `projects`: an Eagle-only project has documents but no
+  // `projects` row, so walking project ids would leave its partition never scanned.
+  const partitions = (await documentsRepo.listDistinctProjectIds(access)).map(v => String(v ?? ''));
   summary.expected = await documentsRepo.countVisible(access, {});
 
   for (const partition of partitions) {

@@ -152,8 +152,8 @@ optional Phase 5b in `TODO-rbac.md`, taken only when the compartment holds real 
 A record leaves level 0 only through `POST /api/sealed/:id/release`. One `compliance` holder is
 enough; the body must carry `caseNumber` and `decision` (400 without either). The release rewrites
 `read[]` to `readForLevel(1)`, writes `auditEvent('sealed.release')` with the case number and
-decision. That audit row is the record of the release; nothing is emailed. Two-person release is
-a later policy toggle. Nothing enters level 0 through
+decision, and notifies the C&E lead. Notification path: TBD — ACS Email is EPIC's send path, but
+this repo has no mailer. Two-person release is a later policy toggle. Nothing enters level 0 through
 the widening endpoint; `PUT /:id/level` 400s on level 0.
 
 **Selected Credentials.** A credential grants a named party sight of specified records at levels
@@ -182,9 +182,8 @@ organisation) or a registry API key; IDIR guest only for an external acting as s
 `idir`, so a credential holder never reaches level 3 by logging in. `end` is required and enforced
 on the GRANT, not on the login — 90 days by default. A grant is also closed out by state change: the nightly Track sync
 that mints team roles drops a project Track reports closed from every live credential over it, and revokes the credential
-once no project is left. EA windows routinely run past 90 days, so renewal is the norm, and the
-expiry is visible rather than announced: the holder reads their own live grants and each `end` on
-`GET /api/me`, the grantor lists the same rows on `GET /api/credentials`.
+once no project is left. EA windows routinely run past 90 days, so renewal is the norm and the grantor is notified
+7 days before expiry.
 
 **Fail closed.** Unknown role → level 4. No ladder token → the row matches only privileged
 callers until it is written with one (P3-2 removes the legacy `unsetIsPublic` arm). Missing
@@ -315,8 +314,8 @@ Each item below overrides the corresponding section of the source document.
     (`src/controllers/nosql/api-key.js:31`), created as a realm role and granted to named humans
     behind the C&E lead.
 12. Answered 2026-08-28: one `compliance` holder is enough, provided the release records a case
-    number and a decision in the same action. The `sealed.release` audit row is the record and
-    nothing is emailed. Two-person release is a later policy toggle, not a schema change.
+    number and a decision in the same action and the C&E lead is notified. Two-person release is a
+    later policy toggle, not a schema change.
 13. Answered 2026-08-28: yes, people through BCeID enabled as an IdP on `eao-epic` — BCeID
     Business for proponents and consultants, which ties the credential to the organisation. IDIR
     guest only for an external acting as staff. Systems use the existing registry API keys (roles +
@@ -324,9 +323,8 @@ Each item below overrides the corresponding section of the source document.
     accident.
 14. Answered 2026-08-28: `end` is required and defaults to 90 days, enforced on the grant and not
     on the login. The grant is also auto-revoked when the project closes or the engagement's work
-    completes. EA windows routinely exceed 90 days, so renewal is the norm, and the expiry is
-    visible rather than announced: the holder sees their own grants and each `end` on
-    `GET /api/me`, the grantor on `GET /api/credentials`.
+    completes. EA windows routinely exceed 90 days, so renewal is the norm and the grantor is
+    notified 7 days before expiry.
 15. Answered 2026-08-28: required for any widening to level 4 and for every level-0 release
     (which also carries the case number). Optional on every other move; the audit row already
     carries actor, time, from and to.

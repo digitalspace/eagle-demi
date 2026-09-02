@@ -551,4 +551,25 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     assert.match(calls[1].spec.query, /^SELECT VALUE COUNT\(1\) FROM c/);
     assert.match(calls[3].spec.query, /^SELECT VALUE COUNT\(1\) FROM c/);
   });
+
+  await t.test('listDistinctProjectIds enumerates partitions, not projects', async () => {
+    // The whole point of this read: an Eagle-only project has documents but no `projects` row, so
+    // projects.listVisible() alone would never walk its partition. See backfill-display-name-sort.js.
+    const calls = paged(t, [
+      { items: ['207', ''], continuationToken: 'page2' },
+      { items: ['208'], continuationToken: undefined }
+    ]);
+
+    const ids = await documents.listDistinctProjectIds(PUBLIC);
+
+    const { spec, options } = calls[0];
+    assert.match(spec.query, /^SELECT DISTINCT VALUE c\.projectId FROM c WHERE /);
+    assert.match(spec.query, /EXISTS\(SELECT VALUE r FROM r IN c\.read/,
+      'the visibility predicate composes here too, not a bare partition scan');
+    assert.ok(spec.parameters.some(p => p.value === 'public'));
+    assert.doesNotMatch(spec.query, /ORDER BY/,
+      'cross-partition DISTINCT rejects a sort, same continuation-token drop as listSeededIds');
+    assert.strictEqual(options.partitionKey, undefined, 'every partition, not one');
+    assert.deepStrictEqual(ids, ['207', '', '208']);
+  });
 });
