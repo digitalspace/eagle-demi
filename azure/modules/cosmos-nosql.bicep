@@ -212,6 +212,10 @@ resource documentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/
           {
             path: '/contentExtracted/?'
           }
+          {
+            // documents.js filters on it for the extraction-failure count on /db/stats.
+            path: '/contentExtractionError/?'
+          }
           // No '/id/?' here, and it cannot go here: Cosmos rejects the whole policy with "the
           // specified path '/id/?' could not be accepted because it overrides system property
           // 'id'". `id` is always indexed and cannot be included or excluded, so the by-id

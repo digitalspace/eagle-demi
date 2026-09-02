@@ -134,9 +134,8 @@ async function purge(argv = [], opts = {}) {
     for (const doc of page) {
       summary.scanned++;
 
-      // Filtered here rather than in the query: `buildCriteria` has no error predicate, and adding
-      // one means new SQL surface for a one-off admin run over the ~4% of the corpus that is
-      // extracted at all. The page is already in hand.
+      // Filtered here rather than in the query: --error-like has no query equivalent, so the page
+      // is already in hand for --errors-only too.
       //
       // Chunk removal still runs for the documents that DO match. A recorded failure usually wrote
       // no chunks, so it is a no-op — but the partial-write path records an error over an earlier

@@ -10,7 +10,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead, readForLevel, levelOfRead, SEALED_TOKEN } = require('../helpers/access-sql');
-const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
+const { eq, inList, isDefinedAndNotNull, selectWhere, selectFor, countWhere, pageOptions, fetchAll } = require('./_sql');
 
 const CONTAINER = 'documents';
 const PARTITION_FIELD = 'projectId';
@@ -37,7 +37,7 @@ function projectIdList(projectId) {
   return (Array.isArray(projectId) ? projectId : [projectId]).map(String);
 }
 
-function buildCriteria({ projectId, extracted, sourceSystem }) {
+function buildCriteria({ projectId, extracted, sourceSystem, extractionError }) {
   const criteria = [];
   const projectIds = projectIdList(projectId);
   if (projectIds.length === 1) criteria.push(eq('projectId', projectIds[0], '@projectId'));
@@ -49,6 +49,9 @@ function buildCriteria({ projectId, extracted, sourceSystem }) {
   // the single most dangerous translation in the migration, silently skipping every document.
   if (extracted === true) criteria.push(eq('contentExtracted', true, '@extracted'));
   if (extracted === false) criteria.push(eq('contentExtracted', false, '@extracted'));
+
+  // NOT IS_NULL carries this: a successful extraction writes the field back as an explicit null.
+  if (extractionError === true) criteria.push(isDefinedAndNotNull('contentExtractionError'));
 
   return criteria;
 }

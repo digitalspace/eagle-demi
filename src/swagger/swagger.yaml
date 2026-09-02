@@ -5,9 +5,9 @@ info:
     Central authoritative storage and spatial search engine for projects, documents, and
     administrative region boundaries.
 
-    NOT THE CONTRACT. This file is hand-maintained, covers 22 of the 37 paths in src/http/routes.js
-    (31 of its 50 operations), and has drifted from what the API actually serves. Undocumented here:
-    /config, /db/stats, /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
+    NOT THE CONTRACT. This file is hand-maintained, covers 27 of the 41 paths in src/http/routes.js
+    (37 of its 55 operations), and has drifted from what the API actually serves. Undocumented here:
+    /config, /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
     browser redirect rather than an API call and is documented in the wiki. The routes in
     src/http/routes.js are authoritative; read them, or the endpoint itself, before relying on
     anything here.
@@ -1223,6 +1223,65 @@ paths:
           description: Unauthorized.
         '403':
           description: Forbidden. Requires role sysadmin.
+
+  /api/db/stats:
+    get:
+      summary: Item counts per container
+      description: >-
+        An operational reading of the whole database, counted under systemAccess() — the numbers
+        are the container totals, not what the caller may read. Index-build state is on
+        GET /api/admin/index-progress, which issues no container query.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      responses:
+        '200':
+          description: One count per container, plus index-build progress when available.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  database:
+                    type: string
+                  connectionState:
+                    type: string
+                  driver:
+                    type: string
+                  stats:
+                    type: object
+                    properties:
+                      projects:
+                        type: integer
+                        description: Every project row.
+                      trackProjects:
+                        type: integer
+                        description: Projects with a Track counterpart.
+                      unlinkedProjects:
+                        type: integer
+                        description: Eagle-sourced projects Track has no counterpart for.
+                      documents:
+                        type: integer
+                        description: Every document row.
+                      boundaries:
+                        type: integer
+                        description: Every administrative region boundary.
+                      projectsWithCentroid:
+                        type: integer
+                        description: Projects carrying a usable centroid, so they can be map-placed.
+                      documentsExtracted:
+                        type: integer
+                        description: Documents whose content has been extracted.
+                      documentsExtractionErrors:
+                        type: integer
+                        description: Documents whose last extraction attempt failed.
+                  indexProgress:
+                    type: object
+                    description: Index-build percentage per container, omitted when unreadable.
+        '401':
+          description: Unauthorized.
 
 components:
   securitySchemes:
