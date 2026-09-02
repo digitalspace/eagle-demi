@@ -57,7 +57,10 @@ function projectsRepository() {
 async function syncProjects(apiProjects, opts = {}) {
   const { live = false, deps = {} } = opts;
   const rows = apiProjects || [];
-  const summary = { trackProjects: rows.length, created: 0, updated: 0, orphaned: 0, failures: 0 };
+  const summary = {
+    trackProjects: rows.length,
+    created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, failures: 0
+  };
 
   const repo = deps.projects || projectsRepository();
   if (!repo) return summary;
@@ -67,6 +70,12 @@ async function syncProjects(apiProjects, opts = {}) {
   // second copy of every record it was not shown.
   const { items } = await repo.listVisible(systemAccess(), {});
   const stored = new Map(items.map(p => [String(p.id), p]));
+  // `buildRegistry` matches Track to Eagle on `epic_guid`, so a project DEMI holds as an Eagle-only
+  // row is this same project under its pre-Track key, not a record Track has never seen.
+  // `sourceSystem === 'eagle'` is the repository's own definition of that set (`listEagleOnlyIds`).
+  const eagleOnly = new Map(
+    items.filter(p => p.sourceSystem === 'eagle' && p.eagleId).map(p => [String(p.eagleId), p])
+  );
   const listed = new Set();
 
   for (const apiProject of rows) {
@@ -74,8 +83,29 @@ async function syncProjects(apiProjects, opts = {}) {
     const id = String(track.track_project_id);
     listed.add(id);
     const existing = stored.get(id);
+    const guid = track.epic_guid ? String(track.epic_guid) : null;
+    const relink = !existing && guid ? eagleOnly.get(guid) : null;
 
     try {
+      if (relink) {
+        // A RE-KEY, NOT A NEW RECORD. `...relink` keeps the boundary stamps and `sources.wildfire`,
+        // the merge re-owns the identity and the Track fields, and `read`/`isPublished`/`vis` come
+        // back off the stored row: a re-key must not move a level either.
+        //
+        // The `eagle-<id>` row is left exactly as it stands, because that is what the seed does
+        // with it: `buildRegistry` simply stops producing it, and `--reconcile` keys Eagle-only
+        // rows on `eagleId` against the Eagle fetch, so a row whose Eagle project still exists is
+        // not surplus. Removing one is `purgeProject`'s job, and that cascades to its documents.
+        const merged = mergeTrackProject(track, (relink.sources || {}).eagle || null, { now });
+        summary.relinked++;
+        if (live) {
+          await repo.upsert({
+            ...relink, ...merged, read: relink.read, isPublished: relink.isPublished
+          });
+        }
+        continue;
+      }
+
       if (!existing) {
         const merged = mergeTrackProject(track, null, { now });
         // Admission is level 1 (TODO-rbac.md P3-3). The merge's own default for an unmatched
@@ -84,6 +114,15 @@ async function syncProjects(apiProjects, opts = {}) {
         merged.isPublished = false;
         summary.created++;
         if (live) await repo.upsert(merged);
+        continue;
+      }
+
+      // `POST /projects` writes `sources: {}`, and close-unpublished-track-projects.js reads that
+      // absence to tell a deliberately published API row from a merge-produced Track-only one.
+      // Mirroring onto it would stamp `sources.track` on and cost it `public` on the next close
+      // run. `sourceSystem` cannot stand in: the API route writes `'track'` too.
+      if (!(existing.sources || {}).track) {
+        summary.skippedApiRows++;
         continue;
       }
 
@@ -115,4 +154,4 @@ async function syncProjects(apiProjects, opts = {}) {
   return summary;
 }
 
-module.exports = { TRACK_FIELDS, trackChanges, syncProjects };
+module.exports = { trackChanges, syncProjects };

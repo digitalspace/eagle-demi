@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { syncProjects, trackChanges } = require('../../src/scripts/sync-track-projects');
+const { needsClosing } = require('../../src/scripts/close-unpublished-track-projects');
 const { trackApiToExtract } = require('../../src/seed/sources');
 const { mergeTrackProject } = require('../../src/merge/project');
 const { readForLevel } = require('../../src/helpers/access-sql');
@@ -186,6 +187,80 @@ test('a dry run writes nothing and still counts what a live run would do', async
   assert.strictEqual(summary.trackProjects, 2);
 });
 
+/**
+ * `POST /projects`, as `createProject` writes it: `sources: {}` and `eagleId: null`, then widened
+ * to level 4 through `PUT /:id/level`. Under a Track id, because that is the collision that makes
+ * it reachable from the feed at all.
+ */
+function apiProject(overrides = {}) {
+  return {
+    id: '207',
+    trackProjectId: 207,
+    eagleId: null,
+    sourceSystem: 'track',
+    name: 'Hand-created project',
+    sources: {},
+    read: readForLevel(4),
+    isPublished: true,
+    ...overrides
+  };
+}
+
+test('a row created through POST /projects is left alone, not reclassified', async () => {
+  const stored = apiProject();
+  const projects = fakeProjects([stored]);
+  assert.strictEqual(needsClosing(stored), false, 'the premise: nothing would close it today');
+
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects }, now: NOW });
+
+  assert.strictEqual(summary.skippedApiRows, 1);
+  assert.strictEqual(summary.updated, 0);
+  assert.deepStrictEqual(projects.writes, []);
+  const [after] = projects.items;
+  assert.deepStrictEqual(after, stored, 'byte-identical');
+  assert.strictEqual((after.sources || {}).track, undefined,
+    'the discriminator close-unpublished reads must stay absent');
+  assert.strictEqual(needsClosing(after), false,
+    'stamping sources.track on would strip public from a deliberately published row');
+});
+
+/** The Eagle-only row the merge writes when Track has no counterpart yet. */
+function eagleOnlyProject(overrides = {}) {
+  return {
+    id: `eagle-${API_PROJECT.epic_guid}`,
+    trackProjectId: null,
+    eagleId: API_PROJECT.epic_guid,
+    sourceSystem: 'eagle',
+    name: 'Nicomen Wind Energy',
+    read: readForLevel(4),
+    isPublished: true,
+    vis: { eacExpires: 3 },
+    regionalDistrict: 'Thompson-Nicola',
+    sources: { track: null, eagle: { _id: API_PROJECT.epic_guid, name: 'Nicomen Wind Energy' } },
+    ...overrides
+  };
+}
+
+test('a project stored as Eagle-only is re-keyed to its Track id, not duplicated', async () => {
+  const projects = fakeProjects([eagleOnlyProject()]);
+
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects }, now: NOW });
+
+  assert.strictEqual(summary.relinked, 1);
+  assert.strictEqual(summary.created, 0, 'a second row for a project DEMI already holds');
+  assert.strictEqual(projects.writes.length, 1);
+
+  const [written] = projects.writes;
+  assert.strictEqual(written.id, '207', 'the Track id wins, as buildRegistry keys a matched pair');
+  assert.strictEqual(written.eagleId, API_PROJECT.epic_guid);
+  assert.strictEqual(written.sourceSystem, 'track');
+  assert.deepStrictEqual(written.read, readForLevel(4), 'a re-key must not move a level');
+  assert.strictEqual(written.isPublished, true);
+  assert.deepStrictEqual(written.vis, { eacExpires: 3 });
+  assert.strictEqual(written.regionalDistrict, 'Thompson-Nicola');
+  assert.ok(written.sources.track, 'and it is a merge-produced Track row from now on');
+});
+
 test('an empty Track column does not blank a populated row', () => {
   const stored = storedProject();
   const merged = mergeTrackProject({ ...FLAT, ea_certificate: '' }, null, { now: NOW });
@@ -217,6 +292,7 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
   const summary = await syncProjects([API_PROJECT], { live: true, now: NOW });
 
   assert.deepStrictEqual(summary,
-    { trackProjects: 1, created: 0, updated: 0, orphaned: 0, failures: 0 },
+    { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
+      failures: 0 },
     'the feed side still counts; the write side is honestly zero');
 });
