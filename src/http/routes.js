@@ -24,6 +24,7 @@ const { credentialsMiddleware } = require('../middleware/credentials');
 const healthController = () => require('../controllers/health');
 const configController = () => require('../controllers/config');
 const meController = () => require('../controllers/me');
+const accessSimulateController = () => require('../controllers/access-simulate');
 const dbController = () => require('../controllers/db');
 const searchController = () => require('../controllers/search');
 const wildfireController = () => require('../controllers/wildfire');
@@ -57,6 +58,10 @@ const routes = [
   { method: 'get', path: '/config', guards: [], load: () => configController().getConfig },
   // Passive, not authMiddleware: an anonymous caller gets the public tier, not a 401.
   { method: 'get', path: '/me', guards: [passiveAuthMiddleware], load: () => meController().getMe },
+  // Authenticated, though the body describes a HYPOTHETICAL caller and the handler reads no
+  // container: the answer is the whole field catalog plus a role-privilege oracle, the same
+  // disclosure /api-docs is gated for below. The Access Model screen is staff-gated anyway.
+  { method: 'post', path: '/access/simulate', guards: [authMiddleware], load: () => accessSimulateController().simulate },
 
   // Database Management Routes
   // Removed: /db/import and /db/query (generic bulk-write and arbitrary-query endpoints over

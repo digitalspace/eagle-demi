@@ -5,8 +5,8 @@ info:
     Central authoritative storage and spatial search engine for projects, documents, and
     administrative region boundaries.
 
-    NOT THE CONTRACT. This file is hand-maintained, covers 10 of the 23 paths in src/http/routes.js
-    (18 of its 35 operations), and has drifted from what the API actually serves. Undocumented here:
+    NOT THE CONTRACT. This file is hand-maintained, covers 22 of the 37 paths in src/http/routes.js
+    (31 of its 50 operations), and has drifted from what the API actually serves. Undocumented here:
     /config, /db/stats, /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
     browser redirect rather than an API call and is documented in the wiki. The routes in
     src/http/routes.js are authoritative; read them, or the endpoint itself, before relying on
@@ -49,6 +49,34 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Me'
+
+  /api/access/simulate:
+    post:
+      summary: What a hypothetical caller could see
+      description: >-
+        Runs the access engine over a described caller and returns the answer, without reading any
+        data and without granting the real caller anything. Authenticated: the body describes
+        somebody else, but the answer is the whole field catalog and a role-privilege oracle.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccessSimulateRequest'
+      responses:
+        '200':
+          description: The level, ladder rows and field visibility this caller would get.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessSimulateResponse'
+        '400':
+          description: Unknown field, malformed list, or a credential the registry would refuse.
+        '401':
+          description: Unauthorized.
 
   /api/projects:
     get:
@@ -1061,6 +1089,121 @@ components:
           type: boolean
           description: >-
             True when the caller passes authMiddleware; the frontend gates staff screens on it.
+
+    AccessSimulateRequest:
+      type: object
+      additionalProperties: false
+      description: The caller to simulate. Every field is optional; an empty body is an anonymous one.
+      properties:
+        roles:
+          type: array
+          description: >-
+            Realm roles. `team` and `idir` are stripped, as they are on a real token — a realm role
+            must not forge a ladder token.
+          items:
+            type: string
+        identityProvider:
+          type: string
+          nullable: true
+          enum: [idir, bceid, github]
+          description: The `identity_provider` claim. Only `idir` moves the caller to level 3.
+        teams:
+          type: array
+          description: Project ids the caller is a team member of, as `project:<id>` realm roles.
+          items:
+            type: string
+        projectScope:
+          type: array
+          description: >-
+            Project ids a minted key restricts the caller to. Present, even empty, makes the tier
+            `scoped`.
+          items:
+            type: string
+        credential:
+          type: object
+          nullable: true
+          additionalProperties: false
+          description: >-
+            A Selected Credential the caller holds, validated as `POST /credentials` would validate
+            it. The window is supplied by the simulator.
+          properties:
+            scope:
+              type: object
+              properties:
+                type:
+                  type: string
+                  enum: [document, project]
+                ids:
+                  type: array
+                  items:
+                    type: string
+            levels:
+              type: array
+              items:
+                type: integer
+                enum: [1, 2, 3]
+
+    AccessSimulateResponse:
+      type: object
+      description: >-
+        The `Me` answer for the simulated caller, plus what it reaches on the row plane and the
+        field plane.
+      allOf:
+        - $ref: '#/components/schemas/Me'
+      properties:
+        rows:
+          type: object
+          description: >-
+            One entry per ladder level, keyed `1`-`4`. `via` names the arm that got the caller
+            there: `role`, `team`, `credential`, or null when the row is out of reach.
+          additionalProperties:
+            type: object
+            properties:
+              readable:
+                type: boolean
+              via:
+                type: string
+                nullable: true
+                enum: [role, team, credential]
+        fields:
+          type: object
+          description: >-
+            Every catalogued field of each entity, including the plumbing keys pinned to level 0.
+          properties:
+            projects:
+              type: array
+              items:
+                $ref: '#/components/schemas/AccessSimulateField'
+            documents:
+              type: array
+              items:
+                $ref: '#/components/schemas/AccessSimulateField'
+        predicatesAssumedFalse:
+          type: boolean
+          description: >-
+            Always true: no record is simulated, so every catalog `when` reads false and each field
+            sits at its `defaultVis`.
+        notes:
+          type: object
+          properties:
+            sealedCompartment:
+              type: string
+
+    AccessSimulateField:
+      type: object
+      properties:
+        field:
+          type: string
+        defaultVis:
+          type: integer
+        maxVis:
+          type: integer
+        when:
+          type: string
+          nullable: true
+          description: Name of the catalog predicate that widens this field, or null.
+        visible:
+          type: boolean
 
     Project:
       type: object
