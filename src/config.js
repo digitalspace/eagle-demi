@@ -40,6 +40,21 @@ function timeSpanMs(value) {
   return ((Number(m[1]) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1000;
 }
 
+/**
+ * A comma list of IPv4 addresses or CIDR blocks. Throws at load on any other shape: a typo would
+ * otherwise deploy clean and silently put every visitor back on one shared quota key.
+ */
+function proxyListFromEnv(name) {
+  const entries = (process.env[name] || '').split(',').map(s => s.trim()).filter(Boolean);
+  const shape = /^(\d{1,3})(\.\d{1,3}){3}(\/\d{1,2})?$/;
+  for (const entry of entries) {
+    if (!shape.test(entry) || entry.split('/')[0].split('.').some(o => Number(o) > 255)) {
+      throw new Error(`${name} must be a comma list of IPv4 addresses or CIDR blocks, got '${entry}'.`);
+    }
+  }
+  return entries;
+}
+
 const config = {
   minioHost:    process.env.MINIO_HOST       || 'localhost',
   minioPort:    parseInt(process.env.MINIO_PORT || '9000', 10),
@@ -262,7 +277,7 @@ const config = {
   // Egress addresses of the OpenShift rproxy that fronts eagle-public. When APIM asserts one of
   // these, every eagle-public visitor shares it and the anonymous bulk quota becomes one global
   // bucket — so utils/caller-ip.js keys on the browser hop instead. See that file.
-  trustedProxyIps:       (process.env.TRUSTED_PROXY_IPS || '').split(',').map(s => s.trim()).filter(Boolean),
+  trustedProxyIps:       proxyListFromEnv('TRUSTED_PROXY_IPS'),
 };
 
 // Fail to boot rather than run a deployed environment with an allowlist that admits every client

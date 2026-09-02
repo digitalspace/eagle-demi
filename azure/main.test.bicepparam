@@ -120,10 +120,10 @@ param allowedClients = 'eagle-admin-console'
 // Measured 2026-08-28 on a test-realm user token: aud contains 'account'. Prod not measured.
 param ssoAudience = 'account'
 
-// Empty until the rproxy egress address is measured: one request through
-// eagle-test.apps.silver.devops.gov.bc.ca/demi-search, then read `callerIp` off the App Insights
-// request row. Until it is set, every eagle-public visitor shares one anonymous
-// bulk-download quota key.
+// The rproxy egress addresses as APIM reports them (`callerIp` on the App Insights request row
+// for a request made through eagle-test.apps.silver.devops.gov.bc.ca/demi-search; measured
+// 2026-09-02). With these trusted, the anonymous bulk-download quota keys on the browser hop.
+// An address missing here only puts that proxy's visitors back on one shared key.
 param trustedProxyIps = '142.34.194.121,142.34.194.123'
 
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
