@@ -1,0 +1,8 @@
+[
+ {"allowedMemberTypes":["User","Application"],"description":"Row-plane superuser (level 1)","displayName":"sysadmin","id":"7b1d5b1e-0f7a-4f2a-9c1e-000000000001","isEnabled":true,"value":"sysadmin"},
+ {"allowedMemberTypes":["User","Application"],"description":"Row-plane superuser (level 1)","displayName":"demi-admin","id":"7b1d5b1e-0f7a-4f2a-9c1e-000000000002","isEnabled":true,"value":"demi-admin"},
+ {"allowedMemberTypes":["User"],"description":"EAO staff (level 2)","displayName":"staff","id":"7b1d5b1e-0f7a-4f2a-9c1e-000000000003","isEnabled":true,"value":"staff"},
+ {"allowedMemberTypes":["User","Application"],"description":"Sealed compartment (level 0 rows)","displayName":"compliance","id":"7b1d5b1e-0f7a-4f2a-9c1e-000000000004","isEnabled":true,"value":"compliance"},
+ {"allowedMemberTypes":["Application"],"description":"Service reader (level 2)","displayName":"demi-service-read","id":"7b1d5b1e-0f7a-4f2a-9c1e-000000000005","isEnabled":true,"value":"demi-service-read"},
+ {"allowedMemberTypes":["Application"],"description":"Service writer (level 2)","displayName":"demi-service-write","id":"7b1d5b1e-0f7a-4f2a-9c1e-000000000006","isEnabled":true,"value":"demi-service-write"}
+]

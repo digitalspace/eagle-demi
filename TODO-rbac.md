@@ -42,9 +42,26 @@ P4-3 → P4-4 → P4-5. P3-2 and P3-6 residues are independent. P5b is optional 
       Delivered (prod): ______
 - [x] EAO questions 1-4: closed 2026-08-28, answers in `docs/rbac-architecture.md` §3.
 - [ ] Entra app registration for the DEMI API, app roles named exactly as the realm roles, issuer and
-      audience recorded in the wiki. Blocks P4-3. Owner: ______  Requested: ______  Delivered: ______
+      audience recorded in the wiki. Blocks P4-3. The tenant refuses non-admin `az ad app create`
+      (2026-09-02, "Insufficient privileges"), so the identity team must create it; the app-role
+      manifest to hand them is `docs/entra-app-roles.json`. Owner: Daniel. Requested: ______
+      Delivered: ______
 
 ---
+
+## Pick-up checks (do these first)
+
+- [ ] First live Track mirror on test ran 2026-09-03 10:00 UTC. Read the `[track-teams]` summary
+      line in App Insights for `demi-api-fc-test`; expected `trackProjects=384 created=2 updated=17
+      failures=0` (dry run 2026-09-02). Anything else: `src/scripts/sync-track-projects.js`.
+- [ ] Staff-login checks on test, with Daniel signed in as IDIR staff on a Track team: a level-1
+      row of that team returns 200, `PATCH` on a project as `staff` returns 403, and the audit
+      container holds the rows. Closes the P3-2 residue staff-token box too.
+- [ ] Prod runs v0.58.3; main carries #288 (trusted proxy), #290 (`/api/me` credentials), #294. Tag
+      and deploy when wanted: `gh workflow run "Deploy DEMI to Azure production" --ref <tag> -f
+      version=<tag>`; a dispatch from `main` is rejected by the environment tag policy.
+- [ ] Rotate the prod `demi-user` Keycloak password (it passed through a terminal 2026-09-02) and
+      update `demi-keycloak-admin` in `6cdc9e-prod`.
 
 ## U1 — ADR
 
