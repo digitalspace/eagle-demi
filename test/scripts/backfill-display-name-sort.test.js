@@ -16,6 +16,11 @@ const NOW = '2026-09-02T00:00:00.000Z';
  *
  * `countVisible` answers over ALL partitions while `listVisible` answers one, which is what makes
  * the coverage check falsifiable: a partition nobody asked for shows up as a shortfall.
+ *
+ * `listDistinctProjectIds` derives partitions from the docs themselves — never from a `projects`
+ * fixture — so a doc whose `projectId` has no project row is still enumerated. A double built the
+ * other way (partitions from an injected project-id list) would pass every assertion below right
+ * up until the "no project row" case, which is the point of that test.
  */
 function fakeDocuments(docs, opts = {}) {
   const state = { listedPartitions: [] };
@@ -29,11 +34,12 @@ function fakeDocuments(docs, opts = {}) {
     },
     async countVisible() {
       return opts.count === undefined ? docs.length : opts.count;
+    },
+    async listDistinctProjectIds() {
+      return [...new Set(docs.map(d => d.projectId ?? ''))];
     }
   };
 }
-
-const fakeProjects = (ids) => ({ async listVisible() { return { items: ids.map(id => ({ id })) }; } });
 
 function fakeWriter(opts = {}) {
   const state = { operations: [] };
@@ -61,10 +67,9 @@ const DOCS = [
 
 const run = (argv, docs = DOCS, opts = {}) => {
   const documents = fakeDocuments(docs, opts);
-  const projects = fakeProjects(['207', '311']);
   const writer = fakeWriter(opts);
   return backfillDisplayNameSort(argv, {
-    documents, projects, bulkVerified: writer.write, now: NOW
+    documents, bulkVerified: writer.write, now: NOW
   }).then(summary => ({ summary, documents, writer }));
 };
 
@@ -118,8 +123,10 @@ test('backfillDisplayNameSort', async (t) => {
 
     assert.strictEqual(summary.patched, 3);
     assert.strictEqual(summary.failed, 0);
-    // Partition order: the unlinked one is walked first, then each project's.
-    assert.deepStrictEqual(writer.state.operations.map(o => o.id), ['d4', 'd1', 'd2']);
+    // Partition order is whatever DISTINCT VALUE returns — unspecified across partitions — so
+    // this checks the set of patched ids, not their sequence.
+    assert.deepStrictEqual(
+      writer.state.operations.map(o => o.id).sort(), ['d1', 'd2', 'd4'].sort());
 
     const appendix10 = writer.state.operations.find(o => o.id === 'd2');
     assert.deepStrictEqual(appendix10.resourceBody.operations[0],
@@ -133,6 +140,20 @@ test('backfillDisplayNameSort', async (t) => {
 
     assert.ok(documents.state.listedPartitions.includes(''));
     assert.ok(writer.state.operations.some(o => o.id === 'd4' && o.partitionKey === ''));
+  });
+
+  await t.test('a partition with no project row (Eagle-only project) is scanned and patched', async () => {
+    // Real example, test env: projectId 5efe366b3a147c00223be181 has no row in `projects`.
+    // Partitions come from documentsRepo.listDistinctProjectIds — the docs themselves — never
+    // from a project-id list, so this doc has nowhere to hide. Enumerating from `projects`
+    // instead (the bug) leaves this partition unwalked: scanned stays 0, exitCodeFor stays 1.
+    const docs = [{ id: 'd5', projectId: '5efe366b3a147c00223be181', displayName: 'Eagle Only' }];
+    const { summary, writer } = await run(['--live'], docs);
+
+    assert.strictEqual(summary.scanned, 1);
+    assert.strictEqual(summary.expected, 1);
+    assert.strictEqual(exitCodeFor(summary), 0, 'the partition must not be silently skipped');
+    assert.deepStrictEqual(writer.state.operations.map(o => o.id), ['d5']);
   });
 
   await t.test('a second run over patched rows plans nothing', async () => {

@@ -284,12 +284,12 @@ reconciles, so the route is idempotent and an interrupted backfill simply restar
 
 Two transport constraints on this route, both found from real documents rather than tests:
 
-- **Send `Content-Length`, never a chunked body.** The Azure front end does not forward a
+- **Send `Content-Length`, never a chunked body.** App Service does not forward a
   `Transfer-Encoding: chunked` body to the Node worker; it arrives as an empty stream and the app
   answers 400, which reads like a malformed payload rather than a transport problem. In Python
   `requests`, pass bytes, never a generator.
-- **The platform caps a request at ~230 s (`host.json`) and that applies to streaming writes.**
-  Concurrent 30 MB ingests return 504; serialise to one uploader (111 s for the same document).
+- **App Service's request timeout is 240 s and applies to streaming writes.** Four concurrent 30 MB
+  ingests on one B1 vCPU returned 504; serialising to one uploader took the same document to 111 s.
 
 Documents whose markdown exceeds the 10 MB JSON body limit use `Content-Type: application/x-ndjson`
 on the same route — line 1 provenance, lines 2..n JSON-encoded markdown blocks. The dispatcher only
@@ -584,8 +584,8 @@ without revisiting that grant. `scripts/validate-deploy.sh` checks the result wh
    - Valid Redirect URIs: `https://<afd-endpoint>/*` — covers both `/` and `/silent-check-sso.html`
    - Web Origins: `https://<afd-endpoint>` — the token and userinfo XHRs are checked against this
 
-   **Remove any `demi-frontend-<env>.azurewebsites.net` entries.** That name is back in Azure's
-   global pool, so a redirect URI on it points at whoever claims it next.
+   **Keep the existing `demi-frontend-<env>.azurewebsites.net` entries until the cutover is
+   verified**, so a rollback to the App Service still logs in.
 
    Failure signature if this is skipped: clicking Log In lands on Keycloak's
    `Invalid parameter: redirect_uri` error page. Worse, once a user has `isLoggedIn` set on the new

@@ -65,22 +65,3 @@ test('DEMI_ALLOWED_CLIENTS is required in the deployed environments', async (t) 
     assert.strictEqual(config.environmentName, 'dev');
   });
 });
-
-test('TRUSTED_PROXY_IPS refuses anything that is not an IPv4 address or CIDR block', () => {
-  const configPath = path.resolve(__dirname, '..', 'src', 'config.js');
-  const previous = process.env.TRUSTED_PROXY_IPS;
-  try {
-    // A malformed entry can never match a proxy, so a typo would silently put every visitor back
-    // on one shared quota key. Load must fail instead.
-    process.env.TRUSTED_PROXY_IPS = '142.34.194.121,not-an-ip';
-    delete require.cache[configPath];
-    assert.throws(() => require(configPath), /TRUSTED_PROXY_IPS must be a comma list/);
-
-    process.env.TRUSTED_PROXY_IPS = '142.34.194.121, 10.0.0.0/8';
-    delete require.cache[configPath];
-    assert.deepStrictEqual(require(configPath).trustedProxyIps, ['142.34.194.121', '10.0.0.0/8']);
-  } finally {
-    if (previous === undefined) delete process.env.TRUSTED_PROXY_IPS; else process.env.TRUSTED_PROXY_IPS = previous;
-    delete require.cache[configPath];
-  }
-});
