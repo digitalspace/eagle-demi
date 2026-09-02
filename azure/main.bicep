@@ -372,6 +372,7 @@ module observability './modules/observability.bicep' = {
     location: location
     environmentName: environmentName
     tags: defaultTags
+    apiPrincipalId: identity.outputs.principalId
     // Same list the budget alerts use — one place to change who gets told.
     contactEmails: contactEmails
     deployReconcileDriftAlert: deployReconcileDriftAlert
@@ -452,6 +453,10 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     auditDcrEndpoint: auditLogs.outputs.dcrEndpoint
     auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
     auditWorkspaceId: auditLogs.outputs.workspaceId
+    auditWorkspaceCustomerId: auditLogs.outputs.workspaceCustomerId
+    appLogsWorkspaceCustomerId: observability.outputs.workspaceCustomerId
+    // From the budget module rather than rebuilt from environmentName: one place owns the name.
+    budgetName: costBudget.outputs.budgetName
     frontendHostNames: frontendHostNames
     linkBaseUrl: linkBaseUrl
     // VaultName/SecretName rather than SecretUri: the secret is created out of band, so no module
@@ -532,6 +537,22 @@ module costBudget './modules/cost-budget.bicep' = {
     budgetAmount: budgetAmount
     contactEmails: contactEmails
     startDate: budgetStartDate
+  }
+}
+
+// Cost Management Reader for the API identity, at this resource group — the scope GET /admin/cost
+// queries and the scope the budget above is defined on. Read-only, and it sees this group only.
+//
+// The name is built from the identity's NAME, not its principal id: a resource name cannot contain
+// a runtime value, and `identity.outputs.principalId` is one. The properties may, and do.
+var costManagementReaderRoleId = '72fafb9e-0641-4937-9268-a91bfd8191a3'
+
+resource costReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(resourceGroup().id, 'demi-identity-${environmentName}', costManagementReaderRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', costManagementReaderRoleId)
+    principalId: identity.outputs.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 

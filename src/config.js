@@ -153,6 +153,17 @@ const config = {
   auditMaxBatch:       parseInt(process.env.AUDIT_MAX_BATCH || '100', 10),
   auditMaxBatchBytes:  parseInt(process.env.AUDIT_MAX_BATCH_BYTES || '800000', 10),
 
+  // Reading Azure back for the admin panel (src/azure/monitor.js). Same stance as the writer
+  // above: empty is OFF, and the route answers 503 rather than guessing a workspace.
+  //
+  // The Log Analytics query API keys on the workspace GUID (`customerId`), NOT its resource id.
+  // DemiAudit_CL and DemiEvents_CL live in the audit workspace; AppRequests lives in the app one.
+  auditWorkspaceCustomerId:   process.env.AUDIT_WORKSPACE_CUSTOMER_ID || '',
+  appLogsWorkspaceCustomerId: process.env.APP_LOGS_WORKSPACE_CUSTOMER_ID || '',
+  // Resource group id: the scope a cost query and the budget are both read at.
+  costScope:                  process.env.COST_SCOPE || '',
+  budgetName:                 process.env.BUDGET_NAME || '',
+
   // Keycloak & Token Authentication
   keycloakUrl:           process.env.KEYCLOAK_URL || 'https://dev.loginproxy.gov.bc.ca/auth',
   keycloakRealm:         process.env.KEYCLOAK_REALM || 'eao-epic',
