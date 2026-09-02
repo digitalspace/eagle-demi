@@ -86,7 +86,7 @@ test('GET /db/stats', async (t) => {
 
   await t.test('the existing shape is unchanged', async () => {
     // Anything reading this endpoint keys on these; the discriminator pair in particular is how a
-    // deploy is told apart from the legacy Mongo build (eagle-demi/CLAUDE.md).
+    // deploy is told apart from the legacy Mongo build.
     mockCounts(t, {
       projects: 1, eagleOnly: 0, centroid: 0, documents: 2, extracted: 0, errors: 0, boundaries: 3
     });
