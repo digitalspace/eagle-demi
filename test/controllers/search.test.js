@@ -266,9 +266,6 @@ test('Search Controller Tests', async (t) => {
   });
 
   await t.test('an unscoped PRIVILEGED caller sends only the sealed exclusion', async () => {
-    // `filterFor` returns `{filter: null, empty: false}` for a caller with nothing to restrict — an
-    // unfiltered read, not an empty one. Interpolating that into a filter string emits
-    // `(undefined) and …`, which Azure answers 400 and this route turns into 502.
     let sent = null;
     t.mock.method(aiSearch, 'searchProjects', async (opts) => {
       sent = opts;
@@ -286,11 +283,11 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(sent.filter, "not read/any(r: r eq 'compliance')",
       'privilege lifts the role clause, never the sealed compartment');
 
-    // The null-filter case still exists — it is now the compliance holder — so the placeholder
-    // regression stays covered. `=== undefined`, not a regex on the coerced string, which passes
-    // on garbage as readily.
+    // Holding `compliance` changes nothing HERE: this route builds no compartment access, so a
+    // sealed row is unfindable to its own holder — `/api/sealed` is the only door, and it audits.
     await ask(['sysadmin', 'compliance']);
-    assert.strictEqual(sent.filter, undefined, 'nothing to scope means no filter, not "(undefined)"');
+    assert.strictEqual(sent.filter, "not read/any(r: r eq 'compliance')",
+      'a compliance holder searching the index is excluded like everyone else');
   });
 
   await t.test('a keywordless SORT is not provenance-scoped either', async () => {

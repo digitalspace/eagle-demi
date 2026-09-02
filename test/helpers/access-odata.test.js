@@ -22,8 +22,10 @@ test('access-odata filter', async (t) => {
     assert.strictEqual(filter, "not read/any(r: r eq 'compliance')");
     assert.strictEqual(empty, false);
 
-    // The holder is the one caller with nothing to exclude, and only then is the filter null.
-    assert.deepStrictEqual(filterFor({ ...ADMIN, roles: [...ADMIN.roles, 'compliance'] }),
+    // A compartment read is the one with nothing to exclude, and only then is the filter null.
+    // The role on its own changes nothing — see 'every caller without compliance excludes...'.
+    assert.deepStrictEqual(
+      filterFor({ ...ADMIN, roles: [...ADMIN.roles, 'compliance'], compartment: true }),
       { filter: null, empty: false });
   });
 
@@ -148,9 +150,16 @@ test('access-odata filter', async (t) => {
         `${access.tier} must exclude level 0`);
     }
 
+    // Holding the role is not enough: `GET /api/search` builds no compartment access, so the
+    // holder is excluded there like everyone else.
     const holder = { tier: TIER.PUBLIC, roles: ['public', 'compliance'], projectScope: null };
-    assert.ok(!filterFor(holder).filter.includes('not read/any'),
-      'the holder is the one caller with nothing to exclude');
+    assert.ok(filterFor(holder).filter.includes("not read/any(r: r eq 'compliance')"),
+      'a compliance caller on the search route is still excluded');
+
+    assert.ok(!filterFor({ ...holder, compartment: true }).filter.includes('not read/any'),
+      'the compartment read is the one with nothing to exclude');
+    assert.ok(filterFor({ ...ADMIN, compartment: true }).filter.includes('not read/any'),
+      'the flag alone opens nothing — the caller must hold compliance too');
   });
 
   await t.test('a value containing a comma falls back to an eq chain', () => {

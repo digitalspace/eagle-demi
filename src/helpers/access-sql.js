@@ -29,7 +29,8 @@ const LEVEL_TOKENS = Object.freeze({ 1: 'team', 2: 'staff', 3: 'idir', 4: 'publi
 /**
  * The sealed compartment's token — level 0, off the ladder (docs/rbac-architecture.md §1,
  * "Level 0"). It is a role name like any other, so a sealed row needs no separate store; what makes
- * it sealed is that every caller NOT holding it carries an exclusion, privileged callers included.
+ * it sealed is that every read carries an exclusion — privileged callers and the role's own holders
+ * included — except the compartment routes' own, see `opensSealed`.
  */
 const SEALED_TOKEN = 'compliance';
 
@@ -200,6 +201,18 @@ function isPrivileged(roles) {
 /** Does this caller hold the sealed compartment's role? Nothing else opens a level-0 row. */
 function holdsSealed(roles) {
   return (roles || []).includes(SEALED_TOKEN);
+}
+
+/**
+ * May THIS read see into the compartment? Two conditions, and the route is one of them.
+ *
+ * Holding `compliance` is not enough: every ordinary path (`GET /documents`, `/documents/:id`,
+ * `/documents/:id/download`, `/search`) carries the exclusion for every caller, so a sealed row is
+ * reached only through `/api/sealed` — which is what makes "every sealed read is audited" true.
+ * The flag is set by the sealed controller and by nothing else; `systemAccess()` never sets it.
+ */
+function opensSealed(roles, compartment) {
+  return compartment === true && holdsSealed(roles);
 }
 
 /** May this role set hold a session on an authenticated route? See AUTHENTICATED_ROLES. */
@@ -390,6 +403,7 @@ const TEAM_PARTITION_FIELDS = Object.freeze(['projectId', 'id']);
  *                                          query cannot collide
  * @param {string[]} [opts.teams]           caller's team project ids — the level-1 OR arm
  * @param {string}   [opts.partitionField='projectId']  field the team arm compares, 'id' on projects
+ * @param {boolean}  [opts.compartment]     this read is a compartment route's — see opensSealed
  * @returns {{clause: string, params: {name: string, value: any}[]}}
  */
 function readClause(roles, opts = {}) {
@@ -399,7 +413,7 @@ function readClause(roles, opts = {}) {
   // The sealed compartment, and the reason a privileged caller no longer gets a bare `true`: the
   // short-circuit is what would hand `sysadmin` a level-0 row. Literal, not a parameter, because
   // it is our own token and never a caller value.
-  const sealed = holdsSealed(roles)
+  const sealed = opensSealed(roles, opts.compartment)
     ? null
     : `NOT ARRAY_CONTAINS(${alias}.read, '${SEALED_TOKEN}')`;
 
@@ -557,7 +571,11 @@ function andClauses(...fragments) {
 function visibilityFor(access, partitionField = 'projectId', opts = {}) {
   return andClauses(
     readClause(access.roles, {
-      ...opts, teams: access.teams, credentials: access.credentials, partitionField
+      ...opts,
+      teams: access.teams,
+      credentials: access.credentials,
+      partitionField,
+      compartment: access.compartment
     }),
     scopeClause(access, partitionField, opts)
   );
@@ -588,7 +606,7 @@ function canRead(doc, access, partitionField = 'projectId') {
 
   // BEFORE the privilege short-circuit, which is the whole leak: `sysadmin` returning early here
   // reads a sealed row. The SQL twin is readClause's `NOT ARRAY_CONTAINS`.
-  if (read.includes(SEALED_TOKEN) && !holdsSealed(access.roles)) return false;
+  if (read.includes(SEALED_TOKEN) && !opensSealed(access.roles, access.compartment)) return false;
 
   // Privilege is a property of the ROLES, not of the tier — this mirrors readClause(), which
   // collapses to `true` for a privileged role set whatever the tier happens to be. Keying it off
@@ -635,6 +653,7 @@ module.exports = {
   rolesFor,
   isPrivileged,
   holdsSealed,
+  opensSealed,
   isAuthenticatedRole,
   canWrite,
   canAdmin,

@@ -4,10 +4,12 @@
  * The sealed compartment — level 0 (docs/rbac-architecture.md §1, "Level 0").
  *
  * A sealed record IS a document: same container, same partition, `read: ['compliance']`. There is
- * no second store and no second ACL mechanism — what seals the row is that every caller without
- * that role carries an exclusion, the privileged ones and `systemAccess()` included.
+ * no second store and no second ACL mechanism — what seals the row is that every read outside these
+ * routes carries an exclusion, the privileged ones and `systemAccess()` included.
  *
- * READS ARE AUDITED HERE AND NOWHERE ELSE IN DEMI. That asymmetry is the compartment's point.
+ * READS ARE AUDITED HERE AND NOWHERE ELSE IN DEMI. That asymmetry is the compartment's point, and
+ * `compartmentAccess` below is what makes it true: holding `compliance` opens a sealed row only on
+ * an access context these routes built, so the ordinary ladder routes cannot answer with one.
  *
  * Separate from `controllers/nosql/document.js` on purpose: these four routes run their own guard
  * chain (`sealed-auth` + `requireRole('compliance')`), and nothing on the ladder may reach them.
@@ -30,9 +32,15 @@ const { redactForAccess } = require('../../vis/redact');
 /** The level a released record lands on — team only, never back onto the ladder above it. */
 const RELEASE_LEVEL = 1;
 
+/**
+ * The ONLY access context that lifts the sealed exclusion (`opensSealed`). Built here and nowhere
+ * else, so every read of a level-0 row happens on a route that audits it.
+ */
+const compartmentAccess = (req) => ({ ...resolveAccess(req), compartment: true });
+
 exports.createSealed = async (req, res) => {
   try {
-    const access = resolveAccess(req);
+    const access = compartmentAccess(req);
     const { project, displayName, s3Key } = req.body || {};
 
     if (!project || !displayName || !s3Key) {
@@ -82,7 +90,7 @@ exports.createSealed = async (req, res) => {
 
 exports.listSealed = async (req, res) => {
   try {
-    const access = resolveAccess(req);
+    const access = compartmentAccess(req);
     const { pageSize, error } = pageSizeFor(access, req.query.pageSize);
     if (error) return res.status(400).json({ error });
 
@@ -113,7 +121,7 @@ exports.listSealed = async (req, res) => {
 
 exports.getSealed = async (req, res) => {
   try {
-    const access = resolveAccess(req);
+    const access = compartmentAccess(req);
     const doc = await documents.getById(access, req.params.id, req.query.project);
 
     // A record that is not sealed is not found HERE: this route is the compartment, not a second
@@ -143,7 +151,7 @@ exports.getSealed = async (req, res) => {
  */
 exports.releaseSealed = async (req, res) => {
   try {
-    const access = resolveAccess(req);
+    const access = compartmentAccess(req);
     const { caseNumber, decision } = req.body || {};
 
     if (!String(caseNumber || '').trim()) {
@@ -180,8 +188,8 @@ exports.releaseSealed = async (req, res) => {
       { id: existing.id, read: acl, isPublished: false }
     ]);
 
-    // The CALLER's access, not systemAccess(): system holds no `compliance`, so it cannot see the
-    // sealed chunks it would have to re-derive and they would stay sealed under a released document.
+    // The COMPARTMENT's access, not systemAccess(): system carries the exclusion, so it cannot see
+    // the sealed chunks it must re-derive and they would stay sealed under a released document.
     const chunkAcl = await chunks.setAclForDocument(access, existing.id, acl);
     if (chunkAcl.failed > 0) {
       logger.error('[sealed] chunk ACL patch partially failed', {

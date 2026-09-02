@@ -63,7 +63,11 @@ const SEALED_ROUTES = [
 ];
 
 let rows = [];
-audit._setTransport(async (stream, batch) => { rows.push(...batch); });
+// Tagged with the stream: the ladder routes emit a `search` ANALYTICS row through the same
+// transport, and "no audit row was written" is the assertion the compartment turns on.
+audit._setTransport(async (stream, batch) => { rows.push(...batch.map(row => ({ ...row, stream }))); });
+
+const auditRows = () => rows.filter(row => row.stream === audit.AUDIT_STREAM);
 
 function mockRes() {
   return {
@@ -107,15 +111,18 @@ const bearerReq = () => ({
 });
 
 /**
- * A fake Cosmos honouring ONE clause: the sealed exclusion. Everything the emitted SQL does not
- * exclude comes back — so dropping the exclusion from `readClause` hands the sealed row straight
- * to the assertion below instead of quietly passing.
+ * A fake Cosmos honouring TWO things: the sealed exclusion and an `@id` criterion. Everything the
+ * emitted SQL does not exclude comes back — so dropping the exclusion from `readClause` hands the
+ * sealed row straight to the assertion below instead of quietly passing. The id is honoured because
+ * a point read that ignored it would answer with the first row of the container.
  */
-const fakeCosmosQuery = (stored) => async (_container, spec) => ({
-  items: /NOT ARRAY_CONTAINS\(c\.read, 'compliance'\)/.test(spec.query)
+const fakeCosmosQuery = (stored) => async (_container, spec) => {
+  const visible = /NOT ARRAY_CONTAINS\(c\.read, 'compliance'\)/.test(spec.query)
     ? stored.filter(row => !(row.read || []).includes('compliance'))
-    : stored
-});
+    : stored;
+  const id = (spec.parameters || []).find(param => param.name === '@id');
+  return { items: id ? visible.filter(row => row.id === id.value) : visible };
+};
 
 /** The same idea for AI Search: the OData twin of the clause above. */
 const fakeIndex = (stored) => async ({ filter }) => {
@@ -176,29 +183,63 @@ test('the sealed compartment routes', async (t) => {
     assert.strictEqual(res.statusCode, 403);
   });
 
-  await t.test('a sealed row is never returned to the ladder', async () => {
-    // GET /api/documents, driven through the REAL repository so the emitted SQL is what decides.
+  // The ladder routes, for BOTH the caller that never held `compliance` and the one that does. The
+  // holder is the interesting case: it may read the row at `/api/sealed/:id`, and the compartment's
+  // whole mechanism is that it cannot read it anywhere the read goes unaudited.
+  for (const caller of [SYSADMIN, COMPLIANCE]) {
+    const who = caller.realm_access.roles[0];
+
+    await t.test(`a sealed row is never returned to the ladder (${who})`, async () => {
+      // Driven through the REAL repository and controllers, so the emitted SQL is what decides.
+      t.mock.method(cosmos, 'query', fakeCosmosQuery([PUBLIC_ROW, SEALED_ROW]));
+
+      const listed = mockRes();
+      await documentController.getDocuments(
+        { query: {}, params: {}, user: caller, headers: {} }, listed);
+
+      assert.deepStrictEqual(listed.body.map(d => d.id), ['d1'],
+        `the document list handed a sealed row to ${who}`);
+
+      // GET /api/documents/:id — the point read, which bypasses the list predicate entirely.
+      const fetched = mockRes();
+      await documentController.getDocument(
+        { query: {}, params: { id: 's1' }, user: caller, headers: {} }, fetched);
+
+      assert.strictEqual(fetched.statusCode, 404, `getDocument answered ${who} with a sealed row`);
+
+      // GET /api/search, same row present in the index.
+      t.mock.method(aiSearch, 'searchDocuments', fakeIndex([PUBLIC_ROW, SEALED_ROW]));
+      t.mock.method(projects, 'listByIds', async () => [{ id: '207', name: 'Skeena LNG' }]);
+
+      const searched = mockRes();
+      await searchController.search({
+        query: { dataset: 'Document', pageSize: '10' }, params: {}, user: caller,
+        header: () => null
+      }, searched);
+
+      assert.deepStrictEqual(searched.body[0].searchResults.map(r => r._id), ['d1'],
+        `document search handed a sealed row to ${who}`);
+
+      await audit.flush();
+      assert.deepStrictEqual(auditRows(), [],
+        'a ladder read of a sealed row would be an unaudited one');
+    });
+  }
+
+  await t.test('the compartment route reads the row the ladder refused', async () => {
+    // The other half of the invariant: refusing the holder everywhere would seal the record shut.
     t.mock.method(cosmos, 'query', fakeCosmosQuery([PUBLIC_ROW, SEALED_ROW]));
 
-    const listed = mockRes();
-    await documentController.getDocuments(
-      { query: {}, params: {}, user: SYSADMIN, headers: {} }, listed);
+    const res = mockRes();
+    await sealedController.getSealed(
+      { params: { id: 's1' }, query: {}, user: COMPLIANCE }, res);
 
-    assert.deepStrictEqual(listed.body.map(d => d.id), ['d1'],
-      'the document list handed a sealed row to a sysadmin');
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.id, 's1');
 
-    // GET /api/search, same row present in the index.
-    t.mock.method(aiSearch, 'searchDocuments', fakeIndex([PUBLIC_ROW, SEALED_ROW]));
-    t.mock.method(projects, 'listByIds', async () => [{ id: '207', name: 'Skeena LNG' }]);
-
-    const searched = mockRes();
-    await searchController.search({
-      query: { dataset: 'Document', pageSize: '10' }, params: {}, user: SYSADMIN,
-      header: () => null
-    }, searched);
-
-    assert.deepStrictEqual(searched.body[0].searchResults.map(r => r._id), ['d1'],
-      'document search handed a sealed row to a sysadmin');
+    await audit.flush();
+    assert.strictEqual(auditRows().length, 1, 'and it is audited');
+    assert.strictEqual(auditRows()[0].Action, 'sealed.read');
   });
 
   await t.test('release lands at level 1', async () => {

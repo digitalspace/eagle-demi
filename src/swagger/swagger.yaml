@@ -544,9 +544,10 @@ paths:
       description: >-
         Write a document into the sealed compartment — level 0
         (docs/rbac-architecture.md §1, "Level 0"). The row is an ordinary document in the ordinary
-        container carrying `read: ['compliance']`, so no caller without that role reaches it, the
-        privileged ones and `systemAccess()` included. Requires the `compliance` role; every other
-        role, `sysadmin` included, gets 403. Audited as `sealed.create`.
+        container carrying `read: ['compliance']`, and only these routes read it — every other
+        route excludes level 0 from every caller, the privileged ones, `systemAccess()` and the
+        `compliance` holder alike. Requires the `compliance` role; every other role, `sysadmin`
+        included, gets 403. Audited as `sealed.create`.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1194,11 +1195,12 @@ components:
 
           * `public`             — no privilege; the anonymous tier, named explicitly.
           * `compliance`         — the sealed compartment (level 0). Matched against each row's
-                                   `read[]`, not privileged, and the only role that reads a sealed
-                                   row: every other caller, privileged ones included, carries an
-                                   exclusion. Only a caller that already holds it may mint a key
-                                   carrying it — anyone else gets 400 `compliance is not grantable
-                                   by this caller`.
+                                   `read[]`, not privileged, and the only role admitted to
+                                   `/api/sealed` — which is the only place it reads a sealed row.
+                                   Every other route excludes level 0 from every caller, its holder
+                                   included, so no sealed read goes unaudited. Only a caller that
+                                   already holds it may mint a key carrying it — anyone else gets
+                                   400 `compliance is not grantable by this caller`.
           * `demi-service-read`  — reads every row the ACL allows. Writes nothing.
           * `demi-service-write` — the same reads, plus every data write: projects, documents,
                                    chunks, boundaries and the Eagle mirror. Refused on
