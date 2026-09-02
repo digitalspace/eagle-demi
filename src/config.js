@@ -258,6 +258,11 @@ const config = {
   // Empty = not enforced. No default value: an unmeasured audience 401s every caller, so this
   // stays off until someone reads `aud` off a live token per realm.
   ssoAudience:           process.env.SSO_AUDIENCE || '',
+
+  // Egress addresses of the OpenShift rproxy that fronts eagle-public. When APIM asserts one of
+  // these, every eagle-public visitor shares it and the anonymous bulk quota becomes one global
+  // bucket — so utils/caller-ip.js keys on the browser hop instead. See that file.
+  trustedProxyIps:       (process.env.TRUSTED_PROXY_IPS || '').split(',').map(s => s.trim()).filter(Boolean),
 };
 
 // Fail to boot rather than run a deployed environment with an allowlist that admits every client

@@ -27,6 +27,7 @@ const { purgeDocument } = require('../../helpers/purge');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
 const { transformDocument, seedAcl } = require('../../seed/transform');
+const { naturalSortKey } = require('../../helpers/natural-sort');
 const { redactForAccess, redactAllForAccess, refusedWriteKeys } = require('../../vis/redact');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
@@ -181,6 +182,8 @@ exports.createDocument = async (req, res) => {
       projectId: String(project),
       sourceSystem: 'demi',
       displayName,
+      // Same derived sort key the seed writes; the index cannot compute it. helpers/natural-sort.
+      displayNameSort: naturalSortKey(displayName),
       s3Key,
       region: region || parentProject.region || '',
       edrmsRecordNumber: edrmsRecordNumber || '',
@@ -239,12 +242,14 @@ exports.extractDocument = async (req, res) => {
 
     const acl = resolveDocumentAcl(parentProject);
     const now = new Date().toISOString();
+    const uploadedDisplayName = displayName || file.originalname;
 
     const saved = await documents.upsert({
       id: crypto.randomUUID(),
       projectId: String(project),
       sourceSystem: 'demi',
-      displayName: displayName || file.originalname,
+      displayName: uploadedDisplayName,
+      displayNameSort: naturalSortKey(uploadedDisplayName),
       s3Key: objectPath,
       fileExt: (fileExtension || 'pdf').toLowerCase(),
       region: region || parentProject.region || '',
@@ -328,6 +333,9 @@ exports.updateDocument = async (req, res) => {
       projectId: existing.projectId,
       read: existing.read,
       isPublished: existing.isPublished,
+      // Recomputed from the MERGED name, so a rename moves the sort key with it and a row that
+      // predates the key gains one on its next edit.
+      displayNameSort: naturalSortKey(changes.displayName ?? existing.displayName),
       updatedAt: new Date().toISOString()
     });
 

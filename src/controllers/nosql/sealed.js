@@ -29,6 +29,7 @@ const aiSearch = require('../../search/ai-search');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { redactForAccess } = require('../../vis/redact');
+const { naturalSortKey } = require('../../helpers/natural-sort');
 // The TTL, so both routes hand out a link that expires after the same window.
 const { DOWNLOAD_URL_TTL_SECONDS } = require('./document');
 
@@ -67,6 +68,7 @@ exports.createSealed = async (req, res) => {
       projectId: String(project),
       sourceSystem: 'demi',
       displayName,
+      displayNameSort: naturalSortKey(displayName),
       s3Key,
       read: readForLevel(0),
       isPublished: false,

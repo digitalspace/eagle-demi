@@ -361,6 +361,24 @@
       "vectorSearchProfile": null,
       "vectorEncoding": null,
       "synonymMaps": []
+    },
+    {
+      "name": "displayNameSort",
+      "type": "Edm.String",
+      "searchable": false,
+      "filterable": false,
+      "retrievable": false,
+      "stored": true,
+      "sortable": true,
+      "facetable": false,
+      "key": false,
+      "indexAnalyzer": null,
+      "searchAnalyzer": null,
+      "analyzer": null,
+      "dimensions": null,
+      "vectorSearchProfile": null,
+      "vectorEncoding": null,
+      "synonymMaps": []
     }
   ],
   "scoringProfiles": [],

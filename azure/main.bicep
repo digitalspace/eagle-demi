@@ -134,6 +134,11 @@ param allowedClients string
 @description('Expected JWT aud claim. Empty disables audience verification.')
 param ssoAudience string = ''
 
+// Empty until the rproxy egress address is measured per environment (one request through test,
+// then App Insights `callerIp`). Until then every eagle-public visitor shares one quota key.
+@description('Comma-separated egress IPs of proxies we run. An APIM-asserted address on this list makes the browser hop of X-Forwarded-For the caller.')
+param trustedProxyIps string = ''
+
 // Flex needs its own subnet, delegated to `Microsoft.App/environments`. Empty deploys no API app
 // at all, so an environment that wants one must supply it.
 @description('Delegated subnet for the Flex Consumption API app. Empty deploys no API.')
@@ -500,6 +505,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     keycloakClientId: keycloakClientId
     allowedClients: allowedClients
     ssoAudience: ssoAudience
+    trustedProxyIps: trustedProxyIps
     virtualNetworkSubnetId: apiFlexSubnetId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId
