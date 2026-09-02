@@ -759,7 +759,7 @@ Acceptance
 Branch: `feat/vis-me-endpoint`
 
 - [x] New `exports.getMe` in `src/controllers/me.js` (no Cosmos read, so beside `config.js`, not under `nosql/`) (new file, ~15 lines): `resolveAccess(req)` then `res.json({ roles, level, tier, privileged })`. No Cosmos read.
-- [x] Route `router.get('/me', passiveAuthMiddleware, meController.getMe)` in `src/routes/api.js`, beside `/config` at `:38`. Passive, not `authMiddleware`: an anonymous caller must get `{ roles: ['public'], level: 4, tier: 'public' }` rather than a 401.
+- [x] Route `router.get('/me', passiveAuthMiddleware, meController.getMe)` in `src/http/routes.js`, beside `/config`. Passive, not `authMiddleware`: an anonymous caller must get `{ roles: ['public'], level: 4, tier: 'public' }` rather than a 401.
 - [x] `src/swagger/swagger.yaml`: add `/api/me` under `paths:` (`:15`), before `/api/projects` (`:39`); response schema in `components:` (`:499`).
 
 Tests
@@ -1165,9 +1165,9 @@ Merges only after the `project:<id>` roles dependency above carries a date.
 
 Branch: `feat/ladder-widen-endpoint`
 
-- [x] `src/routes/api.js` — `router.put('/projects/:id/level', authMiddleware, requireWrite,
-      projectController.setLevel)` after `:72`, and `/documents/:id/level` beside `:90`. Keep
-      `PUT /documents/:id/published` (`:90`) as a thin alias for `{ level: 4, confirm }` /
+- [x] `src/http/routes.js` — `router.put('/projects/:id/level', authMiddleware, requireWrite,
+      projectController.setLevel)`, and `/documents/:id/level` beside it. Keep
+      `PUT /documents/:id/published` as a thin alias for `{ level: 4, confirm }` /
       `{ level: 2 }`, marked deprecated in swagger — eagle-admin-console still calls it. The alias
       runs the same guards, so unpublishing a level-4 document now needs `sysadmin`.
 - [x] `exports.setLevel` in each controller: body `{ level, confirm, reason }`; 400 on a level
@@ -1220,7 +1220,7 @@ Branch: `feat/vis-classify-endpoint`
 
 - [x] `requireRole(name)` factory in `src/middleware/require-roles.js` beside `requireWrite:24-31`;
       route `router.patch('/projects/:id/visibility', authMiddleware, requireWrite,
-      requireRole('sysadmin'), projectController.setVisibility)` in `src/routes/api.js` after `:72`.
+      requireRole('sysadmin'), projectController.setVisibility)` in `src/http/routes.js`.
 - [x] `exports.setVisibility` in `src/controllers/nosql/project.js` after `updateProject`: body
       `{ vis: { field: level } }`; 400 on an uncatalogued field, on a level outside `0..maxVis`,
       and on more than 10 keys
@@ -1371,7 +1371,7 @@ Branch: `feat/vis-chunks-catalog`
 - [ ] `src/vis/catalog/chunks.js` over the stored chunk shape (`src/chunker.js` output plus `documentId`, `projectId`, `read`, `pageNumber`, `content`). `read` and `vis` at `maxVis: 0`.
 - [ ] Decide and record: chunk content classification is the PARENT DOCUMENT's, not the chunk's. The gate already works that way — `src/controllers/search.js:581` filters chunks whose parent document is not visible, and `src/repositories/chunks.js:68-73` `getById` gates on `canRead`. No new plane; the catalog only classifies chunk METADATA.
 - [ ] `content` stays out of the wire by the `select` string at `src/search/ai-search.js:773` and by `content: ''` at `src/controllers/search.js:617`. Catalogue `content` at `maxVis: 0` so the drift test can hold both.
-- [ ] There is no chunk read endpoint: `src/routes/api.js` mounts only `POST /documents/:id/chunks` (`:96`). No new `res.json` site to redact.
+- [ ] There is no chunk read endpoint: `src/http/routes.js` mounts only `POST /documents/:id/chunks`. No new `res.json` site to redact.
 - [ ] `src/controllers/search.js` `summarize`: redact the `chunksRepo.getById` rows, deferred from
       P2-2 because the catalog did not exist yet.
 
@@ -1390,7 +1390,7 @@ Acceptance
 Branch: `docs/vis-level-zero-exports`
 
 - [ ] `docs/prod-flip-runbook.md`: name `src/scripts/export-chunks-to-eagle.js --dump`, `src/scripts/audit-chunk-quality.js` and `src/scripts/probe-phrase-presence.js` as level-0 material — all three read under `systemAccess()` (`src/scripts/audit-chunk-quality.js:111`, `src/scripts/probe-phrase-presence.js:241`).
-- [ ] Add the deletion step for the App Service `/home` filesystem on `demi-api-test` and `demi-api-prod` after any `--dump`.
+- [ ] Add the deletion step for the `--dump` output on the devbox (`demi-devbox-test`, `demi-devbox-prod`) working directory after any `--dump`.
 - [ ] `src/ai/summarize.js`: one comment line stating it consumes chunk `content` only and never a project or document row. No code change.
 
 Tests
