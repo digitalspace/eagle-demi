@@ -29,7 +29,7 @@ const answer = (over: Partial<SimulateResponse> = {}): SimulateResponse => ({
     ]
   },
   predicatesAssumedFalse: true,
-  notes: { sealedCompartment: 'designed, not built (Phase 5)' },
+  notes: { sealedCompartment: 'live, /api/sealed only' },
   ...over
 });
 
@@ -216,7 +216,7 @@ describe('AccessModelComponent', () => {
 
     const sealed = Array.from(el.querySelectorAll('.attention-row'))
       .find(r => (r.textContent || '').includes('Level 0 — sealed compartment'));
-    expect(sealed!.textContent).toContain('designed, not built (Phase 5)');
+    expect(sealed!.textContent).toContain('live, /api/sealed only');
     expect(sealed!.querySelector('input')).toBeNull();
   });
 

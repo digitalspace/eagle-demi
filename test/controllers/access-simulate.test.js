@@ -148,7 +148,7 @@ test('access simulate', async (t) => {
       assert.deepStrictEqual(me, testCase.me);
       assert.deepStrictEqual(got, rows(testCase.via));
       assert.strictEqual(predicatesAssumedFalse, true);
-      assert.strictEqual(notes.sealedCompartment, 'designed, not built (Phase 5)');
+      assert.strictEqual(notes.sealedCompartment, 'live, /api/sealed only');
       assert.ok(fields.projects.length > 0 && fields.documents.length > 0);
     });
   }
