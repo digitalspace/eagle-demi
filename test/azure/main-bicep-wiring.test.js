@@ -13,6 +13,8 @@ const PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.prod.biceppar
 const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'search-existing.bicep'), 'utf8');
 const COSMOS_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
 const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'observability.bicep'), 'utf8');
+const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
+const DEPLOY = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-infra.sh'), 'utf8');
 
 const { summaryLine } = require('../../src/scripts/reconcile-eagle');
 
@@ -193,6 +195,30 @@ test('deployEnrichment gates the wildfires container and only that one', () => {
   assert.ok(boundaries, 'no boundaries container declared in cosmos-nosql.bicep');
   assert.doesNotMatch(boundaries.split('\n')[0], /= if \(/,
     'boundaries must NOT be gated — every environment serves it, empty in prod');
+});
+
+// eagle-notify is two settings and the key is OPTIONAL, which is a shape three files have to agree
+// on: an empty key writes no Key Vault secret, an empty secret URI leaves the app setting empty,
+// and the deploy script demands the key only where a host is named. Break any one and either a
+// prod deploy is blocked on a credential prod does not use, or a test environment goes dark while
+// looking configured. `az bicep build` says nothing about either.
+test('the eagle-notify key is demanded exactly where a host is named', () => {
+  assert.match(KEY_VAULT, /var hasNotifyKey = !empty\(notifyApiKey\)/);
+  assert.match(KEY_VAULT, /resource notifyApiKeySecret [^\n]+ = if \(hasNotifyKey\) \{/,
+    'an empty key must write no secret — there is no empty secret value to write');
+  assert.match(API_MODULE, /value: empty\(notifyApiKeySecretUri\) \?/,
+    'without the empty branch a dark environment gets a Key Vault reference to no secret');
+
+  const base = (params) => /^param notifyApiBase = '([^']*)'$/m.exec(params);
+  assert.ok(base(TEST_PARAMS), 'test must state notifyApiBase');
+  assert.ok(base(PROD_PARAMS), 'prod must state notifyApiBase, empty or otherwise');
+  assert.strictEqual(base(PROD_PARAMS)[1], '', 'prod has no eagle-notify to announce to yet');
+
+  assert.match(DEPLOY, /os_secret demi-app-secrets NOTIFY_API_KEY/,
+    'the key comes from OpenShift, like every other secret this script sources');
+  assert.match(DEPLOY, /notifyApiBase[^\n]*PARAM_FILE[\s\S]{0,120}required\+=\(NOTIFY_API_KEY\)/,
+    'the key must be required only where the param file names a host — otherwise prod is blocked ' +
+    'on a credential it does not use, or test deploys a host with no key and stays dark');
 });
 
 // Two params, one feature, and each is useless alone: the schedule is what writes the drift line,

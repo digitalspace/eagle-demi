@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * The Eagle mirror routes — `PUT /eagle/projects/:eagleId` and `PUT /eagle/documents/:eagleId`.
+ * The Eagle mirror routes for projects and documents. `PUT /eagle/updates/:eagleId` is the third
+ * and has its own suite, update-push.test.js.
  *
  * eagle-api pushes fire-and-forget on every write it makes, so these handlers are the only thing
  * standing between a raw upstream record and the registry. What they are asserted on is what a
@@ -578,11 +579,11 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 
 test('the mirror routes are behind authMiddleware + requireWrite', async (t) => {
   // The handlers read and write through systemAccess(), so no ACL predicate protects them — the
-  // route chain is the whole gate. access-coverage.test.js asserts the chain from the router
+  // route chain is the whole gate. All three mirror routes, not just this file's two. access-coverage.test.js asserts the chain from the router
   // source; this runs the two middlewares to prove what the chain buys.
-  await t.test('both routes declare the chain', () => {
+  await t.test('every mirror route declares the chain', () => {
     const mirror = routeChains().filter(r => r.path.startsWith('/eagle/'));
-    assert.strictEqual(mirror.length, 2);
+    assert.strictEqual(mirror.length, 3, 'projects, documents, updates');
     for (const r of mirror) {
       assert.match(r.chain, /\bauthMiddleware\b/);
       assert.match(r.chain, /\brequireWrite\b/);

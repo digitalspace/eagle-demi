@@ -64,7 +64,8 @@ case "$ENVIRONMENT" in
     RESOURCE_GROUP='rg-demi-prod'
     # This box has NO prod write context. The name below is the read-only ServiceAccount context
     # from the workspace CLAUDE.md, used here to read the MinIO secret and demi-app-secrets
-    # (ADMIN_API_KEY, DOCLING_API_KEY, TRACK_CLIENT_SECRET, ROLE_SYNC_CLIENT_SECRET) out of
+    # (ADMIN_API_KEY, DOCLING_API_KEY, TRACK_CLIENT_SECRET, ROLE_SYNC_CLIENT_SECRET,
+    # NOTIFY_API_KEY) out of
     # 6cdc9e-prod. Export any of them by hand to override.
     OC_CONTEXT='6cdc9e-prod/api-silver-devops-gov-bc-ca:6443/system:serviceaccount:6cdc9e-tools:github-cicd'
     ;;
@@ -141,12 +142,20 @@ require_secrets() {
   DOCLING_API_KEY="${DOCLING_API_KEY:-$(os_secret demi-app-secrets DOCLING_API_KEY)}"
   TRACK_CLIENT_SECRET="${TRACK_CLIENT_SECRET:-$(os_secret demi-app-secrets TRACK_CLIENT_SECRET)}"
   ROLE_SYNC_CLIENT_SECRET="${ROLE_SYNC_CLIENT_SECRET:-$(os_secret demi-app-secrets ROLE_SYNC_CLIENT_SECRET)}"
+  NOTIFY_API_KEY="${NOTIFY_API_KEY:-$(os_secret demi-app-secrets NOTIFY_API_KEY)}"
 
   export MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
-  export TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET
+  export TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET NOTIFY_API_KEY
 
   local -a required=(MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
     TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET)
+
+  # Only where the param file names an eagle-notify host. With `notifyApiBase` empty the push is
+  # dark, no Key Vault secret is written, and demanding the key would block a prod deploy on a
+  # credential prod does not use. Same shape as the devbox key below.
+  if grep -Eq "^param notifyApiBase *= *'[^']+'" "$PARAM_FILE"; then
+    required+=(NOTIFY_API_KEY)
+  fi
 
   # The devbox SSH key. A public key, not a credential — but the param file reads it with no
   # fallback like the six above, so a missing one fails the build, and the same guard is what turns
@@ -204,6 +213,9 @@ there is no rollback — ARM does not retain @secure() parameter values.
                                            (keys ${MINIO_ACCESS_KEY_FIELD} / ${MINIO_SECRET_KEY_FIELD})
   ADMIN_API_KEY / DOCLING_API_KEY          OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
   TRACK_CLIENT_SECRET / ROLE_SYNC_CLIENT_SECRET  OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
+  NOTIFY_API_KEY                           OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
+                                           (the eagle-notify function key; only asked for where the
+                                           param file sets a non-empty notifyApiBase)
   DEVBOX_SSH_PUBLIC_KEY                    OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
                                            (a PUBLIC key — 'ssh-keygen -t ed25519' and store the .pub,
                                            or export it; only asked for when deployDevbox = true)

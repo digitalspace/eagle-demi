@@ -143,6 +143,12 @@ param roleSyncClientId = 'demi-role-sync'
 param trackClientSecret = readEnvironmentVariable('TRACK_CLIENT_SECRET')
 param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 
+// ── eagle-notify ──────────────────────────────────────────────────────────────────────────────
+// Empty until eagle-notify is deployed in prod: the push stays dark and no notification claim is
+// taken, so wiring it later still announces every published Update.
+param notifyApiBase = ''
+param notifyApiKey = readEnvironmentVariable('NOTIFY_API_KEY', '')
+
 // Empty until both realm clients exist in the prod realm.
 param syncTeamsSchedule = ''
 

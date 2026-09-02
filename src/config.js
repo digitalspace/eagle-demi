@@ -238,6 +238,11 @@ const config = {
   linkAllowedHosts:      (process.env.LINK_ALLOWED_HOSTS || 'gov.bc.ca').split(',').map(s => s.trim()).filter(Boolean),
   linkBaseUrl:           process.env.LINK_BASE_URL || 'https://projects.eao.gov.bc.ca',
 
+  // eagle-notify, told when an Update is published. Both empty = dark: src/services/notify.js
+  // sends nothing and the mirror never claims a notification, so wiring it later still notifies.
+  notifyApiBase:         process.env.NOTIFY_API_BASE || '',
+  notifyApiKey:          process.env.NOTIFY_API_KEY || '',
+
   // Track team feed → `project:<id>` realm roles (src/scripts/sync-track-teams.js). Two
   // client-credentials identities in the realm above: one reads Track, one holds
   // `realm-management`. Empty everywhere the sync is not scheduled, which is every environment

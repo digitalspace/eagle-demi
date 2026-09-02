@@ -935,6 +935,47 @@ paths:
         '404':
           description: The document's parent project is not in DEMI.
 
+  /api/eagle/updates/{eagleId}:
+    put:
+      summary: Mirror an Update from eagle-api
+      description: |-
+        Receives one Update (Eagle `RecentActivity`) pushed by eagle-api, keyed by the Eagle `_id`.
+        The body carries the RAW Eagle record. Idempotent: the same eagleId replaces. DEMI owns
+        Updates, so it is also what tells eagle-notify about a publication — once per update, and
+        again as a cancellation when a published update is withdrawn. A notification that fails is
+        logged and retried by the next push; it never fails the mirror.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the update. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: Update mirrored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: |-
+            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
+            higher.
+
   /api/links:
     get:
       summary: List short links

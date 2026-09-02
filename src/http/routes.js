@@ -33,6 +33,7 @@ const searchController = () => require('../controllers/search');
 const wildfireController = () => require('../controllers/wildfire');
 const projectController = () => require('../controllers/nosql/project');
 const documentController = () => require('../controllers/nosql/document');
+const updateController = () => require('../controllers/nosql/update');
 const boundaryController = () => require('../controllers/nosql/boundary');
 const bulkDownloadController = () => require('../controllers/nosql/bulk-download');
 const apiKeyController = () => require('../controllers/nosql/api-key');
@@ -148,6 +149,7 @@ const routes = [
   // Write-gated like every other mutation — the push authenticates as a registry key.
   { method: 'put', path: '/eagle/projects/:eagleId', guards: [authMiddleware, requireWrite], load: () => projectController().upsertFromEagle },
   { method: 'put', path: '/eagle/documents/:eagleId', guards: [authMiddleware, requireWrite], load: () => documentController().upsertFromEagle },
+  { method: 'put', path: '/eagle/updates/:eagleId', guards: [authMiddleware, requireWrite], load: () => updateController().upsertFromEagle },
 
   // Boundaries (Borders) Routes. Regions went with an empty collection nothing consumed.
   { method: 'get', path: '/boundaries', guards: [passiveAuthMiddleware], load: () => boundaryController().getBoundaries },
