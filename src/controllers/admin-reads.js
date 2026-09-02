@@ -194,9 +194,12 @@ async function getCost(req, res) {
   } catch (err) {
     // Cost Management rate-limits per tenant (429). This figure moves once a day, so any cached
     // one — however old — beats a 500; only a cold cache leaves nothing to answer with.
-    logger.warn('GET /admin/cost: cost query failed', { error: err.message });
+    const throttled = /^429\b/.test(String(err.message));
+    logger.warn('GET /admin/cost: cost query failed', { error: err.message, stack: err.stack });
     if (cached && cached.body) return res.json({ ...cached.body, stale: true });
-    return sendError(res, 'cost data rate-limited by Azure, retry in a few minutes', 503);
+    return sendError(res, throttled
+      ? 'cost data rate-limited by Azure, retry in a few minutes'
+      : 'cost data unavailable, retry in a few minutes', 503);
   }
 }
 
