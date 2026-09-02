@@ -419,8 +419,8 @@ test('the summary is gated on the parent document, like the chunk search', async
     }));
     // The chunk rows themselves are readable — this is the stale-ACL case, and it is the only one
     // the two existing gates cannot catch.
-    t.mock.method(chunksRepo, 'getById', async (access, chunkId) => ({
-      id: chunkId, content: `text of ${chunkId}`
+    t.mock.method(chunksRepo, 'getById', async (access, chunkId, documentId) => ({
+      id: chunkId, documentId, content: `text of ${chunkId}`
     }));
     // ACL-enforcing: d2 is simply not returned.
     t.mock.method(documentsRepo, 'listByIds', async () => ([{ id: 'd1', displayName: 'First' }]));

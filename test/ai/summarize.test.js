@@ -68,6 +68,34 @@ test('buildPrompt', async (t) => {
     assert.ok(!prompt.includes('doc1::p0::c0'));
   });
 
+  await t.test('summarize reads no project or document field', () => {
+    // The controller hands this module chunks and nothing else. A row carrying a document's and a
+    // project's fields beside the chunk keys goes through a recording proxy, so a future edit that
+    // reads `displayName`, `s3Key` or a project name off it fails here rather than shipping the
+    // field to the model.
+    const CHUNK_KEYS = ['chunkId', 'documentId', 'projectId', 'pageNumber', 'content'];
+    const reads = [];
+    const decorated = {
+      ...chunk(0, 'alpha'),
+      read: ['staff'], displayName: 'Sealed Report', s3Key: 'etl/site-c/secret.pdf', name: 'Project X'
+    };
+    const spy = new Proxy(decorated, {
+      get(target, prop) {
+        if (typeof prop === 'string') reads.push(prop);
+        return target[prop];
+      }
+    });
+
+    const prompt = buildPrompt('q', [spy], 1500);
+
+    assert.deepStrictEqual(reads.filter(k => !CHUNK_KEYS.includes(k)), [],
+      'the prompt builder read a key that is not a chunk key');
+    for (const value of ['Sealed Report', 'etl/site-c/secret.pdf', 'Project X', 'staff']) {
+      assert.ok(!prompt.includes(value), `${value} reached the model`);
+    }
+    assert.ok(prompt.includes('alpha'), 'not vacuous: the chunk text itself is in the prompt');
+  });
+
   await t.test('enforces the per-chunk ceiling, which is the cost ceiling', () => {
     // 8 chunks x this cap is the input-token bound the cost probe asserts against. If truncation
     // stops firing, the bill grows with document size instead of with query count.

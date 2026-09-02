@@ -575,9 +575,10 @@ test('every ALIASES target is a defaultVis 4 index field', () => {
     }
   }
 
-  // DocumentChunk is the exception and it is deliberate: the chunks catalog is P4-1, so chunk keys
-  // are not gated and its aliases still resolve.
-  assert.throws(() => catalogFor('chunks'));
+  // DocumentChunk is the exception and it is deliberate. The chunks catalog classifies the STORED
+  // chunk — it carries `extractedAt`, which no index does — so it says nothing about index field
+  // names, DATASET_CATALOG has no entry for the dataset, and its aliases still resolve.
+  assert.ok(catalogFor('chunks').extractedAt, 'the chunks catalog is over the stored chunk');
   const { filter } = eagleQuery.buildFilter(
     { 'and[document]': 'abc' }, 'DocumentChunk', anonAcl(), anonymous());
   assert.match(filter, /documentId eq 'abc'/);

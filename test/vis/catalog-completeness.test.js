@@ -12,10 +12,23 @@ const {
   mergeEagleOnlyProject
 } = require('../../src/merge/project');
 const { transformDocument } = require('../../src/seed/transform');
+const { chunkMarkdown } = require('../../src/chunker');
 const { catalogFor } = require('../../src/vis/catalog');
 
 const catalog = catalogFor('projects');
 const documentCatalog = catalogFor('documents');
+const chunkCatalog = catalogFor('chunks');
+
+/** Shared by all three catalogs: both bounds present, in range, and the default at or below them. */
+function assertBounds(catalog) {
+  for (const [key, entry] of Object.entries(catalog)) {
+    assert.strictEqual(typeof entry.defaultVis, 'number', `${key}.defaultVis`);
+    assert.strictEqual(typeof entry.maxVis, 'number', `${key}.maxVis`);
+    assert.ok(entry.defaultVis >= 0 && entry.defaultVis <= 4, `${key}.defaultVis out of range`);
+    assert.ok(entry.maxVis >= 0 && entry.maxVis <= 4, `${key}.maxVis out of range`);
+    assert.ok(entry.defaultVis <= entry.maxVis, `${key} defaults above its ceiling`);
+  }
+}
 
 // Both fixtures are written out by hand rather than generated from TRACK_PRECEDENCE and
 // EAGLE_ONLY_FIELDS: a fixture derived from the constants would grow a new field at the same
@@ -113,15 +126,7 @@ test('the projects catalog covers every field the merge emits', async (t) => {
     }
   });
 
-  await t.test('every entry has both bounds and defaultVis <= maxVis', () => {
-    for (const [key, entry] of Object.entries(catalog)) {
-      assert.strictEqual(typeof entry.defaultVis, 'number', `${key}.defaultVis`);
-      assert.strictEqual(typeof entry.maxVis, 'number', `${key}.maxVis`);
-      assert.ok(entry.defaultVis >= 0 && entry.defaultVis <= 4, `${key}.defaultVis out of range`);
-      assert.ok(entry.maxVis >= 0 && entry.maxVis <= 4, `${key}.maxVis out of range`);
-      assert.ok(entry.defaultVis <= entry.maxVis, `${key} defaults above its ceiling`);
-    }
-  });
+  await t.test('every entry has both bounds and defaultVis <= maxVis', () => assertBounds(catalog));
 
   await t.test('read, sources and vis can never be seen', () => {
     assert.strictEqual(catalog.read.maxVis, 0);
@@ -229,13 +234,47 @@ test('the documents catalog covers every field the seed and the controller write
     assert.strictEqual(documentCatalog.edrmsRecordNumber.defaultVis, 4);
   });
 
-  await t.test('every entry has both bounds and defaultVis <= maxVis', () => {
-    for (const [key, entry] of Object.entries(documentCatalog)) {
-      assert.strictEqual(typeof entry.defaultVis, 'number', `${key}.defaultVis`);
-      assert.strictEqual(typeof entry.maxVis, 'number', `${key}.maxVis`);
-      assert.ok(entry.defaultVis >= 0 && entry.defaultVis <= 4, `${key}.defaultVis out of range`);
-      assert.ok(entry.maxVis >= 0 && entry.maxVis <= 4, `${key}.maxVis out of range`);
-      assert.ok(entry.defaultVis <= entry.maxVis, `${key} defaults above its ceiling`);
+  await t.test('every entry has both bounds and defaultVis <= maxVis', () => assertBounds(documentCatalog));
+});
+
+test('chunks catalog covers the chunker output', async (t) => {
+  // The chunker runs for real rather than a hand-written row: a key it grows is catalogued here or
+  // this fails. The fixture is two sections, which is what makes it emit anything at all.
+  const emitted = chunkMarkdown(
+    '# Water quality\n\nThe proponent monitored turbidity at four stations.\n\n' +
+    'Results are reported annually.');
+
+  await t.test('the fixture actually chunks', () => {
+    assert.ok(emitted.length > 0, 'the fixture emitted no chunk, so the case below is vacuous');
+  });
+
+  await t.test('every key the chunker emits is catalogued', () => {
+    const keys = [...new Set(emitted.flatMap(Object.keys))];
+    assert.deepStrictEqual(keys.filter(k => !(k in chunkCatalog)), []);
+  });
+
+  await t.test('the ingest-written fields are catalogued', () => {
+    // Both ingest paths in controllers/nosql/document.js add these five to the chunker's output.
+    for (const key of ['id', 'documentId', 'projectId', 'read', 'extractedAt']) {
+      assert.ok(key in chunkCatalog, `${key} is not catalogued`);
     }
   });
+
+  await t.test('content, read and the dial map can never be seen', () => {
+    // Chunk text is classified by its PARENT DOCUMENT and no response carries it: the chunk mapper
+    // sends `content: ''` and there is no chunk read endpoint.
+    assert.strictEqual(chunkCatalog.content.defaultVis, 0);
+    assert.strictEqual(chunkCatalog.content.maxVis, 0);
+    assert.strictEqual(chunkCatalog.read.maxVis, 0);
+    assert.strictEqual(chunkCatalog.vis.maxVis, 0);
+  });
+
+  await t.test('the Cosmos system fields can never be seen', () => {
+    assert.strictEqual(chunkCatalog._rid.maxVis, 0);
+    assert.strictEqual(chunkCatalog._self.maxVis, 0);
+    assert.strictEqual(chunkCatalog._attachments.maxVis, 0);
+    assert.strictEqual(chunkCatalog._ts.maxVis, 0);
+  });
+
+  await t.test('every entry has both bounds and defaultVis <= maxVis', () => assertBounds(chunkCatalog));
 });
