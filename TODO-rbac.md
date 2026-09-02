@@ -823,7 +823,8 @@ CronJob, no `pg`, no `TRACK_DB_*`, no `src/track/team-feed.js` — DEMI has no r
 database; it calls a Track HTTP endpoint instead. A project's team is the union of the staff on its
 works, read from `find_staff_for_works`; the feed mints and revokes the existing `project:<id>`
 realm roles and creates no new role vocabulary. Lead-managed member lists are a manual override,
-not a source (doc §3 question 10).
+not a source (doc §3 question 10). The same nightly run also mirrors Track's PROJECT list into the
+registry (B5) — Track is the live source of project identity, read over the same bearer.
 
 ### A. Track PR `feat/project-team-members` off `develop` (Track repo, reviewer: Track team)
 
@@ -848,7 +849,7 @@ not a source (doc §3 question 10).
       auth as the rest of the API plus `view`, caller is DEMI's nightly sync, nothing written to
       Track, tests listed.
 
-### B. DEMI — three PRs, in order
+### B. DEMI — in order
 
 - [x] B1 script + tests. `src/scripts/sync-track-teams.js` (shape of
       `src/scripts/reconcile-eagle.js`: `parseArgs`, pure `plan()`, `sync(argv, deps)`,
@@ -900,6 +901,27 @@ not a source (doc §3 question 10).
       if `aud` lacks `epictrack-web`). Confidential client `demi-role-sync`, service account with
       realm-management `manage-realm`, `manage-users`, `view-users`. Secrets into
       `demi-app-secrets` (`6cdc9e-<env>`).
+- [x] B5 project mirror. `src/scripts/sync-track-projects.js`, the run's third step, on the
+      `GET /api/v1/projects` list the credential sweep already fetched — one fetch, two steps, no
+      new timer and no new app setting. `trackApiToExtract` (`src/seed/sources.js`) maps a live row
+      to the flat shape `merge/project.js` reads, and `loadTrackProjects()` prefers the feed
+      whenever `TRACK_API_BASE` and the reader client are set; `src/data/track_projects_enriched.json`
+      (2026-07-29) stays as the offline fixture, with NO fallback between the two — a stale file
+      standing in for a failed fetch would seed July's registry and report success.
+      Existing record: re-merge, then write only the fields Track owns (the `TRACK_PRECEDENCE`
+      targets), carrying `read`, `isPublished` and `vis` off the stored row. `mergeTrackProject`
+      derives `read` from the Eagle record, so without that carry every night would reset a level
+      `PUT /api/projects/:id/level` set. New record: created at `readForLevel(1)` per P3-3. A record
+      the feed no longer lists is counted `orphaned` and never deleted. Summary line gains
+      `trackProjects=… created=… updated=… orphaned=…`.
+  - Tests: `test/scripts/sync-track-projects.test.js`, in-memory repository
+    - [x] `'a changed name leaves the level where it was'`
+    - [x] `'a project DEMI has never seen is created at level 1'`
+    - [x] `'a record the feed no longer lists is counted, not deleted'`
+    - [x] `'a dry run writes nothing and still counts what a live run would do'`
+    - [x] `'the project list is read once and feeds both the mirror and the credential sweep'`
+          (`test/scripts/sync-track-teams.test.js`)
+  - Acceptance: `yarn test` — 0 fail.
 
 Acceptance (test, end to end)
 

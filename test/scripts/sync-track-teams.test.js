@@ -144,7 +144,8 @@ test('a user on two projects is granted both roles, and the feed is read with a 
   ]);
   assert.strictEqual(summaryLine(summary),
     '[track-teams] mode=live projects=2 users=2 grants=3 revokes=0 unmatched=0 ' +
-    'closedProjects=0 credentialsRevoked=0 failures=0');
+    'closedProjects=0 credentialsRevoked=0 trackProjects=0 created=0 updated=0 orphaned=0 ' +
+    'relinked=0 skippedApiRows=0 failures=0');
 });
 
 test('a departed staff member loses every project role they held', async () => {
@@ -341,6 +342,40 @@ test('closing a project revokes its credentials and leaves an open project alone
   assert.strictEqual(summary.credentialsRevoked, 2);
   assert.ok(summaryLine(summary).includes('closedProjects=1 credentialsRevoked=2'),
     summaryLine(summary));
+});
+
+test('the project list is read once and feeds both the mirror and the credential sweep', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const credentials = fakeCredentials(TWO_AND_ONE);
+  const projects = { listVisible: async () => ({ items: [] }), upsert: async () => {} };
+  const urls = [];
+  const get = async (url) => {
+    urls.push(url);
+    return url.endsWith('/team-members') ? TEAMS : CLOSED_AND_OPEN;
+  };
+
+  const summary = await sync(['--live'], { fetchJson: get, kc, credentials, projects });
+
+  assert.strictEqual(urls.filter(u => u === 'https://track.example/api/v1/projects').length, 1,
+    'two steps, one fetch — a second read is a second night of Track load for the same rows');
+  assert.strictEqual(summary.trackProjects, 2);
+  assert.strictEqual(summary.created, 2, 'both feed rows are new to this empty registry');
+  assert.strictEqual(summary.credentialsRevoked, 2);
+  assert.ok(summaryLine(summary).includes('trackProjects=2 created=2 updated=0 orphaned=0'),
+    summaryLine(summary));
+});
+
+test('a Cosmos outage in the mirror still leaves the credential sweep to run', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const credentials = fakeCredentials(TWO_AND_ONE);
+  const projects = { listVisible: async () => { throw new Error('cosmos said no'); } };
+
+  const summary = await sync(['--live'],
+    { fetchJson: fakeFetch(TEAMS, {}, CLOSED_AND_OPEN), kc, credentials, projects });
+
+  assert.strictEqual(summary.failures, 1);
+  assert.strictEqual(summary.trackProjects, 0);
+  assert.strictEqual(summary.credentialsRevoked, 2);
 });
 
 test('a dry run revokes no credential and still counts them', async () => {

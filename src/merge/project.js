@@ -41,7 +41,6 @@ const TRACK_PRECEDENCE = [
   ['isActive', 'is_active', 'activeStatus'],
   // Track-only, and stored VERBATIM: the column carries certificate state as well as numbers
   // ("E98-05", but also "Withdrawn", "In progress", "N/A"), so nothing here parses or normalises it.
-  // Absent from the checked-in export until the next pull — an empty Track field like any other.
   ['eaCertificate', 'ea_certificate', null]
 ];
 
@@ -201,7 +200,7 @@ function resolveProjectAcl(eagle) {
 /**
  * Merge one Track project with its optional Eagle counterpart.
  *
- * @param {object}      track  a record from track_projects_enriched.json
+ * @param {object}      track  a Track project in the flat shape `trackApiToExtract` produces
  * @param {object|null} eagle  the Eagle project matched via track.epic_guid
  * @param {object}      [opts]
  * @param {string}      [opts.now]  ISO timestamp, injected for deterministic tests

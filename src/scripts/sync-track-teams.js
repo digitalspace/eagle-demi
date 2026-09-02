@@ -26,10 +26,12 @@
  * no Track team to sync it from and must survive every run. The `project:` prefix is re-checked
  * after the Keycloak search rather than trusted, since `search=` is a substring match.
  *
- * IT ALSO CLOSES CREDENTIALS. The same run reads `GET /api/v1/projects` and closes out every live
- * Selected Credential over a project Track reports closed (TODO-rbac.md P3-6) — narrowed if it
- * names other projects, revoked if it does not. "Work complete" is not in the feed, so
- * `project-closed` is the only cause acted on here.
+ * IT ALSO MIRRORS THE PROJECT LIST AND CLOSES CREDENTIALS. The same run reads
+ * `GET /api/v1/projects` ONCE and hands that list to two steps. `sync-track-projects.js` creates
+ * and updates the DEMI project records from it — Track is the live source of project identity, not
+ * the checked-in export. Then every live Selected Credential over a project Track reports closed is
+ * closed out (TODO-rbac.md P3-6) — narrowed if it names other projects, revoked if it does not.
+ * "Work complete" is not in the feed, so `project-closed` is the only cause acted on here.
  *
  * Two client-credentials identities, both confidential clients in the same realm:
  * `TRACK_CLIENT_ID` reads Track, `KEYCLOAK_ADMIN_CLIENT_ID` (`demi-role-sync`) holds
@@ -38,7 +40,8 @@
 
 const config = require('../config');
 const { PROJECT_ROLE_PREFIX } = require('../helpers/access-sql');
-const { fetchJson } = require('../seed/sources');
+const { clientToken, fetchJson, fetchTrackProjects } = require('../seed/sources');
+const { syncProjects } = require('./sync-track-projects');
 const { logger } = require('../utils/logger');
 
 /** Keycloak's admin API caps a listing page; anything longer has to be walked with `first=`. */
@@ -140,21 +143,8 @@ function plan(trackTeams, keycloakState = {}) {
 
 /** Every Keycloak call this script makes, in one object so a test can replace the lot. */
 function keycloakClient() {
-  const realmBase = `${config.keycloakUrl}/realms/${config.keycloakRealm}`;
   const adminBase = `${config.keycloakUrl}/admin/realms/${config.keycloakRealm}`;
   let adminToken;
-
-  async function clientToken(clientId, clientSecret) {
-    const res = await fetch(`${realmBase}/protocol/openid-connect/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret
-      })
-    });
-    if (!res.ok) throw new Error(`[track-teams] token for ${clientId}: HTTP ${res.status}`);
-    return (await res.json()).access_token;
-  }
 
   const mintAdminToken = async () => {
     adminToken = await clientToken(config.keycloakAdminClientId, config.keycloakAdminClientSecret);
@@ -263,6 +253,12 @@ async function sync(argv = [], deps = {}) {
     unmatched: decided.unmatched.length,
     closedProjects: 0,
     credentialsRevoked: 0,
+    trackProjects: 0,
+    created: 0,
+    updated: 0,
+    orphaned: 0,
+    relinked: 0,
+    skippedApiRows: 0,
     failures: 0,
     plan: decided
   };
@@ -314,8 +310,26 @@ async function sync(argv = [], deps = {}) {
   // Guarded end to end: a throw here must not swallow the grants/revokes already applied above,
   // or the summary line that reports them.
   try {
-    const projects = await get(`${config.trackApiBase}/api/v1/projects`,
-      { Authorization: `Bearer ${trackToken}` });
+    const projects = await fetchTrackProjects(trackToken, get);
+
+    // Its own try: a Cosmos outage in the mirror must not cost the credential sweep, which needs
+    // no repository of its own.
+    try {
+      const mirrored = await syncProjects(projects, { live: args.live, deps });
+      Object.assign(summary, {
+        trackProjects: mirrored.trackProjects,
+        created: mirrored.created,
+        updated: mirrored.updated,
+        orphaned: mirrored.orphaned,
+        relinked: mirrored.relinked,
+        skippedApiRows: mirrored.skippedApiRows
+      });
+      summary.failures += mirrored.failures;
+    } catch (err) {
+      summary.failures++;
+      logger.error('[track-teams] project mirror failed', { error: err.message });
+    }
+
     const closed = new Set((projects || []).filter(isClosed).map(p => String(p.id)));
     summary.closedProjects = closed.size;
 
@@ -357,6 +371,8 @@ function summaryLine(s) {
   return `[track-teams] mode=${s.mode} projects=${s.projects} users=${s.users} ` +
     `grants=${s.grants} revokes=${s.revokes} unmatched=${s.unmatched} ` +
     `closedProjects=${s.closedProjects} credentialsRevoked=${s.credentialsRevoked} ` +
+    `trackProjects=${s.trackProjects} created=${s.created} updated=${s.updated} ` +
+    `orphaned=${s.orphaned} relinked=${s.relinked} skippedApiRows=${s.skippedApiRows} ` +
     `failures=${s.failures}`;
 }
 
