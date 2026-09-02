@@ -414,6 +414,7 @@ test('GET /bulk-downloads/:id', async (t) => {
       documentCount: 4,
       includedCount: 4,
       partCount: 2,
+      label: 'Site C Clean Energy',
       bytes: 300,
       errors: [],
       errorCount: 0,
@@ -438,11 +439,47 @@ test('GET /bulk-downloads/:id', async (t) => {
     ]);
     // Safari ignores `<a download>` cross-origin, so the name has to be baked into the presign.
     assert.deepStrictEqual(presign.mock.calls[1].arguments[1], {
-      expirySeconds: 300, fileName: `epic-documents-${JOB}-part2.zip`
+      expirySeconds: 300, fileName: 'EPIC documents - Site C Clean Energy (part 2 of 2).zip'
     });
+    assert.deepStrictEqual(body(response).parts.map(p => p.fileName), [
+      'EPIC documents - Site C Clean Energy (part 1 of 2).zip',
+      'EPIC documents - Site C Clean Energy (part 2 of 2).zip'
+    ]);
     assert.deepStrictEqual(analytics.map(row => row.EventName), ['bulk.download']);
     assert.strictEqual(analytics[0].ResultCount, 4);
     assert.deepStrictEqual(audited, [], 'nothing restricted went into this job');
+  });
+
+  await t.test('a one-part job is named after its content, without a part number', async () => {
+    t.mock.method(bulkDownloads, 'getById', async () => ({
+      id: JOB, status: 'ready', requesterId: '', partCount: 1, label: '3 projects',
+      parts: [{ n: 1, key: 'zips/j1-part1.zip', bytes: 10, count: 2 }]
+    }));
+    t.mock.method(storage, 'getDownloadUrl', async () => 'https://nrs.example/x');
+
+    const response = res();
+    await controller.getBulkDownload({ ...ANON, params: { id: JOB } }, response);
+
+    assert.strictEqual(body(response).parts[0].fileName, 'EPIC documents - 3 projects.zip');
+  });
+
+  await t.test('a job written before labels existed is named generically, never after its id', async () => {
+    t.mock.method(bulkDownloads, 'getById', async () => ({
+      id: JOB, status: 'ready', requesterId: '', partCount: 2,
+      parts: [
+        { n: 1, key: 'zips/j1-part1.zip', bytes: 10, count: 1 },
+        { n: 2, key: 'zips/j1-part2.zip', bytes: 10, count: 1 }
+      ]
+    }));
+    t.mock.method(storage, 'getDownloadUrl', async () => 'https://nrs.example/x');
+
+    const response = res();
+    await controller.getBulkDownload({ ...ANON, params: { id: JOB } }, response);
+
+    assert.deepStrictEqual(body(response).parts.map(p => p.fileName), [
+      'EPIC documents (part 1 of 2).zip',
+      'EPIC documents (part 2 of 2).zip'
+    ]);
   });
 
   await t.test('handing out a job that carried a restricted document is audited', async () => {

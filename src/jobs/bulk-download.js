@@ -273,6 +273,18 @@ async function projectNamesFor(access, docs) {
 }
 
 /**
+ * What the zip parts are named after: the one project everything came from, or how many projects
+ * there were. Empty when that project has no name this caller may see, which the status route
+ * answers with a generic name rather than an id nobody can read.
+ */
+function labelFor(docs, projectNames) {
+  const ids = new Set(docs.map(doc => String(doc.projectId)));
+  if (ids.size > 1) return `${ids.size} projects`;
+  const [id] = ids;
+  return clean(projectNames.get(id)).slice(0, MAX_FOLDER_LENGTH).trim();
+}
+
+/**
  * The job's access snapshot, with its credentials re-checked against the registry.
  *
  * Roles are frozen at submit on purpose — that is the selection the caller asked for. A CREDENTIAL
@@ -446,6 +458,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     await bulkDownloads.patch(id, {
       parts: done,
       partCount: done.length,
+      label: labelFor(docs, projectNames),
       includedCount,
       bytes,
       errorCount: errors.length,
