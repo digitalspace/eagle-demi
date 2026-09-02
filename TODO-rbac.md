@@ -861,7 +861,8 @@ not a source (doc §3 question 10).
       `idir_user_id` (`<guid>@idir`, `exact=true`) then email; reconcile: create missing
       `project:<id>` roles (409 ignored), grant, REVOKE stale, touching only the `project:<id>`
       names Track's feed lists — a hand-granted scope like `project:eagle-abc` is never revoked. One summary line
-      `[track-teams] mode=… projects=… users=… grants=… revokes=… unmatched=… failures=…`
+      `[track-teams] mode=… projects=… users=… grants=… revokes=… unmatched=… closedProjects=…
+      credentialsRevoked=… failures=…`
       via `src/utils/logger.js`. `package.json` script `rbac:sync-teams`.
       `ponytail: union over all works. Per-work roles only if the business ever needs them.`
   - Tests: `test/scripts/sync-track-teams.test.js`, in-memory `kc` fake, literals only
@@ -1263,13 +1264,17 @@ level, never changes anyone else's access, and never touches the field plane.
       arm: the record's id or projectId is in a credential's `scope.ids` AND `levelOfRead(read)` is in
       the credential's `levels` (doc §1: a credential names the levels it may see). No new SQL shape — the level check is the same
       `EXISTS ... r IN (...)` / `read/any` the role arm already builds.
-- [ ] Auto-revoke on state change, not only on the clock: the P3-0 Track feed revokes every live
-      credential over a project when that project closes or its work completes, audited
-      `credential.revoke` with `detail.cause: 'project-closed' | 'work-complete'`. Renewal is the
-      norm on EA timelines, so the same job notifies the GRANTOR 7 days before an `end` passes.
-      Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer.
-      P3-6 ships the reusable half only: `credentials.revokeForProject(projectId, cause)` revokes
-      and audits, and nothing calls it yet. The feed wiring and the 7-day notice are what is left.
+- [ ] Auto-revoke on state change, not only on the clock.
+  - [x] Project closed. 2026-09-02: `sync-track-teams.js` reads `GET ${TRACK_API_BASE}/api/v1/projects`
+        on the same bearer and calls `credentials.revokeForProject(String(id), 'project-closed')`
+        for every project with `is_project_closed === true` or `project_state === 'Closed'`; a dry
+        run counts them through `listForProject` instead. Summary gains `closedProjects=…
+        credentialsRevoked=…`. `project:<id>` roles are untouched — they follow Track staff, not
+        project state.
+  - [ ] Work complete. Track's project feed exposes no such field, so there is nothing to act on
+        yet; `detail.cause: 'work-complete'` is unused.
+  - [ ] The 7-day pre-expiry notice to the GRANTOR (renewal is the norm on EA timelines).
+        Notification path: TBD — ACS Email is EPIC's send path, but this repo has no mailer.
 - [x] Endpoints `POST /api/credentials`, `GET /api/credentials?party=|projectId=`,
       `POST /api/credentials/revoke` (body `{ id | batchId | party | projectId }`), all
       `requireWrite` + `requireRole('sysadmin')`, audited `credential.grant` /
@@ -1287,6 +1292,12 @@ level, never changes anyone else's access, and never touches the field plane.
   - [x] `test/controllers/credentials.test.js`: `'bulk revoke by batchId revokes exactly that
         batch'` (3 granted, 2 in the batch → 2 revoked, 1 untouched) and `'every grant and revoke
         audits'`.
+  - [x] `test/scripts/sync-track-teams.test.js`: `'closing a project revokes its credentials and
+        leaves an open project alone'` (2 over the closed project, 1 over an open one → 2 revoked),
+        `'a dry run revokes no credential and still counts them'`, `'a closed project with no
+        credentials revokes nothing and does not fail'`, `'project_state Closed counts even when
+        is_project_closed is false'`, `'no COSMOS_ENDPOINT reports zero instead of reaching for
+        Cosmos'`.
   - [x] `test/vis/redact-matrix.test.js` case `'a credential does not widen the field plane'` — a
         level-4 caller admitted by a credential still sees only `effVis 4` fields.
 - Acceptance

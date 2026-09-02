@@ -74,11 +74,44 @@ function fakeKc({ roles = [], users = [] } = {}) {
   };
 }
 
-const fakeFetch = (teams, seen = {}) => async (url, headers) => {
-  seen.url = url;
-  seen.headers = headers;
-  return teams;
+/** Track answers two endpoints on the same bearer: the team feed and the project list. */
+const fakeFetch = (teams, seen = {}, projects = []) => async (url, headers) => {
+  const teamFeed = url.endsWith('/team-members');
+  if (teamFeed) { seen.url = url; seen.headers = headers; }
+  else seen.projectsUrl = url;
+  return teamFeed ? teams : projects;
 };
+
+/**
+ * The `credentials` repository, in memory. Every call is logged, because "revoked the closed
+ * project and nothing else" is the whole assertion.
+ */
+function fakeCredentials(rows = []) {
+  const live = rows.map(r => ({ ...r }));
+  const calls = [];
+  const over = (projectId) => live.filter(r => r.projectId === projectId && !r.revokedAt);
+  return {
+    calls, rows: live,
+    listForProject: async (projectId) => { calls.push(['list', projectId]); return over(projectId); },
+    revokeForProject: async (projectId, cause) => {
+      calls.push(['revoke', projectId, cause]);
+      const hit = over(projectId);
+      for (const row of hit) { row.revokedAt = '2026-09-02T00:00:00.000Z'; row.cause = cause; }
+      return hit;
+    }
+  };
+}
+
+const CLOSED_AND_OPEN = [
+  { id: 1, is_project_closed: true, project_state: 'Closed' },
+  { id: 2, is_project_closed: false, project_state: 'Operation' }
+];
+
+const TWO_AND_ONE = [
+  { id: 'c1', projectId: '1' },
+  { id: 'c2', projectId: '1' },
+  { id: 'c3', projectId: '2' }
+];
 
 test('usernameFor never doubles the @idir suffix Track already carries', () => {
   assert.strictEqual(usernameFor({ idir_user_id: 'AAAA1111@idir' }), 'aaaa1111@idir');
@@ -99,7 +132,8 @@ test('a user on two projects is granted both roles, and the feed is read with a 
     ['grant', 'u-bo', ['project:1', 'project:2']]
   ]);
   assert.strictEqual(summaryLine(summary),
-    '[track-teams] mode=live projects=2 users=2 grants=3 revokes=0 unmatched=0 failures=0');
+    '[track-teams] mode=live projects=2 users=2 grants=3 revokes=0 unmatched=0 ' +
+    'closedProjects=0 credentialsRevoked=0 failures=0');
 });
 
 test('a departed staff member loses every project role they held', async () => {
@@ -276,4 +310,70 @@ test('role listing pages past 1000', async (t) => {
   assert.strictEqual(urls.length, 3, 'a short page ends the walk');
   assert.ok(urls[1].endsWith('first=0&max=1000'), urls[1]);
   assert.ok(urls[2].endsWith('first=1000&max=1000'), urls[2]);
+});
+
+test('closing a project revokes its credentials and leaves an open project alone', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const credentials = fakeCredentials(TWO_AND_ONE);
+  const seen = {};
+
+  const summary = await sync(['--live'],
+    { fetchJson: fakeFetch(TEAMS, seen, CLOSED_AND_OPEN), kc, credentials });
+
+  assert.strictEqual(seen.projectsUrl, 'https://track.example/api/v1/projects');
+  assert.deepStrictEqual(credentials.calls, [['revoke', '1', 'project-closed']],
+    'the open project is never even asked about');
+  assert.deepStrictEqual(credentials.rows.filter(r => r.revokedAt).map(r => r.id), ['c1', 'c2']);
+  assert.deepStrictEqual([...new Set(credentials.rows.filter(r => r.cause).map(r => r.cause))],
+    ['project-closed']);
+  assert.strictEqual(summary.closedProjects, 1);
+  assert.strictEqual(summary.credentialsRevoked, 2);
+  assert.ok(summaryLine(summary).includes('closedProjects=1 credentialsRevoked=2'),
+    summaryLine(summary));
+});
+
+test('a dry run revokes no credential and still counts them', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const credentials = fakeCredentials(TWO_AND_ONE);
+
+  const summary = await sync([], { fetchJson: fakeFetch(TEAMS, {}, CLOSED_AND_OPEN), kc, credentials });
+
+  assert.deepStrictEqual(credentials.calls, [['list', '1']]);
+  assert.deepStrictEqual(credentials.rows.filter(r => r.revokedAt), []);
+  assert.strictEqual(summary.credentialsRevoked, 2, 'the count is what a --live run would revoke');
+});
+
+test('a closed project with no credentials revokes nothing and does not fail', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const credentials = fakeCredentials([{ id: 'c3', projectId: '2' }]);
+
+  const summary = await sync(['--live'],
+    { fetchJson: fakeFetch(TEAMS, {}, CLOSED_AND_OPEN), kc, credentials });
+
+  assert.strictEqual(summary.closedProjects, 1);
+  assert.strictEqual(summary.credentialsRevoked, 0);
+  assert.strictEqual(summary.failures, 0);
+  assert.deepStrictEqual(credentials.rows.filter(r => r.revokedAt), []);
+});
+
+test('project_state Closed counts even when is_project_closed is false', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const credentials = fakeCredentials(TWO_AND_ONE);
+  const projects = [{ id: 1, is_project_closed: false, project_state: 'Closed' }];
+
+  const summary = await sync(['--live'], { fetchJson: fakeFetch(TEAMS, {}, projects), kc, credentials });
+
+  assert.strictEqual(summary.closedProjects, 1);
+  assert.strictEqual(summary.credentialsRevoked, 2);
+});
+
+test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  assert.strictEqual(process.env.COSMOS_ENDPOINT, undefined, 'the CLI dry-run case');
+
+  const summary = await sync([], { fetchJson: fakeFetch(TEAMS, {}, CLOSED_AND_OPEN), kc });
+
+  assert.strictEqual(summary.closedProjects, 1);
+  assert.strictEqual(summary.credentialsRevoked, 0);
+  assert.strictEqual(summary.failures, 0);
 });

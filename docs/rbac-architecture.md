@@ -180,9 +180,8 @@ attributes they see — and level 4 needs none.
 The party is a person logging in through BCeID (Business, which ties the credential to the
 organisation) or a registry API key; IDIR guest only for an external acting as staff. BCeID is not
 `idir`, so a credential holder never reaches level 3 by logging in. `end` is required and enforced
-on the GRANT, not on the login — 90 days by default. A grant is also revoked by state change: when
-the project closes or the engagement's work completes, from the same Track feed that mints team
-roles. EA windows routinely run past 90 days, so renewal is the norm and the grantor is notified
+on the GRANT, not on the login — 90 days by default. A grant is also revoked by state change: the nightly Track sync
+that mints team roles revokes every live credential over a project Track reports closed. EA windows routinely run past 90 days, so renewal is the norm and the grantor is notified
 7 days before expiry.
 
 **Fail closed.** Unknown role → level 4. No ladder token → the row matches only privileged

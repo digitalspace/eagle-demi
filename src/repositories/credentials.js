@@ -108,11 +108,9 @@ async function revokeBy(selector, at = new Date().toISOString()) {
 /**
  * Revoke every grant over a project because its state changed — it closed, or its work completed.
  *
- * NOTHING CALLS THIS YET. The P3-0 Track feed is the caller: `src/scripts/sync-track-teams.js`
- * already reads Track's project feed on the `syncTrackTeams` timer, and
- * `close-unpublished-track-projects.js` is where a close is decided today. Wiring it in is that
- * unit's work, not this one's — and the 7-day pre-expiry notice needs a mailer this repo does not
- * have (TODO-rbac.md P3-6).
+ * Called by `src/scripts/sync-track-teams.js` on the `syncTrackTeams` timer with
+ * `cause: 'project-closed'`. Work-complete is not in Track's feed, and the 7-day pre-expiry notice
+ * needs a mailer this repo does not have (TODO-rbac.md P3-6).
  */
 async function revokeForProject(projectId, cause) {
   const revoked = await revokeBy({ projectId });
