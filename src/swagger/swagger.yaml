@@ -1802,7 +1802,13 @@ components:
               bytes: { type: integer }
               count: { type: integer }
               expiresIn: { type: integer }
-              fileName: { type: string }
+              fileName:
+                type: string
+                description: >-
+                  Named after what the part holds: `EPIC documents - <project name>.zip`, or
+                  `EPIC documents - <N> projects.zip` when the selection spans several. Several
+                  parts add ` (part <n> of <partCount>)` before the extension. Baked into the
+                  presigned URL as its content-disposition.
     MeBase:
       type: object
       properties:

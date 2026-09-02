@@ -374,6 +374,38 @@ test('the bulk download worker', async (t) => {
       'Cosmos refuses a patch over PATCH_MAX_OPERATIONS');
   });
 
+  await t.test('a job from one project is labelled with that project', async (tt) => {
+    const docs = [doc('d1'), doc('d2')];
+    const { patches } = harness(tt, { row: job(docs), docs });
+
+    await worker.run('job-1');
+
+    assert.strictEqual(readyPatch(patches).label, 'Site C Clean Energy',
+      'the label is what names the zip the caller downloads');
+  });
+
+  await t.test('a job spanning projects is labelled with how many', async (tt) => {
+    const docs = [doc('d1'), doc('d2', { projectId: '311' })];
+    const { patches } = harness(tt, { row: job(docs), docs });
+    tt.mock.method(projects, 'listByIds',
+      async () => [PROJECT, { id: '311', name: 'Coastal GasLink' }]);
+
+    await worker.run('job-1');
+
+    assert.strictEqual(readyPatch(patches).label, '2 projects',
+      'no caller wants a zip named after one of the projects it holds');
+  });
+
+  await t.test('a project the caller cannot name leaves the label empty', async (tt) => {
+    const docs = [doc('d1', { projectId: '999' })];
+    const { patches } = harness(tt, { row: job(docs), docs });
+
+    await worker.run('job-1');
+
+    assert.strictEqual(readyPatch(patches).label, '',
+      'the status route names an unlabelled job generically rather than after an id');
+  });
+
   await t.test('a redelivered ready job is not rebuilt', async () => {
     const docs = [doc('d1')];
     const { patches, uploads } = harness(t, { row: job(docs, { status: 'ready' }), docs });

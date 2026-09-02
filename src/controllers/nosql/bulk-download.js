@@ -290,11 +290,18 @@ exports.getBulkDownload = async (req, res) => {
     };
 
     if (status === 'ready') {
+      // What the worker named the job's content, if it ran since jobs started carrying a label.
+      const label = String(job.label || '').trim();
+      const base = label ? `EPIC documents - ${label}` : 'EPIC documents';
+      const partCount = job.partCount || parts.length;
+
       body.parts = await Promise.all(parts.map(async (part, index) => {
         const n = part.n || index + 1;
         // The filename is baked into the presign as a content-disposition: Safari ignores
         // `<a download>` on a cross-origin URL and would otherwise name the file after the key.
-        const fileName = `epic-documents-${job.id}-part${n}.zip`;
+        const fileName = partCount > 1
+          ? `${base} (part ${n} of ${partCount}).zip`
+          : `${base}.zip`;
         return {
           n,
           url: await storage.getDownloadUrl(part.key, {
