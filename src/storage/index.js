@@ -3,9 +3,8 @@
 /**
  * Object storage — the single entry point every caller uses.
  *
- * Two operations, because that is all the application does with stored files: hand out a
- * short-lived download URL and write an upload. Nothing here exposes a bucket, a container, or a
- * client.
+ * Hand out a short-lived download URL, write an upload, stream an object in or out, delete one.
+ * Nothing here exposes a bucket, a container, or a client.
  *
  * The backend is chosen by an EXPLICIT `STORAGE_BACKEND` value and an unknown value throws at
  * load. Inferring it from whichever credentials happen to be set is how this repo previously
@@ -59,4 +58,30 @@ function putFile(key, filePath, contentType) {
   return backend.putFile(key, filePath, contentType);
 }
 
-module.exports = { getDownloadUrl, putFile };
+/**
+ * Read an object as a stream, for bytes too large to buffer.
+ *
+ * @returns {Promise<import('stream').Readable>}
+ */
+function getObjectStream(key) {
+  return backend.getObjectStream(key);
+}
+
+/**
+ * Write a stream of UNKNOWN length under `key` — the backend multiparts it.
+ *
+ * @returns {Promise<string>} the key as actually stored; see putFile on why callers record the
+ *   value they passed in instead.
+ */
+function putObjectStream(key, stream, contentType) {
+  return backend.putObjectStream(key, stream, contentType);
+}
+
+/** Delete an object. Absent is not an error, in both backends. */
+function removeObject(key) {
+  return backend.removeObject(key);
+}
+
+module.exports = {
+  getDownloadUrl, putFile, getObjectStream, putObjectStream, removeObject
+};

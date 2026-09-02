@@ -81,7 +81,11 @@ function fromGateway(req) {
   const secret = process.env.APIM_GATEWAY_SECRET;
   if (!secret || secret.startsWith('@Microsoft.KeyVault')) return false;
 
-  return matchesConfiguredKey(req.header('X-Gateway-Secret') || '', [secret]);
+  // The header bag as well as req.header(): utils/caller-ip.js asks this question from the request
+  // log and the audit writer, which are handed request-shaped objects that carry headers only.
+  const presented = (req.header ? req.header('X-Gateway-Secret') : null) ||
+    ((req.headers || {})['x-gateway-secret']) || '';
+  return matchesConfiguredKey(presented, [secret]);
 }
 
 /**
@@ -309,6 +313,7 @@ function authenticate(req, onSuccess, onFailure) {
 
 module.exports = {
   authenticate,
+  fromGateway,
   isAllowedClient,
   forgetCachedKey,
   KEY_CACHE_TTL_MS

@@ -210,8 +210,11 @@ resource machineSubscriptions 'Microsoft.ApiManagement/service/subscriptions@202
   }
 }]
 
-// Global policy. The two backend headers are deleted first because the Function App host stays
+// Global policy. The three backend headers are deleted first because the Function App host stays
 // publicly reachable: anything a client sends under these names is attacker input.
+// X-Client-Ip is the address APIM saw the request arrive from. Behind the gateway the last
+// X-Forwarded-For hop is APIM, so it is the only way the app can tell two callers apart —
+// src/utils/caller-ip.js reads it, and only on a request the gateway secret proves.
 // No <base/> here: the global scope has no parent, so APIM rejects it; backend forwards explicitly.
 resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-05-01' = {
   parent: apim
@@ -222,11 +225,15 @@ resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-05-01' = {
   <inbound>
     <set-header name="X-Gateway-Secret" exists-action="delete" />
     <set-header name="X-APIM-Subscription" exists-action="delete" />
+    <set-header name="X-Client-Ip" exists-action="delete" />
     <set-header name="X-Gateway-Secret" exists-action="override">
       <value>{{gateway-secret}}</value>
     </set-header>
     <set-header name="X-APIM-Subscription" exists-action="override">
       <value>@(context.Subscription?.Name ?? "")</value>
+    </set-header>
+    <set-header name="X-Client-Ip" exists-action="override">
+      <value>@(context.Request.IpAddress)</value>
     </set-header>
   </inbound>
   <backend><forward-request /></backend>

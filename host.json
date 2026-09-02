@@ -22,6 +22,15 @@
   "extensions": {
     "http": {
       "routePrefix": ""
+    },
+    "queues": {
+      "_comment": "messageEncoding 'none' because the bulk-download producer sends a bare job UUID as the message body: the default base64 encoding would have the trigger hand the worker a decoded-then-re-decoded string that is not the id. batchSize 1 with newBatchThreshold 0 is one zip per instance — Flex scales horizontally to 20 instances, and one 64 MiB multipart buffer per 2048 MB instance is the memory budget this keeps. The 64 MiB is real only because src/storage/minio.js constructs the client with partSize 64 MiB: with no size hint the SDK picks the part size that fits a 5 TB object in 10,000 parts, 528 MiB, and buffers each one. maxDequeueCount is read by api/index.js, which tells the worker which delivery is the last. visibilityTimeout matches the 30-minute functionTimeout with room to spare, so a message from an instance killed mid-zip reappears rather than being lost.",
+      "messageEncoding": "none",
+      "batchSize": 1,
+      "newBatchThreshold": 0,
+      "maxDequeueCount": 3,
+      "visibilityTimeout": "01:00:00",
+      "maxPollingInterval": "00:00:30"
     }
   },
   "extensionBundle": {

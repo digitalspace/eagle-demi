@@ -318,4 +318,7 @@ async function dispatch(request, context) {
   });
 }
 
-module.exports = { dispatch };
+// makeRes is exported for the controller suites: a hand-rolled `{ status, json }` double answers
+// twice without complaining and reports objects the real one would have serialised, which is how a
+// response assertion passes against a handler that sent something else.
+module.exports = { dispatch, makeRes };

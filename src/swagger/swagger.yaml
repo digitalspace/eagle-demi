@@ -5,8 +5,8 @@ info:
     Central authoritative storage and spatial search engine for projects, documents, and
     administrative region boundaries.
 
-    NOT THE CONTRACT. This file is hand-maintained, covers 27 of the 41 paths in src/http/routes.js
-    (37 of its 55 operations), and has drifted from what the API actually serves. Undocumented here:
+    NOT THE CONTRACT. This file is hand-maintained, covers 29 of the 43 paths in src/http/routes.js
+    (39 of its 57 operations), and has drifted from what the API actually serves. Undocumented here:
     /config, /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
     browser redirect rather than an API call and is documented in the wiki. The routes in
     src/http/routes.js are authoritative; read them, or the endpoint itself, before relying on
@@ -549,6 +549,100 @@ paths:
           description: Document not found.
         '409':
           description: The document's project is not published.
+
+  /api/bulk-downloads:
+    post:
+      summary: Request a bulk document download
+      description: >-
+        Asks for many documents as one download. Exactly ONE id is answered inline with the same
+        presigned URL `GET /api/documents/{id}/download` hands out (`single: true`, no job); two or
+        more start an asynchronous job — 202 now, poll `GET /api/bulk-downloads/{id}`, download the
+        zip parts from the presigned URLs it returns once the status is `ready`.
+
+        Ids the caller may not see are dropped by the read ACL, and so are documents with no
+        stored file, so `documentCount` is what will actually be zipped and may be lower than the
+        number asked for. Caps REFUSE rather than truncate: 100 documents anonymously, 2500
+        authenticated, and 20 GiB in total. The zip is split into ~2 GiB numbered parts rather than
+        refused. Three jobs may be in flight per requester and 20 may be started in 24 hours.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documentIds]
+              additionalProperties: false
+              properties:
+                documentIds:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: One id only — a direct presigned download, never a zip.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+                  expiresIn: { type: integer, description: Seconds until the URL expires. }
+                  fileName: { type: string }
+                  displayName: { type: string, nullable: true }
+                  single: { type: boolean, enum: [true] }
+        '202':
+          description: The job was recorded and queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkDownloadAccepted'
+        '400':
+          description: >-
+            An unknown body parameter, a malformed `documentIds`, more documents than the caller's
+            cap allows, or a selection over the total byte limit.
+        '404':
+          description: None of the requested documents are visible to this caller.
+        '429':
+          description: >-
+            This requester is at a quota: either the maximum number of jobs in flight, or the
+            number of jobs one requester may start in 24 hours. Both are counted per API key, per
+            signed-in user, or per client address for anonymous callers. A job gives its in-flight
+            slot back when it is refused, when it finishes, or when it runs out of retries — a
+            failure that will be retried keeps its slot. The daily count only resets 24 hours after
+            the requester's first job of the window.
+        '503':
+          description: >-
+            Bulk download is disabled in this environment (no queue configured), or the job was
+            recorded but could not be queued — in which case it is marked `failed` rather than left
+            waiting for a worker that will never come.
+
+  /api/bulk-downloads/{id}:
+    get:
+      summary: Bulk download status
+      description: >-
+        The job id is the capability. An anonymous job is answered to whoever holds its id; a job
+        made by an authenticated caller is answered only to that caller, and anyone else gets 404
+        rather than 403. A `running` job whose worker stopped reporting for longer than the queue's
+        visibility timeout is reported as `failed`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job status, with one presigned URL per zip part once it is ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkDownloadStatus'
+        '404':
+          description: >-
+            No such job, it belongs to another caller, or the id is not a job id. The three are
+            deliberately indistinguishable.
 
   /api/sealed:
     post:
@@ -1620,6 +1714,46 @@ components:
         p95DurationMs:
           type: number
       description: One AppRequests summary row.
+    BulkDownloadAccepted:
+      type: object
+      properties:
+        id: { type: string, format: uuid, description: The job id, and the capability that reads it back. }
+        status: { type: string, enum: [queued] }
+        documentCount: { type: integer, description: Documents visible to this caller, so possibly fewer than were asked for. }
+        estimatedPartCount: { type: integer, description: Zip parts the selection is expected to pack into. An estimate — a document with no recorded size counts as nothing here, so the real count can differ. Poll for `partCount`. }
+        statusUrl: { type: string, example: /api/bulk-downloads/6f1c4b9e-0d2a-4d9d-9c3e-1f5f9a2b7c40 }
+    BulkDownloadStatus:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, ready, failed, expired] }
+        documentCount: { type: integer }
+        partCount: { type: integer, description: Zip parts the job actually produced. 0 until the job is ready. }
+        partsReady: { type: integer, description: Parts finished so far. }
+        includedCount: { type: integer, description: Documents actually written into the zip. }
+        errorCount: { type: integer }
+        errors:
+          type: array
+          description: At most 100; the full list ships as errors.txt inside the last part.
+          items:
+            type: object
+            properties:
+              documentId: { type: string }
+              name: { type: string, description: File name, empty when the document could not be read at all. }
+              reason: { type: string, example: not available }
+        bytes: { type: integer }
+        parts:
+          type: array
+          description: Present only when ready. Fetch each URL in turn; the browser prompts once to allow several downloads.
+          items:
+            type: object
+            properties:
+              n: { type: integer }
+              url: { type: string }
+              bytes: { type: integer }
+              count: { type: integer }
+              expiresIn: { type: integer }
+              fileName: { type: string }
     Me:
       type: object
       properties:

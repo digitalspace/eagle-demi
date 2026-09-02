@@ -25,6 +25,9 @@ param apiPrincipalId string
 @description('Alert when the nightly reconcile reports drift. Off by default — an environment that does not set RECONCILE_SCHEDULE never writes the line this rule reads, and a rule that can only ever be silent is one more thing to keep.')
 param deployReconcileDriftAlert bool = false
 
+@description('Alert when a bulk download job fails. Off by default, like the drift alert: an environment with no BULK_DOWNLOADS_QUEUE never writes the line this rule reads.')
+param deployBulkDownloadPoisonAlert bool = false
+
 @description('Who to tell when ingestion approaches the daily cap. Also reused by audit-logs.bicep, which cannot own the action group itself: main.bicep deploys this module first, so a shared group has to live on this side of the dependency.')
 param contactEmails array = [
   'Daniel.T.Truong@gov.bc.ca'
@@ -200,6 +203,48 @@ resource reconcileDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
+// A bulk download that died. The worker writes `[bulk] job failed` on its LAST attempt only, so
+// one line is one job that will not be retried and the rule fires on a single occurrence — the
+// retries in between are logged at warn and deliberately not alerted on. It reads the log rather
+// than the poison queue because per-queue length is not a metric the storage account emits.
+resource bulkDownloadPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (deployBulkDownloadPoisonAlert) {
+  name: 'demi-bulk-download-failed-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI bulk download job failed'
+    description: 'A bulk download job failed after its retries. The requester sees status `failed`; the job row holds the error. See the Bulk-Download wiki page for the poison-queue runbook.'
+    // Warning: one requester lost one download, and they can ask again.
+    severity: 2
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT15M'
+    // Same length as the frequency — no overlap, so one failure is not counted twice.
+    windowSize: 'PT15M'
+    criteria: {
+      allOf: [
+        {
+          // `AppTraces`, not `traces`, and `contains`, not `has` — see reconcileDriftAlert above.
+          query: 'AppTraces | where Message contains "[bulk] job failed"'
+          timeAggregation: 'Count'
+          // One line, one dead job.
+          operator: 'GreaterThanOrEqual'
+          threshold: 1
           failingPeriods: {
             numberOfEvaluationPeriods: 1
             minFailingPeriodsToAlert: 1
