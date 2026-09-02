@@ -129,10 +129,11 @@ test('GET /admin/analytics', async (t) => {
     configure(t, { auditWorkspaceCustomerId: 'ws-audit', appLogsWorkspaceCustomerId: 'ws-logs' });
     const sent = spyLogs(t, (query) => {
       if (query.startsWith('AppRequests')) return [{ requests: 40, failed: 1, p95DurationMs: 250 }];
-      if (query.includes('bin(TimeGenerated')) return [{ day: '2026-09-01T00:00:00Z', events: 5, visitors: 3 }];
+      if (query.includes('bin(hour, 1d)')) {
+        return [{ day: '2026-09-01T00:00:00Z', events: 5, peakHourUsers: 3 }];
+      }
       if (query.includes('EventName')) return [{ EventName: 'search', c: 12 }];
-      if (query.includes('SearchTerm')) return [{ SearchTerm: 'lng', c: 4 }];
-      return [{ events: 9, visitors: 4 }];
+      return [{ events: 9, peakHourUsers: 4 }];
     });
 
     const res = mockRes();
@@ -140,18 +141,60 @@ test('GET /admin/analytics', async (t) => {
 
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(res.body.days, 30);
-    assert.deepStrictEqual(res.body.totals, { events: 9, visitors: 4 });
-    assert.deepStrictEqual(res.body.perDay, [{ day: '2026-09-01T00:00:00Z', events: 5, visitors: 3 }]);
+    assert.deepStrictEqual(res.body.totals, { events: 9, peakHourUsers: 4 });
+    assert.deepStrictEqual(res.body.perDay, [
+      { day: '2026-09-01T00:00:00Z', events: 5, peakHourUsers: 3 }
+    ]);
     assert.deepStrictEqual(res.body.topEvents, [{ name: 'search', count: 12 }]);
-    assert.deepStrictEqual(res.body.topSearches, [{ term: 'lng', count: 4 }]);
+    assert.strictEqual(res.body.topSearches, undefined);
     assert.deepStrictEqual(res.body.requests.window, { requests: 40, failed: 1, p95DurationMs: 250 });
 
-    const events = sent.filter((call) => call.query.includes('DemiEvents_CL'));
+    const events = sent.filter((call) => call.query.includes('DemiEventsHourly_CL'));
     const requests = sent.filter((call) => call.query.startsWith('AppRequests'));
     assert.ok(events.length && events.every((call) => call.customerId === 'ws-audit'));
     assert.ok(requests.length && requests.every((call) => call.customerId === 'ws-logs'));
     // The last 24 hours is reported beside the window, so one of the two must not be P30D.
     assert.deepStrictEqual(requests.map((call) => call.timespan).sort(), ['P30D', 'PT24H']);
+  });
+
+  await t.test('reads the hourly rollup and never the raw Auxiliary table', async () => {
+    // DemiEvents_CL is Auxiliary-plan: an interactive query against it returns no rows at all,
+    // so naming it is the bug this route had rather than a style preference.
+    configure(t, { auditWorkspaceCustomerId: 'ws-audit', appLogsWorkspaceCustomerId: 'ws-logs' });
+    const sent = spyLogs(t, () => []);
+
+    await controller.getAnalytics({ query: {} }, mockRes());
+
+    const usage = sent.filter((call) => !call.query.startsWith('AppRequests'));
+    assert.strictEqual(usage.length, 3);
+    for (const call of usage) {
+      assert.ok(call.query.includes('DemiEventsHourly_CL'), call.query);
+      assert.ok(!call.query.includes('DemiEvents_CL'), call.query);
+      // count()/dcount() belong to the raw table; the rollup carries pre-aggregated columns.
+      assert.ok(!call.query.includes('count('), call.query);
+    }
+  });
+
+  await t.test('rebuilds the hour before taking the peak, and sums events', async () => {
+    // The rollup is one row per (hour, EventName, ActorType, ProjectId, Env), so a max over raw
+    // rows reads the biggest bucket rather than the busiest hour.
+    configure(t, { auditWorkspaceCustomerId: 'ws-audit', appLogsWorkspaceCustomerId: 'ws-logs' });
+    const sent = spyLogs(t, () => []);
+
+    await controller.getAnalytics({ query: {} }, mockRes());
+
+    const users = sent.filter((call) => call.query.includes('Users'));
+    assert.strictEqual(users.length, 2);
+    for (const call of users) {
+      const perHour = call.query.indexOf('hourUsers = sum(Users) by hour = bin(TimeGenerated, 1h)');
+      assert.ok(perHour > 0, call.query);
+      assert.ok(call.query.indexOf('max(') > perHour, 'the peak comes after the hours are rebuilt');
+      assert.ok(call.query.includes('peakHourUsers = max(hourUsers)'), call.query);
+      assert.ok(call.query.includes('events = sum(hourEvents)'), call.query);
+    }
+
+    const top = sent.find((call) => call.query.includes('by EventName'));
+    assert.ok(top.query.includes('c = sum(Events) by EventName'), top.query);
   });
 
   await t.test('answers 503 when only one of the two workspaces is configured', async () => {
