@@ -121,7 +121,7 @@ param roleSyncClientId = 'demi-role-sync'
 param trackClientSecret = readEnvironmentVariable('TRACK_CLIENT_SECRET')
 param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 
-// set to '0 0 10 * * *' once the Track endpoint is live
+// Nightly 10:00 UTC. Armed 2026-09-02 after the first live run against epictrack-api-c8b80a-test.
 param syncTeamsSchedule = '0 0 10 * * *'
 
 // APIM Consumption in front of demi-api-fc-test. Test only — prod stays off until this proves out.
