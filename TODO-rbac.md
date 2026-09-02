@@ -31,9 +31,10 @@ U5 (Key Vault) may slide behind U6-U11; nothing depends on it.
 
 ## External dependencies (owner and date before the unit that needs them)
 
-- [ ] Realm roles: DEMI reuses Eagle's vocabulary, no `demi-*` realm roles (decided 2026-08-28). Test done; prod open.
-      `eao-epic` test held only `sysadmin` of the names eagle-api checks; `staff` created there
-      2026-08-28 by `demi-user` (`realm-management` grant). Prod realm: `staff` still to create. Owner: Daniel.
+- [x] Realm roles: DEMI reuses Eagle's vocabulary, no `demi-*` realm roles (decided 2026-08-28).
+      `eao-epic` held only `sysadmin` of the names eagle-api checks; `staff` created on test
+      2026-08-28 by `demi-user` (`realm-management` grant), `staff` and `compliance` (P5) on test
+      and prod 2026-09-02 by `kc-create-demi-clients.sh`. Owner: Daniel.
       Level 3 is the `identity_provider` claim and level 1 is project scope: neither is a new realm
       role. Classifying (P3-5) uses `requireRole('sysadmin')`; `requireAdmin` admits `staff`.
 - [x] Track read endpoint `GET /api/v1/projects/team-members` — Track PR, owner Daniel, reviewer
@@ -218,7 +219,7 @@ creates one; it is the largest Phase 0 item and merges alone.
       `'@Microsoft.KeyVault(SecretUri=${adminApiKeySecretUri})'`; keep `param adminApiKey` only if
       the vault module still needs it via main (it does — main writes the secret, the app reads it).
 - [x] `docs/prod-flip-runbook.md`: name the rotation owner and the sequence (OpenShift
-      `demi-app-secrets` → vault secret new version → app restart). `docs/FUTURE.md:23-27` already
+      `demi-app-secrets` → vault secret new version → app restart). `docs/FUTURE.md` (Key manager / rotator) already
       describes the hand sequence; link it.
 - Tests: `test/azure/main-bicep-wiring.test.js`
   - [x] `the API app reads ADMIN_API_KEY through a Key Vault reference` — assert
