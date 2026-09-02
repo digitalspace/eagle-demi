@@ -1555,10 +1555,13 @@ Branch: `feat/level-zero-routes`
   - [x] `'every sealed route audits, reads included'`.
 - Acceptance
   - [x] `node --test test/controllers/nosql/sealed.test.js` — 0 fail.
-  - [ ] On test, with a `compliance` API key: seal, read back, release; confirm the released record
-        answers 404 to a staff caller with no `project:` role and 200 to a team member, and that a
-        `sysadmin` key gets nothing while it is sealed. `DemiAudit_CL | where Action startswith
-        "sealed."` shows create, read and release.
+  - [x] On test 2026-09-02 (sha 592e8be): first `compliance` key minted on the devbox through the
+        real mint path (sysadmin key refused with 400); seal → 201, compartment read/list/download
+        → 200, sysadmin 403 on `/sealed/:id` and 404 on `/documents/:id`, compliance 404 on the
+        ordinary route, release without `caseNumber` 400, release → level 1: sysadmin reads it,
+        anonymous 404. `DemiAudit_CL` holds `sealed.create/read/list/download/release`. Not
+        exercised live: a `staff` key without a `project:` role (mint needs `allowWrite`; unit test
+        `release lands at level 1` covers the ACL). Throwaway doc and both keys deleted.
 
 ## P5b envelope encryption (optional, unscheduled)
 
