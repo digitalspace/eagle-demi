@@ -76,7 +76,7 @@ async function backfillEacNumbers(argv = [], deps = {}) {
   const { items } = await projectsRepo.listVisible(access, {});
   const storedIds = new Set(items.map(p => String(p.id)));
 
-  const trackProjects = src.loadTrackProjects();
+  const trackProjects = await src.loadTrackProjects();
   const summary = {
     mode: args.live ? 'live' : 'dry-run',
     total: trackProjects.length,

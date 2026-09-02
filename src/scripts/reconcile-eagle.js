@@ -99,7 +99,7 @@ async function reconcile(argv = [], deps = {}) {
   // The document gate, over the registry seed-nosql builds — a Track row's dangling epic_guid
   // resolves here exactly as it does there, so a document under one is drift, not unresolvable.
   const { admit } = await documentAdmission(src,
-    buildProjectIndex(buildRegistry(src.loadTrackProjects(), eagleProjects).projects));
+    buildProjectIndex(buildRegistry(await src.loadTrackProjects(), eagleProjects).projects));
   const eagleDocumentIds = new Set();
   const eagleDocumentProject = new Map(); // doc id -> its Eagle project id
   await src.streamEagleDocuments(page => {

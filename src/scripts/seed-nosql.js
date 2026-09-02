@@ -367,8 +367,8 @@ async function seed(argv = [], deps = {}) {
   // Always built, even when not in --only: every other stage needs the project index to resolve
   // its partition key, and a stale index would misfile documents.
   log('Loading Track projects...');
-  const trackProjects = src.loadTrackProjects();
-  log(`  ${trackProjects.length} from the checked-in export`);
+  const trackProjects = await src.loadTrackProjects();
+  log(`  ${trackProjects.length} Track projects`);
 
   log('Fetching Eagle projects...');
   // The upstream total, captured because `--reconcile` refuses to delete unless the fetch passed

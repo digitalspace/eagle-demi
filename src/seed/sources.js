@@ -8,13 +8,16 @@
  *
  * Sources, verified 2026-07-30:
  *
- *   Track       src/data/track_projects_enriched.json (checked in)     382 projects
+ *   Track       ${TRACK_API_BASE}/api/v1/projects (live, bearer)          384 projects
+ *               src/data/track_projects_enriched.json — offline fallback  382 projects
  *   Eagle       eagle-api /api/public/search                           359 projects, 60,661 docs, 213 List items
  *   Boundaries  frontend/public/assets/geojson/*.geojson (checked in)   281 features
  */
 
 const fs = require('fs');
 const path = require('path');
+
+const config = require('../config');
 
 const EAGLE_API_BASE = process.env.EAGLE_API_BASE ||
   'https://eagle-dev.apps.silver.devops.gov.bc.ca/api/public';
@@ -117,8 +120,78 @@ async function fetchAllPages(base, dataset, opts = {}) {
   return accumulate ? items : { count, total };
 }
 
-/** The checked-in Track export. Authoritative for project identity. */
-function loadTrackProjects() {
+/** Track sends these either nested (`{name}`) or as a bare string, depending on the endpoint. */
+const nameOf = (v) => (v && typeof v === 'object' ? v.name : v);
+
+/**
+ * One live Track project in the flat shape `merge/project.js` reads.
+ *
+ * The API nests what the checked-in export flattened and calls the id `id`; every other column
+ * keeps its name. Kept as a plain literal so the two shapes can be diffed by eye.
+ */
+function trackApiToExtract(project) {
+  return {
+    track_project_id: project.id,
+    name: project.name,
+    description: project.description,
+    epic_guid: project.epic_guid,
+    latitude: project.latitude,
+    longitude: project.longitude,
+    address: project.address,
+    abbreviation: project.abbreviation,
+    is_active: project.is_active,
+    proponent_name: nameOf(project.proponent),
+    sub_type_name: nameOf(project.sub_type),
+    type_name: nameOf(project.type),
+    project_state_name: nameOf(project.project_state),
+    ea_certificate: project.ea_certificate
+  };
+}
+
+/** Client-credentials bearer for a confidential realm client. */
+async function clientToken(clientId, clientSecret) {
+  const res = await fetch(
+    `${config.keycloakUrl}/realms/${config.keycloakRealm}/protocol/openid-connect/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret
+      })
+    });
+  if (!res.ok) throw new Error(`[seed] token for ${clientId}: HTTP ${res.status}`);
+  return (await res.json()).access_token;
+}
+
+const trackFeedConfigured = () =>
+  Boolean(config.trackApiBase && config.trackClientId && config.trackClientSecret);
+
+/**
+ * Track's project list, RAW. The nightly sync reads `is_project_closed` off these rows as well as
+ * the columns the mapper takes, so the two callers share one fetch rather than one shape.
+ *
+ * @param {function} [get] test seam, and the sync's own `deps.fetchJson`
+ */
+function fetchTrackProjects(token, get = fetchJson) {
+  return get(`${config.trackApiBase}/api/v1/projects`, { Authorization: `Bearer ${token}` });
+}
+
+/**
+ * Track projects: the live API when a reader client is configured, the checked-in export
+ * otherwise. Authoritative for project identity either way.
+ *
+ * NO FALLBACK BETWEEN THE TWO. A stale file standing in for a failed fetch would seed the
+ * 2026-07-29 registry and report success; `fetchJson` already retries three times.
+ */
+async function loadTrackProjects() {
+  if (trackFeedConfigured()) {
+    const rows = await fetchTrackProjects(
+      await clientToken(config.trackClientId, config.trackClientSecret));
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new Error(`[seed] no Track projects returned by ${config.trackApiBase}`);
+    }
+    return rows.map(trackApiToExtract);
+  }
+
   const file = path.join(__dirname, '../data/track_projects_enriched.json');
   const projects = JSON.parse(fs.readFileSync(file, 'utf8'));
   if (!Array.isArray(projects) || projects.length === 0) {
@@ -179,6 +252,10 @@ module.exports = {
   fetchJson,
   unwrapSearchResponse,
   fetchAllPages,
+  clientToken,
+  trackApiToExtract,
+  trackFeedConfigured,
+  fetchTrackProjects,
   loadTrackProjects,
   fetchEagleProjects,
   streamEagleDocuments,
