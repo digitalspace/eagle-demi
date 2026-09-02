@@ -745,19 +745,21 @@ exports.summarize = async (req, res) => {
     const docById = new Map(redactAllForAccess('documents', parentDocs, access)
       .map(d => [String(d.id), d]));
 
-    // The chunk rows are redacted too, so anything a later edit reads off one is already filtered.
+    // The chunk rows are redacted too, and every METADATA field the response carries reads off the
+    // redacted row below, not off `items` (the raw AI Search hit, never gated by the chunk catalog).
     // `content` is maxVis 0 and does not survive that — deliberately: it is never a response field,
-    // and the model call below is its only consumer, gated by the parent document above.
+    // so it is read off the raw `fetched` row, the model call below being its only consumer, gated
+    // by the parent document above.
     const rows = redactAllForAccess('chunks', fetched, access);
 
-    const chunks = items
-      .map((item, i) => ({ item, row: rows[i], text: fetched[i] && fetched[i].content }))
-      .filter(({ item, row, text }) => row && text && docById.has(String(item.documentId)))
-      .map(({ item, text }) => ({
-        chunkId: String(item.chunkId),
-        documentId: String(item.documentId || ''),
-        projectId: String(item.projectId || ''),
-        pageNumber: item.pageNumber ?? 0,
+    const chunks = rows
+      .map((row, i) => ({ row, text: fetched[i] && fetched[i].content }))
+      .filter(({ row, text }) => row && row.documentId && text && docById.has(String(row.documentId)))
+      .map(({ row, text }) => ({
+        chunkId: String(row.id || ''),
+        documentId: String(row.documentId || ''),
+        projectId: String(row.projectId || ''),
+        pageNumber: row.pageNumber ?? 0,
         content: text
       }));
 

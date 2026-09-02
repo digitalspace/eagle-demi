@@ -72,12 +72,15 @@ they print or write out is unredacted and is handled as level-0 material:
 
 `grep -n systemAccess src/scripts/*.js` is that list; a script added to one is added to the other.
 
-`src/scripts/export-chunks-to-eagle.js` is level-0 material as well and is deliberately absent from
-that grep: it queries the `chunks` container directly (`SELECT * FROM c` on a `--dump` run), which
-is wider than `systemAccess()`, not narrower.
+`src/scripts/export-chunks-to-eagle.js` and `src/scripts/copy-to-env.js` are level-0 material as
+well and are deliberately absent from that grep: both query a container directly (`SELECT * FROM c`,
+`export-chunks-to-eagle.js` over `chunks` on a `--dump` run, `copy-to-env.js` over `projects`,
+`documents`, `boundaries` and `chunks`), with no access predicate at all — wider than
+`systemAccess()`, not narrower.
 
-Four of them leave a file behind rather than only printing: `export-chunks-to-eagle.js --dump`,
-`audit-chunk-quality.js --out`, `probe-phrase-presence.js --out` and `score-retrieval.js --out`.
+Five of them leave a file behind rather than only printing: `export-chunks-to-eagle.js --dump`,
+`audit-chunk-quality.js --out`, `probe-phrase-presence.js --out`, `score-retrieval.js --out` and
+`copy-to-env.js` (its `--checkpoint` file, written on every `--live` run, not only `--dump`).
 
 ### Delete the dump
 
@@ -88,6 +91,14 @@ backup — it is deleted as soon as it reaches its destination, on the same conn
 ```
 shred -u /home/backups/chunks-YYYYMMDD.jsonl   # the path passed to --dump
 ls -l /home/backups                            # confirm nothing is left
+```
+
+`copy-to-env.js --live` writes its own file, the `--checkpoint` path (default `./copy-checkpoint.json`),
+on every run, not only a `--dump` one — resume state per container, not chunk text, but still level-0
+material off the devbox once the copy is verified complete:
+
+```
+shred -u <path passed to --checkpoint, or ./copy-checkpoint.json>
 ```
 
 A devbox is stop/start operated and only `/home` survives a stop, so a dump left there outlives the

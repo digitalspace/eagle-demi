@@ -165,7 +165,8 @@ function fieldsFor(dataset) {
 
 /**
  * Dataset -> the catalog that classifies its INDEX field names (docs/rbac-architecture.md section 2
- * item 9). No entry for DocumentChunk: the chunks catalog is P4-1, so chunk keys are not gated yet.
+ * item 9). No entry for DocumentChunk: the chunks catalog classifies the STORED chunk, not index
+ * field names, so chunk query keys stay ungated.
  */
 const DATASET_CATALOG = {
   Project: 'index-projects',
