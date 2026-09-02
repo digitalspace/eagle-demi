@@ -13,10 +13,8 @@ const {
   buildProjectIndex,
   normalizeCentroid,
   resolveProjectAcl,
-  BC_BBOX,
-  SECURE_ROLES
+  BC_BBOX
 } = require('../../src/merge/project');
-const { ADMIN_ROLES } = require('../../src/helpers/access-sql');
 
 const inBC = (lng, lat) =>
   lng >= BC_BBOX.minLng && lng <= BC_BBOX.maxLng &&
@@ -173,14 +171,10 @@ test('centroid normalisation', async (t) => {
 });
 
 test('ACL — the merge never widens visibility', async (t) => {
-  await t.test('merge ACL constant is the same object access-sql exports', () => {
-    assert.strictEqual(SECURE_ROLES, ADMIN_ROLES);
-  });
-
-  await t.test('an unpublished merge writes exactly three roles', () => {
-    // Literal, not read off either constant: importing access-sql's 5-entry SECURE_ROLES instead
-    // would rewrite every stored read[] and this is what catches it.
-    assert.deepStrictEqual(resolveProjectAcl(null), ['sysadmin', 'staff', 'demi-admin']);
+  await t.test('an unpublished merge writes the level-2 ladder token', () => {
+    // Literal, not read off a constant: a re-merge must write exactly what a controller writes,
+    // and reading the value off `readForLevel` here would pass whatever that becomes.
+    assert.deepStrictEqual(resolveProjectAcl(null), ['staff']);
   });
 
   await t.test('an existing Eagle read[] is preserved verbatim', () => {
@@ -200,15 +194,14 @@ test('ACL — the merge never widens visibility', async (t) => {
     // returned zero anonymous hits on prod eagle-search.
     const acl = resolveProjectAcl(null);
     assert.ok(!acl.includes('public'), 'no Eagle counterpart means nobody published it');
-    for (const r of SECURE_ROLES) assert.ok(acl.includes(r), `${r} keeps access`);
   });
 
   await t.test('an empty read[] array is absent, and absent now fails CLOSED', () => {
-    // Still "absent, not deny-all" in the sense that SECURE_ROLES retain access — what changed is
-    // that absence no longer grants `public`.
+    // Still "absent, not deny-all" in the sense that staff retain access — what changed is that
+    // absence no longer grants `public`.
     const acl = resolveProjectAcl({ read: [] });
     assert.ok(!acl.includes('public'));
-    assert.deepStrictEqual(acl, [...SECURE_ROLES]);
+    assert.deepStrictEqual(acl, ['staff']);
   });
 
   await t.test('isPublished MIRRORS read[] — it is never an independent signal', () => {
