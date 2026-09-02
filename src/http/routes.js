@@ -33,6 +33,7 @@ const wildfireController = () => require('../controllers/wildfire');
 const projectController = () => require('../controllers/nosql/project');
 const documentController = () => require('../controllers/nosql/document');
 const boundaryController = () => require('../controllers/nosql/boundary');
+const bulkDownloadController = () => require('../controllers/nosql/bulk-download');
 const apiKeyController = () => require('../controllers/nosql/api-key');
 const linkController = () => require('../controllers/nosql/link');
 const credentialController = () => require('../controllers/nosql/credentials');
@@ -118,6 +119,12 @@ const routes = [
   // from the live document inside the controller, so an extraction host cannot widen visibility.
   { method: 'post', path: '/documents/:id/chunks', guards: [authMiddleware, requireWrite], load: () => documentController().ingestChunks },
   { method: 'delete', path: '/documents/:id', guards: [authMiddleware, requireWrite], load: () => documentController().deleteDocument },
+
+  // Bulk download. Same chain as /documents/:id/download and for the same reason: the ACL runs
+  // inside the controller, so an anonymous caller gets the public tier rather than a 401. The
+  // status read is a capability check on the job id, not a role check.
+  { method: 'post', path: '/bulk-downloads', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => bulkDownloadController().createBulkDownload },
+  { method: 'get', path: '/bulk-downloads/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => bulkDownloadController().getBulkDownload },
 
   // The sealed compartment — level 0 (docs/rbac-architecture.md §1). ONE chain on all five routes,
   // and it is not authMiddleware: that gate 403s `compliance`, which is the only role that belongs

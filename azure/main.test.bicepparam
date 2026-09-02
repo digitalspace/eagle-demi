@@ -54,6 +54,14 @@ param eagleApiBase = 'https://eagle-test.apps.silver.devops.gov.bc.ca/api/public
 param reconcileSchedule = ''
 param deployReconcileDriftAlert = false
 
+// ── Bulk download ─────────────────────────────────────────────────────────────────────────────
+// Test runs it first. The caps (documents, bytes, pending jobs, per day, retention) take the
+// defaults in main.bicep — set one here only to override it, so one place holds each number. Naming
+// the queue also turns the nightly zip sweep on: api-function-flex.bicep supplies its schedule, so
+// bulkCleanupSchedule is set here only to move the hour.
+param bulkDownloadsQueue = 'bulk-downloads'
+param deployBulkDownloadPoisonAlert = true
+
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //
 // The browser origins allowed to call the API.

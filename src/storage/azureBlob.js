@@ -30,6 +30,7 @@ const {
 const { DefaultAzureCredential } = require('@azure/identity');
 
 const config = require('../config');
+const { contentDisposition } = require('./content-disposition');
 
 /** Delegation keys are valid up to 7 days. Re-fetching per request would add a round trip to
  *  every download, so it is cached — but well short of the maximum, because an expired key
@@ -76,6 +77,12 @@ async function getBuffer(key) {
   return getBlobClient(key).downloadToBuffer();
 }
 
+/** The un-draining half of getBuffer: for objects too big to hold in memory. */
+async function getObjectStream(key) {
+  const res = await getBlobClient(key).download();
+  return res.readableStreamBody;
+}
+
 /**
  * A time-limited user delegation key, cached.
  *
@@ -112,7 +119,7 @@ async function getDownloadUrl(key, opts = {}) {
   };
 
   if (opts.fileName) {
-    sasOptions.contentDisposition = `attachment; filename="${opts.fileName}"`;
+    sasOptions.contentDisposition = contentDisposition(opts.fileName);
   }
 
   const sas = generateBlobSASQueryParameters(
@@ -128,6 +135,19 @@ async function putFile(key, filePath, contentType) {
     blobHTTPHeaders: contentType ? { blobContentType: contentType } : undefined
   });
   return key;
+}
+
+/** Store a readable stream of unknown length: 4 MiB blocks, 5 uploaded concurrently. */
+async function putObjectStream(key, stream, contentType) {
+  await getBlobClient(key).uploadStream(stream, 4 * 1024 * 1024, 5, {
+    blobHTTPHeaders: contentType ? { blobContentType: contentType } : undefined
+  });
+  return key;
+}
+
+/** Delete an object. `deleteIfExists` swallows the 404, which is what a re-running sweep needs. */
+async function removeObject(key) {
+  await getBlobClient(key).deleteIfExists();
 }
 
 function describe() {
@@ -147,8 +167,11 @@ function _resetCache() {
 
 module.exports = {
   getBuffer,
+  getObjectStream,
   getDownloadUrl,
   putFile,
+  putObjectStream,
+  removeObject,
   describe,
   getDelegationKey,
   DELEGATION_KEY_TTL_MS,

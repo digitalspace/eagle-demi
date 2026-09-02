@@ -118,6 +118,14 @@ param availabilityUrl = 'https://projects.eao.gov.bc.ca/demi-search/search?datas
 param reconcileSchedule = '0 0 10 * * *'
 param deployReconcileDriftAlert = true
 
+// ── Bulk download ─────────────────────────────────────────────────────────────────────────────
+// OFF UNTIL TEST HAS RUN IT. The queue and the Cosmos container deploy either way; an empty queue
+// name registers no worker, so prod carries the infrastructure and none of the behaviour. Caps
+// take the defaults in main.bicep.
+param bulkDownloadsQueue = ''
+param bulkCleanupSchedule = ''
+param deployBulkDownloadPoisonAlert = false
+
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────
 // account and no second search service, but does carry a plan, Cosmos and the private endpoints.
 param budgetAmount = 400

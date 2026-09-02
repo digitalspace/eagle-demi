@@ -31,7 +31,7 @@ const { app } = require('@azure/functions');
 
 // Exported for test/reconcile-timer.test.js and test/sync-teams-timer.test.js — the host is the
 // only other caller of either.
-module.exports = { reconcileEagle, syncTrackTeams };
+module.exports = { reconcileEagle, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads };
 
 // Drain buffered audit events before the worker goes away.
 //
@@ -92,6 +92,58 @@ if (process.env.SYNC_TEAMS_SCHEDULE) {
     runOnStartup: false,
     handler: syncTrackTeams
   });
+}
+
+// The zip builder, one job per message. Guarded on the queue NAME for the reason the timers are
+// guarded on their schedules: `%BULK_DOWNLOADS_QUEUE%` is resolved by the host, and an
+// unresolvable name is a startup error that takes the HTTP functions with it.
+if (process.env.BULK_DOWNLOADS_QUEUE) {
+  app.storageQueue('bulkDownloadWorker', {
+    queueName: '%BULK_DOWNLOADS_QUEUE%',
+    // The host's own storage account, identity-based — the same connection the producer sends on.
+    connection: 'AzureWebJobsStorage',
+    handler: bulkDownloadWorker
+  });
+}
+
+// Deletes zips past their retention window. Off unless the schedule is set, same guard again.
+if (process.env.BULK_CLEANUP_SCHEDULE) {
+  app.timer('cleanupBulkDownloads', {
+    schedule: '%BULK_CLEANUP_SCHEDULE%',
+    runOnStartup: false,
+    handler: cleanupBulkDownloads
+  });
+}
+
+// Read from host.json rather than repeated here: the queue extension is what actually decides how
+// many deliveries a message gets, and a copy of the number drifts silently.
+const MAX_DEQUEUE_COUNT = require('../host.json').extensions.queues.maxDequeueCount;
+
+/**
+ * Unlike the timers this RETHROWS: a failed zip has a retry, and after `maxDequeueCount` the
+ * message belongs in the poison queue where the alert can see it. Swallowing here would report
+ * every failure as a success and lose the job.
+ */
+async function bulkDownloadWorker(message, context) {
+  // `messageEncoding: "none"` (host.json) means the body arrives as the bare job id. The binding
+  // hands over a string, or a Buffer if the host ever passes the body through undecoded.
+  const jobId = Buffer.isBuffer(message) ? message.toString('utf8') : String(message);
+  // Which delivery this is. The worker logs the string the poison alert matches only on the last
+  // one — an earlier failure still has a retry, and paging for it would be noise.
+  const attempt = Number(
+    (context && context.triggerMetadata && context.triggerMetadata.dequeueCount) || 1
+  );
+  await require('../src/jobs/bulk-download').run(jobId, { attempt, maxAttempts: MAX_DEQUEUE_COUNT });
+}
+
+/** Swallows the failure for the reason the reconcile does: the next run is the retry. */
+async function cleanupBulkDownloads() {
+  const { logger } = require('../src/utils/logger');
+  try {
+    await require('../src/scripts/cleanup-bulk-downloads').run();
+  } catch (err) {
+    logger.error('[bulk] cleanup run failed', { error: err.message, stack: err.stack });
+  }
 }
 
 /**

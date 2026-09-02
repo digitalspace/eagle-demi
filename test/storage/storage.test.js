@@ -37,16 +37,20 @@ test('backend selection', async (t) => {
     assert.throws(() => load(undefined), /unknown STORAGE_BACKEND/);
   });
 
-  await t.test('both backends load and expose the same four operations', () => {
-    // The backends, not the facade: the facade forwards only the two operations the app uses,
-    // while the copy script talks to a backend directly and needs getBuffer/describe.
+  await t.test('both backends load and expose the same operations', () => {
+    // Parity is the property: STORAGE_BACKEND is meant to be a config flip, and a method one
+    // backend has and the other does not turns that flip into a runtime crash on one path.
     for (const name of ['minio', 'azureBlob']) {
       const backend = require(`../../src/storage/${name}`);
-      for (const op of ['getBuffer', 'getDownloadUrl', 'putFile', 'describe']) {
+      for (const op of ['getBuffer', 'getObjectStream', 'getDownloadUrl', 'putFile',
+        'putObjectStream', 'removeObject', 'describe']) {
         assert.strictEqual(typeof backend[op], 'function', `${name}.${op}`);
       }
     }
-    for (const op of ['getDownloadUrl', 'putFile']) {
+    // The facade forwards everything the app uses; the copy script talks to a backend directly
+    // and needs getBuffer/describe, which is why those two stay off this list.
+    for (const op of ['getDownloadUrl', 'putFile', 'getObjectStream', 'putObjectStream',
+      'removeObject']) {
       assert.strictEqual(typeof load('minio')[op], 'function', `facade.${op}`);
     }
   });
@@ -106,6 +110,95 @@ test('minio backend applies the key prefix to every operation', async (t) => {
 
     await minio.getDownloadUrl('etl/abc.pdf');
     assert.ok(seenExpiry > 0 && seenExpiry <= 3600, `default expiry ${seenExpiry} unreasonable`);
+  });
+
+  await t.test('a download URL for a named file forces an attachment', async () => {
+    // Safari ignores `download` on a cross-origin <a>, so a zip whose URL does not say
+    // attachment renders in the tab instead of downloading.
+    let seenHeaders;
+    t.mock.method(Minio.Client.prototype, 'presignedGetObject', async (b, k, e, headers) => {
+      seenHeaders = headers;
+      return 'https://example.invalid/signed';
+    });
+
+    await minio.getDownloadUrl('zips/abc.zip', { fileName: 'epic-documents-1.zip' });
+    assert.strictEqual(
+      seenHeaders['response-content-disposition'],
+      "attachment; filename=\"epic-documents-1.zip\"; filename*=UTF-8''epic-documents-1.zip"
+    );
+  });
+
+  await t.test('an unsized upload is multiparted in 64 MiB pieces, not 528 MiB ones', async () => {
+    let client;
+    t.mock.method(Minio.Client.prototype, 'putObject', async function () { client = this; });
+
+    await minio.putObjectStream(
+      'zips/abc.zip', require('stream').Readable.from(['x']), 'application/zip');
+
+    // An upload with no size is treated as a 5 TB object, and without an explicit partSize the
+    // SDK then climbs from 64 MiB in 16 MiB steps until 10,000 parts cover it — 528 MiB, each
+    // one BUFFERED. host.json's one-zip-per-instance memory budget is written against 64 MiB.
+    assert.strictEqual(client.calculatePartSize(client.maxObjectSize), 64 * 1024 * 1024);
+  });
+
+  await t.test('getObjectStream reads the prefixed key without draining it', async () => {
+    let seen;
+    const source = (async function* () { yield Buffer.from('%PDF-1.5'); })();
+    t.mock.method(Minio.Client.prototype, 'getObject', async (b, key) => {
+      seen = key;
+      return source;
+    });
+
+    const stream = await minio.getObjectStream('etl/site-c/abc.pdf');
+    assert.strictEqual(seen, 'ozwdez/etl/site-c/abc.pdf');
+    assert.strictEqual(stream, source, 'the stream was consumed instead of handed back');
+  });
+
+  await t.test('putObjectStream omits the size, so the SDK multiparts the stream', async () => {
+    // A zip is written while it is still being built: passing a byte count would mean knowing
+    // the length up front, and passing a wrong one truncates the object.
+    let seenKey, seenSize, seenMeta;
+    t.mock.method(Minio.Client.prototype, 'putObject', async (b, key, stream, size, meta) => {
+      seenKey = key; seenSize = size; seenMeta = meta;
+      return {};
+    });
+
+    const stored = await minio.putObjectStream(
+      'zips/abc.zip', require('stream').Readable.from(['x']), 'application/zip');
+    assert.strictEqual(seenKey, 'ozwdez/zips/abc.zip');
+    assert.strictEqual(seenSize, undefined);
+    assert.strictEqual(seenMeta['Content-Type'], 'application/zip');
+    assert.strictEqual(stored, 'ozwdez/zips/abc.zip');
+  });
+
+  await t.test('removeObject deletes the prefixed key', async () => {
+    let seen;
+    t.mock.method(Minio.Client.prototype, 'removeObject', async (b, key) => { seen = key; });
+
+    await minio.removeObject('zips/abc.zip');
+    assert.strictEqual(seen, 'ozwdez/zips/abc.zip');
+  });
+
+  await t.test('removeObject treats an already-deleted key as done', async () => {
+    // The sweeper re-runs over rows a retry may have half-cleared; a 404 there is not a failure.
+    t.mock.method(Minio.Client.prototype, 'removeObject', async () => {
+      const err = new Error('The specified key does not exist.');
+      err.code = 'NoSuchKey';
+      throw err;
+    });
+
+    await minio.removeObject('zips/gone.zip');
+  });
+
+  await t.test('removeObject still reports a failure that is not a missing key', async () => {
+    t.mock.method(Minio.Client.prototype, 'removeObject', async () => {
+      const err = new Error('Access Denied');
+      err.code = 'AccessDenied';
+      throw err;
+    });
+
+    await assert.rejects(minio.removeObject('zips/abc.zip'), /Access Denied/,
+      'swallowing this would report a permission problem as a completed sweep');
   });
 
   await t.test('putFile stores under the prefixed key and returns it', async () => {
@@ -235,8 +328,9 @@ test('azure blob backend', async (t) => {
     const url = await azure.getDownloadUrl('etl/abc.pdf', {
       fileName: 'Site C Report.pdf', now: Date.parse('2026-07-30T12:00:00Z')
     });
-    assert.strictEqual(
-      new URL(url).searchParams.get('rscd'), 'attachment; filename="Site C Report.pdf"');
+    assert.strictEqual(new URL(url).searchParams.get('rscd'),
+      "attachment; filename=\"Site C Report.pdf\"; filename*=UTF-8''Site%20C%20Report.pdf",
+      'both backends sign the same header — one that differs is a bug only one environment shows');
   });
 
   await t.test('the delegation key is cached, then refetched after it expires', async () => {
@@ -281,6 +375,32 @@ test('azure blob backend', async (t) => {
     assert.strictEqual(seenPath, '/tmp/x.pdf');
     assert.strictEqual(seenOpts.blobHTTPHeaders.blobContentType, 'application/pdf');
     assert.strictEqual(stored, '12345/abc.pdf');
+  });
+
+  await t.test('putObjectStream uploads in bounded blocks, not one buffer', async () => {
+    // The whole point of the streaming pair: a multi-GB zip must never be held in memory. Block
+    // size and concurrency are positional, so a swap here is a silent memory blow-up on the day
+    // STORAGE_BACKEND flips.
+    let seenName, seenBlock, seenConcurrency, seenOpts;
+    t.mock.method(BlockBlobClient.prototype, 'uploadStream',
+      async function (s, block, concurrency, opts) {
+        seenName = this.name; seenBlock = block; seenConcurrency = concurrency; seenOpts = opts;
+      });
+
+    const stored = await azure.putObjectStream(
+      'zips/abc.zip', require('stream').Readable.from(['x']), 'application/zip');
+    assert.strictEqual(seenName, 'zips/abc.zip');
+    assert.strictEqual(seenBlock, 4 * 1024 * 1024);
+    assert.strictEqual(seenConcurrency, 5);
+    assert.strictEqual(seenOpts.blobHTTPHeaders.blobContentType, 'application/zip');
+    assert.strictEqual(stored, 'zips/abc.zip');
+  });
+
+  await t.test('getObjectStream hands back the response body, not the response', async () => {
+    const body = require('stream').Readable.from(['%PDF-1.5']);
+    t.mock.method(BlockBlobClient.prototype, 'download', async () => ({ readableStreamBody: body }));
+
+    assert.strictEqual(await azure.getObjectStream('etl/abc.pdf'), body);
   });
 
   await t.test('the container is NEVER created on demand', async () => {

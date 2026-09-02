@@ -256,9 +256,14 @@ const PATCH_MAX_OPERATIONS = 10;
 /**
  * Partial update — atomic, no read-modify-write, and it cannot erase fields it does not name.
  *
+ * `condition` is a SQL predicate over the stored item (`FROM c WHERE c.n < 3`) evaluated by the
+ * server in the same operation: false means the patch is not applied and the call throws 412. That
+ * is what makes a counter a test-and-set rather than a read-then-write two callers can interleave.
+ *
  * @param {Array<{op: string, path: string, value: any}>} operations
+ * @param {string} [condition]
  */
-async function patch(containerName, id, partitionKey, operations) {
+async function patch(containerName, id, partitionKey, operations, condition) {
   if (!Array.isArray(operations) || operations.length === 0) {
     throw new TypeError('[Cosmos] patch() requires a non-empty operations array.');
   }
@@ -269,7 +274,8 @@ async function patch(containerName, id, partitionKey, operations) {
   }
   const container = getContainer(containerName);
   if (!container) return null;
-  const { resource } = await container.item(String(id), partitionKey).patch(operations);
+  const body = condition ? { operations, condition } : operations;
+  const { resource } = await container.item(String(id), partitionKey).patch(body);
   return resource;
 }
 

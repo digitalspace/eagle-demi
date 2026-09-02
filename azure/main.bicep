@@ -230,6 +230,48 @@ param roleSyncClientSecret string
 @description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty runs it never.')
 param syncTeamsSchedule string = ''
 
+// Bulk document download. Three switches and a set of caps; the switches default off, so an
+// environment gets the queue and the container without the feature running. The caps are the same
+// everywhere until measurement says otherwise — a .bicepparam sets one only to override it.
+@description('Storage queue the bulk-download worker triggers on, e.g. `bulk-downloads`. Empty runs no worker.')
+param bulkDownloadsQueue string = ''
+
+@description('NCRONTAB schedule for the zip cleanup timer, e.g. `0 30 3 * * *`. Empty runs it never.')
+param bulkCleanupSchedule string = ''
+
+@description('Deploy the log alert that fires when a bulk job fails.')
+param deployBulkDownloadPoisonAlert bool = false
+
+@description('Most documents one authenticated bulk job may ask for.')
+param bulkMaxDocuments int = 2500
+
+@description('Same cap for anonymous callers.')
+param bulkAnonMaxDocuments int = 100
+
+@description('Bytes per zip part. A job larger than this splits into numbered parts.')
+param bulkMaxBytes int = 2147483648
+
+@description('Bytes across all parts of one job. Over it, the request is refused.')
+param bulkMaxTotalBytes int = 21474836480
+
+@description('Unfinished jobs one requester may hold.')
+param bulkMaxPending int = 3
+
+@description('Days a built zip stays downloadable.')
+param bulkZipRetentionDays int = 7
+
+@description('Days the job row lives. Longer than the zip retention, so the sweep still sees the row that owns an expired zip.')
+param bulkJobTtlDays int = 30
+
+@description('Jobs one requester may start in 24 hours.')
+param bulkMaxPerDay int = 20
+
+@description('Milliseconds a queued job may wait before the worker refuses it as too old to trust its access snapshot.')
+param bulkMaxJobAgeMs int = 7200000
+
+@description('Milliseconds after which a `running` job reads as failed. MUST MATCH host.json extensions.queues.visibilityTimeout.')
+param bulkStaleRunningMs int = 3600000
+
 // THE PUBLIC URL, not this API's own hostname. rproxy resolves the Front Door address once at
 // config load, so a probe aimed straight at the app stays green through a moved edge — the failure
 // this exists to catch. Not composable here for the same reason `frontendHostNames` is not.
@@ -375,6 +417,7 @@ module observability './modules/observability.bicep' = {
     // Same list the budget alerts use — one place to change who gets told.
     contactEmails: contactEmails
     deployReconcileDriftAlert: deployReconcileDriftAlert
+    deployBulkDownloadPoisonAlert: deployBulkDownloadPoisonAlert
   }
 }
 
@@ -435,6 +478,18 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     roleSyncClientId: roleSyncClientId
     roleSyncClientSecretUri: keyVault.outputs.roleSyncClientSecretUri
     syncTeamsSchedule: syncTeamsSchedule
+    bulkDownloadsQueue: bulkDownloadsQueue
+    bulkCleanupSchedule: bulkCleanupSchedule
+    bulkMaxDocuments: bulkMaxDocuments
+    bulkAnonMaxDocuments: bulkAnonMaxDocuments
+    bulkMaxBytes: bulkMaxBytes
+    bulkMaxTotalBytes: bulkMaxTotalBytes
+    bulkMaxPending: bulkMaxPending
+    bulkZipRetentionDays: bulkZipRetentionDays
+    bulkJobTtlDays: bulkJobTtlDays
+    bulkMaxPerDay: bulkMaxPerDay
+    bulkMaxJobAgeMs: bulkMaxJobAgeMs
+    bulkStaleRunningMs: bulkStaleRunningMs
     keycloakClientId: keycloakClientId
     allowedClients: allowedClients
     ssoAudience: ssoAudience

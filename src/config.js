@@ -17,6 +17,22 @@
  * and empty.
  */
 
+/**
+ * A whole non-negative number from the environment, or the fallback when the variable is unset.
+ *
+ * Throws at load, like the allowedClients guard below: a cap that parsed to NaN compares false
+ * against every value, so the failure mode of a silent parse is an unlimited limit.
+ */
+function intFromEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${name} must be a whole non-negative number, got '${raw}'.`);
+  }
+  return value;
+}
+
 const config = {
   minioHost:    process.env.MINIO_HOST       || 'localhost',
   minioPort:    parseInt(process.env.MINIO_PORT || '9000', 10),
@@ -80,6 +96,39 @@ const config = {
   doclingTimeout: parseInt(process.env.DOCLING_TIMEOUT_MS || '300000', 10),
 
   batchSize: parseInt(process.env.BATCH_SIZE || '50', 10),
+
+  // Bulk document download (PUBLIC-148). Caps REFUSE rather than truncate: a job that silently
+  // dropped documents would hand someone an incomplete download they had no way to notice.
+  //
+  // intFromEnv, not parseInt: `parseInt('2500 docs')` is 2500 and `parseInt('lots')` is NaN, and a
+  // NaN cap compares false against everything, so a typo in an app setting would remove the limit
+  // instead of failing the deploy.
+  bulkMaxDocuments:     intFromEnv('BULK_MAX_DOCUMENTS', 2500),
+  bulkAnonMaxDocuments: intFromEnv('BULK_ANON_MAX_DOCUMENTS', 100),
+  // Per ZIP PART: a job over this is split into numbered parts, not refused.
+  bulkMaxBytes:         intFromEnv('BULK_MAX_BYTES', 2147483648),
+  // Whole job. The one byte ceiling that refuses.
+  bulkMaxTotalBytes:    intFromEnv('BULK_MAX_TOTAL_BYTES', 21474836480),
+  // Concurrent jobs per requester. No app rate limiter exists and APIM Consumption cannot key-limit
+  // an anonymous caller, so this is the abuse boundary for the feature.
+  bulkMaxPending:       intFromEnv('BULK_MAX_PENDING', 3),
+  // Jobs one requester may start in 24 hours. bulkMaxPending alone bounds concurrency only: a
+  // caller who waits for each job to finish can start an unlimited number of them.
+  bulkMaxPerDay:        intFromEnv('BULK_MAX_PER_DAY', 20),
+  // How old a job may be when the worker picks it up. The access snapshot on the row is a copy of
+  // the caller's roles at submit time, so a message that sat in the queue past this is refused
+  // rather than run against credentials nobody has re-checked since.
+  bulkMaxJobAgeMs:      intFromEnv('BULK_MAX_JOB_AGE_MS', 7_200_000),
+  // When a `running` job is reported as failed instead. MUST MATCH host.json
+  // `extensions.queues.visibilityTimeout` (01:00:00): below it a job whose message is still hidden
+  // reads as dead, above it a job whose message was returned to the queue reads as alive.
+  bulkStaleRunningMs:   intFromEnv('BULK_STALE_RUNNING_MS', 3_600_000),
+  bulkZipRetentionDays: intFromEnv('BULK_ZIP_RETENTION_DAYS', 7),
+  bulkJobTtlDays:       intFromEnv('BULK_JOB_TTL_DAYS', 30),
+  // Empty = the feature is OFF. Azure drops an app setting whose value is '', so an unset variable
+  // must mean disabled rather than fall back to a queue name nothing is bound to.
+  bulkDownloadsQueue:   process.env.BULK_DOWNLOADS_QUEUE || '',
+  bulkCleanupSchedule:  process.env.BULK_CLEANUP_SCHEDULE || '',
 
   uploadDir:             process.env.UPLOAD_DIRECTORY || '/tmp',
 

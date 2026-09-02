@@ -154,6 +154,51 @@ param apimGatewaySecretRef string = ''
 @description('NCRONTAB schedule for the Track team sync timer, e.g. `0 0 10 * * *`. Empty registers no timer.')
 param syncTeamsSchedule string = ''
 
+// ── Bulk download ────────────────────────────────────────────────────────────
+// Flex trap: an app setting deployed as '' is DROPPED, so `process.env.X` is undefined rather
+// than empty — off is the code's default, never a value it can read here.
+@description('Storage queue the bulk-download worker triggers on. Empty registers no worker, which leaves the feature off.')
+param bulkDownloadsQueue string = ''
+
+@description('Most documents one authenticated bulk job may ask for. Over it, the request is refused rather than truncated.')
+param bulkMaxDocuments int = 2500
+
+@description('Same cap for anonymous callers.')
+param bulkAnonMaxDocuments int = 100
+
+@description('Bytes per zip part. A job larger than this splits into numbered parts.')
+param bulkMaxBytes int = 2147483648
+
+@description('Bytes across all parts of one job. Over it, the request is refused.')
+param bulkMaxTotalBytes int = 21474836480
+
+@description('Unfinished jobs one requester may hold. The abuse boundary for the anonymous path — APIM Consumption cannot rate-limit by key.')
+param bulkMaxPending int = 3
+
+@description('Days a built zip stays downloadable.')
+param bulkZipRetentionDays int = 7
+
+@description('Days the job row lives. Longer than the zip retention, so the sweep still sees the row that owns an expired zip.')
+param bulkJobTtlDays int = 30
+
+@description('Jobs one requester may start in 24 hours. Concurrency alone does not bound a caller who waits for each job to finish.')
+param bulkMaxPerDay int = 20
+
+@description('Milliseconds a queued job may wait before the worker refuses it. The job row carries an access snapshot, and a stale one is credentials nobody has re-checked.')
+param bulkMaxJobAgeMs int = 7200000
+
+@description('Milliseconds after which a `running` job reads as failed. MUST MATCH host.json extensions.queues.visibilityTimeout.')
+param bulkStaleRunningMs int = 3600000
+
+@description('NCRONTAB schedule for the zip cleanup timer, e.g. `0 30 3 * * *`. Empty registers no timer.')
+param bulkCleanupSchedule string = ''
+
+// Feature on means cleanup on: a queue with no sweep fills the container with zips nothing
+// deletes. An explicit schedule still wins, so an environment can move the hour.
+var cleanupSchedule = empty(bulkCleanupSchedule) && !empty(bulkDownloadsQueue)
+  ? '0 30 3 * * *'
+  : bulkCleanupSchedule
+
 var apiAppName = 'demi-api-fc-${environmentName}'
 var appServicePlanName = 'demi-plan-fc-${environmentName}'
 var storageAccountName = take('demifc${environmentName}${uniqueString(resourceGroup().id)}', 24)
@@ -189,6 +234,26 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
 resource deployContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
   parent: blobService
   name: 'deployment'
+}
+
+resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue)) {
+  parent: apiStorage
+  name: 'default'
+}
+
+// Bulk-download job ids waiting to be zipped. One id per message. NAMED FROM THE PARAM: a queue
+// declared under a different name than the worker triggers on is a feature that silently does
+// nothing, and an environment with no queue name deploys neither queue.
+resource bulkDownloadsQueueResource 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(bulkDownloadsQueue)) {
+  parent: queueService
+  name: bulkDownloadsQueue
+}
+
+// The runtime creates this itself after `maxDequeueCount` failed attempts. Declaring it means it
+// exists from the start and can be alerted on, rather than appearing the first time a job dies.
+resource bulkDownloadsPoison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(bulkDownloadsQueue)) {
+  parent: queueService
+  name: '${bulkDownloadsQueue}-poison'
 }
 
 resource blobDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -416,6 +481,57 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'SYNC_TEAMS_SCHEDULE'
           value: syncTeamsSchedule
+        }
+        // Bulk download. api/index.js registers the queue worker only when the queue name is set,
+        // and the host resolves it as `%BULK_DOWNLOADS_QUEUE%`. Empty is off — and Flex drops an
+        // empty value entirely, so the code reads `undefined` here, not ''.
+        {
+          name: 'BULK_DOWNLOADS_QUEUE'
+          value: bulkDownloadsQueue
+        }
+        {
+          name: 'BULK_MAX_DOCUMENTS'
+          value: string(bulkMaxDocuments)
+        }
+        {
+          name: 'BULK_ANON_MAX_DOCUMENTS'
+          value: string(bulkAnonMaxDocuments)
+        }
+        {
+          name: 'BULK_MAX_BYTES'
+          value: string(bulkMaxBytes)
+        }
+        {
+          name: 'BULK_MAX_TOTAL_BYTES'
+          value: string(bulkMaxTotalBytes)
+        }
+        {
+          name: 'BULK_MAX_PENDING'
+          value: string(bulkMaxPending)
+        }
+        {
+          name: 'BULK_ZIP_RETENTION_DAYS'
+          value: string(bulkZipRetentionDays)
+        }
+        {
+          name: 'BULK_JOB_TTL_DAYS'
+          value: string(bulkJobTtlDays)
+        }
+        {
+          name: 'BULK_MAX_PER_DAY'
+          value: string(bulkMaxPerDay)
+        }
+        {
+          name: 'BULK_MAX_JOB_AGE_MS'
+          value: string(bulkMaxJobAgeMs)
+        }
+        {
+          name: 'BULK_STALE_RUNNING_MS'
+          value: string(bulkStaleRunningMs)
+        }
+        {
+          name: 'BULK_CLEANUP_SCHEDULE'
+          value: cleanupSchedule
         }
         // What proves a request came through APIM. Empty is the off switch: helpers/auth.js then
         // ignores both gateway headers, which is the only safe default while the host is public.
