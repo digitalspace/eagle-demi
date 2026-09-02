@@ -200,6 +200,8 @@ function authenticate(req, onSuccess, onFailure) {
 
   if (apiKey && validKeys.length > 0 && matchesConfiguredKey(apiKey, validKeys)) {
     logger.info('[demi-api] Authenticated internal-service via break-glass ADMIN_API_KEY');
+    // No `compliance`: one shared secret must not open the sealed compartment
+    // (docs/rbac-architecture.md §1, condition 1).
     return onSuccess({
       preferred_username: 'internal-service',
       realm_access: { roles: ['sysadmin', 'staff', 'demi-admin'] }

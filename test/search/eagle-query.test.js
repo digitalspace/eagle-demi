@@ -22,6 +22,9 @@ const { catalogFor } = require('../../src/vis/catalog');
 
 const anonymous = () => resolveAccess({ header: () => null });
 const anonAcl = (field) => filterFor(anonymous(), field);
+/** What an anonymous caller's ACL clause is on its own: the public roles, minus the sealed rows. */
+const ANON_FILTER =
+  "read/any(r: search.in(r, 'public', ',')) and not read/any(r: r eq 'compliance')";
 
 test('eagle-query filters', async (t) => {
   // THE assertion that matters. The caller's filters are COMPOSED with the ACL clause; a filter
@@ -82,7 +85,7 @@ test('eagle-query filters', async (t) => {
 
     assert.deepStrictEqual(dropped, ['documentAuthor']);
     assert.ok(!filter.includes('documentAuthor'), 'a name the index lacks must never reach OData');
-    assert.strictEqual(filter, "read/any(r: search.in(r, 'public', ','))");
+    assert.strictEqual(filter, ANON_FILTER);
   });
 
   // The four document facets eagle-public sends, all as List ObjectIds, all onto the id columns.
@@ -143,7 +146,7 @@ test('eagle-query filters', async (t) => {
       anonAcl(), anonymous());
 
     assert.deepStrictEqual(dropped, ['read']);
-    assert.strictEqual(filter, "read/any(r: search.in(r, 'public', ','))");
+    assert.strictEqual(filter, ANON_FILTER);
   });
 
   // `_id` is the Eagle ObjectId on the wire. On a project that lives in `legacyEagleId`; filtering
@@ -232,7 +235,7 @@ test('eagle-query filters', async (t) => {
       'Project', anonAcl('id'));
 
     assert.deepStrictEqual(dropped.sort(), ['pcp', 'proponent']);
-    assert.strictEqual(filter, "read/any(r: search.in(r, 'public', ','))");
+    assert.strictEqual(filter, ANON_FILTER);
   });
 
   // The alias table is a FILTER redirect. Sorting the Phase column by an ObjectId would order the
@@ -262,7 +265,7 @@ test('eagle-query filters', async (t) => {
 
     assert.deepStrictEqual(dropped, ['centroid']);
     assert.ok(!filter.includes('centroid'), 'a geography field must never reach OData as `eq`');
-    assert.strictEqual(filter, "read/any(r: search.in(r, 'public', ','))");
+    assert.strictEqual(filter, ANON_FILTER);
   });
 
   // The same defect, the numeric branch: the old test was "does Number() accept it", which is not

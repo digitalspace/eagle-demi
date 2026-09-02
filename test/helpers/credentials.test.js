@@ -184,7 +184,7 @@ test('the search filter carries the same grant', () => {
 
   // An anonymous caller holding nothing gets the filter it got before credentials existed.
   assert.strictEqual(filterFor(resolveAccess({}), 'id').filter,
-    "read/any(r: search.in(r, 'public', ','))");
+    "read/any(r: search.in(r, 'public', ',')) and not read/any(r: r eq 'compliance')");
 });
 
 test('a document-scoped grant filters on the field THIS index carries', () => {
@@ -197,9 +197,9 @@ test('a document-scoped grant filters on the field THIS index carries', () => {
     /search\.in\(documentId, 'd1', ','\)/);
 
   // Unnamed — the projects index — the grant matches nothing rather than naming a missing field.
-  assert.strictEqual(filterFor(access, 'id').filter, "read/any(r: search.in(r, 'public', ','))");
-  assert.strictEqual(filterFor(access, 'projectId').filter,
-    "read/any(r: search.in(r, 'public', ','))");
+  const anonymousFilter = "read/any(r: search.in(r, 'public', ',')) and not read/any(r: r eq 'compliance')";
+  assert.strictEqual(filterFor(access, 'id').filter, anonymousFilter);
+  assert.strictEqual(filterFor(access, 'projectId').filter, anonymousFilter);
 });
 
 test('a credential changes no record', () => {

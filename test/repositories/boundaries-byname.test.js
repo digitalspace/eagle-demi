@@ -77,7 +77,9 @@ test('boundaries are ACL-gated', async (t) => {
     t.mock.method(cosmos, 'query', async (c, s) => { spec = s; return { items: [] }; });
 
     await boundaries.listByType(systemAccess(), {});
-    assert.ok(!/c\.read/.test(spec.query), 'privileged collapses the ACL clause, as elsewhere');
+    assert.ok(!/EXISTS/.test(spec.query), 'privileged collapses the ACL clause, as elsewhere');
+    assert.match(spec.query, /NOT ARRAY_CONTAINS\(c\.read, 'compliance'\)/,
+      'except the sealed compartment, which systemAccess never reads');
   });
 
   await t.test('project scope does NOT apply — boundaries have no project axis', async () => {

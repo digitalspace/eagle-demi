@@ -12,7 +12,8 @@
  */
 
 const {
-  TIER, PUBLIC_ROLES, LEVEL_TOKENS, isPrivileged, levelTokens, credentialField
+  TIER, PUBLIC_ROLES, LEVEL_TOKENS, SEALED_TOKEN, isPrivileged, holdsSealed, levelTokens,
+  credentialField
 } = require('./access-sql');
 
 /**
@@ -108,6 +109,13 @@ function filterFor(access, partitionField = 'projectId', documentField = null) {
     clauses.push(grants.length > 1 ? `(${grants.join(' or ')})` : grants[0]);
   }
 
+  // The sealed compartment, the OData twin of readClause's `NOT ARRAY_CONTAINS`. Outside the
+  // privilege branch above: a privileged caller has no role clause at all, and it is exactly that
+  // caller the exclusion is for.
+  if (!holdsSealed(access.roles)) {
+    clauses.push(`not read/any(r: r eq ${quote(SEALED_TOKEN)})`);
+  }
+
   if (access.tier === TIER.SCOPED) {
     const scope = access.projectScope;
     // Scoped to nothing must match nothing. Never fall through to the role clause alone, which
@@ -116,8 +124,8 @@ function filterFor(access, partitionField = 'projectId', documentField = null) {
     clauses.push(inClause(partitionField, scope));
   }
 
-  // No clauses means an unscoped privileged caller: unrestricted, and `null` says so explicitly
-  // rather than emitting an empty string that a caller might send as a filter.
+  // No clauses means an unscoped privileged caller that also holds `compliance`: unrestricted, and
+  // `null` says so explicitly rather than emitting an empty string that a caller might send.
   if (clauses.length === 0) return { filter: null, empty: false };
 
   return { filter: clauses.join(' and '), empty: false };

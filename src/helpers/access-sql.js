@@ -27,13 +27,24 @@ const PUBLIC_ROLES = Object.freeze(['public']);
 const LEVEL_TOKENS = Object.freeze({ 1: 'team', 2: 'staff', 3: 'idir', 4: 'public' });
 
 /**
+ * The sealed compartment's token — level 0, off the ladder (docs/rbac-architecture.md §1,
+ * "Level 0"). It is a role name like any other, so a sealed row needs no separate store; what makes
+ * it sealed is that every caller NOT holding it carries an exclusion, privileged callers included.
+ */
+const SEALED_TOKEN = 'compliance';
+
+/**
  * The `read[]` a row carries at `level`.
  *
  * Levels 2-4 nest, so staff reads every row at level 2 or above with one token. Level 1 shares
  * NOTHING with them and is reached only through the team arm: a level-2 row carrying `team` would
  * hand a team-only caller every All-EAO row of its own project.
+ *
+ * 0 is the sealed compartment, the one non-ladder level this accepts. It shares no token with the
+ * ladder, so no ladder caller reaches it and the exclusion below keeps privileged ones out too.
  */
 function readForLevel(level) {
+  if (level === 0) return [SEALED_TOKEN];
   if (!Number.isInteger(level) || !LEVEL_TOKENS[level]) {
     throw new RangeError(`[access] ${level} is not a ladder level`);
   }
@@ -42,7 +53,7 @@ function readForLevel(level) {
 }
 
 /**
- * A row's level: the widest ladder token in its `read[]`, 1 when it carries none.
+ * A row's level: the widest ladder token in its `read[]`, 1 when it carries none, 0 when sealed.
  *
  * Legacy ACLs (`['sysadmin','staff','demi-admin']`, plus `'public'` when published) therefore read
  * as level 2 and 4 — today's meaning. Admin role names are ignored: they only ever matched callers
@@ -50,6 +61,7 @@ function readForLevel(level) {
  */
 function levelOfRead(read) {
   const tokens = Array.isArray(read) ? read : [];
+  if (tokens.includes(SEALED_TOKEN)) return 0;
   let level = 1;
   for (const [ladder, token] of Object.entries(LEVEL_TOKENS)) {
     if (tokens.includes(token) && Number(ladder) > level) level = Number(ladder);
@@ -183,6 +195,11 @@ function rolesFor(req) {
 
 function isPrivileged(roles) {
   return roles.some(r => SECURE_ROLES.includes(r));
+}
+
+/** Does this caller hold the sealed compartment's role? Nothing else opens a level-0 row. */
+function holdsSealed(roles) {
+  return (roles || []).includes(SEALED_TOKEN);
 }
 
 /** May this role set hold a session on an authenticated route? See AUTHENTICATED_ROLES. */
@@ -379,8 +396,15 @@ function readClause(roles, opts = {}) {
   const alias = opts.alias || 'c';
   const prefix = opts.prefix || '@role';
 
+  // The sealed compartment, and the reason a privileged caller no longer gets a bare `true`: the
+  // short-circuit is what would hand `sysadmin` a level-0 row. Literal, not a parameter, because
+  // it is our own token and never a caller value.
+  const sealed = holdsSealed(roles)
+    ? null
+    : `NOT ARRAY_CONTAINS(${alias}.read, '${SEALED_TOKEN}')`;
+
   if (isPrivileged(roles)) {
-    return { clause: 'true', params: [] };
+    return { clause: sealed || 'true', params: [] };
   }
 
   const effective = Array.from(new Set([...roles, ...PUBLIC_ROLES]));
@@ -451,7 +475,10 @@ function readClause(roles, opts = {}) {
 
   if (credArms.length > 0) arms.push(`(${credArms.join(' OR ')})`);
 
-  return { clause: `(${arms.join(' OR ')})`, params };
+  // ANDed onto the grants, not folded into one of them: no arm above can match a sealed row today,
+  // and this is what keeps that true when the next arm is added.
+  const clause = `(${arms.join(' OR ')})`;
+  return { clause: sealed ? `${clause} AND ${sealed}` : clause, params };
 }
 
 /**
@@ -554,12 +581,20 @@ function canRead(doc, access, partitionField = 'projectId') {
     if (!scope.includes(String(doc[partitionField]))) return false;
   }
 
+  // No `read[]` at all: the SQL twin's `NOT ARRAY_CONTAINS` is undefined on such a row and drops
+  // it from every list, so the point read drops it too — same answer from both paths.
+  if (!Array.isArray(doc.read)) return false;
+  const read = doc.read;
+
+  // BEFORE the privilege short-circuit, which is the whole leak: `sysadmin` returning early here
+  // reads a sealed row. The SQL twin is readClause's `NOT ARRAY_CONTAINS`.
+  if (read.includes(SEALED_TOKEN) && !holdsSealed(access.roles)) return false;
+
   // Privilege is a property of the ROLES, not of the tier — this mirrors readClause(), which
   // collapses to `true` for a privileged role set whatever the tier happens to be. Keying it off
   // the tier would deny a scoped-but-privileged caller its own in-scope private rows.
   if (isPrivileged(access.roles || [])) return true;
 
-  const read = Array.isArray(doc.read) ? doc.read : [];
   if (read.some(r => (access.roles || []).includes(r))) return true;
 
   // The team arm's JS twin — see readClause. A row with no ladder token at all reaches no
@@ -586,6 +621,7 @@ module.exports = {
   WRITE_ROLES,
   AUTHENTICATED_ROLES,
   LEVEL_TOKENS,
+  SEALED_TOKEN,
   TIER,
   PROJECT_ROLE_PREFIX,
   MAX_PAGE_SIZE,
@@ -598,6 +634,7 @@ module.exports = {
   credentialField,
   rolesFor,
   isPrivileged,
+  holdsSealed,
   isAuthenticatedRole,
   canWrite,
   canAdmin,
