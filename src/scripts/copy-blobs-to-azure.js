@@ -33,6 +33,7 @@ const { getBuffer: readFromMinio } = require('../storage/minio');
 const azure = require('../storage/azureBlob');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const { DefaultAzureCredential } = require('@azure/identity');
+const { mapLimit } = require('../utils/worker-pool');
 
 function parseArgs(argv) {
   const args = { live: false, concurrency: 8, limit: Infinity, keysFile: null };
@@ -104,23 +105,6 @@ async function copyOne(containerClient, key, live) {
   return { status: 'copied', bytes: buffer.length };
 }
 
-/**
- * Run `worker` over `items` with at most `concurrency` in flight.
- *
- * ponytail: hand-rolled rather than adding p-limit for one call site. Replace if a second
- * caller appears.
- */
-async function mapLimit(items, concurrency, worker) {
-  let cursor = 0;
-  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor++;
-      await worker(items[index], index);
-    }
-  });
-  await Promise.all(runners);
-}
-
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
@@ -190,7 +174,7 @@ async function main() {
   if (counts.failed > 0) process.exitCode = 1;
 }
 
-module.exports = { parseArgs, loadKeys, copyOne, mapLimit };
+module.exports = { parseArgs, loadKeys, copyOne };
 
 if (require.main === module) {
   main().catch(err => {
