@@ -128,11 +128,108 @@ test('the bulk download worker', async (t) => {
   const maxBytes = config.bulkMaxBytes;
   const maxTotalBytes = config.bulkMaxTotalBytes;
   const maxJobAgeMs = config.bulkMaxJobAgeMs;
+  const fetchAhead = config.bulkFetchAhead;
   t.afterEach(() => {
     t.mock.restoreAll();
     config.bulkMaxBytes = maxBytes;
     config.bulkMaxTotalBytes = maxTotalBytes;
     config.bulkMaxJobAgeMs = maxJobAgeMs;
+    config.bulkFetchAhead = fetchAhead;
+  });
+
+  await t.test('objects are opened ahead of the append, no more than the window at once', async (tt) => {
+    config.bulkFetchAhead = 3;
+    const docs = Array.from({ length: 6 }, (_, i) => doc(`d${i}`));
+    // `open` when the object store is asked, `read` when the archive has finished that entry —
+    // an open recorded before an earlier read is a round trip that overlapped an append.
+    const events = [];
+    let inFlight = 0;
+    let peak = 0;
+    const { uploads, zipText } = harness(tt, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => {
+        events.push(`open ${key}`);
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        inFlight -= 1;
+        const stream = Readable.from([`bytes of ${key}`]);
+        stream.once('end', () => events.push(`read ${key}`));
+        return stream;
+      }
+    });
+
+    await worker.run('job-1');
+
+    assert.strictEqual(peak, 3,
+      'serial fetching peaks at 1 and an unbounded window at 6 — neither is the configured window');
+    assert.ok(events.indexOf('open etl/d2.pdf') < events.indexOf('read etl/d0.pdf'),
+      'the point of the window: later objects are already in flight while an earlier one is packed');
+
+    const text = zipText([...uploads.keys()][0]);
+    const positions = docs.map(d => text.indexOf(`Site C Clean Energy/${d.id}.pdf`));
+    assert.ok(positions.every(at => at >= 0), 'every document has to be in the zip');
+    assert.deepStrictEqual(positions, [...positions].sort((a, b) => a - b),
+      'fetching ahead must not reorder the entries — the zip is still built in the order asked for');
+  });
+
+  await t.test('an open that fails inside the window is recorded and the rest still pack', async (tt) => {
+    config.bulkFetchAhead = 3;
+    const docs = Array.from({ length: 6 }, (_, i) => doc(`d${i}`));
+    const { patches, uploads, zipText } = harness(tt, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => {
+        if (key === 'etl/d2.pdf') throw new Error('S3 NoSuchKey ozwdez/etl/d2.pdf');
+        return Readable.from([`bytes of ${key}`]);
+      }
+    });
+
+    await worker.run('job-1');
+
+    assert.deepStrictEqual(readyPatch(patches).errors,
+      [{ documentId: 'd2', name: 'd2.pdf', reason: 'unavailable' }],
+      'a failed open is still that one document\'s error, not the part\'s');
+    assert.strictEqual(readyPatch(patches).includedCount, 5);
+    const text = zipText([...uploads.keys()][0]);
+    const packed = ['d0', 'd1', 'd3', 'd4', 'd5'].map(id => text.indexOf(`${id}.pdf`));
+    assert.ok(packed.every(at => at >= 0), 'the documents after the failure still have to be zipped');
+    assert.deepStrictEqual(packed, [...packed].sort((a, b) => a - b));
+  });
+
+  await t.test('a cancel mid-part destroys the objects opened ahead of it', async (tt) => {
+    config.bulkFetchAhead = 3;
+    // More than the 20 documents between cancellation checks, so the check inside the part fires.
+    const docs = Array.from({ length: 25 }, (_, i) => doc(`d${i}`));
+    const row = job(docs);
+    // A stream the archive read is destroyed by the pipe itself, so only the ones destroyed
+    // UNREAD are the window's — those are the sockets a cancel would otherwise leak.
+    const destroyedUnread = [];
+    const { zipText } = harness(tt, {
+      row,
+      docs,
+      getObjectStream: async key => {
+        const stream = Readable.from([`bytes of ${key}`]);
+        const destroy = stream.destroy.bind(stream);
+        stream.destroy = (...args) => {
+          if (!stream.readableDidRead) destroyedUnread.push(key);
+          return destroy(...args);
+        };
+        return stream;
+      }
+    });
+    let reads = 0;
+    tt.mock.method(bulkDownloads, 'getById',
+      async () => (reads++ === 0 ? row : { ...row, status: 'cancelled' }));
+    tt.mock.method(logger, 'info', () => {});
+
+    assert.strictEqual(await worker.run('job-1'), null);
+
+    assert.doesNotMatch(zipText('zips/job-1-part1.zip'), /d20\.pdf/, 'the cancel stopped at d20');
+    assert.deepStrictEqual(destroyedUnread.sort(),
+      ['etl/d20.pdf', 'etl/d21.pdf', 'etl/d22.pdf'],
+      'every object opened ahead of the cancel is closed, and nothing else is');
   });
 
   await t.test('a document the manifest no longer returns is dropped and named in errors.txt', async () => {

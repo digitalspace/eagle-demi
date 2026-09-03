@@ -133,6 +133,10 @@ const config = {
   bulkMaxBytes:         intFromEnv('BULK_MAX_BYTES', 2147483648),
   // Whole job. The one byte ceiling that refuses.
   bulkMaxTotalBytes:    intFromEnv('BULK_MAX_TOTAL_BYTES', 21474836480),
+  // Object opens the worker keeps ahead of the archive append, so the next documents' round trips
+  // to the object store overlap the current one. Bounded by the sockets and buffers an instance
+  // can hold at once, not by how slow the object store is.
+  bulkFetchAhead:       intFromEnv('BULK_FETCH_AHEAD', 3),
   // Concurrent jobs per requester. No app rate limiter exists and APIM Consumption cannot key-limit
   // an anonymous caller, so this is the abuse boundary for the feature.
   bulkMaxPending:       intFromEnv('BULK_MAX_PENDING', 3),

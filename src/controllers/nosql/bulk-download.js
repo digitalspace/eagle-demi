@@ -239,6 +239,10 @@ exports.createBulkDownload = async (req, res) => {
       });
     }
 
+    // The one line carrying the full id: the access log masks it (bearer capability), so this is
+    // what a queue wait is measured from, against the worker's `Executing` line for the same job.
+    logger.info(`[bulk] job queued job=${id} documents=${job.documentCount}`);
+
     return res.status(202).json({
       id,
       status: (saved && saved.status) || job.status,
