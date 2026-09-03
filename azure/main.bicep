@@ -266,6 +266,9 @@ param bulkMaxBytes int = 2147483648
 @description('Bytes across all parts of one job. Over it, the request is refused.')
 param bulkMaxTotalBytes int = 21474836480
 
+@description('Objects the worker opens ahead of the zip entry it is writing, so the next round trips overlap the current append.')
+param bulkFetchAhead int = 3
+
 @description('Unfinished jobs one requester may hold.')
 param bulkMaxPending int = 3
 
@@ -497,6 +500,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     bulkAnonMaxDocuments: bulkAnonMaxDocuments
     bulkMaxBytes: bulkMaxBytes
     bulkMaxTotalBytes: bulkMaxTotalBytes
+    bulkFetchAhead: bulkFetchAhead
     bulkMaxPending: bulkMaxPending
     bulkZipRetentionDays: bulkZipRetentionDays
     bulkJobTtlDays: bulkJobTtlDays

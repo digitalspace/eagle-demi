@@ -133,6 +133,82 @@ function shielded(source, onTruncate) {
   return out;
 }
 
+/**
+ * Object opens kept running ahead of the archive, at most `ahead` at a time, in document order.
+ *
+ * Only the APPEND has to be serial — that is the archive's single-writer constraint, and it is what
+ * fixes the order of the entries. The round trip to the object store does not, so the next
+ * documents' are already in flight while the current one is being written.
+ */
+function readAhead(docs, ahead) {
+  const limit = Math.max(1, ahead);
+  const pending = new Map();
+
+  /**
+   * One document's open. It resolves either way and carries its own error, because a document that
+   * failed is that document's error when its turn comes — never an unhandled rejection, and never
+   * an unhandled 'error' event on a stream sitting in the window, which is an uncaught exception
+   * that takes the worker down mid-job. The listener goes on the moment the stream exists and
+   * stays on: `shielded` adds its own later, and both firing is harmless.
+   */
+  const open = i => {
+    const entry = { stream: null, error: null, dropped: false };
+    entry.opened = (async () => {
+      try {
+        const stream = await storage.getObjectStream(docs[i].s3Key);
+        stream.on('error', err => { entry.error = entry.error || err; });
+        if (entry.dropped) stream.destroy();
+        else entry.stream = stream;
+      } catch (err) {
+        entry.error = err;
+      }
+      return entry;
+    })();
+    return entry;
+  };
+
+  // Close one entry for good. Synchronous on purpose — a dead upload must not wait out an open the
+  // object store can sit on for minutes — so a stream still arriving is closed by `open` instead.
+  const drop = entry => {
+    if (!entry) return;
+    entry.dropped = true;
+    if (entry.stream) entry.stream.destroy();
+  };
+
+  // The one taken but not yet handed to the archive. Held here because `destroy` has to reach it:
+  // a part that dies during this document's open would otherwise leave that socket to nobody.
+  let current = null;
+
+  return {
+    /** Keep the window full from `next` on, past the end of this part — see `destroy`. */
+    fill(next) {
+      for (let i = next; i < docs.length && pending.size < limit; i += 1) {
+        if (!pending.has(i)) pending.set(i, open(i));
+      }
+    },
+    /** Called twice for the same document to re-open it — the first entry is closed here. */
+    take(i) {
+      if (!pending.has(i)) pending.set(i, open(i));
+      const entry = pending.get(i);
+      pending.delete(i);
+      drop(current);
+      current = entry;
+      return entry.opened;
+    },
+    /** The archive owns this stream from here, so the window stops closing it. */
+    release() {
+      current = null;
+    },
+    /** Everything opened that this part never reached: a part that rolled, a cancel, a fatal error. */
+    destroy() {
+      for (const entry of pending.values()) drop(entry);
+      pending.clear();
+      drop(current);
+      current = null;
+    }
+  };
+}
+
 /** Append one entry and wait for the archive to finish reading it. */
 function addEntry(archive, source, name) {
   return new Promise((resolve, reject) => {
@@ -166,10 +242,6 @@ async function isCancelled(jobId) {
  * a recorded `fileSize` is missing on plenty of documents and a plan made from those sizes packs
  * the wrong files. Returns the index it stopped at, so the caller opens the next part there, and
  * whether a cancel is what stopped it.
- *
- * ponytail: one object streams at a time, so a part takes as long as its files do in series. Swap
- * for a small append pool (3-4) if wall time is ever the complaint — memory is the reason it is
- * serial today, one multipart buffer per instance.
  */
 async function buildPart({ jobId, n, docs, from, projectNames, access, errors, maxBytes, partMaxBytes }) {
   const key = `zips/${jobId}-part${n}.zip`;
@@ -189,53 +261,72 @@ async function buildPart({ jobId, n, docs, from, projectNames, access, errors, m
   const orDie = promise => Promise.race([promise, died]);
 
   const taken = new Set();
+  const ahead = readAhead(docs, config.bulkFetchAhead);
   let included = 0;
   let cancelled = false;
   let i = from;
 
-  for (; i < docs.length; i += 1) {
-    // Falls through to `finish()`: the upload is consuming this archive, and abandoning it
-    // unfinished would leave a multipart stream nobody ends.
-    if (i > from && (i - from) % CANCEL_CHECK_EVERY === 0 && await isCancelled(jobId)) {
-      cancelled = true;
-      break;
+  try {
+    for (; i < docs.length; i += 1) {
+      // Falls through to `finish()`: the upload is consuming this archive, and abandoning it
+      // unfinished would leave a multipart stream nobody ends.
+      if (i > from && (i - from) % CANCEL_CHECK_EVERY === 0 && await isCancelled(jobId)) {
+        cancelled = true;
+        break;
+      }
+
+      const doc = docs[i];
+      // Roll BEFORE appending, never after: a part already at the cap must not take one more file.
+      // Both clauses matter — the first closes a part filled by documents nobody recorded a size
+      // for, the second keeps a document whose size IS known from overshooting a part that still
+      // has room.
+      const written = archive.getBytesWritten();
+      if (i > from && (written >= partMaxBytes || written + knownSize(doc) > partMaxBytes)) break;
+
+      ahead.fill(i);
+      const opened = ahead.take(i);
+
+      const folder = clean(projectNames.get(String(doc.projectId))).slice(0, MAX_FOLDER_LENGTH) ||
+        UNKNOWN_PROJECT;
+      const name = uniqueName(taken, folder, fileNameFor(doc, access));
+      let truncated = null;
+
+      try {
+        let entry = await orDie(opened);
+        // Only once this one has settled: refilling before it would hold one more socket open
+        // than the window allows.
+        ahead.fill(i + 1);
+        // A parked stream can be reset while the documents ahead of it are packed — a socket the
+        // serial fetch never held open long enough to lose. One fresh open at its turn, which is
+        // what it would have got before the window existed, then it is the document's failure.
+        if (entry.error && entry.stream) entry = await orDie(ahead.take(i));
+        if (entry.error) throw entry.error;
+        ahead.release();
+        await orDie(addEntry(
+          archive, shielded(entry.stream, e => { truncated = e; }), `${folder}/${name}`
+        ));
+      } catch (err) {
+        if (fatal) throw fatal;
+        logger.warn(`[bulk] object unreadable job=${jobId} document=${doc.id}`,
+          { error: err.message });
+        errors.push({ documentId: doc.id, name, reason: REASON.unavailable });
+        continue;
+      }
+
+      if (truncated) {
+        logger.warn(`[bulk] object truncated job=${jobId} document=${doc.id}`,
+          { error: truncated.message });
+        errors.push({ documentId: doc.id, name, reason: REASON.truncated });
+      } else {
+        included += 1;
+      }
+
+      // The whole job's budget, against real bytes — the estimate the caller was refused on could
+      // not see the documents whose size was never recorded.
+      if (archive.getBytesWritten() > maxBytes) throw new Error('over the size limit');
     }
-
-    const doc = docs[i];
-    // Roll BEFORE appending, never after: a part already at the cap must not take one more file.
-    // Both clauses matter — the first closes a part filled by documents nobody recorded a size for,
-    // the second keeps a document whose size IS known from overshooting a part that still has room.
-    const written = archive.getBytesWritten();
-    if (i > from && (written >= partMaxBytes || written + knownSize(doc) > partMaxBytes)) break;
-
-    const folder = clean(projectNames.get(String(doc.projectId))).slice(0, MAX_FOLDER_LENGTH) ||
-      UNKNOWN_PROJECT;
-    const name = uniqueName(taken, folder, fileNameFor(doc, access));
-    let truncated = null;
-
-    try {
-      const source = await orDie(storage.getObjectStream(doc.s3Key));
-      await orDie(addEntry(
-        archive, shielded(source, err => { truncated = err; }), `${folder}/${name}`
-      ));
-    } catch (err) {
-      if (fatal) throw fatal;
-      logger.warn(`[bulk] object unreadable job=${jobId} document=${doc.id}`, { error: err.message });
-      errors.push({ documentId: doc.id, name, reason: REASON.unavailable });
-      continue;
-    }
-
-    if (truncated) {
-      logger.warn(`[bulk] object truncated job=${jobId} document=${doc.id}`,
-        { error: truncated.message });
-      errors.push({ documentId: doc.id, name, reason: REASON.truncated });
-    } else {
-      included += 1;
-    }
-
-    // The whole job's budget, against real bytes — the estimate the caller was refused on could
-    // not see the documents whose size was never recorded.
-    if (archive.getBytesWritten() > maxBytes) throw new Error('over the size limit');
+  } finally {
+    ahead.destroy();
   }
 
   // errors.txt rides in the last part, which is the one that ran out of documents rather than room.
