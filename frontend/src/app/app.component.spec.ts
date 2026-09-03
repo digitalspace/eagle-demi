@@ -106,6 +106,27 @@ describe('AppComponent', () => {
     expect(service.lassoLabel()).toBeNull();
   });
 
+  it('clears the search text when navigating between screens', async () => {
+    await renderAs(true, false);
+    const service = TestBed.inject(RegistryStateService);
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl('/index');
+    service.searchQuery.set('cariboo');
+
+    await router.navigateByUrl('/map');
+
+    expect(service.searchQuery()).toBe('');
+  });
+
+  it('takes the search text from ?q= on arrival', async () => {
+    await renderAs(true, false);
+    const service = TestBed.inject(RegistryStateService);
+
+    await TestBed.inject(Router).navigateByUrl('/index?q=Cariboo%20Gold');
+
+    expect(service.searchQuery()).toBe('Cariboo Gold');
+  });
+
   it('keeps a lasso set before arriving on the map', async () => {
     await renderAs(true, false);
     const service = TestBed.inject(RegistryStateService);

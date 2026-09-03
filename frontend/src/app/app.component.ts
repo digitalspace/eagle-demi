@@ -32,8 +32,14 @@ export class AppComponent {
     this.router.events.pipe(takeUntilDestroyed()).subscribe(event => {
       if (!(event instanceof NavigationEnd)) return;
       const next = this.keyOf(event.urlAfterRedirects);
-      // Map filters are only shown on the map; arriving there may carry a saved lasso from My account.
+      // Search state is global to the service, so each screen starts clean. Map arrivals may carry a
+      // saved lasso from My account; `?q=` carries a handoff such as the map's Documents button.
       if (next !== 'map') this.service.clearFilters();
+      const q = new URL(event.urlAfterRedirects, location.origin).searchParams.get('q') ?? '';
+      if (q !== this.service.searchQuery()) {
+        this.service.searchQuery.set(q);
+        this.service.loadData();
+      }
       this.screenKey.set(next);
       this.accountOpen.set(false);
     });
