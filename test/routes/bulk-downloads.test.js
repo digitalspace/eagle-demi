@@ -409,7 +409,7 @@ test('DELETE /bulk-downloads/:id', async (t) => {
     assert.ok(patches[0].operations.some(op => op.path === '/finishedAt'));
     // Without the condition the cancel would overwrite a job the worker had just finished, and
     // free a slot that job had already given back.
-    assert.match(patches[0].condition, /c\.status IN \('queued', 'running'\)/);
+    assert.match(patches[0].condition, /c\.status IN \('queued', 'running', 'failed'\)/);
     assert.deepStrictEqual(released.mock.calls.map(call => call.arguments[0]), ['198.51.100.7']);
     assert.deepStrictEqual(analytics.map(row => row.EventName), ['bulk.cancel']);
     assert.strictEqual(analytics[0].ResultCount, 4);
@@ -424,6 +424,35 @@ test('DELETE /bulk-downloads/:id', async (t) => {
     assert.strictEqual(response.statusCode, 204);
     assert.strictEqual(patches.length, 1);
     assert.strictEqual(released.mock.callCount(), 1);
+  });
+
+  await t.test('a job waiting on a queue retry is cancelled too', async (t2) => {
+    // `failed` is not terminal while deliveries remain: the queue redelivers and the worker
+    // re-runs a failed job on purpose, so a cancel that skipped this status would answer 204 and
+    // let the zip build resume up to an hour later.
+    const { patches, released } = cancelling(t2, queued({ status: 'failed' }));
+
+    const response = res();
+    await eventsFrom(() => controller.cancelBulkDownload({ ...ANON, params: { id: JOB } }, response));
+
+    assert.strictEqual(response.statusCode, 204);
+    assert.match(patches[0].condition, /'failed'/);
+    assert.strictEqual(released.mock.callCount(), 1);
+  });
+
+  await t.test('a job whose last delivery failed is cancelled without a second release', async (t2) => {
+    // `slotReleasedAt` is the worker's stamp: that job gave its slot back on the way out.
+    const { patches, released } = cancelling(t2, queued({
+      status: 'failed', slotReleasedAt: new Date().toISOString()
+    }));
+
+    const response = res();
+    await eventsFrom(() => controller.cancelBulkDownload({ ...ANON, params: { id: JOB } }, response));
+
+    assert.strictEqual(response.statusCode, 204);
+    assert.strictEqual(patches.length, 1, 'the row still becomes cancelled');
+    assert.strictEqual(released.mock.callCount(), 0,
+      'a second release frees a slot another of this requester\'s jobs is holding');
   });
 
   await t.test('a job that already finished is 204 and untouched', async (t2) => {

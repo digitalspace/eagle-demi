@@ -347,9 +347,12 @@ exports.getBulkDownload = async (req, res) => {
  * Cancel a job. Idempotent: a job that already reached a terminal status answers 204 unchanged.
  *
  * The worker is a separate process that may be building this job right now, so the status flip is
- * a conditional patch — whichever writer takes the row out of `queued`/`running` owns the outcome,
- * and the loser neither overwrites it nor gives the slot back a second time. The worker notices the
+ * a conditional patch — whichever writer takes the row out of a live status owns the outcome, and
+ * the loser neither overwrites it nor gives the slot back a second time. The worker notices the
  * cancelled row between parts, deletes what it wrote and stops.
+ *
+ * `failed` is a live status here: the queue redelivers a failed job and the worker re-runs it on
+ * purpose, so a cancel landing in that retry gap has to take the row or the build resumes anyway.
  */
 exports.cancelBulkDownload = async (req, res) => {
   try {
@@ -361,12 +364,13 @@ exports.cancelBulkDownload = async (req, res) => {
     const cancelled = await bulkDownloads.patchIfStatus(
       job.id,
       { status: 'cancelled', finishedAt: new Date().toISOString() },
-      ['queued', 'running']
+      ['queued', 'running', 'failed']
     );
 
     if (cancelled) {
-      // Winning the patch above is what makes this the one release for this job's whole life.
-      if (job.requesterKey) await bulkDownloads.releaseSlot(job.requesterKey);
+      // Winning the patch above is what makes this the one release for this job's whole life —
+      // except for a job whose last delivery already failed, which gave the slot back on its way out.
+      if (job.requesterKey && !job.slotReleasedAt) await bulkDownloads.releaseSlot(job.requesterKey);
       analyticsEvent(req, { eventName: 'bulk.cancel', resultCount: job.documentCount || 0 });
     }
 

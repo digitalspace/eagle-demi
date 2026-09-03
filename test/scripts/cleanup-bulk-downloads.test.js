@@ -67,6 +67,8 @@ test('cleanup-bulk-downloads', async (t) => {
     const patches = [];
     let page = 0;
     t.mock.method(bulkDownloads, 'listExpired', async () => (page++ === 0 ? [cancelled] : []));
+    // Resolving on a key that is already gone is what both storage backends do, and for a
+    // cancelled job that is the usual case: its own worker deleted the parts before it stopped.
     t.mock.method(storage, 'removeObject', async key => { removed.push(key); });
     t.mock.method(bulkDownloads, 'patch', async (id, fields) => { patches.push({ id, fields }); });
 
@@ -80,23 +82,28 @@ test('cleanup-bulk-downloads', async (t) => {
     assert.deepStrictEqual(summary, { jobs: 1, objects: 2, failures: 0 });
   });
 
-  await t.test('a part somebody already deleted does not fail the sweep', async () => {
-    const cancelled = row('job-9', { status: 'cancelled' });
-    const patches = [];
-    let page = 0;
-    t.mock.method(bulkDownloads, 'listExpired', async () => (page++ === 0 ? [cancelled] : []));
-    // What a driver that raises on a missing key answers. The usual case for a cancelled job: its
-    // worker deleted the part before it stopped.
-    t.mock.method(storage, 'removeObject', async () => {
-      throw Object.assign(new Error('NoSuchKey'), { code: 'NoSuchKey' });
+  await t.test('a full page of cancelled rows is swept once, not re-queried forever', async () => {
+    // A cancelled row KEEPS its status, so the only thing taking it out of the sweep's query is
+    // losing its parts. The loop reads another page whenever a full one expired something, so a
+    // row that stays selectable pages over the same work until the timer is killed.
+    // 500 is the script's page size: a shorter page ends the loop on its own and proves nothing.
+    const rows = Array.from({ length: 500 }, (_, i) => row(`job-${i}`, { status: 'cancelled' }));
+    let queries = 0;
+    t.mock.method(bulkDownloads, 'listExpired', async () => {
+      queries += 1;
+      if (queries > 3) throw new Error('the sweep re-queried rows it had already swept');
+      // The query's own predicate: finished, and still naming parts to delete.
+      return rows.filter(job => job.parts.length > 0).map(job => ({ ...job }));
     });
-    t.mock.method(bulkDownloads, 'patch', async (id, fields) => { patches.push({ id, fields }); });
+    t.mock.method(storage, 'removeObject', async () => {});
+    t.mock.method(bulkDownloads, 'patch', async (id, fields) => {
+      Object.assign(rows.find(job => job.id === id), fields);
+    });
 
     const summary = await cleanup.run();
 
-    assert.deepStrictEqual(summary, { jobs: 1, objects: 0, failures: 0 },
-      'a row parked on a key that is already gone comes back every night forever');
-    assert.deepStrictEqual(patches[0].fields.parts, []);
+    assert.strictEqual(queries, 2, 'one page of work, then one page with nothing left to sweep');
+    assert.deepStrictEqual(summary, { jobs: 500, objects: 500, failures: 0 });
   });
 
   await t.test('only a row still running gives its quota slot back', async () => {

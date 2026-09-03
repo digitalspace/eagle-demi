@@ -25,6 +25,10 @@ const documents = require('./documents');
 const CONTAINER = 'bulkDownloads';
 const PARTITION_FIELD = 'id';
 
+// Every status a job row may carry. A patch condition takes no parameters, so `patchIfStatus`
+// interpolates; this is what keeps the interpolated values off the callers' hands.
+const STATUSES = ['queued', 'running', 'ready', 'failed', 'expired', 'cancelled'];
+
 // Rolling window for the per-day cap, and how long a quota row outlives its last use. Two days, so
 // an in-flight count that leaked (a job whose worker never ran) clears itself.
 const WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -54,6 +58,10 @@ async function patch(id, fields) {
  * (what is left of its row TTL — a row still `running` has no finish time) and whose slot to give
  * back, if the worker never did.
  *
+ * A finished job is only selected while it still names parts, because the sweep empties them: a
+ * `cancelled` row keeps its status, so without that clause it matches this query again on the next
+ * page and the sweep pages over the same rows forever.
+ *
  * `limit` is a page, not a filter: the read takes one page and stops, so a backlog is swept over
  * several nights rather than draining an unbounded result set into one timer invocation.
  */
@@ -62,7 +70,8 @@ async function listExpired(cutoffIso, { statuses = ['ready', 'failed'], limit = 
   const { items } = await cosmos.query(CONTAINER, {
     query: `SELECT c.id, c.status, c.parts, c.finishedAt, c.createdAt, c.requesterKey, ` +
       `c.slotReleasedAt FROM c ` +
-      `WHERE (c.status IN (${names.join(', ')}) AND c.finishedAt < @cutoff) ` +
+      `WHERE (c.status IN (${names.join(', ')}) AND c.finishedAt < @cutoff ` +
+      `AND ARRAY_LENGTH(c.parts) > 0) ` +
       "OR (c.status = 'running' AND c.startedAt < @cutoff)",
     parameters: [
       ...names.map((name, i) => ({ name, value: String(statuses[i]) })),
@@ -96,12 +105,15 @@ async function conditionalPatch(id, operations, condition) {
  * Move a job to a terminal status only while it is still in one of `statuses`.
  *
  * A cancel and the worker's own `ready`/`failed` write race each other, and the loser must not
- * overwrite the winner — nor give the requester's in-flight slot back a second time. The statuses
- * are literals from this repo's own callers, not request input.
+ * overwrite the winner — nor give the requester's in-flight slot back a second time.
  *
  * @returns {Promise<boolean>} false: another writer already took the row out of `statuses`.
  */
 async function patchIfStatus(id, fields, statuses) {
+  const unknown = statuses.filter(status => !STATUSES.includes(status));
+  if (unknown.length > 0) {
+    throw new RangeError(`[bulk] not a job status: ${unknown.join(', ')}`);
+  }
   const list = statuses.map(status => `'${status}'`).join(', ');
   const outcome = await conditionalPatch(
     String(id), setOps(fields), `FROM c WHERE c.status IN (${list})`

@@ -157,6 +157,16 @@ test('a terminal status write', async (t) => {
     assert.strictEqual(call.condition, "FROM c WHERE c.status IN ('queued', 'running')");
   });
 
+  await t.test('refuses a status that is not one a job can hold', async () => {
+    const patched = t.mock.method(cosmos, 'patch', async () => ({}));
+
+    await assert.rejects(
+      () => bulkDownloads.patchIfStatus('job-1', { status: 'cancelled' }, ["running' OR true"]),
+      /not a job status/
+    );
+    assert.strictEqual(patched.mock.callCount(), 0, 'the condition is interpolated, so it is checked');
+  });
+
   await t.test('says so when somebody else already finished the job', async () => {
     t.mock.method(cosmos, 'patch', refuse(412));
 
@@ -193,6 +203,9 @@ test('listExpired', async (t) => {
     // A row still 'running' past the cutoff is an instance that died with retries exhausted; the
     // worker never released its slot, so the sweep must see it.
     assert.match(spec.query, /c\.status = 'running' AND c\.startedAt < @cutoff/);
+    // The sweep empties `parts` and a cancelled row keeps its status, so without this the same
+    // rows come back on the next page and the sweep never finishes.
+    assert.match(spec.query, /ARRAY_LENGTH\(c\.parts\) > 0/);
     assert.deepStrictEqual(
       spec.parameters.map(p => p.value),
       ['ready', 'failed', '2026-08-01T00:00:00.000Z']

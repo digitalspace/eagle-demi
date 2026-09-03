@@ -26,11 +26,6 @@ const SECONDS_PER_DAY = 24 * 60 * 60;
 // A cancelled one is swept because its worker may have died before it could delete its own parts.
 const SWEPT_STATUSES = ['ready', 'failed', 'cancelled'];
 
-// A cancelled job's parts are usually gone already, deleted by the worker that stopped. Both
-// backends call deleting a missing object success; this only guards one that raises instead.
-const isMissing = err =>
-  err && (err.code === 'NoSuchKey' || err.code === 'NotFound' || err.statusCode === 404);
-
 // One page of rows per query. The loop below stops as soon as a page is short or expires nothing,
 // so this only bounds how much a single sweep holds in memory.
 const PAGE = 500;
@@ -83,12 +78,10 @@ async function run() {
       // Per job, so one undeletable object does not park every later job behind it forever.
       try {
         for (const part of job.parts || []) {
-          try {
-            await storage.removeObject(part.key);
-            objects += 1;
-          } catch (err) {
-            if (!isMissing(err)) throw err;
-          }
+          // A key the worker already deleted is not an error: both backends treat removing a
+          // missing object as success, which is the usual case for a cancelled job.
+          await storage.removeObject(part.key);
+          objects += 1;
         }
         await markExpired(job, now);
         expired += 1;
