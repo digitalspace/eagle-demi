@@ -40,8 +40,7 @@ const DOCUMENT_FIELDS = 'c.id, c.projectId, c.displayName, c.documentFileName, c
 // The row keeps a readable sample; `errors.txt` in the zip keeps all of them.
 const MAX_STORED_ERRORS = 100;
 
-// Documents between cancellation checks. One point read (1 RU) buys the caller a stop within a few
-// files, where a check per document would cost one read per file for a button nobody usually presses.
+// Documents between cancellation checks: one point read buys a stop within a few files.
 const CANCEL_CHECK_EVERY = 20;
 
 // Folder + name has to clear the 255-character path limit Windows Explorer still enforces when it
@@ -166,8 +165,7 @@ async function isCancelled(jobId) {
  * Where the part ENDS is decided here, against the bytes the archive has actually written, because
  * a recorded `fileSize` is missing on plenty of documents and a plan made from those sizes packs
  * the wrong files. Returns the index it stopped at, so the caller opens the next part there, and
- * whether it stopped because the job was cancelled — the part it built is then the caller's to
- * delete along with every earlier one.
+ * whether a cancel is what stopped it.
  *
  * ponytail: one object streams at a time, so a part takes as long as its files do in series. Swap
  * for a small append pool (3-4) if wall time is ever the complaint — memory is the reason it is
@@ -196,8 +194,8 @@ async function buildPart({ jobId, n, docs, from, projectNames, access, errors, m
   let i = from;
 
   for (; i < docs.length; i += 1) {
-    // Stop at a document boundary, then fall through to `finish()` below: the upload is consuming
-    // this archive, so abandoning it unfinished would leave a multipart stream nobody ever ends.
+    // Falls through to `finish()`: the upload is consuming this archive, and abandoning it
+    // unfinished would leave a multipart stream nobody ends.
     if (i > from && (i - from) % CANCEL_CHECK_EVERY === 0 && await isCancelled(jobId)) {
       cancelled = true;
       break;
@@ -349,22 +347,18 @@ async function claim(job, now) {
 }
 
 /**
- * Give this job's quota slot back, ONCE for its whole life.
- *
- * The counter is per requester, not per job, so a second release frees a slot one of that
- * requester's other jobs is holding — which is how a retried message hands out extra capacity.
- * `slotReleasedAt` on the row is what a redelivery (and the cleanup sweep) reads to know it is
- * already done. Best effort in both directions: the counter is the controller's and may not exist.
+ * Give this job's quota slot back, ONCE for its whole life — the counter is per requester, so a
+ * second release frees a slot one of that requester's other jobs is holding.
  */
 async function releaseSlot(job) {
   if (typeof bulkDownloads.releaseSlot !== 'function' || !job || !job.requesterKey) return;
   if (job.slotReleasedAt) return;
   try {
+    const at = new Date().toISOString();
+    // The stamp is the claim, and a cancel writes the same one: whoever lands it decrements.
+    if (!(await bulkDownloads.claimSlotRelease(job.id, at))) return;
+    job.slotReleasedAt = at;
     await bulkDownloads.releaseSlot(job.requesterKey);
-    // Stamped only once the counter really moved: a release that threw has not happened, and the
-    // sweep still has to find that slot.
-    job.slotReleasedAt = new Date().toISOString();
-    await bulkDownloads.patch(job.id, { slotReleasedAt: job.slotReleasedAt });
   } catch (err) {
     logger.warn(`[bulk] could not release slot for ${job.id}`, { error: err.message });
   }
@@ -373,11 +367,8 @@ async function releaseSlot(job) {
 /**
  * Flip the job to a terminal status, without ever becoming the reason the job fails.
  *
- * Conditional on the row still being in `statuses`, so a cancel that landed while this ran owns
- * the row and keeps it: `cancelled` is terminal and nothing here may write over it.
- *
- * @returns {Promise<boolean>} false: somebody else finished this job, so its slot is theirs to
- *   give back too.
+ * @returns {Promise<boolean>} false: a cancel finished this job first, so the row and its slot
+ *   are the canceller's.
  */
 async function markTerminal(id, fields, statuses, what) {
   try {
@@ -393,23 +384,25 @@ async function markTerminal(id, fields, statuses, what) {
  * through the row we are about to overwrite. Delete it first or it is storage nobody ever frees.
  */
 async function dropParts(parts) {
+  const left = [];
   for (const part of parts || []) {
     try {
       await storage.removeObject(part.key);
     } catch (err) {
+      left.push(part);
       logger.warn(`[bulk] could not drop part ${part.key}`, { error: err.message });
     }
   }
+  return left;
 }
 
 /**
- * Give up on a cancelled job: the parts built so far are storage nobody will ever fetch. The
- * cleanup sweep deletes them too, for a job whose worker died before reaching here; deleting now
- * is what keeps them out of storage for the retention window. The row is left as the canceller
- * wrote it.
+ * Give up on a cancelled job: delete the parts built so far, leaving on the row whatever would not
+ * delete — that is all the cleanup sweep has to find it by. Wiki [[Bulk-Download]] §Cancelling.
  */
 async function abandon(id, parts) {
-  await dropParts(parts);
+  await bulkDownloads.patch(id, { parts });
+  await bulkDownloads.patch(id, { parts: await dropParts(parts) });
   logger.info(`[bulk] job cancelled ${id}`);
   return null;
 }
@@ -495,8 +488,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
       from = next;
       // Patched per part so a poll reports progress rather than silence.
       await bulkDownloads.patch(id, { parts: done });
-      // Between parts as well as inside one: a cancel arriving here would otherwise wait out a
-      // whole 2 GiB part before anything noticed it.
+      // Between parts too: a cancel here would otherwise wait out a whole part.
       if (await isCancelled(id)) return abandon(id, done);
     }
 
@@ -518,8 +510,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     );
     if (!marked) return abandon(id, done);
 
-    // Only now the row really says `ready`: the slot is not this job's any more, and a release the
-    // canceller has already made would free a slot one of this requester's other jobs is holding.
+    // Only now the row really says `ready`, so the slot is not this job's any more.
     await releaseSlot(job);
 
     // No telemetry call: auditEvent and analyticsEvent both take a request, and there is no request

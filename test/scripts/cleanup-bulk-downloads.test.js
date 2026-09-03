@@ -120,6 +120,7 @@ test('cleanup-bulk-downloads', async (t) => {
     t.mock.method(bulkDownloads, 'listExpired', async () => (page++ === 0 ? rows : []));
     t.mock.method(storage, 'removeObject', async () => {});
     t.mock.method(bulkDownloads, 'patch', async () => {});
+    t.mock.method(bulkDownloads, 'claimSlotRelease', async () => true);
     t.mock.method(bulkDownloads, 'releaseSlot', async key => { released.push(key); });
 
     await cleanup.run();

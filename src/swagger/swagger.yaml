@@ -648,13 +648,13 @@ paths:
     delete:
       summary: Cancel a bulk download
       description: >-
-        Stops a job that is still `queued`, `running`, or `failed` with a queue retry still to
-        come: the job becomes `cancelled`, the requester's in-flight slot is given back, and the
-        worker deletes the zip parts it had already written. Idempotent — a job that already
-        reached `ready`, `expired` or `cancelled` is left alone and answered 204 all the same, as
-        is a `failed` job the queue has finished retrying. Same capability rule as the status read:
-        an anonymous job is cancelled by whoever holds its id, an authenticated one only by the
-        caller who made it.
+        Stops a job that is still `queued`, `running` or `failed`: the job becomes `cancelled` and
+        the worker deletes the zip parts it had already written. `failed` is included because the
+        queue redelivers such a job and the worker re-runs it. The requester's in-flight slot is
+        given back if the job was still holding it. Idempotent — a job that already reached
+        `ready`, `expired` or `cancelled` is left alone and answered 204 all the same. Same
+        capability rule as the status read: an anonymous job is cancelled by whoever holds its id,
+        an authenticated one only by the caller who made it.
       parameters:
         - name: id
           in: path

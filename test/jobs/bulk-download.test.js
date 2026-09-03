@@ -103,6 +103,11 @@ function harness(t, { row, docs, getObjectStream, putObjectStream } = {}) {
   });
   t.mock.method(projects, 'listByIds', async () => [PROJECT]);
   t.mock.method(bulkDownloads, 'releaseSlot', async key => { released.push(key); return true; });
+  // The stamp every releaser competes for. True is "this worker claimed it", the ordinary case.
+  t.mock.method(bulkDownloads, 'claimSlotRelease', async (id, at) => {
+    patches.push({ slotReleasedAt: at });
+    return true;
+  });
   t.mock.method(storage, 'removeObject', async key => { removed.push(key); });
   t.mock.method(storage, 'putObjectStream', putObjectStream ||
     (async (key, stream) => { uploads.set(key, await collect(stream)); return key; }));
@@ -447,9 +452,27 @@ test('the bulk download worker', async (t) => {
       'the build stops at the check, it does not run the selection out');
     assert.deepStrictEqual(removed, ['zips/job-1-part1.zip'],
       'the partial zip is deleted here or nothing ever deletes it — the sweep skips cancelled rows');
-    assert.deepStrictEqual(patches, [], 'the row keeps the status the canceller wrote');
+    assert.ok(!patches.some(patch => patch.status), 'the row keeps the status the canceller wrote');
+    assert.deepStrictEqual(patches[patches.length - 1], { parts: [] },
+      'the keys are recorded, then cleared once they are really gone');
     assert.deepStrictEqual(released, [], 'the canceller released the slot already');
     assert.ok(infos.includes('[bulk] job cancelled job-1'));
+  });
+
+  await t.test('a part that will not delete stays on the row for the sweep', async (tt) => {
+    const docs = [doc('d1')];
+    const { patches, released } = harness(tt, { row: job(docs), docs });
+    tt.mock.method(bulkDownloads, 'patchIfStatus', async () => false);  // the cancel won the row
+    tt.mock.method(storage, 'removeObject', async () => { throw new Error('object store down'); });
+    tt.mock.method(logger, 'info', () => {});
+    tt.mock.method(logger, 'warn', () => {});
+
+    assert.strictEqual(await worker.run('job-1'), null);
+
+    const parts = patches.filter(patch => patch.parts).map(patch => patch.parts);
+    assert.deepStrictEqual(parts[parts.length - 1].map(part => part.key), ['zips/job-1-part1.zip'],
+      'a key cleared off the row is a key nothing can ever find again');
+    assert.deepStrictEqual(released, []);
   });
 
   await t.test('a cancel between parts deletes every part built so far', async (tt) => {

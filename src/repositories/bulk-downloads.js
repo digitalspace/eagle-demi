@@ -58,9 +58,8 @@ async function patch(id, fields) {
  * (what is left of its row TTL — a row still `running` has no finish time) and whose slot to give
  * back, if the worker never did.
  *
- * A finished job is only selected while it still names parts, because the sweep empties them: a
- * `cancelled` row keeps its status, so without that clause it matches this query again on the next
- * page and the sweep pages over the same rows forever.
+ * Selected only while it still names parts, because the sweep empties them: a `cancelled` row
+ * keeps its status, so without that clause the sweep pages over the same rows forever.
  *
  * `limit` is a page, not a filter: the read takes one page and stops, so a backlog is swept over
  * several nights rather than draining an unbounded result set into one timer invocation.
@@ -102,10 +101,8 @@ async function conditionalPatch(id, operations, condition) {
 }
 
 /**
- * Move a job to a terminal status only while it is still in one of `statuses`.
- *
- * A cancel and the worker's own `ready`/`failed` write race each other, and the loser must not
- * overwrite the winner — nor give the requester's in-flight slot back a second time.
+ * Move a job to a terminal status only while it is still in one of `statuses` — a cancel and the
+ * worker's own `ready`/`failed` write race, and the loser must not overwrite the winner.
  *
  * @returns {Promise<boolean>} false: another writer already took the row out of `statuses`.
  */
@@ -171,6 +168,19 @@ async function acquireSlot(requesterKey, { maxInFlight, maxPerDay }) {
 }
 
 /**
+ * Claim this job's one slot release. Every releaser — the worker, a cancel, the cleanup sweep —
+ * writes this stamp first, so the counter below moves once however they interleave.
+ *
+ * @returns {Promise<boolean>} false: somebody else already claimed it.
+ */
+async function claimSlotRelease(id, at) {
+  const outcome = await conditionalPatch(
+    String(id), setOps({ slotReleasedAt: at }), 'FROM c WHERE NOT IS_DEFINED(c.slotReleasedAt)'
+  );
+  return outcome === 'ok';
+}
+
+/**
  * Give the slot back — the job finished, failed, or was never queued.
  *
  * The floor is in the condition rather than applied after a read, so a release that arrives twice
@@ -195,6 +205,7 @@ module.exports = {
   listExpired,
   acquireSlot,
   releaseSlot,
+  claimSlotRelease,
   // The worker and the controller share one document read, and it lives in documents.js because it
   // IS a document read — gated, projected and batched like every other.
   listDocumentsByIds: documents.listByIdsUnscoped

@@ -127,6 +127,26 @@ test('bulk download quota', async (t) => {
     assert.strictEqual(condition, 'FROM c WHERE c.inFlight > 0');
   });
 
+  await t.test('the release of one job is claimed by a stamp only one writer can write', async () => {
+    let condition = null;
+    t.mock.method(cosmos, 'patch', async (container, id, pk, operations, cond) => {
+      condition = cond;
+      return {};
+    });
+
+    assert.strictEqual(await bulkDownloads.claimSlotRelease('job-1', '2026-09-03T00:00:00Z'), true);
+
+    // The worker, a cancel and the sweep all write this stamp before they touch the counter, so
+    // the order they arrive in cannot decide it twice.
+    assert.strictEqual(condition, 'FROM c WHERE NOT IS_DEFINED(c.slotReleasedAt)');
+  });
+
+  await t.test('a claim somebody else already made is refused', async () => {
+    t.mock.method(cosmos, 'patch', refuse(412));
+
+    assert.strictEqual(await bulkDownloads.claimSlotRelease('job-1', '2026-09-03T00:00:00Z'), false);
+  });
+
   await t.test('a second release of the same job is a no-op, not an error', async () => {
     t.mock.method(cosmos, 'patch', refuse(412));
 

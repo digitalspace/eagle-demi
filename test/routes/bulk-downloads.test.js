@@ -376,7 +376,7 @@ test('DELETE /bulk-downloads/:id', async (t) => {
    * Cancel through the REAL repository, with only Cosmos stubbed: the condition the patch carries
    * is the whole mechanism, and a cancel that dropped it would answer 204 either way.
    */
-  function cancelling(t2, row, { refused = false } = {}) {
+  function cancelling(t2, row, { refused = false, claimed = true } = {}) {
     const patches = [];
     t2.mock.method(bulkDownloads, 'getById', async () => row);
     t2.mock.method(cosmos, 'patch', async (container, id, pk, operations, condition) => {
@@ -384,6 +384,8 @@ test('DELETE /bulk-downloads/:id', async (t) => {
       if (refused) throw Object.assign(new Error('precondition'), { code: 412 });
       return {};
     });
+    // The stamp every releaser competes for. False is the worker having claimed it first.
+    t2.mock.method(bulkDownloads, 'claimSlotRelease', async () => claimed);
     const released = t2.mock.method(bulkDownloads, 'releaseSlot', async () => true);
     return { patches, released };
   }
@@ -440,11 +442,10 @@ test('DELETE /bulk-downloads/:id', async (t) => {
     assert.strictEqual(released.mock.callCount(), 1);
   });
 
-  await t.test('a job whose last delivery failed is cancelled without a second release', async (t2) => {
-    // `slotReleasedAt` is the worker's stamp: that job gave its slot back on the way out.
-    const { patches, released } = cancelling(t2, queued({
-      status: 'failed', slotReleasedAt: new Date().toISOString()
-    }));
+  await t.test('a cancel racing the worker\'s own release does not decrement twice', async (t2) => {
+    // The worker released between the row read and the patch, so it claimed the stamp first. The
+    // row this handler read still says the slot is held, which is why the claim decides, not it.
+    const { patches, released } = cancelling(t2, queued({ status: 'failed' }), { claimed: false });
 
     const response = res();
     await eventsFrom(() => controller.cancelBulkDownload({ ...ANON, params: { id: JOB } }, response));

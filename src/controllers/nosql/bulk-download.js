@@ -214,8 +214,11 @@ exports.createBulkDownload = async (req, res) => {
         error: err.message, stack: err.stack
       });
       // The row would otherwise sit `queued` for its whole TTL with nothing coming to build it.
+      // `slotReleasedAt` because the refusal below gives this job's slot back: a later cancel
+      // reads that stamp to know the counter has already moved.
+      const at = new Date().toISOString();
       await bulkDownloads.patch(id, {
-        status: 'failed', error: 'enqueue failed', finishedAt: new Date().toISOString()
+        status: 'failed', error: 'enqueue failed', finishedAt: at, slotReleasedAt: at
       }).catch(() => {});
       return refuse(503, { error: 'bulk download could not be queued' });
     }
@@ -346,13 +349,10 @@ exports.getBulkDownload = async (req, res) => {
 /**
  * Cancel a job. Idempotent: a job that already reached a terminal status answers 204 unchanged.
  *
- * The worker is a separate process that may be building this job right now, so the status flip is
- * a conditional patch — whichever writer takes the row out of a live status owns the outcome, and
- * the loser neither overwrites it nor gives the slot back a second time. The worker notices the
- * cancelled row between parts, deletes what it wrote and stops.
- *
- * `failed` is a live status here: the queue redelivers a failed job and the worker re-runs it on
- * purpose, so a cancel landing in that retry gap has to take the row or the build resumes anyway.
+ * The worker may be building it right now, so both writes below are conditional — the status flip
+ * against the row's status, the release against the `slotReleasedAt` stamp every releaser claims.
+ * `failed` is live here: the queue redelivers one and the worker re-runs it on purpose.
+ * Wiki [[Bulk-Download]] §Cancelling.
  */
 exports.cancelBulkDownload = async (req, res) => {
   try {
@@ -368,9 +368,11 @@ exports.cancelBulkDownload = async (req, res) => {
     );
 
     if (cancelled) {
-      // Winning the patch above is what makes this the one release for this job's whole life —
-      // except for a job whose last delivery already failed, which gave the slot back on its way out.
-      if (job.requesterKey && !job.slotReleasedAt) await bulkDownloads.releaseSlot(job.requesterKey);
+      // Never off the row read above: the worker may have released between that read and this.
+      if (job.requesterKey &&
+        await bulkDownloads.claimSlotRelease(job.id, new Date().toISOString())) {
+        await bulkDownloads.releaseSlot(job.requesterKey);
+      }
       analyticsEvent(req, { eventName: 'bulk.cancel', resultCount: job.documentCount || 0 });
     }
 

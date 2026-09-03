@@ -46,17 +46,17 @@ function remainingTtl(job, now) {
 
 /** Mark a job whose parts are already gone. Split out only because `run` counts the deletes. */
 async function markExpired(job, now) {
-  // `cancelled` is terminal and says why the parts went; only a swept ready or failed job becomes
-  // `expired`. Either way `parts` is emptied, because the keys it named no longer exist.
+  // `cancelled` says why the parts went, so only a ready or failed job becomes `expired`.
   const fields = job.status === 'cancelled' ? { parts: [] } : { status: 'expired', parts: [] };
   const ttl = remainingTtl(job, now);
   if (ttl !== null) fields.ttl = ttl;
   await bulkDownloads.patch(job.id, fields);
 
-  // The worker releases the slot when it finishes and stamps `slotReleasedAt` when it does; only a
-  // row still 'running' with no stamp (instance died, retries exhausted) was never released.
+  // Only a row still 'running' (instance died, retries exhausted) was never released, and the
+  // stamp is the claim: the worker writes the same one, so the counter moves once.
   if (job.status === 'running' && !job.slotReleasedAt &&
-    typeof bulkDownloads.releaseSlot === 'function' && job.requesterKey) {
+    typeof bulkDownloads.releaseSlot === 'function' && job.requesterKey &&
+    await bulkDownloads.claimSlotRelease(job.id, new Date(now).toISOString())) {
     await bulkDownloads.releaseSlot(job.requesterKey);
   }
 }
