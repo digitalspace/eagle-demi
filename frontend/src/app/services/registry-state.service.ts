@@ -130,9 +130,9 @@ export class RegistryStateService {
    * The summariser's question — deliberately NOT `searchQuery`.
    *
    * Search state on this service is global: `searchQuery` and every result signal are shared by
-   * deep-search and map-explorer, and nothing clears them on navigation. A separate signal is what
-   * stops typing on one page from silently rewriting the other, and it means `loadSummary()` can
-   * run without disturbing a single result column.
+   * deep-search and map-explorer (AppComponent resets them on navigation). A separate signal is
+   * what stops typing on one page from silently rewriting the other, and it means `loadSummary()`
+   * can run without disturbing a single result column.
    */
   summaryQuery = signal<string>('');
 
