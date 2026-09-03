@@ -6,6 +6,8 @@
  * Env vars:
  *   MINIO_HOST, MINIO_PORT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY,
  *   MINIO_BUCKET_NAME, MINIO_USE_SSL
+ *   SOURCE_MINIO_ACCESS_KEY, SOURCE_MINIO_SECRET_KEY,
+ *   SOURCE_MINIO_HOST, SOURCE_MINIO_PORT, SOURCE_MINIO_USE_SSL
  *   DOCLING_URL          — docling-serve base URL (default: http://eagle-demi:5000)
  *   DOCLING_API_KEY      — X-Api-Key for docling-serve
  *
@@ -279,6 +281,17 @@ const config = {
   // bucket — so utils/caller-ip.js keys on the browser hop instead. See that file.
   trustedProxyIps:       proxyListFromEnv('TRUSTED_PROXY_IPS'),
 };
+
+// Optional second object-store credential, read by src/scripts/backfill-objects.js: the test
+// credentials cannot read the prod bucket, so that copy streams under a credential that can.
+// Connection details default to the target's, since both buckets sit on the same NRS host.
+config.sourceMinioAccess = process.env.SOURCE_MINIO_ACCESS_KEY || '';
+config.sourceMinioSecret = process.env.SOURCE_MINIO_SECRET_KEY || '';
+config.sourceMinioHost = process.env.SOURCE_MINIO_HOST || config.minioHost;
+config.sourceMinioPort = intFromEnv('SOURCE_MINIO_PORT', config.minioPort);
+config.sourceMinioSsl = process.env.SOURCE_MINIO_USE_SSL
+  ? process.env.SOURCE_MINIO_USE_SSL === 'true'
+  : config.minioSsl;
 
 // Fail to boot rather than run a deployed environment with an allowlist that admits every client
 // in the realm. Only dev and local keep the permissive default, so a new ENVIRONMENT name is

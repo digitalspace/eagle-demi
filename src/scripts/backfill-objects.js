@@ -6,16 +6,21 @@
  * WHY. The non-prod bucket (`MINIO_BUCKET_NAME`, keys nested under `MINIO_KEY_PREFIX`) holds a copy
  * of prod taken before ~2020-05, so roughly 8,500 documents posted after that date point at a key
  * that 404s — the row lists and downloads, the download 404s. Every `s3Key` still exists in the
- * prod bucket `ozwdez` on the same NRS host under the identical key with NO prefix, so the fix is a
- * server-side copy per missing key: `copyObject` moves the bytes inside the object store, and
- * nothing streams through the machine running this.
+ * prod bucket `ozwdez` on the same NRS host under the identical key with NO prefix.
+ *
+ * Two transfer modes. With one credential the copy is server side — `copyObject` moves the bytes
+ * inside the object store and nothing streams through the machine running this. Set
+ * `SOURCE_MINIO_ACCESS_KEY`/`SOURCE_MINIO_SECRET_KEY` (plus `SOURCE_MINIO_HOST`, `_PORT`,
+ * `_USE_SSL` when the source is a different endpoint) and the source bucket is read under that
+ * second credential and streamed into the target instead, for the case the target's credentials
+ * are not authorized on the source bucket.
  *
  *   node src/scripts/backfill-objects.js --probe
  *   node src/scripts/backfill-objects.js --since 2020-01-01 --live
  *     [--source-bucket ozwdez] [--concurrency 4] [--limit N]
  *
- * `--probe` stats one document's key in both buckets with the configured credentials and exits: it
- * answers "can these credentials read prod at all" before a run is worth starting.
+ * `--probe` stats one document's key in both buckets and exits: it answers "can these credentials
+ * read the source at all", and reports which transfer mode a run would use.
  *
  * **DRY RUN BY DEFAULT**, matching the sibling scripts; a dry run counts the gap and writes nothing.
  * Resumable by nature: every key is stat'd in the target before it is copied, so a killed run
@@ -80,20 +85,39 @@ function isNotFound(err) {
     (err.code === 'NotFound' || err.code === 'NoSuchKey' || err.statusCode === 404);
 }
 
-function defaultStorage() {
-  // src/storage/minio.js keeps its client private and pins one bucket; this copy spans two.
-  const client = new Minio.Client({
-    endPoint: config.minioHost,
-    port: config.minioPort,
-    useSSL: config.minioSsl,
-    accessKey: config.minioAccess,
-    secretKey: config.minioSecret,
+function clientFor(host, port, useSSL, accessKey, secretKey) {
+  return new Minio.Client({
+    endPoint: host, port, useSSL, accessKey, secretKey,
     region: config.minioRegion,
     partSize: UPLOAD_PART_SIZE
   });
+}
+
+/** A minio stat reduced to what the upload needs. Response header keys arrive lowercased. */
+function sourceStat(stat) {
+  return { size: stat.size, contentType: stat.metaData && stat.metaData['content-type'] };
+}
+
+function defaultStorage() {
+  // src/storage/minio.js keeps its client private and pins one bucket; this copy spans two.
+  const target = clientFor(config.minioHost, config.minioPort, config.minioSsl,
+    config.minioAccess, config.minioSecret);
+
+  // A second credential is only built when one is configured; without it the copy stays server side.
+  const source = config.sourceMinioAccess
+    ? clientFor(config.sourceMinioHost, config.sourceMinioPort, config.sourceMinioSsl,
+      config.sourceMinioAccess, config.sourceMinioSecret)
+    : null;
+
   return {
-    statObject: (bucket, key) => client.statObject(bucket, key),
-    copyObject: (bucket, key, source) => client.copyObject(bucket, key, source)
+    statObject: (bucket, key) => target.statObject(bucket, key),
+    copyObject: (bucket, key, from) => target.copyObject(bucket, key, from),
+    putObject: (bucket, key, stream, size, meta) =>
+      target.putObject(bucket, key, stream, size, meta),
+    source: source && {
+      statObject: async (bucket, key) => sourceStat(await source.statObject(bucket, key)),
+      getObject: (bucket, key) => source.getObject(bucket, key)
+    }
   };
 }
 
@@ -127,7 +151,7 @@ async function* eachRow(documentsRepo, readRows, access, since) {
 }
 
 function summaryLine(s) {
-  return `[object-backfill] mode=${s.mode} scanned=${s.scanned} noKey=${s.noKey} ` +
+  return `[object-backfill] mode=${s.mode} transfer=${s.transfer} scanned=${s.scanned} noKey=${s.noKey} ` +
     `present=${s.present} planned=${s.planned} copied=${s.copied} ` +
     `missingInSource=${s.missingInSource} failed=${s.failed}`;
 }
@@ -137,21 +161,30 @@ function summaryLine(s) {
  * Source reachable is the answer being sought, so only that decides the exit code.
  */
 async function probeOne(args, storage, documentsRepo, readRows, access, targetBucket) {
-  const summary = { mode: 'probe', failed: 0, key: null, source: 'no document to probe', target: '-' };
+  const summary = {
+    mode: 'probe', transfer: transferMode(storage), failed: 0,
+    key: null, source: 'no document to probe', target: '-'
+  };
 
   for await (const row of eachRow(documentsRepo, readRows, access, args.since)) {
     if (!row.s3Key) continue;
     summary.key = row.s3Key;
-    summary.source = await statOutcome(storage, args.sourceBucket, row.s3Key);
+    // Whichever credential a run would read the source with, so the probe answers for that run.
+    summary.source = await statOutcome(storage.source || storage, args.sourceBucket, row.s3Key);
     summary.target = await statOutcome(storage, targetBucket, resolveObjectKey(row.s3Key));
     break;
   }
 
   summary.failed = summary.source.startsWith('ok') ? 0 : 1;
-  logger.info(`[object-backfill] probe key=${summary.key} ` +
+  logger.info(`[object-backfill] probe key=${summary.key} transfer=${summary.transfer} ` +
     `source=${args.sourceBucket} -> ${summary.source} ` +
     `target=${targetBucket} -> ${summary.target}`);
   return summary;
+}
+
+/** 'stream' when a source credential is configured, otherwise the server-side 'copy'. */
+function transferMode(storage) {
+  return storage.source ? 'stream' : 'copy';
 }
 
 async function statOutcome(storage, bucket, key) {
@@ -184,6 +217,7 @@ async function backfillObjects(argv = [], deps = {}) {
 
   const summary = {
     mode: args.live ? 'live' : 'dry-run',
+    transfer: transferMode(storage),
     scanned: 0, noKey: 0, present: 0, planned: 0, copied: 0, missingInSource: 0, failed: 0,
     failures: []
   };
@@ -212,9 +246,23 @@ async function backfillObjects(argv = [], deps = {}) {
     summary.planned++;
     if (!args.live) return;
 
+    // The source key carries NO prefix: prod's bucket is what the recorded s3Key is relative to.
     try {
-      // The source key carries NO prefix: prod's bucket is what the recorded s3Key is relative to.
-      await storage.copyObject(targetBucket, targetKey, `/${args.sourceBucket}/${row.s3Key}`);
+      if (storage.source) {
+        // Stat first: a sized upload avoids the SDK's unknown-length multipart path.
+        const meta = await storage.source.statObject(args.sourceBucket, row.s3Key);
+        const stream = await storage.source.getObject(args.sourceBucket, row.s3Key);
+        try {
+          await storage.putObject(targetBucket, targetKey, stream, meta.size,
+            { 'Content-Type': meta.contentType || 'application/octet-stream' });
+        } catch (err) {
+          // An abandoned response body holds its source socket open for the rest of the run.
+          if (stream && stream.destroy) stream.destroy();
+          throw err;
+        }
+      } else {
+        await storage.copyObject(targetBucket, targetKey, `/${args.sourceBucket}/${row.s3Key}`);
+      }
       summary.copied++;
     } catch (err) {
       if (isNotFound(err)) summary.missingInSource++;
@@ -237,7 +285,7 @@ function exitCodeFor(summary) {
 }
 
 module.exports = {
-  parseArgs, isNotFound, eachRow, summaryLine, backfillObjects, exitCodeFor
+  parseArgs, isNotFound, sourceStat, eachRow, summaryLine, backfillObjects, exitCodeFor
 };
 
 if (require.main === module) {
