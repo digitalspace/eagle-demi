@@ -78,19 +78,48 @@ describe('AppComponent', () => {
     expect(router.url).toBe('/workspace');
   });
 
-  // Map filters live in memory and are only shown on the map. Carried into Index search they
-  // emptied its results with nothing on screen to explain why.
-  it('clears map filters when a sidebar link is clicked', async () => {
-    const { el } = await renderAs(true, false);
-    const service = TestBed.inject(RegistryStateService);
+  const RING = [[-121, 56], [-120, 56], [-120.5, 56.5]];
+
+  const setAllFilters = (service: RegistryStateService) => {
     service.gatingFilter.set(new Set(['staged']));
     service.sectorFilter.set(new Set(['Mineral Mines']));
+    service.regionFilter.set(new Set(['Cariboo']));
+    service.boundaryFilter.set({ regionalDistrict: new Set(['Cariboo']) });
+    service.lassoPolygon.set(RING);
+    service.lassoLabel.set('Peace Valley');
+  };
 
-    const link = Array.from(el.querySelectorAll<HTMLAnchorElement>('.app-sidebar__link')).find(a => a.textContent?.trim() === 'Index Search');
-    link!.click();
+  // Map filters live in memory and are only shown on the map. Carried into Index Search they
+  // emptied its results with nothing on screen to explain why. Every way off the map — sidebar,
+  // the map's own "Documents" button, browser Back — is a navigation, so the reset lives there.
+  it('clears every map filter when navigating off the map', async () => {
+    await renderAs(true, false);
+    const service = TestBed.inject(RegistryStateService);
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl('/map');
+    setAllFilters(service);
+
+    await router.navigateByUrl('/index');
 
     expect(service.gatingFilter().size).toBe(0);
     expect(service.sectorFilter().size).toBe(0);
+    expect(service.regionFilter().size).toBe(0);
+    expect(service.boundaryFilter()).toEqual({});
+    expect(service.lassoPolygon()).toBeNull();
+    expect(service.lassoLabel()).toBeNull();
+  });
+
+  // My account's "Apply on map" sets the saved lasso and then routes to the map.
+  it('keeps a lasso set before arriving on the map', async () => {
+    await renderAs(true, false);
+    const service = TestBed.inject(RegistryStateService);
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl('/workspace');
+    service.lassoPolygon.set(RING);
+
+    await router.navigateByUrl('/map');
+
+    expect(service.lassoPolygon()).toEqual(RING);
   });
 
   it('keeps the sidebar open when navigating to the map', async () => {

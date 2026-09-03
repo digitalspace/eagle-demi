@@ -31,7 +31,12 @@ export class AppComponent {
     this.service.authReady.then(() => this.authSettled.set(true));
     this.router.events.pipe(takeUntilDestroyed()).subscribe(event => {
       if (!(event instanceof NavigationEnd)) return;
-      this.screenKey.set(this.keyOf(event.urlAfterRedirects));
+      const next = this.keyOf(event.urlAfterRedirects);
+      // Map filters are set on the map and shown only there; on any other screen they silently
+      // empty the lists. Leaving the map is the one moment to drop them — arriving carries a saved
+      // lasso from My account, which must survive.
+      if (this.screenKey() === 'map' && next !== 'map') this.service.clearFilters();
+      this.screenKey.set(next);
       this.accountOpen.set(false);
     });
   }
