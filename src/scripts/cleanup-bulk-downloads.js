@@ -23,7 +23,13 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 // A failed job holds part keys too — the worker leaves what it built so the sweeper can free it.
-const SWEPT_STATUSES = ['ready', 'failed'];
+// A cancelled one is swept because its worker may have died before it could delete its own parts.
+const SWEPT_STATUSES = ['ready', 'failed', 'cancelled'];
+
+// A cancelled job's parts are usually gone already, deleted by the worker that stopped. Both
+// backends call deleting a missing object success; this only guards one that raises instead.
+const isMissing = err =>
+  err && (err.code === 'NoSuchKey' || err.code === 'NotFound' || err.statusCode === 404);
 
 // One page of rows per query. The loop below stops as soon as a page is short or expires nothing,
 // so this only bounds how much a single sweep holds in memory.
@@ -45,7 +51,9 @@ function remainingTtl(job, now) {
 
 /** Mark a job whose parts are already gone. Split out only because `run` counts the deletes. */
 async function markExpired(job, now) {
-  const fields = { status: 'expired', parts: [] };
+  // `cancelled` is terminal and says why the parts went; only a swept ready or failed job becomes
+  // `expired`. Either way `parts` is emptied, because the keys it named no longer exist.
+  const fields = job.status === 'cancelled' ? { parts: [] } : { status: 'expired', parts: [] };
   const ttl = remainingTtl(job, now);
   if (ttl !== null) fields.ttl = ttl;
   await bulkDownloads.patch(job.id, fields);
@@ -75,8 +83,12 @@ async function run() {
       // Per job, so one undeletable object does not park every later job behind it forever.
       try {
         for (const part of job.parts || []) {
-          await storage.removeObject(part.key);
-          objects += 1;
+          try {
+            await storage.removeObject(part.key);
+            objects += 1;
+          } catch (err) {
+            if (!isMissing(err)) throw err;
+          }
         }
         await markExpired(job, now);
         expired += 1;

@@ -57,6 +57,48 @@ test('cleanup-bulk-downloads', async (t) => {
     assert.deepStrictEqual(summary, { jobs: 2, objects: 3, failures: 0 });
   });
 
+  await t.test('a cancelled job keeps its status, and loses the parts it named', async () => {
+    // Its worker deletes them when it stops, so these are the ones a dead instance left behind.
+    const cancelled = row('job-9', {
+      status: 'cancelled',
+      parts: [{ n: 1, key: 'zips/job-9-part1.zip' }, { n: 2, key: 'zips/job-9-part2.zip' }]
+    });
+    const removed = [];
+    const patches = [];
+    let page = 0;
+    t.mock.method(bulkDownloads, 'listExpired', async () => (page++ === 0 ? [cancelled] : []));
+    t.mock.method(storage, 'removeObject', async key => { removed.push(key); });
+    t.mock.method(bulkDownloads, 'patch', async (id, fields) => { patches.push({ id, fields }); });
+
+    const summary = await cleanup.run();
+
+    assert.deepStrictEqual(removed, ['zips/job-9-part1.zip', 'zips/job-9-part2.zip']);
+    assert.strictEqual(patches[0].fields.status, undefined,
+      'cancelled is terminal and says why the parts went; expired would say the timer took them');
+    assert.deepStrictEqual(patches[0].fields.parts, []);
+    assert.ok(patches[0].fields.ttl > 0, 'and the row keeps what is left of its own TTL');
+    assert.deepStrictEqual(summary, { jobs: 1, objects: 2, failures: 0 });
+  });
+
+  await t.test('a part somebody already deleted does not fail the sweep', async () => {
+    const cancelled = row('job-9', { status: 'cancelled' });
+    const patches = [];
+    let page = 0;
+    t.mock.method(bulkDownloads, 'listExpired', async () => (page++ === 0 ? [cancelled] : []));
+    // What a driver that raises on a missing key answers. The usual case for a cancelled job: its
+    // worker deleted the part before it stopped.
+    t.mock.method(storage, 'removeObject', async () => {
+      throw Object.assign(new Error('NoSuchKey'), { code: 'NoSuchKey' });
+    });
+    t.mock.method(bulkDownloads, 'patch', async (id, fields) => { patches.push({ id, fields }); });
+
+    const summary = await cleanup.run();
+
+    assert.deepStrictEqual(summary, { jobs: 1, objects: 0, failures: 0 },
+      'a row parked on a key that is already gone comes back every night forever');
+    assert.deepStrictEqual(patches[0].fields.parts, []);
+  });
+
   await t.test('only a row still running gives its quota slot back', async () => {
     const released = [];
     let page = 0;
@@ -127,9 +169,9 @@ test('cleanup-bulk-downloads', async (t) => {
 
     await cleanup.run();
 
-    assert.deepStrictEqual(seen.statuses, ['ready', 'failed'],
-      'a failed job keeps the parts it built before it died — nothing else deletes them, and a ' +
-      'cancelled one has none left: the worker deleted them when it stopped');
+    assert.deepStrictEqual(seen.statuses, ['ready', 'failed', 'cancelled'],
+      'a failed job keeps the parts it built before it died, and a cancelled one keeps them when ' +
+      'its worker died before it could delete them — nothing else frees either');
     assert.ok(seen.limit > 0, 'an unbounded read of a container that only grows');
   });
 

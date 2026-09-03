@@ -403,9 +403,10 @@ async function dropParts(parts) {
 }
 
 /**
- * Give up on a cancelled job: the parts built so far are storage nobody will ever fetch, and the
- * cleanup sweep only looks at `ready`, `failed` and `running` rows, so this is their only deleter.
- * The row itself is left exactly as the canceller wrote it.
+ * Give up on a cancelled job: the parts built so far are storage nobody will ever fetch. The
+ * cleanup sweep deletes them too, for a job whose worker died before reaching here; deleting now
+ * is what keeps them out of storage for the retention window. The row is left as the canceller
+ * wrote it.
  */
 async function abandon(id, parts) {
   await dropParts(parts);
