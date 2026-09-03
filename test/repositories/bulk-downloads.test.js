@@ -127,10 +127,73 @@ test('bulk download quota', async (t) => {
     assert.strictEqual(condition, 'FROM c WHERE c.inFlight > 0');
   });
 
+  await t.test('the release of one job is claimed by a stamp only one writer can write', async () => {
+    let condition = null;
+    t.mock.method(cosmos, 'patch', async (container, id, pk, operations, cond) => {
+      condition = cond;
+      return {};
+    });
+
+    assert.strictEqual(await bulkDownloads.claimSlotRelease('job-1', '2026-09-03T00:00:00Z'), true);
+
+    // The worker, a cancel and the sweep all write this stamp before they touch the counter, so
+    // the order they arrive in cannot decide it twice.
+    assert.strictEqual(condition, 'FROM c WHERE NOT IS_DEFINED(c.slotReleasedAt)');
+  });
+
+  await t.test('a claim somebody else already made is refused', async () => {
+    t.mock.method(cosmos, 'patch', refuse(412));
+
+    assert.strictEqual(await bulkDownloads.claimSlotRelease('job-1', '2026-09-03T00:00:00Z'), false);
+  });
+
   await t.test('a second release of the same job is a no-op, not an error', async () => {
     t.mock.method(cosmos, 'patch', refuse(412));
 
     assert.strictEqual(await bulkDownloads.releaseSlot('1.2.3.4'), false);
+  });
+});
+
+test('a terminal status write', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('only lands while the row is still in one of the statuses named', async () => {
+    let call = null;
+    t.mock.method(cosmos, 'patch', async (container, id, pk, operations, condition) => {
+      call = { id, pk, operations, condition };
+      return {};
+    });
+
+    assert.strictEqual(
+      await bulkDownloads.patchIfStatus('job-1', { status: 'cancelled' }, ['queued', 'running']),
+      true
+    );
+
+    assert.strictEqual(call.id, 'job-1');
+    assert.strictEqual(call.pk, 'job-1');
+    assert.deepStrictEqual(call.operations, [{ op: 'set', path: '/status', value: 'cancelled' }]);
+    // The condition is the mutual exclusion between the canceller and the worker: without it both
+    // write a terminal status and both give the requester's in-flight slot back.
+    assert.strictEqual(call.condition, "FROM c WHERE c.status IN ('queued', 'running')");
+  });
+
+  await t.test('refuses a status that is not one a job can hold', async () => {
+    const patched = t.mock.method(cosmos, 'patch', async () => ({}));
+
+    await assert.rejects(
+      () => bulkDownloads.patchIfStatus('job-1', { status: 'cancelled' }, ["running' OR true"]),
+      /not a job status/
+    );
+    assert.strictEqual(patched.mock.callCount(), 0, 'the condition is interpolated, so it is checked');
+  });
+
+  await t.test('says so when somebody else already finished the job', async () => {
+    t.mock.method(cosmos, 'patch', refuse(412));
+
+    assert.strictEqual(
+      await bulkDownloads.patchIfStatus('job-1', { status: 'ready' }, ['running']),
+      false
+    );
   });
 });
 
@@ -160,6 +223,9 @@ test('listExpired', async (t) => {
     // A row still 'running' past the cutoff is an instance that died with retries exhausted; the
     // worker never released its slot, so the sweep must see it.
     assert.match(spec.query, /c\.status = 'running' AND c\.startedAt < @cutoff/);
+    // The sweep empties `parts` and a cancelled row keeps its status, so without this the same
+    // rows come back on the next page and the sweep never finishes.
+    assert.match(spec.query, /ARRAY_LENGTH\(c\.parts\) > 0/);
     assert.deepStrictEqual(
       spec.parameters.map(p => p.value),
       ['ready', 'failed', '2026-08-01T00:00:00.000Z']

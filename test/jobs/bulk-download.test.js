@@ -84,6 +84,12 @@ function harness(t, { row, docs, getObjectStream, putObjectStream } = {}) {
     patches.push(JSON.parse(JSON.stringify(fields)));
     return fields;
   });
+  // The terminal status writes are conditional (see the repository): true is "this worker still
+  // owns the row", the ordinary case. A test about cancellation overrides it with false.
+  t.mock.method(bulkDownloads, 'patchIfStatus', async (id, fields) => {
+    patches.push(JSON.parse(JSON.stringify(fields)));
+    return true;
+  });
   // The claim, which is an etag-conditioned replace rather than a patch.
   t.mock.method(cosmos, 'replace', async (container, id, pk, item) => {
     claims.push(item);
@@ -97,6 +103,11 @@ function harness(t, { row, docs, getObjectStream, putObjectStream } = {}) {
   });
   t.mock.method(projects, 'listByIds', async () => [PROJECT]);
   t.mock.method(bulkDownloads, 'releaseSlot', async key => { released.push(key); return true; });
+  // The stamp every releaser competes for. True is "this worker claimed it", the ordinary case.
+  t.mock.method(bulkDownloads, 'claimSlotRelease', async (id, at) => {
+    patches.push({ slotReleasedAt: at });
+    return true;
+  });
   t.mock.method(storage, 'removeObject', async key => { removed.push(key); });
   t.mock.method(storage, 'putObjectStream', putObjectStream ||
     (async (key, stream) => { uploads.set(key, await collect(stream)); return key; }));
@@ -109,9 +120,9 @@ function harness(t, { row, docs, getObjectStream, putObjectStream } = {}) {
   };
 }
 
-const finalPatch = patches => patches[patches.length - 1];
+// The one patch that flips the job's status; the metadata it names is patched separately.
+const statusPatch = patches => patches.find(p => p.status) || {};
 const readyPatch = patches => patches.find(p => p.partCount !== undefined) || {};
-const failedPatch = patches => patches.find(p => p.status === 'failed') || {};
 
 test('the bulk download worker', async (t) => {
   const maxBytes = config.bulkMaxBytes;
@@ -133,7 +144,7 @@ test('the bulk download worker', async (t) => {
 
     await worker.run('job-1');
 
-    assert.strictEqual(finalPatch(patches).status, 'ready');
+    assert.strictEqual(statusPatch(patches).status, 'ready');
     const ready = readyPatch(patches);
     assert.strictEqual(ready.includedCount, 2, 'the zip holds only what the access snapshot still returns');
     assert.strictEqual(ready.errorCount, 1);
@@ -360,15 +371,18 @@ test('the bulk download worker', async (t) => {
     assert.match(zipText('zips/job-1-part3.zip'), /d2\.pdf/);
   });
 
-  await t.test('status is patched last, after the parts it names', async () => {
+  await t.test('status is patched after the parts it names', async () => {
     const docs = [doc('d1')];
     const { patches } = harness(t, { row: job(docs), docs });
 
     await worker.run('job-1');
 
-    assert.strictEqual(finalPatch(patches).status, 'ready');
-    assert.ok(finalPatch(patches).finishedAt);
-    assert.strictEqual(Object.keys(finalPatch(patches)).length, 2,
+    assert.ok(
+      patches.findIndex(p => p.status === 'ready') > patches.findIndex(p => p.partCount !== undefined),
+      'a poll that reads "ready" before the parts land hands out URLs for objects with no keys'
+    );
+    assert.ok(statusPatch(patches).finishedAt);
+    assert.strictEqual(Object.keys(statusPatch(patches)).length, 2,
       'a poll that reads "ready" before the parts land hands out URLs for objects with no keys');
     assert.ok(Object.keys(readyPatch(patches)).length <= 10,
       'Cosmos refuses a patch over PATCH_MAX_OPERATIONS');
@@ -404,6 +418,93 @@ test('the bulk download worker', async (t) => {
 
     assert.strictEqual(readyPatch(patches).label, '',
       'the status route names an unlabelled job generically rather than after an id');
+  });
+
+  await t.test('a job cancelled before the worker dequeued it does no work', async (tt) => {
+    const docs = [doc('d1')];
+    const { patches, uploads, claims, released } =
+      harness(tt, { row: job(docs, { status: 'cancelled' }), docs });
+
+    assert.strictEqual(await worker.run('job-1'), null);
+
+    assert.deepStrictEqual(claims, [], 'a cancelled job is not claimed');
+    assert.deepStrictEqual(patches, [], 'cancelled is terminal — nothing writes over it');
+    assert.strictEqual(uploads.size, 0);
+    assert.deepStrictEqual(released, [], 'whoever cancelled gave the slot back');
+  });
+
+  await t.test('a cancel mid-part stops the build and deletes what it wrote', async (tt) => {
+    // More than the 20 documents between cancellation checks, so the check inside the part fires.
+    const docs = Array.from({ length: 25 }, (_, i) => doc(`d${i}`));
+    const row = job(docs);
+    const { patches, removed, released, zipText } = harness(tt, { row, docs });
+    // The first read is the worker picking the job up; every later one is a cancellation check.
+    let reads = 0;
+    tt.mock.method(bulkDownloads, 'getById',
+      async () => (reads++ === 0 ? row : { ...row, status: 'cancelled' }));
+    const infos = [];
+    tt.mock.method(logger, 'info', message => infos.push(message));
+
+    assert.strictEqual(await worker.run('job-1'), null, 'a cancel is not a failure to retry');
+
+    assert.match(zipText('zips/job-1-part1.zip'), /d19\.pdf/);
+    assert.doesNotMatch(zipText('zips/job-1-part1.zip'), /d20\.pdf/,
+      'the build stops at the check, it does not run the selection out');
+    assert.deepStrictEqual(removed, ['zips/job-1-part1.zip'],
+      'the partial zip is deleted here or nothing ever deletes it — the sweep skips cancelled rows');
+    assert.ok(!patches.some(patch => patch.status), 'the row keeps the status the canceller wrote');
+    assert.deepStrictEqual(patches[patches.length - 1], { parts: [] },
+      'the keys are recorded, then cleared once they are really gone');
+    assert.deepStrictEqual(released, [], 'the canceller released the slot already');
+    assert.ok(infos.includes('[bulk] job cancelled job-1'));
+  });
+
+  await t.test('a part that will not delete stays on the row for the sweep', async (tt) => {
+    const docs = [doc('d1')];
+    const { patches, released } = harness(tt, { row: job(docs), docs });
+    tt.mock.method(bulkDownloads, 'patchIfStatus', async () => false);  // the cancel won the row
+    tt.mock.method(storage, 'removeObject', async () => { throw new Error('object store down'); });
+    tt.mock.method(logger, 'info', () => {});
+    tt.mock.method(logger, 'warn', () => {});
+
+    assert.strictEqual(await worker.run('job-1'), null);
+
+    const parts = patches.filter(patch => patch.parts).map(patch => patch.parts);
+    assert.deepStrictEqual(parts[parts.length - 1].map(part => part.key), ['zips/job-1-part1.zip'],
+      'a key cleared off the row is a key nothing can ever find again');
+    assert.deepStrictEqual(released, []);
+  });
+
+  await t.test('a cancel between parts deletes every part built so far', async (tt) => {
+    config.bulkMaxBytes = 15;
+    const docs = [doc('d1'), doc('d2'), doc('d3')];
+    const row = job(docs);
+    const { patches, removed } = harness(tt, { row, docs });
+    let reads = 0;
+    tt.mock.method(bulkDownloads, 'getById',
+      async () => (reads++ === 0 ? row : { ...row, status: 'cancelled' }));
+    tt.mock.method(logger, 'info', () => {});
+
+    assert.strictEqual(await worker.run('job-1'), null);
+
+    assert.deepStrictEqual(removed, ['zips/job-1-part1.zip'],
+      'a cancel must not wait out a whole part-sized zip before anything notices');
+    assert.ok(!patches.some(patch => patch.status), 'and must not be overwritten by ready');
+  });
+
+  await t.test('a cancel that lands as the last part finishes still wins the row', async (tt) => {
+    const docs = [doc('d1')];
+    const { patches, removed, released } = harness(tt, { row: job(docs), docs });
+    // The conditional patch refuses: the cancel took the row out of `running` first.
+    tt.mock.method(bulkDownloads, 'patchIfStatus', async () => false);
+    tt.mock.method(logger, 'info', () => {});
+
+    assert.strictEqual(await worker.run('job-1'), null, 'the zip is built but nobody wants it');
+
+    assert.ok(!patches.some(patch => patch.status === 'ready'));
+    assert.deepStrictEqual(removed, ['zips/job-1-part1.zip']);
+    assert.deepStrictEqual(released, [],
+      'the cancel released the slot; a second release frees another of this requester\'s jobs');
   });
 
   await t.test('a redelivered ready job is not rebuilt', async () => {
@@ -573,7 +674,7 @@ test('the bulk download worker', async (t) => {
     const started = Date.now();
     await assert.rejects(worker.run('job-1'), /403 from the object store/);
     assert.ok(Date.now() - started < 500, 'an upload nobody watches parks a Function instance for 30 minutes');
-    assert.strictEqual(failedPatch(patches).status, 'failed');
+    assert.strictEqual(statusPatch(patches).status, 'failed');
   });
 
   await t.test('a selection that outgrows the total cap while streaming fails the job', async (tt) => {
@@ -588,7 +689,7 @@ test('the bulk download worker', async (t) => {
     tt.mock.method(logger, 'error', () => {});
 
     await assert.rejects(worker.run('job-1'), /over the size limit/);
-    assert.strictEqual(failedPatch(patches).error, 'over the size limit');
+    assert.strictEqual(statusPatch(patches).error, 'over the size limit');
   });
 
   await t.test('a message with no job row is logged and dropped', async (tt) => {
@@ -614,7 +715,7 @@ test('the bulk download worker', async (t) => {
 
     assert.strictEqual(errors[0].message, '[bulk] job failed job-1: cosmos down',
       'the poison alert matches this string — changing it silently disables the alert');
-    const failed = failedPatch(patches);
+    const failed = statusPatch(patches);
     assert.strictEqual(failed.status, 'failed');
     assert.strictEqual(failed.error, 'cosmos down');
     assert.ok(failed.finishedAt);

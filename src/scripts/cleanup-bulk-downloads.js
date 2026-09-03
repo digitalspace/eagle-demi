@@ -23,7 +23,8 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 // A failed job holds part keys too — the worker leaves what it built so the sweeper can free it.
-const SWEPT_STATUSES = ['ready', 'failed'];
+// A cancelled one is swept because its worker may have died before it could delete its own parts.
+const SWEPT_STATUSES = ['ready', 'failed', 'cancelled'];
 
 // One page of rows per query. The loop below stops as soon as a page is short or expires nothing,
 // so this only bounds how much a single sweep holds in memory.
@@ -45,15 +46,17 @@ function remainingTtl(job, now) {
 
 /** Mark a job whose parts are already gone. Split out only because `run` counts the deletes. */
 async function markExpired(job, now) {
-  const fields = { status: 'expired', parts: [] };
+  // `cancelled` says why the parts went, so only a ready or failed job becomes `expired`.
+  const fields = job.status === 'cancelled' ? { parts: [] } : { status: 'expired', parts: [] };
   const ttl = remainingTtl(job, now);
   if (ttl !== null) fields.ttl = ttl;
   await bulkDownloads.patch(job.id, fields);
 
-  // The worker releases the slot when it finishes and stamps `slotReleasedAt` when it does; only a
-  // row still 'running' with no stamp (instance died, retries exhausted) was never released.
+  // Only a row still 'running' (instance died, retries exhausted) was never released, and the
+  // stamp is the claim: the worker writes the same one, so the counter moves once.
   if (job.status === 'running' && !job.slotReleasedAt &&
-    typeof bulkDownloads.releaseSlot === 'function' && job.requesterKey) {
+    typeof bulkDownloads.releaseSlot === 'function' && job.requesterKey &&
+    await bulkDownloads.claimSlotRelease(job.id, new Date(now).toISOString())) {
     await bulkDownloads.releaseSlot(job.requesterKey);
   }
 }
@@ -75,6 +78,8 @@ async function run() {
       // Per job, so one undeletable object does not park every later job behind it forever.
       try {
         for (const part of job.parts || []) {
+          // A key the worker already deleted is not an error: both backends treat removing a
+          // missing object as success, which is the usual case for a cancelled job.
           await storage.removeObject(part.key);
           objects += 1;
         }

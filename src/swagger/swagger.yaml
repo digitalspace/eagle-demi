@@ -558,7 +558,8 @@ paths:
         Asks for many documents as one download. Exactly ONE id is answered inline with the same
         presigned URL `GET /api/documents/{id}/download` hands out (`single: true`, no job); two or
         more start an asynchronous job — 202 now, poll `GET /api/bulk-downloads/{id}`, download the
-        zip parts from the presigned URLs it returns once the status is `ready`.
+        zip parts from the presigned URLs it returns once the status is `ready`, or stop it with
+        `DELETE /api/bulk-downloads/{id}`.
 
         Ids the caller may not see are dropped by the read ACL, and so are documents with no
         stored file, so `documentCount` is what will actually be zipped and may be lower than the
@@ -609,8 +610,8 @@ paths:
             This requester is at a quota: either the maximum number of jobs in flight, or the
             number of jobs one requester may start in 24 hours. Both are counted per API key, per
             signed-in user, or per client address for anonymous callers. A job gives its in-flight
-            slot back when it is refused, when it finishes, or when it runs out of retries — a
-            failure that will be retried keeps its slot. The daily count only resets 24 hours after
+            slot back when it is refused, when it finishes, when it is cancelled, or when it runs
+            out of retries — a failure that will be retried keeps its slot. The daily count only resets 24 hours after
             the requester's first job of the window.
         '503':
           description: >-
@@ -640,6 +641,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BulkDownloadStatus'
+        '404':
+          description: >-
+            No such job, it belongs to another caller, or the id is not a job id. The three are
+            deliberately indistinguishable.
+    delete:
+      summary: Cancel a bulk download
+      description: >-
+        Stops a job that is still `queued`, `running` or `failed`: the job becomes `cancelled` and
+        the worker deletes the zip parts it had already written. `failed` is included because the
+        queue redelivers such a job and the worker re-runs it. The requester's in-flight slot is
+        given back if the job was still holding it. Idempotent — a job that already reached
+        `ready`, `expired` or `cancelled` is left alone and answered 204 all the same. Same
+        capability rule as the status read: an anonymous job is cancelled by whoever holds its id,
+        an authenticated one only by the caller who made it.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: The job is cancelled, or had already finished. No body.
         '404':
           description: >-
             No such job, it belongs to another caller, or the id is not a job id. The three are
@@ -1775,7 +1800,7 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
-        status: { type: string, enum: [queued, running, ready, failed, expired] }
+        status: { type: string, enum: [queued, running, ready, failed, expired, cancelled] }
         documentCount: { type: integer }
         partCount: { type: integer, description: Zip parts the job actually produced. 0 until the job is ready. }
         partsReady: { type: integer, description: Parts finished so far. }

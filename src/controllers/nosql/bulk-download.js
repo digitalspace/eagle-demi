@@ -214,8 +214,11 @@ exports.createBulkDownload = async (req, res) => {
         error: err.message, stack: err.stack
       });
       // The row would otherwise sit `queued` for its whole TTL with nothing coming to build it.
+      // `slotReleasedAt` because the refusal below gives this job's slot back: a later cancel
+      // reads that stamp to know the counter has already moved.
+      const at = new Date().toISOString();
       await bulkDownloads.patch(id, {
-        status: 'failed', error: 'enqueue failed', finishedAt: new Date().toISOString()
+        status: 'failed', error: 'enqueue failed', finishedAt: at, slotReleasedAt: at
       }).catch(() => {});
       return refuse(503, { error: 'bulk download could not be queued' });
     }
@@ -253,23 +256,30 @@ exports.createBulkDownload = async (req, res) => {
   }
 };
 
+const NOT_FOUND = { error: 'Bulk download not found' };
+
+/**
+ * The job this caller may act on, or null.
+ *
+ * 404, never 403: an id that is not a job id, a job that never existed and a job belonging to
+ * somebody else must not be distinguishable. An anonymous job carries no owner — holding the id is
+ * the whole claim.
+ */
+async function ownJob(req) {
+  const id = String(req.params.id || '');
+  if (!JOB_ID.test(id)) return null;
+
+  const job = await bulkDownloads.getById(id);
+  if (!job) return null;
+
+  return job.requesterId && job.requesterId !== requesterOf(req).id ? null : job;
+}
+
 exports.getBulkDownload = async (req, res) => {
   try {
-    const notFound = { error: 'Bulk download not found' };
-    if (!JOB_ID.test(String(req.params.id || ''))) {
-      return res.status(404).json(notFound);
-    }
-
-    const job = await bulkDownloads.getById(req.params.id);
+    const job = await ownJob(req);
     if (!job) {
-      return res.status(404).json(notFound);
-    }
-
-    // 404, never 403: a job belonging to somebody else must not be distinguishable from one that
-    // does not exist. An anonymous job carries no owner — holding the id is the whole claim.
-    const requester = requesterOf(req);
-    if (job.requesterId && job.requesterId !== requester.id) {
-      return res.status(404).json(notFound);
+      return res.status(404).json(NOT_FOUND);
     }
 
     const parts = Array.isArray(job.parts) ? job.parts : [];
@@ -331,6 +341,42 @@ exports.getBulkDownload = async (req, res) => {
     }
 
     return res.json(body);
+  } catch (err) {
+    return serverError(res, err, 'bulk download controller failed');
+  }
+};
+
+/**
+ * Cancel a job. Idempotent: a job that already reached a terminal status answers 204 unchanged.
+ *
+ * The worker may be building it right now, so both writes below are conditional — the status flip
+ * against the row's status, the release against the `slotReleasedAt` stamp every releaser claims.
+ * `failed` is live here: the queue redelivers one and the worker re-runs it on purpose.
+ * Wiki [[Bulk-Download]] §Cancelling.
+ */
+exports.cancelBulkDownload = async (req, res) => {
+  try {
+    const job = await ownJob(req);
+    if (!job) {
+      return res.status(404).json(NOT_FOUND);
+    }
+
+    const cancelled = await bulkDownloads.patchIfStatus(
+      job.id,
+      { status: 'cancelled', finishedAt: new Date().toISOString() },
+      ['queued', 'running', 'failed']
+    );
+
+    if (cancelled) {
+      // Never off the row read above: the worker may have released between that read and this.
+      if (job.requesterKey &&
+        await bulkDownloads.claimSlotRelease(job.id, new Date().toISOString())) {
+        await bulkDownloads.releaseSlot(job.requesterKey);
+      }
+      analyticsEvent(req, { eventName: 'bulk.cancel', resultCount: job.documentCount || 0 });
+    }
+
+    return res.status(204).send('');
   } catch (err) {
     return serverError(res, err, 'bulk download controller failed');
   }

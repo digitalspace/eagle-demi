@@ -40,6 +40,9 @@ const DOCUMENT_FIELDS = 'c.id, c.projectId, c.displayName, c.documentFileName, c
 // The row keeps a readable sample; `errors.txt` in the zip keeps all of them.
 const MAX_STORED_ERRORS = 100;
 
+// Documents between cancellation checks: one point read buys a stop within a few files.
+const CANCEL_CHECK_EVERY = 20;
+
 // Folder + name has to clear the 255-character path limit Windows Explorer still enforces when it
 // extracts, with room for the drive and the extract directory the caller chose.
 const MAX_NAME_LENGTH = 150;
@@ -147,6 +150,12 @@ function knownSize(doc) {
   return Number.isFinite(size) && size > 0 ? size : 0;
 }
 
+/** Has the caller cancelled since this job started? A point read on the job's own partition. */
+async function isCancelled(jobId) {
+  const row = await bulkDownloads.getById(jobId);
+  return Boolean(row) && row.status === 'cancelled';
+}
+
 /**
  * Build one part: start the upload, then stream documents into it until it is full.
  *
@@ -155,7 +164,8 @@ function knownSize(doc) {
  *
  * Where the part ENDS is decided here, against the bytes the archive has actually written, because
  * a recorded `fileSize` is missing on plenty of documents and a plan made from those sizes packs
- * the wrong files. Returns the index it stopped at, so the caller opens the next part there.
+ * the wrong files. Returns the index it stopped at, so the caller opens the next part there, and
+ * whether a cancel is what stopped it.
  *
  * ponytail: one object streams at a time, so a part takes as long as its files do in series. Swap
  * for a small append pool (3-4) if wall time is ever the complaint — memory is the reason it is
@@ -180,9 +190,17 @@ async function buildPart({ jobId, n, docs, from, projectNames, access, errors, m
 
   const taken = new Set();
   let included = 0;
+  let cancelled = false;
   let i = from;
 
   for (; i < docs.length; i += 1) {
+    // Falls through to `finish()`: the upload is consuming this archive, and abandoning it
+    // unfinished would leave a multipart stream nobody ends.
+    if (i > from && (i - from) % CANCEL_CHECK_EVERY === 0 && await isCancelled(jobId)) {
+      cancelled = true;
+      break;
+    }
+
     const doc = docs[i];
     // Roll BEFORE appending, never after: a part already at the cap must not take one more file.
     // Both clauses matter — the first closes a part filled by documents nobody recorded a size for,
@@ -230,7 +248,8 @@ async function buildPart({ jobId, n, docs, from, projectNames, access, errors, m
 
   return {
     part: { n, key, bytes: archive.getBytesWritten(), count: included },
-    next: i
+    next: i,
+    cancelled
   };
 }
 
@@ -328,33 +347,35 @@ async function claim(job, now) {
 }
 
 /**
- * Give this job's quota slot back, ONCE for its whole life.
- *
- * The counter is per requester, not per job, so a second release frees a slot one of that
- * requester's other jobs is holding — which is how a retried message hands out extra capacity.
- * `slotReleasedAt` on the row is what a redelivery (and the cleanup sweep) reads to know it is
- * already done. Best effort in both directions: the counter is the controller's and may not exist.
+ * Give this job's quota slot back, ONCE for its whole life — the counter is per requester, so a
+ * second release frees a slot one of that requester's other jobs is holding.
  */
 async function releaseSlot(job) {
   if (typeof bulkDownloads.releaseSlot !== 'function' || !job || !job.requesterKey) return;
   if (job.slotReleasedAt) return;
   try {
+    const at = new Date().toISOString();
+    // The stamp is the claim, and a cancel writes the same one: whoever lands it decrements.
+    if (!(await bulkDownloads.claimSlotRelease(job.id, at))) return;
+    job.slotReleasedAt = at;
     await bulkDownloads.releaseSlot(job.requesterKey);
-    // Stamped only once the counter really moved: a release that threw has not happened, and the
-    // sweep still has to find that slot.
-    job.slotReleasedAt = new Date().toISOString();
-    await bulkDownloads.patch(job.id, { slotReleasedAt: job.slotReleasedAt });
   } catch (err) {
     logger.warn(`[bulk] could not release slot for ${job.id}`, { error: err.message });
   }
 }
 
-/** A patch that must not become the reason the job fails. */
-async function patchQuietly(id, fields, what) {
+/**
+ * Flip the job to a terminal status, without ever becoming the reason the job fails.
+ *
+ * @returns {Promise<boolean>} false: a cancel finished this job first, so the row and its slot
+ *   are the canceller's.
+ */
+async function markTerminal(id, fields, statuses, what) {
   try {
-    await bulkDownloads.patch(id, fields);
+    return await bulkDownloads.patchIfStatus(id, fields, statuses);
   } catch (err) {
     logger.error(`[bulk] could not mark ${id} ${what}`, { error: err.message });
+    return false;
   }
 }
 
@@ -362,14 +383,28 @@ async function patchQuietly(id, fields, what) {
  * A re-run writes the same part keys, so whatever the last attempt uploaded is reachable only
  * through the row we are about to overwrite. Delete it first or it is storage nobody ever frees.
  */
-async function dropExistingParts(job) {
-  for (const part of job.parts || []) {
+async function dropParts(parts) {
+  const left = [];
+  for (const part of parts || []) {
     try {
       await storage.removeObject(part.key);
     } catch (err) {
-      logger.warn(`[bulk] could not drop stale part ${part.key}`, { error: err.message });
+      left.push(part);
+      logger.warn(`[bulk] could not drop part ${part.key}`, { error: err.message });
     }
   }
+  return left;
+}
+
+/**
+ * Give up on a cancelled job: delete the parts built so far, leaving on the row whatever would not
+ * delete — that is all the cleanup sweep has to find it by. Wiki [[Bulk-Download]] §Cancelling.
+ */
+async function abandon(id, parts) {
+  await bulkDownloads.patch(id, { parts });
+  await bulkDownloads.patch(id, { parts: await dropParts(parts) });
+  logger.info(`[bulk] job cancelled ${id}`);
+  return null;
 }
 
 /**
@@ -390,6 +425,11 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     return null;
   }
   if (job.status === 'ready') return job;
+  // Cancelled before this message was ever dequeued: whoever cancelled released the slot.
+  if (job.status === 'cancelled') {
+    logger.info(`[bulk] job cancelled ${id}`);
+    return null;
+  }
 
   const now = Date.now();
   const age = now - Date.parse(job.createdAt || '');
@@ -397,10 +437,10 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
   // on, and its access snapshot is that stale too. Not rethrown: a retry would only be older.
   if (config.bulkMaxJobAgeMs && Number.isFinite(age) && age > config.bulkMaxJobAgeMs) {
     logger.warn(`[bulk] job expired before run ${id}`);
-    await patchQuietly(id, {
+    const expired = await markTerminal(id, {
       status: 'failed', error: 'expired before run', finishedAt: new Date(now).toISOString()
-    }, 'expired');
-    await releaseSlot(job);
+    }, ['queued', 'running', 'failed'], 'expired');
+    if (expired) await releaseSlot(job);
     return null;
   }
 
@@ -416,7 +456,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
   }
 
   try {
-    await dropExistingParts(job);
+    await dropParts(job.parts);
 
     const access = await freshAccess(job, now);
     const errors = [];
@@ -430,7 +470,7 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     // The second clause: everything went away between submit and now, so ship one part anyway —
     // it carries errors.txt, which is the only thing left to tell the caller.
     while (from < docs.length || (done.length === 0 && errors.length > 0)) {
-      const { part, next } = await buildPart({
+      const { part, next, cancelled } = await buildPart({
         jobId: id,
         n: done.length + 1,
         docs,
@@ -442,16 +482,15 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
         partMaxBytes: config.bulkMaxBytes
       });
       done.push(part);
+      if (cancelled) return abandon(id, done);
       bytes += part.bytes;
       includedCount += part.count;
       from = next;
       // Patched per part so a poll reports progress rather than silence.
       await bulkDownloads.patch(id, { parts: done });
+      // Between parts too: a cancel here would otherwise wait out a whole part.
+      if (await isCancelled(id)) return abandon(id, done);
     }
-
-    // Before the row says `ready`: the build is over, so the slot is not this job's any more, and
-    // releasing here keeps the status the LAST thing a poll can see change.
-    await releaseSlot(job);
 
     // Two patches because Cosmos caps one at PATCH_MAX_OPERATIONS, and in this order because the
     // status is what a poll acts on: `ready` must never be visible before the parts it names.
@@ -465,7 +504,14 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
       errors: errors.slice(0, MAX_STORED_ERRORS),
       ttl: config.bulkJobTtlDays * SECONDS_PER_DAY
     });
-    await bulkDownloads.patch(id, { status: 'ready', finishedAt: new Date().toISOString() });
+    // Conditional: a cancel that won this race owns the row, and its parts are ours to delete.
+    const marked = await bulkDownloads.patchIfStatus(
+      id, { status: 'ready', finishedAt: new Date().toISOString() }, ['running']
+    );
+    if (!marked) return abandon(id, done);
+
+    // Only now the row really says `ready`, so the slot is not this job's any more.
+    await releaseSlot(job);
 
     // No telemetry call: auditEvent and analyticsEvent both take a request, and there is no request
     // here — src/utils/audit.js has no request-less variant to use.
@@ -486,12 +532,13 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
       { error: err.message, stack: err.stack }
     );
     // `parts` is deliberately not cleared: the keys built so far are what the sweeper deletes.
-    await patchQuietly(id, {
+    const marked = await markTerminal(id, {
       status: 'failed', error: err.message, finishedAt: new Date().toISOString()
-    }, 'failed');
+    }, ['running'], 'failed');
     // Only the delivery that runs out of retries: an intermediate failure still has an attempt
     // coming, and a slot given back now is one this requester's other jobs are still holding.
-    if (final) await releaseSlot(job);
+    // `marked` false means a cancel finished the job first and released the slot with it.
+    if (final && marked) await releaseSlot(job);
     // Rethrown so the queue retries and then poisons; the retry re-runs a failed job on purpose.
     throw err;
   }
