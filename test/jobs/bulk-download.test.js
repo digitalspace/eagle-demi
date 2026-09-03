@@ -185,9 +185,13 @@ test('the bulk download worker', async (t) => {
         return Readable.from([`bytes of ${key}`]);
       }
     });
+    const warnings = [];
+    tt.mock.method(logger, 'warn', (message, meta) => warnings.push(meta));
 
     await worker.run('job-1');
 
+    assert.match(warnings[0].error, /NoSuchKey/,
+      'the failure logged is the object store\'s, not a TypeError from packing a stream that never opened');
     assert.deepStrictEqual(readyPatch(patches).errors,
       [{ documentId: 'd2', name: 'd2.pdf', reason: 'unavailable' }],
       'a failed open is still that one document\'s error, not the part\'s');
@@ -196,6 +200,74 @@ test('the bulk download worker', async (t) => {
     const packed = ['d0', 'd1', 'd3', 'd4', 'd5'].map(id => text.indexOf(`${id}.pdf`));
     assert.ok(packed.every(at => at >= 0), 'the documents after the failure still have to be zipped');
     assert.deepStrictEqual(packed, [...packed].sort((a, b) => a - b));
+  });
+
+  await t.test('a stream that resets while it waits its turn is that document\'s failure, not a crash', async (tt) => {
+    config.bulkFetchAhead = 3;
+    const docs = [doc('d0'), doc('d1'), doc('d2')];
+    const { patches, uploads, zipText } = harness(tt, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => {
+        // d0 is slow to pack, so d1 is still parked in the window when its socket resets — the
+        // gap the read-ahead opened. Nothing is subscribed to a parked stream but the window
+        // itself, so an unhandled 'error' here is an uncaught exception, not a failed document.
+        if (key === 'etl/d0.pdf') {
+          const slow = new PassThrough();
+          slow.write('bytes of etl/d0.pdf');
+          setTimeout(() => slow.end(), 40);
+          return slow;
+        }
+        if (key === 'etl/d1.pdf') {
+          const resets = new PassThrough();
+          setTimeout(() => resets.emit('error', new Error('ECONNRESET while queued')), 5);
+          return resets;
+        }
+        return Readable.from([`bytes of ${key}`]);
+      }
+    });
+    tt.mock.method(logger, 'warn', () => {});
+
+    await worker.run('job-1');
+
+    assert.deepStrictEqual(readyPatch(patches).errors,
+      [{ documentId: 'd1', name: 'd1.pdf', reason: 'unavailable' }]);
+    assert.strictEqual(readyPatch(patches).includedCount, 2, 'the part carries on past it');
+    const text = zipText([...uploads.keys()][0]);
+    assert.match(text, /bytes of etl\/d0\.pdf/);
+    assert.match(text, /bytes of etl\/d2\.pdf/);
+  });
+
+  await t.test('an open that fails for a document the part never reaches is still handled', async (tt) => {
+    config.bulkFetchAhead = 3;
+    config.bulkMaxBytes = 15;  // one document per part, so every part abandons what it opened ahead
+    const docs = [doc('d0'), doc('d1'), doc('d2'), doc('d3')];
+    const { patches } = harness(tt, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => {
+        if (key === 'etl/d2.pdf') throw new Error('S3 NoSuchKey ozwdez/etl/d2.pdf');
+        return Readable.from([`bytes of ${key}`]);
+      }
+    });
+    tt.mock.method(logger, 'warn', () => {});
+    // An open whose promise is dropped unread has to have resolved, not rejected: an abandoned
+    // rejection is only ever reported process-wide, long after the job it belonged to.
+    const unhandled = [];
+    const record = reason => unhandled.push(reason);
+    process.on('unhandledRejection', record);
+
+    try {
+      await worker.run('job-1');
+      await new Promise(resolve => setImmediate(resolve));  // rejections are reported a tick late
+    } finally {
+      process.off('unhandledRejection', record);
+    }
+
+    assert.deepStrictEqual(unhandled.map(e => e && e.message), []);
+    assert.deepStrictEqual(readyPatch(patches).errors,
+      [{ documentId: 'd2', name: 'd2.pdf', reason: 'unavailable' }],
+      'and the document is still reported when a part finally reaches it');
   });
 
   await t.test('a cancel mid-part destroys the objects opened ahead of it', async (tt) => {
@@ -758,12 +830,19 @@ test('the bulk download worker', async (t) => {
   });
 
   await t.test('a rejected upload fails the part instead of hanging on it', async (tt) => {
-    const docs = [doc('d1')];
+    config.bulkFetchAhead = 3;
+    // More than one document, so the window is holding opens when the upload dies: the outage that
+    // fails the upload is the outage that makes those opens slow, and waiting them out is the hang.
+    const docs = [doc('d1'), doc('d2'), doc('d3'), doc('d4')];
     const { patches } = harness(tt, {
       row: job(docs),
       docs,
-      // Never ends, so the entry await only settles if the upload rejection reaches it.
-      getObjectStream: async () => new PassThrough(),
+      getObjectStream: async key => {
+        // Never ends, so the entry await only settles if the upload rejection reaches it.
+        if (key === 'etl/d1.pdf') return new PassThrough();
+        await new Promise(resolve => setTimeout(resolve, 2000).unref());
+        return new PassThrough();
+      },
       putObjectStream: async () => { throw new Error('403 from the object store'); }
     });
     tt.mock.method(logger, 'error', () => {});

@@ -117,42 +117,37 @@ buffer per 2048 MB instance.
 
 ## Ranked causes
 
-### 1. Sequential per-document fetch — no concurrency (dominant)
+### 1. Sequential per-document fetch — no concurrency (dominant) — FIXED
 
-**Evidence**: `src/jobs/pack-parts.js` and `bulk-download.js` `buildPart()`
-`await`s `getObjectStream` → `addEntry` → archive write for one document
-before starting the next (the `ponytail:` comment on `buildPart` names this
-choice explicitly: "one object streams at a time... swap for a small append
-pool (3-4) if wall time is ever the complaint"). Measured ms/doc (1,088 and
-1,811 for the two clean 10-doc jobs) times out linearly with document count,
-with no sign of overlap.
+**Evidence**, as measured 2026-09-03 and before the fix below: `buildPart()`
+in `src/jobs/bulk-download.js` awaited `getObjectStream` → `addEntry` →
+archive write for one document before starting the next. Measured ms/doc
+(1,088 and 1,811 for the two clean 10-doc jobs) rose linearly with document
+count, with no sign of overlap.
 
 **Estimated share of wall time**: the large majority, for any job with real
-(non-missing) documents — this is the only step in the loop that scales with
-document count rather than being a fixed per-job cost.
+(non-missing) documents — the only step in the loop that scales with document
+count rather than being a fixed per-job cost.
 
-**Fix**: a small concurrent-fetch pool (3--4) that downloads ahead while the
-archive still appends entries sequentially (zip entry order, and therefore
-`archiver`'s single-writer constraint, doesn't require the *fetch* to be
-serial too — only the append). Cost: moderate diff inside `buildPart`; more
-sockets and buffered bytes in flight per instance, which interacts with #4
-below (the 64 MiB part-size budget assumed one object at a time). Risk: OOM
-on the 2048 MB instance if pool size and part size aren't re-balanced
-together; needs a load test on a job built from several ≥10 MB documents,
-not the mostly-small/mostly-missing documents in the current test corpus.
+**Fix, applied**: a bounded read-ahead inside `buildPart` — see "Changes
+applied" below. Zip entry order, and therefore `zip-stream`'s single-writer
+constraint, binds the *append* only, so the fetch overlaps it. The read-ahead
+holds object streams to read from, not upload buffers, so the part-size
+budget in #4 is unchanged. Still untested against a job built from several
+≥10 MB documents: the test corpus is mostly small and mostly missing.
 
-**Measure after**: ms/doc for a matched-size job, before/after.
+**Measure after**: ms/doc for a matched-size job, against the numbers above.
 
 ### 2. Per-object round-trip / connect latency to NRS
 
 **Evidence**: manual sample shows 126 ms connect / 233 ms TTFB on a cold
-connection, 14 ms / 173 ms on a reused one. Because fetches are serial (#1),
-this latency is paid once per document rather than amortized — on the 47-doc
-job, even 150--200 ms of unavoidable round-trip per file adds up to 7--9 s of
-the 24 s total.
+connection, 14 ms / 173 ms on a reused one. Fetches were serial (#1) when
+those numbers were taken, so this latency was paid once per document rather
+than amortized — on the 47-doc job, even 150--200 ms of unavoidable
+round-trip per file adds up to 7--9 s of the 24 s total.
 
-**Estimated share**: bundled with #1 — same fix (concurrency) amortizes it,
-since overlapping requests overlap their round trips too. Not separable with
+**Estimated share**: bundled with #1 — the same fix amortizes it, since
+overlapping requests overlap their round trips too. Not separable with
 current instrumentation (no `AppDependencies` rows for NRS calls).
 
 **Fix**: same as #1. A secondary, smaller fix — confirm the MinIO client
@@ -199,15 +194,15 @@ numbers (largest single document 1.17 GiB, most projects average low
 single-digit MB/doc) are almost always under 64 MiB, so this never even
 triggers a second part for a typical file.
 
-**Estimated share**: ~0% of current wall time. Only matters for documents
-over 64 MiB (rare) and becomes a real constraint the moment concurrency
-(#1) is added, since N concurrent uploads each want their own buffer.
+**Estimated share**: ~0% of wall time. Only matters for documents over
+64 MiB, which are rare.
 
-**Fix**: no change needed today. If #1 ships, re-size jointly: e.g. drop to
-16--32 MiB parts to afford 3--4 concurrent buffers in the same 2048 MB
-budget, or raise `instanceMemoryMB`. Risk: silently reducing this without
-checking the concurrency math reintroduces the exact OOM risk the original
-64 MiB choice was sized to avoid.
+**Fix**: none. The read-ahead in #1 does not touch this budget: it opens
+object streams to read from, while the archive still feeds one multipart
+upload per part, so there is still one 64 MiB buffer per instance. Re-sizing
+becomes necessary only if several parts are ever uploaded at once — and
+reducing the part size without redoing that arithmetic reintroduces the exact
+OOM risk the 64 MiB choice was sized to avoid.
 
 ### 5. zip-stream overhead
 
@@ -248,15 +243,16 @@ the next step, not a code change here.
 
 ## Recommendation
 
-Fix #1 first (sequential fetch): it is the only cause that scales with
-document count and explains the entire linear ms/doc pattern in the logs.
-Do it together with a re-check of #4 (part size vs. concurrent buffers) so
-the fix doesn't trade wall time for OOM risk. Get a real number for #3
-(cold start) before spending on `alwaysReady` — right now it's a plausible
-but unmeasured cost, and the instrumentation gap (job id not correlatable
-from POST to Executing, `Warning`-level host logging) should be closed
-first so the fix can be justified and later verified. #2, #5, #6, #7 need no
-code change based on what's measured here.
+#1 (sequential fetch) is applied — it was the only cause that scales with
+document count and it explains the entire linear ms/doc pattern above. It
+needs remeasuring against those numbers; how, and against what, is in
+"Changes applied". #4 (part size) needed no change with it.
+
+#3 (cold start) still needs a real number before anything is spent on
+`alwaysReady`. Half of the instrumentation gap is closed — the POST now logs
+the job id, so submit-to-`Executing` is joinable — but `Warning`-level host
+logging still hides scale-out events. #2, #5, #6 and #7 need no code change
+based on what is measured here.
 
 ## Changes applied
 
@@ -266,9 +262,9 @@ Against cause #1, in `src/jobs/bulk-download.js`:
   (`config.bulkFetchAhead`, default 3) objects ahead of the entry it is
   appending, so the next documents' round trips overlap the current append.
   The append itself stays serial, so zip entry order is unchanged. A failed
-  open is still that one document's error; opens the part never reaches — a
-  part that rolled, a cancel, a fatal error — are destroyed rather than left
-  as open sockets. Part size (#4) is untouched: the archive still holds one
+  open is still that one document's error, including a stream whose socket
+  resets while it waits its turn; opens the part never reaches — a part that
+  rolled, a cancel, a fatal error — are destroyed without waiting on them. Part size (#4) is untouched: the archive still holds one
   multipart upload buffer, and the read-ahead adds object streams, not
   upload buffers.
 - **`POST /api/bulk-downloads` logs `[bulk] job queued job=<id>`.** The access

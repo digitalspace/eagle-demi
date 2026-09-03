@@ -144,14 +144,27 @@ function readAhead(docs, ahead) {
   const limit = Math.max(1, ahead);
   const pending = new Map();
 
-  // Never rejects: a failed open is that document's error when its turn comes, so it must not
-  // become an unhandled rejection while it waits for one.
-  const open = async i => {
-    try {
-      return { stream: await storage.getObjectStream(docs[i].s3Key) };
-    } catch (err) {
-      return { err };
-    }
+  /**
+   * One document's open. It resolves either way and carries its own error, because a document that
+   * failed is that document's error when its turn comes — never an unhandled rejection, and never
+   * an unhandled 'error' event on a stream sitting in the window, which is an uncaught exception
+   * that takes the worker down mid-job. The listener goes on the moment the stream exists and
+   * stays on: `shielded` adds its own later, and both firing is harmless.
+   */
+  const open = i => {
+    const entry = { stream: null, error: null, dropped: false };
+    entry.opened = (async () => {
+      try {
+        const stream = await storage.getObjectStream(docs[i].s3Key);
+        stream.on('error', err => { entry.error = entry.error || err; });
+        if (entry.dropped) stream.destroy();
+        else entry.stream = stream;
+      } catch (err) {
+        entry.error = err;
+      }
+      return entry;
+    })();
+    return entry;
   };
 
   return {
@@ -163,20 +176,21 @@ function readAhead(docs, ahead) {
     },
     take(i) {
       if (!pending.has(i)) pending.set(i, open(i));
-      const opened = pending.get(i);
+      const entry = pending.get(i);
       pending.delete(i);
-      return opened;
+      return entry.opened;
     },
     /**
      * Everything opened that this part never reached: a part that rolled, a cancel, a fatal error.
-     * Awaited, so a socket is closed rather than left to whatever the process does next.
+     * Synchronous on purpose — a dead upload must not wait out an open the object store can sit on
+     * for minutes — so a stream still arriving is closed by `open` when it lands instead.
      */
-    async destroy() {
-      const left = Array.from(pending.values());
+    destroy() {
+      for (const entry of pending.values()) {
+        entry.dropped = true;
+        if (entry.stream) entry.stream.destroy();
+      }
       pending.clear();
-      await Promise.all(left.map(opened => opened.then(({ stream }) => {
-        if (stream) stream.destroy();
-      })));
     }
   };
 }
@@ -264,13 +278,13 @@ async function buildPart({ jobId, n, docs, from, projectNames, access, errors, m
       let truncated = null;
 
       try {
-        const { stream, err } = await orDie(opened);
+        const entry = await orDie(opened);
         // Only once this one has settled: refilling before it would hold one more socket open
         // than the window allows.
         ahead.fill(i + 1);
-        if (err) throw err;
+        if (entry.error) throw entry.error;
         await orDie(addEntry(
-          archive, shielded(stream, e => { truncated = e; }), `${folder}/${name}`
+          archive, shielded(entry.stream, e => { truncated = e; }), `${folder}/${name}`
         ));
       } catch (err) {
         if (fatal) throw fatal;
@@ -293,7 +307,7 @@ async function buildPart({ jobId, n, docs, from, projectNames, access, errors, m
       if (archive.getBytesWritten() > maxBytes) throw new Error('over the size limit');
     }
   } finally {
-    await ahead.destroy();
+    ahead.destroy();
   }
 
   // errors.txt rides in the last part, which is the one that ran out of documents rather than room.
