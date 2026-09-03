@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { MapExplorerComponent } from './map-explorer.component';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { UserdataService, SavedLasso } from '../../services/userdata.service';
@@ -81,6 +81,16 @@ describe('MapExplorerComponent wildfire panel', () => {
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('Test Project');
     expect(text).not.toContain('Nearby fires');
+  });
+
+  it('hands the project name to Index Search through ?q=', () => {
+    const router = TestBed.inject(Router);
+    const navigate = spyOn(router, 'navigate').and.resolveTo(true);
+
+    fixture.componentInstance.viewProjectDocuments(project());
+
+    expect(navigate).toHaveBeenCalledWith(['/index'], { queryParams: { q: 'Test Project' } });
+    expect(service.searchQuery()).toBe('');
   });
 });
 
