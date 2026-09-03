@@ -78,6 +78,21 @@ describe('AppComponent', () => {
     expect(router.url).toBe('/workspace');
   });
 
+  // Map filters live in memory and are only shown on the map. Carried into Index search they
+  // emptied its results with nothing on screen to explain why.
+  it('clears map filters when a sidebar link is clicked', async () => {
+    const { el } = await renderAs(true, false);
+    const service = TestBed.inject(RegistryStateService);
+    service.gatingFilter.set(new Set(['staged']));
+    service.sectorFilter.set(new Set(['Mineral Mines']));
+
+    const link = Array.from(el.querySelectorAll<HTMLAnchorElement>('.app-sidebar__link')).find(a => a.textContent?.trim() === 'Index Search');
+    link!.click();
+
+    expect(service.gatingFilter().size).toBe(0);
+    expect(service.sectorFilter().size).toBe(0);
+  });
+
   it('keeps the sidebar open when navigating to the map', async () => {
     const { el, fixture } = await renderAs(true, false);
     await TestBed.inject(Router).navigateByUrl('/map');
