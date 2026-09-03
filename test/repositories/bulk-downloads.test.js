@@ -134,6 +134,39 @@ test('bulk download quota', async (t) => {
   });
 });
 
+test('a terminal status write', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('only lands while the row is still in one of the statuses named', async () => {
+    let call = null;
+    t.mock.method(cosmos, 'patch', async (container, id, pk, operations, condition) => {
+      call = { id, pk, operations, condition };
+      return {};
+    });
+
+    assert.strictEqual(
+      await bulkDownloads.patchIfStatus('job-1', { status: 'cancelled' }, ['queued', 'running']),
+      true
+    );
+
+    assert.strictEqual(call.id, 'job-1');
+    assert.strictEqual(call.pk, 'job-1');
+    assert.deepStrictEqual(call.operations, [{ op: 'set', path: '/status', value: 'cancelled' }]);
+    // The condition is the mutual exclusion between the canceller and the worker: without it both
+    // write a terminal status and both give the requester's in-flight slot back.
+    assert.strictEqual(call.condition, "FROM c WHERE c.status IN ('queued', 'running')");
+  });
+
+  await t.test('says so when somebody else already finished the job', async () => {
+    t.mock.method(cosmos, 'patch', refuse(412));
+
+    assert.strictEqual(
+      await bulkDownloads.patchIfStatus('job-1', { status: 'ready' }, ['running']),
+      false
+    );
+  });
+});
+
 test('listExpired', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 

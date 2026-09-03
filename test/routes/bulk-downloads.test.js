@@ -369,6 +369,132 @@ test('POST /bulk-downloads', async (t) => {
   });
 });
 
+test('DELETE /bulk-downloads/:id', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  /**
+   * Cancel through the REAL repository, with only Cosmos stubbed: the condition the patch carries
+   * is the whole mechanism, and a cancel that dropped it would answer 204 either way.
+   */
+  function cancelling(t2, row, { refused = false } = {}) {
+    const patches = [];
+    t2.mock.method(bulkDownloads, 'getById', async () => row);
+    t2.mock.method(cosmos, 'patch', async (container, id, pk, operations, condition) => {
+      patches.push({ id, operations, condition });
+      if (refused) throw Object.assign(new Error('precondition'), { code: 412 });
+      return {};
+    });
+    const released = t2.mock.method(bulkDownloads, 'releaseSlot', async () => true);
+    return { patches, released };
+  }
+
+  const queued = (extra = {}) => ({
+    id: JOB, status: 'queued', requesterId: '', requesterKey: '198.51.100.7', documentCount: 4, ...extra
+  });
+
+  await t.test('a queued job is cancelled and its slot given back once', async (t2) => {
+    const { patches, released } = cancelling(t2, queued());
+
+    const response = res();
+    const { analytics } = await eventsFrom(
+      () => controller.cancelBulkDownload({ ...ANON, params: { id: JOB } }, response)
+    );
+
+    assert.strictEqual(response.statusCode, 204);
+    assert.strictEqual(response.body, '', 'a 204 carries no body');
+    assert.strictEqual(patches.length, 1);
+    assert.strictEqual(patches[0].id, JOB);
+    assert.deepStrictEqual(patches[0].operations.find(op => op.path === '/status'),
+      { op: 'set', path: '/status', value: 'cancelled' });
+    assert.ok(patches[0].operations.some(op => op.path === '/finishedAt'));
+    // Without the condition the cancel would overwrite a job the worker had just finished, and
+    // free a slot that job had already given back.
+    assert.match(patches[0].condition, /c\.status IN \('queued', 'running'\)/);
+    assert.deepStrictEqual(released.mock.calls.map(call => call.arguments[0]), ['198.51.100.7']);
+    assert.deepStrictEqual(analytics.map(row => row.EventName), ['bulk.cancel']);
+    assert.strictEqual(analytics[0].ResultCount, 4);
+  });
+
+  await t.test('a running job is cancelled the same way', async (t2) => {
+    const { patches, released } = cancelling(t2, queued({ status: 'running' }));
+
+    const response = res();
+    await eventsFrom(() => controller.cancelBulkDownload({ ...ANON, params: { id: JOB } }, response));
+
+    assert.strictEqual(response.statusCode, 204);
+    assert.strictEqual(patches.length, 1);
+    assert.strictEqual(released.mock.callCount(), 1);
+  });
+
+  await t.test('a job that already finished is 204 and untouched', async (t2) => {
+    // 412 is Cosmos refusing the condition, which is how a terminal row says "not yours to end".
+    const { released } = cancelling(t2, queued({ status: 'ready' }), { refused: true });
+
+    const response = res();
+    const { analytics } = await eventsFrom(
+      () => controller.cancelBulkDownload({ ...ANON, params: { id: JOB } }, response)
+    );
+
+    assert.strictEqual(response.statusCode, 204, 'cancelling twice is not an error');
+    assert.strictEqual(released.mock.callCount(), 0,
+      'the slot went back when the job finished; a second release frees another job\'s slot');
+    assert.deepStrictEqual(analytics, [], 'nothing was cancelled, so nothing is counted');
+  });
+
+  await t.test('an unknown job is 404 and writes nothing', async (t2) => {
+    const { patches } = cancelling(t2, null);
+
+    const response = res();
+    await eventsFrom(() => controller.cancelBulkDownload({ ...ANON, params: { id: JOB } }, response));
+
+    assert.strictEqual(response.statusCode, 404);
+    assert.deepStrictEqual(patches, []);
+  });
+
+  await t.test('an id that is not a job id is 404 without a read', async (t2) => {
+    const read = t2.mock.method(bulkDownloads, 'getById', async () => ({ id: 'quota:127.0.0.1' }));
+
+    const response = res();
+    await eventsFrom(() => controller.cancelBulkDownload({ ...ANON, params: { id: 'quota:127.0.0.1' } }, response));
+
+    assert.strictEqual(response.statusCode, 404);
+    assert.strictEqual(read.mock.callCount(), 0, 'a quota row is not reachable by id');
+  });
+
+  await t.test("another caller's job is 404, and is not cancelled", async (t2) => {
+    const { patches, released } = cancelling(t2, queued({ requesterId: 'kc-sub-other', status: 'running' }));
+
+    const response = res();
+    await eventsFrom(() => controller.cancelBulkDownload({ ...ANON, params: { id: JOB }, user: STAFF }, response));
+
+    assert.strictEqual(response.statusCode, 404);
+    assert.deepStrictEqual(patches, [], 'a foreign job must not be cancellable by strangers');
+    assert.strictEqual(released.mock.callCount(), 0);
+  });
+
+  await t.test('an anonymous job is cancelled by whoever holds its id', async (t2) => {
+    const { patches } = cancelling(t2, queued({ requesterId: '' }));
+
+    const response = res();
+    await eventsFrom(() => controller.cancelBulkDownload({ ...ANON, params: { id: JOB }, user: STAFF }, response));
+
+    assert.strictEqual(response.statusCode, 204);
+    assert.strictEqual(patches.length, 1, 'an anonymous job binds to nobody — the id is the claim');
+  });
+
+  await t.test('an authenticated job is cancelled by its own subject', async (t2) => {
+    const { patches, released } = cancelling(t2, queued({ requesterId: 'kc-sub-1', requesterKey: 'kc-sub-1' }));
+
+    const response = res();
+    await eventsFrom(() => controller.cancelBulkDownload({ ...ANON, params: { id: JOB }, user: STAFF }, response));
+
+    assert.strictEqual(response.statusCode, 204);
+    assert.strictEqual(patches.length, 1);
+    assert.deepStrictEqual(released.mock.calls.map(call => call.arguments[0]), ['kc-sub-1'],
+      'the quota bucket is the requester, not the job');
+  });
+});
+
 test('GET /bulk-downloads/:id', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   t.after(() => audit._resetTransport());
@@ -498,6 +624,21 @@ test('GET /bulk-downloads/:id', async (t) => {
     assert.strictEqual(audited[0].TargetType, 'bulkDownload');
     assert.strictEqual(audited[0].TargetId, JOB);
     assert.strictEqual(audited[0].ActorId, 'kc-sub-1');
+  });
+
+  await t.test('a cancelled job reports cancelled and hands out no URLs', async () => {
+    t.mock.method(bulkDownloads, 'getById', async () => ({
+      id: JOB, status: 'cancelled', requesterId: '', documentCount: 4,
+      parts: [{ n: 1, key: 'zips/j1-part1.zip' }]
+    }));
+    const presign = t.mock.method(storage, 'getDownloadUrl', async () => 'https://nrs.example/x');
+
+    const response = res();
+    await controller.getBulkDownload({ ...ANON, params: { id: JOB } }, response);
+
+    assert.strictEqual(body(response).status, 'cancelled', 'the frontend stops polling on it');
+    assert.strictEqual(body(response).parts, undefined);
+    assert.strictEqual(presign.mock.callCount(), 0, 'the parts it names were deleted');
   });
 
   await t.test('a running job whose worker stopped reporting is failed', async () => {

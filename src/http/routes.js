@@ -133,6 +133,9 @@ const routes = [
   // status read is a capability check on the job id, not a role check.
   { method: 'post', path: '/bulk-downloads', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => bulkDownloadController().createBulkDownload },
   { method: 'get', path: '/bulk-downloads/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => bulkDownloadController().getBulkDownload },
+  // Cancel. Same chain and the same owner check as the status read — the job id is the capability,
+  // so a foreign or unknown id is a 404 here too, never a 403.
+  { method: 'delete', path: '/bulk-downloads/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => bulkDownloadController().cancelBulkDownload },
 
   // The sealed compartment — level 0 (docs/rbac-architecture.md §1). ONE chain on all five routes,
   // and it is not authMiddleware: that gate 403s `compliance`, which is the only role that belongs

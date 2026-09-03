@@ -128,7 +128,8 @@ test('cleanup-bulk-downloads', async (t) => {
     await cleanup.run();
 
     assert.deepStrictEqual(seen.statuses, ['ready', 'failed'],
-      'a failed job keeps the parts it built before it died — nothing else deletes them');
+      'a failed job keeps the parts it built before it died — nothing else deletes them, and a ' +
+      'cancelled one has none left: the worker deleted them when it stopped');
     assert.ok(seen.limit > 0, 'an unbounded read of a container that only grows');
   });
 

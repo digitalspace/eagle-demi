@@ -40,12 +40,13 @@ async function create(job) {
   return cosmos.create(CONTAINER, job);
 }
 
+const setOps = fields => Object.entries(fields).map(([name, value]) => ({
+  op: 'set', path: `/${name}`, value
+}));
+
 /** Partial update — the worker patches progress onto a row the controller may be reading. */
 async function patch(id, fields) {
-  const operations = Object.entries(fields).map(([name, value]) => ({
-    op: 'set', path: `/${name}`, value
-  }));
-  return cosmos.patch(CONTAINER, String(id), String(id), operations);
+  return cosmos.patch(CONTAINER, String(id), String(id), setOps(fields));
 }
 
 /**
@@ -89,6 +90,23 @@ async function conditionalPatch(id, operations, condition) {
     if (status === 404) return 'missing';
     throw err;
   }
+}
+
+/**
+ * Move a job to a terminal status only while it is still in one of `statuses`.
+ *
+ * A cancel and the worker's own `ready`/`failed` write race each other, and the loser must not
+ * overwrite the winner — nor give the requester's in-flight slot back a second time. The statuses
+ * are literals from this repo's own callers, not request input.
+ *
+ * @returns {Promise<boolean>} false: another writer already took the row out of `statuses`.
+ */
+async function patchIfStatus(id, fields, statuses) {
+  const list = statuses.map(status => `'${status}'`).join(', ');
+  const outcome = await conditionalPatch(
+    String(id), setOps(fields), `FROM c WHERE c.status IN (${list})`
+  );
+  return outcome === 'ok';
 }
 
 /**
@@ -161,6 +179,7 @@ module.exports = {
   getById,
   create,
   patch,
+  patchIfStatus,
   listExpired,
   acquireSlot,
   releaseSlot,

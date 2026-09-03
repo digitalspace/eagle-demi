@@ -253,23 +253,30 @@ exports.createBulkDownload = async (req, res) => {
   }
 };
 
+const NOT_FOUND = { error: 'Bulk download not found' };
+
+/**
+ * The job this caller may act on, or null.
+ *
+ * 404, never 403: an id that is not a job id, a job that never existed and a job belonging to
+ * somebody else must not be distinguishable. An anonymous job carries no owner — holding the id is
+ * the whole claim.
+ */
+async function ownJob(req) {
+  const id = String(req.params.id || '');
+  if (!JOB_ID.test(id)) return null;
+
+  const job = await bulkDownloads.getById(id);
+  if (!job) return null;
+
+  return job.requesterId && job.requesterId !== requesterOf(req).id ? null : job;
+}
+
 exports.getBulkDownload = async (req, res) => {
   try {
-    const notFound = { error: 'Bulk download not found' };
-    if (!JOB_ID.test(String(req.params.id || ''))) {
-      return res.status(404).json(notFound);
-    }
-
-    const job = await bulkDownloads.getById(req.params.id);
+    const job = await ownJob(req);
     if (!job) {
-      return res.status(404).json(notFound);
-    }
-
-    // 404, never 403: a job belonging to somebody else must not be distinguishable from one that
-    // does not exist. An anonymous job carries no owner — holding the id is the whole claim.
-    const requester = requesterOf(req);
-    if (job.requesterId && job.requesterId !== requester.id) {
-      return res.status(404).json(notFound);
+      return res.status(404).json(NOT_FOUND);
     }
 
     const parts = Array.isArray(job.parts) ? job.parts : [];
@@ -331,6 +338,39 @@ exports.getBulkDownload = async (req, res) => {
     }
 
     return res.json(body);
+  } catch (err) {
+    return serverError(res, err, 'bulk download controller failed');
+  }
+};
+
+/**
+ * Cancel a job. Idempotent: a job that already reached a terminal status answers 204 unchanged.
+ *
+ * The worker is a separate process that may be building this job right now, so the status flip is
+ * a conditional patch — whichever writer takes the row out of `queued`/`running` owns the outcome,
+ * and the loser neither overwrites it nor gives the slot back a second time. The worker notices the
+ * cancelled row between parts, deletes what it wrote and stops.
+ */
+exports.cancelBulkDownload = async (req, res) => {
+  try {
+    const job = await ownJob(req);
+    if (!job) {
+      return res.status(404).json(NOT_FOUND);
+    }
+
+    const cancelled = await bulkDownloads.patchIfStatus(
+      job.id,
+      { status: 'cancelled', finishedAt: new Date().toISOString() },
+      ['queued', 'running']
+    );
+
+    if (cancelled) {
+      // Winning the patch above is what makes this the one release for this job's whole life.
+      if (job.requesterKey) await bulkDownloads.releaseSlot(job.requesterKey);
+      analyticsEvent(req, { eventName: 'bulk.cancel', resultCount: job.documentCount || 0 });
+    }
+
+    return res.status(204).send('');
   } catch (err) {
     return serverError(res, err, 'bulk download controller failed');
   }
