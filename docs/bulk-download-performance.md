@@ -262,8 +262,9 @@ Against cause #1, in `src/jobs/bulk-download.js`:
   (`config.bulkFetchAhead`, default 3) objects ahead of the entry it is
   appending, so the next documents' round trips overlap the current append.
   The append itself stays serial, so zip entry order is unchanged. A failed
-  open is still that one document's error, including a stream whose socket
-  resets while it waits its turn; opens the part never reaches — a part that
+  open is still that one document's error; a stream reset while it waits its
+  turn gets one fresh open first, which is what its turn would have given it
+  before the window existed. Opens the part never reaches — a part that
   rolled, a cancel, a fatal error — are destroyed without waiting on them. Part size (#4) is untouched: the archive still holds one
   multipart upload buffer, and the read-ahead adds object streams, not
   upload buffers.

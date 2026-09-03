@@ -202,23 +202,25 @@ test('the bulk download worker', async (t) => {
     assert.deepStrictEqual(packed, [...packed].sort((a, b) => a - b));
   });
 
-  await t.test('a stream that resets while it waits its turn is that document\'s failure, not a crash', async (tt) => {
+  await t.test('a stream that resets while it waits its turn is re-opened at its turn', async (tt) => {
     config.bulkFetchAhead = 3;
     const docs = [doc('d0'), doc('d1'), doc('d2')];
+    const opens = [];
     const { patches, uploads, zipText } = harness(tt, {
       row: job(docs),
       docs,
       getObjectStream: async key => {
-        // d0 is slow to pack, so d1 is still parked in the window when its socket resets — the
-        // gap the read-ahead opened. Nothing is subscribed to a parked stream but the window
-        // itself, so an unhandled 'error' here is an uncaught exception, not a failed document.
+        opens.push(key);
+        // d0 is slow to pack, so d1 is still parked in the window when its socket resets — the gap
+        // the read-ahead opened. Nothing is subscribed to a parked stream but the window itself,
+        // so an unhandled 'error' here is an uncaught exception rather than a failed document.
         if (key === 'etl/d0.pdf') {
           const slow = new PassThrough();
           slow.write('bytes of etl/d0.pdf');
           setTimeout(() => slow.end(), 40);
           return slow;
         }
-        if (key === 'etl/d1.pdf') {
+        if (key === 'etl/d1.pdf' && opens.filter(k => k === 'etl/d1.pdf').length === 1) {
           const resets = new PassThrough();
           setTimeout(() => resets.emit('error', new Error('ECONNRESET while queued')), 5);
           return resets;
@@ -230,12 +232,48 @@ test('the bulk download worker', async (t) => {
 
     await worker.run('job-1');
 
+    assert.strictEqual(opens.filter(key => key === 'etl/d1.pdf').length, 2,
+      'the window held that socket open through another document — a fresh open is what its turn ' +
+      'would have given it before the window existed');
+    assert.strictEqual(readyPatch(patches).errorCount, 0,
+      'an idle socket dropped while parked must not cost the caller the file');
+    assert.strictEqual(readyPatch(patches).includedCount, 3);
+    assert.match(zipText([...uploads.keys()][0]), /bytes of etl\/d1\.pdf/);
+  });
+
+  await t.test('a re-open that fails too is that document\'s failure, and the part carries on', async (tt) => {
+    config.bulkFetchAhead = 3;
+    const docs = [doc('d0'), doc('d1'), doc('d2')];
+    const opens = [];
+    const { patches, uploads, zipText } = harness(tt, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => {
+        opens.push(key);
+        if (key === 'etl/d0.pdf') {
+          const slow = new PassThrough();
+          slow.write('bytes of etl/d0.pdf');
+          setTimeout(() => slow.end(), 40);
+          return slow;
+        }
+        if (key === 'etl/d1.pdf') {
+          if (opens.filter(k => k === 'etl/d1.pdf').length > 1) throw new Error('S3 NoSuchKey');
+          const resets = new PassThrough();
+          setTimeout(() => resets.emit('error', new Error('ECONNRESET while queued')), 5);
+          return resets;
+        }
+        return Readable.from([`bytes of ${key}`]);
+      }
+    });
+    tt.mock.method(logger, 'warn', () => {});
+
+    await worker.run('job-1');
+
+    assert.strictEqual(opens.filter(key => key === 'etl/d1.pdf').length, 2, 'one retry, not a loop');
     assert.deepStrictEqual(readyPatch(patches).errors,
       [{ documentId: 'd1', name: 'd1.pdf', reason: 'unavailable' }]);
-    assert.strictEqual(readyPatch(patches).includedCount, 2, 'the part carries on past it');
-    const text = zipText([...uploads.keys()][0]);
-    assert.match(text, /bytes of etl\/d0\.pdf/);
-    assert.match(text, /bytes of etl\/d2\.pdf/);
+    assert.strictEqual(readyPatch(patches).includedCount, 2);
+    assert.match(zipText([...uploads.keys()][0]), /bytes of etl\/d2\.pdf/);
   });
 
   await t.test('an open that fails for a document the part never reaches is still handled', async (tt) => {
@@ -268,6 +306,38 @@ test('the bulk download worker', async (t) => {
     assert.deepStrictEqual(readyPatch(patches).errors,
       [{ documentId: 'd2', name: 'd2.pdf', reason: 'unavailable' }],
       'and the document is still reported when a part finally reaches it');
+  });
+
+  await t.test('opens that land after the part died are closed, including the one in hand', async (tt) => {
+    config.bulkFetchAhead = 3;
+    const docs = [doc('d0'), doc('d1'), doc('d2'), doc('d3')];
+    const opened = [];
+    const destroyed = [];
+    const { patches } = harness(tt, {
+      row: job(docs),
+      docs,
+      // The outage that fails the upload is the outage that makes the opens slow: every one of
+      // them is still in flight when the part dies, so none can be closed where it is dropped.
+      getObjectStream: async key => {
+        opened.push(key);
+        await new Promise(resolve => setTimeout(resolve, 30).unref());
+        const stream = new PassThrough();
+        const destroy = stream.destroy.bind(stream);
+        stream.destroy = (...args) => { destroyed.push(key); return destroy(...args); };
+        return stream;
+      },
+      putObjectStream: async () => { throw new Error('403 from the object store'); }
+    });
+    tt.mock.method(logger, 'error', () => {});
+
+    await assert.rejects(worker.run('job-1'), /403 from the object store/);
+    assert.deepStrictEqual(destroyed, [], 'nothing has arrived yet — that is the whole problem');
+    await new Promise(resolve => setTimeout(resolve, 60));
+
+    assert.deepStrictEqual(destroyed.sort(), opened.sort(),
+      'every socket the window started is closed when it lands, the one taken for this document ' +
+      'included — the part is long gone and nothing else can ever close them');
+    assert.strictEqual(statusPatch(patches).status, 'failed');
   });
 
   await t.test('a cancel mid-part destroys the objects opened ahead of it', async (tt) => {

@@ -167,6 +167,18 @@ function readAhead(docs, ahead) {
     return entry;
   };
 
+  // Close one entry for good. Synchronous on purpose — a dead upload must not wait out an open the
+  // object store can sit on for minutes — so a stream still arriving is closed by `open` instead.
+  const drop = entry => {
+    if (!entry) return;
+    entry.dropped = true;
+    if (entry.stream) entry.stream.destroy();
+  };
+
+  // The one taken but not yet handed to the archive. Held here because `destroy` has to reach it:
+  // a part that dies during this document's open would otherwise leave that socket to nobody.
+  let current = null;
+
   return {
     /** Keep the window full from `next` on, past the end of this part — see `destroy`. */
     fill(next) {
@@ -174,23 +186,25 @@ function readAhead(docs, ahead) {
         if (!pending.has(i)) pending.set(i, open(i));
       }
     },
+    /** Called twice for the same document to re-open it — the first entry is closed here. */
     take(i) {
       if (!pending.has(i)) pending.set(i, open(i));
       const entry = pending.get(i);
       pending.delete(i);
+      drop(current);
+      current = entry;
       return entry.opened;
     },
-    /**
-     * Everything opened that this part never reached: a part that rolled, a cancel, a fatal error.
-     * Synchronous on purpose — a dead upload must not wait out an open the object store can sit on
-     * for minutes — so a stream still arriving is closed by `open` when it lands instead.
-     */
+    /** The archive owns this stream from here, so the window stops closing it. */
+    release() {
+      current = null;
+    },
+    /** Everything opened that this part never reached: a part that rolled, a cancel, a fatal error. */
     destroy() {
-      for (const entry of pending.values()) {
-        entry.dropped = true;
-        if (entry.stream) entry.stream.destroy();
-      }
+      for (const entry of pending.values()) drop(entry);
       pending.clear();
+      drop(current);
+      current = null;
     }
   };
 }
@@ -278,11 +292,16 @@ async function buildPart({ jobId, n, docs, from, projectNames, access, errors, m
       let truncated = null;
 
       try {
-        const entry = await orDie(opened);
+        let entry = await orDie(opened);
         // Only once this one has settled: refilling before it would hold one more socket open
         // than the window allows.
         ahead.fill(i + 1);
+        // A parked stream can be reset while the documents ahead of it are packed — a socket the
+        // serial fetch never held open long enough to lose. One fresh open at its turn, which is
+        // what it would have got before the window existed, then it is the document's failure.
+        if (entry.error && entry.stream) entry = await orDie(ahead.take(i));
         if (entry.error) throw entry.error;
+        ahead.release();
         await orDie(addEntry(
           archive, shielded(entry.stream, e => { truncated = e; }), `${folder}/${name}`
         ));
