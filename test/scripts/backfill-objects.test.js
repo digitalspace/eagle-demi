@@ -73,6 +73,35 @@ function fakeStorage({ present = [], sourceMissing = [], delayMs = 0 } = {}) {
   };
 }
 
+/**
+ * The two-credential double: the source client records its own calls, so a stat or a get issued
+ * against the target client — or a put aimed at the source bucket — shows up on the wrong list.
+ */
+function fakeStreamStorage({ present = [], sourceMissing = [] } = {}) {
+  const notFound = () => Object.assign(new Error('Not Found'), { code: 'NotFound' });
+  const storage = fakeStorage({ present });
+  storage.state.puts = [];
+  storage.state.sourceStats = [];
+  storage.state.sourceGets = [];
+
+  storage.putObject = async (bucket, key, stream, size, meta) => {
+    storage.state.puts.push([bucket, key, stream, size, meta]);
+    return { etag: 'x' };
+  };
+  storage.source = {
+    statObject: async (bucket, key) => {
+      storage.state.sourceStats.push([bucket, key]);
+      if (sourceMissing.includes(key)) throw notFound();
+      return { size: 42, contentType: 'application/pdf' };
+    },
+    getObject: async (bucket, key) => {
+      storage.state.sourceGets.push([bucket, key]);
+      return `stream:${key}`;
+    }
+  };
+  return storage;
+}
+
 function run(argv, { docs, storage }) {
   const fake = fakeDocuments(docs);
   return backfillObjects(argv, {
@@ -195,4 +224,66 @@ test('--probe reports both buckets and exits on the source outcome', async () =>
   denied.statObject = async () => { throw new Error('AccessDenied'); };
   const blocked = await run(['--probe'], { storage: denied });
   assert.equal(exitCodeFor(blocked.summary), 1);
+});
+
+test('stream mode reads the source with the source client, puts the target key sized and typed',
+  async () => {
+    const storage = fakeStreamStorage({ present: ['ozwdez/1/aaa.pdf'] });
+    const { summary } = await run(['--live', '--concurrency', '1'], { storage });
+
+    // Source side: prod bucket, bare key. Target side: this bucket, prefixed key.
+    assert.deepEqual(storage.state.sourceStats,
+      [['ozwdez', '1/bbb.pdf'], ['ozwdez', '2/ccc.pdf']]);
+    assert.deepEqual(storage.state.sourceGets,
+      [['ozwdez', '1/bbb.pdf'], ['ozwdez', '2/ccc.pdf']]);
+    assert.deepEqual(storage.state.puts, [
+      [TARGET_BUCKET, 'ozwdez/1/bbb.pdf', 'stream:1/bbb.pdf', 42, { 'Content-Type': 'application/pdf' }],
+      [TARGET_BUCKET, 'ozwdez/2/ccc.pdf', 'stream:2/ccc.pdf', 42, { 'Content-Type': 'application/pdf' }]
+    ]);
+    assert.deepEqual(storage.state.copies, []);
+    assert.equal(summary.transfer, 'stream');
+    assert.equal(summary.copied, 2);
+    assert.equal(summary.failed, 0);
+  });
+
+test('a key missing in the source bucket is counted in stream mode too', async () => {
+  const storage = fakeStreamStorage({ sourceMissing: ['1/aaa.pdf'] });
+  const { summary } = await run(['--live'], { storage });
+
+  assert.equal(summary.missingInSource, 1);
+  assert.equal(summary.copied, 2);
+  assert.equal(exitCodeFor(summary), 0);
+});
+
+test('a stream failure counts as failed and the run carries on', async () => {
+  const storage = fakeStreamStorage();
+  storage.source.getObject = async (bucket, key) => {
+    if (key === '1/bbb.pdf') throw new Error('connection reset');
+    return `stream:${key}`;
+  };
+  const { summary } = await run(['--live', '--concurrency', '1'], { storage });
+
+  assert.equal(summary.failed, 1);
+  assert.ok(summary.failures[0].includes('ozwdez/1/bbb.pdf: connection reset'));
+  // The keys after the failure still transferred.
+  assert.deepEqual(storage.state.puts.map(([, key]) => key),
+    ['ozwdez/1/aaa.pdf', 'ozwdez/2/ccc.pdf']);
+  assert.equal(summary.copied, 2);
+  assert.equal(exitCodeFor(summary), 1);
+});
+
+test('--probe stats the source with the source client and names the mode', async () => {
+  const storage = fakeStreamStorage();
+  const { summary } = await run(['--probe'], { storage });
+
+  assert.deepEqual(storage.state.sourceStats, [['ozwdez', '1/aaa.pdf']]);
+  assert.deepEqual(storage.state.stats, [[TARGET_BUCKET, 'ozwdez/1/aaa.pdf']]);
+  assert.equal(summary.transfer, 'stream');
+  assert.match(summary.source, /^ok size=42/);
+  assert.equal(exitCodeFor(summary), 0);
+});
+
+test('the copy mode still reports itself as copy', async () => {
+  const { summary } = await run([], { storage: fakeStorage() });
+  assert.equal(summary.transfer, 'copy');
 });
