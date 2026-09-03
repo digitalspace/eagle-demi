@@ -31,7 +31,10 @@ export class AppComponent {
     this.service.authReady.then(() => this.authSettled.set(true));
     this.router.events.pipe(takeUntilDestroyed()).subscribe(event => {
       if (!(event instanceof NavigationEnd)) return;
-      this.screenKey.set(this.keyOf(event.urlAfterRedirects));
+      const next = this.keyOf(event.urlAfterRedirects);
+      // Map filters are only shown on the map; arriving there may carry a saved lasso from My account.
+      if (next !== 'map') this.service.clearFilters();
+      this.screenKey.set(next);
       this.accountOpen.set(false);
     });
   }

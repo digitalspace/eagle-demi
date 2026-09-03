@@ -78,6 +78,46 @@ describe('AppComponent', () => {
     expect(router.url).toBe('/workspace');
   });
 
+  const RING = [[-121, 56], [-120, 56], [-120.5, 56.5]];
+
+  const setAllFilters = (service: RegistryStateService) => {
+    service.gatingFilter.set(new Set(['staged']));
+    service.sectorFilter.set(new Set(['Mineral Mines']));
+    service.regionFilter.set(new Set(['Cariboo']));
+    service.boundaryFilter.set({ regionalDistrict: new Set(['Cariboo']) });
+    service.lassoPolygon.set(RING);
+    service.lassoLabel.set('Peace Valley');
+  };
+
+  it('clears every map filter when navigating off the map', async () => {
+    await renderAs(true, false);
+    const service = TestBed.inject(RegistryStateService);
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl('/map');
+    setAllFilters(service);
+
+    await router.navigateByUrl('/index');
+
+    expect(service.gatingFilter().size).toBe(0);
+    expect(service.sectorFilter().size).toBe(0);
+    expect(service.regionFilter().size).toBe(0);
+    expect(service.boundaryFilter()).toEqual({});
+    expect(service.lassoPolygon()).toBeNull();
+    expect(service.lassoLabel()).toBeNull();
+  });
+
+  it('keeps a lasso set before arriving on the map', async () => {
+    await renderAs(true, false);
+    const service = TestBed.inject(RegistryStateService);
+    const router = TestBed.inject(Router);
+    await router.navigateByUrl('/workspace');
+    service.lassoPolygon.set(RING);
+
+    await router.navigateByUrl('/map');
+
+    expect(service.lassoPolygon()).toEqual(RING);
+  });
+
   it('keeps the sidebar open when navigating to the map', async () => {
     const { el, fixture } = await renderAs(true, false);
     await TestBed.inject(Router).navigateByUrl('/map');
