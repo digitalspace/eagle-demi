@@ -10,7 +10,7 @@ const path = require('path');
 
 const config = require('../../src/config');
 const minio = require('../../src/storage/minio');
-const { parseArgs, loadKeys, copyOne, mapLimit } = require('../../src/scripts/copy-blobs-to-azure');
+const { parseArgs, loadKeys, copyOne } = require('../../src/scripts/copy-blobs-to-azure');
 
 function mockBlob(existingSize) {
   const state = { uploads: 0, uploaded: null, size: existingSize };
@@ -187,33 +187,4 @@ test('the script has no code path that writes to the source', () => {
     'the source must be imported by its read operation only, not as a whole module');
   assert.strictEqual(typeof minio.putFile, 'function',
     'sanity: the write op exists on the backend and is simply not imported here');
-});
-
-test('mapLimit', async (t) => {
-  await t.test('runs every item, bounded by concurrency', async () => {
-    const items = Array.from({ length: 50 }, (_, i) => i);
-    const seen = [];
-    let inFlight = 0, peak = 0;
-
-    await mapLimit(items, 5, async (item) => {
-      inFlight++; peak = Math.max(peak, inFlight);
-      await new Promise(r => setImmediate(r));
-      seen.push(item);
-      inFlight--;
-    });
-
-    assert.strictEqual(seen.length, 50);
-    assert.deepStrictEqual(seen.slice().sort((a, b) => a - b), items);
-    assert.ok(peak <= 5, `peak concurrency ${peak} exceeded the limit`);
-  });
-
-  await t.test('handles an empty list without hanging', async () => {
-    await mapLimit([], 8, async () => assert.fail('should not be called'));
-  });
-
-  await t.test('a rejecting worker propagates', async () => {
-    // Per-key failures are caught by the caller; a worker that throws anyway must not be
-    // silently absorbed into a "done" summary.
-    await assert.rejects(() => mapLimit([1], 1, async () => { throw new Error('boom'); }), /boom/);
-  });
 });

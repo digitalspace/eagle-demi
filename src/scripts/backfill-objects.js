@@ -32,6 +32,7 @@ const { selectWhere, fetchAll } = require('../repositories/_sql');
 const { systemAccess } = require('../helpers/access-sql');
 const { resolveObjectKey } = require('../storage/objectKey');
 const { logger } = require('../utils/logger');
+const { mapLimit } = require('../utils/worker-pool');
 
 // Only the fields the decision needs; the rest of a document row is ~1 KB of RU per row wasted.
 const SELECT = 'c.id, c.s3Key, c.datePosted, c.fileSize';
@@ -112,7 +113,7 @@ async function readPartition(access, projectId) {
  * Per-partition, NOT one cross-partition paged read: the SDK drops `x-ms-continuation` on a
  * cross-partition query, so a paging loop there stops silently at 1,000 rows (see
  * backfill-display-name-sort.js). Concurrent `next()` calls are queued by the runtime, so the
- * worker pool below can share one iterator.
+ * worker pool can share one iterator.
  */
 async function* eachRow(documentsRepo, readRows, access, since) {
   const sinceMs = since ? Date.parse(since) : null;
@@ -123,18 +124,6 @@ async function* eachRow(documentsRepo, readRows, access, since) {
       yield row;
     }
   }
-}
-
-/** Bounded worker pool: `size` consumers sharing one iterator, so at most `size` calls in flight. */
-async function drain(iterator, size, worker) {
-  const runners = Array.from({ length: size }, async () => {
-    for (;;) {
-      const { value, done } = await iterator.next();
-      if (done) return;
-      await worker(value);
-    }
-  });
-  await Promise.all(runners);
 }
 
 function summaryLine(s) {
@@ -233,7 +222,7 @@ async function backfillObjects(argv = [], deps = {}) {
     }
   };
 
-  await drain(eachRow(documentsRepo, readRows, access, args.since), args.concurrency, handle);
+  await mapLimit(eachRow(documentsRepo, readRows, access, args.since), args.concurrency, handle);
 
   logger.info(summaryLine(summary));
   if (summary.failed) {
@@ -248,7 +237,7 @@ function exitCodeFor(summary) {
 }
 
 module.exports = {
-  parseArgs, isNotFound, eachRow, drain, summaryLine, backfillObjects, exitCodeFor
+  parseArgs, isNotFound, eachRow, summaryLine, backfillObjects, exitCodeFor
 };
 
 if (require.main === module) {

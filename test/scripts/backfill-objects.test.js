@@ -169,12 +169,17 @@ test('concurrency bounds the calls in flight', async () => {
 });
 
 test('--since keeps documents posted on or after the date', async () => {
+  const docs = [
+    ...DOCS,
+    { id: 'e', projectId: '3', s3Key: '3/eee.pdf', datePosted: '2020-01-01T00:00:00Z' },
+    { id: 'f', projectId: '3', s3Key: '3/fff.pdf', datePosted: '2019-12-31T00:00:00Z' }
+  ];
   const storage = fakeStorage();
-  const { summary } = await run(['--live', '--since', '2020-01-01'], { storage });
+  const { summary } = await run(['--live', '--since', '2020-01-01'], { docs, storage });
 
   assert.deepEqual(storage.state.copies.map(([, key]) => key),
-    ['ozwdez/1/bbb.pdf', 'ozwdez/2/ccc.pdf']);
-  assert.equal(summary.scanned, 3);
+    ['ozwdez/1/bbb.pdf', 'ozwdez/2/ccc.pdf', 'ozwdez/3/eee.pdf']);
+  assert.equal(summary.scanned, 4);
 });
 
 test('--probe reports both buckets and exits on the source outcome', async () => {
