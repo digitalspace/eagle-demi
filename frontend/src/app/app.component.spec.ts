@@ -89,9 +89,6 @@ describe('AppComponent', () => {
     service.lassoLabel.set('Peace Valley');
   };
 
-  // Map filters live in memory and are only shown on the map. Carried into Index Search they
-  // emptied its results with nothing on screen to explain why. Every way off the map — sidebar,
-  // the map's own "Documents" button, browser Back — is a navigation, so the reset lives there.
   it('clears every map filter when navigating off the map', async () => {
     await renderAs(true, false);
     const service = TestBed.inject(RegistryStateService);
@@ -109,7 +106,6 @@ describe('AppComponent', () => {
     expect(service.lassoLabel()).toBeNull();
   });
 
-  // My account's "Apply on map" sets the saved lasso and then routes to the map.
   it('keeps a lasso set before arriving on the map', async () => {
     await renderAs(true, false);
     const service = TestBed.inject(RegistryStateService);
