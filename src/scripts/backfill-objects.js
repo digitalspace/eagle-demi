@@ -93,6 +93,11 @@ function clientFor(host, port, useSSL, accessKey, secretKey) {
   });
 }
 
+/** A minio stat reduced to what the upload needs. Response header keys arrive lowercased. */
+function sourceStat(stat) {
+  return { size: stat.size, contentType: stat.metaData && stat.metaData['content-type'] };
+}
+
 function defaultStorage() {
   // src/storage/minio.js keeps its client private and pins one bucket; this copy spans two.
   const target = clientFor(config.minioHost, config.minioPort, config.minioSsl,
@@ -110,10 +115,7 @@ function defaultStorage() {
     putObject: (bucket, key, stream, size, meta) =>
       target.putObject(bucket, key, stream, size, meta),
     source: source && {
-      statObject: async (bucket, key) => {
-        const stat = await source.statObject(bucket, key);
-        return { size: stat.size, contentType: stat.metaData && stat.metaData['content-type'] };
-      },
+      statObject: async (bucket, key) => sourceStat(await source.statObject(bucket, key)),
       getObject: (bucket, key) => source.getObject(bucket, key)
     }
   };
@@ -250,8 +252,14 @@ async function backfillObjects(argv = [], deps = {}) {
         // Stat first: a sized upload avoids the SDK's unknown-length multipart path.
         const meta = await storage.source.statObject(args.sourceBucket, row.s3Key);
         const stream = await storage.source.getObject(args.sourceBucket, row.s3Key);
-        await storage.putObject(targetBucket, targetKey, stream, meta.size,
-          { 'Content-Type': meta.contentType || 'application/octet-stream' });
+        try {
+          await storage.putObject(targetBucket, targetKey, stream, meta.size,
+            { 'Content-Type': meta.contentType || 'application/octet-stream' });
+        } catch (err) {
+          // An abandoned response body holds its source socket open for the rest of the run.
+          if (stream && stream.destroy) stream.destroy();
+          throw err;
+        }
       } else {
         await storage.copyObject(targetBucket, targetKey, `/${args.sourceBucket}/${row.s3Key}`);
       }
@@ -277,7 +285,7 @@ function exitCodeFor(summary) {
 }
 
 module.exports = {
-  parseArgs, isNotFound, eachRow, summaryLine, backfillObjects, exitCodeFor
+  parseArgs, isNotFound, sourceStat, eachRow, summaryLine, backfillObjects, exitCodeFor
 };
 
 if (require.main === module) {

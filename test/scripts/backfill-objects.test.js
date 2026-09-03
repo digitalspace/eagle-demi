@@ -8,7 +8,7 @@ process.env.MINIO_KEY_PREFIX = 'ozwdez';
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { parseArgs, backfillObjects, exitCodeFor } =
+const { parseArgs, sourceStat, backfillObjects, exitCodeFor } =
   require('../../src/scripts/backfill-objects');
 
 const TARGET_BUCKET = 'asnpnn';
@@ -77,7 +77,7 @@ function fakeStorage({ present = [], sourceMissing = [], delayMs = 0 } = {}) {
  * The two-credential double: the source client records its own calls, so a stat or a get issued
  * against the target client — or a put aimed at the source bucket — shows up on the wrong list.
  */
-function fakeStreamStorage({ present = [], sourceMissing = [] } = {}) {
+function fakeStreamStorage({ present = [], sourceMissing = [], contentType = 'application/pdf' } = {}) {
   const notFound = () => Object.assign(new Error('Not Found'), { code: 'NotFound' });
   const storage = fakeStorage({ present });
   storage.state.puts = [];
@@ -92,7 +92,7 @@ function fakeStreamStorage({ present = [], sourceMissing = [] } = {}) {
     statObject: async (bucket, key) => {
       storage.state.sourceStats.push([bucket, key]);
       if (sourceMissing.includes(key)) throw notFound();
-      return { size: 42, contentType: 'application/pdf' };
+      return { size: 42, contentType };
     },
     getObject: async (bucket, key) => {
       storage.state.sourceGets.push([bucket, key]);
@@ -286,4 +286,38 @@ test('--probe stats the source with the source client and names the mode', async
 test('the copy mode still reports itself as copy', async () => {
   const { summary } = await run([], { storage: fakeStorage() });
   assert.equal(summary.transfer, 'copy');
+});
+
+test('sourceStat reads the size and the lowercase content-type header minio delivers', () => {
+  assert.deepEqual(
+    sourceStat({ size: 1234, etag: 'e', metaData: { 'content-type': 'application/pdf' } }),
+    { size: 1234, contentType: 'application/pdf' });
+  // No header, and no metaData at all: both leave contentType unset for the caller's fallback.
+  assert.deepEqual(sourceStat({ size: 7, metaData: {} }), { size: 7, contentType: undefined });
+  assert.deepEqual(sourceStat({ size: 7 }), { size: 7, contentType: undefined });
+});
+
+test('an object with no content type uploads as octet-stream', async () => {
+  const storage = fakeStreamStorage({ contentType: null });
+  await run(['--live', '--limit', '1'], { storage });
+
+  assert.deepEqual(storage.state.puts[0][4], { 'Content-Type': 'application/octet-stream' });
+});
+
+test('a failed upload destroys the source stream', async () => {
+  const { Readable } = require('node:stream');
+  const streams = [];
+  const storage = fakeStreamStorage();
+  storage.source.getObject = async () => {
+    const stream = Readable.from(['bytes']);
+    streams.push(stream);
+    return stream;
+  };
+  storage.putObject = async () => { throw new Error('AccessDenied'); };
+
+  const { summary } = await run(['--live'], { storage });
+
+  assert.equal(summary.failed, 3);
+  assert.equal(streams.length, 3);
+  assert.ok(streams.every(s => s.destroyed), 'every abandoned source stream is destroyed');
 });
