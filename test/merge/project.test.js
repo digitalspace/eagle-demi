@@ -104,6 +104,39 @@ test('field precedence — Track wins, Eagle fills gaps', async (t) => {
   });
 });
 
+/**
+ * Work phases are Track's alone — Eagle has no equivalent — so there is no precedence contest,
+ * only the rule that an absent feed must not blank a stored value. That rule is what stops a Track
+ * outage from erasing the assessment rail off every project on the next nightly run.
+ */
+test('Track work phases', async (t) => {
+  const PHASES = [
+    { name: 'Early Engagement', eaActId: 3, eaActName: '2018 Act', workType: 'Assessment',
+      startDate: '2021-05-03T00:00:00.000Z', endDate: '2021-11-08T00:00:00.000Z',
+      numberOfDays: 90, legislated: true, sortOrder: 1, isCompleted: true }
+  ];
+
+  await t.test('phases arrive verbatim when Track supplies them', () => {
+    const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207), { ...OPTS, phases: PHASES });
+    assert.deepStrictEqual(merged.phases, PHASES);
+  });
+
+  await t.test('Eagle\'s own phase record is untouched by them', () => {
+    const eagle = eagleFor(TRACK_207, { phaseHistory: ['Pre-Application', 'Application Review'] });
+    const merged = mergeTrackProject(TRACK_207, eagle, { ...OPTS, phases: PHASES });
+
+    assert.strictEqual(merged.currentPhaseName, 'Post Certification');
+    assert.deepStrictEqual(merged.phaseHistory, ['Pre-Application', 'Application Review']);
+  });
+
+  await t.test('no phases and an empty list are both absent, never null or []', () => {
+    assert.ok(!('phases' in mergeTrackProject(TRACK_207, null, OPTS)));
+    assert.ok(!('phases' in mergeTrackProject(TRACK_207, null, { ...OPTS, phases: [] })));
+    assert.ok(!('phases' in mergeEagleOnlyProject(eagleFor(TRACK_207))),
+      'an Eagle-only project has no Track work to draw a rail from');
+  });
+});
+
 test('centroid normalisation', async (t) => {
   await t.test('Track lat/lng strings become GeoJSON [lng, lat]', () => {
     // Track stores these as strings and lat-first; GeoJSON is lng-first. Getting this backwards

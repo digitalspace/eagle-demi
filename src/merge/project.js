@@ -203,7 +203,8 @@ function resolveProjectAcl(eagle) {
  * @param {object}      track  a Track project in the flat shape `trackApiToExtract` produces
  * @param {object|null} eagle  the Eagle project matched via track.epic_guid
  * @param {object}      [opts]
- * @param {string}      [opts.now]  ISO timestamp, injected for deterministic tests
+ * @param {string}      [opts.now]     ISO timestamp, injected for deterministic tests
+ * @param {Array}       [opts.phases]  this project's Track work phases (seed/sources.js)
  */
 function mergeTrackProject(track, eagleRaw, opts = {}) {
   if (!track || !hasValue(track.track_project_id)) {
@@ -257,6 +258,11 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
       if (hasValue(eagle[field])) merged[field] = eagle[field];
     }
   }
+
+  // Track-only, and no contest with Eagle: `currentPhaseName` and `phaseHistory` are Eagle's own
+  // EA-process record and stay exactly as they are. This is the dated assessment rail, and it is
+  // omitted rather than emptied when Track has none — an absent feed must not blank a stored one.
+  if (Array.isArray(opts.phases) && opts.phases.length) merged.phases = opts.phases;
 
   const centroid = normalizeCentroid(track, eagle);
   if (centroid) merged.centroid = centroid;

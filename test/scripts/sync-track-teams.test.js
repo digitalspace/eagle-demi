@@ -74,12 +74,19 @@ function fakeKc({ roles = [], users = [] } = {}) {
   };
 }
 
-/** Track answers two endpoints on the same bearer: the team feed and the project list. */
-const fakeFetch = (teams, seen = {}, projects = []) => async (url, headers) => {
-  const teamFeed = url.endsWith('/team-members');
-  if (teamFeed) { seen.url = url; seen.headers = headers; }
-  else seen.projectsUrl = url;
-  return teamFeed ? teams : projects;
+/**
+ * Track answers three endpoints on the same bearer: the team feed, the project list and the work
+ * list the phase pull starts from. `works` empty is the ordinary case here — with no assessment
+ * work there is no `/works/<id>/phases` call to answer, and the phase pull's own behaviour is
+ * covered in test/seed/sources-fetch.test.js.
+ */
+const fakeFetch = (teams, seen = {}, projects = [], works = []) => async (url, headers) => {
+  if (url.endsWith('/team-members')) { seen.url = url; seen.headers = headers; return teams; }
+  if (url.endsWith('/api/v1/works')) { seen.worksUrl = url; return works; }
+  const phases = url.match(/\/works\/(\d+)\/phases$/);
+  if (phases) { (seen.phaseUrls = seen.phaseUrls || []).push(url); return []; }
+  seen.projectsUrl = url;
+  return projects;
 };
 
 /**
@@ -145,7 +152,7 @@ test('a user on two projects is granted both roles, and the feed is read with a 
   assert.strictEqual(summaryLine(summary),
     '[track-teams] mode=live projects=2 users=2 grants=3 revokes=0 unmatched=0 ' +
     'closedProjects=0 credentialsRevoked=0 trackProjects=0 created=0 updated=0 orphaned=0 ' +
-    'relinked=0 skippedApiRows=0 failures=0');
+    'relinked=0 skippedApiRows=0 trackPhases=0 failures=0');
 });
 
 test('a departed staff member loses every project role they held', async () => {
@@ -363,6 +370,60 @@ test('the project list is read once and feeds both the mirror and the credential
   assert.strictEqual(summary.credentialsRevoked, 2);
   assert.ok(summaryLine(summary).includes('trackProjects=2 created=2 updated=0 orphaned=0'),
     summaryLine(summary));
+});
+
+/**
+ * The write-through. Without it `phases` is computed nightly and stored nowhere: this run is the
+ * only writer of Track-owned project fields, and eagle-public reads them off the stored record.
+ */
+test('the work phases pulled in the run are written onto the project record', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const written = [];
+  const projects = { listVisible: async () => ({ items: [] }), upsert: async (p) => written.push(p) };
+  const works = [{ id: 11, project_id: 1, work_type_id: 6, is_active: true }];
+  const phaseRows = [{
+    work_phase: {
+      name: 'Application Review', start_date: '2023-02-01T00:00:00+00:00', end_date: null,
+      number_of_days: 180, legislated: true, sort_order: 4, is_completed: false,
+      phase: { name: 'Application Review', ea_act_id: 3, ea_act: { id: 3, name: '2018 Act' },
+        work_type: { id: 6, name: 'Assessment' } }
+    }
+  }];
+  const get = async (url) => {
+    if (url.endsWith('/team-members')) return TEAMS;
+    if (url.endsWith('/api/v1/works')) return works;
+    if (url.endsWith('/works/11/phases')) return phaseRows;
+    return CLOSED_AND_OPEN;
+  };
+
+  const summary = await sync(['--live'], { fetchJson: get, kc, credentials: fakeCredentials(), projects });
+
+  const project1 = written.find(p => p.id === '1');
+  assert.deepStrictEqual(project1.phases, [{
+    name: 'Application Review', eaActId: 3, eaActName: '2018 Act', workType: 'Assessment',
+    startDate: '2023-02-01T00:00:00.000Z', endDate: null, numberOfDays: 180,
+    legislated: true, sortOrder: 4, isCompleted: false
+  }]);
+  assert.ok(!('phases' in written.find(p => p.id === '2')),
+    'a project Track reports no assessment work for carries no phases at all');
+  assert.strictEqual(summary.trackPhases, 1);
+  assert.ok(summaryLine(summary).includes('trackPhases=1'), summaryLine(summary));
+});
+
+test('a Track work feed that is down costs the phases and nothing else', async () => {
+  const kc = fakeKc({ roles: ['project:1', 'project:2'], users: [realmAda(), realmBo()] });
+  const projects = { listVisible: async () => ({ items: [] }), upsert: async () => {} };
+  const get = async (url) => {
+    if (url.endsWith('/team-members')) return TEAMS;
+    if (url.endsWith('/api/v1/works')) throw new Error('HTTP 503 Service Unavailable');
+    return CLOSED_AND_OPEN;
+  };
+
+  const summary = await sync(['--live'], { fetchJson: get, kc, credentials: fakeCredentials(), projects });
+
+  assert.strictEqual(summary.trackPhases, 0);
+  assert.strictEqual(summary.failures, 1, 'reported, not swallowed');
+  assert.strictEqual(summary.trackProjects, 2, 'the project mirror still ran');
 });
 
 test('a Cosmos outage in the mirror still leaves the credential sweep to run', async () => {

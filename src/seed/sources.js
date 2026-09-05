@@ -10,6 +10,7 @@
  *
  *   Track       ${TRACK_API_BASE}/api/v1/projects (live, bearer)          384 projects
  *               src/data/track_projects_enriched.json — offline fallback  382 projects
+ *               ${TRACK_API_BASE}/api/v1/works + /works/<id>/phases       work phases, live only
  *   Eagle       eagle-api /api/public/search                           359 projects, 60,661 docs, 213 List items
  *   Boundaries  frontend/public/assets/geojson/*.geojson (checked in)   281 features
  */
@@ -18,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 
 const config = require('../config');
+const { logger } = require('../utils/logger');
 
 const EAGLE_API_BASE = process.env.EAGLE_API_BASE ||
   'https://eagle-dev.apps.silver.devops.gov.bc.ca/api/public';
@@ -175,6 +177,107 @@ function fetchTrackProjects(token, get = fetchJson) {
   return get(`${config.trackApiBase}/api/v1/projects`, { Authorization: `Bearer ${token}` });
 }
 
+/** Track's `WorkTypeEnum.ASSESSMENT` (models/work_type.py). The EA work whose phases are the rail. */
+const ASSESSMENT_WORK_TYPE_ID = 6;
+
+/** Track sends timestamps with a zone; anything unparseable lands as null rather than a bad date. */
+function isoOrNull(value) {
+  if (!value) return null;
+  const at = new Date(value);
+  return isNaN(at.getTime()) ? null : at.toISOString();
+}
+
+/**
+ * One `GET /works/<id>/phases` row, in the public shape a project document carries.
+ *
+ * `work_phase.name` wins over the phase code's: Track lets a work rename its own phase, and the
+ * renamed one is what its staff and its reports use.
+ */
+function trackPhaseToPublic(row) {
+  const wp = (row && row.work_phase) || {};
+  const phase = wp.phase || {};
+  const eaAct = phase.ea_act || {};
+  return {
+    name: wp.name || phase.name || null,
+    eaActId: phase.ea_act_id ?? eaAct.id ?? null,
+    eaActName: eaAct.name || null,
+    workType: (phase.work_type || {}).name || null,
+    startDate: isoOrNull(wp.start_date),
+    endDate: isoOrNull(wp.end_date),
+    numberOfDays: wp.number_of_days ?? null,
+    legislated: wp.legislated ?? null,
+    sortOrder: wp.sort_order ?? null,
+    isCompleted: wp.is_completed === true
+  };
+}
+
+/**
+ * The one Assessment work per project whose phases DEMI mirrors, keyed by Track project id.
+ *
+ * A project also carries amendments, extensions and post-EAC reviews; only the assessment is the
+ * progress rail. Between two assessment works the live one wins, then the most recent.
+ */
+function assessmentWorkByProject(works) {
+  const preferred = (candidate, held) =>
+    (candidate.is_active === true) !== (held.is_active === true)
+      ? candidate.is_active === true
+      : Number(candidate.id) > Number(held.id);
+
+  const byProject = new Map();
+  for (const work of works || []) {
+    const workType = work.work_type_id ?? (work.work_type || {}).id;
+    if (Number(workType) !== ASSESSMENT_WORK_TYPE_ID) continue;
+    const projectId = work.project_id ?? (work.project || {}).id;
+    if (projectId === undefined || projectId === null) continue;
+
+    const key = String(projectId);
+    const held = byProject.get(key);
+    if (!held || preferred(work, held)) byProject.set(key, work);
+  }
+  return byProject;
+}
+
+/**
+ * Track work phases, `trackProjectId -> phases[]` sorted by `sortOrder`.
+ *
+ * CALL PLAN: one `GET /works` for the work list, then one `GET /works/<id>/phases` per assessment
+ * work — about one request per project a night. `GET /work-phases` cannot replace the pair: its
+ * rows carry no project id, and it filters to completed, legislated, over- or under-budget phases
+ * (it is the insights report, api/services/work_phase.py). `GET /projects?with_works=true` only
+ * FILTERS the project list — its response schema carries no works at all.
+ *
+ * One work's phases failing is logged and skipped rather than thrown: the other ~400 projects'
+ * phases are worth more than an all-or-nothing run.
+ *
+ * @param {function} [get] test seam, and the sync's own `deps.fetchJson`
+ */
+async function fetchTrackWorkPhases(token, get = fetchJson) {
+  const headers = { Authorization: `Bearer ${token}` };
+  const works = await get(`${config.trackApiBase}/api/v1/works`, headers);
+
+  const byProject = new Map();
+  for (const [projectId, work] of assessmentWorkByProject(works)) {
+    try {
+      const rows = await get(`${config.trackApiBase}/api/v1/works/${work.id}/phases`, headers);
+      const phases = (rows || []).map(trackPhaseToPublic)
+        .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+      if (phases.length) byProject.set(projectId, phases);
+    } catch (err) {
+      logger.error(`[seed] work ${work.id} phases`, { error: err.message });
+    }
+  }
+  return byProject;
+}
+
+/**
+ * Track work phases when a reader client is configured, an EMPTY MAP otherwise — the checked-in
+ * export carries none, and a caller that has no Track credentials must still finish its run.
+ */
+async function loadTrackWorkPhases() {
+  if (!trackFeedConfigured()) return new Map();
+  return fetchTrackWorkPhases(await clientToken(config.trackClientId, config.trackClientSecret));
+}
+
 /**
  * Track projects: the live API when a reader client is configured, the checked-in export
  * otherwise. Authoritative for project identity either way.
@@ -257,6 +360,8 @@ module.exports = {
   trackFeedConfigured,
   fetchTrackProjects,
   loadTrackProjects,
+  fetchTrackWorkPhases,
+  loadTrackWorkPhases,
   fetchEagleProjects,
   streamEagleDocuments,
   fetchListLookup,

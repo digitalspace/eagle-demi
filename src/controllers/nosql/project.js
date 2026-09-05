@@ -98,9 +98,15 @@ exports.getProjects = async (req, res) => {
 exports.getProject = async (req, res) => {
   try {
     const access = resolveAccess(req);
+    // Both id spaces on one route: eagle-public holds Eagle ObjectIds and DEMI ids are Track
+    // integers or `eagle-<ObjectId>`, so a 24-hex `:id` can only be Eagle's.
+    //
     // getById gates the point read internally — a point read bypasses the query predicate,
-    // so without that gate a by-id fetch would return what a list hides.
-    const project = await projects.getById(access, req.params.id);
+    // so without that gate a by-id fetch would return what a list hides. getByEagleId is a
+    // query and carries the same predicate.
+    const project = projects.EAGLE_OBJECT_ID.test(req.params.id)
+      ? await projects.getByEagleId(access, req.params.id)
+      : await projects.getById(access, req.params.id);
 
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });

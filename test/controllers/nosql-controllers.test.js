@@ -77,6 +77,55 @@ test('nosql project controller', async (t) => {
   });
 
   /**
+   * eagle-public holds Eagle ObjectIds and DEMI ids are Track integers or `eagle-<ObjectId>`, so
+   * one route answers both spaces. Which repository call is made is the assertion: `getById` is a
+   * point read on the partition key and would miss an Eagle id entirely, answering 404 for a
+   * project the caller may see.
+   */
+  await t.test('a 24-hex :id is resolved as an Eagle id', async () => {
+    const EAGLE_ID = '58851172aaecd9001b820335';
+    const calls = [];
+    t.mock.method(projects, 'getById', async (access, id) => { calls.push(['getById', id]); return null; });
+    t.mock.method(projects, 'getByEagleId', async (access, id) => {
+      calls.push(['getByEagleId', id]);
+      return { id: '207', eagleId: EAGLE_ID, name: 'Nicomen Wind Energy', read: ['public'] };
+    });
+
+    const res = mockRes();
+    await projectController.getProject({ params: { id: EAGLE_ID }, query: {} }, res);
+
+    assert.deepStrictEqual(calls, [['getByEagleId', EAGLE_ID]], 'no point read on an Eagle id');
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body.id, '207', 'the DEMI record, under its own id');
+  });
+
+  await t.test('a DEMI id still takes the point read, and is redacted the same way', async () => {
+    const calls = [];
+    t.mock.method(projects, 'getByEagleId', async () => { calls.push('getByEagleId'); return null; });
+    t.mock.method(projects, 'getById', async (access, id) => {
+      calls.push(`getById:${id}`);
+      return { id: '207', name: 'Nicomen Wind Energy', read: ['public'], sources: { eagle: { x: 1 } } };
+    });
+
+    for (const id of ['207', 'eagle-58851172aaecd9001b820335']) {
+      const res = mockRes();
+      await projectController.getProject({ params: { id }, query: {} }, res);
+      assert.strictEqual(res.body.sources, undefined, `${id}: the same redaction path`);
+      assert.strictEqual(res.body.name, 'Nicomen Wind Energy', `${id}: the record itself survives`);
+    }
+    assert.deepStrictEqual(calls, ['getById:207', 'getById:eagle-58851172aaecd9001b820335']);
+  });
+
+  await t.test('an Eagle id the caller may not see is 404, not 403', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+
+    const res = mockRes();
+    await projectController.getProject(
+      { params: { id: '58851172aaecd9001b820335' }, query: {} }, res);
+    assert.strictEqual(res.statusCode, 404);
+  });
+
+  /**
    * The read ACL gates rows, not fields, so a caller entitled to the row was getting the raw
    * upstream payloads with it — unbounded, and anonymous on both these routes. ENRICHMENT_SOURCES
    * is the allowlist; everything unnamed goes without needing its own rule.

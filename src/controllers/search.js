@@ -12,6 +12,7 @@ const eagleQuery = require('../search/eagle-query');
 const groupChunks = require('../search/group-chunks');
 const documentsRepo = require('../repositories/documents');
 const projectsRepo = require('../repositories/projects');
+const { EAGLE_OBJECT_ID } = projectsRepo;
 const chunksRepo = require('../repositories/chunks');
 const summarizer = require('../ai/summarize');
 const { analyticsEvent } = require('../utils/audit');
@@ -53,9 +54,6 @@ async function labelWithProjectNames(access, docs) {
     doc.project = eagleQuery.ref((parent && parent.eagleId) || doc.project, doc.projectName);
   }
 }
-
-/** An Eagle ObjectId. DEMI project ids are Track integers or `eagle-<ObjectId>`, so this cannot collide. */
-const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
 
 /**
  * Rewrite `&project=`/`&and[project]=` from Eagle ObjectIds into DEMI project ids.
