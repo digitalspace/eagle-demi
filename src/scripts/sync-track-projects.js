@@ -20,8 +20,10 @@
  */
 
 const { readForLevel, systemAccess } = require('../helpers/access-sql');
+const { ensureProjectShortLink } = require('../helpers/short-links');
 const { TRACK_PRECEDENCE, mergeTrackProject } = require('../merge/project');
 const { trackApiToExtract } = require('../seed/sources');
+const linksRepository = require('../repositories/links');
 const { logger } = require('../utils/logger');
 
 const TRACK_FIELDS = TRACK_PRECEDENCE.map(([target]) => target);
@@ -60,19 +62,28 @@ function projectsRepository() {
 
 /**
  * @param {Array}  apiProjects  raw `GET /api/v1/projects` rows
- * @param {object} [opts]       {live} write, {deps} test seam {projects}, {now} fixed timestamp,
- *                              {phases} Map of Track project id -> work phases
+ * @param {object} [opts]       {live} write, {deps} test seam {projects, links}, {now} fixed timestamp,
+ *                              {phases} Map of Track project id -> work phases.
+ *                              `deps.links` is the links repository, injected by the tests.
  */
 async function syncProjects(apiProjects, opts = {}) {
   const { live = false, deps = {}, phases = new Map() } = opts;
   const rows = apiProjects || [];
   const summary = {
     trackProjects: rows.length,
-    created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0, failures: 0
+    created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0,
+    shortLinks: 0, failures: 0
   };
 
   const repo = deps.projects || projectsRepository();
   if (!repo) return summary;
+  const linksRepo = deps.links || linksRepository;
+
+  /** Mints the project's one short link, and counts only the nights that actually mint. */
+  const shortLink = async (project) => {
+    if (project.shortCode) return;
+    if (await ensureProjectShortLink(project, linksRepo)) summary.shortLinks++;
+  };
 
   const now = opts.now || new Date().toISOString();
   // systemAccess(), because a scoped context would list only what it can see and then create a
@@ -111,9 +122,11 @@ async function syncProjects(apiProjects, opts = {}) {
         const merged = mergeTrackProject(track, (relink.sources || {}).eagle || null, mergeOpts);
         summary.relinked++;
         if (live) {
-          await repo.upsert({
+          const rekeyed = {
             ...relink, ...merged, read: relink.read, isPublished: relink.isPublished
-          });
+          };
+          await shortLink(rekeyed);
+          await repo.upsert(rekeyed);
         }
         continue;
       }
@@ -125,7 +138,10 @@ async function syncProjects(apiProjects, opts = {}) {
         merged.read = readForLevel(1);
         merged.isPublished = false;
         summary.created++;
-        if (live) await repo.upsert(merged);
+        if (live) {
+          await shortLink(merged);
+          await repo.upsert(merged);
+        }
         continue;
       }
 
@@ -140,9 +156,12 @@ async function syncProjects(apiProjects, opts = {}) {
 
       const merged = mergeTrackProject(track, (existing.sources || {}).eagle || null, mergeOpts);
       const changes = trackChanges(existing, merged);
-      if (!Object.keys(changes).length) continue;
+      // A stored project with no code yet is written even when Track says nothing new: that is how
+      // the projects that predate short links get one.
+      if (!Object.keys(changes).length && (existing.shortCode || !existing.eagleId)) continue;
       summary.updated++;
       if (!live) continue;
+      await shortLink(existing);
 
       // `...existing` first and a change set of Track-owned fields only: `read`, `isPublished`,
       // `vis`, the boundary stamps and `sources.wildfire` all survive an upsert that replaces the

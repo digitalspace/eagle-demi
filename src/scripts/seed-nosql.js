@@ -45,6 +45,8 @@ const aiSearch = require('../search/ai-search');
 const projectsRepo = require('../repositories/projects');
 const documentsRepo = require('../repositories/documents');
 const boundariesRepo = require('../repositories/boundaries');
+const linksRepo = require('../repositories/links');
+const { ensureProjectShortLink } = require('../helpers/short-links');
 
 /** Every stage `--only` accepts. */
 const ALL_STAGES = ['projects', 'documents', 'boundaries'];
@@ -336,7 +338,8 @@ async function seed(argv = [], deps = {}) {
   const repos = deps.repos || {
     projects: projectsRepo,
     documents: documentsRepo,
-    boundaries: boundariesRepo
+    boundaries: boundariesRepo,
+    links: linksRepo
   };
   const purge = deps.purge || purgeHelpers;
   const audit = deps.audit || auditHelpers;
@@ -390,7 +393,7 @@ async function seed(argv = [], deps = {}) {
   // Parent ACLs by canonical id: documents are narrowed against these, and the pre-write gate
   // checks the same invariant.
   const projectRead = new Map(projects.map(p => [String(p.id), p.read]));
-  summary.stages.projects = { built: projects.length, report, written: 0, visCarried: 0 };
+  summary.stages.projects = { built: projects.length, report, written: 0, visCarried: 0, shortLinks: 0 };
 
   const projectFailures = verifyProjects(projects);
   summary.failures.push(...projectFailures);
@@ -408,7 +411,13 @@ async function seed(argv = [], deps = {}) {
             project.vis = existing.vis;
             summary.stages.projects.visCarried++;
           }
+          // A minted code is printable, so a re-seed must never mint a second one for the project.
+          if (existing.shortCode) project.shortCode = existing.shortCode;
           project.sources = { ...existing.sources, ...project.sources };
+        }
+        // Counted as minted, not as held: the carry above already answered for the rest.
+        if (!project.shortCode && await ensureProjectShortLink(project, repos.links)) {
+          summary.stages.projects.shortLinks++;
         }
         await repos.projects.upsert(project);
         summary.stages.projects.written++;

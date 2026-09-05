@@ -24,6 +24,7 @@ const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { mergeTrackProject, mergeEagleOnlyProject } = require('../../merge/project');
 const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
+const { shortUrlFor } = require('../../helpers/short-links');
 
 /**
  * A project's visibility change, carried to its index row and re-derived onto its documents.
@@ -111,7 +112,11 @@ exports.getProject = async (req, res) => {
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    return res.json(redactForAccess('projects', project, access));
+    const body = redactForAccess('projects', project, access);
+    // Only the code is stored; the masthead's copy button needs the URL, and the base host is
+    // per-environment config, not a stored value that could go stale.
+    if (body.shortCode) body.shortUrl = shortUrlFor(body.shortCode);
+    return res.json(body);
   } catch (err) {
     return serverError(res, err, 'project controller failed');
   }

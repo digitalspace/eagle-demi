@@ -143,7 +143,9 @@ test('the projects catalog covers every field the merge emits', async (t) => {
   });
 
   await t.test('the job-written fields are catalogued', () => {
-    for (const key of ['regionalDistrict', 'municipality', 'electoralDistrict', 'createdAt', 'sources.wildfire']) {
+    const jobWritten = ['regionalDistrict', 'municipality', 'electoralDistrict', 'createdAt',
+      'sources.wildfire', 'shortCode'];
+    for (const key of jobWritten) {
       assert.ok(key in catalog, `${key} is not catalogued`);
     }
   });

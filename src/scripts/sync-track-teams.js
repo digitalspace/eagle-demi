@@ -337,7 +337,8 @@ async function sync(argv = [], deps = {}) {
         orphaned: mirrored.orphaned,
         relinked: mirrored.relinked,
         skippedApiRows: mirrored.skippedApiRows,
-        trackPhases: mirrored.phases
+        trackPhases: mirrored.phases,
+        shortLinks: mirrored.shortLinks
       });
       summary.failures += mirrored.failures;
     } catch (err) {

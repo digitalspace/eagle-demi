@@ -5,9 +5,9 @@
  * deletion is hard, so auditEvent rows are the only record that a link ever existed.
  */
 
-const crypto = require('crypto');
 const links = require('../../repositories/links');
 const { validateDestination } = require('../../helpers/link-url');
+const { generateCode, shortUrlFor, isConflict } = require('../../helpers/short-links');
 const { logger } = require('../../utils/logger');
 const { serverError } = require('../../helpers/response');
 const { auditEvent } = require('../../utils/audit');
@@ -16,18 +16,6 @@ const config = require('../../config');
 /** Vanity codes. Anything outside this alphabet cannot be a Cosmos id or a clean URL segment. */
 const CUSTOM_CODE = /^[a-z0-9_-]{3,64}$/;
 const MAX_NOTE_LENGTH = 200;
-
-/** No `0 O 1 l I` — a printed poster must not force a reader to guess which glyph they're looking at. */
-const CODE_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
-const GENERATED_CODE_LENGTH = 8;
-
-function generateCode() {
-  let code = '';
-  for (let i = 0; i < GENERATED_CODE_LENGTH; i++) {
-    code += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
-  }
-  return code;
-}
 
 /**
  * Fixed at module load, never composed per request: helmet runs with `contentSecurityPolicy:
@@ -51,17 +39,13 @@ function present(record) {
     id: record.id,
     url: record.url,
     note: record.note ?? null,
-    shortUrl: `${config.linkBaseUrl}/s/${record.id}`,
+    shortUrl: shortUrlFor(record.id),
     createdAt: record.createdAt,
     createdBy: record.createdBy,
     updatedAt: record.updatedAt ?? null,
     // Absent on every row minted before the flag, and those are shared.
     personal: record.personal === true
   };
-}
-
-function isConflict(err) {
-  return Boolean(err) && (err.code === 409 || err.statusCode === 409);
 }
 
 exports.listLinks = async (req, res) => {
@@ -124,7 +108,7 @@ exports.createLink = async (req, res) => {
       detail: { url: record.url, note: record.note, custom, personal: record.personal }
     });
 
-    return res.status(201).json({ code: record.id, shortUrl: present(record).shortUrl, url: record.url });
+    return res.status(201).json({ code: record.id, shortUrl: shortUrlFor(record.id), url: record.url });
   } catch (err) {
     return serverError(res, err, 'short link create failed');
   }

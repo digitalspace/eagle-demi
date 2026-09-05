@@ -156,7 +156,9 @@ paths:
             type: string
       responses:
         '200':
-          description: Project document.
+          description: >-
+            Project document. It carries `shortCode` and, composed from it, `shortUrl` — the
+            `/s/<code>` link to the project's public page.
         '404':
           description: Project not found.
     put:
@@ -2028,6 +2030,16 @@ components:
           type: string
         centroid:
           $ref: '#/components/schemas/GeoPoint'
+        shortCode:
+          type: string
+          description: >-
+            The project's short link code, minted once by the seed or the nightly Track sync for
+            every project with an Eagle id. Absent on a project with no public page.
+        shortUrl:
+          type: string
+          description: >-
+            `shortCode` as a URL, composed per environment. Response only — it is never stored.
+          example: https://projects.eao.gov.bc.ca/s/mkq7bt2r
     
     ProjectInput:
       type: object
