@@ -124,7 +124,7 @@ param ssoAudience = 'account'
 // for a request made through eagle-test.apps.silver.devops.gov.bc.ca/demi-search; measured
 // 2026-09-02). With these trusted, the anonymous bulk-download quota keys on the browser hop.
 // An address missing here only puts that proxy's visitors back on one shared key.
-param trustedProxyIps = '142.34.194.121,142.34.194.123'
+param trustedProxyIps = '142.34.194.121,142.34.194.123,142.34.194.124'
 
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
