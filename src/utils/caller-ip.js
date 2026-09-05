@@ -75,6 +75,26 @@ function isTrustedProxy(ip) {
 }
 
 /**
+ * The caller behind `asserted` — an address some hop we believe says it saw the request from.
+ *
+ * Where that address is a proxy WE run, every eagle-public visitor reaches us through it and the
+ * asserted address is the same for all of them, so the anonymous quota would be one shared bucket.
+ * The chain is then `[whatever the caller prepended,] <browser>, <our egress>` — so walk from the
+ * RIGHT and take the first hop that is not ours. Anything left of it is caller-supplied and never
+ * reached. Not one of ours, or nothing but ours in the chain: the asserted address is the answer.
+ */
+function behindProxy(asserted, headers) {
+  if (!isTrustedProxy(asserted)) return asserted;
+
+  const hops = String(headers['x-forwarded-for'] || '')
+    .split(',').map(hop => stripPort(hop.trim())).filter(Boolean);
+  for (let i = hops.length - 1; i >= 0; i--) {
+    if (!isTrustedProxy(hops[i])) return hops[i];
+  }
+  return asserted;
+}
+
+/**
  * The one definition of "who is this caller", shared by the request log, the audit trail and the
  * bulk-download quota.
  */
@@ -88,8 +108,11 @@ function callerIp(req) {
   // this is a different hop's proof — AFD reaches us through APIM either way.
   // ponytail: the trust is only as good as the secret's rotation; Private Link from Front Door to APIM would drop the header trust entirely.
   if (fromEdge(headers)) {
+    // Front Door's own socket peer is the OpenShift rproxy on the public path
+    // (browser → rproxy → Front Door → APIM), so this is not automatically the browser either —
+    // walk on past it exactly as the gateway branch does.
     const socketIp = normalizeIp(stripPort(String(headers['x-azure-socketip'] || '').trim()));
-    if (socketIp) return socketIp;
+    if (socketIp) return behindProxy(socketIp, headers);
   }
 
   // Behind APIM the last forwarded hop is APIM ITSELF, so every public caller resolves to one
@@ -98,19 +121,7 @@ function callerIp(req) {
   // secret is the whole reason that header can be believed.
   if (fromGateway(req)) {
     const asserted = stripPort(String(headers['x-client-ip'] || '').trim());
-    // Further back when the address APIM saw is a proxy WE run: every eagle-public visitor reaches
-    // us through the OpenShift rproxy, so the asserted address is the same for all of them and the
-    // anonymous quota would be one shared bucket. The chain is then
-    // `[whatever the caller prepended,] <browser>, <nginx egress>` — so walk from the RIGHT and take
-    // the first hop that is not ours. Anything left of it is caller-supplied and never reached.
-    if (asserted && isTrustedProxy(asserted)) {
-      const hops = String(headers['x-forwarded-for'] || '')
-        .split(',').map(hop => stripPort(hop.trim())).filter(Boolean);
-      for (let i = hops.length - 1; i >= 0; i--) {
-        if (!isTrustedProxy(hops[i])) return hops[i];
-      }
-    }
-    if (asserted) return asserted;
+    if (asserted) return behindProxy(asserted, headers);
   }
 
   const forwarded = String(headers['x-forwarded-for'] || '');

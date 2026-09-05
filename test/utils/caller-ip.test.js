@@ -227,6 +227,14 @@ test('callerIp behind Front Door', async (t) => {
     assert.strictEqual(withConfig({ edgeSecret: '' }, () => callerIp(viaEdge())), AFD_EGRESS);
   });
 
+  await t.test('an empty EDGE_SECRET does not match an absent header', () => {
+    // The dangerous half of the off switch, and the one a length comparison cannot catch: two
+    // empty strings ARE equal, so without the explicit empty guard every caller sending no header
+    // at all would be believed and pick its own quota key.
+    const bothEmpty = viaEdge({ 'x-edge-secret': undefined, 'x-azure-socketip': '9.9.9.9' });
+    assert.strictEqual(withConfig({ edgeSecret: '' }, () => callerIp(bothEmpty)), AFD_EGRESS);
+  });
+
   await t.test('an unresolved Key Vault reference is not a secret', () => {
     const ref = '@Microsoft.KeyVault(SecretUri=https://demi-kv-test.vault.azure.net/secrets/edge-secret)';
     const spoofed = viaEdge({ 'x-edge-secret': ref });
@@ -257,6 +265,30 @@ test('callerIp behind Front Door', async (t) => {
     // Front Door derives ClientIP from the caller's own X-Forwarded-For, so a browser picks it.
     const forged = viaEdge({ 'x-azure-socketip': undefined, 'x-azure-clientip': '9.9.9.9' });
     assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(forged)), AFD_EGRESS);
+  });
+
+  await t.test('a socket IP that is our own rproxy is walked past, not keyed on', () => {
+    // The prod public path is browser → rproxy → Front Door → APIM, so Front Door's socket peer is
+    // the rproxy egress and is the SAME for every visitor. Keying on it collapses the whole
+    // anonymous bulk quota onto one row — the exact bug the edge secret exists to avoid.
+    const throughRproxy = viaEdge({
+      'x-azure-socketip': '142.34.194.121',
+      'x-forwarded-for': '198.51.100.7, 142.34.194.121'
+    });
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: ['142.34.194.121'] },
+        () => callerIp(throughRproxy)), '198.51.100.7');
+  });
+
+  await t.test('a socket IP that is not ours is the caller itself', () => {
+    // The direct path, with no rproxy in front: Front Door accepted the browser's own connection.
+    const direct = viaEdge({
+      'x-azure-socketip': '198.51.100.7',
+      'x-forwarded-for': `198.51.100.7, ${AFD_EGRESS}`
+    });
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: ['142.34.194.121'] },
+        () => callerIp(direct)), '198.51.100.7');
   });
 
   await t.test('the edge secret stands on its own, without the gateway secret', () => {
