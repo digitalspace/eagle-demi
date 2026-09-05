@@ -95,8 +95,10 @@ test('the 3.3 fields are declared and sourced as intended', () => {
 
   assert.strictEqual(field('isFeatured').type, 'Edm.Boolean');
   assert.strictEqual(field('documentSource').type, 'Edm.String');
+  assert.strictEqual(field('fileSize').type, 'Edm.Int64');
   assert.strictEqual(projected.get('isFeatured'), 'isFeatured');
   assert.strictEqual(projected.get('documentSource'), 'documentSource');
+  assert.strictEqual(projected.get('fileSize'), 'fileSize');
 
   // Same text as `documentFileName`, a second time under the `filename` analyzer. Sourcing it from
   // any other column would tokenize the wrong string.
