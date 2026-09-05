@@ -267,17 +267,49 @@ test('callerIp behind Front Door', async (t) => {
     assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(forged)), AFD_EGRESS);
   });
 
-  await t.test('a socket IP that is our own rproxy is walked past, not keyed on', () => {
-    // The prod public path is browser → rproxy → Front Door → APIM, so Front Door's socket peer is
-    // the rproxy egress and is the SAME for every visitor. Keying on it collapses the whole
-    // anonymous bulk quota onto one row — the exact bug the edge secret exists to avoid.
-    const throughRproxy = viaEdge({
-      'x-azure-socketip': '142.34.194.121',
-      'x-forwarded-for': '198.51.100.7, 142.34.194.121'
+  /** The rproxy egress Front Door accepts the public path's connections from. */
+  const RPROXY_EGRESS = '142.34.194.121';
+
+  /**
+   * The chain DEMI actually reads on the public path. Front Door appends its socket peer (the
+   * rproxy), then APIM appends Front Door — so the browser is TWO hops in from the right, and the
+   * two entries right of it are the same for every visitor alive.
+   */
+  function publicPath(browser) {
+    return viaEdge({
+      'x-azure-socketip': RPROXY_EGRESS,
+      'x-client-ip': AFD_EGRESS,
+      'x-forwarded-for': `${browser}, ${RPROXY_EGRESS}, ${AFD_EGRESS}`
+    });
+  }
+
+  await t.test('the walk starts at the socket hop, not at the end of the chain', () => {
+    // Walking plain right-to-left stops on the AFD egress, which is one shared anonymous bulk
+    // quota row for the entire public internet — the exact bug the edge secret exists to avoid.
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
+        () => callerIp(publicPath('198.51.100.7'))), '198.51.100.7');
+  });
+
+  await t.test('two browsers on that path get two different keys', () => {
+    // The whole point of the feature: same rproxy, same Front Door, different quota rows.
+    const resolve = (browser) => withConfig(
+      { edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
+      () => callerIp(publicPath(browser)));
+    assert.strictEqual(resolve('203.0.113.55'), '203.0.113.55');
+    assert.notStrictEqual(resolve('203.0.113.55'), resolve('198.51.100.7'));
+  });
+
+  await t.test('a socket IP absent from the chain is the answer itself', () => {
+    // Nothing to anchor on, so there is no hop known to be left of it: guessing would let a caller
+    // pick its own key by prepending one.
+    const noAnchor = viaEdge({
+      'x-azure-socketip': RPROXY_EGRESS,
+      'x-forwarded-for': `198.51.100.7, ${AFD_EGRESS}`
     });
     assert.strictEqual(
-      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: ['142.34.194.121'] },
-        () => callerIp(throughRproxy)), '198.51.100.7');
+      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
+        () => callerIp(noAnchor)), RPROXY_EGRESS);
   });
 
   await t.test('a socket IP that is not ours is the caller itself', () => {
@@ -287,8 +319,20 @@ test('callerIp behind Front Door', async (t) => {
       'x-forwarded-for': `198.51.100.7, ${AFD_EGRESS}`
     });
     assert.strictEqual(
-      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: ['142.34.194.121'] },
+      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
         () => callerIp(direct)), '198.51.100.7');
+  });
+
+  await t.test('a forged copy of our egress left of the real hop is not reached', () => {
+    // A caller can prepend anything, our own egress address included. The anchor is the RIGHTMOST
+    // occurrence, so the forgery stays left of where the walk starts.
+    const forged = viaEdge({
+      'x-azure-socketip': RPROXY_EGRESS,
+      'x-forwarded-for': `9.9.9.9, ${RPROXY_EGRESS}, 198.51.100.7, ${RPROXY_EGRESS}, ${AFD_EGRESS}`
+    });
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
+        () => callerIp(forged)), '198.51.100.7');
   });
 
   await t.test('the edge secret stands on its own, without the gateway secret', () => {

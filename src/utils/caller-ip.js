@@ -79,16 +79,32 @@ function isTrustedProxy(ip) {
  *
  * Where that address is a proxy WE run, every eagle-public visitor reaches us through it and the
  * asserted address is the same for all of them, so the anonymous quota would be one shared bucket.
- * The chain is then `[whatever the caller prepended,] <browser>, <our egress>` — so walk from the
- * RIGHT and take the first hop that is not ours. Anything left of it is caller-supplied and never
+ * The chain is then `[whatever the caller prepended,] <browser>, <our egress>` — so walk LEFTWARDS
+ * and take the first hop that is not ours. Anything further left is caller-supplied and never
  * reached. Not one of ours, or nothing but ours in the chain: the asserted address is the answer.
+ *
+ * `anchored` starts that walk at the asserted hop's own position rather than at the end of the
+ * chain. Front Door needs it: by the time DEMI reads the header the chain is
+ * `<browser>, <rproxy>, <AFD egress>`, because Front Door appended its socket peer and APIM then
+ * appended Front Door. Everything RIGHT of the hop that named `asserted` was written by those
+ * later hops and is never the browser — an unanchored walk stops on the AFD egress and hands every
+ * visitor the same key again.
  */
-function behindProxy(asserted, headers) {
+function behindProxy(asserted, headers, { anchored = false } = {}) {
   if (!isTrustedProxy(asserted)) return asserted;
 
   const hops = String(headers['x-forwarded-for'] || '')
     .split(',').map(hop => stripPort(hop.trim())).filter(Boolean);
-  for (let i = hops.length - 1; i >= 0; i--) {
+
+  let start = hops.length - 1;
+  if (anchored) {
+    // Rightmost occurrence: a caller can prepend our egress address, and only the entry the real
+    // hop appended is at or right of that forgery.
+    start = hops.lastIndexOf(asserted);
+    if (start < 0) return asserted;
+  }
+
+  for (let i = start; i >= 0; i--) {
     if (!isTrustedProxy(hops[i])) return hops[i];
   }
   return asserted;
@@ -110,9 +126,9 @@ function callerIp(req) {
   if (fromEdge(headers)) {
     // Front Door's own socket peer is the OpenShift rproxy on the public path
     // (browser → rproxy → Front Door → APIM), so this is not automatically the browser either —
-    // walk on past it exactly as the gateway branch does.
+    // walk on past it, anchored at the hop Front Door saw.
     const socketIp = normalizeIp(stripPort(String(headers['x-azure-socketip'] || '').trim()));
-    if (socketIp) return behindProxy(socketIp, headers);
+    if (socketIp) return behindProxy(socketIp, headers, { anchored: true });
   }
 
   // Behind APIM the last forwarded hop is APIM ITSELF, so every public caller resolves to one
