@@ -314,6 +314,7 @@ function authenticate(req, onSuccess, onFailure) {
 module.exports = {
   authenticate,
   fromGateway,
+  matchesConfiguredKey,
   isAllowedClient,
   forgetCachedKey,
   KEY_CACHE_TTL_MS

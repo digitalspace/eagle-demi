@@ -81,6 +81,12 @@ param ssoAudience = ''
 // bulk-download quota key.
 param trustedProxyIps = ''
 
+// The secret the eagle-edge rule set stamps on origin requests. It comes from OpenShift
+// `demi-app-secrets` through deploy-infra.sh, never from this file. The `''` fallback is
+// deliberate, like notifyApiKey below: an environment with no Front Door in front of it writes no
+// secret and ignores the header, rather than failing the build on a value it does not use.
+param edgeSecret = readEnvironmentVariable('EDGE_SECRET', '')
+
 // Empty, deliberately. There is no DEMI frontend in prod — eagle-public is the consumer and it
 // reaches this API same-origin through rproxy, so no browser origin needs allowing. Empty leaves
 // CORS_ORIGIN unset and src/app.js falls back to localhost only: fail closed, not open.

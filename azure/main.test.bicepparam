@@ -126,6 +126,12 @@ param ssoAudience = 'account'
 // An address missing here only puts that proxy's visitors back on one shared key.
 param trustedProxyIps = '142.34.194.121,142.34.194.123,142.34.194.124'
 
+// The secret the eagle-edge rule set stamps on origin requests. It comes from OpenShift
+// `demi-app-secrets` through deploy-infra.sh, never from this file. The `''` fallback is
+// deliberate, like notifyApiKey below: an environment with no Front Door in front of it writes no
+// secret and ignores the header, rather than failing the build on a value it does not use.
+param edgeSecret = readEnvironmentVariable('EDGE_SECRET', '')
+
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
 // Secrets come from OpenShift `demi-app-secrets` through deploy-infra.sh, never from this file.

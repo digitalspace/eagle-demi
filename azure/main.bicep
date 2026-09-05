@@ -139,6 +139,13 @@ param ssoAudience string = ''
 @description('Comma-separated egress IPs of proxies we run. An APIM-asserted address on this list makes the browser hop of X-Forwarded-For the caller.')
 param trustedProxyIps string = ''
 
+// Empty means X-Edge-Secret is ignored and every visitor arriving through Front Door shares its
+// egress address as one anonymous quota key. OPTIONAL, like notifyApiKey: empty writes no Key
+// Vault secret at all.
+@description('Shared secret the eagle-edge Front Door rule set stamps as X-Edge-Secret. A request carrying it is keyed on X-Azure-SocketIP.')
+@secure()
+param edgeSecret string = ''
+
 // Flex needs its own subnet, delegated to `Microsoft.App/environments`. Empty deploys no API app
 // at all, so an environment that wants one must supply it.
 @description('Delegated subnet for the Flex Consumption API app. Empty deploys no API.')
@@ -350,6 +357,7 @@ module keyVault './modules/key-vault.bicep' = {
     trackClientSecret: trackClientSecret
     roleSyncClientSecret: roleSyncClientSecret
     notifyApiKey: notifyApiKey
+    edgeSecret: edgeSecret
   }
 }
 
@@ -510,6 +518,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     allowedClients: allowedClients
     ssoAudience: ssoAudience
     trustedProxyIps: trustedProxyIps
+    edgeSecretUri: keyVault.outputs.edgeSecretUri
     virtualNetworkSubnetId: apiFlexSubnetId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId

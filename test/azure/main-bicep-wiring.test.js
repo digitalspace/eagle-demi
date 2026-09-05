@@ -391,6 +391,45 @@ test('the API app reads both team-sync secrets through Key Vault references', ()
   }
 });
 
+// The edge secret is what makes the app believe X-Azure-SocketIP, and it is optional in the same
+// three-file shape the notify key is: an empty value writes no Key Vault secret, an empty URI
+// leaves the app setting empty, and the deploy script sources it without demanding it. Delete the
+// app-setting block or rename the variable and `az bicep build` still exits 0 — the app would then
+// silently key every Front Door visitor on one shared anonymous quota row.
+test('the API app reads EDGE_SECRET through a Key Vault reference', () => {
+  const setting = API_MODULE
+    .split(/^\s+\{$/m)
+    .find(b => /name: 'EDGE_SECRET'/.test(b));
+  assert.ok(setting, 'no EDGE_SECRET app setting declared at all — src/config.js would read nothing');
+  assert.match(setting, /value: empty\(edgeSecretUri\) \? '' : '@Microsoft\.KeyVault\(SecretUri=\$\{edgeSecretUri\}\)'/,
+    'the setting must be a Key Vault reference bound to edgeSecretUri, never the secret itself, ' +
+    'and empty where no secret was written — a reference to no secret resolves to the literal');
+  assert.doesNotMatch(API_MODULE, /value: edgeSecret$/m,
+    'no app setting may carry the raw edgeSecret value');
+
+  assert.match(MAIN, /^@secure\(\)\nparam edgeSecret string = ''$/m,
+    'edgeSecret must be @secure() in main.bicep, or its value is readable in ARM deployment history');
+  assert.match(MAIN, /^\s+edgeSecret: edgeSecret$/m,
+    'and be passed into the vault module, or the secret is never written');
+  assert.match(MAIN, /^\s+edgeSecretUri: keyVault\.outputs\.edgeSecretUri$/m,
+    'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
+
+  assert.match(KEY_VAULT, /var hasEdgeSecret = !empty\(edgeSecret\)/);
+  assert.match(KEY_VAULT, /resource edgeSecretSecret [^\n]+ = if \(hasEdgeSecret\) \{/,
+    'an empty secret must write no Key Vault secret — there is no empty secret value to write');
+  assert.match(KEY_VAULT, /^output edgeSecretUri string = hasEdgeSecret \? \w+!\.properties\.secretUri : ''$/m,
+    'and output its VERSIONLESS uri, so a rotation is a new secret version plus a restart');
+
+  for (const [label, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+    assert.match(params, /^param edgeSecret = readEnvironmentVariable\('EDGE_SECRET', ''\)$/m,
+      `${label} must read the secret from the environment — a literal would publish it, this ` +
+      'repository is public');
+  }
+
+  assert.match(DEPLOY, /os_secret demi-app-secrets EDGE_SECRET/,
+    'the secret comes from OpenShift, like every other secret this script sources');
+});
+
 // The gateway secret is what makes the app trust an APIM-asserted subscription, and both halves of
 // that trust are text-structural: a plain-value app setting would put the secret in the template
 // and in ARM history, and a global policy that sets the two headers without deleting the client's

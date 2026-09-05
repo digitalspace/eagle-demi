@@ -10,10 +10,19 @@ const GATEWAY_SECRET = 'test-gateway-secret';
 /** The rproxy egress address, as TRUSTED_PROXY_IPS would name it. */
 const RPROXY = '142.34.64.10';
 
-function withTrustedProxies(list, fn) {
-  const previous = config.trustedProxyIps;
-  config.trustedProxyIps = list;
-  try { return fn(); } finally { config.trustedProxyIps = previous; }
+/** The value eagle-edge's rule set stamps, as EDGE_SECRET would name it. */
+const EDGE_SECRET = 'test-edge-secret';
+
+/** An egress address of the Front Door fleet: what APIM sees, never a browser. */
+const AFD_EGRESS = '147.243.0.9';
+
+function withConfig(overrides, fn) {
+  const previous = {};
+  for (const key of Object.keys(overrides)) {
+    previous[key] = config[key];
+    config[key] = overrides[key];
+  }
+  try { return fn(); } finally { Object.assign(config, previous); }
 }
 
 function req(headers, socket) {
@@ -116,7 +125,7 @@ test('callerIp behind our own rproxy', async (t) => {
       'x-client-ip': RPROXY,
       'x-forwarded-for': '198.51.100.7, 142.34.64.10'
     });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(throughRproxy)), '198.51.100.7');
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(throughRproxy)), '198.51.100.7');
   });
 
   await t.test('a forged prefix cannot become the quota key', () => {
@@ -126,7 +135,7 @@ test('callerIp behind our own rproxy', async (t) => {
       'x-client-ip': RPROXY,
       'x-forwarded-for': '9.9.9.9, 1.2.3.4, 142.34.64.10'
     });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(forged)), '1.2.3.4');
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(forged)), '1.2.3.4');
   });
 
   await t.test('a CIDR entry matches the in-cluster router hop', () => {
@@ -135,20 +144,20 @@ test('callerIp behind our own rproxy', async (t) => {
       'x-forwarded-for': '198.51.100.7, 10.97.4.31, 142.34.64.10'
     });
     assert.strictEqual(
-      withTrustedProxies([RPROXY, '10.0.0.0/8'], () => callerIp(throughRouter)), '198.51.100.7');
+      withConfig({ trustedProxyIps: [RPROXY, '10.0.0.0/8'] }, () => callerIp(throughRouter)), '198.51.100.7');
   });
 
   await t.test('strips a port off the browser hop', () => {
     const withPort = viaGateway({
       'x-client-ip': RPROXY, 'x-forwarded-for': '198.51.100.7:52344, 142.34.64.10'
     });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(withPort)), '198.51.100.7');
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(withPort)), '198.51.100.7');
   });
 
   await t.test('a chain of nothing but our own hops falls back to the asserted address', () => {
     const allOurs = viaGateway({ 'x-client-ip': RPROXY, 'x-forwarded-for': '10.97.4.31, 142.34.64.10' });
     assert.strictEqual(
-      withTrustedProxies([RPROXY, '10.0.0.0/8'], () => callerIp(allOurs)), RPROXY);
+      withConfig({ trustedProxyIps: [RPROXY, '10.0.0.0/8'] }, () => callerIp(allOurs)), RPROXY);
   });
 
   await t.test('an untrusted asserted address is still the answer', () => {
@@ -157,25 +166,183 @@ test('callerIp behind our own rproxy', async (t) => {
     const direct = viaGateway({
       'x-client-ip': '203.0.113.5', 'x-forwarded-for': '198.51.100.7, 20.151.0.5'
     });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(direct)), '203.0.113.5');
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(direct)), '203.0.113.5');
   });
 
   await t.test('a trusted proxy with no forwarded chain keeps the asserted address', () => {
     const noChain = viaGateway({ 'x-client-ip': RPROXY });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(noChain)), RPROXY);
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(noChain)), RPROXY);
   });
 
   await t.test('the chain is not walked without the gateway secret', () => {
     // Without the secret the whole chain is attacker input: naming a trusted proxy in X-Client-Ip
     // would otherwise let any caller pick which hop becomes their quota key.
     const spoofed = req({ 'x-client-ip': RPROXY, 'x-forwarded-for': '198.51.100.7, 142.34.7.9' });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(spoofed)), '142.34.7.9');
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(spoofed)), '142.34.7.9');
   });
 
   await t.test('an empty trusted list leaves the APIM behaviour untouched', () => {
     const throughRproxy = viaGateway({
       'x-client-ip': RPROXY, 'x-forwarded-for': '198.51.100.7, 142.34.64.10'
     });
-    assert.strictEqual(withTrustedProxies([], () => callerIp(throughRproxy)), RPROXY);
+    assert.strictEqual(withConfig({ trustedProxyIps: [] }, () => callerIp(throughRproxy)), RPROXY);
+  });
+});
+
+test('callerIp behind Front Door', async (t) => {
+  t.beforeEach(() => { process.env.APIM_GATEWAY_SECRET = GATEWAY_SECRET; });
+  t.afterEach(() => { delete process.env.APIM_GATEWAY_SECRET; });
+
+  /** What eagle-edge's rule set stamps: the shared secret, plus the peer Front Door accepted. */
+  function viaEdge(extra) {
+    return viaGateway({
+      'x-edge-secret': EDGE_SECRET,
+      'x-azure-socketip': '198.51.100.7',
+      'x-client-ip': AFD_EGRESS,
+      'x-forwarded-for': `198.51.100.7, ${AFD_EGRESS}`,
+      ...extra
+    });
+  }
+
+  await t.test('the edge secret makes X-Azure-SocketIP the caller', () => {
+    // Front Door terminates the connection, so APIM asserts an AFD egress address for every
+    // visitor — which is one shared anonymous bulk quota for all of them.
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(viaEdge())), '198.51.100.7');
+  });
+
+  await t.test('a wrong edge secret is ignored', () => {
+    // Anyone reaching APIM can send the header; only the value eagle-edge stamps unlocks it.
+    const forged = viaEdge({ 'x-edge-secret': 'not-the-edge-secret' });
+    assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(forged)), AFD_EGRESS);
+  });
+
+  await t.test('a missing edge secret is ignored', () => {
+    const bare = viaEdge({ 'x-edge-secret': undefined });
+    assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(bare)), AFD_EGRESS);
+  });
+
+  await t.test('an empty EDGE_SECRET leaves the APIM behaviour untouched', () => {
+    // The off switch. Without it an empty config would match an empty header from any caller.
+    assert.strictEqual(withConfig({ edgeSecret: '' }, () => callerIp(viaEdge())), AFD_EGRESS);
+  });
+
+  await t.test('an empty EDGE_SECRET does not match an absent header', () => {
+    // The dangerous half of the off switch, and the one a length comparison cannot catch: two
+    // empty strings ARE equal, so without the explicit empty guard every caller sending no header
+    // at all would be believed and pick its own quota key.
+    const bothEmpty = viaEdge({ 'x-edge-secret': undefined, 'x-azure-socketip': '9.9.9.9' });
+    assert.strictEqual(withConfig({ edgeSecret: '' }, () => callerIp(bothEmpty)), AFD_EGRESS);
+  });
+
+  await t.test('an unresolved Key Vault reference is not a secret', () => {
+    const ref = '@Microsoft.KeyVault(SecretUri=https://demi-kv-test.vault.azure.net/secrets/edge-secret)';
+    const spoofed = viaEdge({ 'x-edge-secret': ref });
+    assert.strictEqual(withConfig({ edgeSecret: ref }, () => callerIp(spoofed)), AFD_EGRESS);
+  });
+
+  await t.test('a garbage X-Azure-SocketIP falls back to the forwarded chain', () => {
+    // An unusable value must not become the quota key: every caller sending it would share one row.
+    for (const garbage of ['not-an-ip', ':', '::::', '1.2.3.4.5', '']) {
+      const req_ = viaEdge({ 'x-azure-socketip': garbage });
+      assert.strictEqual(
+        withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(req_)), AFD_EGRESS, garbage);
+    }
+  });
+
+  await t.test('an IPv4-mapped IPv6 socket address is normalized', () => {
+    const mapped = viaEdge({ 'x-azure-socketip': '::ffff:198.51.100.7' });
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(mapped)), '198.51.100.7');
+  });
+
+  await t.test('a bracketed IPv6 socket address is accepted', () => {
+    const v6 = viaEdge({ 'x-azure-socketip': '[2001:db8::1]' });
+    assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(v6)), '2001:db8::1');
+  });
+
+  await t.test('X-Azure-ClientIP is never consulted, secret or no secret', () => {
+    // Front Door derives ClientIP from the caller's own X-Forwarded-For, so a browser picks it.
+    const forged = viaEdge({ 'x-azure-socketip': undefined, 'x-azure-clientip': '9.9.9.9' });
+    assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(forged)), AFD_EGRESS);
+  });
+
+  /** The rproxy egress Front Door accepts the public path's connections from. */
+  const RPROXY_EGRESS = '142.34.194.121';
+
+  /**
+   * The chain DEMI actually reads on the public path. Front Door appends its socket peer (the
+   * rproxy), then APIM appends Front Door — so the browser is TWO hops in from the right, and the
+   * two entries right of it are the same for every visitor alive.
+   */
+  function publicPath(browser) {
+    return viaEdge({
+      'x-azure-socketip': RPROXY_EGRESS,
+      'x-client-ip': AFD_EGRESS,
+      'x-forwarded-for': `${browser}, ${RPROXY_EGRESS}, ${AFD_EGRESS}`
+    });
+  }
+
+  await t.test('the walk starts at the socket hop, not at the end of the chain', () => {
+    // Walking plain right-to-left stops on the AFD egress, which is one shared anonymous bulk
+    // quota row for the entire public internet — the exact bug the edge secret exists to avoid.
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
+        () => callerIp(publicPath('198.51.100.7'))), '198.51.100.7');
+  });
+
+  await t.test('two browsers on that path get two different keys', () => {
+    // The whole point of the feature: same rproxy, same Front Door, different quota rows.
+    const resolve = (browser) => withConfig(
+      { edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
+      () => callerIp(publicPath(browser)));
+    assert.strictEqual(resolve('203.0.113.55'), '203.0.113.55');
+    assert.notStrictEqual(resolve('203.0.113.55'), resolve('198.51.100.7'));
+  });
+
+  await t.test('a socket IP absent from the chain is the answer itself', () => {
+    // Nothing to anchor on, so there is no hop known to be left of it: guessing would let a caller
+    // pick its own key by prepending one.
+    const noAnchor = viaEdge({
+      'x-azure-socketip': RPROXY_EGRESS,
+      'x-forwarded-for': `198.51.100.7, ${AFD_EGRESS}`
+    });
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
+        () => callerIp(noAnchor)), RPROXY_EGRESS);
+  });
+
+  await t.test('a socket IP that is not ours is the caller itself', () => {
+    // The direct path, with no rproxy in front: Front Door accepted the browser's own connection.
+    const direct = viaEdge({
+      'x-azure-socketip': '198.51.100.7',
+      'x-forwarded-for': `198.51.100.7, ${AFD_EGRESS}`
+    });
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
+        () => callerIp(direct)), '198.51.100.7');
+  });
+
+  await t.test('a forged copy of our egress left of the real hop is not reached', () => {
+    // A caller can prepend anything, our own egress address included. The anchor is the RIGHTMOST
+    // occurrence, so the forgery stays left of where the walk starts.
+    const forged = viaEdge({
+      'x-azure-socketip': RPROXY_EGRESS,
+      'x-forwarded-for': `9.9.9.9, ${RPROXY_EGRESS}, 198.51.100.7, ${RPROXY_EGRESS}, ${AFD_EGRESS}`
+    });
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET, trustedProxyIps: [RPROXY_EGRESS] },
+        () => callerIp(forged)), '198.51.100.7');
+  });
+
+  await t.test('the edge secret stands on its own, without the gateway secret', () => {
+    // AFD reaches the app through APIM either way, and the two secrets prove different hops.
+    const noGateway = req({
+      'x-edge-secret': EDGE_SECRET,
+      'x-azure-socketip': '198.51.100.7',
+      'x-forwarded-for': '142.34.7.9'
+    });
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(noGateway)), '198.51.100.7');
   });
 });
