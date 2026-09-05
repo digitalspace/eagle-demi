@@ -155,11 +155,22 @@ order takes the live search down for anonymous callers.
    GET  {endpoint}/indexers/{name}/status?api-version=2024-07-01
    ```
 
-   **A 202 means the run STARTED, not that any row moved.** Poll `status` and read
-   `lastResult.itemsProcessed` / `itemsFailed` — a reset that re-pulled nothing looks identical to
-   one that worked if you stop at the 202. `lastResult.status` passes through `reset` on its way to
-   `success`, so treat `reset` as still-running rather than as a terminal state. The projects
-   indexer reports `393 processed, 0 failed` when it has done its job.
+   Both POSTs need an empty-body content-length header or the REST API answers 411, not 204/202:
+
+   ```bash
+   curl -X POST -H "Content-Length: 0" "{endpoint}/indexers/{name}/reset?api-version=2024-07-01"
+   curl -X POST -H "Content-Length: 0" "{endpoint}/indexers/{name}/run?api-version=2024-07-01"
+   ```
+
+   **A 202 means the run STARTED, not that any row moved.** The status document's top-level
+   `status` is not a completion signal — it reads `running` the whole time the indexer is enabled
+   on its schedule, reset or no reset. Read `executionHistory[0]` instead (the entry whose
+   `startTime` matches this run) and wait for **its** `status` to reach `success`, then compare
+   `itemsProcessed` there against the index's document count. `lastResult` is the same object as
+   `executionHistory[0]` but the PT5M schedule keeps appending steady-state ticks to the history
+   with `itemsProcessed: 0` — checking the wrong entry, or checking too late, reads like the reset
+   never finished. The projects indexer's run entry reports `393 processed, 0 failed` when it has
+   done its job (61,587 for documents, measured 2026-09-05; 60,578 at cutover).
 
    A **data-only** change needs none of this: a Cosmos patch moves `_ts`, so the `PT5M` schedule
    picks it up on its own within five minutes — and that path needs **no role grant at all**, which
