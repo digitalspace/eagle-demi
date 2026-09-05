@@ -12,8 +12,8 @@ changed endpoint, swagger in the same PR, `src/utils/logger.js` for logging, ask
 **Merging is deploying** on test, so every unit leaves anonymous responses byte-identical unless its
 line says otherwise. Line cites verified 2026-09-02 at `7215e11`; re-verify before editing.
 
-Order for what is left: U1, then the U3 and U4 prod steps, then P3-0's prod schedule, then
-P4-3 → P4-4 → P4-5. P3-2 and P3-6 residues are independent. P5b is optional and unscheduled.
+Order for what is left: U1, then the U3 and U4 prod steps, then P4-3 → P4-4 → P4-5. P3-2 and P3-6
+residues are independent. P5b is optional and unscheduled.
 
 ## Facts
 
@@ -33,13 +33,13 @@ P4-3 → P4-4 → P4-5. P3-2 and P3-6 residues are independent. P5b is optional 
       `compliance` exist on test and prod (2026-09-02, `kc-create-demi-clients.sh`). Level 3 is the
       `identity_provider` claim and level 1 is project scope, so neither is a realm role.
 - [x] Track `GET /api/v1/projects/team-members` (bcgov/EPIC.track#2829): merged 2026-09-01, on test
-      2026-09-02. Prod pending Track's own prod release (last 2026-05-20).
+      2026-09-02, on prod 2026-09-05 — 200 with 103 rows through the prod `demi-track-reader` client.
 - [x] Realm clients `demi-track-reader` and `demi-role-sync` in `eao-epic`, secrets in
       `demi-app-secrets`: test and prod 2026-09-02.
 - [ ] `project:<id>` roles issued in `eao-epic` to every EAO user who must see their own team's
       records. Minted by P3-0's sync, not by hand. Test 2026-09-02: 96 roles, 115 mappings; 53 Track
-      staff have no test-realm user. Prod: blocked on Track prod, see the row above. Owner: Daniel.
-      Delivered (prod): ______
+      staff have no test-realm user. Prod: the timer is armed, roles land on its first run.
+      Owner: Daniel. Delivered (prod): 2026-09-05 (#317)
 - [x] EAO questions 1-4: closed 2026-08-28, answers in `docs/rbac-architecture.md` §3.
 - [ ] Entra app registration for the DEMI API, app roles named exactly as the realm roles, issuer and
       audience recorded in the wiki. Blocks P4-3. The tenant refuses non-admin `az ad app create`
@@ -92,8 +92,11 @@ Code and the `DEMI_ALLOWED_CLIENTS` app setting ship in two pipelines, so infra 
 
 ## P3-0 residue — prod team sync
 
-- [ ] `syncTeamsSchedule` stays `''` in `azure/main.prod.bicepparam:159` until Track prod serves
-      `/api/v1/projects/team-members`. The realm clients and roles already exist in prod.
+- [ ] `syncTeamsSchedule` is `'0 0 11 * * *'` in `azure/main.prod.bicepparam:159` as of 2026-09-05
+      (#317), an hour after the reconcile timer. It starts firing after the next
+      `deploy-infra.sh prod --live` (U3). The realm clients and roles already exist in prod. Read the
+      first run the morning of 2026-09-06: the `[track-teams]` summary line in App Insights for
+      `demi-api-fc-prod`.
 
 ## P3-2 residue — level 3 measurement
 
