@@ -29,6 +29,8 @@ module.exports = {
   legislation: { defaultVis: 4, maxVis: 4 },
   isFeatured: { defaultVis: 4, maxVis: 4 },
   documentSource: { defaultVis: 4, maxVis: 4 },
+  // Bytes. Shipped as `internalSize`, Eagle's name for it, so eagle-public can size a bulk download.
+  fileSize: { defaultVis: 4, maxVis: 4 },
   // `documentFileName` under the filename analyzer, so it carries no further data. Not retrievable,
   // so no hit carries it; classified anyway, because retrievable is one index PUT away.
   fileNameTokens: { defaultVis: 4, maxVis: 4 },

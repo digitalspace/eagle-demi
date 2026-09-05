@@ -1281,6 +1281,16 @@ test('the project search selects the vis dial map', () => {
     'without vis every per-record dial is silently inert on the project search path');
 });
 
+// Same guard as the project-list-columns case above, for the document side: `fileSize` backs
+// eagle-public's size column, and the select-vs-index test only proves the field exists in the
+// index, not that this query asks for it — a field absent from `select` comes back undefined on
+// every hit under a 200, and that reads as a blank column, not an error.
+test('the document search selects the columns the document list renders', () => {
+  const selected = new Set(aiSearch.DOCUMENT_SELECT.split(','));
+  assert.ok(selected.has('fileSize'),
+    'fileSize is not selected, so every hit returns it undefined and the size column reads blank');
+});
+
 // Every searchable projects field is analyzed `en.microsoft`, which strips stopwords: `keywords=mine`
 // matched none of the 32 projects named "... Mine". `nameTokens` is `name` again under the
 // stopword-free `filename` analyzer, and BOTH callers need it — the same query runs against the

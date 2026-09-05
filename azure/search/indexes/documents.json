@@ -379,6 +379,24 @@
       "vectorSearchProfile": null,
       "vectorEncoding": null,
       "synonymMaps": []
+    },
+    {
+      "name": "fileSize",
+      "type": "Edm.Int64",
+      "searchable": false,
+      "filterable": false,
+      "retrievable": true,
+      "stored": true,
+      "sortable": false,
+      "facetable": false,
+      "key": false,
+      "indexAnalyzer": null,
+      "searchAnalyzer": null,
+      "analyzer": null,
+      "dimensions": null,
+      "vectorSearchProfile": null,
+      "vectorEncoding": null,
+      "synonymMaps": []
     }
   ],
   "scoringProfiles": [],

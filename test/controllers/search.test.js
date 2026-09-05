@@ -766,6 +766,30 @@ test('Search Controller Tests', async (t) => {
     assert.strictEqual(plain.documentSource, '', 'absent means an empty string, not undefined');
   });
 
+  // eagle-public estimates a bulk download's size from `internalSize` — Eagle's name for the byte
+  // count the index stores as `fileSize`. Emitting the index name would size every job at zero.
+  await t.test('a document row carries fileSize as internalSize', async () => {
+    t.mock.method(aiSearch, 'searchDocuments', async () => ({
+      count: 2,
+      items: [
+        { id: 'doc1', displayName: 'Sized', documentFileName: 'a.pdf',
+          fileSize: 1048576, projectId: '207', read: ['public'] },
+        // Not every document carries one; the key still ships, null like the other optionals.
+        { id: 'doc2', displayName: 'Unsized', documentFileName: 'b.pdf', projectId: '207', read: ['public'] }
+      ]
+    }));
+    t.mock.method(projectsRepo, 'listByIds', async () => [{ id: '207', name: 'Site C' }]);
+
+    const req = { query: { dataset: 'Document', keywords: 'Ajax' }, header: () => null };
+    let jsonResponse;
+    const res = { json: (data) => { jsonResponse = data; return res; }, status: () => res };
+    await searchController.search(req, res);
+
+    const [sized, unsized] = jsonResponse[0].searchResults;
+    assert.strictEqual(sized.internalSize, 1048576);
+    assert.strictEqual(unsized.internalSize, null);
+  });
+
   await t.test('a bare document list is served by the index, not by Cosmos', async () => {
     // The request shape that used to take the deleted Cosmos read: no keywords, no sort, and a
     // `project` — which `hasCriteria` excludes on purpose. It paged by overfetch-and-slice against
