@@ -155,8 +155,9 @@ param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 param notifyApiBase = ''
 param notifyApiKey = readEnvironmentVariable('NOTIFY_API_KEY', '')
 
-// Nightly 10:00 UTC. Armed 2026-09-05 after Track prod shipped /api/v1/projects/team-members.
-param syncTeamsSchedule = '0 0 10 * * *'
+// Nightly 11:00 UTC, an hour after reconcile. Armed 2026-09-05 after Track prod shipped
+// /api/v1/projects/team-members.
+param syncTeamsSchedule = '0 0 11 * * *'
 
 // ── Devbox ────────────────────────────────────────────────────────────────────────────────────
 // Same shape as test: dev-access VM on `snet-servers`, a plain landing-zone subnet with its own
