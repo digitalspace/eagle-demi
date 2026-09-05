@@ -60,9 +60,6 @@ function stubSources(over = {}) {
   return {
     EAGLE_API_BASE,
     loadTrackProjects: () => TRACK_PROJECTS,
-    // Read-only here: the count is the only phase signal prod gets, because the project mirror
-    // that writes them is off in that environment.
-    loadTrackWorkPhases: async () => new Map([['207', [{ name: 'Early Engagement' }]]]),
     fetchEagleProjects: async () => EAGLE_PROJECTS,
     // Same generic pager seed-nosql calls for ProjectNotification — asserted so a divergent
     // dataset name would fail here rather than silently reading the wrong collection.
@@ -222,39 +219,24 @@ test('summaryLine is the alert contract', async (t) => {
     assert.strictEqual(summaryLine(summary),
       '[reconcile] projects: unpublishedOrDeleted=1 eagleOnly=0 ' +
       'documents: unpublishedOrDeleted=1 eagleOnly=3 unresolvedParent=1 ' +
-      'trackPhases=1 drift=5');
+      'drift=5');
   });
 
   await t.test('a clean run says drift=0', () => {
     assert.strictEqual(
       summaryLine({ projects: { unpublishedOrDeleted: [], eagleOnly: [] },
         documents: { unpublishedOrDeleted: [], eagleOnly: [], unresolvedParent: [] },
-        trackPhases: 0, drift: 0 }),
+        drift: 0 }),
       '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 ' +
-      'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 trackPhases=0 drift=0');
+      'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 drift=0');
   });
 
   // The alert rule reads `drift=` out of this line with a regex (azure/modules/observability.bicep).
-  await t.test('the phase count does not displace what the alert matches', async () => {
+  await t.test('the alert can always extract drift=', async () => {
     const line = summaryLine(await reconcile([], makeDeps()));
     assert.ok(line.includes('[reconcile] projects'), line);
     assert.strictEqual(/drift=([0-9]+)/.exec(line)[1], '5');
   });
-});
-
-/** Phases are Track coverage, not Eagle drift: a Track outage must not raise the drift alarm. */
-test('a Track work phase feed that is down is a failure, not drift', async () => {
-  const deps = makeDeps({
-    sources: stubSources({
-      loadTrackWorkPhases: async () => { throw new Error('HTTP 503 Service Unavailable'); }
-    })
-  });
-
-  const summary = await reconcile([], deps);
-
-  assert.strictEqual(summary.trackPhases, 0);
-  assert.strictEqual(summary.drift, 5, 'unchanged');
-  assert.ok(summary.failures.some(f => f.includes('Track work phases')), summary.failures.join('; '));
 });
 
 // `run` is what BOTH callers go through — the CLI entry below `require.main` and the nightly

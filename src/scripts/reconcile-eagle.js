@@ -71,7 +71,6 @@ function summaryLine(summary) {
     `projects: unpublishedOrDeleted=${p.unpublishedOrDeleted.length} eagleOnly=${p.eagleOnly.length} ` +
     `documents: unpublishedOrDeleted=${d.unpublishedOrDeleted.length} eagleOnly=${d.eagleOnly.length} ` +
     `unresolvedParent=${d.unresolvedParent.length} ` +
-    `trackPhases=${summary.trackPhases} ` +
     `drift=${summary.drift}`;
 }
 
@@ -90,7 +89,7 @@ async function reconcile(argv = [], deps = {}) {
   const access = systemAccess();
 
   const summary = {
-    eagle: src.EAGLE_API_BASE, projects: {}, documents: {}, trackPhases: 0, drift: 0, failures: []
+    eagle: src.EAGLE_API_BASE, projects: {}, documents: {}, drift: 0, failures: []
   };
 
   // Eagle first: `fetchAllPages` throws when a fetch falls short of the reported
@@ -128,15 +127,6 @@ async function reconcile(argv = [], deps = {}) {
   summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff };
   summary.drift = projectDiff.unpublishedOrDeleted.length + projectDiff.eagleOnly.length +
     documentDiff.unpublishedOrDeleted.length + documentDiff.eagleOnly.length;
-
-  // Track phase coverage, read-only and OUTSIDE `drift`: prod runs this job and not the project
-  // mirror (`syncTeamsSchedule` is empty there, azure/main.prod.bicepparam), so this count is the
-  // only nightly evidence that Track has phases for projects whose DEMI rows may not carry them.
-  try {
-    summary.trackPhases = (await src.loadTrackWorkPhases()).size;
-  } catch (err) {
-    summary.failures.push(`Track work phases: ${err.message}`);
-  }
 
   return summary;
 }
