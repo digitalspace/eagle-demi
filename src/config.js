@@ -284,6 +284,11 @@ const config = {
   // these, every eagle-public visitor shares it and the anonymous bulk quota becomes one global
   // bucket — so utils/caller-ip.js keys on the browser hop instead. See that file.
   trustedProxyIps:       proxyListFromEnv('TRUSTED_PROXY_IPS'),
+
+  // Front Door profile ids (`X-Azure-FDID`). Front Door terminates the connection, so APIM asserts
+  // an AFD egress address for every visitor and the anonymous bulk quota becomes one global bucket
+  // again. Empty = the header is ignored. See utils/caller-ip.js.
+  frontDoorIds:          (process.env.FRONT_DOOR_IDS || '').split(',').map(s => s.trim()).filter(Boolean),
 };
 
 // Optional second object-store credential, read by src/scripts/backfill-objects.js: the test

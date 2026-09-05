@@ -126,6 +126,9 @@ param ssoAudience = 'account'
 // An address missing here only puts that proxy's visitors back on one shared key.
 param trustedProxyIps = '142.34.194.121,142.34.194.123,142.34.194.124'
 
+// The `eagle-edge-test` Front Door profile, which fronts eagle-public.
+param frontDoorIds = '8280fe25-2794-4c4d-bbbd-a0a2bd82de8d'
+
 // ── Track team sync ───────────────────────────────────────────────────────────────────────────
 // The nightly job that mints `project:<id>` realm roles from Track's team-members endpoint.
 // Secrets come from OpenShift `demi-app-secrets` through deploy-infra.sh, never from this file.

@@ -40,6 +40,11 @@ function inCidr(ip, cidr) {
   return ((address & mask) >>> 0) === ((network & mask) >>> 0);
 }
 
+/** An address we can key a quota on: a dotted quad, or something carrying an IPv6's colons. */
+function isIpAddress(value) {
+  return ipToLong(value) !== null || /^[0-9a-f]*(:[0-9a-f]*)+$/i.test(value);
+}
+
 /** A hop we run: a plain address, or a range for the in-cluster router hop (`10.0.0.0/8`). */
 function isTrustedProxy(ip) {
   return config.trustedProxyIps.some(
@@ -58,6 +63,16 @@ function callerIp(req) {
   // policy asserts the address it saw in X-Client-Ip (azure/modules/apim.bicep), and the gateway
   // secret is the whole reason that header can be believed.
   if (fromGateway(req)) {
+    // Front Door terminates the connection one hop further out, so the address APIM asserts is an
+    // AFD egress shared by every visitor. A profile id we deployed makes the address Front Door
+    // resolved the caller instead.
+    // ponytail: an APIM-direct caller forges this knowing the id; tighten with an APIM check-header on X-Azure-FDID or an ip-filter on the AzureFrontDoor.Backend tag.
+    const frontDoorId = String(headers['x-azure-fdid'] || '').trim().toLowerCase();
+    if (frontDoorId && config.frontDoorIds.some(id => id.toLowerCase() === frontDoorId)) {
+      const resolved = stripPort(String(headers['x-azure-clientip'] || '').trim());
+      if (resolved && isIpAddress(resolved)) return resolved;
+    }
+
     const asserted = stripPort(String(headers['x-client-ip'] || '').trim());
     // Further back when the address APIM saw is a proxy WE run: every eagle-public visitor reaches
     // us through the OpenShift rproxy, so the asserted address is the same for all of them and the

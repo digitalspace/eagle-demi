@@ -139,6 +139,11 @@ param ssoAudience string = ''
 @description('Comma-separated egress IPs of proxies we run. An APIM-asserted address on this list makes the browser hop of X-Forwarded-For the caller.')
 param trustedProxyIps string = ''
 
+// Empty means X-Azure-FDID is ignored and every visitor arriving through Front Door shares its
+// egress address as one anonymous quota key.
+@description('Comma-separated Front Door profile ids (X-Azure-FDID). A request carrying one is keyed on X-Azure-ClientIP.')
+param frontDoorIds string = ''
+
 // Flex needs its own subnet, delegated to `Microsoft.App/environments`. Empty deploys no API app
 // at all, so an environment that wants one must supply it.
 @description('Delegated subnet for the Flex Consumption API app. Empty deploys no API.')
@@ -510,6 +515,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     allowedClients: allowedClients
     ssoAudience: ssoAudience
     trustedProxyIps: trustedProxyIps
+    frontDoorIds: frontDoorIds
     virtualNetworkSubnetId: apiFlexSubnetId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId

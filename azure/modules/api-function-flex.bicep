@@ -114,6 +114,11 @@ param ssoAudience string = ''
 @description('Comma-separated egress IPs of proxies we run (the OpenShift rproxy). For an APIM-asserted address on this list the browser hop of X-Forwarded-For is the caller.')
 param trustedProxyIps string = ''
 
+// Empty keys every visitor arriving through Front Door on its egress address, which is one shared
+// anonymous bulk-download quota for all of them. src/utils/caller-ip.js.
+@description('Comma-separated Front Door profile ids (X-Azure-FDID). A request carrying one is keyed on the X-Azure-ClientIP Front Door resolved.')
+param frontDoorIds string = ''
+
 @description('Application Insights connection string. Empty disables telemetry, which is the local-development case.')
 param appInsightsConnectionString string = ''
 
@@ -695,6 +700,10 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'TRUSTED_PROXY_IPS'
           value: trustedProxyIps
+        }
+        {
+          name: 'FRONT_DOOR_IDS'
+          value: frontDoorIds
         }
       ]
       // Platform-level CORS, in front of the app's own, and it answers the preflight itself — so

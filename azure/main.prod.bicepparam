@@ -81,6 +81,9 @@ param ssoAudience = ''
 // bulk-download quota key.
 param trustedProxyIps = ''
 
+// The `eagle-edge-prod` Front Door profile in rg-eagle-public-prod.
+param frontDoorIds = '4216f7df-2a03-4830-9ed1-59ddd0f3d7b5'
+
 // Empty, deliberately. There is no DEMI frontend in prod — eagle-public is the consumer and it
 // reaches this API same-origin through rproxy, so no browser origin needs allowing. Empty leaves
 // CORS_ORIGIN unset and src/app.js falls back to localhost only: fail closed, not open.

@@ -10,10 +10,19 @@ const GATEWAY_SECRET = 'test-gateway-secret';
 /** The rproxy egress address, as TRUSTED_PROXY_IPS would name it. */
 const RPROXY = '142.34.64.10';
 
-function withTrustedProxies(list, fn) {
-  const previous = config.trustedProxyIps;
-  config.trustedProxyIps = list;
-  try { return fn(); } finally { config.trustedProxyIps = previous; }
+/** A Front Door profile id, as FRONT_DOOR_IDS would name it. */
+const FDID = '8280fe25-2794-4c4d-bbbd-a0a2bd82de8d';
+
+/** An egress address of the Front Door fleet: what APIM sees, never a browser. */
+const AFD_EGRESS = '147.243.0.9';
+
+function withConfig(overrides, fn) {
+  const previous = {};
+  for (const key of Object.keys(overrides)) {
+    previous[key] = config[key];
+    config[key] = overrides[key];
+  }
+  try { return fn(); } finally { Object.assign(config, previous); }
 }
 
 function req(headers, socket) {
@@ -116,7 +125,7 @@ test('callerIp behind our own rproxy', async (t) => {
       'x-client-ip': RPROXY,
       'x-forwarded-for': '198.51.100.7, 142.34.64.10'
     });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(throughRproxy)), '198.51.100.7');
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(throughRproxy)), '198.51.100.7');
   });
 
   await t.test('a forged prefix cannot become the quota key', () => {
@@ -126,7 +135,7 @@ test('callerIp behind our own rproxy', async (t) => {
       'x-client-ip': RPROXY,
       'x-forwarded-for': '9.9.9.9, 1.2.3.4, 142.34.64.10'
     });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(forged)), '1.2.3.4');
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(forged)), '1.2.3.4');
   });
 
   await t.test('a CIDR entry matches the in-cluster router hop', () => {
@@ -135,20 +144,20 @@ test('callerIp behind our own rproxy', async (t) => {
       'x-forwarded-for': '198.51.100.7, 10.97.4.31, 142.34.64.10'
     });
     assert.strictEqual(
-      withTrustedProxies([RPROXY, '10.0.0.0/8'], () => callerIp(throughRouter)), '198.51.100.7');
+      withConfig({ trustedProxyIps: [RPROXY, '10.0.0.0/8'] }, () => callerIp(throughRouter)), '198.51.100.7');
   });
 
   await t.test('strips a port off the browser hop', () => {
     const withPort = viaGateway({
       'x-client-ip': RPROXY, 'x-forwarded-for': '198.51.100.7:52344, 142.34.64.10'
     });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(withPort)), '198.51.100.7');
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(withPort)), '198.51.100.7');
   });
 
   await t.test('a chain of nothing but our own hops falls back to the asserted address', () => {
     const allOurs = viaGateway({ 'x-client-ip': RPROXY, 'x-forwarded-for': '10.97.4.31, 142.34.64.10' });
     assert.strictEqual(
-      withTrustedProxies([RPROXY, '10.0.0.0/8'], () => callerIp(allOurs)), RPROXY);
+      withConfig({ trustedProxyIps: [RPROXY, '10.0.0.0/8'] }, () => callerIp(allOurs)), RPROXY);
   });
 
   await t.test('an untrusted asserted address is still the answer', () => {
@@ -157,25 +166,90 @@ test('callerIp behind our own rproxy', async (t) => {
     const direct = viaGateway({
       'x-client-ip': '203.0.113.5', 'x-forwarded-for': '198.51.100.7, 20.151.0.5'
     });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(direct)), '203.0.113.5');
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(direct)), '203.0.113.5');
   });
 
   await t.test('a trusted proxy with no forwarded chain keeps the asserted address', () => {
     const noChain = viaGateway({ 'x-client-ip': RPROXY });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(noChain)), RPROXY);
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(noChain)), RPROXY);
   });
 
   await t.test('the chain is not walked without the gateway secret', () => {
     // Without the secret the whole chain is attacker input: naming a trusted proxy in X-Client-Ip
     // would otherwise let any caller pick which hop becomes their quota key.
     const spoofed = req({ 'x-client-ip': RPROXY, 'x-forwarded-for': '198.51.100.7, 142.34.7.9' });
-    assert.strictEqual(withTrustedProxies([RPROXY], () => callerIp(spoofed)), '142.34.7.9');
+    assert.strictEqual(withConfig({ trustedProxyIps: [RPROXY] }, () => callerIp(spoofed)), '142.34.7.9');
   });
 
   await t.test('an empty trusted list leaves the APIM behaviour untouched', () => {
     const throughRproxy = viaGateway({
       'x-client-ip': RPROXY, 'x-forwarded-for': '198.51.100.7, 142.34.64.10'
     });
-    assert.strictEqual(withTrustedProxies([], () => callerIp(throughRproxy)), RPROXY);
+    assert.strictEqual(withConfig({ trustedProxyIps: [] }, () => callerIp(throughRproxy)), RPROXY);
+  });
+});
+
+test('callerIp behind Front Door', async (t) => {
+  t.beforeEach(() => { process.env.APIM_GATEWAY_SECRET = GATEWAY_SECRET; });
+  t.afterEach(() => { delete process.env.APIM_GATEWAY_SECRET; });
+
+  /** What Front Door hands APIM: its own profile id, the client it resolved, and its own egress. */
+  function viaFrontDoor(extra) {
+    return viaGateway({
+      'x-azure-fdid': FDID,
+      'x-azure-clientip': '198.51.100.7',
+      'x-client-ip': AFD_EGRESS,
+      'x-forwarded-for': `198.51.100.7, ${AFD_EGRESS}`,
+      ...extra
+    });
+  }
+
+  await t.test('a recognised profile id makes X-Azure-ClientIP the caller', () => {
+    // Front Door terminates the connection, so APIM asserts an AFD egress address for every
+    // visitor — which is one shared anonymous bulk quota for all of them.
+    assert.strictEqual(
+      withConfig({ frontDoorIds: [FDID] }, () => callerIp(viaFrontDoor())), '198.51.100.7');
+  });
+
+  await t.test('the profile id compares case-insensitively', () => {
+    const upper = viaFrontDoor({ 'x-azure-fdid': FDID.toUpperCase() });
+    assert.strictEqual(
+      withConfig({ frontDoorIds: [FDID] }, () => callerIp(upper)), '198.51.100.7');
+  });
+
+  await t.test('an unrecognised profile id is ignored', () => {
+    // Anyone reaching APIM can send the header; only an id we deployed unlocks it.
+    const other = viaFrontDoor({ 'x-azure-fdid': '00000000-0000-0000-0000-000000000000' });
+    assert.strictEqual(withConfig({ frontDoorIds: [FDID] }, () => callerIp(other)), AFD_EGRESS);
+  });
+
+  await t.test('an empty FRONT_DOOR_IDS leaves the APIM behaviour untouched', () => {
+    assert.strictEqual(withConfig({ frontDoorIds: [] }, () => callerIp(viaFrontDoor())), AFD_EGRESS);
+  });
+
+  await t.test('a missing X-Azure-ClientIP falls back to the forwarded chain', () => {
+    const noClient = viaFrontDoor({ 'x-azure-clientip': undefined });
+    assert.strictEqual(
+      withConfig({ frontDoorIds: [FDID] }, () => callerIp(noClient)), AFD_EGRESS);
+  });
+
+  await t.test('a garbage X-Azure-ClientIP falls back to the forwarded chain', () => {
+    // An unusable value must not become the quota key: every caller sending it would share one row.
+    const garbage = viaFrontDoor({ 'x-azure-clientip': 'not-an-ip' });
+    assert.strictEqual(
+      withConfig({ frontDoorIds: [FDID] }, () => callerIp(garbage)), AFD_EGRESS);
+  });
+
+  await t.test('an IPv6 client address survives', () => {
+    const v6 = viaFrontDoor({ 'x-azure-clientip': '2001:db8::1' });
+    assert.strictEqual(withConfig({ frontDoorIds: [FDID] }, () => callerIp(v6)), '2001:db8::1');
+  });
+
+  await t.test('without the gateway secret the Front Door headers are ignored', () => {
+    // Off the gateway path the whole header bag is attacker input, profile id included.
+    const spoofed = req({
+      'x-azure-fdid': FDID, 'x-azure-clientip': '9.9.9.9', 'x-forwarded-for': '142.34.7.9'
+    });
+    assert.strictEqual(withConfig({ frontDoorIds: [FDID] }, () => callerIp(spoofed)), '142.34.7.9');
   });
 });

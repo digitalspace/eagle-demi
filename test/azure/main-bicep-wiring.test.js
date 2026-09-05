@@ -91,7 +91,10 @@ const WIRED = [
     /^module devbox '\.\/modules\/devbox\.bicep' = if \(deployDevbox && !empty\(devboxSubnetId\)\) \{$/m,
     'the devbox module gate — without it every environment builds a dev-access VM, prod included'],
   ['trustedProxyIps', /^\s+trustedProxyIps: trustedProxyIps$/m,
-    'the API module call — without it TRUSTED_PROXY_IPS is empty and caller-ip trusts no proxy hop']
+    'the API module call — without it TRUSTED_PROXY_IPS is empty and caller-ip trusts no proxy hop'],
+  ['frontDoorIds', /^\s+frontDoorIds: frontDoorIds$/m,
+    'the API module call — without it FRONT_DOOR_IDS is empty and every Front Door visitor shares ' +
+    'one anonymous quota key']
 ];
 
 for (const [name, wiring, why] of WIRED) {
