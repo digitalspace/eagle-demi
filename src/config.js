@@ -285,10 +285,11 @@ const config = {
   // bucket — so utils/caller-ip.js keys on the browser hop instead. See that file.
   trustedProxyIps:       proxyListFromEnv('TRUSTED_PROXY_IPS'),
 
-  // Front Door profile ids (`X-Azure-FDID`). Front Door terminates the connection, so APIM asserts
-  // an AFD egress address for every visitor and the anonymous bulk quota becomes one global bucket
-  // again. Empty = the header is ignored. See utils/caller-ip.js.
-  frontDoorIds:          (process.env.FRONT_DOOR_IDS || '').split(',').map(s => s.trim()).filter(Boolean),
+  // Shared secret the eagle-edge Front Door rule set stamps on origin requests as X-Edge-Secret.
+  // Front Door terminates the connection, so APIM asserts an AFD egress address for every visitor
+  // and the anonymous bulk quota becomes one global bucket again; the secret is the only reason
+  // X-Azure-SocketIP can be believed. Empty = the header is ignored. See utils/caller-ip.js.
+  edgeSecret:            process.env.EDGE_SECRET || '',
 };
 
 // Optional second object-store credential, read by src/scripts/backfill-objects.js: the test

@@ -1,6 +1,7 @@
 'use strict';
 
-const { fromGateway } = require('../helpers/auth');
+const net = require('node:net');
+const { fromGateway, matchesConfiguredKey } = require('../helpers/auth');
 const config = require('../config');
 
 /**
@@ -40,9 +41,31 @@ function inCidr(ip, cidr) {
   return ((address & mask) >>> 0) === ((network & mask) >>> 0);
 }
 
-/** An address we can key a quota on: a dotted quad, or something carrying an IPv6's colons. */
-function isIpAddress(value) {
-  return ipToLong(value) !== null || /^[0-9a-f]*(:[0-9a-f]*)+$/i.test(value);
+/**
+ * An address we can key a quota on, or `''`.
+ *
+ * `[2001:db8::1]` → `2001:db8::1` and `::ffff:1.2.3.4` → `1.2.3.4`, so the same browser never gets
+ * two quota rows depending on which form the hop wrote.
+ */
+function normalizeIp(value) {
+  const bare = value.replace(/^\[(.*)\]$/, '$1');
+  const mapped = /^::ffff:(.+)$/i.exec(bare);
+  const ip = mapped && net.isIP(mapped[1]) === 4 ? mapped[1] : bare;
+  return net.isIP(ip) ? ip : '';
+}
+
+/**
+ * Is this request provably stamped by the eagle-edge Front Door rule set?
+ *
+ * Empty config is the off switch, and an unresolved Key Vault reference arrives as the literal
+ * `@Microsoft.KeyVault(...)` string, which is public in this repository — same rule as the gateway
+ * secret in helpers/auth.js.
+ */
+function fromEdge(headers) {
+  const secret = config.edgeSecret;
+  if (!secret || secret.startsWith('@Microsoft.KeyVault')) return false;
+
+  return matchesConfiguredKey(headers['x-edge-secret'] || '', [secret]);
 }
 
 /** A hop we run: a plain address, or a range for the in-cluster router hop (`10.0.0.0/8`). */
@@ -58,21 +81,22 @@ function isTrustedProxy(ip) {
 function callerIp(req) {
   const headers = (req && req.headers) || {};
 
+  // Front Door terminates the connection one hop outside APIM, so the address APIM asserts is an
+  // AFD egress shared by every visitor. X-Azure-SocketIP is the peer Front Door itself accepted
+  // the connection from; X-Azure-ClientIP is derived from the caller's own X-Forwarded-For and any
+  // browser can pick it, so it is never read here. Checked ahead of the gateway branch because
+  // this is a different hop's proof — AFD reaches us through APIM either way.
+  // ponytail: the trust is only as good as the secret's rotation; Private Link from Front Door to APIM would drop the header trust entirely.
+  if (fromEdge(headers)) {
+    const socketIp = normalizeIp(stripPort(String(headers['x-azure-socketip'] || '').trim()));
+    if (socketIp) return socketIp;
+  }
+
   // Behind APIM the last forwarded hop is APIM ITSELF, so every public caller resolves to one
   // address — which would make the per-requester bulk quota a single shared bucket. The gateway
   // policy asserts the address it saw in X-Client-Ip (azure/modules/apim.bicep), and the gateway
   // secret is the whole reason that header can be believed.
   if (fromGateway(req)) {
-    // Front Door terminates the connection one hop further out, so the address APIM asserts is an
-    // AFD egress shared by every visitor. A profile id we deployed makes the address Front Door
-    // resolved the caller instead.
-    // ponytail: an APIM-direct caller forges this knowing the id; tighten with an APIM check-header on X-Azure-FDID or an ip-filter on the AzureFrontDoor.Backend tag.
-    const frontDoorId = String(headers['x-azure-fdid'] || '').trim().toLowerCase();
-    if (frontDoorId && config.frontDoorIds.some(id => id.toLowerCase() === frontDoorId)) {
-      const resolved = stripPort(String(headers['x-azure-clientip'] || '').trim());
-      if (resolved && isIpAddress(resolved)) return resolved;
-    }
-
     const asserted = stripPort(String(headers['x-client-ip'] || '').trim());
     // Further back when the address APIM saw is a proxy WE run: every eagle-public visitor reaches
     // us through the OpenShift rproxy, so the asserted address is the same for all of them and the

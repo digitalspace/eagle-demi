@@ -36,6 +36,10 @@ param roleSyncClientSecret string
 @secure()
 param notifyApiKey string = ''
 
+@description('Shared secret the eagle-edge Front Door rule set stamps as X-Edge-Secret. Same handling as notifyApiKey: OPTIONAL, and empty writes no secret at all.')
+@secure()
+param edgeSecret string = ''
+
 // 3-24 characters, alphanumeric and hyphens, must start with a letter. `demi-kv-prod` is 12.
 var vaultName = 'demi-kv-${environmentName}'
 
@@ -101,6 +105,18 @@ resource notifyApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if 
   }
 }
 
+// Same shape as the notify key above, for the same reason: an environment with no Front Door in
+// front of it writes no secret rather than an empty one.
+var hasEdgeSecret = !empty(edgeSecret)
+
+resource edgeSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (hasEdgeSecret) {
+  parent: vault
+  name: 'edge-secret'
+  properties: {
+    value: edgeSecret
+  }
+}
+
 // Key Vault Secrets User — read of secret VALUES, nothing else. Not Secrets Officer: the app never
 // writes a secret, and rotation happens at the vault, not through the app.
 var keyVaultSecretsUser = '4633458b-17de-408a-b874-0445c86b69e6'
@@ -150,3 +166,6 @@ output roleSyncClientSecretUri string = roleSyncClientSecretSecret.properties.se
 // Empty where no key was supplied — the app then gets an empty NOTIFY_API_KEY and stays dark,
 // rather than a Key Vault reference that resolves to nothing.
 output notifyApiKeySecretUri string = hasNotifyKey ? notifyApiKeySecret!.properties.secretUri : ''
+// Empty where no secret was supplied — the app then gets an empty EDGE_SECRET and ignores the
+// header, rather than a Key Vault reference to a secret that was never written.
+output edgeSecretUri string = hasEdgeSecret ? edgeSecretSecret!.properties.secretUri : ''

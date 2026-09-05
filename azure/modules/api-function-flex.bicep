@@ -116,8 +116,8 @@ param trustedProxyIps string = ''
 
 // Empty keys every visitor arriving through Front Door on its egress address, which is one shared
 // anonymous bulk-download quota for all of them. src/utils/caller-ip.js.
-@description('Comma-separated Front Door profile ids (X-Azure-FDID). A request carrying one is keyed on the X-Azure-ClientIP Front Door resolved.')
-param frontDoorIds string = ''
+@description('Key Vault URI of the shared secret the eagle-edge rule set stamps as X-Edge-Secret. Not the value: the app resolves it through a Key Vault reference. Empty ignores the header.')
+param edgeSecretUri string = ''
 
 @description('Application Insights connection string. Empty disables telemetry, which is the local-development case.')
 param appInsightsConnectionString string = ''
@@ -701,9 +701,12 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'TRUSTED_PROXY_IPS'
           value: trustedProxyIps
         }
+        // What proves a request came through OUR Front Door, and so that X-Azure-SocketIP is the
+        // address AFD accepted the connection from. Empty is the off switch, like the gateway
+        // secret above; a plain value would put the secret in the template and in ARM history.
         {
-          name: 'FRONT_DOOR_IDS'
-          value: frontDoorIds
+          name: 'EDGE_SECRET'
+          value: empty(edgeSecretUri) ? '' : '@Microsoft.KeyVault(SecretUri=${edgeSecretUri})'
         }
       ]
       // Platform-level CORS, in front of the app's own, and it answers the preflight itself — so

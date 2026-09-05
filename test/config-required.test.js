@@ -84,3 +84,23 @@ test('TRUSTED_PROXY_IPS refuses anything that is not an IPv4 address or CIDR blo
     delete require.cache[configPath];
   }
 });
+
+// No shape to validate — it is an opaque shared secret — so this only pins the NAME. Rename the
+// app setting in bicep or the variable here and utils/caller-ip.js reads an empty string, which is
+// the off switch: every Front Door visitor silently falls back to one shared anonymous quota key.
+test('EDGE_SECRET reaches config.edgeSecret under that exact name', () => {
+  const configPath = path.resolve(__dirname, '..', 'src', 'config.js');
+  const previous = process.env.EDGE_SECRET;
+  try {
+    process.env.EDGE_SECRET = 'a-shared-secret';
+    delete require.cache[configPath];
+    assert.strictEqual(require(configPath).edgeSecret, 'a-shared-secret');
+
+    delete process.env.EDGE_SECRET;
+    delete require.cache[configPath];
+    assert.strictEqual(require(configPath).edgeSecret, '', 'unset must be the off switch, not undefined');
+  } finally {
+    if (previous === undefined) delete process.env.EDGE_SECRET; else process.env.EDGE_SECRET = previous;
+    delete require.cache[configPath];
+  }
+});

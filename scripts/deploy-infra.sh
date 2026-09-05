@@ -143,9 +143,14 @@ require_secrets() {
   TRACK_CLIENT_SECRET="${TRACK_CLIENT_SECRET:-$(os_secret demi-app-secrets TRACK_CLIENT_SECRET)}"
   ROLE_SYNC_CLIENT_SECRET="${ROLE_SYNC_CLIENT_SECRET:-$(os_secret demi-app-secrets ROLE_SYNC_CLIENT_SECRET)}"
   NOTIFY_API_KEY="${NOTIFY_API_KEY:-$(os_secret demi-app-secrets NOTIFY_API_KEY)}"
+  # The value the eagle-edge rule set stamps as X-Edge-Secret. Never in `required` below and never
+  # asserted afterwards: an environment with no Front Door in front of it has none, and an empty one
+  # only puts that environment's visitors back on one shared anonymous quota key. Both sides read
+  # the SAME value — rotate it in eagle-edge and here together, or callers fall back for a while.
+  EDGE_SECRET="${EDGE_SECRET:-$(os_secret demi-app-secrets EDGE_SECRET)}"
 
   export MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
-  export TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET NOTIFY_API_KEY
+  export TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET NOTIFY_API_KEY EDGE_SECRET
 
   local -a required=(MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
     TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET)

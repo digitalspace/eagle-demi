@@ -10,8 +10,8 @@ const GATEWAY_SECRET = 'test-gateway-secret';
 /** The rproxy egress address, as TRUSTED_PROXY_IPS would name it. */
 const RPROXY = '142.34.64.10';
 
-/** A Front Door profile id, as FRONT_DOOR_IDS would name it. */
-const FDID = '8280fe25-2794-4c4d-bbbd-a0a2bd82de8d';
+/** The value eagle-edge's rule set stamps, as EDGE_SECRET would name it. */
+const EDGE_SECRET = 'test-edge-secret';
 
 /** An egress address of the Front Door fleet: what APIM sees, never a browser. */
 const AFD_EGRESS = '147.243.0.9';
@@ -193,63 +193,80 @@ test('callerIp behind Front Door', async (t) => {
   t.beforeEach(() => { process.env.APIM_GATEWAY_SECRET = GATEWAY_SECRET; });
   t.afterEach(() => { delete process.env.APIM_GATEWAY_SECRET; });
 
-  /** What Front Door hands APIM: its own profile id, the client it resolved, and its own egress. */
-  function viaFrontDoor(extra) {
+  /** What eagle-edge's rule set stamps: the shared secret, plus the peer Front Door accepted. */
+  function viaEdge(extra) {
     return viaGateway({
-      'x-azure-fdid': FDID,
-      'x-azure-clientip': '198.51.100.7',
+      'x-edge-secret': EDGE_SECRET,
+      'x-azure-socketip': '198.51.100.7',
       'x-client-ip': AFD_EGRESS,
       'x-forwarded-for': `198.51.100.7, ${AFD_EGRESS}`,
       ...extra
     });
   }
 
-  await t.test('a recognised profile id makes X-Azure-ClientIP the caller', () => {
+  await t.test('the edge secret makes X-Azure-SocketIP the caller', () => {
     // Front Door terminates the connection, so APIM asserts an AFD egress address for every
     // visitor — which is one shared anonymous bulk quota for all of them.
     assert.strictEqual(
-      withConfig({ frontDoorIds: [FDID] }, () => callerIp(viaFrontDoor())), '198.51.100.7');
+      withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(viaEdge())), '198.51.100.7');
   });
 
-  await t.test('the profile id compares case-insensitively', () => {
-    const upper = viaFrontDoor({ 'x-azure-fdid': FDID.toUpperCase() });
-    assert.strictEqual(
-      withConfig({ frontDoorIds: [FDID] }, () => callerIp(upper)), '198.51.100.7');
+  await t.test('a wrong edge secret is ignored', () => {
+    // Anyone reaching APIM can send the header; only the value eagle-edge stamps unlocks it.
+    const forged = viaEdge({ 'x-edge-secret': 'not-the-edge-secret' });
+    assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(forged)), AFD_EGRESS);
   });
 
-  await t.test('an unrecognised profile id is ignored', () => {
-    // Anyone reaching APIM can send the header; only an id we deployed unlocks it.
-    const other = viaFrontDoor({ 'x-azure-fdid': '00000000-0000-0000-0000-000000000000' });
-    assert.strictEqual(withConfig({ frontDoorIds: [FDID] }, () => callerIp(other)), AFD_EGRESS);
+  await t.test('a missing edge secret is ignored', () => {
+    const bare = viaEdge({ 'x-edge-secret': undefined });
+    assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(bare)), AFD_EGRESS);
   });
 
-  await t.test('an empty FRONT_DOOR_IDS leaves the APIM behaviour untouched', () => {
-    assert.strictEqual(withConfig({ frontDoorIds: [] }, () => callerIp(viaFrontDoor())), AFD_EGRESS);
+  await t.test('an empty EDGE_SECRET leaves the APIM behaviour untouched', () => {
+    // The off switch. Without it an empty config would match an empty header from any caller.
+    assert.strictEqual(withConfig({ edgeSecret: '' }, () => callerIp(viaEdge())), AFD_EGRESS);
   });
 
-  await t.test('a missing X-Azure-ClientIP falls back to the forwarded chain', () => {
-    const noClient = viaFrontDoor({ 'x-azure-clientip': undefined });
-    assert.strictEqual(
-      withConfig({ frontDoorIds: [FDID] }, () => callerIp(noClient)), AFD_EGRESS);
+  await t.test('an unresolved Key Vault reference is not a secret', () => {
+    const ref = '@Microsoft.KeyVault(SecretUri=https://demi-kv-test.vault.azure.net/secrets/edge-secret)';
+    const spoofed = viaEdge({ 'x-edge-secret': ref });
+    assert.strictEqual(withConfig({ edgeSecret: ref }, () => callerIp(spoofed)), AFD_EGRESS);
   });
 
-  await t.test('a garbage X-Azure-ClientIP falls back to the forwarded chain', () => {
+  await t.test('a garbage X-Azure-SocketIP falls back to the forwarded chain', () => {
     // An unusable value must not become the quota key: every caller sending it would share one row.
-    const garbage = viaFrontDoor({ 'x-azure-clientip': 'not-an-ip' });
+    for (const garbage of ['not-an-ip', ':', '::::', '1.2.3.4.5', '']) {
+      const req_ = viaEdge({ 'x-azure-socketip': garbage });
+      assert.strictEqual(
+        withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(req_)), AFD_EGRESS, garbage);
+    }
+  });
+
+  await t.test('an IPv4-mapped IPv6 socket address is normalized', () => {
+    const mapped = viaEdge({ 'x-azure-socketip': '::ffff:198.51.100.7' });
     assert.strictEqual(
-      withConfig({ frontDoorIds: [FDID] }, () => callerIp(garbage)), AFD_EGRESS);
+      withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(mapped)), '198.51.100.7');
   });
 
-  await t.test('an IPv6 client address survives', () => {
-    const v6 = viaFrontDoor({ 'x-azure-clientip': '2001:db8::1' });
-    assert.strictEqual(withConfig({ frontDoorIds: [FDID] }, () => callerIp(v6)), '2001:db8::1');
+  await t.test('a bracketed IPv6 socket address is accepted', () => {
+    const v6 = viaEdge({ 'x-azure-socketip': '[2001:db8::1]' });
+    assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(v6)), '2001:db8::1');
   });
 
-  await t.test('without the gateway secret the Front Door headers are ignored', () => {
-    // Off the gateway path the whole header bag is attacker input, profile id included.
-    const spoofed = req({
-      'x-azure-fdid': FDID, 'x-azure-clientip': '9.9.9.9', 'x-forwarded-for': '142.34.7.9'
+  await t.test('X-Azure-ClientIP is never consulted, secret or no secret', () => {
+    // Front Door derives ClientIP from the caller's own X-Forwarded-For, so a browser picks it.
+    const forged = viaEdge({ 'x-azure-socketip': undefined, 'x-azure-clientip': '9.9.9.9' });
+    assert.strictEqual(withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(forged)), AFD_EGRESS);
+  });
+
+  await t.test('the edge secret stands on its own, without the gateway secret', () => {
+    // AFD reaches the app through APIM either way, and the two secrets prove different hops.
+    const noGateway = req({
+      'x-edge-secret': EDGE_SECRET,
+      'x-azure-socketip': '198.51.100.7',
+      'x-forwarded-for': '142.34.7.9'
     });
-    assert.strictEqual(withConfig({ frontDoorIds: [FDID] }, () => callerIp(spoofed)), '142.34.7.9');
+    assert.strictEqual(
+      withConfig({ edgeSecret: EDGE_SECRET }, () => callerIp(noGateway)), '198.51.100.7');
   });
 });
