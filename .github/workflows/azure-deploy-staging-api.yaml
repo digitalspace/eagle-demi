@@ -96,9 +96,8 @@ jobs:
       - name: Smoke test the deployed API
         run: |
           set -euo pipefail
-          host=$(az functionapp show -g "$AZURE_RESOURCE_GROUP" -n "$API_FLEX_APP_NAME" \
-                   --query defaultHostName -o tsv)
-          curl -fsS --retry 3 --retry-delay 5 "https://${host}/health"
+          # az functionapp show returns null hostname for Flex; default host is <app>.azurewebsites.net
+          curl -fsS --retry 3 --retry-delay 5 "https://${API_FLEX_APP_NAME}.azurewebsites.net/health"
 
       - name: Report API Failure to Job Summary
         if: failure()
