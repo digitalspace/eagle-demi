@@ -216,7 +216,7 @@ param deployReconcileDriftAlert bool = false
 // The nightly Track team sync, a second Functions timer (api/index.js) that mints `project:<id>`
 // realm roles from Track's team-members endpoint. Four settings and a schedule, and the schedule
 // is the switch: empty registers no timer, which is where every environment starts.
-@description('Base URL of the Track API the team sync reads, e.g. https://epictrack-api-c72cba-test.apps.gold.devops.gov.bc.ca. Empty runs no sync.')
+@description('Base URL of the Track API the team sync reads, e.g. https://epictrack-api-c8b80a-test.apps.gold.devops.gov.bc.ca. Empty runs no sync.')
 param trackApiBase string = ''
 
 @description('Keycloak client id of the Track service account (client credentials).')
