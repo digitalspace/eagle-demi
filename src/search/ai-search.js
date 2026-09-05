@@ -63,7 +63,7 @@ const MAX_SKIP = 100000;
 // `isFeatured` backs eagle-public's ★ column; `documentSource` its PROJECT-NOTIFICATION split.
 const DOCUMENT_SELECT = 'id,displayName,documentFileName,description,type,projectId,read,' +
   'isPublished,typeId,milestoneId,projectPhaseId,documentAuthorTypeId,datePosted,isFeatured,' +
-  'documentSource';
+  'documentSource,fileSize';
 
 /**
  * The fields a PROJECT hit carries back. Same invariant, same reason, and the same exported-so-a-

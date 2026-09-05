@@ -502,6 +502,8 @@ exports.search = async (req, res) => {
               // Emitted because search-diff no longer accepts them as eagle-only columns.
               isFeatured: doc.isFeatured === true,
               documentSource: doc.documentSource || '',
+              // Bytes, under Eagle's name: eagle-public sizes a bulk download off `internalSize`.
+              internalSize: doc.fileSize || null,
               // The ids eagle-public's `idToList()` resolves, NOT the labels beside them: a label
               // is ambiguous across the 2002 and 2018 Acts (`Amendment` is two different List rows).
               type: doc.typeId || null,
