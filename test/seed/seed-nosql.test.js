@@ -13,6 +13,7 @@ const {
 } = require('../../src/scripts/seed-nosql');
 const { unwrapSearchResponse, fetchAllPages, PAGE_SIZE, EAGLE_API_BASE } = require('../../src/seed/sources');
 const trackProjects = require('../../src/data/track_projects_enriched.json');
+const config = require('../../src/config');
 
 const NOW = '2026-07-30T00:00:00.000Z';
 
@@ -295,13 +296,16 @@ test('seed() end to end with stubbed sources', async (t) => {
   };
 
   const makeRepos = () => {
-    const written = { projects: [], documents: [], boundaries: [] };
+    const written = { projects: [], documents: [], boundaries: [], links: [] };
     return {
       written,
       repos: {
         projects: {
           upsert: async (p) => { written.projects.push(p); return p; },
           getById: async () => null
+        },
+        links: {
+          create: async (record) => { written.links.push(record); return record; }
         },
         // Returns the verified shape: the seeder must count what LANDED, not what it sent.
         documents: {
@@ -384,6 +388,43 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(matched.sources.wildfire.x, 1, 'a source block the run does not rebuild survives');
     assert.strictEqual(summary.stages.projects.visCarried, 1,
       'only the row that actually had vis counts, not every existing row read');
+  });
+
+  await t.test('the project stage mints one short link per project with a public page', async () => {
+    const { written, repos } = makeRepos();
+
+    const summary = await seed(['--live', '--only', 'projects'],
+      { sources: stubSources, repos, now: NOW });
+
+    const withEagleId = written.projects.filter(p => p.eagleId);
+    assert.ok(withEagleId.length, 'the premise: at least one project has an Eagle page');
+    assert.strictEqual(written.links.length, withEagleId.length, 'one link, one project');
+    assert.strictEqual(summary.stages.projects.shortLinks, withEagleId.length);
+    for (const project of written.projects) {
+      const link = written.links.find(l => l.id === project.shortCode);
+      if (!project.eagleId) {
+        assert.strictEqual(project.shortCode, undefined, 'no public page, no link');
+        continue;
+      }
+      assert.ok(link, `project ${project.id} carries the code that was minted for it`);
+      assert.strictEqual(link.url, `${config.linkBaseUrl}/p/${project.eagleId}`);
+    }
+  });
+
+  await t.test('a re-seed keeps the code the project already carries', async () => {
+    // The printed-poster case: minting a second code would leave the first pointing nowhere the
+    // project knows about.
+    const { written, repos } = makeRepos();
+    repos.projects.getById = async (_access, id) => (
+      id === '207' ? { id: '207', shortCode: 'kq7bt2rm' } : null);
+
+    const summary = await seed(['--live', '--only', 'projects'],
+      { sources: stubSources, repos, now: NOW });
+
+    const matched = written.projects.find(p => p.id === '207');
+    assert.strictEqual(matched.shortCode, 'kq7bt2rm');
+    assert.deepStrictEqual(written.links, [], 'nothing left to mint');
+    assert.strictEqual(summary.stages.projects.shortLinks, 0);
   });
 
   await t.test('documents are grouped by project — the partition key', async () => {
@@ -724,7 +765,8 @@ test('seed --reconcile end to end', async (t) => {
         listSeededIds: async () => seededDocs,
         countSeededIds: async () => counts.documents ?? seededDocs.length
       },
-      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
+      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) },
+      links: { create: async (record) => record }
     };
     const purge = {
       purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); },
@@ -1135,7 +1177,8 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
         listSeededIds: async () => docRows,
         countSeededIds: async () => docRows.length
       },
-      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
+      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) },
+      links: { create: async (record) => record }
     };
     const purge = {
       purgeDocument: async (row) => { purged.documents.push(`${row.projectId}|${row.id}`); },
@@ -1255,7 +1298,8 @@ test('a re-seed carries extraction state forward', async (t) => {
           return { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } };
         }
       },
-      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) }
+      boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) },
+      links: { create: async (record) => record }
     };
     const summary = await seed(['--live', '--only', 'documents'],
       { sources, repos, now: NOW, cosmosReady });

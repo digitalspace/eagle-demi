@@ -22,6 +22,7 @@ const { needsClosing } = require('../../src/scripts/close-unpublished-track-proj
 const { trackApiToExtract } = require('../../src/seed/sources');
 const { mergeTrackProject } = require('../../src/merge/project');
 const { readForLevel } = require('../../src/helpers/access-sql');
+const config = require('../../src/config');
 
 const NOW = '2026-09-02T00:00:00.000Z';
 
@@ -61,9 +62,20 @@ function storedProject(overrides = {}) {
     ...mergeTrackProject(FLAT, null, { now: '2026-08-01T00:00:00.000Z' }),
     read: readForLevel(4),
     isPublished: true,
+    // Already minted: a stored row without one is the migration case, tested on its own below.
+    shortCode: 'kq7bt2rm',
     vis: { eacExpires: 3 },
     regionalDistrict: 'Thompson-Nicola',
     ...overrides
+  };
+}
+
+/** The links repository, in memory. Only `create` is reached: a project link is minted once. */
+function fakeLinks() {
+  const created = [];
+  return {
+    created,
+    create: async (record) => { created.push(record); return record; }
   };
 }
 
@@ -143,6 +155,72 @@ test('a project Track has not changed is not written at all', async () => {
   assert.deepStrictEqual(projects.writes, [], 'a nightly rewrite of 384 unchanged rows is churn');
   assert.strictEqual(summary.updated, 0);
   assert.strictEqual(summary.trackProjects, 1);
+  assert.strictEqual(summary.shortLinks, 0, 'and the code it already carries is not re-minted');
+});
+
+/**
+ * Every project with a public page carries one short link, so the nightly mirror is where the
+ * projects that predate the feature get theirs — a quiet night still writes for that, and only
+ * that. Minting a second code for a project would leave a printed link pointing at a dead one.
+ */
+test('project short links', async (t) => {
+  await t.test('a stored project with no code yet is minted one on a quiet night', async () => {
+    const stored = storedProject();
+    delete stored.shortCode;
+    const projects = fakeProjects([stored]);
+    const links = fakeLinks();
+
+    const summary = await syncProjects([API_PROJECT],
+      { live: true, deps: { projects, links }, now: NOW });
+
+    assert.strictEqual(summary.shortLinks, 1);
+    assert.strictEqual(links.created.length, 1);
+    const [link] = links.created;
+    assert.strictEqual(link.url, `${config.linkBaseUrl}/p/${API_PROJECT.epic_guid}`,
+      'the public project page, not the DEMI id');
+    assert.strictEqual(link.createdBy, 'system');
+    assert.strictEqual(link.personal, false, 'a project link is everyone\'s');
+    assert.strictEqual(projects.writes.length, 1, 'the code is only real once the project holds it');
+    assert.strictEqual(projects.writes[0].shortCode, link.id);
+  });
+
+  await t.test('a project with no Eagle id has no public page, so no link', async () => {
+    const stored = storedProject({ eagleId: null });
+    delete stored.shortCode;
+    const projects = fakeProjects([stored]);
+    const links = fakeLinks();
+
+    const summary = await syncProjects([{ ...API_PROJECT, epic_guid: null }],
+      { live: true, deps: { projects, links }, now: NOW });
+
+    assert.deepStrictEqual(links.created, []);
+    assert.deepStrictEqual(projects.writes, []);
+    assert.strictEqual(summary.shortLinks, 0);
+  });
+
+  await t.test('a stored code survives an update to the Track fields', async () => {
+    const projects = fakeProjects([storedProject()]);
+    const links = fakeLinks();
+
+    await syncProjects([{ ...API_PROJECT, name: 'Renamed' }],
+      { live: true, deps: { projects, links }, now: NOW });
+
+    assert.strictEqual(projects.writes[0].shortCode, 'kq7bt2rm');
+    assert.deepStrictEqual(links.created, [], 'an upsert must not mint a second code');
+  });
+
+  await t.test('a dry run mints nothing', async () => {
+    const stored = storedProject();
+    delete stored.shortCode;
+    const projects = fakeProjects([stored]);
+    const links = fakeLinks();
+
+    const summary = await syncProjects([API_PROJECT], { deps: { projects, links }, now: NOW });
+
+    assert.deepStrictEqual(links.created, []);
+    assert.deepStrictEqual(projects.writes, []);
+    assert.strictEqual(summary.updated, 1, 'and it still reports the write a live run would make');
+  });
 });
 
 /**
@@ -205,8 +283,9 @@ test('Track work phases', async (t) => {
 
 test('a project DEMI has never seen is created at level 1', async () => {
   const projects = fakeProjects([]);
+  const links = fakeLinks();
 
-  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects }, now: NOW });
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
 
   assert.strictEqual(summary.created, 1);
   const [written] = projects.writes;
@@ -216,6 +295,10 @@ test('a project DEMI has never seen is created at level 1', async () => {
   assert.strictEqual(written.isPublished, false);
   assert.strictEqual(written.name, 'Nicomen Wind Energy');
   assert.strictEqual(written.eaCertificate, 'Withdrawn');
+  assert.strictEqual(summary.shortLinks, 1);
+  assert.strictEqual(links.created.length, 1, 'a project born here is minted its link too');
+  assert.strictEqual(written.shortCode, links.created[0].id);
+  assert.strictEqual(written.shortCode.length, 8);
 });
 
 test('a record the feed no longer lists is counted, not deleted', async () => {
@@ -301,8 +384,9 @@ function eagleOnlyProject(overrides = {}) {
 
 test('a project stored as Eagle-only is re-keyed to its Track id, not duplicated', async () => {
   const projects = fakeProjects([eagleOnlyProject()]);
+  const links = fakeLinks();
 
-  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects }, now: NOW });
+  const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects, links }, now: NOW });
 
   assert.strictEqual(summary.relinked, 1);
   assert.strictEqual(summary.created, 0, 'a second row for a project DEMI already holds');
@@ -317,6 +401,10 @@ test('a project stored as Eagle-only is re-keyed to its Track id, not duplicated
   assert.deepStrictEqual(written.vis, { eacExpires: 3 });
   assert.strictEqual(written.regionalDistrict, 'Thompson-Nicola');
   assert.ok(written.sources.track, 'and it is a merge-produced Track row from now on');
+  assert.strictEqual(summary.shortLinks, 1);
+  assert.strictEqual(links.created.length, 1, 'the re-keyed row is minted its link');
+  assert.strictEqual(written.shortCode, links.created[0].id);
+  assert.strictEqual(written.shortCode.length, 8);
 });
 
 test('an empty Track column does not blank a populated row', () => {
@@ -336,7 +424,8 @@ test('one project that fails is counted and does not stop the next', async () =>
   };
 
   const summary = await syncProjects(
-    [API_PROJECT, { ...API_PROJECT, id: 412 }], { live: true, deps: { projects }, now: NOW });
+    [API_PROJECT, { ...API_PROJECT, id: 412 }],
+    { live: true, deps: { projects, links: fakeLinks() }, now: NOW });
 
   assert.strictEqual(summary.failures, 1);
   assert.strictEqual(projects.writes.length, 1, 'project 412 is still written');
@@ -351,6 +440,6 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   assert.deepStrictEqual(summary,
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
-      phases: 0, failures: 0 },
+      phases: 0, shortLinks: 0, failures: 0 },
     'the feed side still counts; the write side is honestly zero');
 });

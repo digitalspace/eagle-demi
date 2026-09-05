@@ -116,6 +116,33 @@ test('nosql project controller', async (t) => {
     assert.deepStrictEqual(calls, ['getById:207', 'getById:eagle-58851172aaecd9001b820335']);
   });
 
+  /**
+   * The masthead's copy button needs a URL. Only the code is stored, because the host is
+   * per-environment config — a stored URL would hand test's host to prod after a restore.
+   */
+  await t.test('a project carrying a short code answers with the composed URL', async () => {
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207', name: 'Nicomen Wind Energy', read: ['public'], shortCode: 'kq7bt2rm'
+    }));
+
+    const res = mockRes();
+    await projectController.getProject({ params: { id: '207' }, query: {} }, res);
+
+    assert.strictEqual(res.body.shortCode, 'kq7bt2rm', 'the stored code is public too');
+    assert.strictEqual(res.body.shortUrl, `${config.linkBaseUrl}/s/kq7bt2rm`);
+  });
+
+  await t.test('a project with no code carries no shortUrl at all', async () => {
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207', name: 'Nicomen Wind Energy', read: ['public']
+    }));
+
+    const res = mockRes();
+    await projectController.getProject({ params: { id: '207' }, query: {} }, res);
+
+    assert.ok(!('shortUrl' in res.body), 'a link to nothing is worse than no link');
+  });
+
   await t.test('an Eagle id the caller may not see is 404, not 403', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
 
