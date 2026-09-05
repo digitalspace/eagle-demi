@@ -436,6 +436,9 @@ exports.upsertFromEagle = async (req, res) => {
     merged.sources = { ...(existing && existing.sources), ...merged.sources };
     // Same replace-the-whole-item trap as sources: an upsert with no vis wipes classification.
     if (existing && existing.vis) merged.vis = existing.vis;
+    // And the same for the code: dropping it would leave a printed link pointing at nothing once
+    // the nightly sync minted a second one.
+    if (existing && existing.shortCode) merged.shortCode = existing.shortCode;
 
     const saved = await projects.upsert(merged);
 

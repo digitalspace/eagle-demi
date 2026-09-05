@@ -295,6 +295,10 @@ test('a project DEMI has never seen is created at level 1', async () => {
   assert.strictEqual(written.isPublished, false);
   assert.strictEqual(written.name, 'Nicomen Wind Energy');
   assert.strictEqual(written.eaCertificate, 'Withdrawn');
+  assert.strictEqual(summary.shortLinks, 1);
+  assert.strictEqual(links.created.length, 1, 'a project born here is minted its link too');
+  assert.strictEqual(written.shortCode, links.created[0].id);
+  assert.strictEqual(written.shortCode.length, 8);
 });
 
 test('a record the feed no longer lists is counted, not deleted', async () => {
@@ -397,6 +401,10 @@ test('a project stored as Eagle-only is re-keyed to its Track id, not duplicated
   assert.deepStrictEqual(written.vis, { eacExpires: 3 });
   assert.strictEqual(written.regionalDistrict, 'Thompson-Nicola');
   assert.ok(written.sources.track, 'and it is a merge-produced Track row from now on');
+  assert.strictEqual(summary.shortLinks, 1);
+  assert.strictEqual(links.created.length, 1, 'the re-keyed row is minted its link');
+  assert.strictEqual(written.shortCode, links.created[0].id);
+  assert.strictEqual(written.shortCode.length, 8);
 });
 
 test('an empty Track column does not blank a populated row', () => {
