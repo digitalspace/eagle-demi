@@ -101,7 +101,6 @@ function behindProxy(asserted, headers, { anchored = false } = {}) {
     // Rightmost occurrence: a caller can prepend our egress address, and only the entry the real
     // hop appended is at or right of that forgery.
     start = hops.lastIndexOf(asserted);
-    if (start < 0) return asserted;
   }
 
   for (let i = start; i >= 0; i--) {
