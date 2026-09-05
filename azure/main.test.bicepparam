@@ -122,9 +122,10 @@ param ssoAudience = 'account'
 
 // The rproxy egress addresses as APIM reports them (`callerIp` on the App Insights request row
 // for a request made through eagle-test.apps.silver.devops.gov.bc.ca/demi-search; measured
-// 2026-09-02). With these trusted, the anonymous bulk-download quota keys on the browser hop.
+// 2026-09-02; .122 seen 2026-09-05 through test.projects.eao.gov.bc.ca). With these trusted, the
+// anonymous bulk-download quota keys on the browser hop.
 // An address missing here only puts that proxy's visitors back on one shared key.
-param trustedProxyIps = '142.34.194.121,142.34.194.123,142.34.194.124'
+param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194.124'
 
 // The secret the eagle-edge rule set stamps on origin requests. It comes from OpenShift
 // `demi-app-secrets` through deploy-infra.sh, never from this file. The `''` fallback is
