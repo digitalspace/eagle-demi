@@ -488,8 +488,8 @@ App Service plan to size or join. Data-plane work goes through `demi-devbox-prod
 landing-zone VNet; see "Running anything against the database".
 
 Object-store credentials come from the `nr-object-store-credential` secret in `6cdc9e-prod`
-(`user_account` / `password`), not `eagle-api-minio-keys`. `demi-app-secrets` does not exist in
-`6cdc9e-prod` yet — create it, or export `ADMIN_API_KEY` and `DOCLING_API_KEY` by hand.
+(`user_account` / `password`), not `eagle-api-minio-keys`. The application secrets come from
+`demi-app-secrets` in the same namespace.
 
 ```bash
 # what-if — the default, nothing is applied
