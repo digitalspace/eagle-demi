@@ -26,13 +26,10 @@ updates:
       # minor+patch ONLY. A group is for things you merge on green CI without
       # reading them, and a major is never that.
       #
-      # Without this, the first run produced PR #35: express 4.22.2 -> 5.2.1,
-      # helmet 7 -> 8, jwks-rsa 3 -> 4, minio 7 -> 8 and serverless-http 3 -> 4,
-      # in one PR, green. Green proved nothing — no test in `test/` mounts the
-      # Express app, so nothing exercised Express 5's router at all, and neither
-      # CI nor `scripts/validate-deploy.sh` touches MinIO, which is the live
-      # object store behind every document download. Majors now arrive one per
-      # PR, with their own changelog, to be read.
+      # Without this, the first run produced PR #35: express, helmet, jwks-rsa,
+      # minio and serverless-http majors in one green PR. Green proved nothing —
+      # no test mounts the Express app, and nothing in CI touches MinIO, the live
+      # object store behind every document download. Majors now arrive one per PR.
       api-dependencies:
         patterns:
           - '*'

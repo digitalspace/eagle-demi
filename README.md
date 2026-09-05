@@ -537,8 +537,8 @@ the site 404s. That is a *service-properties* write, so it needs **Storage Accou
 which Blob Data Contributor does not imply — `static-site.bicep` now assigns it alongside the data
 role. Handing CI a role carrying `listKeys` is only acceptable because the account sets
 `allowSharedKeyAccess: false`, which makes those keys unusable; do not re-enable shared keys
-without revisiting that grant. `scripts/validate-deploy.sh` checks the result when given
-`FRONTEND_STORAGE_ACCOUNT`.
+without revisiting that grant. A missing grant fails the first step of
+`scripts/deploy-azure.sh frontend` with a 403, before the build.
 
 1. **Give eagle-search the origin hostname.** `main.bicep` outputs `frontendStaticSiteHostName`
    (`demiweb….z13.web.core.windows.net`); it goes into eagle-search's `demiFrontendWebHostName`

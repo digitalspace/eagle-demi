@@ -386,6 +386,26 @@ test('API deploy package', async (t) => {
       `only azure/search/{indexes,indexers} may be packaged, found: ${azureExtras.join(', ')}`);
   });
 
+  await t.test('never ships an operator credential file, at any depth', () => {
+    // Same class as the .env below — files an operator's working tree holds and wwwroot must not.
+    // Fixture-based, because the repo holds none of them today and a real-tree check would pass
+    // whatever the packager did.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'demi-pkg-secrets-'));
+    const repo = path.join(dir, 'repo');
+    scaffold(repo);
+    fs.mkdirSync(path.join(repo, 'src', 'deep'), { recursive: true });
+    const refused = ['local.settings.json', '.npmrc', 'server.key', 'cert.pem',
+      'bundle.p12', 'bundle.pfx'];
+    for (const name of refused) {
+      fs.writeFileSync(path.join(repo, name), 'SECRET=x');
+      fs.writeFileSync(path.join(repo, 'src', 'deep', name), 'SECRET=x');
+    }
+    const packed = packageInto(dir, repo);
+    fs.rmSync(dir, { recursive: true, force: true });
+    const leaked = [...packed].filter(e => refused.includes(e.split('/').pop()));
+    assert.deepStrictEqual(leaked, [], `no credential file may be packaged, found: ${leaked.join(', ')}`);
+  });
+
   await t.test('never ships a .env at any depth', () => {
     // This one carried live database and object-storage credentials into a world-readable path
     // once already. Depth-independent, by name — ".env" has no extension to filter on.

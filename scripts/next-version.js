@@ -1,42 +1,21 @@
 'use strict';
 
-// Computes the next semantic version for the release candidate from Conventional Commit messages.
-// `.github/workflows/draft-release.yaml` runs this on every push to `main` and feeds the result to
-// `git tag` and then to `gh release create --draft`.
-//
-// Inputs come from `gh`, never from git history. `git describe` walks HEAD's ancestry only, so a
-// tag sitting on a commit that is not an ancestor of HEAD silently resolves to an OLDER base and
-// yields a lower version than the one already released — a wrong number, produced quietly, which is
-// the worst failure available here. The tags endpoint below is ancestry-independent.
-//
-// THE BASE IS THE HIGHEST TAG, not the latest published release. Every push to `main` now mints a
-// tag, so a base that only saw published releases would recompute the same number on the next push
-// and collide with the tag it had just created.
-//
-// A consequence worth stating: the range this bump is computed over and the range GitHub generates
-// release NOTES over are deliberately different. The bump runs from the last tag, because the number
-// has to climb once per push. `--generate-notes` is left to infer its own start, which is the last
-// PUBLISHED release — the last version that actually reached production. So a candidate that is
-// never deployed still spends a version, and the notes on the candidate that IS deployed carry its
-// work too. "What is new in prod" is the question a published release answers.
+// Next semantic version from Conventional Commits, for draft-release.yaml. Details: wiki Release-Process.
+// Inputs from `gh`, never git history: `git describe` walks ancestry only and yields an older base.
 
 const { execFileSync } = require('node:child_process');
 
-// `type(scope)!:` — the `!` is the Conventional Commits breaking-change marker. Anything that does
-// not match (a bare "wip", a merge commit, a revert of a revert) simply scores no bump rather than
-// throwing: a release must not be blocked by one commit that skipped the format.
+// `type(scope)!:` — the `!` is the breaking-change marker. Anything that does not match scores no
+// bump rather than throwing: a release must not be blocked by one commit that skipped the format.
 const HEADER = /^(?<type>[a-zA-Z]+)(?:\((?<scope>[^)]*)\))?(?<breaking>!)?:/;
 
-// Both spellings are normative in the Conventional Commits spec; `BREAKING-CHANGE` exists because a
-// footer token cannot contain a space. The footer FORM is required — start of a line, followed by
-// the spec's `: ` or ` #` separator. An unanchored search for the phrase would read prose as a
-// declaration: a body reading "this is not a BREAKING CHANGE for callers" says the opposite of what
-// it would then trigger, and at 1.x that mints a whole major on a commit that promised not to.
+// The footer FORM is required — line start, then the spec's `: ` or ` #`. An unanchored search reads
+// prose as a declaration: "this is not a BREAKING CHANGE for callers" would mint a major at 1.x.
 const BREAKING_FOOTER = /^BREAKING[ -]CHANGE(?=: | #)/m;
 
-// The only tag shape this project's automation creates. Anything else in the repository — a vendor
-// tag, a `v1.2.3-rc1`, a `release/2026-08` — is not a version base and must not become one.
-const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
+// The only tag shape this project's automation creates, and the only base it will accept. A vendor
+// tag, a `v1.2.3-rc1` or a `release/2026-08` is not a version base.
+const RELEASE_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
 
 const PATCH = 0;
 const MINOR = 1;
@@ -81,15 +60,11 @@ function highestReleaseTag(names) {
  * @returns {string} the next version, `v`-prefixed
  */
 function nextVersion(lastTag, commitMessages) {
-  const parsed = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(lastTag == null ? '' : lastTag).trim());
-  // There is deliberately no "no previous release" branch. The seed release v0.1.0 is created once
-  // by hand, so a predecessor always exists and every version is computed from a real one. Reaching
-  // here means the seed is gone or renamed, which is an operator problem, not something to paper
-  // over by inventing a starting point that would then disagree with the notes GitHub generates.
+  const parsed = RELEASE_TAG.exec(String(lastTag == null ? '' : lastTag).trim());
+  // No "no previous release" branch on purpose: the seed release is created once by hand, so
+  // reaching here means it is gone or renamed, which is an operator problem.
   if (!parsed) {
-    // The suggested command carries `--notes` on purpose: without it `gh` opens an editor, and with
-    // no TTY (a CI shell, an ssh one-liner, a pipe) it just refuses. This message is read at exactly
-    // the moment a pasted command has to work first try.
+    // `--notes` on purpose: without it `gh` opens an editor and refuses when there is no TTY.
     throw new Error(
       `Cannot compute the next version: ${JSON.stringify(lastTag)} is not a version tag. ` +
         'Create the seed release first: ' +
@@ -101,10 +76,8 @@ function nextVersion(lastTag, commitMessages) {
   let [major, minor, patch] = parsed.slice(1).map(Number);
   const level = (commitMessages || []).reduce((highest, message) => Math.max(highest, bumpLevel(message)), PATCH);
 
-  // The 0.x guard. SemVer says anything may change while the major is 0, so a breaking change here
-  // is a minor bump, and 1.0.0 stays a deliberate human decision. Without this, a single stray
-  // `refactor!:` would mint v1.0.0 for a product that has never shipped to prod — and a version
-  // number cannot be walked back once a draft carrying it has been published.
+  // The 0.x guard: SemVer lets anything change while the major is 0, so 1.0.0 stays a human
+  // decision. Without it one stray `refactor!:` mints v1.0.0, and a version cannot be walked back.
   if (level === MAJOR && major >= 1) {
     major += 1;
     minor = 0;
@@ -123,34 +96,22 @@ module.exports = { nextVersion, highestReleaseTag };
 
 if (require.main === module) {
   const repository = process.env.GITHUB_REPOSITORY || 'digitalspace/eagle-demi';
-  // In Actions the workflow's own SHA is the target, not a branch name, so a push landing mid-run
-  // cannot move the comparison. Outside Actions the fallback `HEAD` is resolved by GitHub, not by
-  // the local checkout: it means the remote default branch. A local preview therefore reports the
-  // bump for what is on the remote, and cannot see unpushed commits on a feature branch.
+  // The workflow's own SHA, so a push landing mid-run cannot move the comparison. The `HEAD`
+  // fallback is resolved by GitHub — the remote default branch, not the local checkout.
   const sha = process.env.GITHUB_SHA || 'HEAD';
   const gh = (args) => execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
 
   let lastTag = '';
   try {
-    // Sorted here, not by GitHub: the tags endpoint's order is unspecified — neither semver nor
-    // creation time — so the highest is picked explicitly, with a NUMERIC collation. A plain string
-    // sort puts `v0.1.9` above `v0.1.10` and would hand back a base that has already been used.
-    //
-    // Reads tags rather than releases so an unpublished candidate is still seen. Reads the API
-    // rather than `git tag --sort=-v:refname` so it needs neither a full-depth checkout nor fetched
-    // tag refs, and so a local preview reports what the REMOTE has, matching the compare below.
-    //
-    // The repository is passed explicitly so this and the compare call below cannot resolve to
-    // different repositories: without it `gh` infers from the checkout's origin remote, while the
-    // compare uses GITHUB_REPOSITORY. In a fork or a mirror clone that yields a base tag from one
-    // repository and a commit range from another.
-    lastTag = highestReleaseTag(gh(['api', `repos/${repository}/tags?per_page=100`, '--paginate', '--jq', '.[].name']).split('\n'));
+    // `matching-refs/tags/v` filters server-side, in no defined order — hence the numeric sort.
+    // Tags, not releases, so an unpublished candidate is seen. Repository explicit: a fork drifts.
+    lastTag = highestReleaseTag(gh([
+      'api', `repos/${repository}/git/matching-refs/tags/v?per_page=100`, '--paginate',
+      '--jq', '.[].ref | sub("^refs/tags/"; "")',
+    ]).split('\n'));
   } catch (err) {
-    // gh has already printed its own reason on stderr. Falling through lets nextVersion raise the
-    // actionable "create the seed release" error — but ONLY a 404 actually means the seed is
-    // missing. A bad flag, a rate limit or a 5xx all land here too, and pointing the operator at
-    // `gh release create v0.1.0` for those is a wrong instruction they might follow: the tag they
-    // would be told to create already exists. So say which failure this was.
+    // Only a 404 actually means the seed is missing; a bad flag, a rate limit or a 5xx land here
+    // too, and the "create the seed release" error below would then be a wrong instruction.
     process.stderr.write(
       `Could not list tags for ${repository}: ${err.message}\n` +
       'If that is a 404 the seed release is genuinely missing; anything else is a gh or API ' +
@@ -158,18 +119,8 @@ if (require.main === module) {
     );
   }
 
-  // `total_commits` is fetched alongside the messages so truncation is detectable — see the guard
-  // below. Emitted as one JSON object, not one message per line: commit messages contain newlines
-  // themselves, so a newline-delimited stream has no unambiguous boundary between two messages, and
-  // a body line reading `feat: ...` would be indistinguishable from the next commit's subject and
-  // would bump the minor on its own.
-  //
-  // The `--jq` projection is also what keeps this inside execFileSync's 1 MB default buffer: a raw
-  // compare response carries every changed file's full patch, which is ~10 MB across this
-  // repository's history and dies with ENOBUFS.
-  //
-  // Skipped without a tag so the missing-seed case surfaces as the error below rather than as a
-  // raw 404 body from a comparison with no left-hand side.
+  // One JSON object, not a message per line: a body line reading `feat: ...` would otherwise read as
+  // the next subject. The projection also keeps this inside execFileSync's 1 MB buffer.
   const compare = lastTag
     ? JSON.parse(
         gh([
@@ -181,13 +132,8 @@ if (require.main === module) {
       )
     : { total: 0, messages: [] };
 
-  // The compare endpoint caps `.commits` at 250 and announces it nowhere except a `total_commits`
-  // that disagrees with the array length. The response is ordered base->head, so what gets dropped
-  // is the NEWEST work — the one `feat:` that should have bumped the minor is exactly the commit
-  // that falls off the end, and the result would be a version that is quietly too low. A tag per
-  // push normally keeps this gap at one commit, but it stays reachable: a long-lived branch merged
-  // in one push, or a run whose tag step failed, both widen it. Failing is the point. Paginating
-  // instead would trade a loud stop for a multi-megabyte download on every push.
+  // The compare endpoint caps `.commits` at 250, announced nowhere but a `total_commits` that
+  // disagrees with the array length — and it drops the NEWEST work, so failing loudly is the point.
   if (compare.total > compare.messages.length) {
     console.error(
       `Cannot compute the next version: GitHub returned ${compare.messages.length} of ` +
@@ -199,9 +145,7 @@ if (require.main === module) {
   }
 
   // Only the version goes to stdout: the workflow captures this whole stream as the release tag.
-  // The failure above is written for an operator, so it is printed as a sentence rather than thrown:
-  // an uncaught throw buries that sentence under a node stack trace naming internal frames, in an
-  // Actions log where the first line is the one that gets read.
+  // Printed as a sentence rather than thrown — a stack trace buries the line that gets read.
   try {
     process.stdout.write(`${nextVersion(lastTag, compare.messages)}\n`);
   } catch (error) {

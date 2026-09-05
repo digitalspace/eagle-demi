@@ -1,29 +1,5 @@
-# =============================================================================
-# Build and Deploy the DEMI API to Azure staging
-# =============================================================================
-# Deploys the Node.js API to the Flex Consumption app `demi-api-fc-test`. The legacy B1 app
-# is deleted; this workflow must never target it again.
-#
-# API only. The frontend has its own file, `azure-deploy-staging-frontend.yaml`, and its
-# own trigger. They were one workflow until 2026-08-05, which meant an Angular-only
-# change redeployed the API and a controller change rebuilt the frontend. The two
-# target different App Services and share no build output, so they now run
-# independently — including their concurrency groups.
-#
-# This workflow deploys the application only. It must NEVER deploy infrastructure.
-# Infrastructure changes go through `az deployment group create` by hand with
-# `azure/main.test.bicepparam` — CI holds no credential that could run an ARM
-# deployment, and that is deliberate.
-#
-# The credential is scoped to match: `demi-cicd-test` holds Website Contributor on
-# demi-api-fc-test alone (the frontend is published to blob storage now, under a
-# data-plane role), nothing at resource-group scope,
-# so it cannot run an ARM deployment even if a job were added. Keep it that way — do
-# not add an infra job, and do not widen the role assignment.
-#
-# Bicep still gets validated, in `pr.yaml`. A template that will not compile is a
-# pull-request problem; it has no bearing on whether a zipdeploy should run.
-# =============================================================================
+# Deploy the DEMI API to the staging Flex Consumption app. Application only: the CI identity holds
+# Website Contributor on that one app, so it cannot run an ARM deployment. Details: wiki CI-Workflows.
 
 name: Deploy DEMI API to Azure staging
 
@@ -32,12 +8,8 @@ on:
     branches:
       - main
     paths:
-      # `scripts/package-api.py` is the authority on what ends up in the package, and
-      # these paths mirror it. One is easy to miss:
-      #   - `frontend/public/assets/geojson/**` is re-included by `include_subpaths` —
-      #     the boundary seeder reads it at runtime in Azure. It is the one path under
-      #     `frontend/` that belongs to the API package, so it fires BOTH workflows.
-      #     That is correct, not a bug.
+      # Mirrors `scripts/package-api.py`. The geojson lives under `frontend/` but is packaged with
+      # the API, so it fires both deploy workflows — that is correct, not a bug.
       - 'src/**'
       - 'api/**'
       - 'index.js'
@@ -56,7 +28,6 @@ permissions:
   id-token: write
   contents: read
 
-# The Flex app is the only API target; the name lives here so steps carry no literal.
 env:
   API_FLEX_APP_NAME: demi-api-fc-test
 
@@ -64,42 +35,33 @@ jobs:
   deploy-api:
     name: Build & Deploy API (Azure Function App)
     runs-on: ubuntu-latest
-    # Subscription, resource group and the two Azure ids all come from this
-    # environment — only the app names below are pinned in the file.
-    #
-    # STAGING IS SPELLED `-test` IN AZURE: `demi-api-fc-test` in `c4b0a8-test-rg`,
-    # subscription `c4b0a8-test`. The environment model is
-    # dev = sandbox (redeployable, not wired to CI), test = staging, prod = prod.
-    #
-    # Declaring an environment CHANGES THE OIDC SUBJECT CLAIM. It becomes
-    # `repo:digitalspace/eagle-demi:environment:test` instead of
-    # `...:ref:refs/heads/main`, so only the `gh-env-test` federated credential on
-    # demi-cicd-test matches. Remove the environment and Azure Login fails with
-    # AADSTS700213; rename it and it fails the same way — create the credential for
-    # the new subject BEFORE renaming anything here.
+    timeout-minutes: 20
+    # Declaring an environment CHANGES THE OIDC SUBJECT CLAIM to
+    # `repo:digitalspace/eagle-demi:environment:test`; only `gh-env-test` on demi-cicd-test matches it.
     environment: test
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
     steps:
       - name: Checkout repository
-        # Full history, because BUILD_ID comes from `git describe --tags`. At the default
-        # fetch-depth of 1 the tag refs can arrive while HEAD has no ancestry path to them, and
-        # describe fails with "No tags can describe '<sha>'" — leaving the deployed app reporting
-        # a bare sha with no version. `fetch-tags: true` does not fix that; only depth 0 does. At
-        # roughly 67 MB and 296 commits the extra clone cost is noise.
+        # Depth 0 because BUILD_ID comes from `git describe --tags`: at depth 1 the tag refs arrive
+        # with no ancestry path from HEAD and describe fails. `fetch-tags: true` does not fix it.
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # Before setup-node: its Yarn 4 cache detection reads the corepack shim (actions/setup-node#1027).
+      - name: Enable Corepack
+        run: corepack enable
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: '22'
+          cache: 'yarn'
 
-      # Dependencies only. Packaging belongs to `scripts/package-api.py`: an inline zip prunes by
-      # hand and ships .claude, test, azure, .github and scripts into the app.
+      # Dependencies only. Packaging belongs to `scripts/package-api.py`.
       - name: Install Dependencies
-        run: |
-          corepack enable
-          yarn install --immutable
+        run: yarn install --immutable
 
       - name: Azure Login
         uses: azure/login@v3
@@ -108,40 +70,35 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # Dev dependencies are half the package's file count, and the Flex extract phase is paid per
+      # file. Nothing after this step needs them.
+      - name: Drop dev dependencies from the package
+        run: yarn workspaces focus --production
+
       # `config-zip`: a Flex app has no Kudu wwwroot to POST a zip into — it publishes to the
-      # deployment blob container declared in the module. BUILD_ID is stamped into the package, so
-      # the zip is built here rather than reused.
-      # No existence probe: the Flex app is permanent; a missing app must fail loudly, not skip.
+      # deployment blob container. No existence probe: a missing app must fail loudly, not skip.
       - name: Deploy API to the Flex app
         run: |
           set -euo pipefail
           export BUILD_ID="$(git describe --tags --always --dirty)-$(date -u +%H%M%S)"
           python3 scripts/package-api.py . /tmp/api-flex.zip
           az functionapp deployment source config-zip \
-            -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+            -g "$AZURE_RESOURCE_GROUP" \
             -n "$API_FLEX_APP_NAME" \
             --src /tmp/api-flex.zip
 
-      # A deploy reporting success is not the same fact as the HTTP function being registered: the
-      # host loads an app that registers nothing quite happily, and every route then 404s. Trigger
-      # sync is asynchronous after a Flex publish, so poll rather than read once.
-      #
-      # `api` is the catch-all route in api/index.js. Matched exactly — `grep api` also matches
-      # `apiRoot`, which registers from the same block and so proves nothing extra.
+      # `api` is the catch-all route in api/index.js; a deploy that registers nothing 404s every route.
       - name: Verify the api function is registered
+        run: ./scripts/wait-for-function.sh "$AZURE_RESOURCE_GROUP" "$API_FLEX_APP_NAME" api
+
+      # Registered is not the same fact as serving. `/health` is liveness only and needs no auth
+      # (src/http/routes.js), and host.json sets routePrefix "" so it is not under /api.
+      - name: Smoke test the deployed API
         run: |
-          for i in {1..10}; do
-            if az functionapp function list -g ${{ vars.AZURE_RESOURCE_GROUP }} \
-                 -n "$API_FLEX_APP_NAME" --query "[].name" -o tsv 2>/dev/null \
-                 | sed 's#.*/##' | grep -qx api; then
-              echo "✓ api is registered on $API_FLEX_APP_NAME"
-              exit 0
-            fi
-            echo "Attempt $i: not registered yet, waiting..."
-            sleep 20
-          done
-          echo "❌ api never appeared. The app is deployed and every route will 404."
-          exit 1
+          set -euo pipefail
+          host=$(az functionapp show -g "$AZURE_RESOURCE_GROUP" -n "$API_FLEX_APP_NAME" \
+                   --query defaultHostName -o tsv)
+          curl -fsS --retry 3 --retry-delay 5 "https://${host}/health"
 
       - name: Report API Failure to Job Summary
         if: failure()

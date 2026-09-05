@@ -5,6 +5,8 @@ node_modules
 .env
 .env.local
 .env.*.local
+# Azure Functions local settings — holds connection strings, and package-api.py refuses to ship it
+local.settings.json
 
 # Local instruction files, not for review
 .github/antigravity.md
