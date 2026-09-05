@@ -94,6 +94,12 @@ async function getById(access, id) {
 }
 
 /**
+ * An Eagle ObjectId. DEMI project ids are Track integers or `eagle-<ObjectId>`, so an id in this
+ * shape is unambiguously Eagle's and the two spaces cannot collide.
+ */
+const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
+
+/**
  * Look up by an alternate identity. Used by the seeders, which hold an Eagle ObjectId rather
  * than a Track id.
  *
@@ -281,6 +287,7 @@ module.exports = {
   listVisible,
   countVisible,
   getById,
+  EAGLE_OBJECT_ID,
   getByEagleId,
   listByIds,
   listWithCentroid,

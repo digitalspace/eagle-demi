@@ -148,6 +148,10 @@ paths:
         - name: id
           in: path
           required: true
+          description: >-
+            A DEMI project id (a Track project number, or `eagle-<ObjectId>`), or the project's
+            Eagle ObjectId — a 24-character hex string, which is resolved through `eagleId`.
+            The two id spaces cannot collide, and both answer under the same ACL.
           schema:
             type: string
       responses:

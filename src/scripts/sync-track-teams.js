@@ -29,7 +29,9 @@
  * IT ALSO MIRRORS THE PROJECT LIST AND CLOSES CREDENTIALS. The same run reads
  * `GET /api/v1/projects` ONCE and hands that list to two steps. `sync-track-projects.js` creates
  * and updates the DEMI project records from it — Track is the live source of project identity, not
- * the checked-in export. Then every live Selected Credential over a project Track reports closed is
+ * the checked-in export — along with the assessment work phases this run pulls separately
+ * (`sources.fetchTrackWorkPhases`, one `/works` call plus one per assessment work). Then every
+ * live Selected Credential over a project Track reports closed is
  * closed out (TODO-rbac.md P3-6) — narrowed if it names other projects, revoked if it does not.
  * "Work complete" is not in the feed, so `project-closed` is the only cause acted on here.
  *
@@ -40,7 +42,7 @@
 
 const config = require('../config');
 const { PROJECT_ROLE_PREFIX } = require('../helpers/access-sql');
-const { clientToken, fetchJson, fetchTrackProjects } = require('../seed/sources');
+const { clientToken, fetchJson, fetchTrackProjects, fetchTrackWorkPhases } = require('../seed/sources');
 const { syncProjects } = require('./sync-track-projects');
 const { logger } = require('../utils/logger');
 
@@ -259,6 +261,7 @@ async function sync(argv = [], deps = {}) {
     orphaned: 0,
     relinked: 0,
     skippedApiRows: 0,
+    trackPhases: 0,
     failures: 0,
     plan: decided
   };
@@ -312,17 +315,29 @@ async function sync(argv = [], deps = {}) {
   try {
     const projects = await fetchTrackProjects(trackToken, get);
 
+    // Work phases on their own try, ahead of the mirror: they are ~400 requests to Track, and a
+    // feed that is down must cost the phases only. The mirror then writes none, and
+    // `mergeTrackProject` leaves the stored ones alone rather than blanking them.
+    let phases = new Map();
+    try {
+      phases = await fetchTrackWorkPhases(trackToken, get);
+    } catch (err) {
+      summary.failures++;
+      logger.error('[track-teams] work phase pull failed', { error: err.message });
+    }
+
     // Its own try: a Cosmos outage in the mirror must not cost the credential sweep, which needs
     // no repository of its own.
     try {
-      const mirrored = await syncProjects(projects, { live: args.live, deps });
+      const mirrored = await syncProjects(projects, { live: args.live, deps, phases });
       Object.assign(summary, {
         trackProjects: mirrored.trackProjects,
         created: mirrored.created,
         updated: mirrored.updated,
         orphaned: mirrored.orphaned,
         relinked: mirrored.relinked,
-        skippedApiRows: mirrored.skippedApiRows
+        skippedApiRows: mirrored.skippedApiRows,
+        trackPhases: mirrored.phases
       });
       summary.failures += mirrored.failures;
     } catch (err) {
@@ -373,7 +388,7 @@ function summaryLine(s) {
     `closedProjects=${s.closedProjects} credentialsRevoked=${s.credentialsRevoked} ` +
     `trackProjects=${s.trackProjects} created=${s.created} updated=${s.updated} ` +
     `orphaned=${s.orphaned} relinked=${s.relinked} skippedApiRows=${s.skippedApiRows} ` +
-    `failures=${s.failures}`;
+    `trackPhases=${s.trackPhases} failures=${s.failures}`;
 }
 
 /**

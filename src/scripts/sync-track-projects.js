@@ -5,6 +5,8 @@
  *
  * Runs inside the nightly Track sync (`sync-track-teams.js`) on the list that run already fetched:
  * one `GET /api/v1/projects` per night feeds both this and the closed-project credential sweep.
+ * That run also hands over the work phases it pulled (`sources.fetchTrackWorkPhases`), so the
+ * assessment rail eagle-public draws is written by the same pass that writes the names.
  *
  * A RE-MERGE MUST NEVER MOVE A RECORD'S LEVEL. `mergeTrackProject` derives `read` from the Eagle
  * record every time it is called, so re-running it over a stored row would rewrite an ACL that
@@ -32,6 +34,9 @@ const TRACK_FIELDS = TRACK_PRECEDENCE.map(([target]) => target);
  *
  * Centroid, `epic_guid` and the Eagle match are NOT compared here: re-deriving them is the seed's
  * job, and this step exists to keep names, states and certificates current.
+ *
+ * `phases` is the one Track-owned field that is not a scalar, so it is compared by value. Both
+ * sides come out of the same mapper, so key order is stable and a serialised compare holds.
  */
 function trackChanges(existing, merged) {
   const changes = {};
@@ -39,6 +44,9 @@ function trackChanges(existing, merged) {
     if (merged[field] !== undefined && merged[field] !== existing[field]) {
       changes[field] = merged[field];
     }
+  }
+  if (merged.phases && JSON.stringify(merged.phases) !== JSON.stringify(existing.phases)) {
+    changes.phases = merged.phases;
   }
   return changes;
 }
@@ -52,14 +60,15 @@ function projectsRepository() {
 
 /**
  * @param {Array}  apiProjects  raw `GET /api/v1/projects` rows
- * @param {object} [opts]       {live} write, {deps} test seam {projects}, {now} fixed timestamp
+ * @param {object} [opts]       {live} write, {deps} test seam {projects}, {now} fixed timestamp,
+ *                              {phases} Map of Track project id -> work phases
  */
 async function syncProjects(apiProjects, opts = {}) {
-  const { live = false, deps = {} } = opts;
+  const { live = false, deps = {}, phases = new Map() } = opts;
   const rows = apiProjects || [];
   const summary = {
     trackProjects: rows.length,
-    created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, failures: 0
+    created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0, phases: 0, failures: 0
   };
 
   const repo = deps.projects || projectsRepository();
@@ -85,6 +94,9 @@ async function syncProjects(apiProjects, opts = {}) {
     const existing = stored.get(id);
     const guid = track.epic_guid ? String(track.epic_guid) : null;
     const relink = !existing && guid ? eagleOnly.get(guid) : null;
+    // Every merge below takes the same options; the phase list is per project, so it is read once.
+    const mergeOpts = { now, phases: phases.get(id) };
+    if (mergeOpts.phases) summary.phases++;
 
     try {
       if (relink) {
@@ -96,7 +108,7 @@ async function syncProjects(apiProjects, opts = {}) {
         // with it: `buildRegistry` simply stops producing it, and `--reconcile` keys Eagle-only
         // rows on `eagleId` against the Eagle fetch, so a row whose Eagle project still exists is
         // not surplus. Removing one is `purgeProject`'s job, and that cascades to its documents.
-        const merged = mergeTrackProject(track, (relink.sources || {}).eagle || null, { now });
+        const merged = mergeTrackProject(track, (relink.sources || {}).eagle || null, mergeOpts);
         summary.relinked++;
         if (live) {
           await repo.upsert({
@@ -107,7 +119,7 @@ async function syncProjects(apiProjects, opts = {}) {
       }
 
       if (!existing) {
-        const merged = mergeTrackProject(track, null, { now });
+        const merged = mergeTrackProject(track, null, mergeOpts);
         // Admission is level 1 (TODO-rbac.md P3-3). The merge's own default for an unmatched
         // Track project is level 2, and no job may widen anything.
         merged.read = readForLevel(1);
@@ -126,7 +138,7 @@ async function syncProjects(apiProjects, opts = {}) {
         continue;
       }
 
-      const merged = mergeTrackProject(track, (existing.sources || {}).eagle || null, { now });
+      const merged = mergeTrackProject(track, (existing.sources || {}).eagle || null, mergeOpts);
       const changes = trackChanges(existing, merged);
       if (!Object.keys(changes).length) continue;
       summary.updated++;

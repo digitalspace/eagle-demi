@@ -218,15 +218,24 @@ test('summaryLine is the alert contract', async (t) => {
     const summary = await reconcile([], makeDeps());
     assert.strictEqual(summaryLine(summary),
       '[reconcile] projects: unpublishedOrDeleted=1 eagleOnly=0 ' +
-      'documents: unpublishedOrDeleted=1 eagleOnly=3 unresolvedParent=1 drift=5');
+      'documents: unpublishedOrDeleted=1 eagleOnly=3 unresolvedParent=1 ' +
+      'drift=5');
   });
 
   await t.test('a clean run says drift=0', () => {
     assert.strictEqual(
       summaryLine({ projects: { unpublishedOrDeleted: [], eagleOnly: [] },
-        documents: { unpublishedOrDeleted: [], eagleOnly: [], unresolvedParent: [] }, drift: 0 }),
+        documents: { unpublishedOrDeleted: [], eagleOnly: [], unresolvedParent: [] },
+        drift: 0 }),
       '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 drift=0');
+  });
+
+  // The alert rule reads `drift=` out of this line with a regex (azure/modules/observability.bicep).
+  await t.test('the alert can always extract drift=', async () => {
+    const line = summaryLine(await reconcile([], makeDeps()));
+    assert.ok(line.includes('[reconcile] projects'), line);
+    assert.strictEqual(/drift=([0-9]+)/.exec(line)[1], '5');
   });
 });
 

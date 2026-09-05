@@ -35,6 +35,9 @@ module.exports = {
   isActive: { defaultVis: 4, maxVis: 4 },
   // Certificate number or state — both are published on the EAO's own certificate pages.
   eaCertificate: { defaultVis: 4, maxVis: 4 },
+  // Track's assessment phases, dates only — the progress rail eagle-public draws. No staff, no
+  // notes: seed/sources.js maps the fields listed here and drops the rest of the Track row.
+  phases: { defaultVis: 4, maxVis: 4 },
 
   // Eagle-only EA process record.
   eaStatus: { defaultVis: 4, maxVis: 4 },

@@ -145,6 +145,64 @@ test('a project Track has not changed is not written at all', async () => {
   assert.strictEqual(summary.trackProjects, 1);
 });
 
+/**
+ * Work phases are the one Track-owned field that is an array, so `trackChanges` compares them by
+ * value. Compared by identity every run would rewrite all 384 rows every night; not compared at
+ * all, a project whose assessment moved on would keep last year's rail forever.
+ */
+test('Track work phases', async (t) => {
+  const PHASES = [{
+    name: 'Application Review', eaActId: 3, eaActName: '2018 Act', workType: 'Assessment',
+    startDate: '2023-02-01T00:00:00.000Z', endDate: null, numberOfDays: 180,
+    legislated: true, sortOrder: 4, isCompleted: false
+  }];
+  const phaseMap = (phases = PHASES) => new Map([['207', phases]]);
+
+  await t.test('a new phase list is written and counted', async () => {
+    const projects = fakeProjects([storedProject()]);
+
+    const summary = await syncProjects([API_PROJECT],
+      { live: true, deps: { projects }, now: NOW, phases: phaseMap() });
+
+    assert.strictEqual(summary.updated, 1);
+    assert.strictEqual(summary.phases, 1);
+    assert.deepStrictEqual(projects.writes[0].phases, PHASES);
+    assert.deepStrictEqual(projects.writes[0].read, readForLevel(4),
+      'and the level is still the one the ladder set');
+  });
+
+  await t.test('an unchanged phase list writes nothing', async () => {
+    const projects = fakeProjects([storedProject({ phases: PHASES })]);
+
+    const summary = await syncProjects([API_PROJECT],
+      { live: true, deps: { projects }, now: NOW, phases: phaseMap() });
+
+    assert.deepStrictEqual(projects.writes, []);
+    assert.strictEqual(summary.updated, 0);
+    assert.strictEqual(summary.phases, 1, 'Track still reported them; nothing had moved');
+  });
+
+  await t.test('a moved phase date is written', async () => {
+    const projects = fakeProjects([storedProject({ phases: PHASES })]);
+    const moved = [{ ...PHASES[0], endDate: '2023-08-01T00:00:00.000Z', isCompleted: true }];
+
+    await syncProjects([API_PROJECT],
+      { live: true, deps: { projects }, now: NOW, phases: phaseMap(moved) });
+
+    assert.deepStrictEqual(projects.writes[0].phases, moved);
+  });
+
+  await t.test('a run with no phases leaves the stored ones alone', async () => {
+    const projects = fakeProjects([storedProject({ phases: PHASES })]);
+
+    const summary = await syncProjects([API_PROJECT], { live: true, deps: { projects }, now: NOW });
+
+    assert.deepStrictEqual(projects.writes, [],
+      'a Track work feed that was down must not erase the rail off every project');
+    assert.strictEqual(summary.phases, 0);
+  });
+});
+
 test('a project DEMI has never seen is created at level 1', async () => {
   const projects = fakeProjects([]);
 
@@ -293,6 +351,6 @@ test('no COSMOS_ENDPOINT reports zero instead of reaching for Cosmos', async (t)
 
   assert.deepStrictEqual(summary,
     { trackProjects: 1, created: 0, updated: 0, relinked: 0, skippedApiRows: 0, orphaned: 0,
-      failures: 0 },
+      phases: 0, failures: 0 },
     'the feed side still counts; the write side is honestly zero');
 });

@@ -95,6 +95,20 @@ const EAGLE_FIXTURE = {
   nameSearchTerms: ['eagle', 'name']
 };
 
+/** Track work phases, as `seed/sources.js` maps them. Only the merge passes them through. */
+const TRACK_PHASES_FIXTURE = [{
+  name: 'Early Engagement',
+  eaActId: 3,
+  eaActName: '2018 Act',
+  workType: 'Assessment',
+  startDate: '2021-05-03T00:00:00.000Z',
+  endDate: '2021-11-08T00:00:00.000Z',
+  numberOfDays: 90,
+  legislated: true,
+  sortOrder: 1,
+  isCompleted: true
+}];
+
 test('the projects catalog covers every field the merge emits', async (t) => {
   await t.test('the fixtures actually populate every merge constant', () => {
     for (const field of EAGLE_ONLY_FIELDS) {
@@ -106,8 +120,16 @@ test('the projects catalog covers every field the merge emits', async (t) => {
   });
 
   await t.test('every key mergeTrackProject emits is catalogued', () => {
-    const out = mergeTrackProject(TRACK_FIXTURE, EAGLE_FIXTURE);
+    // With phases, because they are conditional: merged without them the emitted key set is
+    // smaller and an uncatalogued `phases` would sail through.
+    const out = mergeTrackProject(TRACK_FIXTURE, EAGLE_FIXTURE, { phases: TRACK_PHASES_FIXTURE });
+    assert.ok('phases' in out, 'the fixture must actually exercise the phase path');
     assert.deepStrictEqual(Object.keys(out).filter(k => !(k in catalog)), []);
+  });
+
+  await t.test('the whole phase list is public — it is dates, not staff', () => {
+    assert.strictEqual(catalog.phases.defaultVis, 4);
+    assert.strictEqual(catalog.phases.maxVis, 4);
   });
 
   await t.test('every key mergeEagleOnlyProject emits is catalogued', () => {
