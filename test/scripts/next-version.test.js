@@ -160,7 +160,8 @@ esac
   // A flag gh does not define is the failure this test exists for. Per-page belongs in the query
   // string; `gh api` has no --per-page.
   assert.ok(!argv.includes('--per-page'), '`gh api` has no --per-page flag — put per_page in the query string');
-  assert.ok(argv.some((a) => a.includes('tags?per_page=')), 'the tags call should request a full page');
+  assert.ok(argv.some((a) => a.includes('matching-refs/tags/v?per_page=')),
+    'release tags are filtered server-side, a full page at a time');
   assert.ok(argv.includes('--paginate'), 'every page must be fetched to find the highest tag');
 
   fs.rmSync(dir, { recursive: true, force: true });

@@ -1,54 +1,5 @@
-# =============================================================================
-# Cut the release candidate: mint the tag, refresh the draft
-# =============================================================================
-# Every push to `main` mints a git TAG and a matching draft GitHub release. The two
-# `azure-deploy-staging-*.yaml` workflows deploy that same push to staging on their own
-# path filters. Together the three are the "test" half of the release paradigm;
-# `azure-deploy-prod.yaml` is the other half — it deploys one of these tags and, on a
-# green deploy, flips its draft to published.
-#
-# ── WHY THE TAG IS CUT HERE, at test time ────────────────────────────────────────────
-# A draft release mints no git ref: GitHub creates the tag only when someone clicks
-# Publish. That is fine for reserving a version NUMBER and useless for deploying, because
-# the build sitting on staging has no name. "Deploy the tag you verified on staging" could
-# not be obeyed until after a human had already published — which meant publishing had to
-# happen BEFORE the prod deploy, so a published release meant "somebody intended to ship
-# this", not "this is in production".
-#
-# Minting the tag here makes the candidate addressable the moment it is deployed to
-# staging, and leaves publishing free to mean exactly one thing. Nothing else publishes;
-# `azure-deploy-prod.yaml` does it as its last step.
-#
-# ── WHAT THAT COSTS ──────────────────────────────────────────────────────────────────
-# Versions are spent one per push to `main`, and tags accumulate for candidates that never
-# reach prod. A tag is a 40-byte ref, so this is cheap, and it is what makes every staging
-# build referable after the fact.
-#
-# It also moves the version base: `scripts/next-version.js` computes from the highest TAG,
-# not from the latest published release. Basing it on the release would recompute the same
-# number on the next push and collide with the tag this workflow had just created.
-#
-# The draft body is regenerated per version, and there is still exactly ONE draft at a
-# time — the current candidate. `--generate-notes` overwrites whatever is there, so a
-# hand-edit to the draft's notes is discarded by the next push to `main`.
-#
-# ── TRIGGER ──────────────────────────────────────────────────────────────────────────
-# A plain `on: push`, deliberately NOT `workflow_run` chained off the two staging deploys.
-# Chaining looked tempting — "only tag what actually deployed" — and fails three ways: the
-# `frontend/public/assets/geojson/**` path fires BOTH deploy workflows, so two events would
-# race for one tag; a `workflow_run` workflow is unreviewable before merge because it only
-# ever runs from the default branch; and `actions/checkout` inside a `workflow_run` job
-# defaults to the default-branch head rather than the triggering `head_sha`. `on: push` is
-# one event, is testable via `workflow_dispatch`, and hands us `github.sha` directly.
-#
-# The accepted cost: a docs-only push, or a push whose staging deploy later fails, still
-# spends a version. Harmless — the tag is never deployed, and a prod dispatch takes the
-# version an operator names rather than the newest one.
-#
-# This workflow touches no Azure credential, so it declares no `environment:`.
-# Adding one would change nothing here except the OIDC subject claim, which nothing
-# in this file uses.
-# =============================================================================
+# Every push to `main` mints a git tag and refreshes the single draft release for that candidate.
+# Why the tag is cut at test time, and what it costs: wiki Release-Process.
 
 name: Tag and draft release
 
@@ -58,61 +9,31 @@ on:
       - main
   workflow_dispatch:
 
-# `cancel-in-progress: false`, and it matters more here than in the deploy workflows.
-# A cancellation landing between the tag push and the draft create leaves a tag with no
-# release; one landing between the delete and the create leaves no draft at all. Both
-# self-heal on the next push, and neither is worth risking on a run that is already
-# halfway through minting a ref. GitHub queues at most one pending run per group and
-# coalesces the rest, so nothing piles up.
+# A cancellation between the tag push and the draft create leaves a tag with no release. Both
+# halves self-heal on the next push, and GitHub coalesces queued runs, so nothing piles up.
 concurrency:
   group: draft-release
   cancel-in-progress: false
 
-# Tags and releases are both `contents` — `contents: write` is enough to push a ref and to
-# list, delete and create releases, and is the whole of what this workflow needs.
-permissions:
-  contents: write
-
 jobs:
   draft-release:
     name: Tag the commit and refresh the draft release
-    # GUARDED AT JOB LEVEL, NOT ON THE TAG STEP. `workflow_dispatch` carries no branch restriction
-    # — only the `push` trigger does — and guarding the tag step alone is not enough: the delete
-    # step would still remove the LIVE candidate's draft (its notes, with no undo) and the create
-    # step would still stage a draft at the unmerged SHA. Publishing that draft in the UI mints the
-    # tag, and azure-deploy-prod.yaml validates only the `^v[0-9]+\.[0-9]+\.[0-9]+$` shape before
-    # checking out `refs/tags/<input>` — so it reaches production. The whole job is pinned to main.
+    # GUARDED AT JOB LEVEL: `workflow_dispatch` carries no branch restriction, and guarding the tag
+    # step alone would still let the delete step remove the live candidate's draft.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Tags and releases are both `contents`, and this is the only job that writes either.
+    permissions:
+      contents: write
     steps:
-      # Shallow (the default) on purpose, and it stays correct now that this job pushes a tag.
-      # Do NOT "fix" this by adding `fetch-depth: 0`: nothing here reads git history, and the tag
-      # below points at a commit the remote already has, so the push carries one object and
-      # introduces no shallow boundary. `scripts/next-version.js` asks `gh` for the repository's
-      # tags and for the commit range `<lastTag>...$GITHUB_SHA`, both ancestry-independent, and the
-      # range is the same boundary GitHub uses to generate release notes.
-      #
-      # `git describe` was rejected for exactly the opposite reason: it walks HEAD's ancestry only,
-      # so a tag on a non-ancestor commit silently yields an older base and a wrong version.
-      #
-      # The checkout's persisted credential is what authenticates the `git push` below; removing
-      # `persist-credentials` (the default is on) breaks the tag step with a 403.
+      # Shallow on purpose: nothing here reads git history, and the tag points at a commit the
+      # remote already has. The checkout's persisted credential authenticates the `git push` below.
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-
-      # No `yarn install`: the script is plain node with no dependencies, and it reads
-      # its inputs from the `gh` CLI that the runner already ships.
-      #
-      # Assigned to a variable first rather than interpolated straight into the `echo`.
-      # `set -e` does not fire on a command substitution that is merely an argument —
-      # `echo` still exits 0 — so a failing script would quietly publish an empty version
-      # and surface as a baffling `git tag` error one step later.
+      # No setup-node and no install: the runner ships node and the script has no dependencies.
+      # Assigned to a variable because `set -e` ignores a command substitution used as an argument.
       - name: Compute next version
         id: version
         env:
@@ -122,22 +43,8 @@ jobs:
           version=$(node scripts/next-version.js)
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # The tag, not the draft, is what makes this build deployable — `gh release create --draft`
-      # below mints no ref, so without this step the version exists only as a name on a release
-      # record and `azure-deploy-prod.yaml` has nothing to check out.
-      #
-      # BEFORE the draft is touched, deliberately. A tag push refused by a ruleset then fails the
-      # job with the previous draft still standing, rather than having deleted it and created a
-      # replacement pointing at a tag that does not exist.
-      #
-      # Annotated, so the tag records who cut it and when. `git tag -a` needs a tagger identity and
-      # a runner has none configured, hence the two `git config` lines; the address is GitHub's own
-      # for the Actions bot, so the tagger resolves to a real account rather than a dead mailbox.
-      #
-      # No `|| true` and no "does the tag already exist" guard. On a re-run of the same SHA the
-      # version step has already seen the tag it created last time and computed the NEXT one, so
-      # there is nothing to collide with; a genuine collision means the base lookup is wrong and
-      # must stop the run rather than silently reuse a shipped version.
+      # BEFORE the draft is touched: a tag push refused by a ruleset then fails with the previous
+      # draft still standing. Annotated, so the tag records who cut it — hence the tagger identity.
       - name: Tag the commit
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -148,55 +55,23 @@ jobs:
           git tag -a "$VERSION" -m "Release $VERSION"
           git push origin "$VERSION"
 
-      # Ref-safe by construction, and that now protects a REAL tag rather than a hypothetical one:
-      # every draft this workflow deletes has a git tag behind it from the step above.
-      # `gh release delete` without `--cleanup-tag` removes the release record only. `--cleanup-tag`
-      # is the ONE flag that would also delete the git ref — never add it here. With it, every push
-      # would delete the previous candidate's tag, and `azure-deploy-prod.yaml` could no longer
-      # deploy or roll back to anything but the newest build.
-      #
-      # Scoped to `vX.Y.Z` tag names, which is the only shape this workflow ever creates. Selecting
-      # every draft would take hand-authored ones with it — a maintainer drafting prod notes or a
-      # security advisory in the UI would find them deleted by the next push to `main`, and release
-      # deletion has no undo. The same filter drops the empty tag name a draft saved without picking
-      # a tag emits, which would otherwise become a `gh release delete ""` that can never succeed.
-      #
-      # Deleting the previous draft is what keeps "exactly one candidate" true. The tag it leaves
-      # behind is still deployable; a prod deploy of a tag with no draft creates the published
-      # release itself, which is the rollback path.
-      #
-      # No `|| true`. The race it would cover cannot happen: the `concurrency` group above
-      # already serialises runs of this workflow. What it would actually absorb is a real
-      # failure — a ruleset denial, a 5xx, a token scope change — after which the create
-      # step adds a SECOND draft, the job still reports success, and every later push adds
-      # another. A red job here is recovered by the next push, which is the same self-heal
-      # the create step already relies on.
+      # Never add `--cleanup-tag`: it deletes the git ref too, leaving prod nothing to roll back to.
+      # Filtered to this workflow's own drafts — a hand-authored one must survive; deletion has no undo.
       - name: Delete existing draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh release list --limit 100 --json tagName,isDraft \
-            --jq '.[] | select(.isDraft) | .tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' \
-          | while read -r t; do gh release delete "$t" --yes; done
+          # `gh api`, not `gh release list`: the latter's --json has no author field.
+          gh api "repos/$REPO/releases?per_page=100" \
+            --jq '.[] | select(.draft and .author.login == "github-actions[bot]") | .tag_name
+                  | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' \
+          | while read -r t; do gh release delete "$t" --yes --repo "$REPO"; done
 
-      # `--target "$GITHUB_SHA"` is belt-and-braces now that the tag exists: GitHub ignores
-      # `target_commitish` for a tag it does not have to create. It stays because it is still the
-      # right answer if these steps are ever reordered, and because a BRANCH name here would be
-      # wrong — a branch target resolves at publish time, so the release would land on whatever
-      # `main` pointed at then rather than on the commit these notes describe.
-      #
-      # `--generate-notes` is left to infer its own start boundary, which is the last PUBLISHED
-      # release — the last version that reached production. That is deliberately a wider range than
-      # the one the version bump was computed over (the last tag): a candidate that never shipped
-      # still spent a version, and the notes of the candidate that does ship must carry its work
-      # too. See the header of `scripts/next-version.js`.
-      #
-      # ponytail: delete-and-recreate rather than updating in place. The ceiling is a
-      # sub-second window with no draft if a run dies between the two steps, which
-      # self-heals on the next push to `main`. If that window ever matters, the upgrade is
-      # `gh release edit --tag/--target` on the existing draft, with the body fetched from
-      # `POST /repos/{owner}/{repo}/releases/generate-notes`.
+      # `--generate-notes` starts from the last PUBLISHED release, a wider range than the bump was
+      # computed over: a candidate that never shipped still spent a version, and its work ships here.
+      # ponytail: delete-and-recreate, ceiling is a sub-second window with no draft that self-heals.
       - name: Create draft release
         id: create
         env:
@@ -207,8 +82,6 @@ jobs:
           url=$(gh release create "$VERSION" --draft --generate-notes --target "$GITHUB_SHA")
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
-      # The version is otherwise invisible without opening the Releases tab — nothing else
-      # in this repo writes a job summary on success.
       - name: Report the candidate to the job summary
         env:
           VERSION: ${{ steps.version.outputs.version }}

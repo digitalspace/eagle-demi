@@ -11,8 +11,6 @@
     "db:purge-extraction": "NODE_PATH=node_modules node -r dotenv/config src/scripts/purge-extraction.js",
     "db:backfill-eac-number": "NODE_PATH=node_modules node -r dotenv/config src/scripts/backfill-eac-number.js",
     "rbac:sync-teams": "NODE_PATH=node_modules node -r dotenv/config src/scripts/sync-track-teams.js",
-    "deploy:azure": "bash scripts/deploy-azure.sh all",
-    "deploy:azure:api": "bash scripts/deploy-azure.sh api",
     "deploy:azure:frontend": "bash scripts/deploy-azure.sh frontend",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

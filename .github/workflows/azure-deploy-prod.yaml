@@ -1,55 +1,5 @@
-# =============================================================================
-# Deploy DEMI to Azure production
-# =============================================================================
-# Dispatch-only, from a released tag. `azure-deploy-staging-api.yaml` is the sibling this is
-# modelled on — read it for the packaging and zipdeploy reasoning, which is unchanged here.
-#
-# WHAT IS DIFFERENT FROM STAGING, and why this is a separate file rather than an input on that
-# one: staging deploys on every push to `main`. A prod deploy takes a version, deploys the tag
-# and nothing else, and passes an approval gate first. Merging the two would put a prod deploy
-# one dropdown position away from a test deploy. There is no `push:` trigger here and there must
-# never be one.
-#
-# PUBLISHING IS THE LAST THING THIS WORKFLOW DOES. The tag already exists before a dispatch —
-# `draft-release.yaml` mints one on every push to `main`, alongside a draft release — so there is
-# nothing to publish in order to deploy. The `publish-release` job at the bottom flips that draft to
-# published only after every deploy job has gone green, which makes a published release mean "this
-# version is in production" rather than "somebody intended to ship it". Nothing else publishes.
-#
-# TWO TARGETS: `demi-api-fc-prod` (the Flex app, the only API target — the old `demi-api-prod`
-# is retired and broken) and the extractor Function App (not stood up in prod). Everything else
-# in prod is ARM — which DEMI's posture bars from CI,
-# see the credential note below — or VNet-bound, and a GitHub runner has no route into the VNet.
-#
-# ── PREREQUISITES, none of which this workflow creates ───────────────────────────────────────
-# Created by hand, once:
-#   in Azure:
-#     - resource group `rg-demi-prod`
-#     - the extractor, deployed from `azure/modules/extractor.bicep` — see its header for the
-#       standalone `az deployment group create` and the traps around it. THIS WORKFLOW SHIPS
-#       CODE ONLY; it never runs an ARM deployment.
-#     - UAMI `demi-cicd-prod`, holding **Website Contributor on `demi-api-fc-prod`** (add the same
-#       on the extractor once it exists). Nothing at resource-group scope, nothing on
-#       `demi-search-prod`, no Storage roles. That is what makes "CI cannot run an ARM deployment"
-#       a fact rather than a convention.
-#     - a federated credential `gh-env-prod` on `demi-cicd-prod`. Subject
-#       `repo:digitalspace/eagle-demi:environment:prod` — READ from
-#       `gh api repos/digitalspace/eagle-demi/actions/oidc/customization/sub` (the repository uses
-#       the default subject claim), not composed by hand. Issuer
-#       `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`.
-#       Declaring `environment: prod` below is what produces that subject; rename the environment
-#       and Azure Login fails with AADSTS700213.
-#     - KEEP THIS IDENTITY SEPARATE FROM ANY RUNTIME IDENTITY. eagle-demi is a PUBLIC repository:
-#       a federated credential hung off the runtime UAMI would let any workflow in it mint a token
-#       carrying Cosmos and AI Search data access.
-#   in GitHub, on environment `prod`:
-#     - required reviewer, so a dispatch waits for a human
-#     - a deployment branch/tag policy: custom, one rule of type `tag`, pattern `v*`. That
-#       enforces "deploy from a tag, never a branch" at the platform, before the runner starts.
-#     - secrets AZURE_CLIENT_ID / AZURE_TENANT_ID, vars AZURE_SUBSCRIPTION_ID /
-#       AZURE_RESOURCE_GROUP (`rg-demi-prod`). A missing AZURE_CLIENT_ID fails at Azure Login and
-#       reads as an auth problem rather than a configuration one.
-# =============================================================================
+# Deploy DEMI to production from a released tag, dispatch only. There is no `push:` trigger here and
+# there must never be one. Prerequisites, approval gate and the publish step: wiki Release-Process.
 
 name: Deploy DEMI to Azure production
 
@@ -70,11 +20,8 @@ permissions:
   contents: read
 
 env:
-  # Still `eagle-extractor-*`: the code moved repositories, the deployed app did not. See
-  # `azure/modules/extractor.bicep`.
+  # Still `eagle-extractor-*`: the code moved repositories, the deployed app did not.
   EXTRACTOR_APP_NAME: eagle-extractor-prod
-  # Two API apps, one zip, for the length of the Flex migration: the B1 app keeps serving prod
-  # while the FC1 app is proven, and rproxy is flipped only in Phase 4.
   API_FLEX_APP_NAME: demi-api-fc-prod
 
 jobs:
@@ -83,13 +30,14 @@ jobs:
     runs-on: ubuntu-latest
     environment: prod
     timeout-minutes: 25
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
     steps:
       # Format first, because it decides what gets checked out below. The environment's tag policy
       # already refuses anything that is not `v*`; this says WHICH shape of `v*` is a release.
       - name: Validate version format
         # Through the environment, never interpolated into the script body: `${{ inputs.version }}`
-        # is substituted into the text BEFORE bash starts, so the regex below would be validating a
-        # string that has already had its chance to be shell.
+        # is substituted before bash starts, so the regex would validate a string already run as shell.
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
@@ -99,16 +47,8 @@ jobs:
             exit 1
           fi
 
-      # `ref:` is the whole point: without it the checkout is the branch the dispatch was fired
-      # from, and the job would ship `main` while claiming to deploy a tag. It also replaces the
-      # separate "verify the git tag exists" step the other repos run — checkout fails on a ref
-      # that does not exist, which is the same check without a second way to be wrong.
-      #
-      # This is the one place to deliberately NOT copy eao-nginx, whose deploy job checks out the
-      # default branch and ships master's chart with a promoted image.
-      #
-      # fetch-depth: 0 for the same reason as staging — BUILD_ID comes from `git describe --tags`,
-      # and at depth 1 the tag refs can arrive with no ancestry path from HEAD.
+      # `ref:` is the whole point: without it the checkout is the branch the dispatch was fired from
+      # and the job ships `main` while claiming to deploy a tag. Depth 0 for `git describe --tags`.
       - name: Checkout the tag
         uses: actions/checkout@v7
         with:
@@ -122,21 +62,25 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # No extractor in prod yet. Skip rather than fail, so the API job behind `needs:` still runs.
+      # No extractor in prod yet, so "absent" skips and lets the API job behind `needs:` run. Only
+      # ResourceNotFound means absent: an auth or throttling failure must stop the release.
       - name: Does the extractor exist yet?
         id: probe
         run: |
-          if az functionapp show -g ${{ vars.AZURE_RESOURCE_GROUP }} -n ${{ env.EXTRACTOR_APP_NAME }} \
-               --query name -o tsv >/dev/null 2>&1; then
-            echo "found=true" >> $GITHUB_OUTPUT
+          set -uo pipefail
+          if err=$(az functionapp show -g "$AZURE_RESOURCE_GROUP" -n "$EXTRACTOR_APP_NAME" \
+                     --query name -o tsv 2>&1 >/dev/null); then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$err" == *ResourceNotFound* ]]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "⏭️ $EXTRACTOR_APP_NAME not present — skipping the extractor deploy." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "found=false" >> $GITHUB_OUTPUT
-            echo "⏭️  ${{ env.EXTRACTOR_APP_NAME }} not present — skipping the extractor deploy." >> $GITHUB_STEP_SUMMARY
+            echo "::error::az functionapp show failed for $EXTRACTOR_APP_NAME: $err"
+            exit 1
           fi
 
-      # `extractor/` zipped AT THE ROOT: function_app.py, extract.py, ocr.py, requirements.txt,
-      # host.json. Nothing else — `test_extract.py` and `__pycache__` are developer files and the
-      # remote build would carry them into the app.
+      # Zipped AT THE ROOT, and nothing else: `test_extract.py` and `__pycache__` are developer
+      # files the remote build would carry into the app.
       - name: Package the extractor
         if: steps.probe.outputs.found == 'true'
         run: |
@@ -144,42 +88,21 @@ jobs:
           zip -r /tmp/extractor.zip function_app.py extract.py ocr.py requirements.txt host.json
           unzip -l /tmp/extractor.zip
 
-      # `config-zip`, not `scripts/deploy-azure.sh`. That script is demi-api's: it POSTs to Kudu
-      # and then polls `/api/config` for a BUILD_ID that only the Node app serves. None of it
-      # applies here — a Flex Consumption app has no Kudu wwwroot to merge into, it publishes to
-      # the deployment blob container declared in `azure/modules/extractor.bicep`, and the remote
+      # `config-zip`, not `scripts/deploy-azure.sh`: a Flex app has no Kudu wwwroot, and the remote
       # build is what installs pypdfium2 and rapidocr-onnxruntime from `requirements.txt`.
       - name: Deploy the extractor
         if: steps.probe.outputs.found == 'true'
         run: |
           az functionapp deployment source config-zip \
-            -g ${{ vars.AZURE_RESOURCE_GROUP }} \
-            -n ${{ env.EXTRACTOR_APP_NAME }} \
+            -g "$AZURE_RESOURCE_GROUP" \
+            -n "$EXTRACTOR_APP_NAME" \
             --src /tmp/extractor.zip
 
-      # The deploy reporting success is not the same fact as the function being registered. A
-      # missing `extensionBundle` in host.json loads the app happily and never registers
-      # `queueTrigger`, so the app runs and the queue never drains — which is indistinguishable
-      # from "no documents arrived" unless something asserts the trigger exists.
-      #
-      # Trigger sync is asynchronous after a Flex publish, so poll rather than read once.
+      # A missing `extensionBundle` in host.json loads the app happily and never registers
+      # `queueTrigger`, which is indistinguishable from "no documents arrived".
       - name: Verify the queue trigger is registered
         if: steps.probe.outputs.found == 'true'
-        run: |
-          for i in {1..10}; do
-            if az functionapp function list -g ${{ vars.AZURE_RESOURCE_GROUP }} \
-                 -n ${{ env.EXTRACTOR_APP_NAME }} --query "[].name" -o tsv 2>/dev/null \
-                 | grep -q extract_document; then
-              echo "✓ extract_document is registered"
-              exit 0
-            fi
-            echo "Attempt $i: not registered yet, waiting..."
-            sleep 20
-          done
-          echo "❌ extract_document never appeared. The app is deployed and the queue will not drain."
-          echo "   First thing to check is host.json's extensionBundle — without it the host logs"
-          echo "   \"The binding type(s) 'queueTrigger' are not registered\" and nothing else."
-          exit 1
+        run: ./scripts/wait-for-function.sh "$AZURE_RESOURCE_GROUP" "$EXTRACTOR_APP_NAME" extract_document
 
       - name: Report extractor failure to job summary
         if: failure()
@@ -190,18 +113,15 @@ jobs:
   deploy-api:
     name: Build & Deploy API (Azure Function App)
     runs-on: ubuntu-latest
-    # Ordered, not concurrent. Both jobs sit behind the same `prod` approval, so without this they
-    # start together the moment it is granted — and the API is the thing that would be serving
-    # traffic while the extractor it feeds is still going up. Sequential also means one failure
-    # stops the other rather than leaving half a release.
+    # Ordered, not concurrent: both jobs sit behind the same approval, and the API must not serve
+    # traffic while the extractor it feeds is still going up.
     needs: deploy-extractor
     environment: prod
     timeout-minutes: 30
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
     steps:
       - name: Validate version format
-        # Through the environment, never interpolated into the script body: `${{ inputs.version }}`
-        # is substituted into the text BEFORE bash starts, so the regex below would be validating a
-        # string that has already had its chance to be shell.
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
@@ -224,52 +144,42 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # No existence probe: the Flex app is permanent; a permission failure and an absent app must
-      # both fail loudly — a probe cannot tell them apart, and one did, twice, silently (2026-09-01).
+      # Before setup-node: its Yarn 4 cache detection reads the corepack shim (actions/setup-node#1027).
+      - name: Enable Corepack
+        run: corepack enable
+
+      # 22 is the Flex host's runtime (azure/modules/api-function-flex.bicep).
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: '22'
+          cache: 'yarn'
 
-      # Dependencies only. Packaging belongs to `scripts/package-api.py`.
-      # No legacy App Service deploy: demi-api-prod is retired from serving and a deploy onto it
-      # broke it (2026-09-01) — the Flex app is the only API target.
+      # Dependencies only. Packaging belongs to `scripts/package-api.py`. demi-api-prod is retired
+      # from serving and a deploy onto it broke it (2026-09-01) — the Flex app is the only target.
       - name: Install Dependencies
-        run: |
-          corepack enable
-          yarn install --immutable
+        run: yarn install --immutable
 
-      # `config-zip`, not `scripts/deploy-azure.sh`, for the reason the extractor job gives: a Flex
-      # app has no Kudu wwwroot to POST into — it publishes to the deployment blob container
-      # declared in the module.
+      # Dev dependencies are half the package's file count, and the Flex extract phase is paid per
+      # file. Nothing after this step needs them.
+      - name: Drop dev dependencies from the package
+        run: yarn workspaces focus --production
+
+      # `config-zip`: a Flex app has no Kudu wwwroot to POST into — it publishes to the deployment
+      # blob container declared in the module.
       - name: Deploy API to the Flex app
         run: |
           set -euo pipefail
           export BUILD_ID="$(git describe --tags --always --dirty)-$(date -u +%H%M%S)"
           python3 scripts/package-api.py . /tmp/api-flex.zip
           az functionapp deployment source config-zip \
-            -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+            -g "$AZURE_RESOURCE_GROUP" \
             -n "$API_FLEX_APP_NAME" \
             --src /tmp/api-flex.zip
 
-      # The deploy reporting success is not the same fact as the HTTP function being registered:
-      # the host loads an app that registers nothing, and every route then 404s. Trigger sync is
-      # asynchronous after a Flex publish, so poll rather than read once. `api` is the catch-all in
-      # api/index.js, matched exactly — `grep api` also matches `apiRoot` and proves nothing extra.
+      # `api` is the catch-all route in api/index.js; a deploy that registers nothing 404s every route.
       - name: Verify the api function is registered
-        run: |
-          for i in {1..10}; do
-            if az functionapp function list -g ${{ vars.AZURE_RESOURCE_GROUP }} \
-                 -n "$API_FLEX_APP_NAME" --query "[].name" -o tsv 2>/dev/null \
-                 | sed 's#.*/##' | grep -qx api; then
-              echo "✓ api is registered on $API_FLEX_APP_NAME"
-              exit 0
-            fi
-            echo "Attempt $i: not registered yet, waiting..."
-            sleep 20
-          done
-          echo "❌ api never appeared. The app is deployed and every route will 404."
-          exit 1
+        run: ./scripts/wait-for-function.sh "$AZURE_RESOURCE_GROUP" "$API_FLEX_APP_NAME" api
 
       - name: Report API failure to job summary
         if: failure()
@@ -280,36 +190,17 @@ jobs:
   publish-release:
     name: Publish the release
     runs-on: ubuntu-latest
-    # LAST, and only on a fully successful deploy. `needs:` is the whole enforcement: a job with
-    # `needs` runs only when every one of them succeeded, so a failed, cancelled or skipped deploy
-    # leaves the draft exactly where it was. Add a new deploy job above and it belongs in this list
-    # too, or a release can be published while part of the deploy is red.
+    # LAST, and only on a fully successful deploy: a job with `needs` runs only when every one of
+    # them succeeded. Add a deploy job above and it belongs in this list too.
     needs: [deploy-extractor, deploy-api]
     timeout-minutes: 5
-    # `contents: write` and nothing else. This job touches no Azure resource, so it needs neither
-    # `id-token` nor `environment: prod` — and declaring the environment would put a second approval
-    # gate in front of a step whose entire job is to record that the already-approved deploy
-    # finished. Job-level permissions replace the workflow-level block rather than adding to it,
-    # which is what keeps `contents: read` for the two deploy jobs.
+    # Job-level permissions REPLACE the workflow-level block, which is what keeps `contents: read`
+    # on the deploy jobs. No environment: a second approval gate here would gate only bookkeeping.
     permissions:
       contents: write
     steps:
-      # `--latest` moves GitHub's latest-release pointer to whatever was just deployed, INCLUDING
-      # when that is a rollback to an older tag. Correct: the pointer answers "what is in prod", not
-      # "what is the highest number". `scripts/next-version.js` computes from the highest TAG and no
-      # longer reads this flag, so moving it backwards cannot disturb the next version — which was
-      # a real trap while the base was the latest published release.
-      #
-      # The `else` branch exists for a tag whose draft is gone. `draft-release.yaml` keeps exactly
-      # one draft, so any tag older than the current candidate has none — and a rollback deploy is
-      # precisely that case. It must still leave a published release behind, otherwise the record of
-      # what is in production has a hole exactly where an incident put it.
-      #
-      # `gh release view` rather than `gh release edit ... || gh release create ...`: the `||` form
-      # would also swallow a genuine failure of the edit — a ruleset denial, a 5xx — and create a
-      # duplicate on top of it.
-      #
-      # `--repo` means no checkout is needed at all; this job never touches the working tree.
+      # `--latest` answers "what is in prod", not "what is the highest number", so a rollback moves
+      # it backwards. The `else` branch is that rollback path: an older tag's draft is already gone.
       - name: Publish the release for this version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

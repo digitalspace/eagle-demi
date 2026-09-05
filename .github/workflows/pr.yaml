@@ -1,14 +1,5 @@
-# =============================================================================
-# PR Validation
-# =============================================================================
-# Runs linting, tests, and builds for API and Frontend on pull requests, and
-# compiles the Bicep template.
-#
-# `validate-bicep` moved here from the dev deploy workflow on 2026-08-05, where it
-# gated both app deploys. That was backwards: dev deploys no infrastructure at all,
-# so a template that will not compile has no bearing on whether a zipdeploy should
-# run. It does have a bearing on whether a pull request is mergeable.
-# =============================================================================
+# Lint, test and build both apps, and compile the Bicep templates, on every pull request.
+# Why the Bicep gate lives here rather than in a deploy workflow: wiki CI-Workflows.
 
 name: PR Validation
 
@@ -21,10 +12,8 @@ concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-# Every job here only reads the checkout — none comment, label or push. Without this
-# block the GITHUB_TOKEN gets the repository default, which is broader; CodeQL flags
-# it as `actions/missing-workflow-permissions`. It also keeps Dependabot's PRs working,
-# since those already run with a read-only token.
+# Every job here only reads the checkout. Without this block the token gets the repository default,
+# which is broader, and Dependabot's read-only PRs would stop matching.
 permissions:
   contents: read
 
@@ -37,13 +26,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # Before setup-node: its Yarn 4 cache detection reads the corepack shim (actions/setup-node#1027).
+      - name: Enable Corepack
+        run: corepack enable
+
+      # 22, the Flex host's runtime (azure/modules/api-function-flex.bicep) and what both API deploy
+      # jobs run. Testing on a version prod does not serve proves the wrong thing.
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '24'
-
-      - name: Enable Corepack
-        run: corepack enable
+          node-version: '22'
+          cache: 'yarn'
 
       - name: Install dependencies
         run: yarn install --immutable
@@ -54,20 +47,17 @@ jobs:
       - name: Run API tests
         run: yarn test
 
-      # The extractor is Python in a Node repo, so `yarn test` cannot see it. Its own suite checks
-      # `decide()` against extraction-host/worker.py over 3,000 generated inputs — the parity that
-      # keeps net-new chunks landing on the same boundaries as the migrated corpus.
-      #
-      # Both steps below are load-bearing. ubuntu-latest ships a python3 but which one drifts with
-      # the image, and `extract.py` imports `requests` at module load — without it the selftest dies
-      # on the import, before it has asserted anything.
+      # The extractor is Python in a Node repo, so `yarn test` cannot see it. Its suite checks
+      # `decide()` against extraction-host/worker.py over 3,000 generated inputs.
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
+      # `extract.py` imports requests at module load, so the selftest dies on the import without it.
+      # Pinned: an unpinned install makes the gate depend on whatever PyPI published this morning.
       - name: Install extractor test dependencies
-        run: pip install requests
+        run: pip install requests==2.34.2
 
       - name: Run extractor tests
         run: python3 extractor/test_extract.py
@@ -80,13 +70,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # Before setup-node: its Yarn 4 cache detection reads the corepack shim (actions/setup-node#1027).
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: '24'
-
-      - name: Enable Corepack
-        run: corepack enable
+          cache: 'yarn'
+          cache-dependency-path: frontend/yarn.lock
 
       - name: Install frontend dependencies
         run: yarn --cwd frontend install --immutable
@@ -94,12 +87,8 @@ jobs:
       - name: Lint Frontend
         run: yarn --cwd frontend lint
 
-      # This job ran lint and build and no tests until 2026-08-07, which is how PR #70 bumped
-      # jasmine-core across a MAJOR (5.6 → 6.3) and merged green with its 44 specs never executed.
-      # They were run by hand afterwards and passed — luck, not a gate.
-      # `--no-watch` because `ng test` otherwise waits for file changes and never exits. No
-      # `--browsers` flag: karma.conf.js already defaults to the sandbox-less ChromeNoSandbox
-      # launcher, which is what a runner needs.
+      # This job ran no tests until 2026-08-07, which is how PR #70 bumped jasmine-core across a
+      # major and merged green with its 44 specs never executed. `--no-watch` or `ng test` never exits.
       - name: Test Frontend
         run: yarn --cwd frontend test --no-watch
 
@@ -110,62 +99,36 @@ jobs:
     name: Validate Bicep Template
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # The param files read these with NO default (BCP427), and THE MISSING DEFAULTS ARE THE SAFETY
+    # PROPERTY: a `''` fallback overwrote live credentials on 2026-08-13. Placeholders reach nothing.
+    env:
+      MINIO_ACCESS_KEY: ci-placeholder-not-a-real-key
+      MINIO_SECRET_KEY: ci-placeholder-not-a-real-key
+      ADMIN_API_KEY: ci-placeholder-not-a-real-key
+      DOCLING_API_KEY: ci-placeholder-not-a-real-key
+      TRACK_CLIENT_SECRET: ci-placeholder-not-a-real-key
+      ROLE_SYNC_CLIENT_SECRET: ci-placeholder-not-a-real-key
+      DEVBOX_SSH_PUBLIC_KEY: ci-placeholder-not-a-real-key
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      # No Azure login: `az bicep build` compiles locally, and `ubuntu-latest` ships az.
-      # Keeping it loginless is deliberate — it makes deploying from this workflow
-      # impossible rather than merely unauthenticated.
+      # No Azure login: `az bicep build` compiles locally. Keeping it loginless makes deploying from
+      # this workflow impossible rather than merely unauthenticated.
       - name: Validate Bicep Template
         run: az bicep build --file ./azure/main.bicep
 
-      # extractor.bicep is deliberately NOT wired into main.bicep — it is deployed on its own into
-      # the target resource group — so compiling main.bicep alone would let a broken template reach
-      # a hand-run production deploy unchallenged.
+      # extractor.bicep is deliberately NOT wired into main.bicep — it is deployed on its own, so
+      # compiling main.bicep alone would let a broken template reach a hand-run production deploy.
       - name: Validate Extractor Module
         run: az bicep build --file ./azure/modules/extractor.bicep
 
-      # The param file is where the subnet ids, the object-store coordinates and the CORS origin
-      # list actually live, and none of it is covered by compiling main.bicep. It was ungated
-      # because it cannot compile at all as checked out: six params call
-      # `readEnvironmentVariable` with NO default (MINIO_ACCESS_KEY, MINIO_SECRET_KEY,
-      # ADMIN_API_KEY, DOCLING_API_KEY, TRACK_CLIENT_SECRET, ROLE_SYNC_CLIENT_SECRET), so BCP427
-      # fires on all six and even `az deployment group what-if` never gets to run.
-      #
-      # THE MISSING DEFAULTS ARE THE SAFETY PROPERTY — do not "fix" this by adding `''`. Quoting
-      # the note at azure/main.test.bicepparam:22-25: with a `''` fallback a forgotten export
-      # resolves to empty and the deploy writes that over the live credential — silently, because
-      # the app settings collection is a whole-collection PUT and what-if masks @secure() values as
-      # "*******" in BOTH before and after. That is the mechanism that destroyed ADMIN_API_KEY and
-      # DOCLING_API_KEY irrecoverably on 2026-08-13; only MinIO survived, because OpenShift held an
-      # authoritative copy.
-      #
-      # The hazard is an UNSET variable, not the function, so CI pays the cost with placeholders
-      # instead: the values below are set, prove the rest of the file still resolves, and reach
-      # nothing — this job has no Azure login and deploys nowhere.
-      # eagle-search's own pr.yaml:129-135 already gates its param files exactly this way.
+      # The param files are where the subnet ids, object-store coordinates and CORS origins live,
+      # and none of it is covered by compiling main.bicep.
       - name: Validate Test Parameters
-        env:
-          MINIO_ACCESS_KEY: ci-placeholder-not-a-real-key
-          MINIO_SECRET_KEY: ci-placeholder-not-a-real-key
-          ADMIN_API_KEY: ci-placeholder-not-a-real-key
-          DOCLING_API_KEY: ci-placeholder-not-a-real-key
-          TRACK_CLIENT_SECRET: ci-placeholder-not-a-real-key
-          ROLE_SYNC_CLIENT_SECRET: ci-placeholder-not-a-real-key
-          DEVBOX_SSH_PUBLIC_KEY: ci-placeholder-not-a-real-key
         run: az bicep build-params --file ./azure/main.test.bicepparam --outfile /dev/null
 
-      # Same placeholders, same reason: main.prod.bicepparam reads the same seven values.
       - name: Validate Prod Parameters
-        env:
-          MINIO_ACCESS_KEY: ci-placeholder-not-a-real-key
-          MINIO_SECRET_KEY: ci-placeholder-not-a-real-key
-          ADMIN_API_KEY: ci-placeholder-not-a-real-key
-          DOCLING_API_KEY: ci-placeholder-not-a-real-key
-          TRACK_CLIENT_SECRET: ci-placeholder-not-a-real-key
-          ROLE_SYNC_CLIENT_SECRET: ci-placeholder-not-a-real-key
-          DEVBOX_SSH_PUBLIC_KEY: ci-placeholder-not-a-real-key
         run: az bicep build-params --file ./azure/main.prod.bicepparam --outfile /dev/null
 
       - name: Report Validation Failure to Job Summary
