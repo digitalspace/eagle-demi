@@ -114,6 +114,11 @@ MapLibre stays defensible if developer experience matters more than dependency
 count. It has the better React story and an official Angular binding, and Terra Draw
 is healthy. It is second, not wrong.
 
+eagle-public runs MapLibre GL, installed with the `@vis.gl/react-maplibre` binding as
+part of its map and `/projects` redesign: that app needs pins, clustering and a React
+component surface, not drawing or BC Gov WMS. That choice does not bind DEMI. The
+recommendation above still stands for DEMI's own map.
+
 **Do not migrate if the scope stays where it is.** Leaflet plus Geoman-free would
 cover 281 polygons, drawing and pins with one added dependency and no rewrite. Move
 to OpenLayers when the layer list grows past what we have now or drawing becomes a
