@@ -188,6 +188,24 @@ test('the devbox cloud-init text is frozen', () => {
     + 'bicep // comment outside the string, or recreate the VM and repin this hash.');
 });
 
+// That pin is not enough on its own: customData is base64(cloudInit), not of the template, so the
+// deployed text also moves when a substituted value or the substitution chain moves — changing
+// `param adminUsername string = 'demi'` or dropping one replace() leaves the template byte-identical
+// and still ships different customData. The span covers every param declared between that default
+// and the end of the chain, because each one is a module-local default that feeds the same string.
+test('the devbox cloud-init inputs are frozen', () => {
+  const span = /^param adminUsername string[\s\S]*?^var cloudInit = replace\([\s\S]*?^\)$/m
+    .exec(DEVBOX_MODULE);
+  assert.ok(span, 'devbox.bicep must declare adminUsername above the cloudInit substitution chain');
+
+  const hash = crypto.createHash('sha256').update(span[0]).digest('hex');
+  assert.strictEqual(hash, 'e4acd1105d1a4bfa524ece24b322e502117820d2888e0d38117496feb900927d',
+    'a cloud-init input changed: a param default, or the replace() chain that builds cloudInit. '
+    + 'customData is base64 of that result and cannot be altered on a VM that already exists: the '
+    + 'next apply fails with PropertyChangeNotAllowed on osProfile.customData. Recreate the VM, or '
+    + 'repin this hash if the substituted result is provably unchanged.');
+});
+
 // Read off demi-apim-test and demi-apim-prod, both Disabled (2026-09-06). Omitted, the API version's
 // default is Enabled, so every apply proposes switching the deprecated portal back on.
 test('the gateway pins the legacy developer portal off', () => {
