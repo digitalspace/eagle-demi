@@ -149,12 +149,22 @@ test('the devbox is fed the same endpoints the API app gets', () => {
 // a management subscription this deployer cannot see, so an apply would fail LinkedAuthorizationFailed.
 // Policy Deploy-VM-Monitoring re-attaches it after every write, so the template only carries our own.
 test('the devbox lists only the identity we own', () => {
-  assert.match(DEVBOX_MODULE, /^\s+type: 'SystemAssigned, UserAssigned'$/m,
+  const identityBlock = /identity: \{[\s\S]*?\n {2}\}\n/.exec(DEVBOX_MODULE);
+  assert.ok(identityBlock, 'devbox.bicep must declare an identity block');
+  const IDENTITY_BLOCK = identityBlock[0];
+
+  assert.match(IDENTITY_BLOCK, /^\s+type: 'SystemAssigned, UserAssigned'$/m,
     'the policy adds a system-assigned identity after creation; UserAssigned alone removes it again');
-  assert.match(DEVBOX_MODULE,
-    /userAssignedIdentities: \{\s*'\$\{identityId\}': \{\}\s*\}/,
+
+  const entries = IDENTITY_BLOCK.match(/^\s+'[^']+':\s*\{\}$/gm) || [];
+  assert.strictEqual(entries.length, 1,
+    'userAssignedIdentities must carry exactly one entry, the identity this template owns');
+  assert.match(entries[0], /'\$\{identityId\}':\s*\{\}/,
     'the app identity is the one entry the template may attach');
-  assert.doesNotMatch(DEVBOX_MODULE, /platformIdentityId/,
+
+  assert.doesNotMatch(IDENTITY_BLOCK, /union\(/,
+    'union() would merge in an identity the deployer cannot see, and what-if reports the merge as a diff');
+  assert.doesNotMatch(IDENTITY_BLOCK, /platformIdentityId/,
     'a cross-subscription identity in the payload fails the apply, it does not just quiet the what-if');
 
   // The Compute API returns no diskSizeGB for an image-default disk, so a value here is a

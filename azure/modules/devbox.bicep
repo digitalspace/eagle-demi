@@ -144,6 +144,8 @@ resource devbox 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   tags: tags
   // The scripts run as the USER-assigned identity, same reasoning as the API app: the grants exist
   // before the VM and survive it being deleted and rebuilt.
+  // SystemAssigned carries no DEMI grant; it stays on only because the landing-zone monitoring
+  // policy enables it regardless, and turning it off here would just have every apply strip it back.
   // Landing-zone policy Deploy-VM-Monitoring adds bcgov-managed-lz-live-uami by DeployIfNotExists
   // after every write. The template cannot list it — no assign right in the management subscription —
   // so what-if reports its removal on every run and remediation puts it straight back.
