@@ -107,9 +107,8 @@ param analyticsBackendUrl = 'https://analytics-api-fc-prod.azurewebsites.net'
 param analyticsDcrEndpoint = 'https://analytics-dcr-prod-625z-canadacentral.logs.z1.ingest.monitor.azure.com'
 param analyticsDcrImmutableId = 'dcr-1805b5a943b34c8d83f13bb4225b8319'
 param analyticsWorkspaceCustomerId = '2a0751d4-6666-40f1-b9a6-846030078467'
-// Same handling as edgeSecret above: no fallback would fail the build on a value prod does not use.
-// Its home is the GitHub environment secret of that name, on this repository and on eagle-analytics;
-// deploy-infra.sh demands it once analyticsBackendUrl above is filled in.
+// The '' fallback keeps `az bicep build` green without the GitHub environment secret exported;
+// deploy-infra.sh refuses a prod apply unless this and analyticsAuditHeaderValue below are both set.
 param analyticsSharedHeaderValue = readEnvironmentVariable('APIM_SHARED_HEADER_VALUE', '')
 // The second credential, demanded on POST /audit alone and deployed there as
 // AUDIT_SHARED_HEADER_VALUE. Same home and same handling as the one above.
