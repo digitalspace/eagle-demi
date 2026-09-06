@@ -41,13 +41,6 @@ param identityId string
 @description('Client ID of that identity. Exported as AZURE_CLIENT_ID so @azure/identity picks it.')
 param identityClientId string
 
-// The landing zone attaches this to every VM in the subscription by policy, together with a
-// system-assigned identity, minutes after the VM is created. Both live on demi-devbox-test and
-// demi-devbox-prod (2026-09-06). Unmodelled they show up as a removal on every what-if and each
-// apply strips them until the policy remediates again.
-@description('Resource ID of the platform identity the landing zone attaches to every VM. Empty where the subscription carries no such policy.')
-param platformIdentityId string = ''
-
 // Baked, not read back off the Flex app at runtime: `az functionapp config appsettings list` needs
 // `Microsoft.Web/sites/config/list/action`, which no read-only role carries and this identity does
 // not hold (verified against demi-identity-test, 2026-09-01). main.bicep passes the same expressions
@@ -150,14 +143,15 @@ resource devbox 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   location: location
   tags: tags
   // The scripts run as the USER-assigned identity, same reasoning as the API app: the grants exist
-  // before the VM and survive it being deleted and rebuilt. The system-assigned identity and the
-  // platform one carry no DEMI grant — they are here because the landing zone policy puts them here.
+  // before the VM and survive it being deleted and rebuilt.
+  // Landing-zone policy Deploy-VM-Monitoring adds bcgov-managed-lz-live-uami by DeployIfNotExists
+  // after every write. The template cannot list it — no assign right in the management subscription —
+  // so what-if reports its removal on every run and remediation puts it straight back.
   identity: {
     type: 'SystemAssigned, UserAssigned'
-    userAssignedIdentities: union(
-      { '${identityId}': {} },
-      empty(platformIdentityId) ? {} : { '${platformIdentityId}': {} }
-    )
+    userAssignedIdentities: {
+      '${identityId}': {}
+    }
   }
   properties: {
     hardwareProfile: {

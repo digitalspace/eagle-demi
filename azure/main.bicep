@@ -358,12 +358,6 @@ param devboxSubnetId string = ''
 @description('SSH public key for the devbox admin user.')
 param devboxSshPublicKey string = ''
 
-// Landing-zone state, not ours: a subscription policy attaches this identity to every VM. The
-// template has to carry it or each apply detaches it. Empty deploys the VM with its own identities
-// only.
-@description('Resource ID of the platform identity the landing zone attaches to every VM.')
-param devboxPlatformIdentityId string = ''
-
 // Mandatory Cost Management Tags applied across ALL resources
 // Created out of band in the vault, shared by the gateway (named value) and the app (app setting).
 var apimGatewaySecretName = 'apim-gateway-secret'
@@ -644,7 +638,6 @@ module devbox './modules/devbox.bicep' = if (deployDevbox && !empty(devboxSubnet
     sshPublicKey: devboxSshPublicKey
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId
-    platformIdentityId: devboxPlatformIdentityId
     // The same expressions the API app gets, so demi-run cannot drift from the running app.
     cosmosEndpoint: cosmos.outputs.cosmosEndpoint
     searchEndpoint: deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint

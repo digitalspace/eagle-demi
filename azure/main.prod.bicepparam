@@ -191,7 +191,3 @@ param syncTeamsSchedule = '0 0 11 * * *'
 param deployDevbox = true
 param devboxSubnetId = '/subscriptions/be5924ac-1083-4a1b-be92-7b444882cfd9/resourceGroups/c4b0a8-prod-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-prod-vwan-spoke/subnets/snet-servers'
 param devboxSshPublicKey = readEnvironmentVariable('DEVBOX_SSH_PUBLIC_KEY')
-
-// Attached by landing-zone policy, same identity in both subscriptions (read off demi-devbox-prod
-// and demi-devbox-test, 2026-09-06). Not ours to create, only to keep.
-param devboxPlatformIdentityId = '/subscriptions/40e13180-2fb8-4399-8931-f0c3eefb3e14/resourceGroups/bcgov-managed-lz-live-mgmt/providers/Microsoft.ManagedIdentity/userAssignedIdentities/bcgov-managed-lz-live-uami'
