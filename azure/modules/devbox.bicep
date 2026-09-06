@@ -77,8 +77,8 @@ write_files:
       # exit status, and the scripts then no-op against an unset COSMOS_ENDPOINT and report success.
       set -euo pipefail
       [ $# -gt 0 ] || { echo "usage: demi-run '<command>'" >&2; exit 2; }
-      # --client-id, because the VM has ONLY a user-assigned identity: with no id argument the CLI
-      # asks IMDS for a system-assigned one that does not exist.
+      # --client-id, because the VM also carries a system-assigned identity: with no id argument the
+      # CLI logs in as that one, which holds no Cosmos or Search grant.
       az login --identity --client-id __CLIENT_ID__ --allow-no-subscriptions --output none
       export AZURE_CLIENT_ID=__CLIENT_ID__
       export COSMOS_ENDPOINT=__COSMOS_ENDPOINT__
@@ -142,10 +142,15 @@ resource devbox 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   name: vmName
   location: location
   tags: tags
-  // USER-assigned only, same reasoning as the API app: the grants exist before the VM and survive it
-  // being deleted and rebuilt.
+  // The scripts run as the USER-assigned identity, same reasoning as the API app: the grants exist
+  // before the VM and survive it being deleted and rebuilt.
+  // SystemAssigned carries no DEMI grant; it stays on only because the landing-zone monitoring
+  // policy enables it regardless, and turning it off here would just have every apply strip it back.
+  // Landing-zone policy Deploy-VM-Monitoring adds bcgov-managed-lz-live-uami by DeployIfNotExists
+  // after every write. The template cannot list it — no assign right in the management subscription —
+  // so what-if reports its removal on every run and remediation puts it straight back.
   identity: {
-    type: 'UserAssigned'
+    type: 'SystemAssigned, UserAssigned'
     userAssignedIdentities: {
       '${identityId}': {}
     }
@@ -165,9 +170,10 @@ resource devbox 'Microsoft.Compute/virtualMachines@2024-07-01' = {
         sku: 'server'
         version: 'latest'
       }
+      // No diskSizeGB: the image default is the 30 GiB the live disks already are, and the Compute
+      // API does not return the field, so any value here reads as an addition on every what-if.
       osDisk: {
         createOption: 'FromImage'
-        diskSizeGB: 30
         managedDisk: {
           storageAccountType: 'Standard_LRS'
         }

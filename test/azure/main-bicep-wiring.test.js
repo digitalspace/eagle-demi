@@ -16,6 +16,7 @@ const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'sea
 const COSMOS_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
 const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'observability.bicep'), 'utf8');
 const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
+const DEVBOX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'devbox.bicep'), 'utf8');
 const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
 const DEPLOY = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-infra.sh'), 'utf8');
 
@@ -142,6 +143,41 @@ test('the devbox is fed the same endpoints the API app gets', () => {
   for (const [name, pattern] of wiring) {
     assert.match(block, pattern, `the devbox module's ${name} is not wired, or is wired to something else`);
   }
+});
+
+// The landing-zone identity is deliberately absent: listing it needs assign/action on an identity in
+// a management subscription this deployer cannot see, so an apply would fail LinkedAuthorizationFailed.
+// Policy Deploy-VM-Monitoring re-attaches it after every write, so the template only carries our own.
+test('the devbox lists only the identity we own', () => {
+  const identityBlock = /identity: \{[\s\S]*?\n {2}\}\n/.exec(DEVBOX_MODULE);
+  assert.ok(identityBlock, 'devbox.bicep must declare an identity block');
+  const IDENTITY_BLOCK = identityBlock[0];
+
+  assert.match(IDENTITY_BLOCK, /^\s+type: 'SystemAssigned, UserAssigned'$/m,
+    'the policy adds a system-assigned identity after creation; UserAssigned alone removes it again');
+
+  const entries = IDENTITY_BLOCK.match(/^\s+'[^']+':\s*\{\}$/gm) || [];
+  assert.strictEqual(entries.length, 1,
+    'userAssignedIdentities must carry exactly one entry, the identity this template owns');
+  assert.match(entries[0], /'\$\{identityId\}':\s*\{\}/,
+    'the app identity is the one entry the template may attach');
+
+  assert.doesNotMatch(IDENTITY_BLOCK, /union\(/,
+    'union() would merge in an identity the deployer cannot see, and what-if reports the merge as a diff');
+  assert.doesNotMatch(IDENTITY_BLOCK, /platformIdentityId/,
+    'a cross-subscription identity in the payload fails the apply, it does not just quiet the what-if');
+
+  // The Compute API returns no diskSizeGB for an image-default disk, so a value here is a
+  // permanent what-if addition and a shrink risk against a disk that was grown by hand.
+  assert.doesNotMatch(DEVBOX_MODULE, /^\s+diskSizeGB: /m,
+    'the os disk size must come from the image, not from the template');
+});
+
+// Read off demi-apim-test and demi-apim-prod, both Disabled (2026-09-06). Omitted, the API version's
+// default is Enabled, so every apply proposes switching the deprecated portal back on.
+test('the gateway pins the legacy developer portal off', () => {
+  assert.match(APIM_MODULE, /^\s+legacyPortalStatus: 'Disabled'$/m,
+    'legacyPortalStatus must be set on the service, or the apply turns the legacy portal on');
 });
 
 // src/config.js throws on an empty allowlist in test and prod, so a param file that omits this
