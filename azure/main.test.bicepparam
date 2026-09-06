@@ -159,19 +159,18 @@ param syncTeamsSchedule = '0 0 10 * * *'
 param deployApim = true
 
 // ── eagle-analytics ───────────────────────────────────────────────────────────────────────────
-// Empty until that estate exists here. Every value is READ FROM the eagle-analytics deployment's
-// outputs and none is composed — a Function App host name can carry a regional suffix, and the DCR
-// endpoint and immutable ID are Azure-generated:
+// Filled in from the eagle-analytics deployment's outputs; none is composed — a Function App host
+// name can carry a regional suffix, and the DCR endpoint and immutable ID are Azure-generated:
 //   analyticsBackendUrl          <- apiHostName, prefixed https://
 //   analyticsDcrEndpoint         <- eventsDcrEndpoint
 //   analyticsDcrImmutableId      <- eventsDcrImmutableId
 //   analyticsWorkspaceCustomerId <- analyticsWorkspaceCustomerId
 // The first publishes /analytics on demi-apim-test; the DCR pair moves audit rows to EagleAudit_CL;
 // the workspace GUID makes GET /admin/audit read those rows beside the old DemiAudit_CL ones.
-param analyticsBackendUrl = ''
-param analyticsDcrEndpoint = ''
-param analyticsDcrImmutableId = ''
-param analyticsWorkspaceCustomerId = ''
+param analyticsBackendUrl = 'https://analytics-api-fc-test.azurewebsites.net'
+param analyticsDcrEndpoint = 'https://analytics-dcr-test-akm7-canadacentral.logs.z1.ingest.monitor.azure.com'
+param analyticsDcrImmutableId = 'dcr-f14d018cfbcf4b59945cbfeb0ce09a2e'
+param analyticsWorkspaceCustomerId = '3d9b7393-bec2-4f06-bb5f-87887b72c4ef'
 // The header value eagle-analytics deploys as APIM_SHARED_HEADER_VALUE — both sides must match or
 // that app refuses the gateway. It lives in the GitHub environment secret of that name, on this
 // repository and on eagle-analytics, and NOT in OpenShift `demi-app-secrets`: export it before
