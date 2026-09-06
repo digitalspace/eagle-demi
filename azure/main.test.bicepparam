@@ -193,6 +193,9 @@ param deployDevbox = true
 param devboxSubnetId = '/subscriptions/7897ceb1-9a86-4639-87d7-7f9ff67142b3/resourceGroups/c4b0a8-test-networking/providers/Microsoft.Network/virtualNetworks/c4b0a8-test-vwan-spoke/subnets/snet-servers'
 param devboxSshPublicKey = readEnvironmentVariable('DEVBOX_SSH_PUBLIC_KEY')
 
+// Same landing-zone identity prod's devbox carries, in the same management subscription.
+param devboxPlatformIdentityId = '/subscriptions/40e13180-2fb8-4399-8931-f0c3eefb3e14/resourceGroups/bcgov-managed-lz-live-mgmt/providers/Microsoft.ManagedIdentity/userAssignedIdentities/bcgov-managed-lz-live-uami'
+
 // Pinned to the live budget period — an existing budget rejects startDate updates.
 param budgetStartDate = '2026-08-01'
 

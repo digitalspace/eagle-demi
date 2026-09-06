@@ -16,6 +16,7 @@ const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'sea
 const COSMOS_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
 const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'observability.bicep'), 'utf8');
 const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
+const DEVBOX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'devbox.bicep'), 'utf8');
 const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
 const DEPLOY = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-infra.sh'), 'utf8');
 
@@ -91,6 +92,9 @@ const WIRED = [
   ['deployDevbox',
     /^module devbox '\.\/modules\/devbox\.bicep' = if \(deployDevbox && !empty\(devboxSubnetId\)\) \{$/m,
     'the devbox module gate — without it every environment builds a dev-access VM, prod included'],
+  ['devboxPlatformIdentityId', /^\s+platformIdentityId: devboxPlatformIdentityId$/m,
+    'the devbox module call — without it the landing-zone identity is unmodelled and every apply ' +
+    'detaches it from the VM'],
   ['trustedProxyIps', /^\s+trustedProxyIps: trustedProxyIps$/m,
     'the API module call — without it TRUSTED_PROXY_IPS is empty and caller-ip trusts no proxy hop'],
   // eagle-analytics. Each of these is empty by default, so an unwired one is not a failed deploy:
@@ -142,6 +146,39 @@ test('the devbox is fed the same endpoints the API app gets', () => {
   for (const [name, pattern] of wiring) {
     assert.match(block, pattern, `the devbox module's ${name} is not wired, or is wired to something else`);
   }
+});
+
+// Live state the landing zone owns, which the template has to carry or hand back on every apply.
+// `az bicep build` compiles either shape, and a what-if is the only other way to see it — so these
+// are text-structural, and their evidence is the live read recorded in the module comments.
+test('the devbox keeps the identities the landing zone attaches to it', () => {
+  assert.match(DEVBOX_MODULE, /^\s+type: 'SystemAssigned, UserAssigned'$/m,
+    'the policy adds a system-assigned identity after creation; UserAssigned alone removes it again');
+  assert.match(DEVBOX_MODULE,
+    /userAssignedIdentities: union\(\s*\{ '\$\{identityId\}': \{\} \},\s*empty\(platformIdentityId\) \? \{\} : \{ '\$\{platformIdentityId\}': \{\} \}\s*\)/,
+    'both identities must be listed, and the platform one must drop out where no policy attaches it');
+
+  // The Compute API returns no diskSizeGB for an image-default disk, so a value here is a
+  // permanent what-if addition and a shrink risk against a disk that was grown by hand.
+  assert.doesNotMatch(DEVBOX_MODULE, /^\s+diskSizeGB: /m,
+    'the os disk size must come from the image, not from the template');
+});
+
+for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+  test(`the ${envName} param file names the landing-zone devbox identity`, () => {
+    const match = /^param devboxPlatformIdentityId = '([^']+)'$/m.exec(params);
+    assert.ok(match, 'an unset value deploys a VM the policy has to re-remediate after every apply');
+    assert.match(match[1],
+      /^\/subscriptions\/[0-9a-f-]{36}\/resourceGroups\/[^/]+\/providers\/Microsoft\.ManagedIdentity\/userAssignedIdentities\/[^/]+$/,
+      'it has to be a full identity resource id — a name alone is not something Compute can attach');
+  });
+}
+
+// Read off demi-apim-test and demi-apim-prod, both Disabled (2026-09-06). Omitted, the API version's
+// default is Enabled, so every apply proposes switching the deprecated portal back on.
+test('the gateway pins the legacy developer portal off', () => {
+  assert.match(APIM_MODULE, /^\s+legacyPortalStatus: 'Disabled'$/m,
+    'legacyPortalStatus must be set on the service, or the apply turns the legacy portal on');
 });
 
 // src/config.js throws on an empty allowlist in test and prod, so a param file that omits this

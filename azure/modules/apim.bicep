@@ -89,6 +89,9 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   properties: {
     publisherEmail: publisherEmail
     publisherName: publisherName
+    // Live state on both instances, and off is where we want it: the legacy portal is the
+    // deprecated one and nothing here uses it. Unmodelled, every apply proposes turning it back on.
+    legacyPortalStatus: 'Disabled'
   }
 }
 

@@ -41,6 +41,13 @@ param identityId string
 @description('Client ID of that identity. Exported as AZURE_CLIENT_ID so @azure/identity picks it.')
 param identityClientId string
 
+// The landing zone attaches this to every VM in the subscription by policy, together with a
+// system-assigned identity, minutes after the VM is created. Both live on demi-devbox-test and
+// demi-devbox-prod (2026-09-06). Unmodelled they show up as a removal on every what-if and each
+// apply strips them until the policy remediates again.
+@description('Resource ID of the platform identity the landing zone attaches to every VM. Empty where the subscription carries no such policy.')
+param platformIdentityId string = ''
+
 // Baked, not read back off the Flex app at runtime: `az functionapp config appsettings list` needs
 // `Microsoft.Web/sites/config/list/action`, which no read-only role carries and this identity does
 // not hold (verified against demi-identity-test, 2026-09-01). main.bicep passes the same expressions
@@ -77,8 +84,8 @@ write_files:
       # exit status, and the scripts then no-op against an unset COSMOS_ENDPOINT and report success.
       set -euo pipefail
       [ $# -gt 0 ] || { echo "usage: demi-run '<command>'" >&2; exit 2; }
-      # --client-id, because the VM has ONLY a user-assigned identity: with no id argument the CLI
-      # asks IMDS for a system-assigned one that does not exist.
+      # --client-id, because the VM also carries a system-assigned identity: with no id argument the
+      # CLI logs in as that one, which holds no Cosmos or Search grant.
       az login --identity --client-id __CLIENT_ID__ --allow-no-subscriptions --output none
       export AZURE_CLIENT_ID=__CLIENT_ID__
       export COSMOS_ENDPOINT=__COSMOS_ENDPOINT__
@@ -142,13 +149,15 @@ resource devbox 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   name: vmName
   location: location
   tags: tags
-  // USER-assigned only, same reasoning as the API app: the grants exist before the VM and survive it
-  // being deleted and rebuilt.
+  // The scripts run as the USER-assigned identity, same reasoning as the API app: the grants exist
+  // before the VM and survive it being deleted and rebuilt. The system-assigned identity and the
+  // platform one carry no DEMI grant — they are here because the landing zone policy puts them here.
   identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${identityId}': {}
-    }
+    type: 'SystemAssigned, UserAssigned'
+    userAssignedIdentities: union(
+      { '${identityId}': {} },
+      empty(platformIdentityId) ? {} : { '${platformIdentityId}': {} }
+    )
   }
   properties: {
     hardwareProfile: {
@@ -165,9 +174,10 @@ resource devbox 'Microsoft.Compute/virtualMachines@2024-07-01' = {
         sku: 'server'
         version: 'latest'
       }
+      // No diskSizeGB: the image default is the 30 GiB the live disks already are, and the Compute
+      // API does not return the field, so any value here reads as an addition on every what-if.
       osDisk: {
         createOption: 'FromImage'
-        diskSizeGB: 30
         managedDisk: {
           storageAccountType: 'Standard_LRS'
         }
