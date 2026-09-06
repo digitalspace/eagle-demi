@@ -15,6 +15,7 @@ const PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.prod.biceppar
 const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'search-existing.bicep'), 'utf8');
 const COSMOS_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
 const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'observability.bicep'), 'utf8');
+const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
 const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
 const DEPLOY = fs.readFileSync(path.join(ROOT, 'scripts', 'deploy-infra.sh'), 'utf8');
 
@@ -91,7 +92,21 @@ const WIRED = [
     /^module devbox '\.\/modules\/devbox\.bicep' = if \(deployDevbox && !empty\(devboxSubnetId\)\) \{$/m,
     'the devbox module gate — without it every environment builds a dev-access VM, prod included'],
   ['trustedProxyIps', /^\s+trustedProxyIps: trustedProxyIps$/m,
-    'the API module call — without it TRUSTED_PROXY_IPS is empty and caller-ip trusts no proxy hop']
+    'the API module call — without it TRUSTED_PROXY_IPS is empty and caller-ip trusts no proxy hop'],
+  // eagle-analytics. Each of these is empty by default, so an unwired one is not a failed deploy:
+  // it is an environment that looks configured and writes its audit rows to the old table anyway.
+  ['analyticsBackendUrl', /^\s+analyticsBackendUrl: analyticsBackendUrl$/m,
+    'the apim module call — without it no param file can publish the /analytics API'],
+  ['analyticsSharedHeaderValue', /^\s+analyticsSharedHeaderValue: analyticsSharedHeaderValue$/m,
+    'the apim module call — without it the gateway stamps no header and the analytics app refuses it'],
+  ['analyticsAuditHeaderValue', /^\s+analyticsAuditHeaderValue: analyticsAuditHeaderValue$/m,
+    'the apim module call — without it POST /audit is forwarded with no audit credential and 401s'],
+  ['analyticsDcrEndpoint', /^\s+analyticsDcrEndpoint: analyticsDcrEndpoint$/m,
+    'the API module call — without it audit rows stay on the DEMI DCR whatever the param file says'],
+  ['analyticsDcrImmutableId', /^\s+analyticsDcrImmutableId: analyticsDcrImmutableId$/m,
+    'the API module call — an endpoint with no immutable ID addresses no rule, so the app reads OFF'],
+  ['analyticsWorkspaceCustomerId', /^\s+analyticsWorkspaceCustomerId: analyticsWorkspaceCustomerId$/m,
+    'the API module call — without it GET /admin/audit never sees the rows written since the repoint']
 ];
 
 for (const [name, wiring, why] of WIRED) {
@@ -160,6 +175,133 @@ for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) 
         `${envName} must state ${name} explicitly, empty or otherwise`);
     });
   }
+}
+
+// The four plain eagle-analytics settings. Empty is the correct value until that estate exists, but
+// the LINE has to be there: these are whole-collection-PUT app settings, so a param file that stops
+// naming one takes main.bicep's empty default and a live value is deleted on the next deploy —
+// silently repointing audit rows back at the old table. `az bicep build` says nothing either way.
+for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+  for (const name of ['analyticsBackendUrl', 'analyticsDcrEndpoint', 'analyticsDcrImmutableId',
+    'analyticsWorkspaceCustomerId']) {
+    test(`the ${envName} param file declares ${name}`, () => {
+      assert.match(params, new RegExp(`^param ${name} = '[^']*'$`, 'm'),
+        `${envName} must state ${name} explicitly, empty or otherwise`);
+    });
+  }
+}
+
+// The audit stream has to travel with the DCR it is sent to. Each rule declares one of the two
+// tables and rejects the other, so a deploy that takes the endpoint from one side and the stream
+// name from the other loses every audit row to a 400 the app can only log. Nothing in
+// `az bicep build` or a what-if diff pairs them; both branches were mutable with the suite green.
+test('the audit stream name is decided by the same gate as the audit DCR endpoint', () => {
+  const setting = (name) => new RegExp(`name: '${name}'\\n\\s+value: ([^\\n]+)`).exec(API_MODULE);
+
+  const endpoint = setting('AUDIT_DCR_ENDPOINT');
+  assert.ok(endpoint, 'api-function-flex.bicep must set AUDIT_DCR_ENDPOINT');
+  assert.strictEqual(endpoint[1], 'analyticsAuditConfigured ? analyticsDcrEndpoint : auditDcrEndpoint');
+
+  const stream = setting('AUDIT_STREAM_NAME');
+  assert.ok(stream, 'without AUDIT_STREAM_NAME the app writes DemiAudit_CL to whatever rule it holds');
+  assert.strictEqual(stream[1],
+    'analyticsAuditConfigured ? \'Custom-EagleAudit_CL\' : \'Custom-DemiAudit_CL\'',
+    'the stream must be chosen by the same gate as the endpoint, or the pair can be crossed');
+
+  // Usage counters do NOT move: DemiEvents_CL exists only in the DEMI rule, and its hourly rollup
+  // is what GET /admin/analytics reads.
+  const events = setting('EVENTS_DCR_ENDPOINT');
+  assert.ok(events, 'api-function-flex.bicep must set EVENTS_DCR_ENDPOINT');
+  assert.strictEqual(events[1], 'auditDcrEndpoint');
+
+  assert.match(API_MODULE,
+    /^var analyticsAuditConfigured = !empty\(analyticsDcrEndpoint\) && !empty\(analyticsDcrImmutableId\)$/m,
+    'a half-set pair must read as OFF, not as a rule with no id');
+});
+
+// Which analytics routes need a subscription key. A browser cannot hold one, so moving a read route
+// under the keyed API breaks the DEMI admin screens with a 401 the gateway issues before any policy
+// runs — and moving `/audit` the other way opens a write path to anyone. `az bicep build` compiles
+// both arrangements. Text-structural, with the same honest limits as the guards above.
+test('the analytics read routes are anonymous and only /audit takes a key', () => {
+  const blocks = APIM_MODULE.split(/^resource /m);
+  const block = (name) => blocks.find((b) => b.startsWith(`${name} `));
+  const isOperation = (b) => /Microsoft\.ApiManagement\/service\/apis\/operations@/.test(b.split('\n')[0]);
+
+  const bearer = block('analyticsBearerOperationResources');
+  assert.ok(bearer, 'apim.bicep must declare the bearer operations');
+  assert.match(bearer, /^\s+parent: analyticsApi$/m,
+    'the read routes belong to the anonymous API — the app authorises them on the Keycloak bearer');
+
+  const keyed = blocks.filter((b) => isOperation(b) && /^\s+parent: analyticsMachineApi$/m.test(b));
+  assert.strictEqual(keyed.length, 1, 'the keyed API must carry exactly one operation');
+  assert.match(keyed[0], /urlTemplate: '\/audit'$/m, 'and that operation is POST /audit');
+  assert.match(keyed[0], /method: 'POST'$/m);
+
+  for (const urlTemplate of ["'/query'", "'/query/schema'", "'/dashboards'", "'/dashboards/*'"]) {
+    assert.ok(APIM_MODULE.includes(`urlTemplate: ${urlTemplate}`),
+      `${urlTemplate} must still be declared, or the gateway 404s it`);
+  }
+});
+
+// The read routes carry a bearer, so their CORS list is named rather than `*`, and the browser cannot
+// send that header at all unless it is allowed by name. Neither is visible in a what-if diff.
+test('the analytics read routes allow the admin origins and the Authorization header', () => {
+  const policy = /var analyticsBearerCorsPolicy = replace\('''([\s\S]*?)''',/.exec(APIM_MODULE);
+  assert.ok(policy, 'apim.bicep must build a CORS policy for the bearer operations');
+
+  assert.match(policy[1], /<header>Authorization<\/header>/,
+    'without this the browser cannot send the token the app authorises on');
+  assert.match(policy[1], /<header>Content-Type<\/header>/);
+  for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']) {
+    assert.match(policy[1], new RegExp(`<method>${method}</method>`), `${method} must be allowed`);
+  }
+  assert.doesNotMatch(policy[1], /<origin>\*<\/origin>/,
+    'a wildcard origin is the wrong answer for a request carrying a bearer');
+  assert.match(policy[1], /^__ORIGINS__$/m, 'the origins are substituted in, one element each');
+
+  // Empty list, no policy: an <allowed-origins> with no child is invalid XML and APIM rejects the PUT.
+  assert.match(APIM_MODULE,
+    /resource analyticsBearerOperationPolicies [^\n]*\[for \(operation, index\) in analyticsBearerOperations: if \(analyticsDeployed && !empty\(analyticsBrowserOrigins\)\) \{/,
+    'the policy must be gated on there being at least one origin');
+
+  // Built from frontendHostNames, not listed a second time: those hostnames carry a deploy-time hash.
+  assert.match(MAIN, /^var analyticsAdminOrigins = concat\($/m,
+    'main.bicep must derive the origins rather than take them as a parameter');
+  assert.match(MAIN, /filter\(frontendHostNames, host => startsWith\(host, 'demi-admin'\)\)/,
+    'the admin app is the only frontend that builds a query');
+  // Unconditionally appended, this WAS prod's only allowed origin: prod's frontendHostNames is
+  // empty on purpose, so the derived list would have held one developer's machine and nothing else.
+  assert.match(MAIN, /environmentName == 'prod' \? \[\] : \[ 'http:\/\/localhost:4200' \]/,
+    'localhost is a developer origin and must never be appended in prod');
+  assert.match(PROD_PARAMS, /^param frontendHostNames = \[\]$/m,
+    'prod has no DEMI frontend, so its origin list stays empty and the gate above allows no browser');
+  assert.match(MAIN, /^\s+analyticsBrowserOrigins: analyticsAdminOrigins$/m,
+    'declared but unwired means every browser request is refused at the gateway');
+});
+
+// The shape of the trusted-proxy list, which nothing else guards: a typo passes lint,
+// `az bicep build-params` and the whole suite, and only surfaces as a config.js throw when the app
+// next starts. Fed through the real validator rather than a copy of its regex.
+for (const [envName, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+  test(`the ${envName} param file's trustedProxyIps is a value the app can boot on`, () => {
+    const match = /^param trustedProxyIps = '([^']*)'$/m.exec(params);
+    assert.ok(match, `${envName} must state trustedProxyIps explicitly, empty or otherwise`);
+
+    const CONFIG = path.join(ROOT, 'src', 'config');
+    const previous = process.env.TRUSTED_PROXY_IPS;
+    process.env.TRUSTED_PROXY_IPS = match[1];
+    delete require.cache[require.resolve(CONFIG)];
+    try {
+      assert.deepStrictEqual(require(CONFIG).trustedProxyIps,
+        match[1].split(',').map((s) => s.trim()).filter(Boolean),
+        'every entry must survive src/config.js as an address the proxy check can compare');
+    } finally {
+      if (previous === undefined) delete process.env.TRUSTED_PROXY_IPS;
+      else process.env.TRUSTED_PROXY_IPS = previous;
+      delete require.cache[require.resolve(CONFIG)];
+    }
+  });
 }
 
 // deploySearch=false means ai-search.bicep never runs, so the ONE thing that gives the indexer a
@@ -435,8 +577,7 @@ test('the API app reads EDGE_SECRET through a Key Vault reference', () => {
 // and in ARM history, and a global policy that sets the two headers without deleting the client's
 // copies first would let anyone reach the app directly and assert any subscription they like — the
 // Function App host stays public, because Consumption APIM has no VNet. `az bicep build` exits 0
-// either way. Same honest limits as the guards above.
-const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
+// either way. Same honest limits as the guards above. APIM_MODULE is read at the top of this file.
 
 test('the Flex app reads APIM_GATEWAY_SECRET through a Key Vault reference', () => {
   const setting = API_MODULE
@@ -474,6 +615,96 @@ test('the gateway strips client-supplied trust headers before setting its own', 
     'the secret must come from the named value, never a literal in this repository');
   assert.match(APIM_MODULE, /<value>@\(context\.Subscription\?\.Name \?\? ""\)<\/value>/,
     'and the subscription name from APIM itself, which is the only party that verified the key');
+});
+
+// The analytics APIs get their own trust header, and the same ordering rule applies: a client copy
+// left in place would let anyone reach that Function's public host directly. DEMI's own gateway
+// secret has to come OFF, too — it proves nothing to another app's backend and would otherwise sit
+// in its request logs. `az bicep build` compiles every arrangement of these lines.
+//
+// The policies are composed from fragments, so the test resolves them the way apim.bicep does and
+// asserts on the finished XML — asserting on a fragment would pass a stamp that moved to the wrong
+// API. `analytics` is anonymous, so a client-sent X-Analytics-Audit reaching the backend there is
+// the whole attack; only `analytics-machine` may ever stamp one.
+function analyticsPolicies() {
+  const fragment = (name) => {
+    const hit = new RegExp(`var ${name} = '''([\\s\\S]*?)'''`).exec(APIM_MODULE);
+    assert.ok(hit, `apim.bicep must declare ${name}`);
+    return hit[1];
+  };
+  const head = fragment('analyticsInboundHead');
+  const tail = fragment('analyticsInboundTail');
+  const stamp = fragment('analyticsAuditStamp');
+
+  // The compositions, read from the file rather than assumed: a stamp added to the anonymous one is
+  // exactly the mistake this test exists to catch.
+  assert.match(APIM_MODULE,
+    /^var analyticsPolicyXml = '\$\{analyticsInboundHead\}\$\{analyticsInboundTail\}'$/m,
+    'the anonymous policy is head + tail, with no audit stamp between them');
+  assert.match(APIM_MODULE,
+    /^var analyticsMachinePolicyXml = '\$\{analyticsInboundHead\}\$\{analyticsAuditStamp\}\$\{analyticsInboundTail\}'$/m,
+    'the keyed policy is the same head plus the audit stamp');
+
+  return { anonymous: head + tail, machine: head + stamp + tail };
+}
+
+test('the analytics APIs strip every client-sent trust header before stamping their own', () => {
+  const { anonymous, machine } = analyticsPolicies();
+
+  for (const [apiName, xml] of [['analytics', anonymous], ['analytics-machine', machine]]) {
+    const inbound = /<inbound>([\s\S]*?)<\/inbound>/.exec(xml);
+    assert.ok(inbound, `${apiName} must have an inbound section`);
+
+    assert.match(inbound[1], /<set-header name="X-Gateway-Secret" exists-action="delete" \/>/,
+      "DEMI's gateway secret must come off before the request leaves for eagle-analytics");
+
+    // Both trust headers are deleted on both APIs: a client copy left in place is attacker input.
+    for (const header of ['X-Analytics-Gateway', 'X-Analytics-Audit']) {
+      assert.ok(inbound[1].includes(`<set-header name="${header}" exists-action="delete" />`),
+        `${apiName} must delete a client-supplied ${header}`);
+    }
+
+    const del = inbound[1].indexOf('<set-header name="X-Analytics-Gateway" exists-action="delete" />');
+    const set = inbound[1].indexOf('<set-header name="X-Analytics-Gateway" exists-action="override">');
+    assert.ok(set > del, `${apiName} must delete X-Analytics-Gateway BEFORE setting its own value`);
+    assert.match(inbound[1], /<value>\{\{analytics-shared-header\}\}<\/value>/,
+      'the value must come from the named value, never a literal in this repository');
+  }
+
+  // The audit credential, on the keyed API only. /audit carries both guards; nothing else does.
+  const auditSet = '<set-header name="X-Analytics-Audit" exists-action="override">';
+  const auditDel = '<set-header name="X-Analytics-Audit" exists-action="delete" />';
+  assert.ok(machine.indexOf(auditSet) > machine.indexOf(auditDel),
+    'analytics-machine must delete the client copy of X-Analytics-Audit before stamping its own');
+  assert.match(machine, /<value>\{\{analytics-audit-header\}\}<\/value>/,
+    'and take the value from the named value, never a literal in this repository');
+  assert.ok(!anonymous.includes(auditSet),
+    'the anonymous API must NEVER stamp an audit credential — POST /audit is served keyed only');
+  assert.ok(!anonymous.includes('{{analytics-audit-header}}'),
+    'and must not reference that named value at all');
+
+  // Each policy attached to the API it was built for, and each named value it reads created first.
+  const block = (name) => {
+    const hit = APIM_MODULE.split(/^resource /m).find((b) => b.startsWith(`${name} `));
+    assert.ok(hit, `apim.bicep must declare ${name}`);
+    return hit;
+  };
+  assert.match(block('analyticsApiPolicy'), /^\s+value: analyticsPolicyXml$/m,
+    'the anonymous API must carry the policy with no audit stamp');
+  assert.match(block('analyticsMachineApiPolicy'), /^\s+value: analyticsMachinePolicyXml$/m,
+    'the keyed API must carry the policy that stamps both credentials');
+  assert.match(block('analyticsMachineApiPolicy'), /^\s+analyticsAuditHeader$/m,
+    'and depend on the audit named value, or the policy PUT references one that does not exist yet');
+
+  for (const named of ['analytics-shared-header', 'analytics-audit-header']) {
+    assert.match(APIM_MODULE, new RegExp(`name: '${named}'\\n\\s+properties: \\{[\\s\\S]*?secret: true`),
+      `${named} must be a secret named value, or its value is readable in the portal and in ARM`);
+  }
+
+  // An exported URL with either secret unexported publishes a gateway that 502s what it forwards.
+  assert.match(APIM_MODULE,
+    /^var analyticsDeployed = !empty\(analyticsBackendUrl\) && !empty\(analyticsSharedHeaderValue\) && !empty\(analyticsAuditHeaderValue\)$/m,
+    'a half-set trio must read as not deployed');
 });
 
 // Without operations APIM answers 404 for everything: an API with a backend but no exposed

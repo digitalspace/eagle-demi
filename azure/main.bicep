@@ -302,6 +302,48 @@ param availabilityUrl string = ''
 @description('Deploy the API Management gateway. Requires apiFlexSubnetId, since it fronts that app.')
 param deployApim bool = false
 
+// eagle-analytics rides this gateway instead of paying a second Consumption instance's fixed cost.
+// Everything below is empty until that estate exists, and empty means the analytics API, its
+// products and the audit repoint are all skipped — so this template still deploys on its own.
+@description('Absolute base URL of analytics-api-fc-<env>, read from the eagle-analytics deployment `apiHostName` output. NEVER composed: a Function App host name can carry a regional suffix. Empty deploys no analytics API.')
+param analyticsBackendUrl string = ''
+
+@description('Value of the header analytics-api-fc-<env> demands, shared with its APIM_SHARED_HEADER_VALUE setting. Empty leaves the gateway stamping nothing, which that app refuses.')
+@secure()
+param analyticsSharedHeaderValue string = ''
+
+@description('Value of the SECOND credential that app demands on POST /audit alone, shared with its AUDIT_SHARED_HEADER_VALUE setting. A separate secret from the one above, so the write path can be rotated without touching ingest. Empty deploys no analytics API.')
+@secure()
+param analyticsAuditHeaderValue string = ''
+
+// The audit repoint. Privileged actions move to EagleAudit_CL in the eagle-analytics pipeline, which
+// is EPIC-wide; usage counters stay on DEMI's own DCR. Both empty keeps audit rows where they are.
+// The seven years of DemiAudit_CL rows already written are not migrated and not deleted — the
+// ingestion API overwrites a TimeGenerated older than two days, so they age out where they lie and
+// GET /admin/audit unions them.
+@description('Logs Ingestion endpoint of analytics-dcr-<env>, from the eagle-analytics `eventsDcrEndpoint` output. Empty keeps audit rows on DEMI\'s own DCR.')
+param analyticsDcrEndpoint string = ''
+
+@description('Immutable ID of that DCR, from the eagle-analytics `eventsDcrImmutableId` output. Both this and the endpoint are required before anything is repointed.')
+param analyticsDcrImmutableId string = ''
+
+@description('Workspace GUID of analytics-logs-<env>, from the eagle-analytics `analyticsWorkspaceCustomerId` output. Empty keeps GET /admin/audit reading DemiAudit_CL alone.')
+param analyticsWorkspaceCustomerId string = ''
+
+// The browser origins the analytics read routes accept. Derived from frontendHostNames rather than
+// listed again: those hostnames carry a deploy-time AFD hash, and CORS_ORIGIN already reads them, so
+// a second copy would drift the first time an endpoint moves. Narrowed by the `demi-admin` prefix
+// because the admin app is the only frontend that builds a query — the public DEMI UI never does.
+//
+// localhost is for running that admin app against a deployed gateway, and NEVER in prod: prod has no
+// DEMI frontend, so frontendHostNames there is empty on purpose and appending localhost would make a
+// developer's machine the only origin prod allows. Empty instead, which is what arms the fail-closed
+// gate in apim.bicep — no CORS policy, so no browser origin at all.
+var analyticsAdminOrigins = concat(
+  map(filter(frontendHostNames, host => startsWith(host, 'demi-admin')), host => 'https://${host}'),
+  environmentName == 'prod' ? [] : [ 'http://localhost:4200' ]
+)
+
 // The dev-access VM. Off by default: it is a per-environment opt-in, and an environment without the
 // subnet gets nothing rather than a half-built one.
 @description('Deploy the dev-access VM that replaces the App Service SSH tunnel.')
@@ -534,6 +576,9 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     auditDcrImmutableId: auditLogs.outputs.dcrImmutableId
     auditWorkspaceId: auditLogs.outputs.workspaceId
     auditWorkspaceCustomerId: auditLogs.outputs.workspaceCustomerId
+    analyticsDcrEndpoint: analyticsDcrEndpoint
+    analyticsDcrImmutableId: analyticsDcrImmutableId
+    analyticsWorkspaceCustomerId: analyticsWorkspaceCustomerId
     appLogsWorkspaceCustomerId: observability.outputs.workspaceCustomerId
     // From the budget module rather than rebuilt from environmentName: one place owns the name.
     budgetName: costBudget.outputs.budgetName
@@ -558,6 +603,12 @@ module apim './modules/apim.bicep' = if (deployApim && !empty(apiFlexSubnetId)) 
     apiHostName: apiFunctionFlex!.outputs.apiFunctionAppHostName
     keyVaultName: keyVault.outputs.vaultName
     gatewaySecretName: apimGatewaySecretName
+    // Another repository's estate: the module's own !empty() gate skips the analytics API when
+    // eagle-analytics has not been deployed here.
+    analyticsBackendUrl: analyticsBackendUrl
+    analyticsSharedHeaderValue: analyticsSharedHeaderValue
+    analyticsAuditHeaderValue: analyticsAuditHeaderValue
+    analyticsBrowserOrigins: analyticsAdminOrigins
   }
 }
 

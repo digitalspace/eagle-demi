@@ -25,10 +25,12 @@ function mockRes() {
  * unconfigured case cannot leak into a configured one — nothing else in the suite sets them.
  */
 function configure(t, values) {
-  const keys = ['auditWorkspaceCustomerId', 'appLogsWorkspaceCustomerId', 'costScope', 'budgetName'];
+  const keys = ['auditWorkspaceCustomerId', 'analyticsWorkspaceCustomerId', 'appLogsWorkspaceCustomerId',
+    'costScope', 'budgetName'];
   const saved = Object.fromEntries(keys.map((k) => [k, config[k]]));
   Object.assign(config, {
-    auditWorkspaceCustomerId: '', appLogsWorkspaceCustomerId: '', costScope: '', budgetName: '',
+    auditWorkspaceCustomerId: '', analyticsWorkspaceCustomerId: '', appLogsWorkspaceCustomerId: '',
+    costScope: '', budgetName: '',
     ...values
   });
   t.after(() => Object.assign(config, saved));
@@ -106,6 +108,61 @@ test('GET /admin/audit', async (t) => {
     assert.ok(sent[0].query.includes("where Action == 'key.mint'"));
     assert.ok(sent[0].query.includes("ActorId == 'daniel' or ActorName == 'daniel'"));
     assert.ok(sent[0].query.includes('top 1 by TimeGenerated desc'), 'limit caps the rows');
+  });
+
+  await t.test('spans the repoint: this app\'s analytics rows unioned with the old table', async () => {
+    // Two workspaces, one panel. EagleAudit_CL is EPIC-wide, so the SourceApp filter has to sit
+    // INSIDE that leg: outside it, DemiAudit_CL rows — which have no such column — arrive null and
+    // the union drops every pre-cutover row.
+    configure(t, { auditWorkspaceCustomerId: 'ws-audit', analyticsWorkspaceCustomerId: 'ws-analytics' });
+    const sent = spyLogs(t, (query) => (query.includes('summarize') ? [{ Action: 'key.mint', c: 1 }] : []));
+
+    const res = mockRes();
+    await controller.getAudit({ query: { action: 'key.mint' } }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(sent.length, 2, 'both the row page and the per-action count read the union');
+    for (const call of sent) {
+      assert.strictEqual(call.customerId, 'ws-audit',
+        'the query still runs against the DEMI workspace and reaches the other one cross-workspace');
+      assert.ok(call.query.startsWith("union DemiAudit_CL, (workspace('ws-analytics').EagleAudit_CL"),
+        `unexpected source: ${call.query}`);
+      assert.match(call.query, /EagleAudit_CL \| where SourceApp == 'eagle-demi'\)/);
+      assert.ok(call.query.indexOf("Action == 'key.mint'") > call.query.indexOf('SourceApp'),
+        'the operator filter applies to the union, not to one leg of it');
+    }
+  });
+
+  await t.test('reads the old table alone until the analytics workspace is configured', async () => {
+    configure(t, { auditWorkspaceCustomerId: 'ws-audit' });
+    const sent = spyLogs(t, () => []);
+
+    const res = mockRes();
+    await controller.getAudit({ query: {} }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    for (const call of sent) {
+      assert.ok(call.query.startsWith('DemiAudit_CL'), `unexpected source: ${call.query}`);
+      assert.ok(!call.query.includes('union'), 'an unconfigured workspace must not reach the query text');
+    }
+  });
+
+  await t.test('reads the live table alone once the old workspace is gone', async () => {
+    // The archive is retired when its last row ages out, and the panel must keep working: query the
+    // analytics workspace directly, no union, SourceApp filter still applied.
+    configure(t, { analyticsWorkspaceCustomerId: 'ws-analytics' });
+    const sent = spyLogs(t, () => []);
+
+    const res = mockRes();
+    await controller.getAudit({ query: {} }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    for (const call of sent) {
+      assert.strictEqual(call.customerId, 'ws-analytics', 'the only configured workspace is queried');
+      assert.ok(call.query.startsWith("EagleAudit_CL | where SourceApp == 'eagle-demi'"),
+        `unexpected source: ${call.query}`);
+      assert.ok(!call.query.includes('DemiAudit_CL'), 'a workspace that is gone must not be named');
+    }
   });
 
   await t.test('answers 503 when no audit workspace is configured', async () => {

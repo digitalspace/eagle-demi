@@ -131,6 +131,17 @@ param auditDcrImmutableId string = ''
 @description('Workspace GUID holding DemiAudit_CL and DemiEvents_CL. Empty makes GET /admin/audit and /admin/analytics answer 503.')
 param auditWorkspaceCustomerId string = ''
 
+// The audit repoint. With both set, privileged actions are written to EagleAudit_CL in the
+// eagle-analytics pipeline instead of DemiAudit_CL; usage counters stay on the DEMI DCR either way.
+@description('Logs Ingestion endpoint of analytics-dcr-<env>. Empty keeps audit rows on the DEMI DCR.')
+param analyticsDcrEndpoint string = ''
+
+@description('Immutable ID of that DCR. Both this and the endpoint are required before anything is repointed — a mismatched pair is rejected at ingest.')
+param analyticsDcrImmutableId string = ''
+
+@description('Workspace GUID of analytics-logs-<env>, holding EagleAudit_CL. Empty makes GET /admin/audit read DemiAudit_CL alone.')
+param analyticsWorkspaceCustomerId string = ''
+
 @description('Workspace GUID holding AppRequests. Empty makes GET /admin/analytics answer 503.')
 param appLogsWorkspaceCustomerId string = ''
 
@@ -223,6 +234,10 @@ param bulkCleanupSchedule string = ''
 var cleanupSchedule = empty(bulkCleanupSchedule) && !empty(bulkDownloadsQueue)
   ? '0 30 3 * * *'
   : bulkCleanupSchedule
+
+// Both halves or neither: an endpoint with no immutable ID addresses no rule, and the app treats a
+// half-set pair as OFF, which would silently discard every audit row.
+var analyticsAuditConfigured = !empty(analyticsDcrEndpoint) && !empty(analyticsDcrImmutableId)
 
 var apiAppName = 'demi-api-fc-${environmentName}'
 var appServicePlanName = 'demi-plan-fc-${environmentName}'
@@ -612,12 +627,29 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         }
         // Audit and usage analytics. Absent endpoint drops events after a single warning rather
         // than throwing, which is what makes local development and the test suite work.
+        //
+        // Audit rows go to the eagle-analytics DCR wherever it is deployed, DEMI's own otherwise.
+        // The stream travels with the endpoint because each DCR declares one of the two and rejects
+        // the other, so the pair must never be set from different sides.
         {
           name: 'AUDIT_DCR_ENDPOINT'
-          value: auditDcrEndpoint
+          value: analyticsAuditConfigured ? analyticsDcrEndpoint : auditDcrEndpoint
         }
         {
           name: 'AUDIT_DCR_IMMUTABLE_ID'
+          value: analyticsAuditConfigured ? analyticsDcrImmutableId : auditDcrImmutableId
+        }
+        {
+          name: 'AUDIT_STREAM_NAME'
+          value: analyticsAuditConfigured ? 'Custom-EagleAudit_CL' : 'Custom-DemiAudit_CL'
+        }
+        // Usage counters, unmoved: DemiEvents_CL and its hourly rollup feed GET /admin/analytics.
+        {
+          name: 'EVENTS_DCR_ENDPOINT'
+          value: auditDcrEndpoint
+        }
+        {
+          name: 'EVENTS_DCR_IMMUTABLE_ID'
           value: auditDcrImmutableId
         }
         // Reading the same data back for the admin panel. The query API keys on the workspace
@@ -625,6 +657,11 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'AUDIT_WORKSPACE_CUSTOMER_ID'
           value: auditWorkspaceCustomerId
+        }
+        // Second workspace GET /admin/audit unions in, holding the rows written since the repoint.
+        {
+          name: 'ANALYTICS_WORKSPACE_CUSTOMER_ID'
+          value: analyticsWorkspaceCustomerId
         }
         {
           name: 'APP_LOGS_WORKSPACE_CUSTOMER_ID'

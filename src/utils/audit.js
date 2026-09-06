@@ -3,13 +3,17 @@
 /**
  * audit.js — the append-only record of what happened, and the usage counters beside it.
  *
- * Two destinations, one writer. Both are custom tables in the `demi-audit-<env>` Log Analytics
- * workspace, reached through the Logs Ingestion API of a Direct data collection rule. See
- * `azure/modules/audit-logs.bicep` for why they are separate tables and why that workspace is
- * separate from the one application logs go to.
+ * Two destinations, one writer, and since the audit repoint they are two different pipelines —
+ * each reached through the Logs Ingestion API of a Direct data collection rule.
  *
- *   auditEvent()     -> DemiAudit_CL   privileged actions. Identity-bearing, kept 7 years.
- *   analyticsEvent() -> DemiEvents_CL  usage counters. No durable identity, kept 13 months.
+ *   auditEvent()     -> EagleAudit_CL  privileged actions, in `analytics-logs-<env>` (eagle-analytics).
+ *                                      EPIC-wide, so every row carries SourceApp. Kept 7 years.
+ *                                      Falls back to DemiAudit_CL where that DCR is not configured.
+ *   analyticsEvent() -> DemiEvents_CL  usage counters, in `demi-audit-<env>`. Unchanged: no durable
+ *                                      identity, kept 13 months. See azure/modules/audit-logs.bicep.
+ *
+ * The pre-repoint DemiAudit_CL rows are not migrated (the ingestion API overwrites a TimeGenerated
+ * older than two days); they age out where they are, and GET /admin/audit unions them.
  *
  * THIS MODULE MUST NEVER FAIL A REQUEST. Every entry point returns synchronously after appending
  * to an in-memory buffer; the network call happens on a timer. A failed flush is logged and
@@ -27,8 +31,14 @@ const { callerIp } = require('./caller-ip');
 const { rolesFor } = require('../helpers/access-sql');
 const azureCredential = require('./azure-credential');
 
-const AUDIT_STREAM = 'Custom-DemiAudit_CL';
+// Which audit table this environment writes to is a deployment fact, not a code one — see
+// config.auditStream. The events stream is not: nothing else ever holds DemiEvents_CL.
+const AUDIT_STREAM = config.auditStream;
 const EVENTS_STREAM = 'Custom-DemiEvents_CL';
+
+// This app's name in EagleAudit_CL, which holds every EPIC app's rows. Ignored by DemiAudit_CL,
+// whose stream declaration has no such column, so the fallback destination is unaffected.
+const SOURCE_APP = 'eagle-demi';
 
 // Buffered rows, keyed by stream. Flushed together, one HTTP call per stream.
 const buffers = new Map([
@@ -37,7 +47,7 @@ const buffers = new Map([
 ]);
 
 let flushTimer = null;
-let warnedDisabled = false;
+const warnedStreams = new Set();
 
 // Injection seam for the tests. Real code never passes anything here; `test/audit.test.js`
 // substitutes a stub so the buffering and batching logic can be exercised with no Azure and no
@@ -46,8 +56,16 @@ let warnedDisabled = false;
 let sendBatch = postToIngestionApi;
 let getToken = fetchIngestionToken;
 
-function enabled() {
-  return Boolean(config.auditDcrEndpoint && config.auditDcrImmutableId);
+/** The DCR a stream is sent to. Both empty is OFF for that stream — see the module header. */
+function destinationFor(stream) {
+  return stream === EVENTS_STREAM
+    ? { endpoint: config.eventsDcrEndpoint, immutableId: config.eventsDcrImmutableId }
+    : { endpoint: config.auditDcrEndpoint, immutableId: config.auditDcrImmutableId };
+}
+
+function enabled(stream) {
+  const { endpoint, immutableId } = destinationFor(stream);
+  return Boolean(endpoint && immutableId);
 }
 
 /**
@@ -143,10 +161,10 @@ function anonId(req) {
  * Append a row and make sure a flush is coming. Never throws.
  */
 function enqueue(stream, row) {
-  if (!enabled()) {
-    if (!warnedDisabled) {
-      warnedDisabled = true;
-      logger.warn('[Audit] AUDIT_DCR_ENDPOINT is not set; audit and analytics events are being discarded.');
+  if (!enabled(stream)) {
+    if (!warnedStreams.has(stream)) {
+      warnedStreams.add(stream);
+      logger.warn(`[Audit] no data collection rule configured for ${stream}; those rows are being discarded.`);
     }
     return;
   }
@@ -193,6 +211,9 @@ function auditEvent(req, event) {
     // one. Nothing deduplicates on ingest; a reader dedupes with `arg_min(TimeGenerated, *) by
     // EventId` if duplicates ever show up.
     EventId: crypto.randomUUID(),
+    // Which app acted. EagleAudit_CL carries every EPIC app's rows, so a reader that does not
+    // filter on this is reading somebody else's trail — GET /admin/audit filters on it.
+    SourceApp: SOURCE_APP,
     Action: event.action,
     Outcome: event.outcome || 'success',
     // `sub` is the stable Keycloak identifier and survives a rename; ActorName is what a human
@@ -332,7 +353,8 @@ async function postToIngestionApi(stream, rows) {
   const token = await getToken();
   if (!token) throw new Error('no token for https://monitor.azure.com');
 
-  const url = `${config.auditDcrEndpoint}/dataCollectionRules/${config.auditDcrImmutableId}` +
+  const { endpoint, immutableId } = destinationFor(stream);
+  const url = `${endpoint}/dataCollectionRules/${immutableId}` +
     `/streams/${stream}?api-version=2023-01-01`;
 
   const res = await fetch(url, {
@@ -415,8 +437,10 @@ module.exports = {
   flush,
   AUDIT_STREAM,
   EVENTS_STREAM,
+  SOURCE_APP,
   // Test seams only.
   _setTransport: (send, token) => { sendBatch = send; getToken = token || (async () => 'test-token'); },
   _resetTransport: () => { sendBatch = postToIngestionApi; getToken = fetchIngestionToken; },
-  _batches: batches
+  _batches: batches,
+  _destinationFor: destinationFor
 };

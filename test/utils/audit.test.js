@@ -45,8 +45,23 @@ test('audit writer', async (t) => {
 
     await audit.flush();
     assert.strictEqual(sent.length, 1);
-    assert.strictEqual(sent[0].stream, audit.AUDIT_STREAM);
+    // The literal, not audit.AUDIT_STREAM: that reads the same config value the code under test
+    // does, so the pair would agree on any name at all, including a wrong one.
+    assert.strictEqual(sent[0].stream, 'Custom-DemiAudit_CL');
     assert.strictEqual(sent[0].rows.length, 1);
+  });
+
+  await t.test('an environment with no events DCR sends both streams to the audit one', async () => {
+    // config.js falls EVENTS_DCR_ENDPOINT back to AUDIT_DCR_ENDPOINT: one rule declaring both
+    // tables is every environment deployed before eagle-analytics, plus local. Only the pair the
+    // URL is built from proves it — a stream sent to a rule that does not declare it is rejected at
+    // ingest with a 400 nothing downstream reports.
+    const demiDcr = {
+      endpoint: 'https://dcr-test.canadacentral-1.ingest.monitor.azure.com',
+      immutableId: 'dcr-testimmutableid'
+    };
+    assert.deepStrictEqual(audit._destinationFor(audit.EVENTS_STREAM), demiDcr);
+    assert.deepStrictEqual(audit._destinationFor('Custom-DemiAudit_CL'), demiDcr);
   });
 
   await t.test('records actor, correlation id and unmasked IP for the DCR to mask', async () => {
@@ -61,6 +76,9 @@ test('audit writer', async (t) => {
     await audit.flush();
 
     const row = sent[0].rows[0];
+    // EagleAudit_CL holds every EPIC app's rows, so a row that does not name its writer is a row
+    // GET /admin/audit cannot tell from eagle-api's or ENGAGE's.
+    assert.strictEqual(row.SourceApp, 'eagle-demi');
     assert.strictEqual(row.Action, 'document.delete');
     assert.strictEqual(row.Outcome, 'denied');
     assert.strictEqual(row.ActorId, 'kc-sub-1');
@@ -117,7 +135,7 @@ test('audit writer', async (t) => {
       { action: 'document.read', targetType: 'document', targetId: 'd1' });
     await audit.flush();
     assert.strictEqual(sent.length, 1);
-    assert.strictEqual(sent[0].stream, audit.AUDIT_STREAM);
+    assert.strictEqual(sent[0].stream, 'Custom-DemiAudit_CL');
   });
 
   await t.test('anonymous callers stay anonymous, signed-in callers are traceable', async () => {

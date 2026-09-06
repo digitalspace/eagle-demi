@@ -222,8 +222,18 @@ const config = {
   // Both empty is the local-development and test case, and the writer treats it as OFF rather than
   // as an error — an audit call must never be the reason a request fails. Same shape as
   // SEARCH_ENDPOINT: absent endpoint disables the feature instead of breaking the caller.
+  //
+  // TWO DCRs since the audit repoint: privileged actions go to the eagle-analytics pipeline
+  // (`EagleAudit_CL`, EPIC-wide, one row per app with SourceApp), usage counters stay on DEMI's own
+  // DCR (`DemiEvents_CL`). Each pair below is one destination, and the events pair falls back to
+  // the audit one — which is every environment deployed before eagle-analytics exists, plus local.
   auditDcrEndpoint:    process.env.AUDIT_DCR_ENDPOINT || '',
   auditDcrImmutableId: process.env.AUDIT_DCR_IMMUTABLE_ID || '',
+  // Named beside the endpoint it belongs to: the analytics DCR accepts only Custom-EagleAudit_CL
+  // and DEMI's only Custom-DemiAudit_CL, so a mismatched pair is silently rejected at ingest.
+  auditStream:         process.env.AUDIT_STREAM_NAME || 'Custom-DemiAudit_CL',
+  eventsDcrEndpoint:    process.env.EVENTS_DCR_ENDPOINT || process.env.AUDIT_DCR_ENDPOINT || '',
+  eventsDcrImmutableId: process.env.EVENTS_DCR_IMMUTABLE_ID || process.env.AUDIT_DCR_IMMUTABLE_ID || '',
   // Flush triggers. Whichever fires first wins. 800 KB leaves headroom under the 1 MB per-call
   // ingestion limit for the JSON envelope.
   auditFlushMs:        parseInt(process.env.AUDIT_FLUSH_MS || '1000', 10),
@@ -237,6 +247,9 @@ const config = {
   // DemiAudit_CL and DemiEvents_CL live in the audit workspace; AppRequests lives in the app one.
   auditWorkspaceCustomerId:   process.env.AUDIT_WORKSPACE_CUSTOMER_ID || '',
   appLogsWorkspaceCustomerId: process.env.APP_LOGS_WORKSPACE_CUSTOMER_ID || '',
+  // `analytics-logs-<env>`, holding EagleAudit_CL. Empty keeps GET /admin/audit on DemiAudit_CL
+  // alone, which is what an environment deployed before eagle-analytics reads.
+  analyticsWorkspaceCustomerId: process.env.ANALYTICS_WORKSPACE_CUSTOMER_ID || '',
   // Resource group id: the scope a cost query and the budget are both read at.
   costScope:                  process.env.COST_SCOPE || '',
   budgetName:                 process.env.BUDGET_NAME || '',

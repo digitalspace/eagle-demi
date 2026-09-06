@@ -1468,10 +1468,12 @@ paths:
     get:
       summary: The audit trail
       description: >-
-        Rows from DemiAudit_CL over the chosen window, newest first, with a count per action over
-        the whole window. The API queries Log Analytics with its own managed identity — the caller
-        never reaches Azure. `action` and `actor` are matched against a fixed pattern before they
-        reach the query; anything else is a 400.
+        Audit rows over the chosen window, newest first, with a count per action over the whole
+        window. Two tables in one answer: this app's rows in EagleAudit_CL, which every EPIC app
+        writes to, unioned with the DemiAudit_CL rows written before the audit pipeline moved. The
+        API queries Log Analytics with its own managed identity — the caller never reaches Azure.
+        `action` and `actor` are matched against a fixed pattern before they reach the query;
+        anything else is a 400.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1533,7 +1535,7 @@ paths:
                     type: array
                     items:
                       type: object
-                      description: One DemiAudit_CL row. SourceIp arrives already masked.
+                      description: One audit row, from either table. SourceIp arrives already masked.
                       properties:
                         TimeGenerated:
                           type: string
