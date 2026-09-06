@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('node:os');
 const path = require('path');
 const { spawnSync } = require('node:child_process');
+const crypto = require('node:crypto');
 
 const ROOT = path.join(__dirname, '..', '..');
 const MAIN = fs.readFileSync(path.join(ROOT, 'azure', 'main.bicep'), 'utf8');
@@ -171,6 +172,20 @@ test('the devbox lists only the identity we own', () => {
   // permanent what-if addition and a shrink risk against a disk that was grown by hand.
   assert.doesNotMatch(DEVBOX_MODULE, /^\s+diskSizeGB: /m,
     'the os disk size must come from the image, not from the template');
+});
+
+// customData is immutable once the VM exists, and it is base64(cloudInit) — a comment edit inside the
+// template is a property change to Microsoft.Compute, which is how #325 broke the prod apply. This
+// pins the text so an edit fails here instead of half way through a deploy.
+test('the devbox cloud-init text is frozen', () => {
+  const block = /var cloudInitTemplate = '''\n([\s\S]*?)\n'''\n/.exec(DEVBOX_MODULE);
+  assert.ok(block, 'devbox.bicep must declare cloudInitTemplate as a multi-line string');
+
+  const hash = crypto.createHash('sha256').update(block[1]).digest('hex');
+  assert.strictEqual(hash, '4999c3a8b78d7ff0dc178a0734495e4604f9b472694acec4a61be33560995503',
+    'cloudInitTemplate changed. customData cannot be altered on a VM that already exists: the next '
+    + 'apply fails with PropertyChangeNotAllowed on osProfile.customData. Put the explanation in a '
+    + 'bicep // comment outside the string, or recreate the VM and repin this hash.');
 });
 
 // Read off demi-apim-test and demi-apim-prod, both Disabled (2026-09-06). Omitted, the API version's
