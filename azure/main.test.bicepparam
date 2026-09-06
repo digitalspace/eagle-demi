@@ -158,6 +158,33 @@ param syncTeamsSchedule = '0 0 10 * * *'
 //   az rest --method PUT --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<vault>/secrets/apim-gateway-secret?api-version=2023-07-01" --body '{"properties":{"value":"<random>"}}'
 param deployApim = true
 
+// ── eagle-analytics ───────────────────────────────────────────────────────────────────────────
+// Empty until that estate exists here. Every value is READ FROM the eagle-analytics deployment's
+// outputs and none is composed — a Function App host name can carry a regional suffix, and the DCR
+// endpoint and immutable ID are Azure-generated:
+//   analyticsBackendUrl          <- apiHostName, prefixed https://
+//   analyticsDcrEndpoint         <- eventsDcrEndpoint
+//   analyticsDcrImmutableId      <- eventsDcrImmutableId
+//   analyticsWorkspaceCustomerId <- analyticsWorkspaceCustomerId
+// The first publishes /analytics on demi-apim-test; the DCR pair moves audit rows to EagleAudit_CL;
+// the workspace GUID makes GET /admin/audit read those rows beside the old DemiAudit_CL ones.
+param analyticsBackendUrl = ''
+param analyticsDcrEndpoint = ''
+param analyticsDcrImmutableId = ''
+param analyticsWorkspaceCustomerId = ''
+// The header value eagle-analytics deploys as APIM_SHARED_HEADER_VALUE — both sides must match or
+// that app refuses the gateway. It lives in the GitHub environment secret of that name, on this
+// repository and on eagle-analytics, and NOT in OpenShift `demi-app-secrets`: export it before
+// deploying, and deploy-infra.sh demands it once analyticsBackendUrl above is filled in. The `''`
+// fallback matches edgeSecret above: an environment with no analytics API stamps no header rather
+// than failing the build on a value it does not use.
+param analyticsSharedHeaderValue = readEnvironmentVariable('APIM_SHARED_HEADER_VALUE', '')
+// The second credential, which eagle-analytics demands on POST /audit alone and deploys as
+// AUDIT_SHARED_HEADER_VALUE. A different secret from the one above so the write path rotates on its
+// own. Same home and same handling: the GitHub environment secret of that name on this repository
+// and on eagle-analytics, demanded by deploy-infra.sh once analyticsBackendUrl above is filled in.
+param analyticsAuditHeaderValue = readEnvironmentVariable('AUDIT_SHARED_HEADER_VALUE', '')
+
 // The dev-access VM, on `snet-servers` — a plain landing-zone subnet with its own NSG, not one of
 // the delegated ones above. The key is a PUBLIC key and never committed; nothing SSHes in, so a
 // throwaway is fine. No fallback, same rule as the six above: an empty value here would reach

@@ -1,4 +1,10 @@
-// Audit and usage-analytics store.
+// Audit archive and usage-analytics store.
+//
+// DemiAudit_CL IS A FROZEN ARCHIVE SINCE THE AUDIT REPOINT. Privileged actions are now written to
+// EagleAudit_CL in `analytics-logs-<env>`, the EPIC-wide pipeline eagle-analytics owns; nothing
+// writes here any more. The rows already in it are not migrated — the Logs Ingestion API overwrites
+// a TimeGenerated older than two days — so they age out where they lie, GET /admin/audit unions the
+// two tables, and this workspace stays for the archive and for DemiEvents_CL, which did not move.
 //
 // WHY A SECOND WORKSPACE. `observability.bicep` already builds `demi-logs-<env>`, and audit rows
 // could physically live there. They must not, for one reason: that workspace carries
@@ -14,7 +20,7 @@
 // Those two requirements collide in the same rows, so they get separate tables — and separate
 // table plans, which is also where the cost difference lives.
 //
-//   DemiAudit_CL        Analytics plan  — interactive queries cost nothing, so the UI can hammer it
+//   DemiAudit_CL        Analytics plan  — archive; interactive queries cost nothing, so the UI can hammer it
 //   DemiEvents_CL       Auxiliary plan  — ~$0.15/GB ingest, queries billed on GB scanned
 //   DemiEventsHourly_CL Analytics plan  — created BY the summary rule below, not declared here
 //

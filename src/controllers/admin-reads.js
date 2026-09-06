@@ -5,6 +5,9 @@ const monitor = require('../azure/monitor');
 const cache = require('../repositories/cache');
 const { sendError, serverError } = require('../helpers/response');
 const { logger } = require('../utils/logger');
+// The same literal the writer stamps on every row. One source of truth, or the reader filters on a
+// name nothing writes and the panel goes blank.
+const { SOURCE_APP } = require('../utils/audit');
 
 // Log Analytics bounds a query by `timespan`, so the window is a service-side parameter and never
 // reaches the KQL text. These are the only windows offered; anything else is a 400.
@@ -49,28 +52,50 @@ function auditFilter({ action, actor }) {
   return kql;
 }
 
+/**
+ * The workspace to query and the table expression to query there, spanning the repoint.
+ *
+ * Rows written since it go to EagleAudit_CL in `analytics-logs-<env>`, which holds every EPIC app's
+ * audit rows — so the SourceApp filter sits INSIDE that leg. Outside it, the column DemiAudit_CL
+ * does not have would arrive null on those rows and the union would drop all of them.
+ *
+ * Either workspace alone is a working configuration: an environment deployed before eagle-analytics
+ * has only the archive, and one built after the DemiAudit_CL rows age out has only the live table.
+ *
+ * Nothing user-supplied is interpolated: the workspace GUID is an app setting, the same kind of
+ * value queryLogs already puts in its URL.
+ */
+function auditSource() {
+  const { auditWorkspaceCustomerId: archive, analyticsWorkspaceCustomerId: live } = config;
+  const eagleLeg = `EagleAudit_CL | where SourceApp == '${SOURCE_APP}'`;
+  if (!live) return { workspaceId: archive, table: 'DemiAudit_CL' };
+  if (!archive) return { workspaceId: live, table: eagleLeg };
+  return { workspaceId: archive, table: `union DemiAudit_CL, (workspace('${live}').${eagleLeg})` };
+}
+
 /** GET /admin/audit — the audit trail, newest first, plus a count per action over the window. */
 async function getAudit(req, res) {
-  if (!config.auditWorkspaceCustomerId) return notConfigured(res);
+  if (!config.auditWorkspaceCustomerId && !config.analyticsWorkspaceCustomerId) return notConfigured(res);
 
   const q = auditQuery((req && req.query) || {});
   if (q.error) return sendError(res, q.error, 400);
 
   const filter = auditFilter(q);
   const timespan = AUDIT_WINDOWS[q.hours];
+  const { workspaceId, table } = auditSource();
 
   try {
     const [rows, byAction] = await Promise.all([
       monitor.queryLogs(
-        config.auditWorkspaceCustomerId,
-        `DemiAudit_CL${filter} | top ${q.limit} by TimeGenerated desc` +
+        workspaceId,
+        `${table}${filter} | top ${q.limit} by TimeGenerated desc` +
           ' | project TimeGenerated, EventId, Action, Outcome, ActorId, ActorName, ActorType,' +
           ' ActorRoles, SourceIp, TargetType, TargetId, ProjectId, CorrelationId, Env, Detail',
         timespan
       ),
       monitor.queryLogs(
-        config.auditWorkspaceCustomerId,
-        `DemiAudit_CL${filter} | summarize c = count() by Action | order by c desc`,
+        workspaceId,
+        `${table}${filter} | summarize c = count() by Action | order by c desc`,
         timespan
       )
     ]);

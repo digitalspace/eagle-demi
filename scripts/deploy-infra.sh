@@ -162,6 +162,16 @@ require_secrets() {
     required+=(NOTIFY_API_KEY)
   fi
 
+  # Only where the param file publishes the analytics API. Not sourced from OpenShift like the six
+  # above: the values belong to eagle-analytics, and their home is the GitHub environment secrets
+  # APIM_SHARED_HEADER_VALUE and AUDIT_SHARED_HEADER_VALUE, held on that repository and this one.
+  # TWO of them, because that app guards POST /audit with a credential of its own on top of the
+  # gateway header. Both sides must read the same values, so an unexported one would publish a
+  # gateway stamping nothing and a Function refusing what it forwards.
+  if grep -Eq "^param analyticsBackendUrl *= *'[^']+'" "$PARAM_FILE"; then
+    required+=(APIM_SHARED_HEADER_VALUE AUDIT_SHARED_HEADER_VALUE)
+  fi
+
   # The devbox SSH key. A public key, not a credential — but the param file reads it with no
   # fallback like the six above, so a missing one fails the build, and the same guard is what turns
   # that into a message. Only where the param file switches the VM on.

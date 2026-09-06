@@ -95,6 +95,27 @@ param frontendHostNames = []
 // ── Compute ───────────────────────────────────────────────────────────────────────────────────
 param deployApim = true
 
+// ── eagle-analytics ───────────────────────────────────────────────────────────────────────────
+// Empty, and it stays empty until the analytics estate proves out on test and is deployed in
+// `rg-eagle-public-prod`. Every value is READ FROM that deployment's outputs, never composed:
+//   analyticsBackendUrl          <- apiHostName, prefixed https://
+//   analyticsDcrEndpoint         <- eventsDcrEndpoint
+//   analyticsDcrImmutableId      <- eventsDcrImmutableId
+//   analyticsWorkspaceCustomerId <- analyticsWorkspaceCustomerId
+// Empty means prod keeps writing DemiAudit_CL and reading it alone — the seven-year rows are never
+// migrated in either environment.
+param analyticsBackendUrl = ''
+param analyticsDcrEndpoint = ''
+param analyticsDcrImmutableId = ''
+param analyticsWorkspaceCustomerId = ''
+// Same handling as edgeSecret above: no fallback would fail the build on a value prod does not use.
+// Its home is the GitHub environment secret of that name, on this repository and on eagle-analytics;
+// deploy-infra.sh demands it once analyticsBackendUrl above is filled in.
+param analyticsSharedHeaderValue = readEnvironmentVariable('APIM_SHARED_HEADER_VALUE', '')
+// The second credential, demanded on POST /audit alone and deployed there as
+// AUDIT_SHARED_HEADER_VALUE. Same home and same handling as the one above.
+param analyticsAuditHeaderValue = readEnvironmentVariable('AUDIT_SHARED_HEADER_VALUE', '')
+
 // Live budget period, read from demi-budget-prod 2026-09-01 (az rest: 2026-08-01T00:00:00Z) —
 // an existing budget rejects startDate changes.
 param budgetStartDate = '2026-08-01'
