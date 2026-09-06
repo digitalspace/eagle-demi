@@ -59,6 +59,12 @@ param eagleApiBase string
 
 // Placeholders rather than interpolation: a Bicep multi-line string does not interpolate, and the
 // shell below is full of `$` that a single-line string would fight.
+// FROZEN TEXT. customData is immutable once the VM exists: any edit below, comments included,
+// fails the next apply with PropertyChangeNotAllowed on osProfile.customData. Change it only
+// together with a VM recreate.
+// The demi-run --client-id note below is stale on purpose: the VM now also carries a
+// system-assigned identity, so a bare `az login --identity` picks that one, which holds no
+// Cosmos or Search grant. Passing --client-id is still right, for that reason instead.
 var cloudInitTemplate = '''
 #cloud-config
 package_update: true
@@ -77,8 +83,8 @@ write_files:
       # exit status, and the scripts then no-op against an unset COSMOS_ENDPOINT and report success.
       set -euo pipefail
       [ $# -gt 0 ] || { echo "usage: demi-run '<command>'" >&2; exit 2; }
-      # --client-id, because the VM also carries a system-assigned identity: with no id argument the
-      # CLI logs in as that one, which holds no Cosmos or Search grant.
+      # --client-id, because the VM has ONLY a user-assigned identity: with no id argument the CLI
+      # asks IMDS for a system-assigned one that does not exist.
       az login --identity --client-id __CLIENT_ID__ --allow-no-subscriptions --output none
       export AZURE_CLIENT_ID=__CLIENT_ID__
       export COSMOS_ENDPOINT=__COSMOS_ENDPOINT__
