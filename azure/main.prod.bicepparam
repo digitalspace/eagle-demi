@@ -96,18 +96,17 @@ param frontendHostNames = []
 param deployApim = true
 
 // ── eagle-analytics ───────────────────────────────────────────────────────────────────────────
-// Empty, and it stays empty until the analytics estate proves out on test and is deployed in
-// `rg-eagle-public-prod`. Every value is READ FROM that deployment's outputs, never composed:
+// Filled in from the eagle-analytics deployment's outputs in `rg-eagle-public-prod`; none is
+// composed — a Function App host name can carry a regional suffix, and the DCR endpoint and
+// immutable ID are Azure-generated:
 //   analyticsBackendUrl          <- apiHostName, prefixed https://
 //   analyticsDcrEndpoint         <- eventsDcrEndpoint
 //   analyticsDcrImmutableId      <- eventsDcrImmutableId
 //   analyticsWorkspaceCustomerId <- analyticsWorkspaceCustomerId
-// Empty means prod keeps writing DemiAudit_CL and reading it alone — the seven-year rows are never
-// migrated in either environment.
-param analyticsBackendUrl = ''
-param analyticsDcrEndpoint = ''
-param analyticsDcrImmutableId = ''
-param analyticsWorkspaceCustomerId = ''
+param analyticsBackendUrl = 'https://analytics-api-fc-prod.azurewebsites.net'
+param analyticsDcrEndpoint = 'https://analytics-dcr-prod-625z-canadacentral.logs.z1.ingest.monitor.azure.com'
+param analyticsDcrImmutableId = 'dcr-1805b5a943b34c8d83f13bb4225b8319'
+param analyticsWorkspaceCustomerId = '2a0751d4-6666-40f1-b9a6-846030078467'
 // Same handling as edgeSecret above: no fallback would fail the build on a value prod does not use.
 // Its home is the GitHub environment secret of that name, on this repository and on eagle-analytics;
 // deploy-infra.sh demands it once analyticsBackendUrl above is filled in.
