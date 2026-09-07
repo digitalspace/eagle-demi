@@ -54,7 +54,11 @@ const ALIASES = {
     // the wire name resolves to the id column. Same split eagle-search uses: an id is unambiguous.
     eacDecision: 'eacDecisionId',
     currentPhaseName: 'currentPhaseNameId',
-    CEAAInvolvement: 'ceaaInvolvementId'
+    CEAAInvolvement: 'ceaaInvolvementId',
+    // Same split, one file later: `proponent` is the NAME column the list renders and sorts on,
+    // while the facet panel filters by Organization ObjectId. Sorting is unaffected —
+    // `proponentId` is `sortable: false`, so `sortFieldFor` falls back to the name.
+    proponent: 'proponentId'
   },
   Document: {
     _id: 'id',
@@ -88,16 +92,19 @@ const SORT_KEYS = {
 /**
  * Wire keys that name a REAL field of the index and must still never be filtered on.
  *
- * `proponent` is the whole reason this exists: it passes every gate in `buildFilter` and emits
- * `proponent eq '<ObjectId>'` against a field holding a NAME, matching 0 of 382 rows under a 200.
- * NOT a general deny list — a key naming no field, or an unfilterable one, is already dropped
- * below. See wiki Search-Index-Reference#what-demis-indexes-cannot-express.
+ * Empty today. `proponent` was the entry that made this necessary — it passed every gate in
+ * `buildFilter` and emitted `proponent eq '<ObjectId>'` against a field holding a NAME, matching 0
+ * of 382 rows under a 200. The index now carries `proponentId` and the ALIASES entry above
+ * redirects onto it, so the key is expressible and the exception is gone.
+ *
+ * The mechanism stays: this is the only gate that can refuse a key which resolves to a real,
+ * filterable field of the WRONG value space. NOT a general deny list — a key naming no field, or an
+ * unfilterable one, is already dropped below. See
+ * wiki Search-Index-Reference#what-demis-indexes-cannot-express.
  */
 const EMPTY_SET = new Set();
 
-const UNMAPPED_KEYS = {
-  Project: new Set(['proponent'])
-};
+const UNMAPPED_KEYS = {};
 
 /**
  * Wire VALUE -> the OTHER spelling the corpus may hold it under. Both are matched, never swapped,

@@ -36,9 +36,11 @@
  *
  * What it still WILL report today, by design: `DocumentChunk` document-metadata filters are
  * `IGNORED` on demi and `applied` on eagle, because `chunks.json` carries no metadata to filter on;
- * `proponent` the same on Project, whose index holds a NAME where eagle-public sends an ObjectId;
  * and demi's document paging repeats rows on project-name
- * keyword queries. Those are open defects, and each one going quiet is what proves a fix landed.
+ * keyword queries. `proponent` on Project used to be an open defect (index held a NAME where
+ * eagle-public sent an ObjectId); it is now fixed by aliasing `and[proponent]=<ObjectId>` to the
+ * `proponentId` index field (`src/search/eagle-query.js` ALIASES.Project). Remaining defects going
+ * quiet is what proves a fix landed.
  *
  * Usage:
  *   DEMI_DIFF_USER=… DEMI_DIFF_PASS=… node src/scripts/search-diff.js [--case=7] [--json]

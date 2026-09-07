@@ -82,6 +82,8 @@ const EAGLE_FIXTURE = {
   complianceLead: 'Casey Compliance',
   execProjectDirector: 'Drew Director',
   eaoMember: 'Erin Member',
+  projectLeadPhone: '250 555 0101',
+  responsibleEPDPhone: '250 555 0102',
   sector: 'Energy-Electricity',
   commodity: 'Coal',
   region: 'Vancouver Island',
@@ -92,7 +94,19 @@ const EAGLE_FIXTURE = {
   cacEmail: 'cac@example.invalid',
   overallProgress: 75,
   code: 'eagle-project-code',
-  nameSearchTerms: ['eagle', 'name']
+  nameSearchTerms: ['eagle', 'name'],
+  CEAALink: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80000',
+  applicableRegulation: {
+    _id: '588511d0aaecd9001b826192',
+    name: 'Reviewable Projects Regulation',
+    item: 'https://www.bclaws.gov.bc.ca/civix/document/id/complete/statreg/370_2002'
+  },
+  build: 'modification',
+  dateAdded: '2016-12-14T00:00:00.000Z',
+  proponentId: '58850f69aaecd9001b8085cc',
+  proponentName: 'Eagle Proponent Ltd',
+  pins: [{ _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' }],
+  featuredDocuments: ['5cf00c03a266b7e187750002', '5cf00c03a266b7e187750003']
 };
 
 /** Track work phases, as `seed/sources.js` maps them. Only the merge passes them through. */
@@ -114,8 +128,13 @@ test('the projects catalog covers every field the merge emits', async (t) => {
     for (const field of EAGLE_ONLY_FIELDS) {
       assert.ok(field in EAGLE_FIXTURE, `EAGLE_FIXTURE is missing ${field}`);
     }
-    for (const [, trackField] of TRACK_PRECEDENCE) {
+    for (const [, trackField, eagleField] of TRACK_PRECEDENCE) {
       assert.ok(trackField in TRACK_FIXTURE, `TRACK_FIXTURE is missing ${trackField}`);
+      // The Eagle slot too: it is the fallback that keeps an Eagle-only project from rendering a
+      // blank column, and a fixture that never populates it cannot fail on a broken one.
+      if (eagleField) {
+        assert.ok(eagleField in EAGLE_FIXTURE, `EAGLE_FIXTURE is missing ${eagleField}`);
+      }
     }
   });
 
@@ -177,9 +196,22 @@ test('the projects catalog covers every field the merge emits', async (t) => {
     assert.strictEqual(catalog.execProjectDirector.maxVis, 4);
   });
 
-  await t.test('the contact emails are public by policy', () => {
+  await t.test('the contact emails and phones are public by policy', () => {
     assert.strictEqual(catalog.projectLeadEmail.defaultVis, 4);
     assert.strictEqual(catalog.responsibleEPDEmail.defaultVis, 4);
+    assert.strictEqual(catalog.projectLeadPhone.defaultVis, 4);
+    assert.strictEqual(catalog.responsibleEPDPhone.defaultVis, 4);
+  });
+
+  // They live at the top level of a Mongo project, so the merge picks them up through
+  // EAGLE_TOP_LEVEL_FIELDS rather than the legislation block. Their only other home is
+  // `sources.eagle`, which is maxVis 0 — without these entries they reach nobody.
+  await t.test('pins and featuredDocuments are catalogued in their own right', () => {
+    assert.strictEqual(catalog.pins.defaultVis, 4);
+    assert.strictEqual(catalog.pins.maxVis, 4);
+    assert.strictEqual(catalog.featuredDocuments.defaultVis, 4);
+    assert.strictEqual(catalog.featuredDocuments.maxVis, 4);
+    assert.strictEqual(catalog.sources.maxVis, 0);
   });
 
   await t.test('cacEmail reaches the public only through its predicate', () => {

@@ -29,6 +29,9 @@ module.exports = {
   projectType: { defaultVis: 4, maxVis: 4 },
   projectSubType: { defaultVis: 4, maxVis: 4 },
   proponentName: { defaultVis: 4, maxVis: 4 },
+  // The Organization ObjectId behind the name. Public because it is only useful as a filter value,
+  // and eagle-public's own project-list URLs already carry it.
+  proponentId: { defaultVis: 4, maxVis: 4 },
   projectState: { defaultVis: 4, maxVis: 4 },
   abbreviation: { defaultVis: 4, maxVis: 4 },
   address: { defaultVis: 4, maxVis: 4 },
@@ -55,6 +58,13 @@ module.exports = {
   reviewSuspensions: { defaultVis: 4, maxVis: 4 },
   substitution: { defaultVis: 4, maxVis: 4 },
   CEAAInvolvement: { defaultVis: 4, maxVis: 4 },
+  // The federal registry link that goes with CEAAInvolvement, and the regulation the project is
+  // assessed under as `{_id, name, item}` — `item` is the public BC Laws URL the label links to.
+  CEAALink: { defaultVis: 4, maxVis: 4 },
+  applicableRegulation: { defaultVis: 4, maxVis: 4 },
+  // Eagle's own record dates and build tag. Already on the public project page.
+  dateAdded: { defaultVis: 4, maxVis: 4 },
+  build: { defaultVis: 4, maxVis: 4 },
   sector: { defaultVis: 4, maxVis: 4 },
   commodity: { defaultVis: 4, maxVis: 4 },
   region: { defaultVis: 4, maxVis: 4 },
@@ -72,8 +82,11 @@ module.exports = {
   eaoMember: { defaultVis: 4, maxVis: 4 },
 
   // Public by policy (answered by Daniel for the EAO, 2026-08-28; docs/rbac-architecture.md §3 question 2).
+  // The phones are office lines on the same contact card as the emails, and carry the same policy.
   projectLeadEmail: { defaultVis: 4, maxVis: 4 },
   responsibleEPDEmail: { defaultVis: 4, maxVis: 4 },
+  projectLeadPhone: { defaultVis: 4, maxVis: 4 },
+  responsibleEPDPhone: { defaultVis: 4, maxVis: 4 },
 
   // Public only while the CAC is, which is what the predicate reads.
   cacEmail: { defaultVis: 2, maxVis: 4, when: 'cacPublished' },
@@ -81,6 +94,12 @@ module.exports = {
   // Not in eagle-public's request list, so restricting them costs nothing public (§2 item 3).
   complianceLead: { defaultVis: 2, maxVis: 4 },
   execProjectDirector: { defaultVis: 2, maxVis: 4 },
+
+  // Pinned documents and the pinned-proponent list, both stored top level in Mongo. They were only
+  // ever reachable under `sources.eagle`, which is maxVis 0 — these entries are what publishes them.
+  // `pins` rows are `{_id, name, province}`; `featuredDocuments` are Eagle document ids.
+  pins: { defaultVis: 4, maxVis: 4 },
+  featuredDocuments: { defaultVis: 4, maxVis: 4 },
 
   // Written by the boundary and wildfire jobs, not by the merge.
   regionalDistrict: { defaultVis: 4, maxVis: 4 },
