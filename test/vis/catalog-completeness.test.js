@@ -14,6 +14,7 @@ const {
 const { transformDocument } = require('../../src/seed/transform');
 const { chunkMarkdown } = require('../../src/chunker');
 const { catalogFor } = require('../../src/vis/catalog');
+const { MIRRORS, captureMirror } = require('../helpers/eagle-mirror-fixtures');
 
 const catalog = catalogFor('projects');
 const documentCatalog = catalogFor('documents');
@@ -106,6 +107,7 @@ const EAGLE_FIXTURE = {
   proponentId: '58850f69aaecd9001b8085cc',
   proponentName: 'Eagle Proponent Ltd',
   pins: [{ _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' }],
+  pinsRead: ['public'],
   featuredDocuments: ['5cf00c03a266b7e187750002', '5cf00c03a266b7e187750003']
 };
 
@@ -207,11 +209,18 @@ test('the projects catalog covers every field the merge emits', async (t) => {
   // EAGLE_TOP_LEVEL_FIELDS rather than the legislation block. Their only other home is
   // `sources.eagle`, which is maxVis 0 — without these entries they reach nobody.
   await t.test('pins and featuredDocuments are catalogued in their own right', () => {
-    assert.strictEqual(catalog.pins.defaultVis, 4);
-    assert.strictEqual(catalog.pins.maxVis, 4);
     assert.strictEqual(catalog.featuredDocuments.defaultVis, 4);
     assert.strictEqual(catalog.featuredDocuments.maxVis, 4);
     assert.strictEqual(catalog.sources.maxVis, 0);
+  });
+
+  // eagle-api ignores the organization's own `read` for pins and governs them with the PROJECT's
+  // `pinsRead[]`, so the ACL that gates every other field here says nothing about this one.
+  await t.test('pins reach the public only through pinsRead', () => {
+    assert.strictEqual(catalog.pins.defaultVis, 2);
+    assert.strictEqual(catalog.pins.maxVis, 4);
+    assert.strictEqual(catalog.pins.when, 'pinsPublished');
+    assert.strictEqual(catalog.pinsRead.maxVis, 0, 'the pins ACL is an ACL');
   });
 
   await t.test('cacEmail reaches the public only through its predicate', () => {
@@ -333,4 +342,46 @@ test('chunks catalog covers the chunker output', async (t) => {
   });
 
   await t.test('every entry has both bounds and defaultVis <= maxVis', () => assertBounds(chunkCatalog));
+});
+
+
+/**
+ * The four public-read mirrors. Same rule as the project and document catalogs above: the row is
+ * captured from the REAL controller, so a field a mirror grows is catalogued here or this fails —
+ * and an uncatalogued field is dropped from every response, which is silent.
+ */
+test('the public-read catalogs cover every field their mirror writes', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  for (const entity of Object.keys(MIRRORS)) {
+    await t.test(`${entity}: every key the mirror writes is catalogued`, async () => {
+      const { res, row } = await captureMirror(t, entity);
+      assert.strictEqual(res.statusCode, 200, 'the fixture must actually reach a write');
+      assert.ok(row, 'nothing was written, so the case below is vacuous');
+      assert.deepStrictEqual(Object.keys(row).filter(k => !(k in catalogFor(entity))), []);
+    });
+
+    await t.test(`${entity}: every entry has both bounds and defaultVis <= maxVis`,
+      () => assertBounds(catalogFor(entity)));
+
+    await t.test(`${entity}: the ACL, the raw payload and the dial map can never be seen`, () => {
+      const catalog = catalogFor(entity);
+      assert.strictEqual(catalog.read.maxVis, 0);
+      assert.strictEqual(catalog.sources.maxVis, 0);
+      assert.strictEqual(catalog.vis.maxVis, 0);
+      assert.strictEqual(catalog._etag.maxVis, 2, 'writers only');
+    });
+  }
+
+  await t.test('a comment author is public only through its predicate', () => {
+    const comments = catalogFor('comments');
+    assert.strictEqual(comments.author.defaultVis, 2);
+    assert.strictEqual(comments.author.maxVis, 4);
+    assert.strictEqual(comments.author.when, 'commentAttributed');
+  });
+
+  await t.test('no comment field is an email', () => {
+    // The Eagle Comment model has none. A catalogued one would publish it the day a push carried it.
+    assert.deepStrictEqual(Object.keys(catalogFor('comments')).filter(k => /mail/i.test(k)), []);
+  });
 });

@@ -1010,6 +1010,168 @@ paths:
             Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
             higher.
 
+  /api/eagle/commentperiods/{eagleId}:
+    put:
+      summary: Mirror a comment period from eagle-api
+      description: |-
+        Receives one `CommentPeriod` pushed by eagle-api, keyed by the Eagle `_id`. The body
+        carries the RAW Eagle record. The stored ACL is the period's own, CONSTRAINED to its
+        project's: a period may never out-rank the project it belongs to, so one published under a
+        project that is not stays private here.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the record. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: Record mirrored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: |-
+            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
+            higher.
+        '404':
+          description: The project named by `doc.project` is not mirrored yet.
+
+  /api/eagle/comments/{eagleId}:
+    put:
+      summary: Mirror a public comment from eagle-api
+      description: |-
+        Receives one `Comment` pushed by eagle-api, keyed by the Eagle `_id`. The body carries
+        the RAW Eagle record. The stored ACL is the comment's own, CONSTRAINED to its period's
+        (which is already constrained to the project's). The submitter's name is stored but is
+        withheld from anonymous responses unless `isAnonymous` is explicitly false.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the record. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: Record mirrored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: |-
+            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
+            higher.
+        '404':
+          description: The comment period named by `doc.period` is not mirrored yet.
+
+  /api/eagle/organizations/{eagleId}:
+    put:
+      summary: Mirror an organization from eagle-api
+      description: |-
+        Receives one `Organization` pushed by eagle-api, keyed by the Eagle `_id`. Stored in the
+        `lists` container as `kind: Organization`. An organization is not project data, so its own
+        `read[]` is the whole ACL.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the record. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: Record mirrored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: |-
+            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
+            higher.
+
+  /api/eagle/notifications/{eagleId}:
+    put:
+      summary: Mirror a project notification from eagle-api
+      description: |-
+        Receives one `ProjectNotification` pushed by eagle-api, keyed by the Eagle `_id`. The
+        record keeps its own `read[]`: `associatedProjectId` names a project that usually does not
+        exist yet, so there is no parent to constrain against.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: eagleId
+          in: path
+          required: true
+          description: The Eagle `_id` of the record. Must equal `doc._id` in the body.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EaglePush'
+      responses:
+        '200':
+          description: Record mirrored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EaglePushResult'
+        '400':
+          description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: |-
+            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
+            higher.
+
   /api/links:
     get:
       summary: List short links

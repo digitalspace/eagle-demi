@@ -66,7 +66,7 @@ const EAGLE_ONLY_FIELDS = [
   'complianceLead', 'execProjectDirector', 'eaoMember',
   'sector', 'commodity', 'region', 'fedElecDist', 'provElecDist',
   'projectCAC', 'projectCACPublished', 'cacEmail',
-  'proponentId', 'pins', 'featuredDocuments',
+  'proponentId', 'pins', 'pinsRead', 'featuredDocuments',
   'overallProgress', 'code', 'nameSearchTerms'
 ];
 

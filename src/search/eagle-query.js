@@ -629,6 +629,8 @@ module.exports = {
   DEFAULT_ORDER,
   buildFilter,
   buildOrderBy,
+  // The Cosmos list reads normalise the same three wire shapes — see repositories/_sql.orderByFrom.
+  sortEntries,
   hasCriteria,
   unknownParams,
   filterKeysIn,

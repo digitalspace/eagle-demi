@@ -34,6 +34,10 @@ const wildfireController = () => require('../controllers/wildfire');
 const projectController = () => require('../controllers/nosql/project');
 const documentController = () => require('../controllers/nosql/document');
 const updateController = () => require('../controllers/nosql/update');
+const commentPeriodController = () => require('../controllers/nosql/comment-period');
+const commentController = () => require('../controllers/nosql/comment');
+const organizationController = () => require('../controllers/nosql/organization');
+const notificationController = () => require('../controllers/nosql/notification');
 const boundaryController = () => require('../controllers/nosql/boundary');
 const bulkDownloadController = () => require('../controllers/nosql/bulk-download');
 const apiKeyController = () => require('../controllers/nosql/api-key');
@@ -153,6 +157,12 @@ const routes = [
   { method: 'put', path: '/eagle/projects/:eagleId', guards: [authMiddleware, requireWrite], load: () => projectController().upsertFromEagle },
   { method: 'put', path: '/eagle/documents/:eagleId', guards: [authMiddleware, requireWrite], load: () => documentController().upsertFromEagle },
   { method: 'put', path: '/eagle/updates/:eagleId', guards: [authMiddleware, requireWrite], load: () => updateController().upsertFromEagle },
+  { method: 'put', path: '/eagle/commentperiods/:eagleId', guards: [authMiddleware, requireWrite], load: () => commentPeriodController().upsertFromEagle },
+  { method: 'put', path: '/eagle/comments/:eagleId', guards: [authMiddleware, requireWrite], load: () => commentController().upsertFromEagle },
+  { method: 'put', path: '/eagle/organizations/:eagleId', guards: [authMiddleware, requireWrite], load: () => organizationController().upsertFromEagle },
+  { method: 'put', path: '/eagle/notifications/:eagleId', guards: [authMiddleware, requireWrite], load: () => notificationController().upsertFromEagle },
+  // No `PUT /eagle/lists/:eagleId`: Eagle `List` has no write controller (migrations only), so the
+  // `lists` container takes its `kind: 'List'` rows from the backfill and nothing else.
 
   // Boundaries (Borders) Routes. Regions went with an empty collection nothing consumed.
   { method: 'get', path: '/boundaries', guards: [passiveAuthMiddleware], load: () => boundaryController().getBoundaries },

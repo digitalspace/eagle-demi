@@ -10,6 +10,7 @@
  */
 
 const cosmos = require('../db/cosmos-nosql');
+const { sortEntries } = require('../search/eagle-query');
 const { visibilityFor, andClauses, MAX_PAGE_SIZE } = require('../helpers/access-sql');
 const { catalogFor } = require('../vis/catalog');
 const { visible } = require('../vis/redact');
@@ -160,9 +161,42 @@ async function fetchAll(container, spec, opts = {}) {
   return rows;
 }
 
+/**
+ * `ORDER BY` for a Cosmos list read, from eagle-public's `sortBy` and an allow-list of fields.
+ *
+ * ONE key only, and never a tiebreak beside it: Cosmos needs a composite index for any multi-
+ * property ORDER BY, and none of these containers defines one. A single-property ORDER BY also
+ * drops every row that lacks the property, so `allowed` may only name fields the mirror writes
+ * unconditionally.
+ *
+ * @param {string|string[]} sortBy  the raw query value, in any of the three wire shapes
+ * @param {string[]} allowed        field names a caller may order by
+ * @param {string} fallback         e.g. 'c.id ASC' — used when the caller named nothing usable
+ */
+function orderByFrom(sortBy, allowed, fallback) {
+  for (const entry of sortEntries(sortBy)) {
+    const name = entry.replace(/^[+-]/, '');
+    if (allowed.includes(name)) return `c.${name} ${entry.startsWith('-') ? 'DESC' : 'ASC'}`;
+  }
+  return fallback;
+}
+
+/**
+ * Offset paging onto Cosmos, which has continuation tokens and no offsets: overfetch `skip + size`
+ * rows and slice. A real ceiling — a page is reachable only while that total stays inside
+ * MAX_PAGE_SIZE, the same bound `controllers/search.js` documents on the project list.
+ */
+function pageSlice({ pageNum, pageSize } = {}) {
+  const size = Math.min(Math.max(Number(pageSize) || MAX_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+  const skip = Math.max(Number(pageNum) || 0, 0) * size;
+  return { size, skip, fetch: skip + size };
+}
+
 module.exports = {
   eq,
   inList,
+  orderByFrom,
+  pageSlice,
   isDefinedAndNotNull,
   selectWhere,
   selectFor,
