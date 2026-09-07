@@ -14,6 +14,9 @@ module.exports = {
   projectId: { defaultVis: 4, maxVis: 4 },
   sourceSystem: { defaultVis: 4, maxVis: 4 },
   isPublished: { defaultVis: 4, maxVis: 4 },
+  // Public like `isPublished`, and for the same reason: it is the state of the record, not a fact
+  // about it. A deleted period is level 2 anyway, so only staff ever see this reading true.
+  isDeleted: { defaultVis: 4, maxVis: 4 },
 
   // The period itself.
   dateStarted: { defaultVis: 4, maxVis: 4 },

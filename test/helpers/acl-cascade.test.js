@@ -77,6 +77,31 @@ test('deriveAcls — the raw Eagle ACL is the row\'s own', async (t) => {
         { id: 'c2', read: STAFF_PARENT, isPublished: false }]);
   });
 
+  await t.test('a row Eagle deleted is not republished by its project', () => {
+    // The raw Eagle copy of a deleted period still says `public` — it was published right up to
+    // the delete — so deriving from it alone hands the row straight back to the public the next
+    // time the project publishes. The flag is the only thing that says otherwise.
+    assert.deepStrictEqual(
+      deriveAcls([{ id: 'cp1', read: STAFF_PARENT, eagleRead: ['public'], isDeleted: true }],
+        PUBLIC_PARENT),
+      [{ id: 'cp1', read: STAFF_PARENT, isPublished: false }]);
+  });
+
+  await t.test('and a takedown still narrows it past the deleted ceiling', () => {
+    // The ceiling is a ceiling, not an assignment: a level-1 parent still wins.
+    assert.deepStrictEqual(
+      deriveAcls([{ id: 'cp1', read: STAFF_PARENT, eagleRead: ['public'], isDeleted: true }],
+        ['team']),
+      [{ id: 'cp1', read: ['team'], isPublished: false }]);
+  });
+
+  await t.test('isDeleted false is an ordinary row', () => {
+    assert.deepStrictEqual(
+      deriveAcls([{ id: 'cp1', read: STAFF_PARENT, eagleRead: ['public'], isDeleted: false }],
+        PUBLIC_PARENT),
+      [{ id: 'cp1', read: PUBLIC_PARENT, isPublished: true }]);
+  });
+
   await t.test('every row is derived, in the order it arrived', () => {
     assert.deepStrictEqual(
       deriveAcls([

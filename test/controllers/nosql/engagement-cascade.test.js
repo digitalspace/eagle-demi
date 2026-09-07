@@ -182,6 +182,37 @@ test('a takedown takes the engagement down with it', async (t) => {
     assert.strictEqual(opValue(commentWrite.operations[0], '/isPublished'), false);
   });
 
+  await t.test('a period Eagle deleted is not handed back to the public on a re-publish',
+    async (tt) => {
+      // The delete push narrowed it and flagged it (see public-read-push.test.js). Publishing the
+      // project re-derives every period from its raw Eagle copy, which still reads `public`, so
+      // without the flag this is where a deleted period comes back — and its comments with it.
+      const { writes } = stubCosmos(tt, {
+        periods: [
+          { id: 'cp1', read: STAFF_READ, eagleRead: ['public'], isDeleted: true },
+          { id: 'cp2', read: STAFF_READ, eagleRead: ['public'] }
+        ],
+        commentsByPeriod: {
+          cp1: [{ id: 'c1', read: STAFF_READ, eagleRead: ['public'] }],
+          cp2: [{ id: 'c2', read: STAFF_READ, eagleRead: ['public'] }]
+        }
+      });
+
+      const res = await moveTo(tt, 4, 2);
+
+      assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+      const [periodWrite] = patchesTo(writes, 'commentPeriods');
+      assert.deepStrictEqual(opValue(periodWrite.operations[0], '/read'), STAFF_READ,
+        'the deleted period stays staff-only');
+      assert.deepStrictEqual(opValue(periodWrite.operations[1], '/read'), PUBLIC_READ,
+        'the live period beside it still publishes');
+
+      const [deletedComments, liveComments] = patchesTo(writes, 'comments');
+      assert.deepStrictEqual(opValue(deletedComments.operations[0], '/read'), STAFF_READ,
+        'a comment under a deleted period follows its period, not the project');
+      assert.deepStrictEqual(opValue(liveComments.operations[0], '/read'), PUBLIC_READ);
+    });
+
   await t.test('a project with no periods writes nothing to either container', async (tt) => {
     const { writes } = stubCosmos(tt, { periods: [] });
 

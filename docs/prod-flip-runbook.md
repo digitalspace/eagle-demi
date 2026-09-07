@@ -1,6 +1,9 @@
 # Search backend switch
 
-One Mongo field decides which backend eagle-public calls for Project and Document search.
+One Mongo field decides which backend eagle-public calls for search. It covers `Project`,
+`Document`, `List`, `Organization`, `RecentActivity` and `ProjectNotification`. It does not yet
+cover `CommentPeriod` or `Comment`, which eagle-public still reads from eagle-api regardless of this
+field's value.
 eagle-api serves it from `/api/config`; the browser reads it once per page load.
 `/api/config` serves the new value within 19–38 s (measured 2026-08-21); poll up to 60 s before
 concluding the change did not land.
@@ -11,7 +14,7 @@ concluding the change did not land.
 
 | Value | Meaning |
 |---|---|
-| `/demi-search` | Live: eagle-public calls `demi-api-fc-prod` for Project/Document search. |
+| `/demi-search` | Live: eagle-public calls `demi-api-fc-prod` for the datasets above. |
 | `''` | Kill switch: eagle-api serves search itself from Mongo. |
 
 ## Statements
@@ -34,7 +37,8 @@ db.epic.updateOne({ _schemaName: 'Config' }, { $set: { SEARCH_API_PATH: '<value>
   return 200 with `searchResultsTotal` > 0 (only meaningful when the field is `/demi-search`).
 - Browser: `/projects` list renders, a document search returns rows, and the network log shows
   calls to the backend the field currently names.
-- `dataset=List` is still answered by eagle-api regardless of `SEARCH_API_PATH`.
+- `dataset=CommentPeriod` and `dataset=Comment` are still answered by eagle-api regardless of
+  `SEARCH_API_PATH` — those two are not on this switch.
 - `/api/config` 200, `/admin/` 200.
 
 ## After a change

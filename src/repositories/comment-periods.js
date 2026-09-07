@@ -106,13 +106,16 @@ async function deleteById(id, projectId) {
  * `sources.eagle.read` is the period's own upstream ACL. `read` cannot stand in for it: the mirror
  * has already narrowed that to the project (`constrainToProject`), so a period pushed under a
  * private project reads private whatever Eagle published it as.
+ *
+ * `isDeleted` rides along because that upstream ACL outlives the record: a deleted period's raw
+ * copy still says `public`, and `deriveAcls` needs the flag to refuse to act on it.
  */
 async function aclRowsForProject(access, projectId) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
     criteria: criteriaFor(projectId),
-    select: 'c.id, c.read, c.sources.eagle.read AS eagleRead'
+    select: 'c.id, c.read, c.isDeleted, c.sources.eagle.read AS eagleRead'
   });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
   return items;
