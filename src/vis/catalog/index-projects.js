@@ -16,6 +16,9 @@ module.exports = {
   displayName: { defaultVis: 4, maxVis: 4 },
   description: { defaultVis: 4, maxVis: 4 },
   proponent: { defaultVis: 4, maxVis: 4 },
+  // The Organization ObjectId. Filter-only: `proponent` holds the NAME, and eagle-public's facet
+  // panel sends the id — this is the column that filter resolves to.
+  proponentId: { defaultVis: 4, maxVis: 4 },
   sector: { defaultVis: 4, maxVis: 4 },
   status: { defaultVis: 4, maxVis: 4 },
   region: { defaultVis: 4, maxVis: 4 },

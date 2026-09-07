@@ -227,19 +227,52 @@ test('eagle-query filters', async (t) => {
       'a decision issued during 31 December is inside a range that names that day');
   });
 
-  // Cosmos keeps `proponentName` and nothing at all for PCP, so there is no column for either to
-  // point at. Dropped and reported, never emitted and hoped for.
+  // Cosmos keeps no comment-period status at all, so there is no column for PCP to point at.
+  // Dropped and reported, never emitted and hoped for.
   await t.test('project facets DEMI holds no data for are dropped, not emitted', () => {
     const { filter, dropped } = eagleQuery.buildFilter(
-      { 'and[proponent]': '58850f69aaecd9001b8085cc', 'and[pcp]': 'open' },
+      { 'and[pcp]': 'open' }, 'Project', anonAcl('id'));
+
+    assert.deepStrictEqual(dropped, ['pcp']);
+    assert.strictEqual(filter, ANON_FILTER);
+  });
+
+  // The proponent facet sends an Organization ObjectId while `proponent` holds the NAME, so it used
+  // to be refused outright by UNMAPPED_KEYS — a 200 with the filter silently gone. `proponentId` is
+  // the column that value actually matches.
+  await t.test('the proponent facet filters on proponentId, not on the name column', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[proponent]': '58850f69aaecd9001b8085cc' }, 'Project', anonAcl('id'));
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes("proponentId eq '58850f69aaecd9001b8085cc'"), filter);
+    assert.ok(!/proponent eq /.test(filter),
+      'an ObjectId compared against the name column matches nothing under a 200');
+  });
+
+  await t.test('two proponents are an OR, not two ANDs that match nothing', () => {
+    const { filter, dropped } = eagleQuery.buildFilter(
+      { 'and[proponent]': '58850f69aaecd9001b8085cc,58850f69aaecd9001b8085cd' },
       'Project', anonAcl('id'));
 
-    assert.deepStrictEqual(dropped.sort(), ['pcp', 'proponent']);
-    assert.strictEqual(filter, ANON_FILTER);
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(filter.includes(
+      "(proponentId eq '58850f69aaecd9001b8085cc' or proponentId eq '58850f69aaecd9001b8085cd')"),
+    filter);
   });
 
   // The alias table is a FILTER redirect. Sorting the Phase column by an ObjectId would order the
   // list by hex; `currentPhaseNameId` is `sortable: false` precisely so this falls back.
+  // Same trade as the phase column, and the reason `proponentId` is `sortable: false`: the alias is
+  // a FILTER redirect, and ordering a project list by hex ObjectId is not an order anyone asked for.
+  await t.test('sorting by proponent orders on the name, not on the id it filters by', () => {
+    const { orderby, dropped } = eagleQuery.buildOrderBy('-proponent', 'Project', false);
+
+    assert.deepStrictEqual(dropped, []);
+    assert.ok(orderby.startsWith('proponent desc'), orderby);
+    assert.ok(!orderby.includes('proponentId'));
+  });
+
   await t.test('sorting by phase orders on the label, not on the id it filters by', () => {
     const { orderby, dropped } = eagleQuery.buildOrderBy('-currentPhaseName', 'Project', false);
 
@@ -406,11 +439,12 @@ test('eagle-query sort', async (t) => {
   });
 
   // The control for the drop above: a scalar field the index CAN sort still sorts. Without this the
-  // assertion is satisfied by dropping every sort, which would measure nothing.
+  // assertion is satisfied by dropping every sort, which would measure nothing. `region` and not
+  // `proponent`, which now carries an alias and so tests the alias path instead of the plain one.
   await t.test('an ordinary sortable string field still orders', () => {
-    const { orderby, dropped } = eagleQuery.buildOrderBy('-proponent', 'Project', false);
+    const { orderby, dropped } = eagleQuery.buildOrderBy('-region', 'Project', false);
     assert.deepStrictEqual(dropped, []);
-    assert.strictEqual(orderby, 'proponent desc, id asc');
+    assert.strictEqual(orderby, 'region desc, id asc');
   });
 
   // A sortable, orderable field the CALLER cannot read must not order their page either: the row

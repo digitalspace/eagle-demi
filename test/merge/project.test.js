@@ -105,6 +105,97 @@ test('field precedence — Track wins, Eagle fills gaps', async (t) => {
 });
 
 /**
+ * The project-record fields eagle-public reads off the page but DEMI had no home for. eagle-api
+ * resolves the ObjectId-bearing ones before pushing — the merge has no Mongo to resolve them
+ * against — so these cases pin the SHAPE that arrives as much as the fact that it lands.
+ */
+test('the pushed-enriched Eagle project record', async (t) => {
+  const ENRICHED = {
+    CEAALink: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80000',
+    applicableRegulation: {
+      _id: '588511d0aaecd9001b826192',
+      name: 'Reviewable Projects Regulation',
+      item: 'https://www.bclaws.gov.bc.ca/civix/document/id/complete/statreg/370_2002'
+    },
+    build: 'modification',
+    dateAdded: '2016-12-14T00:00:00.000Z',
+    projectLeadPhone: '250 555 0101',
+    responsibleEPDPhone: '250 555 0102',
+    proponentId: '58850f69aaecd9001b8085cc',
+    proponentName: 'Eagle Proponent Ltd',
+    pins: [{ _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' }],
+    featuredDocuments: ['5cf00c03a266b7e187750002', '5cf00c03a266b7e187750003']
+  };
+
+  await t.test('every enriched field lands at the TOP level of the merged record', () => {
+    const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207, ENRICHED), OPTS);
+
+    for (const [field, value] of Object.entries(ENRICHED)) {
+      if (field === 'proponentName') continue; // Track wins for it; asserted below.
+      assert.deepStrictEqual(merged[field], value, `${field} did not land top level`);
+    }
+  });
+
+  // They were reachable only under `sources.eagle`, which the field catalog holds at maxVis 0 —
+  // so a caller saw neither. Promoting them must not stop the raw payload carrying them.
+  await t.test('pins and featuredDocuments are top level AND still under sources.eagle', () => {
+    const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207, ENRICHED), OPTS);
+
+    assert.deepStrictEqual(merged.pins, ENRICHED.pins);
+    assert.deepStrictEqual(merged.featuredDocuments, ENRICHED.featuredDocuments);
+    assert.deepStrictEqual(merged.sources.eagle.pins, ENRICHED.pins);
+    assert.deepStrictEqual(merged.sources.eagle.featuredDocuments, ENRICHED.featuredDocuments);
+  });
+
+  // A raw Mongo push nests content under `legislation_<year>` and keeps pins and featured documents
+  // at the top level. Both have to survive the flatten, from opposite sides of it.
+  await t.test('a raw Mongo doc keeps them across the legislation flatten', () => {
+    const merged = mergeTrackProject(TRACK_207, {
+      _id: TRACK_207.epic_guid,
+      read: ['public'],
+      pins: ENRICHED.pins,
+      featuredDocuments: ENRICHED.featuredDocuments,
+      currentLegislationYear: 'legislation_2002',
+      legislation_2002: { name: 'Nested Name', proponentId: ENRICHED.proponentId }
+    }, OPTS);
+
+    assert.deepStrictEqual(merged.pins, ENRICHED.pins);
+    assert.deepStrictEqual(merged.featuredDocuments, ENRICHED.featuredDocuments);
+    assert.strictEqual(merged.proponentId, ENRICHED.proponentId);
+  });
+
+  await t.test('an Eagle project with no Track counterpart keeps its proponent name', () => {
+    const merged = mergeEagleOnlyProject(
+      eagleFor({ epic_guid: 'orphan1', name: 'Orphan' }, ENRICHED), OPTS);
+
+    assert.strictEqual(merged.proponentName, 'Eagle Proponent Ltd');
+    assert.strictEqual(merged.proponentId, ENRICHED.proponentId);
+    assert.deepStrictEqual(merged.applicableRegulation, ENRICHED.applicableRegulation);
+  });
+
+  await t.test('Track still wins the proponent name when Track has one', () => {
+    const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207, ENRICHED), OPTS);
+    assert.strictEqual(merged.proponentName, TRACK_207.proponent_name);
+  });
+
+  // The reason the Eagle slot was filled at all: a blank Track column must not blank the pushed
+  // name, exactly as for every other TRACK_PRECEDENCE pair.
+  await t.test('a blank Track proponent_name falls back instead of erasing Eagle\'s', () => {
+    const merged = mergeTrackProject(
+      { ...TRACK_207, proponent_name: '  ' }, eagleFor(TRACK_207, ENRICHED), OPTS);
+    assert.strictEqual(merged.proponentName, 'Eagle Proponent Ltd');
+  });
+
+  await t.test('an enriched field Eagle did not send is absent, not null', () => {
+    const merged = mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS);
+    for (const field of Object.keys(ENRICHED)) {
+      if (field === 'proponentName') continue;
+      assert.ok(!(field in merged), `${field} was fabricated`);
+    }
+  });
+});
+
+/**
  * Work phases are Track's alone — Eagle has no equivalent — so there is no precedence contest,
  * only the rule that an absent feed must not blank a stored value. That rule is what stops a Track
  * outage from erasing the assessment rail off every project on the next nightly run.
