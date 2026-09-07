@@ -282,6 +282,9 @@ test('seed() end to end with stubbed sources', async (t) => {
       return { count: 3, total: 3 };
     },
     fetchListLookup: async () => new Map([['t1', 'Letter']]),
+    fetchOrganizationLookup: async () => new Map([
+      ['org1', { _id: 'org1', name: 'Some Nation', province: 'BC' }]
+    ]),
     // The seeder reads Project Notifications through the generic pager, since sources.js exposes
     // no named loader for them. Empty here so the default fixtures still describe a corpus in
     // which the only non-project parent is genuinely unknown.
@@ -388,6 +391,41 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.strictEqual(matched.sources.wildfire.x, 1, 'a source block the run does not rebuild survives');
     assert.strictEqual(summary.stages.projects.visCarried, 1,
       'only the row that actually had vis counts, not every existing row read');
+  });
+
+  // Why a re-seed is the fix for 396 rows holding `proponentId: null`: the search shape the seed
+  // reads carries none of what eagle-api's push resolves, and nothing re-pushes existing rows.
+  await t.test('re-seeding an existing row fills proponentId without blanking the push', async () => {
+    const { written, repos } = makeRepos();
+    const org = { _id: 'org-1', name: 'Columbia Power Corporation', province: 'British Columbia' };
+    const pin = { _id: 'org-2', name: 'Some Nation', province: 'BC' };
+    const sources = {
+      ...stubSources,
+      fetchEagleProjects: async () => [{
+        ...eagleProject(matchedGuid, 'Nicomen Wind (Eagle)'),
+        proponent: org,
+        pins: [pin._id]
+      }],
+      fetchOrganizationLookup: async () => new Map([[org._id, org], [pin._id, pin]])
+    };
+    repos.projects.getById = async (_access, id) => (id === '207'
+      ? {
+        id: '207',
+        proponentId: null,
+        applicableRegulation: { _id: 'r1', name: 'Reviewable Projects Regulation', item: null },
+        featuredDocuments: ['d1']
+      }
+      : null);
+
+    await seed(['--live', '--only', 'projects'], { sources, repos, now: NOW });
+
+    const matched = written.projects.find(p => p.id === '207');
+    assert.strictEqual(matched.proponentId, org._id);
+    assert.deepStrictEqual(matched.pins, [pin]);
+    assert.deepStrictEqual(matched.applicableRegulation,
+      { _id: 'r1', name: 'Reviewable Projects Regulation', item: null },
+      'the search carries no applicableRegulation, so the re-merge must not blank it');
+    assert.deepStrictEqual(matched.featuredDocuments, ['d1']);
   });
 
   await t.test('the project stage mints one short link per project with a public page', async () => {
@@ -731,6 +769,7 @@ test('seed --reconcile end to end', async (t) => {
       return { count: 1, total: 1 };
     },
     fetchListLookup: async () => new Map(),
+    fetchOrganizationLookup: async () => new Map(),
     // The notification list is gated like the other two fetches, so the stub reports its total the
     // same way. Empty AND consistent — the shape that used to pass every gate.
     fetchAllPages: async (_base, _dataset, opts) => {
@@ -1154,6 +1193,7 @@ test('--reconcile refuses a surplus over the ceiling', async (t) => {
       return { count: docs.length, total: docs.length };
     },
     fetchListLookup: async () => new Map(),
+    fetchOrganizationLookup: async () => new Map(),
     fetchAllPages: async (_base, _dataset, opts) => {
       if (opts && opts.onPage) await opts.onPage([], 0, 0);
       return [];
@@ -1276,6 +1316,7 @@ test('a re-seed carries extraction state forward', async (t) => {
       return { count: 2, total: 2 };
     },
     fetchListLookup: async () => new Map(),
+    fetchOrganizationLookup: async () => new Map(),
     fetchAllPages: async () => [],
     loadBoundaries: () => []
   };

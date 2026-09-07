@@ -9,6 +9,7 @@ const trackProjects = require('../../src/data/track_projects_enriched.json');
 const {
   mergeTrackProject,
   mergeEagleOnlyProject,
+  carryEagleOnlyFields,
   buildRegistry,
   buildProjectIndex,
   normalizeCentroid,
@@ -472,5 +473,104 @@ test('buildProjectIndex — the deterministic id join', async (t) => {
     assert.strictEqual(index.resolve(''), null);
     assert.strictEqual(index.resolve(null), null);
     assert.strictEqual(index.resolve(undefined), null);
+  });
+});
+
+/**
+ * The same fields as the pushed record above, but arriving from the SEED. eagle-api resolves them
+ * for the push only; `/api/public/search?dataset=Project` returns `proponent` populated and `pins`
+ * as bare ObjectIds, which is why every seeded row held `proponentId: null`.
+ */
+test('the seed-shaped Eagle project record', async (t) => {
+  const ORG = {
+    _id: '58850f68aaecd9001b80857c',
+    _schemaName: 'Organization',
+    name: 'Columbia Power Corporation',
+    province: 'British Columbia',
+    city: 'Castlegar'
+  };
+  const PIN = { _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' };
+  const ORGS = new Map([[PIN._id, PIN]]);
+  const OPTS_ORGS = { now: NOW, orgs: ORGS };
+  // Nothing to inherit a proponent name from, so the Eagle slot's own value is what shows.
+  const NO_PROPONENT = { ...TRACK_207, proponent_name: '' };
+
+  await t.test('a populated proponent object becomes proponentId and proponentName', () => {
+    const merged = mergeTrackProject(
+      NO_PROPONENT, eagleFor(TRACK_207, { proponent: ORG }), OPTS);
+
+    assert.strictEqual(merged.proponentId, ORG._id);
+    assert.strictEqual(merged.proponentName, ORG.name);
+  });
+
+  await t.test('a bare ObjectId gives proponentId and no invented name', () => {
+    const merged = mergeTrackProject(
+      NO_PROPONENT, eagleFor(TRACK_207, { proponent: ORG._id }), OPTS);
+
+    assert.strictEqual(merged.proponentId, ORG._id);
+    assert.strictEqual(merged.proponentName, undefined,
+      'a name the feed never sent must not be conjured from the id');
+  });
+
+  await t.test('what the push already resolved is never overwritten', () => {
+    const merged = mergeTrackProject(NO_PROPONENT, eagleFor(TRACK_207, {
+      proponent: ORG,
+      proponentId: 'pushed-id',
+      proponentName: 'Pushed Name'
+    }), OPTS);
+
+    assert.strictEqual(merged.proponentId, 'pushed-id');
+    assert.strictEqual(merged.proponentName, 'Pushed Name');
+  });
+
+  await t.test('pins resolve to the push shape, and an unknown org drops', () => {
+    const merged = mergeTrackProject(NO_PROPONENT, eagleFor(TRACK_207, {
+      pins: [PIN._id, '5cf00c03a266b7e187759999']
+    }), OPTS_ORGS);
+
+    assert.deepStrictEqual(merged.pins, [PIN]);
+  });
+
+  await t.test('without a lookup, pin ids are left alone rather than made nameless', () => {
+    const merged = mergeTrackProject(NO_PROPONENT, eagleFor(TRACK_207, { pins: [PIN._id] }), OPTS);
+
+    assert.deepStrictEqual(merged.pins, [PIN._id]);
+  });
+
+  await t.test('a nested Mongo doc is normalised out of its legislation block', () => {
+    const merged = mergeEagleOnlyProject({
+      _id: TRACK_207.epic_guid,
+      currentLegislationYear: 'legislation_2002',
+      pins: [PIN._id],
+      legislation_2002: { name: 'Nested Name', proponent: ORG }
+    }, OPTS_ORGS);
+
+    assert.strictEqual(merged.proponentId, ORG._id);
+    assert.strictEqual(merged.proponentName, ORG.name);
+    assert.deepStrictEqual(merged.pins, [PIN]);
+  });
+
+  await t.test('normalising never rewrites the caller\'s own record', () => {
+    const eagle = eagleFor(TRACK_207, { proponent: ORG, pins: [PIN._id] });
+    mergeTrackProject(NO_PROPONENT, eagle, OPTS_ORGS);
+
+    assert.strictEqual(eagle.proponentId, undefined);
+    assert.deepStrictEqual(eagle.pins, [PIN._id]);
+  });
+
+  // The seed's feed is narrower than the push's: no applicableRegulation, no featuredDocuments.
+  await t.test('a re-merge keeps the Eagle-only fields its feed cannot rebuild', () => {
+    const existing = {
+      applicableRegulation: { _id: 'r1', name: 'Reviewable Projects Regulation', item: null },
+      featuredDocuments: ['d1'],
+      region: 'Stale Region'
+    };
+    const merged = carryEagleOnlyFields(
+      mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { region: 'Kootenay' }), OPTS), existing);
+
+    assert.deepStrictEqual(merged.applicableRegulation, existing.applicableRegulation);
+    assert.deepStrictEqual(merged.featuredDocuments, existing.featuredDocuments);
+    assert.strictEqual(merged.region, 'Kootenay',
+      'a field the feed DID supply must win over the stored copy');
   });
 });

@@ -112,6 +112,7 @@ scripts/with-search-admin.sh -- \
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
+npm run db:seed-nosql -- --only projects --live   # projects only
 npm run db:seed-nosql -- --reconcile   # also delete rows the fetch did not produce
 npm run db:seed-public-reads     # lists, notifications, updates, comment periods, comments
 npm run db:purge-extraction      # dry run by default; --live to write
@@ -121,6 +122,16 @@ A re-seed **carries extraction state forward**. A Cosmos upsert replaces the ite
 reads `contentExtracted`, `contentExtractedAt`, `contentPageCount` and `contentExtractionError` out
 of each partition before writing it and puts them back on any document it already holds; new ids
 start unextracted. The run reports `preserved`.
+
+The projects stage **resolves the Eagle slot into the same shape the push sends**. eagle-api pushes
+`proponentId`, `proponentName`, `pins` as `[{_id, name, province}]`, `applicableRegulation` and
+`featuredDocuments` on every project write, but nothing re-pushes rows that were seeded before that
+existed — 396 rows in demi-test held `proponentId: null`. `/api/public/search?dataset=Project`
+returns `proponent` populated and `pins` as bare ObjectIds instead, so the seed fetches the
+Organization list once and `src/merge/project.js` normalises both, on the seed path and the push
+path alike. Re-running the projects stage against an existing database is the way to fill those
+fields; it keeps `vis`, `shortCode`, the Track source block, and the two fields the search does not
+carry at all (`applicableRegulation`, `featuredDocuments`).
 
 `--reconcile` (off by default) is the other half: rows that exist in Cosmos but not in the fetch are
 deleted through the same helpers `DELETE /documents/:id` and `DELETE /projects/:id` use, so the

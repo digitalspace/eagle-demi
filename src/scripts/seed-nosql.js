@@ -34,7 +34,7 @@ const fs = require('fs');
 
 const sources = require('../seed/sources');
 const transform = require('../seed/transform');
-const { buildRegistry, buildProjectIndex } = require('../merge/project');
+const { buildRegistry, buildProjectIndex, carryEagleOnlyFields } = require('../merge/project');
 
 const { systemAccess } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
@@ -382,7 +382,12 @@ async function seed(argv = [], deps = {}) {
   });
   log(`  ${eagleProjects.length} from eagle-api`);
 
-  const { projects, report } = buildRegistry(trackProjects, eagleProjects, { now });
+  // The search returns `pins` as bare ObjectIds; the push sends `{_id, name, province}`. The
+  // lookup is what lets the merge land the same shape from either feed.
+  const orgs = await src.fetchOrganizationLookup();
+  log(`  ${orgs.size} organizations for pin and proponent resolution`);
+
+  const { projects, report } = buildRegistry(trackProjects, eagleProjects, { now, orgs });
   log(`  merged: ${report.matched} matched · ${report.trackOnlyNoGuid} Track without epic_guid · ` +
     `${report.trackOnlyDanglingGuid} dangling · ${report.eagleOnly} Eagle-only = ${report.total}`);
   if (report.danglingGuids.length) {
@@ -414,6 +419,9 @@ async function seed(argv = [], deps = {}) {
           // A minted code is printable, so a re-seed must never mint a second one for the project.
           if (existing.shortCode) project.shortCode = existing.shortCode;
           project.sources = { ...existing.sources, ...project.sources };
+          // The public search carries no applicableRegulation or featuredDocuments, so a re-merge
+          // would blank whatever eagle-api's push had already resolved onto the row.
+          carryEagleOnlyFields(project, existing);
         }
         // Counted as minted, not as held: the carry above already answered for the rest.
         if (!project.shortCode && await ensureProjectShortLink(project, repos.links)) {
