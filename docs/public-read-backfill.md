@@ -54,10 +54,13 @@ A dry run reports `would-write` in place of `written` and touches nothing, inclu
 ### Resuming
 
 A finished stage is recorded in the state file (`./seed-public-reads.state.json`, or `--state
-<path>`) and a later run skips it. The comment stage records each comment period as it finishes, so
-a run killed part way through resumes at the period it stopped on rather than at the first one. A
-stage that logged errors is not recorded, because skipping it next time would leave those rows
-missing for good.
+<path>`) and a later run skips it. The comment stage records each comment period whose comments all
+wrote, so a run killed part way through resumes at the period it stopped on rather than at the first
+one.
+
+Nothing that failed is recorded: a period holding a comment that failed to write stays off the
+per-period list, and a stage that logged errors is not marked complete. Both would otherwise be
+skipped next time, leaving those rows missing for good.
 
 Delete the state file to force a full rerun. Every write is an upsert, so replaying costs request
 units and nothing else.

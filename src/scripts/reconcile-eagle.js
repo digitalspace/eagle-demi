@@ -180,11 +180,16 @@ async function reconcile(argv = [], deps = {}) {
   // no `pushOwned` split to make and no parent gate: a comment period whose project is unpublished
   // is not published by Eagle either, so it is not in the id set to begin with.
   const periodRows = [];
+  // MAX_PAGE_SIZE caps ONE partition's read, so the ceiling is per project. Comparing the running
+  // total against it would fire on every real run once DEMI holds that many periods in all.
+  let periodPageFilled = false;
   for (const project of projectRows) {
     // Per project, because `commentPeriods` partitions on it. Every project a period can hang off
     // is in this list: the mirror resolves its parent through `getByEagleId`, so a period under a
     // project with no `eagleId` cannot exist.
-    periodRows.push(...await periodsRepo.listByProject(project.id, access, {}));
+    const rows = await periodsRepo.listByProject(project.id, access, {});
+    periodPageFilled = periodPageFilled || rows.length >= MAX_PAGE_SIZE;
+    periodRows.push(...rows);
   }
   const listRows = [
     ...await listsRepo.listByKind(listsRepo.KINDS.LIST, access, {}),
@@ -219,7 +224,7 @@ async function reconcile(argv = [], deps = {}) {
 
   // The per-partition enumerations have no cheap COUNT to pair with — one per project, one per
   // period — so the ceiling itself is the check: a partition that filled a page may hold more.
-  if (periodRows.length && periodRows.length >= MAX_PAGE_SIZE) {
+  if (periodPageFilled) {
     summary.failures.push('a project filled a comment-period page — the commentPeriods diff below ' +
       'is computed off a truncated read');
   }

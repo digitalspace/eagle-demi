@@ -89,6 +89,12 @@ function parseArgs(argv) {
     else if (a === '--since') args.since = String(argv[++i] || '');
     else if (a === '--only') {
       args.only = String(argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
+      // A missing or empty value would otherwise select nothing and exit 0 having done nothing —
+      // the same silent no-op the unknown-stage guard below exists to prevent.
+      if (!args.only.length) {
+        throw new Error('[backfill] --only needs at least one stage. ' +
+          `Valid: ${ALL_STAGES.join(', ')}`);
+      }
     } else throw new Error(`[backfill] unknown argument: ${a}`);
   }
 
@@ -326,6 +332,7 @@ async function backfillComments(args, deps, state) {
       continue;
     }
 
+    const errorsBefore = counts.errors;
     try {
       await eachCommentPage(periodId, deps, async (items) => {
         for (const doc of items) {
@@ -333,10 +340,15 @@ async function backfillComments(args, deps, state) {
             d.commentMirror.mirrorFromEagle(String(row._id), row, period), args, deps, counts);
         }
       });
-      done.add(periodId);
-      if (args.live) {
+      // Only a period whose every comment landed is checkpointed. `writeRow` swallows a row failure
+      // into `counts.errors` rather than throwing, so without this the period would be recorded
+      // done, the next run would skip it, and the failed comments would be missing for good.
+      if (counts.errors === errorsBefore) {
+        done.add(periodId);
+        if (args.live) {
           state.comments = { ...state.comments, periods: [...done] };
-        saveState(args.state, state);
+          saveState(args.state, state);
+        }
       }
     } catch (err) {
       counts.errors++;

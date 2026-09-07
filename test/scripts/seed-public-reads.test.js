@@ -36,6 +36,12 @@ test.after(() => fs.rmSync(STATE_DIR, { recursive: true, force: true }));
 let stateSeq = 0;
 const statePath = () => path.join(STATE_DIR, `state-${stateSeq++}.json`);
 
+/** The comment stage's per-period checkpoint — `[]` when the run recorded no state at all. */
+function checkpointedPeriods(state) {
+  if (!fs.existsSync(state)) return [];
+  return (JSON.parse(fs.readFileSync(state, 'utf8')).comments || {}).periods || [];
+}
+
 /**
  * `src/seed/sources.js`, stubbed at the two functions the backfill reads through it.
  *
@@ -103,6 +109,13 @@ test('parseArgs', async (t) => {
   await t.test('an unknown stage or flag throws rather than doing nothing quietly', () => {
     assert.throws(() => parseArgs(['--only', 'listz']), /unknown stage\(s\): listz/);
     assert.throws(() => parseArgs(['--force']), /unknown argument/);
+  });
+
+  await t.test('--only with no stages is the same usage error, not a run that does nothing', () => {
+    // A typo'd invocation that selects nothing exits 0 and looks like a completed backfill.
+    assert.throws(() => parseArgs(['--only']), /--only needs at least one stage/);
+    assert.throws(() => parseArgs(['--only', '']), /--only needs at least one stage/);
+    assert.throws(() => parseArgs(['--only', ' , ']), /--only needs at least one stage/);
   });
 
   await t.test('--since must be a date', () => {
@@ -182,6 +195,26 @@ test('a rerun skips a dataset the state file already calls done', async () => {
   assert.deepStrictEqual(summary.skipped, ['organizations']);
   assert.deepStrictEqual(wrote.map(w => w[0]), ['notifications'],
     'the finished dataset is not refetched, the unfinished one still runs');
+});
+
+test('a mirror that answers null is a skip, not a write', async () => {
+  // Null means the row's parent is not in DEMI — an unpublished project's comment period, and the
+  // main path of this stage. Counting it as written reports a backfill that wrote nothing as clean.
+  const state = statePath();
+  const sources = stubSources({ datasets: { CommentPeriod: [{ _id: 'CP1' }, { _id: 'CP2' }] } });
+
+  const summary = await backfill(['--live', '--only', 'commentPeriods', '--state', state], {
+    sources,
+    commentPeriodMirror: {
+      mirrorFromEagle: async (eagleId) =>
+        (eagleId === 'CP1' ? null : { saved: { id: eagleId }, existing: null })
+    }
+  });
+
+  assert.strictEqual(summary.stages.commentPeriods.fetched, 2);
+  assert.strictEqual(summary.stages.commentPeriods.written, 1, 'only the row the mirror wrote');
+  assert.strictEqual(summary.stages.commentPeriods.skipped, 1, 'the parentless row is skipped');
+  assert.strictEqual(summary.stages.commentPeriods.errors, 0, 'and a missing parent is not an error');
 });
 
 test('a stage that logged errors is NOT checkpointed', async (t) => {
@@ -296,6 +329,43 @@ test('comments', async (t) => {
       'and so are its periods — losing them makes the next run walk every period again');
     t2.mock.restoreAll();
   });
+
+  await t.test('a period holding a comment that failed is retried, not checkpointed',
+    async (t2) => {
+      // The row failure is swallowed into counts.errors rather than thrown, so the period looked
+      // finished: the next run skipped it, reported a clean zero-row stage, and the comment was
+      // gone for good.
+      t2.mock.method(logger, 'error', () => {});
+      const state = statePath();
+      const attempts = [];
+      const commentMirror = {
+        mirrorFromEagle: async (eagleId) => {
+          attempts.push(eagleId);
+          if (attempts.length === 1) throw new Error('cosmos said no');
+          return { saved: { id: eagleId }, existing: null };
+        }
+      };
+      const deps = () => ({
+        sources: stubSources({
+          datasets: { CommentPeriod: [period] }, commentItems: [eagleComment({ _id: 'C1' })]
+        }),
+        commentPeriodsRepo: { getById: async () => storedPeriod() },
+        commentMirror
+      });
+
+      const first = await backfill(['--live', '--only', 'comments', '--state', state], deps());
+      assert.strictEqual(first.stages.comments.errors, 1);
+      assert.deepStrictEqual(checkpointedPeriods(state), [],
+        'a period whose comment failed must stay off the checkpoint');
+
+      const second = await backfill(['--live', '--only', 'comments', '--state', state], deps());
+      assert.deepStrictEqual(attempts, ['C1', 'C1'], 'the failed comment is re-attempted');
+      assert.strictEqual(second.stages.comments.written, 1);
+      assert.strictEqual(second.stages.comments.errors, 0);
+      assert.deepStrictEqual(checkpointedPeriods(state), [PERIOD_EAGLE_ID],
+        'and only the clean run records the period');
+      t2.mock.restoreAll();
+    });
 
   await t.test('a period DEMI has not mirrored is skipped whole, not written under nothing',
     async (t2) => {
