@@ -10,7 +10,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice } = require('./_sql');
+const { eq, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
 
 const CONTAINER = 'commentPeriods';
 const PARTITION_FIELD = 'projectId';
@@ -67,10 +67,9 @@ async function countByProject(projectId, access) {
   return items[0] || 0;
 }
 
-/** Whole-item write, etag-guarded when the row already exists. */
+/** Whole-item write. A period that changed project moves partition — see `upsertItem`. */
 async function upsert(item, existing) {
-  if (!existing) return cosmos.create(CONTAINER, item);
-  return cosmos.replace(CONTAINER, item.id, item.projectId, item, existing._etag);
+  return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
 }
 
 /** Removes a row left in a stale partition by a period that changed project. */

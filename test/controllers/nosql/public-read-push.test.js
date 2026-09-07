@@ -15,6 +15,7 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
+const cosmos = require('../../../src/db/cosmos-nosql');
 const commentPeriods = require('../../../src/repositories/comment-periods');
 const comments = require('../../../src/repositories/comments');
 const notifications = require('../../../src/repositories/notifications');
@@ -35,6 +36,42 @@ const {
   eaglePeriod, eagleComment, eagleOrganization, eagleNotification,
   mockRes, STAFF
 } = require('../../helpers/eagle-mirror-fixtures');
+
+/**
+ * A partition-aware Cosmos, keyed `partitionKey::id` the way the service addresses an item.
+ *
+ * `replace` is addressed at (id, partitionKey) and throws 404 when that key holds nothing, exactly
+ * as the real container does. That is what makes a row moved to another partition observable here:
+ * a write aimed at the wrong partition either throws or shows up under the wrong key.
+ *
+ * @returns {{ store: Map, replaced: Array }} the stored rows, and the etags `replace` was guarded by
+ */
+function partitionedCosmos(t, partitionField, seed = []) {
+  const key = (pk, id) => `${pk}::${id}`;
+  const store = new Map(seed.map(row => [key(row[partitionField], row.id), row]));
+  const replaced = [];
+
+  const put = async (_container, item) => {
+    store.set(key(item[partitionField], item.id), item);
+    return item;
+  };
+  t.mock.method(cosmos, 'create', put);
+  t.mock.method(cosmos, 'upsert', put);
+  t.mock.method(cosmos, 'replace', async (_container, id, partitionKey, item, etag) => {
+    if (!store.has(key(partitionKey, id))) {
+      const err = new Error('Entity with the specified id does not exist in the system.');
+      err.code = 404;
+      throw err;
+    }
+    replaced.push(etag);
+    store.set(key(partitionKey, id), item);
+    return item;
+  });
+  t.mock.method(cosmos, 'remove', async (_container, id, partitionKey) =>
+    store.delete(key(String(partitionKey), String(id))));
+
+  return { store, replaced };
+}
 
 /** Drive one controller the way the dispatcher does, and hand back what it wrote. */
 function pushTo(controller, repo, eagleId, doc, t, { existing = null } = {}) {
@@ -106,15 +143,42 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(upserts, 0);
   });
 
-  await t.test('a period that changed project leaves no row in the old partition', async () => {
+  // The repository and its Cosmos calls are REAL below: mocking `repo.upsert` proves the controller
+  // asked for a write, never that the write could land. Reparenting is precisely where it could not.
+  await t.test('a period that changed project moves to the new partition and leaves nothing behind',
+    async () => {
+      t.mock.method(projects, 'getByEagleId', async () => storedProject());
+      const stale = { id: PERIOD_EAGLE_ID, projectId: '208', read: PUBLIC_ACL, _etag: '"stale"' };
+      const { store } = partitionedCosmos(t, 'projectId', [stale]);
+      t.mock.method(commentPeriods, 'getById', async () => stale);
+
+      const res = mockRes();
+      await commentPeriodController.upsertFromEagle({
+        params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc: eaglePeriod() }, user: STAFF
+      }, res);
+
+      assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+      assert.deepStrictEqual([...store.keys()], [`207::${PERIOD_EAGLE_ID}`],
+        'the row lives under the new project and the old-partition row is gone');
+      assert.strictEqual(store.get(`207::${PERIOD_EAGLE_ID}`).projectId, '207');
+    });
+
+  await t.test('a period that stayed put is written under the etag it was read at', async () => {
+    // The reparent path drops the etag guard because there is no item to match; it must not drop
+    // it for the ordinary update, or a concurrent push stops racing and starts winning silently.
     t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    const removed = [];
-    t.mock.method(commentPeriods, 'deleteById', async (id, projectId) => { removed.push([id, projectId]); });
+    const current = { id: PERIOD_EAGLE_ID, projectId: '207', read: PUBLIC_ACL, _etag: '"v1"' };
+    const { store, replaced } = partitionedCosmos(t, 'projectId', [current]);
+    t.mock.method(commentPeriods, 'getById', async () => current);
 
-    await pushTo(commentPeriodController, commentPeriods, PERIOD_EAGLE_ID, eaglePeriod(), t,
-      { existing: { id: PERIOD_EAGLE_ID, projectId: '208', read: PUBLIC_ACL } });
+    const res = mockRes();
+    await commentPeriodController.upsertFromEagle({
+      params: { eagleId: PERIOD_EAGLE_ID }, query: {}, body: { doc: eaglePeriod() }, user: STAFF
+    }, res);
 
-    assert.deepStrictEqual(removed, [[PERIOD_EAGLE_ID, '208']]);
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(replaced, ['"v1"']);
+    assert.deepStrictEqual([...store.keys()], [`207::${PERIOD_EAGLE_ID}`]);
   });
 });
 
@@ -179,6 +243,25 @@ test('PUT /eagle/comments/:eagleId', async (t) => {
     assert.ok(!('email' in written()), 'no top-level email');
     assert.ok(!Object.keys(written()).some(k => /mail/i.test(k)));
   });
+
+  await t.test('a comment moved to another period moves partition and leaves nothing behind',
+    async () => {
+      t.mock.method(commentPeriods, 'getById', async () => storedPeriod());
+      const stale = {
+        id: COMMENT_EAGLE_ID, periodId: 'oldperiod', projectId: '207',
+        read: PUBLIC_ACL, _etag: '"stale"'
+      };
+      const { store } = partitionedCosmos(t, 'periodId', [stale]);
+      t.mock.method(comments, 'getById', async () => stale);
+
+      const res = mockRes();
+      await commentController.upsertFromEagle({
+        params: { eagleId: COMMENT_EAGLE_ID }, query: {}, body: { doc: eagleComment() }, user: STAFF
+      }, res);
+
+      assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+      assert.deepStrictEqual([...store.keys()], [`${PERIOD_EAGLE_ID}::${COMMENT_EAGLE_ID}`]);
+    });
 
   await t.test('a comment whose period is not mirrored is a 404 and no write', async () => {
     t.mock.method(commentPeriods, 'getById', async () => null);

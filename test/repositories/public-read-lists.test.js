@@ -12,6 +12,9 @@ process.env.NODE_ENV = 'test';
 const test = require('node:test');
 const assert = require('node:assert');
 
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
+
 const cosmos = require('../../src/db/cosmos-nosql');
 const commentPeriods = require('../../src/repositories/comment-periods');
 const comments = require('../../src/repositories/comments');
@@ -182,6 +185,55 @@ test('lists by kind', async (t) => {
 
     assert.ok(!/DROP/.test(seen.spec.query));
     assert.deepStrictEqual(seen.spec.parameters.filter(p => /DROP/.test(p.name)), []);
+  });
+
+  await t.test('a sort key is allowed only on the kind whose rows carry it', async () => {
+    // A single-property ORDER BY drops every row that lacks the property, so `listOrder` — a `List`
+    // field the Organization mirror never writes — must not reach the Organization query.
+    let seen = capture(t);
+    await lists.listByKind(lists.KINDS.LIST, ANON, { sortBy: 'listOrder' });
+    assert.match(seen.spec.query, /ORDER BY c\.listOrder ASC$/);
+
+    t.mock.restoreAll();
+    seen = capture(t);
+    await lists.listByKind(lists.KINDS.ORGANIZATION, ANON, { sortBy: '-listOrder' });
+    assert.match(seen.spec.query, /ORDER BY c\.name ASC$/, 'a List-only key falls back');
+
+    t.mock.restoreAll();
+    seen = capture(t);
+    await lists.listByKind(lists.KINDS.ORGANIZATION, ANON, { sortBy: 'type' });
+    assert.match(seen.spec.query, /ORDER BY c\.name ASC$/, 'so does `type`, which is List-only');
+
+    t.mock.restoreAll();
+    seen = capture(t);
+    await lists.listByKind(lists.KINDS.ORGANIZATION, ANON, { sortBy: '-companyType' });
+    assert.match(seen.spec.query, /ORDER BY c\.companyType DESC$/);
+  });
+
+  await t.test('an unknown kind sorts by nothing a caller named', async () => {
+    const seen = capture(t);
+
+    await lists.listByKind('Nonsense', ANON, { sortBy: 'name' });
+
+    assert.match(seen.spec.query, /ORDER BY c\.name ASC$/, 'the fallback, not the caller\'s key');
+  });
+
+  await t.test('every sortable key is an indexed path on the lists container', () => {
+    // An ORDER BY on a path the indexing policy excludes cannot be served at all, so this pairs the
+    // allow-list with the bicep that has to carry it.
+    const bicep = readFileSync(
+      join(__dirname, '..', '..', 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
+    const policy = bicep.split("id: 'lists'")[1].split('excludedPaths')[0];
+    const indexed = [...policy.matchAll(/path: '\/([A-Za-z]+)\/\?'/g)].map(m => m[1]);
+
+    for (const [kind, keys] of Object.entries(lists.SORTABLE)) {
+      for (const key of keys) {
+        assert.ok(indexed.includes(key), `${kind} sorts by ${key}, which is not an included path`);
+      }
+    }
+    for (const field of Object.values(lists.FILTERS)) {
+      assert.ok(indexed.includes(field), `${field} is filtered on but is not an included path`);
+    }
   });
 
   await t.test('the count shares the filter as well as the predicate', async () => {

@@ -431,6 +431,14 @@ resource listsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
           {
             path: '/name/?'
           }
+          // `List` rows only: eagle-public orders lookup dropdowns by /listOrder and narrows the
+          // legislation lookups by /legislation. An ORDER BY on an unindexed path cannot be served.
+          {
+            path: '/listOrder/?'
+          }
+          {
+            path: '/legislation/?'
+          }
         ]
         excludedPaths: noIndex
       }

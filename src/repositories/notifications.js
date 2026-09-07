@@ -13,7 +13,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice } = require('./_sql');
+const { selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
 
 const CONTAINER = 'notifications';
 const PARTITION_FIELD = 'id';
@@ -49,8 +49,7 @@ async function count(access) {
 }
 
 async function upsert(item, existing) {
-  if (!existing) return cosmos.create(CONTAINER, item);
-  return cosmos.replace(CONTAINER, item.id, item.id, item, existing._etag);
+  return upsertItem(CONTAINER, PARTITION_FIELD, item, existing);
 }
 
 module.exports = {

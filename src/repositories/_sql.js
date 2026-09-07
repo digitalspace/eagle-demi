@@ -182,6 +182,23 @@ function orderByFrom(sortBy, allowed, fallback) {
 }
 
 /**
+ * Whole-item write for a mirror row, addressed at the partition the row is IN.
+ *
+ * Etag-guarded `replace` while the row stays put, so a concurrent push fails with 412 instead of
+ * losing an update. A row whose partition key CHANGED has no item at the new key for `replace` to
+ * address — it would throw 404 and the caller's stale-partition cleanup would never run — so that
+ * case goes through `upsert`, which routes on the item's own key. The caller then deletes the row
+ * left behind in the old partition.
+ */
+async function upsertItem(container, partitionField, item, existing) {
+  if (!existing) return cosmos.create(container, item);
+  if (String(existing[partitionField]) !== String(item[partitionField])) {
+    return cosmos.upsert(container, item);
+  }
+  return cosmos.replace(container, item.id, item[partitionField], item, existing._etag);
+}
+
+/**
  * Offset paging onto Cosmos, which has continuation tokens and no offsets: overfetch `skip + size`
  * rows and slice. A real ceiling — a page is reachable only while that total stays inside
  * MAX_PAGE_SIZE, the same bound `controllers/search.js` documents on the project list.
@@ -197,6 +214,7 @@ module.exports = {
   inList,
   orderByFrom,
   pageSlice,
+  upsertItem,
   isDefinedAndNotNull,
   selectWhere,
   selectFor,
