@@ -12,6 +12,8 @@
 
 const projects = require('../../repositories/projects');
 const documents = require('../../repositories/documents');
+const commentPeriods = require('../../repositories/comment-periods');
+const comments = require('../../repositories/comments');
 const {
   resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
 } = require('../../helpers/access-sql');
@@ -27,7 +29,8 @@ const { redactForAccess, refusedWriteKeys } = require('../../vis/redact');
 const { shortUrlFor } = require('../../helpers/short-links');
 
 /**
- * A project's visibility change, carried to its index row and re-derived onto its documents.
+ * A project's visibility change, carried to its index row and re-derived onto its documents, its
+ * comment periods and their comments.
  * Either transition, `ownRead ∩ projectRead`, systemAccess — wiki `Sync-Architecture`.
  *
  * ponytail: documents only, not chunks — a chunk gates on its parent document at query time.
@@ -43,6 +46,57 @@ async function cascadeProjectVisibility(projectId, acl) {
     { id: projectId, read: acl.read, isPublished: acl.isPublished }
   ]);
 
+  // Both, whatever either says: documents and engagement are independent containers, and stopping
+  // at the first failure would leave the other carrying the old ACL with nothing recorded.
+  const failures = [
+    await cascadeDocumentVisibility(projectId, acl),
+    await cascadeEngagementVisibility(projectId, acl.read)
+  ].filter(Boolean);
+  return failures.length ? failures.join(' ') : null;
+}
+
+/**
+ * The comment periods a project's visibility also governs, and their comments.
+ *
+ * The mirror can only apply `constrainToProject` at push time, so a period pushed while its project
+ * was private stayed private after the project published — the engagement tab of a freshly
+ * published project rendered empty — and a period pushed while it was public survived a takedown.
+ *
+ * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ */
+async function cascadeEngagementVisibility(projectId, read) {
+  try {
+    const periods = await commentPeriods.setAclForProject(systemAccess(), projectId, read);
+    let commentsWritten = 0;
+    let commentsFailed = 0;
+    // Per period, because `comments` partitions on it — one bulk request each, and a project
+    // carries a handful.
+    for (const period of periods.rows) {
+      const cascade = await comments.setAclForPeriod(systemAccess(), period.id, period.read);
+      commentsWritten += cascade.succeeded;
+      commentsFailed += cascade.failed;
+    }
+
+    const counts = {
+      projectId, periods: periods.succeeded, periodsFailed: periods.failed,
+      comments: commentsWritten, commentsFailed
+    };
+    if (periods.failed > 0 || commentsFailed > 0) {
+      logger.error('[Project Controller] engagement ACL cascade partially failed', counts);
+      return 'Project visibility changed, but its comment periods were not fully updated.';
+    }
+    logger.info('[Project Controller] engagement ACL cascade', counts);
+    return null;
+  } catch (cascadeErr) {
+    logger.error('[Project Controller] engagement ACL cascade failed', {
+      projectId, error: cascadeErr.message
+    });
+    return 'Project visibility changed, but its comment periods were not updated.';
+  }
+}
+
+/** @returns {Promise<string|null>} an error message the caller must 500 with, or null */
+async function cascadeDocumentVisibility(projectId, acl) {
   try {
     const cascade = await documents.setAclForProject(systemAccess(), projectId, acl.read);
     if (cascade.failed > 0) {

@@ -95,7 +95,7 @@ time. A row carrying neither timestamp is written.
 these containers as well as projects and documents. It reports and deletes nothing.
 
 ```bash
-node src/scripts/reconcile-eagle.js              # comment periods, lists, notifications
+node src/scripts/reconcile-eagle.js              # comment periods, lists, notifications, updates
 node src/scripts/reconcile-eagle.js --comments   # and comments
 ```
 
@@ -103,3 +103,17 @@ Comments are behind a flag because the sweep costs one eagle-api request per com
 Cosmos query per period — too much for the nightly timer, which is why the alert line says
 `comments: skipped` when it was not asked for. A container the run did not sweep never reports zero
 drift.
+
+### Unresolved parents
+
+A comment period Eagle publishes is not always a period DEMI should hold. eagle-api's
+`dataset=CommentPeriod` gates on the period's own `read[]` and joins no parent, so a period stays in
+the published set even when its project does not — while the mirror drops it, because there is no
+DEMI project row to hang it off. Those ids are reported under `unresolvedParent` and excluded from
+`drift=`, the same treatment a document under an unresolvable parent already gets. Measured on test
+2026-09-07: 29 periods under 20 unpublished projects, every one of them previously counted as push
+drift.
+
+`--comments` walks those unresolved period ids too, so Eagle's comments under them are reported
+rather than silently missed — sweeping DEMI's periods alone never fetched them at all. They also
+land under `unresolvedParent`.

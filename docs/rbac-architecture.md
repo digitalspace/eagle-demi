@@ -101,8 +101,8 @@ stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` ve
 `confirm: true` and answers 400 without it. Level 4 and a level-0 release also require a `reason`
 body field and answer 400 without it; on every other move `reason` is optional, because the audit
 row already carries actor, time, from and to. Nothing widens automatically — no job, no push, no
-merge raises a record's level. A document still cannot out-rank its project; a project's change
-cascades to its documents as it does today. The audit buffer flushes on graceful instance shutdown;
+merge raises a record's level. A document still cannot out-rank its project, nor a comment period,
+nor a comment its period; a project's change cascades to all three. The audit buffer flushes on graceful instance shutdown;
 a forced kill can drop up to one second of buffered rows.
 
 Pulling a record BACK from level 4 is `sysadmin` only, always audited as `record.takedown`, and is

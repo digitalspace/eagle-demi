@@ -11,6 +11,7 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const { eq, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
+const { cascadeAcl } = require('../helpers/acl-cascade');
 
 const CONTAINER = 'comments';
 const PARTITION_FIELD = 'periodId';
@@ -76,6 +77,28 @@ async function deleteById(id, periodId) {
   return cosmos.remove(CONTAINER, String(id), String(periodId));
 }
 
+/** The ACL inputs of every comment in one period — see `commentPeriods.aclRowsForProject`. */
+async function aclRowsForPeriod(access, periodId) {
+  const spec = selectWhere({
+    access,
+    partitionField: SCOPE_FIELD,
+    criteria: criteriaFor(periodId),
+    select: 'c.id, c.read, c.sources.eagle.read AS eagleRead'
+  });
+  const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(periodId) });
+  return items;
+}
+
+/**
+ * Re-derive every comment's ACL from its own and its period's.
+ *
+ * The period's ACL is already narrowed to its project, so this one constrain carries both
+ * ceilings — the same reasoning the comment mirror states.
+ */
+async function setAclForPeriod(access, periodId, read) {
+  return cascadeAcl(CONTAINER, periodId, await aclRowsForPeriod(access, periodId), read);
+}
+
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
@@ -84,6 +107,8 @@ module.exports = {
   getById,
   listByPeriod,
   countByPeriod,
+  aclRowsForPeriod,
+  setAclForPeriod,
   upsert,
   deleteById
 };

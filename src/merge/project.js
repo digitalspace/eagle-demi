@@ -127,18 +127,43 @@ function normalizeEagleSlot(flat, orgs) {
 }
 
 /**
- * Carry forward the Eagle-only fields a re-merge could not rebuild.
+ * The `EAGLE_ONLY_FIELDS` entries the seed's feed cannot supply at all.
  *
- * The seed's feed is narrower than the push's: the public search omits `applicableRegulation` and
- * `featuredDocuments` entirely. A Cosmos upsert replaces the item, so without this a re-seed run
- * to fill `proponentId` would blank both on every row the push had already enriched. Same rule the
- * `phases` carry already states — an absent feed must not blank a stored value.
+ * `/api/public/search?dataset=Project` sends none of these four: the push resolves `proponentId`
+ * and `proponentName` out of the Organization it was handed, and the search omits
+ * `applicableRegulation` and `featuredDocuments` entirely. Every OTHER `EAGLE_ONLY_FIELDS` entry
+ * IS in the feed, and `hasValue` cannot tell a field the feed omitted from one the EAO cleared —
+ * so carrying the whole list forward made an upstream clear unappliable for ~36 fields, `pinsRead`
+ * among them.
+ */
+const PUSH_ONLY_FIELDS = ['proponentId', 'proponentName', 'applicableRegulation', 'featuredDocuments'];
+
+/**
+ * Carry forward the Eagle fields a re-merge could not rebuild.
+ *
+ * A Cosmos upsert replaces the item, so without this a re-seed run to fill `proponentId` would
+ * blank the push's enrichment on every row it had already reached. Same rule the `phases` carry
+ * already states — an absent feed must not blank a stored value.
  */
 function carryEagleOnlyFields(merged, existing) {
   if (!merged || !existing) return merged;
-  for (const field of EAGLE_ONLY_FIELDS) {
+  for (const field of PUSH_ONLY_FIELDS) {
     if (!hasValue(merged[field]) && hasValue(existing[field])) merged[field] = existing[field];
   }
+
+  // `pins` IS in the feed, but as bare ObjectIds — so only the SHAPE is carried, per id, and only
+  // for ids still in the feed's list. Membership stays the feed's, which is what lets a pin the
+  // EAO removed actually disappear; an id the stored row cannot resolve keeps its bare form rather
+  // than being dropped, since nothing here has an Organization lookup to resolve it against.
+  if (Array.isArray(merged.pins) && merged.pins.some(p => p !== null && typeof p !== 'object') &&
+      Array.isArray(existing.pins)) {
+    const stored = new Map(existing.pins
+      .filter(p => p && typeof p === 'object' && hasValue(p._id))
+      .map(p => [String(p._id), p]));
+    merged.pins = merged.pins.map(p =>
+      (p !== null && typeof p === 'object' ? p : stored.get(String(p)) || p));
+  }
+
   return merged;
 }
 
@@ -493,7 +518,6 @@ module.exports = {
   EAGLE_ONLY_FIELDS,
   EAGLE_TOP_LEVEL_FIELDS,
   flattenEagleProject,
-  normalizeEagleSlot,
   carryEagleOnlyFields,
   hasValue,
   BC_BBOX,
