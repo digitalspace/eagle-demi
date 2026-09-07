@@ -14,7 +14,8 @@ PUT /api/documents/:id/level    { "level": 2, "reason": "..." }
 
 Level 2 is staff-only; use level 1 if EAO staff must not see it either. The route writes a
 `record.takedown` audit row with your name and that reason, rewrites the row's ACL in AI Search, and
-patches the document's chunks. On a project it cascades to every document in it.
+patches the document's chunks. On a project it cascades to every document in it, and to its
+comment periods and their comments.
 
 ## 2. Purge the search index
 

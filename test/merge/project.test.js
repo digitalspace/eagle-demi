@@ -574,3 +574,70 @@ test('the seed-shaped Eagle project record', async (t) => {
       'a field the feed DID supply must win over the stored copy');
   });
 });
+
+/**
+ * `carryEagleOnlyFields` — what a re-merge may take back off the stored row, and what it may not.
+ *
+ * A Cosmos upsert replaces the item, so a re-seed has to carry the push's enrichment forward or
+ * blank it. Carrying the WHOLE `EAGLE_ONLY_FIELDS` list did that at a price nobody saw: `hasValue`
+ * cannot tell a field the feed omitted from one the EAO cleared, so an upstream clear was
+ * unappliable for the ~36 fields the feed does carry — the old value came straight back on every
+ * run. Only the four the feed sends nothing for may be carried.
+ */
+test('carryEagleOnlyFields carries only what the feed cannot rebuild', async (t) => {
+  const PIN = { _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' };
+  const OTHER_PIN = { _id: '5cf00c03a266b7e187750002', name: 'Another Nation', province: 'BC' };
+  const UNKNOWN_PIN_ID = '5cf00c03a266b7e187759999';
+
+  await t.test('a field the feed cleared is NOT restored from the stored row', () => {
+    // `region` and `pinsRead` are both in EAGLE_ONLY_FIELDS and both in the feed, so the EAO
+    // clearing either has to stick. This is the regression: they came back on every re-merge.
+    const stored = { region: 'Kootenay', pinsRead: ['public'], proponentId: 'org-1' };
+    const merged = carryEagleOnlyFields(
+      mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { region: '', pinsRead: [] }), OPTS),
+      stored);
+
+    assert.strictEqual(merged.region, undefined, 'a cleared region must stay cleared');
+    assert.strictEqual(merged.pinsRead, undefined, 'a cleared pinsRead must stay cleared');
+  });
+
+  await t.test('a push-only field the feed never sends IS carried', () => {
+    // `/api/public/search?dataset=Project` sends neither: the push resolves `proponentId` off the
+    // Organization it was handed, and the search omits `applicableRegulation` entirely.
+    const stored = {
+      proponentId: 'org-1',
+      applicableRegulation: { _id: 'r1', name: 'Reviewable Projects Regulation', item: null }
+    };
+    const merged = carryEagleOnlyFields(
+      mergeTrackProject(TRACK_207, eagleFor(TRACK_207), OPTS), stored);
+
+    assert.strictEqual(merged.proponentId, 'org-1');
+    assert.deepStrictEqual(merged.applicableRegulation, stored.applicableRegulation);
+  });
+
+  await t.test('pins: [] upstream clears the pins', () => {
+    const merged = carryEagleOnlyFields(
+      mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { pins: [] }), OPTS), { pins: [PIN] });
+
+    assert.strictEqual(merged.pins, undefined,
+      'the item is replaced whole, so no pins field is a project with no pins');
+  });
+
+  await t.test('a bare id takes the stored shape, and an unresolvable one keeps its own', () => {
+    // The feed sends pins as bare ObjectIds. Only the SHAPE comes off the stored row, per id —
+    // dropping an id the stored row cannot resolve would lose a pin the EAO still has.
+    const merged = carryEagleOnlyFields(
+      mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { pins: [PIN._id, UNKNOWN_PIN_ID] }), OPTS),
+      { pins: [PIN] });
+
+    assert.deepStrictEqual(merged.pins, [PIN, UNKNOWN_PIN_ID]);
+  });
+
+  await t.test('membership stays the feed\'s — a pin the EAO removed does not come back', () => {
+    const merged = carryEagleOnlyFields(
+      mergeTrackProject(TRACK_207, eagleFor(TRACK_207, { pins: [PIN._id] }), OPTS),
+      { pins: [PIN, OTHER_PIN] });
+
+    assert.deepStrictEqual(merged.pins, [PIN]);
+  });
+});

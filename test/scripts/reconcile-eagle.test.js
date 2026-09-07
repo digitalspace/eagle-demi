@@ -45,13 +45,18 @@ const NOTIFICATIONS = [{ _id: 'N1' }];
  */
 const EAGLE_BY_DATASET = {
   ProjectNotification: NOTIFICATIONS,
-  CommentPeriod: [{ _id: 'CP1' }],
+  // The period's own `project` ref rides along, because `dataset=CommentPeriod` gates on the
+  // period's `read[]` alone and joins no parent — it is the only thing that says whether the
+  // mirror could have resolved a parent for it. CP1 hangs off published P1, so it is clean here.
+  CommentPeriod: [{ _id: 'CP1', project: 'P1' }],
   List: [{ _id: 'L1' }],
-  Organization: [{ _id: 'O1' }]
+  Organization: [{ _id: 'O1' }],
+  RecentActivity: [{ _id: 'U1' }]
 };
 const PERIOD_ROWS = { 207: [{ id: 'CP1', projectId: '207' }] };
 const LIST_ROWS = { List: [{ id: 'L1', kind: 'List' }], Organization: [{ id: 'O1', kind: 'Organization' }] };
 const NOTIFICATION_ROWS = [{ id: 'N1' }];
+const UPDATE_ROWS = [{ id: 'U1' }];
 const TRACK_PROJECTS = [
   { track_project_id: 207, name: 'P1', epic_guid: 'P1' },
   { track_project_id: 354, name: 'Dangling', epic_guid: 'track-dangling' }
@@ -72,7 +77,11 @@ const DOCUMENT_ROWS = [
   { id: 'D-gone', projectId: '207' }
 ];
 
-function stubSources(over = {}) {
+/**
+ * @param {object} over      individual source functions to replace
+ * @param {object} datasets  the `/search` id sets, when a case needs a different one
+ */
+function stubSources(over = {}, datasets = EAGLE_BY_DATASET) {
   return {
     EAGLE_API_BASE,
     loadTrackProjects: () => TRACK_PROJECTS,
@@ -81,8 +90,8 @@ function stubSources(over = {}) {
     // here rather than silently reading the wrong collection.
     fetchAllPages: async (base, dataset) => {
       assert.strictEqual(base, EAGLE_API_BASE);
-      assert.ok(EAGLE_BY_DATASET[dataset], `unexpected dataset: ${dataset}`);
-      return EAGLE_BY_DATASET[dataset];
+      assert.ok(datasets[dataset], `unexpected dataset: ${dataset}`);
+      return datasets[dataset];
     },
     PAGE_SIZE: 100,
     // The comment sweep reads its total from the header, not the body — eagle-api's
@@ -138,10 +147,29 @@ function makeDeps(over = {}, counts = {}) {
       list: async (access) => { assertSystem(access); return NOTIFICATION_ROWS; },
       count: async () => counts.notifications ?? NOTIFICATION_ROWS.length
     },
+    updates: {
+      list: async (access) => { assertSystem(access); return UPDATE_ROWS; },
+      count: async () => counts.updates ?? UPDATE_ROWS.length
+    },
     comments: {
       listByPeriod: async (periodId, access) => { assertSystem(access); return [{ id: 'C1' }]; }
     },
     ...over
+  };
+}
+
+/**
+ * The `updates` container out of step in BOTH directions: Eagle publishes U1 and U2, DEMI holds U1
+ * and `U-gone`. Same shape as the notifications fixture — the two containers are compared the same
+ * way, and `updates` was the one the nightly sweep never covered.
+ */
+function updatesDrift() {
+  return {
+    sources: stubSources({}, { ...EAGLE_BY_DATASET, RecentActivity: [{ _id: 'U1' }, { _id: 'U2' }] }),
+    updates: {
+      list: async (access) => { assertSystem(access); return [{ id: 'U1' }, { id: 'U-gone' }]; },
+      count: async () => 2
+    }
   };
 }
 
@@ -211,6 +239,107 @@ test('reconcile', async (t) => {
     }));
     assert.deepStrictEqual(summary.projects.eagleOnly, ['P3']);
     assert.strictEqual(summary.drift, 6);
+  });
+
+  // eagle-api's `dataset=CommentPeriod` gates on the period's OWN read[] and joins no parent, so a
+  // period Eagle publishes under a project it does not publish is still in the id set — while the
+  // mirror drops it, because there is no parent project row in DEMI to hang it off. Measured on
+  // test 2026-09-07: 29 such periods under 20 unpublished projects, all reported as push drift.
+  await t.test('a period whose project is unpublished is unresolvedParent, not push drift',
+    async () => {
+      const summary = await reconcile([], makeDeps({
+        sources: stubSources({}, {
+          ...EAGLE_BY_DATASET,
+          // 'gone' is an Eagle project DEMI mirrored but Eagle no longer publishes, so it is not in
+          // the published set — exactly the parent the mirror could not resolve.
+          CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-orphan', project: 'gone' }]
+        })
+      }));
+
+      assert.deepStrictEqual(summary.commentPeriods.unresolvedParent, ['CP-orphan']);
+      assert.deepStrictEqual(summary.commentPeriods.eagleOnly, []);
+      assert.strictEqual(summary.drift, 5,
+        'the project and document drift only — an unresolvable parent is not the push\'s fault');
+    });
+
+  // The other half of the gate. Without this, a gate that answered "unresolved" to everything
+  // would silence the container completely and still pass the case above.
+  await t.test('a period whose project IS published and DEMI never mirrored is still drift',
+    async () => {
+      const summary = await reconcile([], makeDeps({
+        sources: stubSources({}, {
+          ...EAGLE_BY_DATASET,
+          CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-missed', project: 'P2' }]
+        })
+      }));
+
+      assert.deepStrictEqual(summary.commentPeriods.eagleOnly, ['CP-missed']);
+      assert.deepStrictEqual(summary.commentPeriods.unresolvedParent, []);
+      assert.strictEqual(summary.drift, 6);
+    });
+
+  // The gate is the seed REGISTRY, not the published-Eagle set, and the two disagree on exactly
+  // this row — the same distinction D6 pins on the document side. Track row 354's epic_guid no
+  // longer resolves to a published Eagle project, but the registry still indexes it, so DEMI holds
+  // a project row the mirror would have found. Gating on `eagleProjectIds` alone would file this
+  // under `unresolvedParent` and lose it from the alert.
+  await t.test('a period under a Track row\'s dangling epic_guid is drift, not unresolvable',
+    async () => {
+      const summary = await reconcile([], makeDeps({
+        sources: stubSources({}, {
+          ...EAGLE_BY_DATASET,
+          CommentPeriod: [{ _id: 'CP1', project: 'P1' },
+            { _id: 'CP-dangling', project: 'track-dangling' }]
+        })
+      }));
+
+      assert.deepStrictEqual(summary.commentPeriods.eagleOnly, ['CP-dangling']);
+      assert.deepStrictEqual(summary.commentPeriods.unresolvedParent, []);
+      assert.strictEqual(summary.drift, 6);
+    });
+
+  // A period carrying no project ref at all: the mirror has nothing to resolve, so it drops it.
+  await t.test('a period with no project ref is unresolvedParent', async () => {
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, {
+        ...EAGLE_BY_DATASET,
+        CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-nulled', project: null }]
+      })
+    }));
+
+    assert.deepStrictEqual(summary.commentPeriods.unresolvedParent, ['CP-nulled']);
+    assert.deepStrictEqual(summary.commentPeriods.eagleOnly, []);
+    assert.strictEqual(summary.drift, 5);
+  });
+
+  // `updates` mirrors Eagle's RecentActivity and was the one public-read container the nightly
+  // sweep never compared: drift there was invisible to the alert.
+  await t.test('the updates container is swept in both directions', async () => {
+    const summary = await reconcile([], makeDeps(updatesDrift()));
+
+    assert.strictEqual(summary.updates.inDemi, 2);
+    assert.strictEqual(summary.updates.inEagle, 2);
+    assert.deepStrictEqual(summary.updates.unpublishedOrDeleted.map(r => r.id), ['U-gone']);
+    assert.deepStrictEqual(summary.updates.eagleOnly, ['U2']);
+    assert.strictEqual(summary.drift, 7, 'both directions count toward the alert total');
+  });
+
+  await t.test('a truncated updates enumeration is reported', async () => {
+    const summary = await reconcile([], makeDeps({}, { updates: UPDATE_ROWS.length + 42 }));
+    assert.ok(summary.failures.some(f =>
+      /updates enumerated 1 rows but the container holds 43 — .*truncated read/.test(f)),
+    `no truncation failure for updates: ${JSON.stringify(summary.failures)}`);
+  });
+
+  await t.test('updates drift renders in the report and in the alert line', async () => {
+    const summary = await reconcile([], makeDeps(updatesDrift()));
+    const rendered = report(summary);
+
+    assert.match(rendered, /^updates: 2 mirrored in DEMI, 2 published in Eagle$/m,
+      'the container needs its own section, or its drift is reported nowhere a human reads');
+    assert.match(rendered, /updates: 2 mirrored[\s\S]*eagleOnly \(the push missed these\): 1 — U2/);
+    assert.ok(summaryLine(summary).includes('updates: unpublishedOrDeleted=1 eagleOnly=1'),
+      summaryLine(summary));
   });
 
   await t.test('a truncated enumeration is reported', async () => {
@@ -322,6 +451,7 @@ test('summaryLine is the alert contract', async (t) => {
       'commentPeriods: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'lists: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'notifications: unpublishedOrDeleted=0 eagleOnly=0 ' +
+      'updates: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'comments: skipped drift=5');
   });
 
@@ -340,7 +470,8 @@ test('summaryLine is the alert contract', async (t) => {
         drift: 0 }),
       '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 ' +
-      'commentPeriods: skipped lists: skipped notifications: skipped comments: skipped drift=0');
+      'commentPeriods: skipped lists: skipped notifications: skipped updates: skipped ' +
+      'comments: skipped drift=0');
   });
 
   // The alert rule reads `drift=` out of this line with a regex (azure/modules/observability.bicep).

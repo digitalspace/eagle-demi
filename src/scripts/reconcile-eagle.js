@@ -11,8 +11,8 @@
  *   node src/scripts/reconcile-eagle.js [--json] [--comments]
  *
  * It covers the containers the Eagle push and the backfill write: projects, documents, comment
- * periods, lists (both kinds), notifications, and — only with `--comments`, which costs one
- * eagle-api round trip per comment period — comments.
+ * periods, lists (both kinds), notifications, updates, and — only with `--comments`, which costs
+ * one eagle-api round trip per comment period — comments.
  *
  * Runs on the devbox via `demi-run` — same recipe as the other database scripts,
  * see README "Running anything against the database". Alert on the one `drift=` line, clean is 0.
@@ -32,6 +32,7 @@ const commentPeriods = require('../repositories/comment-periods');
 const comments = require('../repositories/comments');
 const lists = require('../repositories/lists');
 const notifications = require('../repositories/notifications');
+const updates = require('../repositories/updates');
 const { buildRegistry, buildProjectIndex } = require('../merge/project');
 const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql');
 const { eachCommentPage } = require('./seed-public-reads');
@@ -39,7 +40,8 @@ const { systemAccess, MAX_PAGE_SIZE } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 
 /** The containers reported, in the order `report` prints them and `summaryLine` names them. */
-const LABELS = ['projects', 'documents', 'commentPeriods', 'lists', 'notifications', 'comments'];
+const LABELS = ['projects', 'documents', 'commentPeriods', 'lists', 'notifications', 'updates',
+  'comments'];
 
 function parseArgs(argv) {
   const args = { json: false, comments: false };
@@ -103,7 +105,8 @@ function summaryLine(summary) {
     `projects: unpublishedOrDeleted=${p.unpublishedOrDeleted.length} eagleOnly=${p.eagleOnly.length} ` +
     `documents: unpublishedOrDeleted=${d.unpublishedOrDeleted.length} eagleOnly=${d.eagleOnly.length} ` +
     `unresolvedParent=${d.unresolvedParent.length} ` +
-    counts('commentPeriods') + counts('lists') + counts('notifications') + counts('comments') +
+    counts('commentPeriods') + counts('lists') + counts('notifications') + counts('updates') +
+    counts('comments') +
     `drift=${summary.drift}`;
 }
 
@@ -113,15 +116,18 @@ function summaryLine(summary) {
  * `fetchAllPages` throws on a short read, so an id missing here is an id Eagle does not publish
  * rather than one a truncated fetch did not reach.
  */
-async function eagleIds(src, dataset, into = new Set()) {
-  for (const row of await src.fetchAllPages(src.EAGLE_API_BASE, dataset)) into.add(String(row._id));
+async function eagleIds(src, dataset, into = new Set(), onRow) {
+  for (const row of await src.fetchAllPages(src.EAGLE_API_BASE, dataset)) {
+    into.add(String(row._id));
+    if (onRow) onRow(row);
+  }
   return into;
 }
 
 /**
  * @param {string[]} argv
  * @param {object} [deps] test seam: {sources, projects, documents, commentPeriods, comments,
- *   lists, notifications}
+ *   lists, notifications, updates}
  */
 async function reconcile(argv = [], deps = {}) {
   const args = parseArgs(argv);
@@ -132,6 +138,7 @@ async function reconcile(argv = [], deps = {}) {
   const commentsRepo = deps.comments || comments;
   const listsRepo = deps.lists || lists;
   const notificationsRepo = deps.notifications || notifications;
+  const updatesRepo = deps.updates || updates;
 
   // systemAccess(), because a scoped context lists only what it can see: every row it cannot read
   // would compute as Eagle-only drift, and every unpublished row as gone from Eagle.
@@ -145,10 +152,12 @@ async function reconcile(argv = [], deps = {}) {
   // `searchResultsTotal`, so a truncated read can never be mistaken for a shrunken corpus.
   const eagleProjects = await src.fetchEagleProjects();
   const eagleProjectIds = new Set(eagleProjects.map(p => String(p._id)));
-  // The document gate, over the registry seed-nosql builds — a Track row's dangling epic_guid
-  // resolves here exactly as it does there, so a document under one is drift, not unresolvable.
-  const { admit } = await documentAdmission(src,
-    buildProjectIndex(buildRegistry(await src.loadTrackProjects(), eagleProjects).projects));
+  // The registry seed-nosql builds. A Track row's dangling epic_guid resolves here exactly as it
+  // does there, which is why this and not `eagleProjectIds` is the parent test: DEMI holds a
+  // project row for such a guid, so a child under one is drift rather than unresolvable.
+  const projectIndex = buildProjectIndex(
+    buildRegistry(await src.loadTrackProjects(), eagleProjects).projects);
+  const { admit } = await documentAdmission(src, projectIndex);
   const eagleDocumentIds = new Set();
   const eagleDocumentProject = new Map(); // doc id -> its Eagle project id
   await src.streamEagleDocuments(page => {
@@ -177,8 +186,13 @@ async function reconcile(argv = [], deps = {}) {
 
   // The public-read containers, enumerated through the SAME repository reads a request uses. Their
   // rows carry `id === eagleId`, and every one of them is the backfill's or the push's, so there is
-  // no `pushOwned` split to make and no parent gate: a comment period whose project is unpublished
-  // is not published by Eagle either, so it is not in the id set to begin with.
+  // no `pushOwned` split to make.
+  //
+  // Comment periods DO need a parent gate. eagle-api's `dataset=CommentPeriod` gates on the
+  // period's own `read[]` and joins no parent (`api/aggregators/searchAggregator.js`), so a period
+  // Eagle publishes under a project it does not publish is still in the id set — while the mirror
+  // drops it, because its parent project row is not in DEMI. Measured on test 2026-09-07: 29 such
+  // periods under 20 unpublished projects, every one of them reported as push drift.
   const periodRows = [];
   // MAX_PAGE_SIZE caps ONE partition's read, so the ceiling is per project. Comparing the running
   // total against it would fire on every real run once DEMI holds that many periods in all.
@@ -196,15 +210,24 @@ async function reconcile(argv = [], deps = {}) {
     ...await listsRepo.listByKind(listsRepo.KINDS.ORGANIZATION, access, {})
   ];
   const notificationRows = await notificationsRepo.list(access, {});
+  const updateRows = await updatesRepo.list(access, {});
 
   // One `lists` container holds both kinds, so both id sets are one comparison.
   const eagleListIds = await eagleIds(src, 'Organization', await eagleIds(src, 'List'));
-  const eaglePeriodIds = await eagleIds(src, 'CommentPeriod');
+  // The period's own project ref rides along: it is the only thing that says whether the mirror
+  // could have resolved a parent for it. A project ONLY — unlike documents, no comment period
+  // hangs off a ProjectNotification, so `admit` is not the gate here, `projectIndex` is.
+  const eaglePeriodProject = new Map(); // period id -> its Eagle project id
+  const eaglePeriodIds = await eagleIds(src, 'CommentPeriod', new Set(), row => {
+    eaglePeriodProject.set(String(row._id), row.project != null ? String(row.project) : null);
+  });
   const eagleNotificationIds = await eagleIds(src, 'ProjectNotification');
+  const eagleUpdateIds = await eagleIds(src, 'RecentActivity');
 
   summary.commentPeriods = {
     inDemi: periodRows.length, inEagle: eaglePeriodIds.size,
-    ...diff(periodRows, row => String(row.id), eaglePeriodIds)
+    ...diff(periodRows, row => String(row.id), eaglePeriodIds, undefined,
+      id => projectIndex.resolve(eaglePeriodProject.get(id)) !== null)
   };
   summary.lists = {
     inDemi: listRows.length, inEagle: eagleListIds.size,
@@ -214,12 +237,17 @@ async function reconcile(argv = [], deps = {}) {
     inDemi: notificationRows.length, inEagle: eagleNotificationIds.size,
     ...diff(notificationRows, row => String(row.id), eagleNotificationIds)
   };
+  summary.updates = {
+    inDemi: updateRows.length, inEagle: eagleUpdateIds.size,
+    ...diff(updateRows, row => String(row.id), eagleUpdateIds)
+  };
 
   summary.failures.push(...(await truncatedReads(access, [
     ['lists', listRows, async (a) =>
       (await listsRepo.countByKind(listsRepo.KINDS.LIST, a)) +
       (await listsRepo.countByKind(listsRepo.KINDS.ORGANIZATION, a))],
-    ['notifications', notificationRows, notificationsRepo.count]
+    ['notifications', notificationRows, notificationsRepo.count],
+    ['updates', updateRows, updatesRepo.count]
   ])).map(short => `${short} — the diff below is computed off a truncated read`));
 
   // The per-partition enumerations have no cheap COUNT to pair with — one per project, one per
@@ -234,7 +262,19 @@ async function reconcile(argv = [], deps = {}) {
   if (args.comments) {
     const commentRows = [];
     const eagleCommentIds = new Set();
+    // Comments under a period the mirror could not resolve. Walking DEMI's periods alone never
+    // fetched them, so they were neither drift nor reported — a silent hole the size of the
+    // unresolved-period set. They cost one round trip each, on a flag that is already opt-in.
+    const unresolvedComments = new Set();
     let ceiling = false;
+    for (const periodId of summary.commentPeriods.unresolvedParent) {
+      await eachCommentPage(periodId, { sources: src }, (items) => {
+        for (const row of items) {
+          eagleCommentIds.add(String(row._id));
+          unresolvedComments.add(String(row._id));
+        }
+      });
+    }
     for (const period of periodRows) {
       const rows = await commentsRepo.listByPeriod(period.id, access, {});
       ceiling = ceiling || rows.length >= MAX_PAGE_SIZE;
@@ -248,7 +288,8 @@ async function reconcile(argv = [], deps = {}) {
     }
     summary.comments = {
       inDemi: commentRows.length, inEagle: eagleCommentIds.size,
-      ...diff(commentRows, row => String(row.id), eagleCommentIds)
+      ...diff(commentRows, row => String(row.id), eagleCommentIds, undefined,
+        id => !unresolvedComments.has(id))
     };
   }
 

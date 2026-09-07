@@ -11,6 +11,7 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
 const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
+const { cascadeAcl } = require('../helpers/acl-cascade');
 
 const CONTAINER = 'commentPeriods';
 const PARTITION_FIELD = 'projectId';
@@ -43,7 +44,8 @@ function criteriaFor(projectId) {
 /**
  * The periods of one project, as this caller may see them.
  *
- * @param {string} projectId  the EAGLE project id, which is what the mirror stores
+ * @param {string} projectId  the DEMI project id — `mirrorItem` stores the parent's `id`, not its
+ *   `eagleId`, so both project-partitioned containers answer a scoped caller on the same value
  */
 async function listByProject(projectId, access, { pageNum, pageSize, sortBy } = {}) {
   const spec = selectWhere({
@@ -98,6 +100,35 @@ async function deleteById(id, projectId) {
   return cosmos.remove(CONTAINER, String(id), String(projectId));
 }
 
+/**
+ * The ACL inputs of every period in one project.
+ *
+ * `sources.eagle.read` is the period's own upstream ACL. `read` cannot stand in for it: the mirror
+ * has already narrowed that to the project (`constrainToProject`), so a period pushed under a
+ * private project reads private whatever Eagle published it as.
+ */
+async function aclRowsForProject(access, projectId) {
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: criteriaFor(projectId),
+    select: 'c.id, c.read, c.sources.eagle.read AS eagleRead'
+  });
+  const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
+  return items;
+}
+
+/**
+ * Re-derive every period's ACL from its own and its project's — the project-publish transition.
+ *
+ * Both directions: the mirror can only apply `constrainToProject` at push time, so without this a
+ * period pushed while its project was private stayed private after the project published, and one
+ * pushed while it was public stayed public after a takedown.
+ */
+async function setAclForProject(access, projectId, read) {
+  return cascadeAcl(CONTAINER, projectId, await aclRowsForProject(access, projectId), read);
+}
+
 module.exports = {
   CONTAINER,
   PARTITION_FIELD,
@@ -106,6 +137,8 @@ module.exports = {
   listByProject,
   listByIds,
   countByProject,
+  aclRowsForProject,
+  setAclForProject,
   upsert,
   deleteById
 };
