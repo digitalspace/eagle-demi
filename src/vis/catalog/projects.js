@@ -98,7 +98,11 @@ module.exports = {
   // Pinned documents and the pinned-proponent list, both stored top level in Mongo. They were only
   // ever reachable under `sources.eagle`, which is maxVis 0 — these entries are what publishes them.
   // `pins` rows are `{_id, name, province}`; `featuredDocuments` are Eagle document ids.
-  pins: { defaultVis: 4, maxVis: 4 },
+  //
+  // `pins` is public only through its predicate: eagle-api publishes the pinned-proponent list per
+  // project with `pinsRead[]` and ignores the organization's own `read` (controllers/pins.js), so
+  // the project ACL that gates every other field here says nothing about this one.
+  pins: { defaultVis: 2, maxVis: 4, when: 'pinsPublished' },
   featuredDocuments: { defaultVis: 4, maxVis: 4 },
 
   // Written by the boundary and wildfire jobs, not by the merge.
@@ -110,6 +114,8 @@ module.exports = {
   // Never public. `sources` is the raw upstream payload; only the dotted child above publishes.
   // `vis` does not exist yet — catalogued so a dial map can never leak which fields are restricted.
   read: { defaultVis: 0, maxVis: 0 },
+  // The pins ACL. Stored because `pinsPublished` reads it, and withheld like every other ACL.
+  pinsRead: { defaultVis: 0, maxVis: 0 },
   sources: { defaultVis: 0, maxVis: 0 },
   vis: { defaultVis: 0, maxVis: 0 },
 

@@ -595,11 +595,20 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 
 test('the mirror routes are behind authMiddleware + requireWrite', async (t) => {
   // The handlers read and write through systemAccess(), so no ACL predicate protects them — the
-  // route chain is the whole gate. All three mirror routes, not just this file's two. access-coverage.test.js asserts the chain from the router
-  // source; this runs the two middlewares to prove what the chain buys.
+  // route chain is the whole gate. EVERY mirror route, not just this file's two.
+  // access-coverage.test.js asserts the chain from the router source; this runs the two
+  // middlewares to prove what the chain buys.
   await t.test('every mirror route declares the chain', () => {
     const mirror = routeChains().filter(r => r.path.startsWith('/eagle/'));
-    assert.strictEqual(mirror.length, 3, 'projects, documents, updates');
+    assert.deepStrictEqual(mirror.map(r => r.path).sort(), [
+      '/eagle/commentperiods/:eagleId',
+      '/eagle/comments/:eagleId',
+      '/eagle/documents/:eagleId',
+      '/eagle/notifications/:eagleId',
+      '/eagle/organizations/:eagleId',
+      '/eagle/projects/:eagleId',
+      '/eagle/updates/:eagleId'
+    ], 'a new mirror route must be listed here, or it is ungated and untested');
     for (const r of mirror) {
       assert.match(r.chain, /\bauthMiddleware\b/);
       assert.match(r.chain, /\brequireWrite\b/);

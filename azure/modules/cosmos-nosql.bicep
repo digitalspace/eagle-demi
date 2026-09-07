@@ -270,6 +270,182 @@ resource updatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
   }
 }
 
+// Public comment periods (Eagle `CommentPeriod`), mirrored on every eagle-api write. /projectId
+// because the only list is "the periods of this project", the same shape as documents.
+resource commentPeriodsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'commentPeriods'
+  properties: {
+    resource: {
+      id: 'commentPeriods'
+      partitionKey: {
+        paths: [
+          '/projectId'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/projectId/?'
+          }
+          {
+            path: '/read/[]/?'
+          }
+          {
+            path: '/isPublished/?'
+          }
+          {
+            path: '/dateStarted/?'
+          }
+          {
+            path: '/dateCompleted/?'
+          }
+          {
+            path: '/dateAdded/?'
+          }
+        ]
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
+// Public comments (Eagle `Comment`). /periodId, not /projectId: every list is "the comments of this
+// period", and a busy project's periods would otherwise share one logical partition against the
+// 20 GB serverless cap. /projectId is still indexed — it is the axis a scoped caller is confined to.
+resource commentsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'comments'
+  properties: {
+    resource: {
+      id: 'comments'
+      partitionKey: {
+        paths: [
+          '/periodId'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/periodId/?'
+          }
+          {
+            path: '/projectId/?'
+          }
+          {
+            path: '/read/[]/?'
+          }
+          {
+            path: '/isPublished/?'
+          }
+          {
+            path: '/dateAdded/?'
+          }
+          {
+            path: '/commentId/?'
+          }
+        ]
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
+// Project notifications (Eagle `ProjectNotification`) — ~17 rows, no project axis of their own.
+// Kept out of `projects` on purpose: folded in, they would appear in the project list, the map and
+// the projects index.
+resource notificationsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'notifications'
+  properties: {
+    resource: {
+      id: 'notifications'
+      partitionKey: {
+        paths: [
+          '/id'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/read/[]/?'
+          }
+          {
+            path: '/isPublished/?'
+          }
+          {
+            path: '/notificationReceivedDate/?'
+          }
+          {
+            path: '/name/?'
+          }
+        ]
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
+// Eagle `List` and `Organization` in one container, discriminated by `kind`. Both are small
+// anonymous lookups read by kind and nothing else, so /kind is the whole query shape.
+resource listsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'lists'
+  properties: {
+    resource: {
+      id: 'lists'
+      partitionKey: {
+        paths: [
+          '/kind'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/kind/?'
+          }
+          {
+            path: '/read/[]/?'
+          }
+          {
+            path: '/isPublished/?'
+          }
+          {
+            path: '/type/?'
+          }
+          {
+            path: '/companyType/?'
+          }
+          {
+            path: '/name/?'
+          }
+          // `List` rows only: eagle-public orders lookup dropdowns by /listOrder and narrows the
+          // legislation lookups by /legislation. An ORDER BY on an unindexed path cannot be served.
+          {
+            path: '/listOrder/?'
+          }
+          {
+            path: '/legislation/?'
+          }
+        ]
+        excludedPaths: noIndex
+      }
+    }
+  }
+}
+
 // Extracted document text. replaceChunks deletes then reinserts every chunk for a document,
 // which /documentId confines to a single logical partition. /content stays unindexed.
 resource chunksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
