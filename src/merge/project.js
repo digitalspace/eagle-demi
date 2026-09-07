@@ -84,11 +84,70 @@ const EAGLE_TOP_LEVEL_FIELDS = [
 const LEGISLATION_KEYS = ['legislation_1996', 'legislation_2002', 'legislation_2018'];
 
 /**
+ * Put the Eagle slot in the shape `EAGLE_ONLY_FIELDS` names, whatever fed it.
+ *
+ * eagle-api's push resolves `proponent` and `pins` before it sends them
+ * (`api/helpers/demiPush.js`), but the seed reads `/api/public/search?dataset=Project`, which
+ * carries neither resolved field: it returns `proponent` as a populated Organization and `pins`
+ * as bare ObjectId strings, and no `proponentId`, `proponentName`, `applicableRegulation` or
+ * `featuredDocuments` at all (verified against eagle-test, 369/369 rows, 2026-09-07). Without
+ * this the seed writes a project whose `proponentId` is null, which is what every row in
+ * demi-test held.
+ *
+ * Only fills what is missing, so it can never overwrite what the push already resolved.
+ *
+ * @param {object}   flat
+ * @param {Map}      [orgs]  Organization `_id` -> `{_id, name, province}`, for `pins`
+ */
+function normalizeEagleSlot(flat, orgs) {
+  if (!flat) return flat;
+
+  if (!hasValue(flat.proponentId) && hasValue(flat.proponent)) {
+    const p = flat.proponent;
+    if (typeof p === 'object') {
+      if (hasValue(p._id)) flat.proponentId = String(p._id);
+      // A bare ObjectId carries no name, so proponentName stays absent rather than blank —
+      // TRACK_PRECEDENCE then falls back to Track's `proponent_name`.
+      if (!hasValue(flat.proponentName) && hasValue(p.name)) flat.proponentName = p.name;
+    } else {
+      flat.proponentId = String(p);
+    }
+  }
+
+  // Only with a lookup: a pin rendered as `{name: null}` is worse than one still held as an id.
+  // An id the lookup does not know is DROPPED, as it is in the push and in handleGetPins.
+  if (orgs && orgs.size && Array.isArray(flat.pins) && flat.pins.some(p => typeof p !== 'object')) {
+    flat.pins = flat.pins
+      .map(p => (typeof p === 'object' && p !== null ? p : orgs.get(String(p))))
+      .filter(Boolean)
+      .map(o => ({ _id: String(o._id), name: o.name || null, province: o.province || null }));
+  }
+
+  return flat;
+}
+
+/**
+ * Carry forward the Eagle-only fields a re-merge could not rebuild.
+ *
+ * The seed's feed is narrower than the push's: the public search omits `applicableRegulation` and
+ * `featuredDocuments` entirely. A Cosmos upsert replaces the item, so without this a re-seed run
+ * to fill `proponentId` would blank both on every row the push had already enriched. Same rule the
+ * `phases` carry already states — an absent feed must not blank a stored value.
+ */
+function carryEagleOnlyFields(merged, existing) {
+  if (!merged || !existing) return merged;
+  for (const field of EAGLE_ONLY_FIELDS) {
+    if (!hasValue(merged[field]) && hasValue(existing[field])) merged[field] = existing[field];
+  }
+  return merged;
+}
+
+/**
  * Normalise an Eagle project to the FLAT shape every rule below is written against: Mongo nests
  * content under `legislation_<year>`, the public search hoists it, the push does not. The block
  * wins over the top level — `region` is declared in both and the top-level copy is stale.
  */
-function flattenEagleProject(doc) {
+function flattenEagleProject(doc, orgs) {
   if (!doc) return doc;
 
   // An EMPTY object is not a block: flattening it yields nothing, so a doc whose named year holds
@@ -105,7 +164,10 @@ function flattenEagleProject(doc) {
     // A doc that carries legislation keys but resolves none of them to content is a raw Mongo doc
     // we failed to read. With no top-level name to fall back on it would land nameless and
     // published, so reject rather than guess which block is current.
-    if (hasValue(doc.name) || !LEGISLATION_KEYS.some(k => k in doc)) return doc;
+    // Copied, not returned as-is: normalising in place would rewrite the caller's own record.
+    if (hasValue(doc.name) || !LEGISLATION_KEYS.some(k => k in doc)) {
+      return normalizeEagleSlot({ ...doc }, orgs);
+    }
     const err = new Error('Eagle project has no resolvable legislation block');
     err.status = 400;
     throw err;
@@ -115,7 +177,7 @@ function flattenEagleProject(doc) {
   for (const field of EAGLE_TOP_LEVEL_FIELDS) {
     if (doc[field] !== undefined) flat[field] = doc[field];
   }
-  return flat;
+  return normalizeEagleSlot(flat, orgs);
 }
 
 function hasValue(v) {
@@ -216,6 +278,7 @@ function resolveProjectAcl(eagle) {
  * @param {object}      [opts]
  * @param {string}      [opts.now]     ISO timestamp, injected for deterministic tests
  * @param {Array}       [opts.phases]  this project's Track work phases (seed/sources.js)
+ * @param {Map}         [opts.orgs]    Organization lookup, for resolving seed-shaped `pins`
  */
 function mergeTrackProject(track, eagleRaw, opts = {}) {
   if (!track || !hasValue(track.track_project_id)) {
@@ -223,7 +286,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
   }
 
   // Here, not at the call sites: the push hands over a raw Mongo doc and the seed a flat one.
-  const eagle = flattenEagleProject(eagleRaw);
+  const eagle = flattenEagleProject(eagleRaw, opts.orgs);
 
   const now = opts.now || new Date().toISOString();
   const id = String(track.track_project_id);
@@ -302,7 +365,7 @@ function mergeTrackProject(track, eagleRaw, opts = {}) {
  * there is no Track id to use.
  */
 function mergeEagleOnlyProject(eagleRaw, opts = {}) {
-  const eagle = flattenEagleProject(eagleRaw);
+  const eagle = flattenEagleProject(eagleRaw, opts.orgs);
   if (!eagle || !hasValue(eagle._id)) {
     throw new TypeError('[merge] an Eagle project with _id is required');
   }
@@ -430,6 +493,8 @@ module.exports = {
   EAGLE_ONLY_FIELDS,
   EAGLE_TOP_LEVEL_FIELDS,
   flattenEagleProject,
+  normalizeEagleSlot,
+  carryEagleOnlyFields,
   hasValue,
   BC_BBOX,
   validCoordinates,

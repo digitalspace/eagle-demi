@@ -119,8 +119,13 @@ be re-pulled before the app ships: PUT the index with `node src/scripts/apply-se
 --live --only projects` (it applies a widening to an index the app is serving from), PUT
 `demi-projects-ds` with `put-search-datasources.js` so the SELECT carries `c.proponentId`, then
 reset and run `projects-indexer` with the two POSTs below and wait for the run entry to report 393
-processed. A row still reads `null` where the pushed Cosmos record has no `proponentId`, so read one
-back before deploying the app.
+processed.
+
+**Fill Cosmos first.** The indexer can only carry what the record holds, and every seeded project
+row held `proponentId: null` — eagle-api resolves it on push, but nothing re-pushes an existing
+project. A re-seed of the projects stage fills it from the Organization the public search returns:
+`node src/scripts/seed-nosql.js --only projects --live` on the devbox. Do that, then reset and run
+the indexer, then read one row back before deploying the app.
 
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.

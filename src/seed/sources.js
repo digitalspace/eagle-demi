@@ -341,6 +341,18 @@ async function fetchListLookup() {
 }
 
 /**
+ * Organization `_id` -> `{_id, name, province}` — the three fields eagle-api's push resolves
+ * `pins` to. The public search returns `pins` as bare ObjectIds, so without this lookup the seed
+ * would store a different pin shape than the push does. 733 organizations, so it loads once.
+ */
+async function fetchOrganizationLookup() {
+  const orgs = await fetchAllPages(EAGLE_API_BASE, 'Organization');
+  return new Map(orgs.filter(o => o && o._id).map(o => [
+    String(o._id), { _id: String(o._id), name: o.name || null, province: o.province || null }
+  ]));
+}
+
+/**
  * The checked-in boundary exports.
  *
  * Read from the frontend asset directory because that is where the export script already writes
@@ -379,5 +391,6 @@ module.exports = {
   fetchEagleProjects,
   streamEagleDocuments,
   fetchListLookup,
+  fetchOrganizationLookup,
   loadBoundaries
 };
