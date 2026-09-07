@@ -51,6 +51,24 @@ function mirrorItem(eagleId, doc, read, existing) {
   };
 }
 
+/**
+ * Mirror one raw Eagle `ProjectNotification`, whoever asked — the push handler below or the
+ * backfill (src/scripts/seed-public-reads.js). No parent, so nothing it can fail to resolve.
+ *
+ * @returns {Promise<{saved: object, existing: object|null}>}
+ */
+function mirrorFromEagle(eagleId, doc) {
+  const read = seedAcl(doc.read);
+
+  return upsertWithRetry(
+    notifications,
+    (current) => mirrorItem(eagleId, doc, read, current),
+    () => notifications.getById(systemAccess(), eagleId)
+  );
+}
+
+exports.mirrorFromEagle = mirrorFromEagle;
+
 exports.upsertFromEagle = async (req, res) => {
   try {
     const push = eaglePush(req);
@@ -59,13 +77,7 @@ exports.upsertFromEagle = async (req, res) => {
     }
     const { eagleId, doc } = push;
 
-    const read = seedAcl(doc.read);
-
-    const { saved, existing } = await upsertWithRetry(
-      notifications,
-      (current) => mirrorItem(eagleId, doc, read, current),
-      () => notifications.getById(systemAccess(), eagleId)
-    );
+    const { saved, existing } = await mirrorFromEagle(eagleId, doc);
 
     auditEvent(req, {
       action: 'notification.push',

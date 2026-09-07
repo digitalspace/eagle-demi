@@ -113,6 +113,7 @@ scripts/with-search-admin.sh -- \
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
 npm run db:seed-nosql -- --reconcile   # also delete rows the fetch did not produce
+npm run db:seed-public-reads     # lists, notifications, updates, comment periods, comments
 npm run db:purge-extraction      # dry run by default; --live to write
 ```
 
@@ -156,6 +157,7 @@ ceiling to `n` for the run — the operator asserting the loss really is that bi
 
 ```bash
 node src/scripts/reconcile-eagle.js            # --json for the full id sets
+node src/scripts/reconcile-eagle.js --comments # and sweep the comments container
 ```
 
 The drift check for the Eagle push, without a re-seed: DEMI rows gone from Eagle's public search
@@ -169,8 +171,13 @@ project is unpublished/gone is not counted as `eagleOnly` drift either — seed-
 same way — it reports separately as `unresolvedParent`. One line is what a log alert matches:
 
 ```
-[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 drift=0
+[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 commentPeriods: unpublishedOrDeleted=0 eagleOnly=0 lists: unpublishedOrDeleted=0 eagleOnly=0 notifications: unpublishedOrDeleted=0 eagleOnly=0 comments: skipped drift=0
 ```
+
+It covers the containers the Eagle push and the backfill write. Comments are behind `--comments`
+because the sweep costs one eagle-api request per comment period, which is too much for the nightly
+timer; a container the run did not sweep says `skipped` rather than reporting zero drift. The
+backfill itself is `docs/public-read-backfill.md`.
 
 Set `RECONCILE_SCHEDULE` to an NCRONTAB expression (six fields, seconds first) and the API app
 registers a Functions timer that runs the same check nightly and logs that line. **Prod only**

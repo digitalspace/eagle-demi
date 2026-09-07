@@ -36,6 +36,21 @@ const EAGLE_API_BASE = 'https://eagle-test.example/api/public';
  */
 const EAGLE_PROJECTS = [{ _id: 'P1' }, { _id: 'P2' }];
 const NOTIFICATIONS = [{ _id: 'N1' }];
+
+/**
+ * The public-read containers, in step on purpose: the fixtures above carry the project and document
+ * drift this suite has always asserted, so the four newer containers are clean here and their own
+ * drift is driven by the subtest that overrides them.
+ */
+const EAGLE_BY_DATASET = {
+  ProjectNotification: NOTIFICATIONS,
+  CommentPeriod: [{ _id: 'CP1' }],
+  List: [{ _id: 'L1' }],
+  Organization: [{ _id: 'O1' }]
+};
+const PERIOD_ROWS = { 207: [{ id: 'CP1', projectId: '207' }] };
+const LIST_ROWS = { List: [{ id: 'L1', kind: 'List' }], Organization: [{ id: 'O1', kind: 'Organization' }] };
+const NOTIFICATION_ROWS = [{ id: 'N1' }];
 const TRACK_PROJECTS = [
   { track_project_id: 207, name: 'P1', epic_guid: 'P1' },
   { track_project_id: 354, name: 'Dangling', epic_guid: 'track-dangling' }
@@ -61,13 +76,20 @@ function stubSources(over = {}) {
     EAGLE_API_BASE,
     loadTrackProjects: () => TRACK_PROJECTS,
     fetchEagleProjects: async () => EAGLE_PROJECTS,
-    // Same generic pager seed-nosql calls for ProjectNotification — asserted so a divergent
-    // dataset name would fail here rather than silently reading the wrong collection.
+    // Same generic pager seed-nosql calls — the dataset name is asserted so a divergent one fails
+    // here rather than silently reading the wrong collection.
     fetchAllPages: async (base, dataset) => {
       assert.strictEqual(base, EAGLE_API_BASE);
-      assert.strictEqual(dataset, 'ProjectNotification');
-      return NOTIFICATIONS;
+      assert.ok(EAGLE_BY_DATASET[dataset], `unexpected dataset: ${dataset}`);
+      return EAGLE_BY_DATASET[dataset];
     },
+    PAGE_SIZE: 100,
+    // The comment sweep reads its total from the header, not the body — eagle-api's
+    // `/api/public/comment` reports it nowhere else. Empty here, so DEMI's one mirrored comment
+    // is drift the sweep must find.
+    fetchJsonWithHeaders: async () => ({
+      body: [], headers: new Headers({ 'x-total-count': '0' })
+    }),
     streamEagleDocuments: async (onPage) => {
       await onPage(EAGLE_DOCS);
       return { count: EAGLE_DOCS.length, total: EAGLE_DOCS.length };
@@ -96,14 +118,33 @@ function makeDeps(over = {}, counts = {}) {
       listSeededIds: async (access) => { assertSystem(access); return DOCUMENT_ROWS; },
       countSeededIds: async () => counts.documents ?? DOCUMENT_ROWS.length
     },
+    commentPeriods: {
+      listByProject: async (projectId, access) => {
+        assertSystem(access);
+        return PERIOD_ROWS[projectId] || [];
+      }
+    },
+    lists: {
+      KINDS: { LIST: 'List', ORGANIZATION: 'Organization' },
+      listByKind: async (kind, access) => { assertSystem(access); return LIST_ROWS[kind]; },
+      countByKind: async (kind) => counts[kind] ?? LIST_ROWS[kind].length
+    },
+    notifications: {
+      list: async (access) => { assertSystem(access); return NOTIFICATION_ROWS; },
+      count: async () => counts.notifications ?? NOTIFICATION_ROWS.length
+    },
+    comments: {
+      listByPeriod: async (periodId, access) => { assertSystem(access); return [{ id: 'C1' }]; }
+    },
     ...over
   };
 }
 
 test('parseArgs', async (t) => {
-  await t.test('takes only --json', () => {
-    assert.deepStrictEqual(parseArgs([]), { json: false });
-    assert.deepStrictEqual(parseArgs(['--json']), { json: true });
+  await t.test('takes --json and --comments', () => {
+    assert.deepStrictEqual(parseArgs([]), { json: false, comments: false });
+    assert.deepStrictEqual(parseArgs(['--json']), { json: true, comments: false });
+    assert.deepStrictEqual(parseArgs(['--comments']), { json: false, comments: true });
   });
 
   await t.test('rejects an unknown argument rather than ignoring it', () => {
@@ -219,7 +260,18 @@ test('summaryLine is the alert contract', async (t) => {
     assert.strictEqual(summaryLine(summary),
       '[reconcile] projects: unpublishedOrDeleted=1 eagleOnly=0 ' +
       'documents: unpublishedOrDeleted=1 eagleOnly=3 unresolvedParent=1 ' +
-      'drift=5');
+      'commentPeriods: unpublishedOrDeleted=0 eagleOnly=0 ' +
+      'lists: unpublishedOrDeleted=0 eagleOnly=0 ' +
+      'notifications: unpublishedOrDeleted=0 eagleOnly=0 ' +
+      'comments: skipped drift=5');
+  });
+
+  // A container the run did not sweep must not read as a clean one: `comments` costs an eagle-api
+  // round trip per period, so it is off unless asked for, and zeros there would say "no drift".
+  await t.test('a container the run skipped says so instead of reporting zero', async () => {
+    assert.match(summaryLine(await reconcile([], makeDeps())), /comments: skipped drift=/);
+    assert.match(summaryLine(await reconcile(['--comments'], makeDeps())),
+      /comments: unpublishedOrDeleted=1 eagleOnly=0 drift=6/);
   });
 
   await t.test('a clean run says drift=0', () => {
@@ -228,7 +280,8 @@ test('summaryLine is the alert contract', async (t) => {
         documents: { unpublishedOrDeleted: [], eagleOnly: [], unresolvedParent: [] },
         drift: 0 }),
       '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 ' +
-      'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 drift=0');
+      'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 ' +
+      'commentPeriods: skipped lists: skipped notifications: skipped comments: skipped drift=0');
   });
 
   // The alert rule reads `drift=` out of this line with a regex (azure/modules/observability.bicep).

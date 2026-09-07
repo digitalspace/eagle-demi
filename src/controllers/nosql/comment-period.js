@@ -47,6 +47,41 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
   };
 }
 
+/**
+ * Mirror one raw Eagle `CommentPeriod`, whoever asked — the push handler below or the backfill
+ * (src/scripts/seed-public-reads.js). NULL when the parent project is not in DEMI: a push answers
+ * that with a 404, a backfill counts it and moves on.
+ *
+ * @param {object} [parentRow] the DEMI project row, when the caller already holds it
+ * @returns {Promise<{saved: object, existing: object|null}|null>}
+ */
+async function mirrorFromEagle(eagleId, doc, parentRow) {
+  // systemAccess on every read: the mirror must find a private parent and a private existing row.
+  const parentEagleId = refId(doc.project);
+  const parent = parentRow || (parentEagleId
+    ? await projects.getByEagleId(systemAccess(), parentEagleId)
+    : null);
+  if (!parent) return null;
+
+  const read = constrainToProject(seedAcl(doc.read), parent.read);
+
+  const { saved, existing } = await upsertWithRetry(
+    commentPeriods,
+    (current) => mirrorItem(eagleId, doc, parent.id, read, current),
+    () => commentPeriods.getById(systemAccess(), eagleId)
+  );
+
+  // A period whose project changed lands in a NEW partition, and Cosmos leaves the old row
+  // behind — still listable under the old project. Same removal as the document mirror.
+  if (existing && String(existing.projectId) !== saved.projectId) {
+    await commentPeriods.deleteById(existing.id, existing.projectId);
+  }
+
+  return { saved, existing };
+}
+
+exports.mirrorFromEagle = mirrorFromEagle;
+
 exports.upsertFromEagle = async (req, res) => {
   try {
     const push = eaglePush(req);
@@ -55,26 +90,9 @@ exports.upsertFromEagle = async (req, res) => {
     }
     const { eagleId, doc } = push;
 
-    // systemAccess on every read: the mirror must find a private parent and a private existing row.
-    const parentEagleId = refId(doc.project);
-    const parent = parentEagleId
-      ? await projects.getByEagleId(systemAccess(), parentEagleId)
-      : null;
-    if (!parent) return res.status(404).json({ error: 'Parent project not found' });
-
-    const read = constrainToProject(seedAcl(doc.read), parent.read);
-
-    const { saved, existing } = await upsertWithRetry(
-      commentPeriods,
-      (current) => mirrorItem(eagleId, doc, parent.id, read, current),
-      () => commentPeriods.getById(systemAccess(), eagleId)
-    );
-
-    // A period whose project changed lands in a NEW partition, and Cosmos leaves the old row
-    // behind — still listable under the old project. Same removal as the document mirror.
-    if (existing && String(existing.projectId) !== saved.projectId) {
-      await commentPeriods.deleteById(existing.id, existing.projectId);
-    }
+    const mirrored = await mirrorFromEagle(eagleId, doc);
+    if (!mirrored) return res.status(404).json({ error: 'Parent project not found' });
+    const { saved, existing } = mirrored;
 
     auditEvent(req, {
       action: 'commentPeriod.push',

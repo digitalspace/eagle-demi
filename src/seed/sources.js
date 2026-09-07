@@ -33,8 +33,16 @@ const PAGE_SIZE = 100;
 const FETCH_TIMEOUT_MS = parseInt(process.env.SEED_FETCH_TIMEOUT_MS || '120000', 10);
 const FETCH_RETRIES = 3;
 
-/** @param {object} [headers] request headers — the Track team feed needs a bearer token. */
-async function fetchJson(url, headers) {
+/**
+ * The body AND the response headers, retried.
+ *
+ * `/api/public/comment` reports its total in `x-total-count` rather than in the body, so the
+ * comment backfill needs the header. Everything else wants the body alone — see `fetchJson`.
+ *
+ * @param {object} [headers] request headers — the Track team feed needs a bearer token.
+ * @returns {Promise<{body: *, headers: Headers}>}
+ */
+async function fetchJsonWithHeaders(url, headers) {
   let lastError;
   for (let attempt = 1; attempt <= FETCH_RETRIES; attempt++) {
     const controller = new AbortController();
@@ -42,7 +50,7 @@ async function fetchJson(url, headers) {
     try {
       const res = await fetch(url, { signal: controller.signal, headers });
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-      return await res.json();
+      return { body: await res.json(), headers: res.headers };
     } catch (err) {
       lastError = err;
       // A transient failure mid-seed would otherwise truncate the corpus silently, so retry
@@ -55,6 +63,11 @@ async function fetchJson(url, headers) {
     }
   }
   throw new Error(`[seed] failed to fetch ${url} after ${FETCH_RETRIES} attempts: ${lastError.message}`);
+}
+
+/** @param {object} [headers] request headers — the Track team feed needs a bearer token. */
+async function fetchJson(url, headers) {
+  return (await fetchJsonWithHeaders(url, headers)).body;
 }
 
 /**
@@ -353,6 +366,7 @@ module.exports = {
   EAGLE_API_BASE,
   PAGE_SIZE,
   fetchJson,
+  fetchJsonWithHeaders,
   unwrapSearchResponse,
   fetchAllPages,
   clientToken,

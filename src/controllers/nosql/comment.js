@@ -52,6 +52,42 @@ function mirrorItem(eagleId, doc, period, read, existing) {
   };
 }
 
+/**
+ * Mirror one raw Eagle `Comment`, whoever asked — the push handler below or the backfill
+ * (src/scripts/seed-public-reads.js). NULL when the parent period is not in DEMI.
+ *
+ * @param {object} [periodRow] the DEMI comment-period row, when the caller already holds it. The
+ *   backfill walks period by period, so it passes one and saves a read per comment.
+ * @returns {Promise<{saved: object, existing: object|null}|null>}
+ */
+async function mirrorFromEagle(eagleId, doc, periodRow) {
+  const periodEagleId = refId(doc.period);
+  const period = periodRow || (periodEagleId
+    ? await commentPeriods.getById(systemAccess(), periodEagleId)
+    : null);
+  if (!period) return null;
+
+  // The period's own ACL is already constrained to its project, so one constrain here carries
+  // both ceilings.
+  const read = constrainToProject(seedAcl(doc.read), period.read);
+
+  const { saved, existing } = await upsertWithRetry(
+    comments,
+    (current) => mirrorItem(eagleId, doc, period, read, current),
+    () => comments.getById(systemAccess(), eagleId)
+  );
+
+  // A comment moved to another period lands in a NEW partition; the old row would stay listable
+  // under the old period. Same removal as the document mirror.
+  if (existing && String(existing.periodId) !== saved.periodId) {
+    await comments.deleteById(existing.id, existing.periodId);
+  }
+
+  return { saved, existing };
+}
+
+exports.mirrorFromEagle = mirrorFromEagle;
+
 exports.upsertFromEagle = async (req, res) => {
   try {
     const push = eaglePush(req);
@@ -60,27 +96,9 @@ exports.upsertFromEagle = async (req, res) => {
     }
     const { eagleId, doc } = push;
 
-    const periodEagleId = refId(doc.period);
-    const period = periodEagleId
-      ? await commentPeriods.getById(systemAccess(), periodEagleId)
-      : null;
-    if (!period) return res.status(404).json({ error: 'Parent comment period not found' });
-
-    // The period's own ACL is already constrained to its project, so one constrain here carries
-    // both ceilings.
-    const read = constrainToProject(seedAcl(doc.read), period.read);
-
-    const { saved, existing } = await upsertWithRetry(
-      comments,
-      (current) => mirrorItem(eagleId, doc, period, read, current),
-      () => comments.getById(systemAccess(), eagleId)
-    );
-
-    // A comment moved to another period lands in a NEW partition; the old row would stay listable
-    // under the old period. Same removal as the document mirror.
-    if (existing && String(existing.periodId) !== saved.periodId) {
-      await comments.deleteById(existing.id, existing.periodId);
-    }
+    const mirrored = await mirrorFromEagle(eagleId, doc);
+    if (!mirrored) return res.status(404).json({ error: 'Parent comment period not found' });
+    const { saved, existing } = mirrored;
 
     auditEvent(req, {
       action: 'comment.push',
