@@ -20,9 +20,23 @@ const commentPeriods = require('../../src/repositories/comment-periods');
 const comments = require('../../src/repositories/comments');
 const notifications = require('../../src/repositories/notifications');
 const lists = require('../../src/repositories/lists');
+const updates = require('../../src/repositories/updates');
 const { TIER } = require('../../src/helpers/access-sql');
 
 const ANON = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [], level: 4 };
+
+/**
+ * The fields one container's indexing policy includes, as the bicep writes them.
+ *
+ * A path is reduced to its field name, so `/read/[]/?` and `/name/?` both read as one field — the
+ * allow-lists these tests pair the policy with are field names.
+ */
+function indexedFields(container) {
+  const bicep = readFileSync(
+    join(__dirname, '..', '..', 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
+  const policy = bicep.split(`id: '${container}'`)[1].split('excludedPaths')[0];
+  return [...policy.matchAll(/path: '\/([A-Za-z]+)(?:\/\[\])?\/\?'/g)].map(m => m[1]);
+}
 
 /** Capture the spec and options of the next query, and answer with `items`. */
 function capture(t, items = []) {
@@ -221,10 +235,7 @@ test('lists by kind', async (t) => {
   await t.test('every sortable key is an indexed path on the lists container', () => {
     // An ORDER BY on a path the indexing policy excludes cannot be served at all, so this pairs the
     // allow-list with the bicep that has to carry it.
-    const bicep = readFileSync(
-      join(__dirname, '..', '..', 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
-    const policy = bicep.split("id: 'lists'")[1].split('excludedPaths')[0];
-    const indexed = [...policy.matchAll(/path: '\/([A-Za-z]+)\/\?'/g)].map(m => m[1]);
+    const indexed = indexedFields('lists');
 
     for (const [kind, keys] of Object.entries(lists.SORTABLE)) {
       for (const key of keys) {
@@ -245,5 +256,72 @@ test('lists by kind', async (t) => {
     const counted = capture(t, [7]);
     assert.strictEqual(await lists.countByKind(lists.KINDS.LIST, ANON, { type: 'doctype' }), 7);
     assert.strictEqual(counted.spec.query.split(' WHERE ')[1], readWhere);
+  });
+});
+
+test('updates', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const EAGLE_PROJECT_ID = '588511d0aaecd9001b825604';
+
+  /** The caller's scope is in DEMI ids; the projects container is what maps them to Eagle ones. */
+  function serve(projectRows, updateRows = [{ id: 'u1' }]) {
+    const seen = [];
+    t.mock.method(cosmos, 'query', async (container, spec) => {
+      seen.push({ container, spec });
+      return { items: container === 'projects' ? projectRows : updateRows };
+    });
+    return seen;
+  }
+
+  const specFor = (seen, container) => seen.filter(s => s.container === container)[0].spec;
+
+  await t.test('every sorted, filtered and ACL field is an indexed path on the container', () => {
+    // An ORDER BY on an excluded path cannot be served at all, and an ACL filter on one is a full
+    // scan of the container — so this pairs both allow-lists with the bicep that has to carry them.
+    const indexed = indexedFields('updates');
+
+    for (const key of updates.SORTABLE) {
+      assert.ok(indexed.includes(key), `updates sorts by ${key}, which is not an included path`);
+    }
+    assert.ok(indexed.includes(updates.SCOPE_FIELD), 'the project scope is filtered on');
+    assert.ok(indexed.includes('read'), 'the ACL predicate the list, the count and the strip carry');
+    assert.ok(indexed.includes('pinned'), 'listTop splits the strip on it');
+  });
+
+  await t.test('a scoped caller reads its own project, by the EAGLE id of it', async () => {
+    const scoped = {
+      tier: TIER.SCOPED, roles: ['staff'], projectScope: ['207'], teams: [], level: 1
+    };
+    const seen = serve([{ id: '207', name: 'Nicomen Wind Energy', eagleId: EAGLE_PROJECT_ID }]);
+
+    const rows = await updates.list(scoped);
+
+    assert.deepStrictEqual(rows.map(r => r.id), ['u1']);
+    const read = specFor(seen, 'updates');
+    assert.match(read.query, /c\.projectId IN \(@scope0\)/);
+    assert.deepStrictEqual(
+      read.parameters.filter(p => p.name === '@scope0').map(p => p.value), [EAGLE_PROJECT_ID],
+      'the scope is in DEMI ids and this container stores Eagle ones — 207 reads zero rows');
+  });
+
+  await t.test('a scope whose project has no Eagle counterpart matches nothing', async () => {
+    // Fail closed: an untranslatable id must not fall through to an unrestricted read.
+    const scoped = {
+      tier: TIER.SCOPED, roles: ['staff'], projectScope: ['999'], teams: [], level: 1
+    };
+    const seen = serve([{ id: '999', name: 'Track-only project' }]);
+
+    await updates.count(scoped);
+
+    assert.match(specFor(seen, 'updates').query, /\bfalse\b/);
+  });
+
+  await t.test('an unscoped caller costs no translation query', async () => {
+    const seen = serve([]);
+
+    await updates.list(ANON);
+
+    assert.deepStrictEqual(seen.map(s => s.container), ['updates']);
   });
 });

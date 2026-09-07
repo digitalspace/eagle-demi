@@ -172,10 +172,12 @@ async function fetchAll(container, spec, opts = {}) {
  * @param {string|string[]} sortBy  the raw query value, in any of the three wire shapes
  * @param {string[]} allowed        field names a caller may order by
  * @param {string} fallback         e.g. 'c.id ASC' — used when the caller named nothing usable
+ * @param {object} [aliases]        wire key -> stored field, for the keys eagle-public sorts by
+ *                                  that no mirrored row carries (`score`, `_id`)
  */
-function orderByFrom(sortBy, allowed, fallback) {
+function orderByFrom(sortBy, allowed, fallback, aliases = {}) {
   for (const entry of sortEntries(sortBy)) {
-    const name = entry.replace(/^[+-]/, '');
+    const name = aliases[entry.replace(/^[+-]/, '')] || entry.replace(/^[+-]/, '');
     if (allowed.includes(name)) return `c.${name} ${entry.startsWith('-') ? 'DESC' : 'ASC'}`;
   }
   return fallback;

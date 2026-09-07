@@ -34,6 +34,11 @@ function mirrorItem(eagleId, doc, period, read, existing) {
     author: doc.author || null,
     comment: doc.comment || null,
     dateAdded: doc.dateAdded || null,
+    dateUpdated: doc.dateUpdated || null,
+    // Free text the commenter typed, and public: it is in eagle-api's own ALLOWED_FIELDS and its
+    // `publicGet` runs the query as `['public']` (api/controllers/comment.js:19,80).
+    location: doc.location || null,
+    submittedCAC: doc.submittedCAC === true,
     // `!== false`, matching the Eagle model's default of TRUE: a comment that never set the flag is
     // anonymous, and storing `undefined` would leave the redactor's predicate deciding on absence.
     isAnonymous: doc.isAnonymous !== false,

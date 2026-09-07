@@ -133,6 +133,9 @@ function filterFor(access, partitionField = 'projectId', documentField = null) {
 
 module.exports = {
   filterFor,
+  // The `search.in` builder, shared with the `?docIds=` scope in controllers/search.js so a
+  // caller-named id list is escaped by the same code as the ACL's.
+  inClause,
   // Exported for tests: escaping is the part worth pinning, since there is no parameter binding.
   quote
 };

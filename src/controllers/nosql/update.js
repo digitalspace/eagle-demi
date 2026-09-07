@@ -15,6 +15,7 @@ const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const notify = require('../../services/notify');
+const { refId } = require('./eagle-mirror');
 
 /**
  * Tell eagle-notify what changed, if anything did.
@@ -67,6 +68,17 @@ function mirrorItem(eagleId, doc, existing) {
     pinned: doc.pinned,
     dateAdded: doc.dateAdded,
     dateUpdated: doc.dateUpdated,
+    // The rest of what eagle-public's News model reads. `pcp` and `projectNotification` arrive as
+    // bare Mongo references — eagle-api populates them only in its own aggregate — so they are
+    // stored as ids and resolved, if ever, by the reader.
+    notificationName: doc.notificationName || null,
+    contentUrl: doc.contentUrl || null,
+    documentUrl: doc.documentUrl || null,
+    pcp: refId(doc.pcp),
+    projectNotification: refId(doc.projectNotification),
+    // Stored beside `isPublished` rather than folded into it: `read[]` is what governs visibility
+    // and `active` is Eagle's own flag, which the News model renders.
+    active: doc.active === true,
     // read[] is authoritative and isPublished mirrors it (ADR-004), as the project and document
     // mirrors do. `active` is the fallback for a record pushed without an ACL.
     isPublished: read ? read.includes('public') : doc.active === true,

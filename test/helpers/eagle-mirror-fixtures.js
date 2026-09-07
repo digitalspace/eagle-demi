@@ -22,12 +22,15 @@ const commentPeriodController = require('../../src/controllers/nosql/comment-per
 const commentController = require('../../src/controllers/nosql/comment');
 const organizationController = require('../../src/controllers/nosql/organization');
 const notificationController = require('../../src/controllers/nosql/notification');
+const updateController = require('../../src/controllers/nosql/update');
+const updates = require('../../src/repositories/updates');
 
 const PROJECT_EAGLE_ID = '588511d0aaecd9001b825604';
 const PERIOD_EAGLE_ID = '5b8bcf0d0f5e9c0019a7a1c1';
 const COMMENT_EAGLE_ID = '5b8bcf0d0f5e9c0019a7a1c2';
 const ORG_EAGLE_ID = '58850f69aaecd9001b8085cc';
 const NOTIFICATION_EAGLE_ID = '5f0e4a0c3f4b1a0021a1b2c3';
+const UPDATE_EAGLE_ID = '5f0e4a0c3f4b1a0021a1b2c4';
 
 /** Published, and taken down: what Eagle leaves on a record staff can still read. */
 const PUBLIC_ACL = ['public', 'sysadmin', 'staff'];
@@ -69,10 +72,36 @@ function eagleComment(overrides = {}) {
     author: 'Jane Public',
     comment: 'The turbine setback is too small.',
     dateAdded: '2026-08-05T00:00:00.000Z',
+    dateUpdated: '2026-08-06T00:00:00.000Z',
+    location: 'Nicomen Island',
+    submittedCAC: true,
     isAnonymous: false,
     documents: ['5cf00c03a266b7e187750003'],
     commentId: 12,
     eaoStatus: 'Published',
+    read: PUBLIC_ACL,
+    ...overrides
+  };
+}
+
+function eagleUpdate(overrides = {}) {
+  return {
+    _id: UPDATE_EAGLE_ID,
+    headline: 'Public comment period opens',
+    content: '<p>The comment period opens on Monday.</p>',
+    type: 'News',
+    project: PROJECT_EAGLE_ID,
+    active: true,
+    pinned: false,
+    dateAdded: '2026-08-01T00:00:00.000Z',
+    dateUpdated: '2026-08-02T00:00:00.000Z',
+    notificationName: 'Nicomen Wind Energy',
+    contentUrl: 'https://projects.eao.gov.bc.ca/p/588511d0aaecd9001b825604/news',
+    documentUrl: 'https://projects.eao.gov.bc.ca/api/document/5cf00c03a266b7e187750002/fetch',
+    // Bare Mongo references: eagle-api populates these only inside its own aggregate, and the push
+    // carries the raw record.
+    pcp: PERIOD_EAGLE_ID,
+    projectNotification: { _id: NOTIFICATION_EAGLE_ID },
     read: PUBLIC_ACL,
     ...overrides
   };
@@ -138,6 +167,10 @@ const MIRRORS = {
     controller: organizationController, repo: lists,
     eagleId: ORG_EAGLE_ID, fixture: eagleOrganization
   },
+  updates: {
+    controller: updateController, repo: updates,
+    eagleId: UPDATE_EAGLE_ID, fixture: eagleUpdate
+  },
   notifications: {
     controller: notificationController, repo: notifications,
     eagleId: NOTIFICATION_EAGLE_ID, fixture: eagleNotification
@@ -188,6 +221,7 @@ module.exports = {
   COMMENT_EAGLE_ID,
   ORG_EAGLE_ID,
   NOTIFICATION_EAGLE_ID,
+  UPDATE_EAGLE_ID,
   PUBLIC_ACL,
   PRIVATE_ACL,
   MIRRORS,
@@ -197,6 +231,7 @@ module.exports = {
   eagleComment,
   eagleOrganization,
   eagleNotification,
+  eagleUpdate,
   mockRes,
   STAFF,
   captureMirror

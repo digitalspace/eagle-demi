@@ -255,10 +255,21 @@ resource updatesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
             path: '/projectId/?'
           }
           {
+            path: '/read/[]/?'
+          }
+          {
             path: '/isPublished/?'
           }
           {
             path: '/dateAdded/?'
+          }
+          // The public list sorts on it, and an ORDER BY on an unindexed path cannot be served.
+          {
+            path: '/dateUpdated/?'
+          }
+          // The home strip splits the page on it, pinned rows first.
+          {
+            path: '/pinned/?'
           }
           {
             path: '/notifiedAt/?'
@@ -387,6 +398,19 @@ resource notificationsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
           }
           {
             path: '/name/?'
+          }
+          // The four facets the public notifications page filters by.
+          {
+            path: '/type/?'
+          }
+          {
+            path: '/region/?'
+          }
+          {
+            path: '/pcp/?'
+          }
+          {
+            path: '/decision/?'
           }
         ]
         excludedPaths: noIndex

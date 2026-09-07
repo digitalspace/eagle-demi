@@ -21,38 +21,10 @@ const notify = require('../../../src/services/notify');
 const controller = require('../../../src/controllers/nosql/update');
 const { routeChains } = require('../../helpers/router-source');
 
-function mockRes() {
-  return {
-    statusCode: 200,
-    body: undefined,
-    status(code) { this.statusCode = code; return this; },
-    json(data) { this.body = data; return this; },
-    setHeader() {}
-  };
-}
-
-const STAFF = { sub: 'kc-sub-1', preferred_username: 'push', realm_access: { roles: ['sysadmin'] } };
-const UPDATE_EAGLE_ID = '5f0e4a0c3f4b1a0021a1b2c3';
-const PROJECT_EAGLE_ID = '588511d0aaecd9001b825604';
-/** What Eagle leaves on a record it has taken down: staff can read it, the public cannot. */
-const PRIVATE = ['sysadmin', 'staff'];
-
-/** A raw Eagle RecentActivity, as eagle-api stores it. */
-function eagleUpdate(overrides = {}) {
-  return {
-    _id: UPDATE_EAGLE_ID,
-    headline: 'Public comment period opens',
-    content: '<p>The comment period opens on Monday.</p>',
-    type: 'News',
-    project: PROJECT_EAGLE_ID,
-    active: true,
-    pinned: false,
-    dateAdded: '2026-08-01T00:00:00.000Z',
-    dateUpdated: '2026-08-02T00:00:00.000Z',
-    read: ['public', 'sysadmin', 'staff'],
-    ...overrides
-  };
-}
+const {
+  UPDATE_EAGLE_ID, PROJECT_EAGLE_ID, PERIOD_EAGLE_ID, NOTIFICATION_EAGLE_ID,
+  PRIVATE_ACL: PRIVATE, eagleUpdate, mockRes, STAFF
+} = require('../../helpers/eagle-mirror-fixtures');
 
 function push(body, res = mockRes()) {
   return controller.upsertFromEagle(
@@ -99,6 +71,13 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
       pinned: false,
       dateAdded: '2026-08-01T00:00:00.000Z',
       dateUpdated: '2026-08-02T00:00:00.000Z',
+      notificationName: 'Nicomen Wind Energy',
+      contentUrl: 'https://projects.eao.gov.bc.ca/p/588511d0aaecd9001b825604/news',
+      documentUrl: 'https://projects.eao.gov.bc.ca/api/document/5cf00c03a266b7e187750002/fetch',
+      // Both flattened to ids by `refId`, whichever shape the push carried them in.
+      pcp: PERIOD_EAGLE_ID,
+      projectNotification: NOTIFICATION_EAGLE_ID,
+      active: true,
       isPublished: true,
       read: ['public', 'sysadmin', 'staff'],
       notifiedAt: null,

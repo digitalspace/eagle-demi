@@ -15,26 +15,107 @@ info:
 paths:
   /api/search:
     get:
-      summary: Search document content
-      description: Queries Azure AI Search for matching projects, documents or text chunks.
+      summary: Search or list one dataset
+      description: >-
+        Project, Document and DocumentChunk are answered by Azure AI Search. The rest are Cosmos
+        list reads of the mirrored Eagle records, on the same envelope: a one-element array of
+        `{searchResults, count, meta}`, where `meta[0].searchResultsTotal` is the measured total to
+        page against. An unknown dataset, or any query parameter not listed here, is a 400.
       parameters:
-        - name: q
+        - name: dataset
           in: query
           required: true
-          description: Search query string.
+          description: Which records to read.
+          schema:
+            type: string
+            enum:
+              - Project
+              - Document
+              - DocumentChunk
+              - List
+              - Organization
+              - CommentPeriod
+              - Comment
+              - RecentActivity
+              - ProjectNotification
+        - name: q
+          in: query
+          required: false
+          description: >-
+            Search query string. Also accepted as `keywords`. Ignored by the Cosmos datasets except
+            RecentActivity, which matches it against the headline and the content,
+            case-insensitively.
           schema:
             type: string
         - name: project
           in: query
           required: false
-          description: Filter results by project ID.
+          description: >-
+            Eagle project id. Also accepted as `and[project]`. Applies to Document, DocumentChunk,
+            CommentPeriod and RecentActivity; on any other dataset the read answers no rows and
+            reports the key under `meta[0].dropped.filter`.
+          schema:
+            type: string
+        - name: docIds
+          in: query
+          required: false
+          description: Pipe-separated Eagle document ids, for dataset=Document.
+          schema:
+            type: string
+        - name: period
+          in: query
+          required: false
+          description: >-
+            Comment period id, required by dataset=Comment. Also accepted as `and[period]`.
+          schema:
+            type: string
+        - name: companyType
+          in: query
+          required: false
+          description: Narrows dataset=Organization. Also accepted as `and[companyType]`.
+          schema:
+            type: string
+        - name: top
+          in: query
+          required: false
+          description: >-
+            `true` on dataset=RecentActivity answers the home-page strip: up to four rows, pinned
+            first, newest by dateAdded.
+          schema:
+            type: boolean
+        - name: _id
+          in: query
+          required: false
+          description: >-
+            Fetch one record by Eagle id, on CommentPeriod, Comment and ProjectNotification. Also
+            accepted as `and[_id]`.
+          schema:
+            type: string
+        - name: and[type]
+          in: query
+          required: false
+          description: >-
+            Narrows dataset=ProjectNotification, with `and[region]`, `and[pcp]` and
+            `and[decision]`. A key the dataset does not consume is reported under
+            `meta[0].dropped.filter` rather than ignored.
+          schema:
+            type: string
+        - name: sortBy
+          in: query
+          required: false
+          description: >-
+            One key, `-` for descending. On RecentActivity `-score` orders by dateAdded, and on
+            ProjectNotification `-_id` orders by notificationReceivedDate — neither field is stored,
+            and an ORDER BY on a field a row lacks drops the row.
           schema:
             type: string
       responses:
         '200':
-          description: Search results containing matched chunks and metadata.
+          description: One-element array of search results, the measured total and metadata.
         '400':
-          description: Missing search query parameter.
+          description: Unknown dataset, unsupported query parameter, or dataset=Comment with no period.
+        '502':
+          description: The backing search index or database could not be read.
 
   /api/me:
     get:
