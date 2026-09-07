@@ -41,7 +41,10 @@ paths:
         - name: q
           in: query
           required: false
-          description: Search query string. Also accepted as `keywords`. Ignored by the Cosmos datasets.
+          description: >-
+            Search query string. Also accepted as `keywords`. Ignored by the Cosmos datasets except
+            RecentActivity, which matches it against the headline and the content,
+            case-insensitively.
           schema:
             type: string
         - name: project
@@ -86,6 +89,24 @@ paths:
           description: >-
             Fetch one record by Eagle id, on CommentPeriod, Comment and ProjectNotification. Also
             accepted as `and[_id]`.
+          schema:
+            type: string
+        - name: and[type]
+          in: query
+          required: false
+          description: >-
+            Narrows dataset=ProjectNotification, with `and[region]`, `and[pcp]` and
+            `and[decision]`. A key the dataset does not consume is reported under
+            `meta[0].dropped.filter` rather than ignored.
+          schema:
+            type: string
+        - name: sortBy
+          in: query
+          required: false
+          description: >-
+            One key, `-` for descending. On RecentActivity `-score` orders by dateAdded, and on
+            ProjectNotification `-_id` orders by notificationReceivedDate — neither field is stored,
+            and an ORDER BY on a field a row lacks drops the row.
           schema:
             type: string
       responses:

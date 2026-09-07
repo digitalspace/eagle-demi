@@ -13,7 +13,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
+const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
 
 const CONTAINER = 'notifications';
 const PARTITION_FIELD = 'id';
@@ -22,6 +22,24 @@ const SCOPE_FIELD = null;
 
 const SORTABLE = ['notificationReceivedDate', 'name'];
 const DEFAULT_ORDER = 'c.notificationReceivedDate DESC';
+/**
+ * eagle-public's notifications page sorts by `-_id`, the Mongo id it used as an arrival proxy.
+ * Received-date descending is the same order, said in a field these rows carry.
+ */
+const SORT_ALIASES = { _id: 'notificationReceivedDate' };
+
+/** Filter keys the public notifications page narrows by, and the field each lands on. */
+const FILTERS = Object.freeze({ type: 'type', region: 'region', pcp: 'pcp', decision: 'decision' });
+
+/**
+ * Shared by the read and its count so the two cannot diverge. Presence, not truthiness: `pcp` is
+ * stored as the string 'none' when there is no period, which is a real value to filter for.
+ */
+function criteriaFor(filters = {}) {
+  return Object.entries(FILTERS)
+    .filter(([key]) => filters[key] !== undefined && filters[key] !== null)
+    .map(([key, field]) => eq(field, String(filters[key]), `@${key}`));
+}
 
 async function getById(access, id) {
   const item = await cosmos.readItem(CONTAINER, String(id), String(id));
@@ -29,12 +47,13 @@ async function getById(access, id) {
   return canRead(item, access, SCOPE_FIELD) ? item : null;
 }
 
-async function list(access, { pageNum, pageSize, sortBy } = {}) {
+async function list(access, { pageNum, pageSize, sortBy, ...filters } = {}) {
   const spec = selectWhere({
     access,
     partitionField: SCOPE_FIELD,
+    criteria: criteriaFor(filters),
     select: selectFor(CONTAINER, access, PARTITION_FIELD),
-    orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER)
+    orderBy: orderByFrom(sortBy, SORTABLE, DEFAULT_ORDER, SORT_ALIASES)
   });
 
   const { skip, fetch } = pageSlice({ pageNum, pageSize });
@@ -42,9 +61,25 @@ async function list(access, { pageNum, pageSize, sortBy } = {}) {
   return skip > 0 ? items.slice(skip) : items;
 }
 
-async function count(access) {
+/** Name and id for a bounded set of notifications, in one query — the label an update refers to. */
+async function listByIds(access, ids) {
+  const unique = Array.from(new Set((ids || []).map(String)));
+  if (unique.length === 0) return [];
+
+  const spec = selectWhere({
+    access,
+    partitionField: SCOPE_FIELD,
+    criteria: [inList(PARTITION_FIELD, unique, '@nid')],
+    select: 'c.id, c.name'
+  });
+
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items;
+}
+
+async function count(access, filters = {}) {
   const { items } = await cosmos.query(CONTAINER,
-    countWhere({ access, partitionField: SCOPE_FIELD }), {});
+    countWhere({ access, partitionField: SCOPE_FIELD, criteria: criteriaFor(filters) }), {});
   return items[0] || 0;
 }
 
@@ -57,8 +92,10 @@ module.exports = {
   PARTITION_FIELD,
   SCOPE_FIELD,
   SORTABLE,
+  FILTERS,
   getById,
   list,
+  listByIds,
   count,
   upsert
 };

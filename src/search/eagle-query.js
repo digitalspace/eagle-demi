@@ -136,16 +136,23 @@ const DEFAULT_ORDER = {
  * Query parameters this endpoint understands. Anything else is a 400 rather than a silent no-op —
  * see wiki Search-Query-Construction#unsupported-parameters-400-inexpressible-filter-keys-drop.
  */
+/**
+ * The BARE filter keys the Cosmos-backed datasets accept. eagle-public sends every one of these
+ * flat rather than under `and[...]` — `docIds` and `companyType` from api.ts, `top` from the
+ * home-page news strip — and `and[...]` spellings of the same keys pass the gate below already.
+ * `period` and `_id` are the two single-record fetches.
+ *
+ * Also read by `filterKeysIn`, so a dataset that does not consume one REPORTS it dropped. Accepted
+ * and silently ignored is the one outcome the dropped report exists to prevent.
+ */
+const BARE_FILTER_KEYS = ['top', 'docIds', 'period', 'companyType', '_id'];
+
 const KNOWN_PARAMS = new Set([
   // this API's own
   'dataset', 'keywords', 'q', 'fuzzy', 'pageSize',
   // eagle-public's (api.ts:160-206). The last four are read by nobody here.
   'pageNum', 'sortBy', 'project', 'categorized', 'projectLegislation', 'populate', 'fields',
-  // The BARE keys the Cosmos-backed datasets accept. eagle-public sends every one of these
-  // flat rather than under `and[...]` — `docIds` and `companyType` from api.ts, `top` from the
-  // home-page news strip — and `and[...]` spellings of the same keys pass the gate below already.
-  // `period` and `_id` are the two single-record fetches.
-  'top', 'docIds', 'period', 'companyType', '_id'
+  ...BARE_FILTER_KEYS
 ]);
 
 /** Loaded once. A schema change needs a redeploy anyway — the definitions ship in the package. */
@@ -599,6 +606,11 @@ function filterKeysIn(query) {
   const keys = Array.from(andParams(query || {}), ([key]) => key);
   if (query && query.project) keys.push('project');
   if (query && query.categorized !== undefined) keys.push('categorized');
+  // The bare spellings too: they are ACCEPTED parameters, so a branch that does not consume one
+  // would otherwise answer 200 with the whole set and say nothing about the filter it ignored.
+  for (const key of BARE_FILTER_KEYS) {
+    if (query && query[key] !== undefined) keys.push(key);
+  }
   return Array.from(new Set(keys));
 }
 

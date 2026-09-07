@@ -10,7 +10,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
+const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
 
 const CONTAINER = 'commentPeriods';
 const PARTITION_FIELD = 'projectId';
@@ -60,6 +60,27 @@ async function listByProject(projectId, access, { pageNum, pageSize, sortBy } = 
   return skip > 0 ? items.slice(skip) : items;
 }
 
+/**
+ * The three fields a period is REFERRED to by, for a bounded set of period ids, in one query.
+ *
+ * Cross-partition — the ids arrive off `updates.pcp` and `notifications.pcp`, which carry no
+ * project — but the set is one page of rows and only the reference is projected.
+ */
+async function listByIds(access, ids) {
+  const unique = Array.from(new Set((ids || []).map(String)));
+  if (unique.length === 0) return [];
+
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [inList('id', unique, '@cpid')],
+    select: 'c.id, c.isMet, c.metURL'
+  });
+
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items;
+}
+
 /** The same predicate as the read, so the total cannot describe rows the page may not carry. */
 async function countByProject(projectId, access) {
   const spec = countWhere({ access, partitionField: PARTITION_FIELD, criteria: criteriaFor(projectId) });
@@ -83,6 +104,7 @@ module.exports = {
   SORTABLE,
   getById,
   listByProject,
+  listByIds,
   countByProject,
   upsert,
   deleteById

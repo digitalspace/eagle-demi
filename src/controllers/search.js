@@ -196,24 +196,58 @@ function cosmosRows(entity, rows, access, schemaName, decorate) {
 /**
  * Label update rows with the project each announces, under the CALLER's access — same rule as
  * `labelWithProjectNames`, one id space over: `updates.projectId` holds the EAGLE id, so the lookup
- * is `getByEagleId` and not `listByIds`.
+ * is `listByEagleIds` and not `listByIds`.
  *
- * Deduplicated, so a page of updates about one project costs one read. A project this caller cannot
- * see yields `null`, which is what eagle-api's own pipeline emits for an orphaned reference
- * (`api/controllers/recentActivity.js:86-90`) and what eagle-public's News model expects.
+ * ONE query for the whole page, like `labelWithProjectNames` and `periodRows`: a per-row lookup
+ * made a 200-row page 200 cross-partition reads, and `pageSlice` allows a page of 1000.
+ * A project this caller cannot see yields `null`, which is what eagle-api's own pipeline emits for
+ * an orphaned reference (`api/controllers/recentActivity.js:86-90`) and what eagle-public's News
+ * model expects.
  */
 async function updateProjects(access, rows) {
-  const eagleIds = Array.from(new Set(rows.map(r => r.projectId).filter(Boolean).map(String)));
-  const found = await Promise.all(eagleIds.map(id => projectsRepo.getByEagleId(access, id)));
-  const byEagleId = new Map();
-  redactAllForAccess('projects', found.filter(Boolean), access)
-    .forEach(p => byEagleId.set(String(p.eagleId), p));
+  const idsOf = (field) => Array.from(new Set(rows.map(r => r[field]).filter(Boolean).map(String)));
+  const eagleIds = idsOf('projectId');
+  const periodIds = idsOf('pcp');
+  const notificationIds = idsOf('projectNotification');
+
+  // Redacted before anything reads a field off them, like every other repository row on this route.
+  const [projectRows, periodRefs, notificationRefs] = await Promise.all([
+    eagleIds.length ? projectsRepo.listByEagleIds(access, eagleIds) : [],
+    periodIds.length ? commentPeriodsRepo.listByIds(access, periodIds) : [],
+    notificationIds.length ? notificationsRepo.listByIds(access, notificationIds) : []
+  ]).then(([p, cp, n]) => [
+    redactAllForAccess('projects', p, access),
+    redactAllForAccess('commentPeriods', cp, access),
+    redactAllForAccess('notifications', n, access)
+  ]);
+
+  const byEagleId = new Map(projectRows.map(p => [String(p.eagleId), p]));
+  const byPeriodId = new Map(periodRefs.map(p => [String(p.id), p]));
+  const byNotificationId = new Map(notificationRefs.map(n => [String(n.id), n]));
 
   return (row) => {
     const project = row.projectId ? byEagleId.get(String(row.projectId)) : null;
+    const period = row.pcp ? byPeriodId.get(String(row.pcp)) : null;
+    const notification = row.projectNotification
+      ? byNotificationId.get(String(row.projectNotification))
+      : null;
+
     // `{name, _id}` and NOT eagleQuery.ref: the News model reads `project.name` and the card links
     // by `project._id`, which is the Eagle id it already holds on the row.
-    return { project: project ? { _id: String(project.eagleId), name: project.name } : null };
+    //
+    // `pcp` and `projectNotification` are OBJECTS or absent, never the bare id the mirror stores:
+    // the News template reads `pcp.isMet` and `projectNotification.name` off them, and a string
+    // answers both with undefined. Unresolved drops the key — `undefined` is not serialised — so a
+    // reference this caller may not see reads as no reference at all.
+    return {
+      project: project ? { _id: String(project.eagleId), name: project.name } : null,
+      pcp: period
+        ? { _id: String(period.id), isMet: period.isMet === true, metURL: period.metURL || '' }
+        : undefined,
+      projectNotification: notification
+        ? { _id: String(notification.id), name: notification.name }
+        : undefined
+    };
   };
 }
 
@@ -298,9 +332,12 @@ const COSMOS_DATASETS = {
     // `query`, NOT `filterQuery`: `updates.projectId` holds the EAGLE project id (the id eagle-api
     // pushed), so the translated DEMI id would match nothing. The mirror image of CommentPeriod.
     const [projectId] = eagleQuery.projectIdsFrom(query);
+    // The news page searches this dataset by text, and there is no index behind it — the container
+    // is small and the repository does it with CONTAINS.
+    const keywords = query.keywords || query.q || '';
     const [rows, count] = await Promise.all([
-      updatesRepo.list(access, { projectId, pageNum, pageSize, sortBy }),
-      updatesRepo.count(access, { projectId })
+      updatesRepo.list(access, { projectId, keywords, pageNum, pageSize, sortBy }),
+      updatesRepo.count(access, { projectId, keywords })
     ]);
     return {
       searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
@@ -315,20 +352,30 @@ const COSMOS_DATASETS = {
     if (id) {
       const row = await notificationsRepo.getById(access, id);
       return {
-        searchResults: cosmosRows('notifications', row ? [row] : [], access, 'ProjectNotification'),
+        searchResults: await notificationRows(access, row ? [row] : []),
         count: row ? 1 : 0,
         applied: ['_id']
       };
     }
 
+    const applied = [];
+    const filters = {};
+    for (const key of Object.keys(notificationsRepo.FILTERS)) {
+      const value = filterValue(query, key);
+      if (value !== null) {
+        filters[key] = value;
+        applied.push(key);
+      }
+    }
+
     const [rows, count] = await Promise.all([
-      notificationsRepo.list(access, { pageNum, pageSize, sortBy }),
-      notificationsRepo.count(access)
+      notificationsRepo.list(access, { ...filters, pageNum, pageSize, sortBy }),
+      notificationsRepo.count(access, filters)
     ]);
     return {
-      searchResults: cosmosRows('notifications', rows, access, 'ProjectNotification'),
+      searchResults: await notificationRows(access, rows),
       count,
-      applied: []
+      applied
     };
   }
 };
@@ -350,7 +397,18 @@ async function listRows({ access, query, pageNum, pageSize, sortBy }, kind) {
     listsRepo.listByKind(kind, access, opts),
     listsRepo.countByKind(kind, access, filters)
   ]);
-  return { searchResults: cosmosRows('lists', rows, access, kind), count, applied };
+  return { searchResults: cosmosRows('lists', rows, access, kind, listRow), count, applied };
+}
+
+/**
+ * eagle-public compares `legislation === 2002`, so a row that stored the year as a string renders
+ * under no legislation at all. Coerced HERE and not only in the writer, because the backfill is the
+ * only writer of these rows and the ones already in the container would need re-running otherwise.
+ */
+function listRow(row) {
+  if (row.legislation === undefined || row.legislation === null || row.legislation === '') return {};
+  const year = Number(row.legislation);
+  return Number.isFinite(year) ? { legislation: year } : {};
 }
 
 /**
@@ -370,6 +428,26 @@ async function periodRows(access, rows) {
 
   return cosmosRows('commentPeriods', rows, access, 'CommentPeriod',
     (row) => ({ project: eagleIdByDemiId.get(String(row.projectId)) || null }));
+}
+
+/**
+ * A notification row carries `proponent` as a NAME. Eagle stores either a name or an Organization
+ * id there, and the notifications page renders the value as it arrives — an id renders as an id.
+ * Resolved in one query under the caller's own access, and left as sent when nothing matches.
+ */
+async function notificationRows(access, rows) {
+  const orgIds = Array.from(new Set(rows
+    .map(r => r.proponent)
+    .filter(value => value && EAGLE_OBJECT_ID.test(String(value)))
+    .map(String)));
+  const orgs = orgIds.length
+    ? redactAllForAccess('lists',
+      await listsRepo.listByIds(access, orgIds, listsRepo.KINDS.ORGANIZATION), access)
+    : [];
+  const nameById = new Map(orgs.map(o => [String(o.id), o.name]));
+
+  return cosmosRows('notifications', rows, access, 'ProjectNotification',
+    (row) => ({ proponent: nameById.get(String(row.proponent)) || row.proponent }));
 }
 
 /** A comment row carries `period` — eagle-public's Comment model reads it. */

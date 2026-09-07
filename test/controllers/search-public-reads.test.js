@@ -232,7 +232,9 @@ test('GET /search?dataset=List', async (t) => {
     assert.strictEqual(row.name, 'Amendment Package');
     assert.strictEqual(row.item,
       'https://www.bclaws.gov.bc.ca/civix/document/id/complete/statreg/370_2002');
-    assert.strictEqual(row.legislation, '2002');
+    // A NUMBER: eagle-public compares `legislation === 2002`, and the backfill stored the year as
+    // a string, so a row that answered '2002' rendered under no legislation at all.
+    assert.strictEqual(row.legislation, 2002);
     assert.strictEqual(row.listOrder, 12);
 
     // The total is MEASURED and is the container's, not the page's — eagle-public pages on it.
@@ -419,6 +421,13 @@ test('GET /search?dataset=RecentActivity', async (t) => {
     let call = 0;
     t.mock.method(cosmos, 'query', async (container, spec) => {
       if (container === 'projects') return { items: [PROJECT_ROW] };
+      // The two references an update carries, as the repositories project them.
+      if (container === 'commentPeriods') {
+        return { items: [{ id: PERIOD_EAGLE_ID, isMet: true, metURL: 'https://eao.gov.bc.ca/met' }] };
+      }
+      if (container === 'notifications') {
+        return { items: [{ id: '5f0e4a0c3f4b1a0021a1b2c3', name: 'Bear Creek Quarry' }] };
+      }
       if (/COUNT\(1\)/.test(spec.query)) return { items: [6] };
       return { items: call++ === 0 ? pinned : unpinned };
     });
@@ -442,8 +451,12 @@ test('GET /search?dataset=RecentActivity', async (t) => {
       'https://projects.eao.gov.bc.ca/p/588511d0aaecd9001b825604/news');
     assert.strictEqual(row.documentUrl,
       'https://projects.eao.gov.bc.ca/api/document/5cf00c03a266b7e187750002/fetch');
-    assert.strictEqual(row.pcp, PERIOD_EAGLE_ID);
-    assert.strictEqual(row.projectNotification, '5f0e4a0c3f4b1a0021a1b2c3');
+    // OBJECTS, not the bare ids the mirror stores: the News template reads `pcp.isMet` and
+    // `projectNotification.name`, and a string answers both with undefined.
+    assert.deepStrictEqual(row.pcp,
+      { _id: PERIOD_EAGLE_ID, isMet: true, metURL: 'https://eao.gov.bc.ca/met' });
+    assert.deepStrictEqual(row.projectNotification,
+      { _id: '5f0e4a0c3f4b1a0021a1b2c3', name: 'Bear Creek Quarry' });
     assert.deepStrictEqual(row.project, { _id: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy' });
     assert.strictEqual(row.notifiedAt, undefined, 'the notify claim is not public');
     assert.strictEqual(row.read, undefined);
@@ -464,6 +477,61 @@ test('GET /search?dataset=RecentActivity', async (t) => {
       assert.ok(boundValues(read).includes(PROJECT_EAGLE_ID),
         'updates.projectId holds the Eagle id — the translated DEMI id would match nothing');
       assert.match(read.query, /ORDER BY c\.dateAdded DESC$/);
+    });
+
+  await t.test('a page of updates resolves every project in ONE query', async () => {
+    // One query PER ROW is what this replaced: `pageSlice` allows a 1000-row page, so a per-row
+    // lookup is 1000 cross-partition reads of the projects container per anonymous request.
+    const eagleIds = ['588511d0aaecd9001b825601', '588511d0aaecd9001b825602', PROJECT_EAGLE_ID];
+    const rows = eagleIds.map((eagleId, i) =>
+      updateRow({ id: `u${i}`, eagleId: `u${i}`, projectId: eagleId }));
+    const projectRows = eagleIds.map((eagleId, i) => ({
+      id: `${200 + i}`, eagleId, name: `Project ${i}`, read: PUBLIC_ACL
+    }));
+    const seen = stubCosmos(t, { projects: projectRows, updates: rows }, { updates: 3 });
+
+    const { status, body } = await get('/api/search?dataset=RecentActivity&pageSize=25');
+
+    assert.strictEqual(status, 200);
+    assert.deepStrictEqual(body[0].searchResults.map(r => r.project.name),
+      ['Project 0', 'Project 1', 'Project 2']);
+
+    const projectSpecs = specsFor(seen, 'projects');
+    assert.strictEqual(projectSpecs.length, 1, 'one batched read, not one per row');
+    assert.match(projectSpecs[0].query, /c\.eagleId IN \(@eid0, @eid1, @eid2\)/);
+    assert.match(projectSpecs[0].query, /SELECT c\.id, c\.name, c\.eagleId/,
+      'the label is projected, never the whole project record');
+  });
+
+  await t.test('a reference this caller cannot resolve is DROPPED, not left as an id', async () => {
+    // `pcp: '<id>'` renders as `pcp.isMet === undefined`, which the News template reads as a period
+    // that exists and is not met. An absent key reads as no period at all, which is the truth.
+    stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+
+    const { body } = await get('/api/search?dataset=RecentActivity');
+
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row.pcp, undefined);
+    assert.strictEqual(row.projectNotification, undefined);
+  });
+
+  await t.test('keywords search the headline and the content, and -score means newest first',
+    async () => {
+      const seen = stubCosmos(t, { projects: [PROJECT_ROW], updates: [updateRow()] });
+
+      const { status } = await get(
+        '/api/search?dataset=RecentActivity&keywords=Application&sortBy=-score');
+
+      assert.strictEqual(status, 200);
+      const [read, counted] = specsFor(seen, 'updates');
+      assert.match(read.query,
+        /CONTAINS\(c\.headline, @keywords, true\) OR CONTAINS\(c\.content, @keywords, true\)/);
+      assert.ok(boundValues(read).includes('Application'));
+      // There is no relevance rank on a Cosmos read, and `-score` must not fall through to an
+      // ORDER BY on a field these rows do not carry — that drops every row.
+      assert.match(read.query, /ORDER BY c\.dateAdded DESC$/);
+      // The count carries the same keyword predicate, or it advertises the unfiltered total.
+      assert.match(counted.query, /CONTAINS\(c\.headline/);
     });
 });
 
@@ -486,6 +554,60 @@ test('GET /search?dataset=ProjectNotification', async (t) => {
     assert.strictEqual(one.body[0].count, 1);
     assert.strictEqual(one.body[0].searchResults[0].name, 'Bear Creek Quarry');
   });
+
+  await t.test('the four page filters narrow the read AND its count', async () => {
+    const seen = stubCosmos(t, { notifications: [notificationRow()] });
+
+    const { body } = await get('/api/search?dataset=ProjectNotification' +
+      '&and%5Btype%5D=Project%20Notification&and%5Bregion%5D=Cariboo' +
+      '&and%5Bpcp%5D=none&and%5Bdecision%5D=In%20Progress');
+
+    assert.strictEqual(body[0].meta[0].dropped, undefined, 'all four are applied, none dropped');
+    const [read, counted] = specsFor(seen, 'notifications');
+    for (const field of ['type', 'region', 'pcp', 'decision']) {
+      assert.match(read.query, new RegExp(`c\\.${field} = @${field}`));
+    }
+    assert.strictEqual(counted.query.split(' WHERE ')[1], read.query.split(' WHERE ')[1]
+      .split(' ORDER BY ')[0], 'the count shares the filter, or it sizes a different set');
+  });
+
+  await t.test('sortBy=-_id is the arrival order these rows actually carry', async () => {
+    // `_id` is Mongo's; a single-property ORDER BY on a field the mirror never wrote drops every
+    // row, so the wire key maps onto the received date rather than reaching Cosmos as written.
+    const seen = stubCosmos(t, { notifications: [notificationRow()] });
+
+    await get('/api/search?dataset=ProjectNotification&sortBy=-_id');
+
+    assert.match(specsFor(seen, 'notifications')[0].query,
+      /ORDER BY c\.notificationReceivedDate DESC$/);
+  });
+
+  await t.test('a proponent stored as an Organization id renders as its name', async () => {
+    const org = {
+      id: '58850f69aaecd9001b8085cc', kind: 'Organization', name: 'Nicomen Energy Ltd',
+      read: PUBLIC_ACL
+    };
+    const seen = stubCosmos(t, {
+      notifications: [notificationRow({ proponent: '58850f69aaecd9001b8085cc' })],
+      lists: [org]
+    });
+
+    const { body } = await get('/api/search?dataset=ProjectNotification');
+
+    assert.strictEqual(body[0].searchResults[0].proponent, 'Nicomen Energy Ltd');
+    assert.strictEqual(specsFor(seen, 'lists').length, 1, 'one batched lookup for the page');
+  });
+
+  await t.test('a proponent stored as a name costs no lookup', async () => {
+    const seen = stubCosmos(t, {
+      notifications: [notificationRow({ proponent: 'Nicomen Energy Ltd' })]
+    });
+
+    const { body } = await get('/api/search?dataset=ProjectNotification');
+
+    assert.strictEqual(body[0].searchResults[0].proponent, 'Nicomen Energy Ltd');
+    assert.deepStrictEqual(specsFor(seen, 'lists'), [], 'only an ObjectId is worth resolving');
+  });
 });
 
 test('the /search query gate', async (t) => {
@@ -501,6 +623,18 @@ test('the /search query gate', async (t) => {
     const bad = await get('/api/search?dataset=List&notAParam=1');
     assert.strictEqual(bad.status, 400);
     assert.match(bad.body.error, /Unsupported query parameter: notAParam/);
+  });
+
+  await t.test('a bare parameter the dataset does not consume is REPORTED dropped', async () => {
+    // Accepted and silently ignored is the worst of the three outcomes: the caller asked for one
+    // period's rows and got every notification, with nothing in the response saying so.
+    stubCosmos(t, { notifications: [notificationRow()] });
+
+    const { body } = await get(
+      '/api/search?dataset=ProjectNotification&period=abc&companyType=x&docIds=a');
+
+    assert.deepStrictEqual(body[0].meta[0].dropped.filter.sort(),
+      ['companyType', 'docIds', 'period']);
   });
 
   await t.test('an unknown dataset is still a 400', async () => {

@@ -14,7 +14,7 @@
 
 const cosmos = require('../db/cosmos-nosql');
 const { canRead } = require('../helpers/access-sql');
-const { eq, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
+const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice, upsertItem } = require('./_sql');
 
 const CONTAINER = 'lists';
 const PARTITION_FIELD = 'kind';
@@ -54,6 +54,25 @@ async function getById(access, id, kind) {
   });
   const { items } = await cosmos.query(CONTAINER, spec, { maxItemCount: 1 });
   return items[0] || null;
+}
+
+/**
+ * Name and id for a bounded set of rows of one kind, in one query — the label a foreign row refers
+ * to, like `notifications.proponent`, which stores an Organization id and renders as its name.
+ */
+async function listByIds(access, ids, kind) {
+  const unique = Array.from(new Set((ids || []).map(String)));
+  if (unique.length === 0) return [];
+
+  const spec = selectWhere({
+    access,
+    partitionField: SCOPE_FIELD,
+    criteria: [eq(PARTITION_FIELD, String(kind), '@kind'), inList('id', unique, '@lid')],
+    select: 'c.id, c.name'
+  });
+
+  const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(kind) });
+  return items;
 }
 
 function criteriaFor(kind, opts) {
@@ -111,6 +130,7 @@ module.exports = {
   FILTERS,
   SORTABLE,
   getById,
+  listByIds,
   listByKind,
   countByKind,
   upsert

@@ -141,6 +141,29 @@ async function listByIds(access, ids) {
   return items;
 }
 
+/**
+ * The same three fields as `listByIds`, keyed the other way round: by EAGLE project id, in one
+ * query.
+ *
+ * `updates.projectId` holds the Eagle id, so labelling a page of updates cannot go through
+ * `listByIds`. One `IN` over `eagleId` rather than a `getByEagleId` per row — a page of 200 updates
+ * about 200 projects was 200 cross-partition reads.
+ */
+async function listByEagleIds(access, eagleIds) {
+  const unique = Array.from(new Set((eagleIds || []).map(String)));
+  if (unique.length === 0) return [];
+
+  const spec = selectWhere({
+    access,
+    partitionField: PARTITION_FIELD,
+    criteria: [inList('eagleId', unique, '@eid')],
+    select: 'c.id, c.name, c.eagleId'
+  });
+
+  const { items } = await cosmos.query(CONTAINER, spec, {});
+  return items;
+}
+
 /** The leaf, not the object: only scalar paths are indexed (Bicep includes /centroid/type/?). */
 const centroidCriteria = () => [isDefinedAndNotNull('centroid.type')];
 
@@ -290,6 +313,7 @@ module.exports = {
   EAGLE_OBJECT_ID,
   getByEagleId,
   listByIds,
+  listByEagleIds,
   listWithCentroid,
   countWithCentroid,
   listEagleOnlyIds,
