@@ -503,6 +503,28 @@ test('eagle-query parameters', async (t) => {
     }), []);
   });
 
+  // The bare keys the Cosmos-backed datasets accept. A 400 here empties the news strip, the
+  // proponent picker and the comment table at once.
+  await t.test('the Cosmos datasets\' own bare parameters are accepted', () => {
+    assert.deepStrictEqual(eagleQuery.unknownParams({
+      dataset: 'RecentActivity', top: 'true', docIds: 'a|b', period: '5b8',
+      companyType: 'Proponent/Certificate Holder', _id: '5b8'
+    }), []);
+  });
+
+  // `projects` has no project axis and neither has `lists` or `notifications`, so a project filter
+  // there must be REPORTED. `commentPeriods` and `updates` do, and they have no index at all, so
+  // the answer cannot come from the index definitions.
+  await t.test('the Cosmos datasets keyed by project can be scoped to one', () => {
+    assert.strictEqual(eagleQuery.canScopeToProject('CommentPeriod'), true);
+    assert.strictEqual(eagleQuery.canScopeToProject('RecentActivity'), true);
+    assert.strictEqual(eagleQuery.canScopeToProject('Document'), true);
+    assert.strictEqual(eagleQuery.canScopeToProject('Project'), false);
+    assert.strictEqual(eagleQuery.canScopeToProject('List'), false);
+    assert.strictEqual(eagleQuery.canScopeToProject('Comment'), false);
+    assert.strictEqual(eagleQuery.canScopeToProject('ProjectNotification'), false);
+  });
+
   // Both project wire forms are live: flat from fields[], and[] from queryModifier. Reading one
   // means half the project tabs return the whole corpus.
   await t.test('project ids are read from both wire forms', () => {

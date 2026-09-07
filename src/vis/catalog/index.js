@@ -7,6 +7,7 @@ const commentPeriods = require('./comment-periods');
 const comments = require('./comments');
 const notifications = require('./notifications');
 const lists = require('./lists');
+const updates = require('./updates');
 // Keyed on AI SEARCH field names, not Cosmos ones — the indexer renames columns
 // (docs/rbac-architecture.md §2 item 9).
 const indexProjects = require('./index-projects');
@@ -21,6 +22,7 @@ const CATALOGS = {
   comments,
   notifications,
   lists,
+  updates,
   'index-projects': indexProjects,
   'index-documents': indexDocuments
 };

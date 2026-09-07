@@ -22,6 +22,11 @@ module.exports = {
   // The comment itself.
   comment: { defaultVis: 4, maxVis: 4 },
   dateAdded: { defaultVis: 4, maxVis: 4 },
+  dateUpdated: { defaultVis: 4, maxVis: 4 },
+  // Free text the commenter typed. Public in eagle-api too — it is in the `ALLOWED_FIELDS` its
+  // `publicGet` sanitises against and that read runs as `['public']`.
+  location: { defaultVis: 4, maxVis: 4 },
+  submittedCAC: { defaultVis: 4, maxVis: 4 },
   isAnonymous: { defaultVis: 4, maxVis: 4 },
   documents: { defaultVis: 4, maxVis: 4 },
   commentId: { defaultVis: 4, maxVis: 4 },

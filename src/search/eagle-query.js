@@ -140,7 +140,12 @@ const KNOWN_PARAMS = new Set([
   // this API's own
   'dataset', 'keywords', 'q', 'fuzzy', 'pageSize',
   // eagle-public's (api.ts:160-206). The last four are read by nobody here.
-  'pageNum', 'sortBy', 'project', 'categorized', 'projectLegislation', 'populate', 'fields'
+  'pageNum', 'sortBy', 'project', 'categorized', 'projectLegislation', 'populate', 'fields',
+  // The BARE keys the Cosmos-backed datasets accept. eagle-public sends every one of these
+  // flat rather than under `and[...]` — `docIds` and `companyType` from api.ts, `top` from the
+  // home-page news strip — and `and[...]` spellings of the same keys pass the gate below already.
+  // `period` and `_id` are the two single-record fetches.
+  'top', 'docIds', 'period', 'companyType', '_id'
 ]);
 
 /** Loaded once. A schema change needs a redeploy anyway — the definitions ship in the package. */
@@ -565,14 +570,23 @@ function sortFieldFor(name, dataset, fields) {
 }
 
 /**
- * Can a `project` filter be EXPRESSED against this dataset's index at all?
+ * The Cosmos-backed datasets whose container carries a project axis, so `controllers/search.js`
+ * applies the `project` filter itself rather than through an index.
+ *
+ * NOT derivable from `fieldsFor`: these datasets have no index at all, and an absent index reads
+ * the same as an index without the field.
+ */
+const COSMOS_PROJECT_DATASETS = new Set(['CommentPeriod', 'RecentActivity']);
+
+/**
+ * Can a `project` filter be EXPRESSED against this dataset at all?
  *
  * `documents` and `chunks` carry `projectId`; `projects` does not, because a project IS its own
  * scope. A dropped project filter is the one drop a route must never simply answer around: the
  * difference between one project's rows and every project's rows is the whole request.
  */
 function canScopeToProject(dataset) {
-  return Boolean(fieldsFor(dataset).get('projectId'));
+  return COSMOS_PROJECT_DATASETS.has(dataset) || Boolean(fieldsFor(dataset).get('projectId'));
 }
 
 /**
@@ -627,6 +641,8 @@ module.exports = {
   ALIASES,
   SORT_KEYS,
   DEFAULT_ORDER,
+  KNOWN_PARAMS,
+  COSMOS_PROJECT_DATASETS,
   buildFilter,
   buildOrderBy,
   // The Cosmos list reads normalise the same three wire shapes — see repositories/_sql.orderByFrom.

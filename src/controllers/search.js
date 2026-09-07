@@ -6,7 +6,7 @@ const { resolveAccess } = require('../helpers/access-sql');
 const { redactForAccess, redactAllForAccess } = require('../vis/redact');
 const { dialsForIndex } = require('../vis/catalog/index-projects-renames');
 const { logger } = require('../utils/logger');
-const { filterFor } = require('../helpers/access-odata');
+const { filterFor, inClause } = require('../helpers/access-odata');
 const aiSearch = require('../search/ai-search');
 const eagleQuery = require('../search/eagle-query');
 const groupChunks = require('../search/group-chunks');
@@ -14,6 +14,11 @@ const documentsRepo = require('../repositories/documents');
 const projectsRepo = require('../repositories/projects');
 const { EAGLE_OBJECT_ID } = projectsRepo;
 const chunksRepo = require('../repositories/chunks');
+const commentPeriodsRepo = require('../repositories/comment-periods');
+const commentsRepo = require('../repositories/comments');
+const notificationsRepo = require('../repositories/notifications');
+const listsRepo = require('../repositories/lists');
+const updatesRepo = require('../repositories/updates');
 const summarizer = require('../ai/summarize');
 const { analyticsEvent } = require('../utils/audit');
 const config = require('../config');
@@ -135,6 +140,242 @@ async function recoverChunkFilters(query, dropped, acl, access) {
   // `quoteList` does quote-DOUBLING only (the comma-delimiter fallback is `access-odata.inClause`),
   // which is safe here because a document id is a GUID or an `eagle-<hex>` string.
   return { scope: `search.in(documentId, ${aiSearch.quoteList(ids)}, ',')`, recovered };
+}
+
+/**
+ * The OData scope for `?docIds=<pipe-separated Eagle ids>`, or null when the caller sent none.
+ *
+ * A PRESENT-BUT-EMPTY value matches nothing rather than everything: `docIds=` asks for a named set
+ * of documents and the named set is empty, which is the same measurement `recoverChunkFilters`
+ * makes when no document matches. `inClause` renders its list comma-delimited — the pipe is the
+ * WIRE separator, and a document id carries neither character.
+ */
+function documentIdScope(raw) {
+  if (raw === undefined || raw === null) return null;
+  const ids = String(Array.isArray(raw) ? raw.join('|') : raw)
+    .split('|').map(v => v.trim()).filter(Boolean);
+  if (ids.length === 0) return "id eq ''";
+  return inClause('id', ids);
+}
+
+/**
+ * One filter value in EITHER wire shape — `&key=v` and `&and[key]=v` are both live, exactly as
+ * `projectIdsFrom` handles both for `project`. A repeat takes the first: these are point lookups,
+ * and a second value would silently pick one of two records.
+ */
+function filterValue(query, key) {
+  for (const [k, v] of eagleQuery.andParams(query || {})) {
+    if (k === key) return String(Array.isArray(v) ? v[0] : v);
+  }
+  const bare = (query || {})[key];
+  if (bare === undefined) return null;
+  return String(Array.isArray(bare) ? bare[0] : bare);
+}
+
+/**
+ * The eagle-search wire shape for a Cosmos row: the REDACTED row as stored, plus the keys
+ * eagle-public indexes on.
+ *
+ * Spread rather than field-by-field on purpose. These containers hold only what a mirror chose to
+ * store and the catalog already decides what leaves; a hand-written field list here would be a
+ * second policy that goes stale the day a mirror grows a field, and the symptom is a blank cell
+ * rather than an error.
+ *
+ * `_id` is the EAGLE id — eagle-public keys every one of these models on it, and the mirrors store
+ * that id as the row key, so the two agree today and the fallback covers a backfilled row.
+ */
+function cosmosRows(entity, rows, access, schemaName, decorate) {
+  return redactAllForAccess(entity, rows, access).map((row) => ({
+    ...row,
+    _id: String(row.eagleId || row.id),
+    _schemaName: schemaName,
+    ...(decorate ? decorate(row) : {})
+  }));
+}
+
+/**
+ * Label update rows with the project each announces, under the CALLER's access — same rule as
+ * `labelWithProjectNames`, one id space over: `updates.projectId` holds the EAGLE id, so the lookup
+ * is `getByEagleId` and not `listByIds`.
+ *
+ * Deduplicated, so a page of updates about one project costs one read. A project this caller cannot
+ * see yields `null`, which is what eagle-api's own pipeline emits for an orphaned reference
+ * (`api/controllers/recentActivity.js:86-90`) and what eagle-public's News model expects.
+ */
+async function updateProjects(access, rows) {
+  const eagleIds = Array.from(new Set(rows.map(r => r.projectId).filter(Boolean).map(String)));
+  const found = await Promise.all(eagleIds.map(id => projectsRepo.getByEagleId(access, id)));
+  const byEagleId = new Map();
+  redactAllForAccess('projects', found.filter(Boolean), access)
+    .forEach(p => byEagleId.set(String(p.eagleId), p));
+
+  return (row) => {
+    const project = row.projectId ? byEagleId.get(String(row.projectId)) : null;
+    // `{name, _id}` and NOT eagleQuery.ref: the News model reads `project.name` and the card links
+    // by `project._id`, which is the Eagle id it already holds on the row.
+    return { project: project ? { _id: String(project.eagleId), name: project.name } : null };
+  };
+}
+
+/**
+ * The Cosmos-backed `/search` datasets — the reads eagle-public used to make against eagle-api's
+ * own `/api/search`, `/api/organization`, `/api/commentperiod`, `/api/public/comment` and
+ * `/api/public/recentActivity`.
+ *
+ * Every one answers `{searchResults, count}` on the SAME envelope the Project bare-list branch
+ * uses, so `res.json`'s wrapper attaches `meta[0].searchResultsTotal` and eagle-public can page.
+ * `applied` names the filter keys the branch consumed; everything else the caller sent is reported
+ * as dropped, because a filter panel that quietly does nothing returns the whole corpus.
+ *
+ * @returns {Promise<{searchResults: object[], count: number, applied?: string[]}>}
+ */
+const COSMOS_DATASETS = {
+  /** Every lookup row. eagle-public asks for all 250-odd in one page and resolves ids client-side. */
+  List: (ctx) => listRows(ctx, listsRepo.KINDS.LIST),
+
+  /** The proponent / certificate-holder picker: `companyType=` in either wire shape, `sortBy=+name`. */
+  Organization: (ctx) => listRows(ctx, listsRepo.KINDS.ORGANIZATION),
+
+  async CommentPeriod({ access, query, filterQuery, pageNum, pageSize, sortBy }) {
+    const id = filterValue(query, '_id');
+    if (id) {
+      const row = await commentPeriodsRepo.getById(access, id);
+      return {
+        searchResults: await periodRows(access, row ? [row] : []),
+        count: row ? 1 : 0,
+        applied: ['_id']
+      };
+    }
+
+    // `filterQuery`, NOT `query`: `commentPeriods.projectId` holds the DEMI project id, so the
+    // Eagle ObjectId eagle-public sends has to be the one `resolveProjectFilter` already translated.
+    const [projectId] = eagleQuery.projectIdsFrom(filterQuery);
+    if (!projectId) {
+      return { searchResults: [], count: 0, applied: [] };
+    }
+
+    const [rows, count] = await Promise.all([
+      commentPeriodsRepo.listByProject(projectId, access, { pageNum, pageSize, sortBy }),
+      commentPeriodsRepo.countByProject(projectId, access)
+    ]);
+    return { searchResults: await periodRows(access, rows), count, applied: ['project'] };
+  },
+
+  async Comment({ access, query, pageNum, pageSize, sortBy }) {
+    const id = filterValue(query, '_id');
+    if (id) {
+      const row = await commentsRepo.getById(access, id);
+      return { searchResults: commentRows(access, row ? [row] : []), count: row ? 1 : 0, applied: ['_id'] };
+    }
+
+    const periodId = filterValue(query, 'period');
+    if (!periodId) {
+      // REFUSED, not answered empty: `comments` is partitioned by period and every caller has one.
+      // An empty 200 here would read as "this period has no comments".
+      return { error: 'dataset=Comment requires and[period]=<id> or _id' };
+    }
+
+    const [rows, count] = await Promise.all([
+      commentsRepo.listByPeriod(periodId, access, { pageNum, pageSize, sortBy }),
+      // The total for the WHOLE period, which is what eagle-public pages the comment table against.
+      commentsRepo.countByPeriod(periodId, access)
+    ]);
+    return { searchResults: commentRows(access, rows), count, applied: ['period'] };
+  },
+
+  async RecentActivity({ access, query, pageNum, pageSize, sortBy }) {
+    if (String(query.top) === 'true') {
+      const rows = await updatesRepo.listTop(access);
+      // The count IS the answer here, not a page of a larger set: `listTop` returns the whole strip.
+      return {
+        searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
+          await updateProjects(access, rows)),
+        count: rows.length,
+        applied: ['top']
+      };
+    }
+
+    // `query`, NOT `filterQuery`: `updates.projectId` holds the EAGLE project id (the id eagle-api
+    // pushed), so the translated DEMI id would match nothing. The mirror image of CommentPeriod.
+    const [projectId] = eagleQuery.projectIdsFrom(query);
+    const [rows, count] = await Promise.all([
+      updatesRepo.list(access, { projectId, pageNum, pageSize, sortBy }),
+      updatesRepo.count(access, { projectId })
+    ]);
+    return {
+      searchResults: cosmosRows('updates', rows, access, 'RecentActivity',
+        await updateProjects(access, rows)),
+      count,
+      applied: projectId ? ['project'] : []
+    };
+  },
+
+  async ProjectNotification({ access, query, pageNum, pageSize, sortBy }) {
+    const id = filterValue(query, '_id');
+    if (id) {
+      const row = await notificationsRepo.getById(access, id);
+      return {
+        searchResults: cosmosRows('notifications', row ? [row] : [], access, 'ProjectNotification'),
+        count: row ? 1 : 0,
+        applied: ['_id']
+      };
+    }
+
+    const [rows, count] = await Promise.all([
+      notificationsRepo.list(access, { pageNum, pageSize, sortBy }),
+      notificationsRepo.count(access)
+    ]);
+    return {
+      searchResults: cosmosRows('notifications', rows, access, 'ProjectNotification'),
+      count,
+      applied: []
+    };
+  }
+};
+
+/** `List` and `Organization`: one container, one handler, told apart by `kind`. */
+async function listRows({ access, query, pageNum, pageSize, sortBy }, kind) {
+  const applied = [];
+  const filters = {};
+  for (const key of Object.keys(listsRepo.FILTERS)) {
+    const value = filterValue(query, key);
+    if (value !== null) {
+      filters[key] = value;
+      applied.push(key);
+    }
+  }
+
+  const opts = { ...filters, pageNum, pageSize, sortBy };
+  const [rows, count] = await Promise.all([
+    listsRepo.listByKind(kind, access, opts),
+    listsRepo.countByKind(kind, access, filters)
+  ]);
+  return { searchResults: cosmosRows('lists', rows, access, kind), count, applied };
+}
+
+/**
+ * A period row carries `project` as the EAGLE project id STRING, because eagle-public's
+ * CommentPeriod model reads `period.project` and passes it straight back into a project URL. The
+ * stored `projectId` is the DEMI id and stays on the row beside it, never in place of it.
+ *
+ * The two ids are not derived from each other, so the Eagle one is READ — under the caller's own
+ * access, deduplicated, and null when the project is not visible to them.
+ */
+async function periodRows(access, rows) {
+  const demiIds = Array.from(new Set(rows.map(r => r.projectId).filter(Boolean).map(String)));
+  const parents = demiIds.length
+    ? redactAllForAccess('projects', await projectsRepo.listByIds(access, demiIds), access)
+    : [];
+  const eagleIdByDemiId = new Map(parents.map(p => [String(p.id), p.eagleId ? String(p.eagleId) : null]));
+
+  return cosmosRows('commentPeriods', rows, access, 'CommentPeriod',
+    (row) => ({ project: eagleIdByDemiId.get(String(row.projectId)) || null }));
+}
+
+/** A comment row carries `period` — eagle-public's Comment model reads it. */
+function commentRows(access, rows) {
+  return cosmosRows('comments', rows, access, 'Comment',
+    (row) => ({ period: row.periodId ? String(row.periodId) : null }));
 }
 
 exports.search = async (req, res) => {
@@ -460,6 +701,15 @@ exports.search = async (req, res) => {
         if (!acl.empty) {
           const { filter, dropped } = eagleQuery.buildFilter(filterQuery, dataset, acl, access);
           noteDropped('filter', dropped);
+
+          // `?docIds=a|b|c` — eagle-public's multi-id document fetch (api.ts getDocumentsByMultiId),
+          // pipe-joined because `buildValues` joins on `|`. ANDed onto the filter as one clause
+          // through the same `inClause` the ACL uses; `search.js:137` builds a similar scope over
+          // the CHUNKS index `documentId`, and this one is the DOCUMENTS index key `id`.
+          const docScope = documentIdScope(req.query.docIds);
+          const scopedDocFilter = docScope
+            ? (filter ? `(${filter}) and ${docScope}` : docScope)
+            : filter;
           // See the Project branch: `Boolean(keywords)` is what lets DEFAULT_ORDER give a
           // keywordless page a stable order instead of a constant relevance score.
           const { orderby, dropped: sortDropped } =
@@ -467,7 +717,7 @@ exports.search = async (req, res) => {
           noteDropped('sort', sortDropped);
 
           const { items, count } = await aiSearch.searchDocuments({
-            filter,
+            filter: scopedDocFilter,
             orderby,
             // Rows in the caller's own `pageSize`, computed once above and shared with every other
             // index read. The service's own `$skip` ceiling of 100,000 binds on ROWS and the corpus
@@ -681,6 +931,30 @@ exports.search = async (req, res) => {
         // renders a non-2xx as an unknown count.
         logger.error(`[search] chunk search failed: ${err.message}`);
         return res.status(502).json({ error: 'Deep Search is unavailable' });
+      }
+    } else if (COSMOS_DATASETS[dataset]) {
+      // The reads eagle-public used to make against eagle-api. Cosmos, never the index: these
+      // containers have no index, and the guard chain is the Project bare-list branch's — one
+      // measured count per request, every row through the catalog, and a 502 on failure because a
+      // read that FAILED is not a read that found nothing.
+      try {
+        const result = await COSMOS_DATASETS[dataset]({
+          access, query: req.query, filterQuery, pageNum, pageSize, sortBy: req.query.sortBy
+        });
+
+        // A branch that refuses the request rather than answering it — see the Comment branch.
+        if (result.error) return res.status(400).json({ error: result.error });
+
+        // Everything the caller asked to filter on that this branch did NOT consume. `project` is
+        // already handled by the canScopeToProject guard above for the datasets that cannot express
+        // it, so anything left here is a key the container has no axis for.
+        const applied = new Set(result.applied || []);
+        noteDropped('filter', eagleQuery.filterKeysIn(req.query).filter(key => !applied.has(key)));
+
+        return res.json([{ searchResults: result.searchResults, count: result.count }]);
+      } catch (err) {
+        logger.error(`[search] ${dataset} read failed: ${err.message}`);
+        return res.status(502).json({ error: `${dataset} search is unavailable` });
       }
     } else {
       return res.status(400).json({ error: `Invalid or unsupported dataset: ${dataset}` });

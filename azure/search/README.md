@@ -102,15 +102,25 @@ squarely on the rebuild side. So the text is added a SECOND time instead: a new
 plain column left exactly as it was. Two copies of one string is the cheap half of that trade — the
 alternative is dropping and refilling 60,578 rows. `nameTokens` on `projects` is the same field for
 the same reason, carrying `c.name`: every searchable projects field is `en.microsoft`, so
-`keywords=mine` matched none of the projects named "... Mine". `proponentId` is deliberately NOT added the same
-way: the value is not in Cosmos until 3.7, and an empty field turns `and[proponent]` from a filter
-that is dropped and named in `meta.dropped` into one that is applied and matches nothing — a silent
-zero-row 200.
+`keywords=mine` matched none of the projects named "... Mine".
 
 Two service rules met on 2026-08-25 while adding it: `stored: false` is rejected on
 `api-version=2024-07-01` (keep `stored: true`), and adding an analyzer or tokenizer to a live index
 is refused without `allowIndexDowntime=true` on the PUT — a few seconds offline, so do it, but only
 on the index PUT and never as a default in `apply-search-definitions.js`.
+
+`proponentId` on `projects` was added on 2026-09-07, and it is a plain widening — no analyzer, no
+rebuild. The facet panel filters by Organization ObjectId while the `proponent` column holds the
+name the list renders and sorts on, so `src/search/eagle-query.js` maps `and[proponent]=<ObjectId>`
+onto `proponentId`. Before the field existed that key was dropped and named in `meta.dropped`. The
+new field is `null` on every row already in the index, and a filter applied over an empty column
+matches nothing under a 200 — quieter than the dropped key it replaces. So the existing rows have to
+be re-pulled before the app ships: PUT the index with `node src/scripts/apply-search-definitions.js
+--live --only projects` (it applies a widening to an index the app is serving from), PUT
+`demi-projects-ds` with `put-search-datasources.js` so the SELECT carries `c.proponentId`, then
+reset and run `projects-indexer` with the two POSTs below and wait for the run entry to report 393
+processed. A row still reads `null` where the pushed Cosmos record has no `proponentId`, so read one
+back before deploying the app.
 
 Widening an index is three separate writes in three different places, and doing them in the wrong
 order takes the live search down for anonymous callers.
