@@ -8,7 +8,11 @@
  * equally be one Eagle merely unpublished, and eagle-api gives an anonymous caller no way to tell
  * the two apart (see `unpublishedOrDeleted` below), so there is nothing here it is safe to delete.
  *
- *   node src/scripts/reconcile-eagle.js [--json]
+ *   node src/scripts/reconcile-eagle.js [--json] [--comments]
+ *
+ * It covers the containers the Eagle push and the backfill write: projects, documents, comment
+ * periods, lists (both kinds), notifications, and — only with `--comments`, which costs one
+ * eagle-api round trip per comment period — comments.
  *
  * Runs on the devbox via `demi-run` — same recipe as the other database scripts,
  * see README "Running anything against the database". Alert on the one `drift=` line, clean is 0.
@@ -24,15 +28,24 @@
 const sources = require('../seed/sources');
 const projects = require('../repositories/projects');
 const documents = require('../repositories/documents');
+const commentPeriods = require('../repositories/comment-periods');
+const comments = require('../repositories/comments');
+const lists = require('../repositories/lists');
+const notifications = require('../repositories/notifications');
 const { buildRegistry, buildProjectIndex } = require('../merge/project');
 const { surplusOf, truncatedReads, documentAdmission } = require('./seed-nosql');
-const { systemAccess } = require('../helpers/access-sql');
+const { eachCommentPage } = require('./seed-public-reads');
+const { systemAccess, MAX_PAGE_SIZE } = require('../helpers/access-sql');
 const { logger } = require('../utils/logger');
 
+/** The containers reported, in the order `report` prints them and `summaryLine` names them. */
+const LABELS = ['projects', 'documents', 'commentPeriods', 'lists', 'notifications', 'comments'];
+
 function parseArgs(argv) {
-  const args = { json: false };
+  const args = { json: false, comments: false };
   for (const a of argv) {
     if (a === '--json') args.json = true;
+    else if (a === '--comments') args.comments = true;
     else throw new Error(`[reconcile] unknown argument: ${a}`);
   }
   return args;
@@ -64,25 +77,61 @@ function diff(rows, keyOf, eagleIds, pushOwned = () => true, parentPublished = (
   };
 }
 
-/** The line a log alert matches. `drift=0` is clean. */
+/** Every id set a diff produced, as one drift number. */
+function driftOf(summary) {
+  return LABELS.reduce((total, label) => {
+    const s = summary[label];
+    return s ? total + s.unpublishedOrDeleted.length + s.eagleOnly.length : total;
+  }, 0);
+}
+
+/**
+ * The line a log alert matches. `drift=0` is clean.
+ *
+ * A container the run did not sweep says `skipped` rather than zero — `comments` is behind
+ * `--comments` and a zero there would read as "no drift" for a sweep that never happened.
+ */
 function summaryLine(summary) {
   const { projects: p, documents: d } = summary;
+  const counts = (label) => {
+    const s = summary[label];
+    return s
+      ? `${label}: unpublishedOrDeleted=${s.unpublishedOrDeleted.length} eagleOnly=${s.eagleOnly.length} `
+      : `${label}: skipped `;
+  };
   return '[reconcile] ' +
     `projects: unpublishedOrDeleted=${p.unpublishedOrDeleted.length} eagleOnly=${p.eagleOnly.length} ` +
     `documents: unpublishedOrDeleted=${d.unpublishedOrDeleted.length} eagleOnly=${d.eagleOnly.length} ` +
     `unresolvedParent=${d.unresolvedParent.length} ` +
+    counts('commentPeriods') + counts('lists') + counts('notifications') + counts('comments') +
     `drift=${summary.drift}`;
 }
 
 /**
+ * Every published id of one `/search` dataset.
+ *
+ * `fetchAllPages` throws on a short read, so an id missing here is an id Eagle does not publish
+ * rather than one a truncated fetch did not reach.
+ */
+async function eagleIds(src, dataset, into = new Set()) {
+  for (const row of await src.fetchAllPages(src.EAGLE_API_BASE, dataset)) into.add(String(row._id));
+  return into;
+}
+
+/**
  * @param {string[]} argv
- * @param {object} [deps] test seam: {sources, projects, documents}
+ * @param {object} [deps] test seam: {sources, projects, documents, commentPeriods, comments,
+ *   lists, notifications}
  */
 async function reconcile(argv = [], deps = {}) {
-  parseArgs(argv);
+  const args = parseArgs(argv);
   const src = deps.sources || sources;
   const projectsRepo = deps.projects || projects;
   const documentsRepo = deps.documents || documents;
+  const periodsRepo = deps.commentPeriods || commentPeriods;
+  const commentsRepo = deps.comments || comments;
+  const listsRepo = deps.lists || lists;
+  const notificationsRepo = deps.notifications || notifications;
 
   // systemAccess(), because a scoped context lists only what it can see: every row it cannot read
   // would compute as Eagle-only drift, and every unpublished row as gone from Eagle.
@@ -125,16 +174,95 @@ async function reconcile(argv = [], deps = {}) {
 
   summary.projects = { inDemi: projectRows.length, inEagle: eagleProjectIds.size, ...projectDiff };
   summary.documents = { inDemi: documentRows.length, inEagle: eagleDocumentIds.size, ...documentDiff };
-  summary.drift = projectDiff.unpublishedOrDeleted.length + projectDiff.eagleOnly.length +
-    documentDiff.unpublishedOrDeleted.length + documentDiff.eagleOnly.length;
+
+  // The public-read containers, enumerated through the SAME repository reads a request uses. Their
+  // rows carry `id === eagleId`, and every one of them is the backfill's or the push's, so there is
+  // no `pushOwned` split to make and no parent gate: a comment period whose project is unpublished
+  // is not published by Eagle either, so it is not in the id set to begin with.
+  const periodRows = [];
+  // MAX_PAGE_SIZE caps ONE partition's read, so the ceiling is per project. Comparing the running
+  // total against it would fire on every real run once DEMI holds that many periods in all.
+  let periodPageFilled = false;
+  for (const project of projectRows) {
+    // Per project, because `commentPeriods` partitions on it. Every project a period can hang off
+    // is in this list: the mirror resolves its parent through `getByEagleId`, so a period under a
+    // project with no `eagleId` cannot exist.
+    const rows = await periodsRepo.listByProject(project.id, access, {});
+    periodPageFilled = periodPageFilled || rows.length >= MAX_PAGE_SIZE;
+    periodRows.push(...rows);
+  }
+  const listRows = [
+    ...await listsRepo.listByKind(listsRepo.KINDS.LIST, access, {}),
+    ...await listsRepo.listByKind(listsRepo.KINDS.ORGANIZATION, access, {})
+  ];
+  const notificationRows = await notificationsRepo.list(access, {});
+
+  // One `lists` container holds both kinds, so both id sets are one comparison.
+  const eagleListIds = await eagleIds(src, 'Organization', await eagleIds(src, 'List'));
+  const eaglePeriodIds = await eagleIds(src, 'CommentPeriod');
+  const eagleNotificationIds = await eagleIds(src, 'ProjectNotification');
+
+  summary.commentPeriods = {
+    inDemi: periodRows.length, inEagle: eaglePeriodIds.size,
+    ...diff(periodRows, row => String(row.id), eaglePeriodIds)
+  };
+  summary.lists = {
+    inDemi: listRows.length, inEagle: eagleListIds.size,
+    ...diff(listRows, row => String(row.id), eagleListIds)
+  };
+  summary.notifications = {
+    inDemi: notificationRows.length, inEagle: eagleNotificationIds.size,
+    ...diff(notificationRows, row => String(row.id), eagleNotificationIds)
+  };
+
+  summary.failures.push(...(await truncatedReads(access, [
+    ['lists', listRows, async (a) =>
+      (await listsRepo.countByKind(listsRepo.KINDS.LIST, a)) +
+      (await listsRepo.countByKind(listsRepo.KINDS.ORGANIZATION, a))],
+    ['notifications', notificationRows, notificationsRepo.count]
+  ])).map(short => `${short} — the diff below is computed off a truncated read`));
+
+  // The per-partition enumerations have no cheap COUNT to pair with — one per project, one per
+  // period — so the ceiling itself is the check: a partition that filled a page may hold more.
+  if (periodPageFilled) {
+    summary.failures.push('a project filled a comment-period page — the commentPeriods diff below ' +
+      'is computed off a truncated read');
+  }
+
+  // Comments are OPT-IN: the sweep costs one eagle-api round trip per comment period and one
+  // single-partition Cosmos query per period, which is too much to put on the nightly timer.
+  if (args.comments) {
+    const commentRows = [];
+    const eagleCommentIds = new Set();
+    let ceiling = false;
+    for (const period of periodRows) {
+      const rows = await commentsRepo.listByPeriod(period.id, access, {});
+      ceiling = ceiling || rows.length >= MAX_PAGE_SIZE;
+      commentRows.push(...rows);
+      await eachCommentPage(period.id, { sources: src },
+        (items) => { for (const row of items) eagleCommentIds.add(String(row._id)); });
+    }
+    if (ceiling) {
+      summary.failures.push('a period filled a comment page — the comments diff below is computed ' +
+        'off a truncated read');
+    }
+    summary.comments = {
+      inDemi: commentRows.length, inEagle: eagleCommentIds.size,
+      ...diff(commentRows, row => String(row.id), eagleCommentIds)
+    };
+  }
+
+  summary.drift = driftOf(summary);
 
   return summary;
 }
 
 function report(summary, { json } = {}) {
   const lines = [`[reconcile] eagle=${summary.eagle}`];
-  for (const label of ['projects', 'documents']) {
+  for (const label of LABELS) {
     const s = summary[label];
+    // `comments` is only there when the run swept it — see `--comments`.
+    if (!s) continue;
     // Capped: a real drift can carry thousands of ids and --json is where the full set lives.
     const preview = ids => ids.slice(0, 20).join(', ') + (ids.length > 20 ? ', …' : '');
     const line = (text, ids) =>
@@ -166,8 +294,9 @@ function report(summary, { json } = {}) {
       unpublishedOrDeleted: s.unpublishedOrDeleted.map(r => r.id), eagleOnly: s.eagleOnly,
       unresolvedParent: s.unresolvedParent
     });
-    lines.push(JSON.stringify(
-      { projects: ids(summary.projects), documents: ids(summary.documents) }, null, 2));
+    const full = {};
+    for (const label of LABELS) if (summary[label]) full[label] = ids(summary[label]);
+    lines.push(JSON.stringify(full, null, 2));
   }
   return lines.join('\n');
 }
@@ -178,10 +307,11 @@ function report(summary, { json } = {}) {
  *
  * No `live` option: this script changes nothing in any mode. See the header.
  *
- * @param {object} [opts] {json} full id sets, {deps} the same test seam `reconcile` takes
+ * @param {object} [opts] {json} full id sets, {comments} sweep the comment container too (one
+ *   eagle-api round trip per comment period), {deps} the same test seam `reconcile` takes
  */
-async function run({ json = false, deps } = {}) {
-  const summary = await reconcile([], deps);
+async function run({ json = false, comments: sweepComments = false, deps } = {}) {
+  const summary = await reconcile(sweepComments ? ['--comments'] : [], deps);
   logger.info(report(summary, { json }));
   // Its own record, so a log alert matches this line and not the report body around it.
   logger.info(summaryLine(summary));
@@ -202,7 +332,7 @@ if (require.main === module) {
   }
   initCosmosClient();
 
-  run({ json: args.json })
+  run({ json: args.json, comments: args.comments })
     .catch(err => {
       logger.error(`[reconcile] ${err.stack || err.message}`);
       process.exit(1);

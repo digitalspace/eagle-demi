@@ -94,6 +94,32 @@ function mirrorItem(eagleId, doc, existing) {
 const raced = (err) => [409, 412].includes(err.code || err.statusCode);
 
 /**
+ * Mirror one raw Eagle `RecentActivity`, whoever asked — the push handler below or the backfill
+ * (src/scripts/seed-public-reads.js). It does NOT announce: `announce` is the push handler's,
+ * because a backfill is history rather than news.
+ *
+ * @returns {Promise<{saved: object, existing: object|null}>}
+ */
+async function mirrorFromEagle(eagleId, doc) {
+  // systemAccess: the mirror must find a row it is about to republish while that row is private.
+  let existing = await updates.getById(systemAccess(), eagleId);
+
+  let saved;
+  try {
+    saved = await updates.upsert(mirrorItem(eagleId, doc, existing), existing);
+  } catch (err) {
+    // The row moved between the read and the write, so the `notifiedAt` carried above is stale
+    // and writing it would hand back a claim another push is holding. Re-read, write again.
+    if (!raced(err)) throw err;
+    existing = await updates.getById(systemAccess(), eagleId);
+    saved = await updates.upsert(mirrorItem(eagleId, doc, existing), existing);
+  }
+  return { saved, existing };
+}
+
+exports.mirrorFromEagle = mirrorFromEagle;
+
+/**
  * Receive one Update pushed by eagle-api, keyed by its Eagle `_id`.
  *
  * The body carries the RAW Eagle record, exactly as the project and document mirrors do.
@@ -106,19 +132,7 @@ exports.upsertFromEagle = async (req, res) => {
       return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
     }
 
-    // systemAccess: the mirror must find a row it is about to republish while that row is private.
-    let existing = await updates.getById(systemAccess(), eagleId);
-
-    let saved;
-    try {
-      saved = await updates.upsert(mirrorItem(eagleId, doc, existing), existing);
-    } catch (err) {
-      // The row moved between the read and the write, so the `notifiedAt` carried above is stale
-      // and writing it would hand back a claim another push is holding. Re-read, write again.
-      if (!raced(err)) throw err;
-      existing = await updates.getById(systemAccess(), eagleId);
-      saved = await updates.upsert(mirrorItem(eagleId, doc, existing), existing);
-    }
+    const { saved, existing } = await mirrorFromEagle(eagleId, doc);
 
     auditEvent(req, {
       action: 'update.push',
