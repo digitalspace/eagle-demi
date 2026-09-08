@@ -5,9 +5,9 @@ info:
     Central authoritative storage and spatial search engine for projects, documents, and
     administrative region boundaries.
 
-    NOT THE CONTRACT. This file is hand-maintained, covers 29 of the 43 paths in src/http/routes.js
-    (39 of its 57 operations), and has drifted from what the API actually serves. Undocumented here:
-    /config, /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
+    NOT THE CONTRACT. This file is hand-maintained, covers 39 of the 52 paths in src/http/routes.js
+    (50 of its 67 operations), and has drifted from what the API actually serves. Undocumented here:
+    /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
     browser redirect rather than an API call and is documented in the wiki. The routes in
     src/http/routes.js are authoritative; read them, or the endpoint itself, before relying on
     anything here.
@@ -116,6 +116,53 @@ paths:
           description: Unknown dataset, unsupported query parameter, or dataset=Comment with no period.
         '502':
           description: The backing search index or database could not be read.
+
+  /api/config:
+    get:
+      summary: DEMI admin console runtime configuration
+      description: >-
+        Unauthenticated, and everything it answers is public — never add a secret. The app settings
+        of the running container, overlaid with the `OVERRIDABLE_KEYS` the `config` document
+        carries. A Cosmos failure or an unseeded container degrades to the app settings alone
+        rather than failing, so a database outage cannot take the frontend down. `BUILD_ID` comes
+        from the deploy package and the document cannot override it.
+      responses:
+        '200':
+          description: The admin console's configuration. Always answered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Config'
+
+  /api/config/public:
+    get:
+      summary: Public site runtime configuration
+      description: >-
+        Unauthenticated, and everything it answers is public — never add a secret. What eagle-public
+        boots on, served from the `public` document exactly as stored: only the allowlisted keys
+        below, no app-settings overlay and no defaults. eagle-api's Mongo `Config` is the source of
+        truth; this is a copy seeded by `src/scripts/seed-public-config.js`, so a hand edit in Mongo
+        leaves it stale until the script is re-run.
+
+        Unlike `/api/config` this route does NOT degrade. A defaulted payload would answer
+        `ACCESS_GATE: false` and open the access curtain on a site meant to be gated, so a missing
+        or unreadable document is a 503 and the caller falls back to eagle-api's own `/api/config`.
+      responses:
+        '200':
+          description: The public site's configuration — the allowlisted keys the document carries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicConfig'
+        '503':
+          description: >-
+            `{ "error": "Public configuration is unavailable." }` — the `public` document is not
+            seeded, or Cosmos could not be read.
+          headers:
+            Cache-Control:
+              description: Always `no-store`, so no cache holds the refusal once the document is seeded.
+              schema:
+                type: string
 
   /api/me:
     get:
@@ -2104,6 +2151,88 @@ components:
                   `EPIC documents - <N> projects.zip` when the selection spans several. Several
                   parts add ` (part <n> of <partCount>)` before the extension. Baked into the
                   presigned URL as its content-disposition.
+    Config:
+      type: object
+      description: >-
+        App settings overlaid with the `config` document. Additional properties are possible: the
+        overlay is bounded by `OVERRIDABLE_KEYS` in `src/controllers/config.js`, which is the list
+        that decides what a stored value may change.
+      properties:
+        BUILD_ID:
+          type: string
+          description: >-
+            Short git sha and deploy timestamp, read once at load from `build-id.txt` in the deploy
+            package. `unknown` outside a packaged deploy. The document cannot override it — an
+            env-var build id would prove a restart happened, not that new code is answering.
+        ENVIRONMENT:
+          type: string
+        API_LOCATION:
+          type: string
+          description: Empty means same-origin `/api`.
+        API_PATH:
+          type: string
+        KEYCLOAK_CLIENT_ID:
+          type: string
+        KEYCLOAK_URL:
+          type: string
+        KEYCLOAK_REALM:
+          type: string
+        KEYCLOAK_ENABLED:
+          type: boolean
+          description: >-
+            Real JSON boolean. A stored value is only accepted when it is a boolean, so Bicep's
+            `'True'` cannot switch a feature on or off through a string comparison.
+        BANNER_COLOUR:
+          type: string
+        USE_MOCK_DATA:
+          type: boolean
+        configEndpoint:
+          type: boolean
+
+    PublicConfig:
+      type: object
+      additionalProperties: false
+      description: >-
+        The `PUBLIC_KEYS` allowlist in `src/controllers/config.js`, and nothing else. Every property
+        is optional: what the `public` document does not carry is absent rather than defaulted, so
+        a consumer that needs a key must treat its absence as "ask eagle-api instead". A field added
+        to the document is not published until it is added to the allowlist too.
+      properties:
+        ENVIRONMENT:
+          type: string
+        BANNER_COLOUR:
+          type: string
+        LOG_LEVEL:
+          type: string
+        API_PATH:
+          type: string
+        SEARCH_API_PATH:
+          type: string
+          description: >-
+            Where the public site sends search. `/demi-search` on test and prod; empty is the kill
+            switch that sends it back to eagle-api's own search.
+        DEMI_PROJECTS_PATH:
+          type: string
+        ADMIN_PATH:
+          type: string
+        CONTENT_SEARCH:
+          type: boolean
+        EAGLE_ANALYTICS_URL:
+          type: string
+        APPINSIGHTS_CONNECTION_STRING:
+          type: string
+          description: Ingestion endpoint and instrumentation key. Public by design, not a secret.
+        SURVEY_URL:
+          type: string
+        SHOW_SURVEY_BANNER:
+          type: boolean
+        ACCESS_GATE:
+          type: boolean
+          description: >-
+            Whether the public site closes its access curtain. A stored `false` is served as
+            boolean `false`; absent is NOT `false`, which is why an unseeded document answers 503
+            rather than a payload.
+
     MeBase:
       type: object
       properties:

@@ -65,10 +65,11 @@ const UNGATED = {
     'Not a repository. This is the shared query builder where visibilityFor is composed, so it is ' +
     'the thing the others are asserted to route through.',
   'config.js':
-    'One document, served verbatim to anonymous callers by GET /api/config, so there is no tier ' +
-    'that may read only part of it and nothing to filter. What bounds the payload is the ' +
-    "controller's explicit OVERRIDABLE_KEYS allowlist, not a permission field — a key added to " +
-    'the document is not published until it is added there too.',
+    'Two documents, served to anonymous callers by GET /api/config and GET /api/config/public, so ' +
+    'there is no tier that may read only part of either and nothing to filter. What bounds each ' +
+    "payload is the controller's explicit key allowlist — OVERRIDABLE_KEYS for the admin console, " +
+    'PUBLIC_KEYS for the public site — not a permission field. A key added to a document is not ' +
+    'published until it is added to the matching list too.',
   'cache.js':
     'Holds no application data. The only caller is GET /admin/cost, itself admin-gated and ' +
     'asserted below, and what it stores is the answer that route already computed for an ' +
