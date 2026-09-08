@@ -313,3 +313,37 @@ test('a non-429 failure keeps the three short attempts it always had', async (t)
   assert.deepStrictEqual(waits, [1000, 2000], 'the 1s/2s retry, not the rate-limit ladder');
   assert.strictEqual(calls.length, 3, 'the rate-limit budget is not spent on ordinary failures');
 });
+
+test('retry-after wins over ratelimit-reset when a 429 carries both', async (t) => {
+  const { waits, sleep } = fetchSequence(t, [
+    throttled({ 'retry-after': '2', 'ratelimit-reset': '12', 'ratelimit-policy': '200;w=60' }),
+    served([])
+  ]);
+
+  await fetchJson(COMMENT_URL, undefined, { sleep });
+
+  assert.deepStrictEqual(waits, [2000],
+    "the server's own instruction, not the seconds left in the window");
+});
+
+test('a ratelimit-reset of 0 still waits a second rather than retrying at once', async (t) => {
+  const { waits, sleep } = fetchSequence(t, [
+    throttled({ 'ratelimit-reset': '0', 'ratelimit-policy': '200;w=60' }),
+    served([])
+  ]);
+
+  await fetchJson(COMMENT_URL, undefined, { sleep });
+
+  assert.deepStrictEqual(waits, [1000], 'the floor, so the retry budget is not spent on nothing');
+});
+
+test('a retry-after far past the cap waits the cap and asks again', async (t) => {
+  const { waits, sleep } = fetchSequence(t, [
+    throttled({ 'retry-after': '999' }),
+    served([])
+  ]);
+
+  await fetchJson(COMMENT_URL, undefined, { sleep });
+
+  assert.deepStrictEqual(waits, [120000], 'one bad header cannot park a nightly run for an hour');
+});
