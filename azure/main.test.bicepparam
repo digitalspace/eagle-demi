@@ -61,9 +61,10 @@ param deployReconcileDriftAlert = false
 // bulkCleanupSchedule is set here only to move the hour.
 param bulkDownloadsQueue = 'bulk-downloads'
 param deployBulkDownloadPoisonAlert = true
-// Overridden because this is the environment the throughput is measured in: 4 concurrent object
-// reads against NRS, 64 MiB of buffer each. docs/bulk-download-performance.md says how to remeasure.
-param bulkFetchConcurrency = 4
+// Left at the default. The 2026-09-08 A/B on test (docs/bulk-download-performance.md) showed no
+// gain from concurrent fetches — the archive stream backpressures on the single-connection upload,
+// so extra read buffers only fill and wait. Stays at 1 until the upload path is parallel.
+param bulkFetchConcurrency = 1
 
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //

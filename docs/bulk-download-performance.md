@@ -110,7 +110,7 @@ outside BC Gov's network, independent of caller.
 | `host.json` queue | `messageEncoding: none`, `batchSize: 1`, `newBatchThreshold: 0`, `maxDequeueCount: 3`, `visibilityTimeout: 01:00:00` |
 | `src/storage/minio.js` | `UPLOAD_PART_SIZE = 64 * 1024 * 1024` (64 MiB) |
 | `BULK_FETCH_AHEAD` | `3` (default) |
-| `BULK_FETCH_CONCURRENCY` | `4` on test, `1` (default, off) elsewhere |
+| `BULK_FETCH_CONCURRENCY` | `1` (default, off) everywhere, including test since the 2026-09-08 A/B below |
 | `BULK_FETCH_BUFFER_BYTES` | `268435456` (256 MiB, default) |
 
 `batchSize: 1` means one zip per instance at a time; Flex scales instances
@@ -120,7 +120,7 @@ buffer per 2048 MB instance.
 
 ## Ranked causes
 
-### 1. Sequential per-document fetch — no concurrency (dominant) — FIXED
+### 1. Sequential per-document fetch — no concurrency (dominant) — read-ahead and concurrency both landed; neither moved the number
 
 **Evidence**, as measured 2026-09-03 and before the fix below: `buildPart()`
 in `src/jobs/bulk-download.js` awaited `getObjectStream` → `addEntry` →
@@ -365,3 +365,26 @@ measure nothing.
 a job that is purely fetch-bound should approach 3-5 s at `4`. It will not:
 whatever is left is the serial upload (#8), and the gap between the two is
 the number that says whether #8 is worth building.
+
+**Results, 2026-09-08**: same ten public documents, 83,892,355 bytes, three
+jobs per setting, worker duration from `Functions.bulkDownloadWorker`
+`Duration` in `demi-logs-test`, taken after d613ea4:
+
+| fetch | job | ms | MB/s |
+|---|---|---|---|
+| 4 | `838367c6` | 16,905 | 4.96 |
+| 4 | `81c82788` | 20,928 | 4.01 |
+| 4 | `eb64ccdb` | 12,116 | 6.92 |
+| 1 | `09b76470` | 12,210 | 6.87 |
+| 1 | `96b66fab` | 13,978 | 6.00 |
+| 1 | `decfe5be` | 15,455 | 5.43 |
+
+No gain from concurrent fetches: the two settings' job times overlap, and the
+ceiling is about 6 MB/s regardless of `BULK_FETCH_CONCURRENCY`. The archive
+stream backpressures on the single-connection upload (#8), so the extra read
+buffers at `4` only fill and wait — they never get to move bytes any faster
+than the one upload connection drains them. `BULK_FETCH_CONCURRENCY` stays
+documented and available, default `1`, until the upload path is parallel.
+Next lever is #8: parallel multipart parts, or measuring raw upload
+throughput from the Function to the object store first, before building
+anything.
