@@ -23,6 +23,10 @@ env:
   # Still `eagle-extractor-*`: the code moved repositories, the deployed app did not.
   EXTRACTOR_APP_NAME: eagle-extractor-prod
   API_FLEX_APP_NAME: demi-api-fc-prod
+  # The app's own host, the same one the staging workflow smokes. Not the public
+  # www.projects.eao.gov.bc.ca/demi-search path: that answer also depends on the OpenShift rproxy,
+  # which this workflow does not deploy and must not be able to fail on.
+  API_BASE_URL: https://demi-api-fc-prod.azurewebsites.net
 
 jobs:
   deploy-extractor:
@@ -112,14 +116,68 @@ jobs:
           echo "### ❌ Extractor deployment failed" >> $GITHUB_STEP_SUMMARY
           echo "Check the step logs above for packaging, zipdeploy or trigger-registration errors." >> $GITHUB_STEP_SUMMARY
 
+  # The index definitions of the tag ABOUT TO SHIP, asked of the app that is ALREADY SERVING. That
+  # pairing is the whole gate: v0.77.2 selected `fileSize`, the live `documents` index did not have
+  # it, and every Document query answered 502 for 65 minutes (2026-09-08) behind a green deploy.
+  # Live indexes are widened by hand (`scripts/demi-devbox.sh apply --env prod`) because no CI
+  # identity holds Search Service Contributor, so this checks rather than fixes.
+  verify-search-schema:
+    name: Verify the live search indexes fit this tag
+    runs-on: ubuntu-latest
+    # Behind the same approval as the deploys: it reads production, and only matters for a release
+    # somebody has decided to ship.
+    environment: prod
+    timeout-minutes: 10
+    steps:
+      - name: Validate version format
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="$INPUT_VERSION"
+          if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Version must be in the format v1.2.3, got '$VERSION'"
+            exit 1
+          fi
+
+      # The TAG's index definitions, not main's. No fetch-depth: nothing here reads history.
+      - name: Checkout the tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.version }}
+
+      # No setup-node and no install: the probe reads JSON and curls, on the runner's own node.
+      - name: Probe the live indexes with this tag's index definitions
+        run: ./scripts/search-schema-probe.sh "$API_BASE_URL"
+
+      - name: Report the drift to the job summary
+        if: failure()
+        run: |
+          {
+            echo "### ❌ Production search indexes are narrower than \`${{ inputs.version }}\`"
+            echo ""
+            echo "Deploying it would 502 every affected query. Widen the live indexes first:"
+            echo ""
+            echo '```'
+            echo "scripts/demi-devbox.sh apply --env prod"
+            echo '```'
+            echo ""
+            echo "Then re-run this workflow. Runbook: \`eagle-demi.wiki/Runbook-Search-Outage.md\`."
+            echo "The missing field names are in the step log above."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   deploy-api:
     name: Build & Deploy API (Azure Function App)
     runs-on: ubuntu-latest
-    # Ordered, not concurrent: both jobs sit behind the same approval, and the API must not serve
-    # traffic while the extractor it feeds is still going up.
-    needs: deploy-extractor
+    # Ordered, not concurrent: all three jobs sit behind the same approval, the API must not serve
+    # traffic while the extractor it feeds is still going up, and it must not ship selects the live
+    # indexes cannot answer.
+    needs: [deploy-extractor, verify-search-schema]
     environment: prod
     timeout-minutes: 30
+    outputs:
+      # Read by the rollback job. A failure BEFORE the app was published — packaging, zipdeploy —
+      # leaves this unset, and rolling back a deploy that never landed would be a pointless deploy.
+      smoke-failed: ${{ steps.smoke.outputs.failed }}
     env:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
     steps:
@@ -139,55 +197,110 @@ jobs:
           ref: refs/tags/${{ inputs.version }}
           fetch-depth: 0
 
-      - name: Azure Login
-        uses: azure/login@v3
+      # Install, package, publish, wait. Shared with the rollback job below so the two cannot drift.
+      - name: Deploy the API
+        uses: ./.github/actions/deploy-api-flex
         with:
+          resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
+          app-name: ${{ env.API_FLEX_APP_NAME }}
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # Before setup-node: its Yarn 4 cache detection reads the corepack shim (actions/setup-node#1027).
-      - name: Enable Corepack
-        run: corepack enable
-
-      # 22 is the Flex host's runtime (azure/modules/api-function-flex.bicep).
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: 'yarn'
-
-      # Dependencies only. Packaging belongs to `scripts/package-api.py`. demi-api-prod is retired
-      # from serving and a deploy onto it broke it (2026-09-01) — the Flex app is the only target.
-      - name: Install Dependencies
-        run: yarn install --immutable
-
-      # Dev dependencies are half the package's file count, and the Flex extract phase is paid per
-      # file. Nothing after this step needs them.
-      - name: Drop dev dependencies from the package
-        run: yarn workspaces focus --production
-
-      # `config-zip`: a Flex app has no Kudu wwwroot to POST into — it publishes to the deployment
-      # blob container declared in the module.
-      - name: Deploy API to the Flex app
+      # Registered and started is not the same fact as answering. Three real queries, because the
+      # 2026-09-08 outage had a healthy `/health` throughout.
+      - name: Smoke test production search
+        id: smoke
+        env:
+          # Empty falls back to the id documented in the script.
+          SMOKE_PROJECT_ID: ${{ vars.SEARCH_SMOKE_PROJECT_ID }}
         run: |
-          set -euo pipefail
-          export BUILD_ID="$(git describe --tags --always --dirty)-$(date -u +%H%M%S)"
-          python3 scripts/package-api.py . /tmp/api-flex.zip
-          az functionapp deployment source config-zip \
-            -g "$AZURE_RESOURCE_GROUP" \
-            -n "$API_FLEX_APP_NAME" \
-            --src /tmp/api-flex.zip
-
-      # `api` is the catch-all route in api/index.js; a deploy that registers nothing 404s every route.
-      - name: Verify the api function is registered
-        run: ./scripts/wait-for-function.sh "$AZURE_RESOURCE_GROUP" "$API_FLEX_APP_NAME" api
+          set -uo pipefail
+          if ! ./scripts/search-smoke.sh "$API_BASE_URL" "$SMOKE_PROJECT_ID"; then
+            # Recorded BEFORE failing: the rollback job keys off this output.
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
 
       - name: Report API failure to job summary
         if: failure()
         run: |
           echo "### ❌ API deployment failed" >> $GITHUB_STEP_SUMMARY
           echo "Check step logs above for details on packaging or Azure Function App deployment errors." >> $GITHUB_STEP_SUMMARY
+
+  # Only when the deployed build answered badly — not on a packaging or upload failure, which never
+  # changed what production is serving.
+  rollback:
+    name: Roll back to the previous release
+    runs-on: ubuntu-latest
+    needs: deploy-api
+    if: failure() && needs.deploy-api.outputs.smoke-failed == 'true'
+    environment: prod
+    timeout-minutes: 30
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+    steps:
+      # The newest published release that is not the one just deployed. Drafts are excluded because
+      # every push to main cuts one and none of them has ever been in production.
+      - name: Find the release production was on
+        id: previous
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PREVIOUS=$(gh release list --repo "$REPO" --limit 50 --exclude-drafts \
+            --json tagName,createdAt \
+            | jq -r --arg current "$VERSION" \
+                '[.[] | select(.tagName != $current)] | sort_by(.createdAt) | reverse
+                 | .[0].tagName // empty')
+          if [[ ! $PREVIOUS =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::no published release to roll back to (found '$PREVIOUS') — redeploy by hand"
+            exit 1
+          fi
+          echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
+          echo "Rolling production back to $PREVIOUS"
+
+      - name: Checkout the previous release
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ steps.previous.outputs.previous }}
+          fetch-depth: 0
+
+      - name: Deploy the API
+        uses: ./.github/actions/deploy-api-flex
+        with:
+          resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
+          app-name: ${{ env.API_FLEX_APP_NAME }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # The rollback is a claim until search answers. A failure here means production is down on
+      # BOTH versions and the cause is not the application build.
+      - name: Smoke test production search
+        env:
+          SMOKE_PROJECT_ID: ${{ vars.SEARCH_SMOKE_PROJECT_ID }}
+        run: ./scripts/search-smoke.sh "$API_BASE_URL" "$SMOKE_PROJECT_ID"
+
+      # The run is already red — deploy-api failed. This says what production is now running, which
+      # is the fact the person reading the failure needs first.
+      - name: Report the rollback to the job summary
+        if: always()
+        run: |
+          {
+            echo "### ↩️ \`${{ inputs.version }}\` failed its search smoke test"
+            echo ""
+            if [ "${{ job.status }}" = "success" ]; then
+              echo "Production was rolled back to \`${{ steps.previous.outputs.previous }}\` and answers search."
+            else
+              echo "**The rollback did not complete — production may be serving \`${{ inputs.version }}\`.**"
+            fi
+            echo ""
+            echo "The release for \`${{ inputs.version }}\` was NOT published. Runbook:"
+            echo "\`eagle-demi.wiki/Runbook-Search-Outage.md\`."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   publish-release:
     name: Publish the release
