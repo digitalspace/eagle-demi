@@ -16,8 +16,10 @@ const { seedAcl } = require('../seed/transform');
 const { readForLevel } = require('../helpers/access-sql');
 
 /**
- * The widest a row Eagle has deleted may be derived back to — staff, the same level a takedown
- * narrows to. See `controllers/nosql/comment-period.js` for why the row is kept at all.
+ * The widest a row Eagle has deleted may be derived back to, and the widest the mirror stores one
+ * at — staff, the same level a takedown narrows to. Exported so the mirror in
+ * `controllers/nosql/comment-period.js` states the level once, here, rather than beside it. That
+ * file also says why the row is kept at all.
  */
 const DELETED_CEILING = readForLevel(2);
 
@@ -76,4 +78,4 @@ async function cascadeAcl(container, partitionKey, rows, parentRead) {
   return { ...result, ids: derived.map(r => r.id), rows: derived };
 }
 
-module.exports = { deriveAcls, cascadeAcl };
+module.exports = { deriveAcls, cascadeAcl, DELETED_CEILING };

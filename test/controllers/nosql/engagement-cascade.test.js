@@ -51,8 +51,23 @@ function mockRes() {
 }
 
 /**
+ * A fixture row as the SQL projection would return it: a field the repository's `select` does not
+ * name does not come back.
+ *
+ * `isDeleted` reaches `deriveAcls` only through that projection and nothing else reads it, so a
+ * stub that handed the whole fixture over would stay green after the field was trimmed out of the
+ * query — with the deleted period republished on the next project publish.
+ */
+function projected(rows, query) {
+  if (!query || query.includes('SELECT *')) return rows;
+  return rows.map(row => Object.fromEntries(Object.entries(row).filter(
+    ([field]) => new RegExp(`\\bc\\.${field}\\b|\\bAS ${field}\\b`).test(query))));
+}
+
+/**
  * Cosmos, and only Cosmos. Period rows come back for the `commentPeriods` read; comment rows are
- * keyed by the partition the read asks for, which is the period id.
+ * keyed by the partition the read asks for, which is the period id. Both are projected through the
+ * query the repository actually sent.
  *
  * @returns {{writes: Array, unexpected: Array}} the bulk patches, in the order they were sent
  */
@@ -68,9 +83,10 @@ function stubCosmos(t, { periods, commentsByPeriod = {} }) {
   t.mock.method(documents, 'setAclForProject', async () => ({ succeeded: 0, failed: 0, rows: [] }));
 
   t.mock.method(cosmos, 'query', async (container, spec, options = {}) => {
-    if (container === 'commentPeriods') return { items: periods };
+    const query = spec && spec.query;
+    if (container === 'commentPeriods') return { items: projected(periods, query) };
     if (container === 'comments') {
-      return { items: commentsByPeriod[String(options.partitionKey)] || [] };
+      return { items: projected(commentsByPeriod[String(options.partitionKey)] || [], query) };
     }
     unexpected.push(container);
     return { items: [] };

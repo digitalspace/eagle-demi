@@ -32,14 +32,14 @@ const comments = require('../../repositories/comments');
 const projects = require('../../repositories/projects');
 const { constrainToProject } = require('../../repositories/documents');
 const { seedAcl } = require('../../seed/transform');
-const { systemAccess, readForLevel, levelOfRead } = require('../../helpers/access-sql');
+const { systemAccess, levelOfRead } = require('../../helpers/access-sql');
+// The widest a deleted period may be stored at, and the ceiling the cascade later re-derives it
+// under: one value, so the two cannot drift apart.
+const { DELETED_CEILING } = require('../../helpers/acl-cascade');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { eaglePush, upsertWithRetry, refId } = require('./eagle-mirror');
-
-/** The widest a deleted period may be stored at — staff, what a takedown narrows to. */
-const DELETED_CEILING = readForLevel(2);
 
 /** The mirror row: the fields eagle-public renders, plus the raw Eagle record behind them. */
 function mirrorItem(eagleId, doc, projectId, read, existing) {
