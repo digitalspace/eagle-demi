@@ -165,6 +165,9 @@ const routes = [
   { method: 'put', path: '/eagle/comments/:eagleId', guards: [authMiddleware, requireWrite], load: () => commentController().upsertFromEagle },
   { method: 'put', path: '/eagle/organizations/:eagleId', guards: [authMiddleware, requireWrite], load: () => organizationController().upsertFromEagle },
   { method: 'put', path: '/eagle/notifications/:eagleId', guards: [authMiddleware, requireWrite], load: () => notificationController().upsertFromEagle },
+  // The config mirror. No `:eagleId` — there is one public config document and Eagle has no id for
+  // it — so the body is the payload itself rather than `{ doc }`, and only PUBLIC_KEYS are stored.
+  { method: 'put', path: '/eagle/config/public', guards: [authMiddleware, requireWrite], load: () => configController().upsertPublicFromEagle },
   // No `PUT /eagle/lists/:eagleId`: Eagle `List` has no write controller (migrations only), so the
   // `lists` container takes its `kind: 'List'` rows from the backfill and nothing else.
 

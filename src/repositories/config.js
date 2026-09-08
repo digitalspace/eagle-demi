@@ -8,8 +8,9 @@
  *
  *   'config'  what GET /api/config overlays on the app settings — the DEMI admin frontend's own
  *             runtime configuration.
- *   'public'  what GET /api/config/public serves to the PUBLIC site (eagle-public), seeded from
- *             eagle-api's live payload by src/scripts/seed-public-config.js. A separate document
+ *   'public'  what GET /api/config/public serves to the PUBLIC site (eagle-public), pushed by
+ *             eagle-api on every Config write (PUT /eagle/config/public) and bootstrapped by
+ *             src/scripts/seed-public-config.js. A separate document
  *             rather than more keys on the first one: the two have different audiences, different
  *             key sets and different failure behaviour, and neither should be able to change the
  *             other by accident.

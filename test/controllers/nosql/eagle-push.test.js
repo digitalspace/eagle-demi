@@ -779,6 +779,9 @@ test('the mirror routes are behind authMiddleware + requireWrite', async (t) => 
     assert.deepStrictEqual(mirror.map(r => r.path).sort(), [
       '/eagle/commentperiods/:eagleId',
       '/eagle/comments/:eagleId',
+      // Not keyed by an Eagle id: one config document, so the body is the payload itself. Its own
+      // suite is test/controllers/config-public.test.js.
+      '/eagle/config/public',
       '/eagle/documents/:eagleId',
       '/eagle/notifications/:eagleId',
       '/eagle/organizations/:eagleId',

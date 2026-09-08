@@ -7,11 +7,10 @@
  * what eagle-public was already booting on. Parity is by construction rather than by
  * transcription — there is no table here to keep in step with Mongo.
  *
- * eagle-api's Mongo `Config` collection stays the source of truth. Nothing pushes it here and
- * nothing writes back: eagle-api has no Config write controller to push from, and the document is
- * edited in Mongo by hand. A hand edit therefore leaves this copy stale until somebody re-runs
- * this script, which is the trade for not building a write path. `epic_config_check` reports the
- * drift; it does not fix it.
+ * This is the BOOTSTRAP and the manual override, not the thing that keeps the copy current:
+ * eagle-api pushes every Config write to PUT /eagle/config/public, so a hand edit in Mongo lands
+ * here on its own. Run this to create the document before the first push, or to force it back to
+ * eagle-api's live payload. Mongo `Config` stays the source of truth and nothing writes back.
  *
  * MUST RUN ON THE DEVBOX (`demi-devbox-<env>`) via `demi-run`. `demi-cosmos-*` is
  * private-endpoint-only and keyless, reachable as the app's managed identity and from nowhere
@@ -32,7 +31,7 @@
  * exists to be read by an anonymous public site, where none of them mean anything.
  */
 
-const { PUBLIC_KEYS } = require('../controllers/config');
+const { pickPublicKeys } = require('../controllers/config');
 const configRepository = require('../repositories/config');
 const sources = require('../seed/sources');
 const config = require('../config');
@@ -76,18 +75,13 @@ function eagleConfigUrl(env = config.environmentName) {
 /**
  * eagle-api's payload, filtered to what this API will serve.
  *
+ * The controller's own filter, so a seeded document and a pushed one are narrowed identically.
  * Absent keys stay absent — the controller serves what the document carries and defaults nothing,
  * so writing a null here would be a value the public site then has to interpret. A stored `false`
  * IS a value and is kept.
  */
 function buildDocument(payload) {
-  const doc = {};
-  for (const key of PUBLIC_KEYS) {
-    const value = payload[key];
-    if (value === undefined || value === null) continue;
-    doc[key] = value;
-  }
-  return doc;
+  return pickPublicKeys(payload);
 }
 
 async function seed(argv, deps = {}) {
