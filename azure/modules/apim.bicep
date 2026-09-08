@@ -47,6 +47,9 @@ param analyticsAuditHeaderValue string = ''
 @description('Browser origins, scheme included, allowed on the analytics read routes. Named rather than `*` because those requests carry a Keycloak bearer; ingest stays open to any origin. Empty deploys no CORS policy on those routes, so no browser reaches them at all — fail closed.')
 param analyticsBrowserOrigins array = []
 
+@description('Resource id of the demi-logs-<env> Log Analytics workspace that gateway logs go to. Empty deploys no diagnostic setting, so ApiManagementGatewayLogs stays empty.')
+param logsWorkspaceId string = ''
+
 var backendUrl = 'https://${apiHostName}/api'
 var machineApiName = 'demi-machine'
 
@@ -92,6 +95,25 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
     // Live state on both instances, and off is where we want it: the legacy portal is the
     // deprecated one and nothing here uses it. Unmodelled, every apply proposes turning it back on.
     legacyPortalStatus: 'Disabled'
+  }
+}
+
+// Per-request gateway rows — status, backend time, caller ip, subscription — which nothing else
+// records: the landing zone's `setByPolicy-LogAnalytics` setting ships audit categories to its own
+// workspace, so without this `ApiManagementGatewayLogs` in demi-logs-<env> has no rows at all.
+resource apimGatewayDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logsWorkspaceId)) {
+  scope: apim
+  // Distinctly named: a name colliding with a `setByPolicy-*` setting would have the two overwrite
+  // each other on every deploy.
+  name: 'demi-gateway-logs'
+  properties: {
+    workspaceId: logsWorkspaceId
+    logs: [
+      {
+        category: 'GatewayLogs'
+        enabled: true
+      }
+    ]
   }
 }
 
