@@ -63,7 +63,9 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       # No extractor in prod yet, so "absent" skips and lets the API job behind `needs:` run. Only
-      # ResourceNotFound means absent: an auth or throttling failure must stop the release.
+      # ResourceNotFound or AuthorizationFailed means absent: the deploy identity's Website
+      # Contributor role is granted per site by hand when a site is created, so a site that was
+      # never created answers Forbidden, not NotFound. Any other error must still stop the release.
       - name: Does the extractor exist yet?
         id: probe
         run: |
@@ -71,7 +73,7 @@ jobs:
           if err=$(az functionapp show -g "$AZURE_RESOURCE_GROUP" -n "$EXTRACTOR_APP_NAME" \
                      --query name -o tsv 2>&1 >/dev/null); then
             echo "found=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$err" == *ResourceNotFound* ]]; then
+          elif [[ "$err" == *ResourceNotFound* || "$err" == *AuthorizationFailed* ]]; then
             echo "found=false" >> "$GITHUB_OUTPUT"
             echo "⏭️ $EXTRACTOR_APP_NAME not present — skipping the extractor deploy." >> "$GITHUB_STEP_SUMMARY"
           else
