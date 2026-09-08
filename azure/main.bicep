@@ -341,10 +341,11 @@ param analyticsWorkspaceCustomerId string = ''
 // a second copy would drift the first time an endpoint moves. Narrowed by the `demi-admin` prefix
 // because the admin app is the only frontend that builds a query — the public DEMI UI never does.
 //
-// localhost is for running that admin app against a deployed gateway, and NEVER in prod: prod has no
-// DEMI frontend, so frontendHostNames there is empty on purpose and appending localhost would make a
-// developer's machine the only origin prod allows. Empty instead, which is what arms the fail-closed
-// gate in apim.bicep — no CORS policy, so no browser origin at all.
+// localhost is for running that admin app against a deployed gateway, and NEVER in prod: prod's
+// frontendHostNames holds the admin console's own AFD host (demi-admin-prod-*.azurefd.net), and
+// appending localhost there would make a developer's machine an origin the deployed gateway accepts.
+// That one prod entry is also what arms the analytics bearer policies in apim.bicep — this filter
+// yielding zero origins is what disarms them, not the environment name.
 var analyticsAdminOrigins = concat(
   map(filter(frontendHostNames, host => startsWith(host, 'demi-admin')), host => 'https://${host}'),
   environmentName == 'prod' ? [] : [ 'http://localhost:4200' ]

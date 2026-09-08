@@ -3,9 +3,10 @@
 Brings prod to the test architecture: Front Door > API Management > Functions Flex Consumption >
 Cosmos serverless. Test rollout completed 2026-09-01.
 
-Prod scope is smaller than test: there is no DEMI frontend or admin site in prod, so no Front Door
-routes or CSP work. The consumers are eagle-public's `/demi-search` (via the OpenShift rproxy) and
-eagle-api's mirror push.
+Prod scope is smaller than test: the DEMI public frontend has no prod presence. The admin console
+does — it is served from eagle-edge-prod (endpoint `demi-admin-prod`, routes `default` and `api`),
+with its own Front Door and CSP work tracked in eagle-edge. The other consumers here are
+eagle-public's `/demi-search` (via the OpenShift rproxy) and eagle-api's mirror push.
 
 ## Gate: none — prod is the canary
 
