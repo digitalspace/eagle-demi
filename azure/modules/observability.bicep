@@ -277,7 +277,7 @@ resource searchFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
   kind: 'LogAlert'
   properties: {
     displayName: 'DEMI search is failing'
-    description: 'The API logged three or more `[search] … failed` lines in five minutes. Callers are getting 502s. Check the index against the deployed build first: GET /health/search-schema names a missing field. Runbook: Runbook-Search-Outage in the DEMI wiki.'
+    description: 'Three or more search errors in five minutes, from either of two branches: `[search] … failed` and `[search/summary] … failed`, where the caller got a 502 or an empty summary, and `[ai-search] … retried without it`, where the live index could not answer a field, so the page was SERVED as a 200 with `meta.degraded` and is missing a column. Check the index against the deployed build first: GET /health/search-schema names a missing field. Runbook: Runbook-Search-Outage in the DEMI wiki.'
     // Error, not warning: the public site cannot search at all while this is true.
     severity: 1
     enabled: true
@@ -288,18 +288,21 @@ resource searchFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
     criteria: {
       allOf: [
         {
-          // `[search`, unclosed on purpose: search.js logs under two tags, `[search]` and
-          // `[search/summary]`, and the summary route answers 200 on failure — so this rule is the
-          // ONLY thing that can see a summary outage. `startswith` rather than `has` because `has`
-          // tokenises on the brackets (see reconcileDriftAlert), and rather than `contains` because
-          // every message in this workspace does begin at its tag. Both tags plus `failed` are only
-          // ever logged at error level; the warn lines under the same tags say nothing about failure.
+          // One alternative per tag, each tag CLOSED. An unclosed `[search` prefix also matches
+          // `[search-schema]`, which the anonymous /health/search-schema probe writes — a path that
+          // serves nobody and would page at severity 1 on a caller's malformed request.
+          // `startswith` rather than `has` because `has` tokenises on the brackets (see
+          // reconcileDriftAlert); every message in this workspace begins at its tag.
           //
-          // The second clause is the schema-drift degrade in src/search/ai-search.js: it drops the
-          // field the index cannot answer and retries, so the page is served, no 502 is logged and
-          // NOTHING else here would fire. It is `contains` rather than `startswith` because no
-          // `[ai-search]` line has been observed in this workspace to anchor the tag against.
-          query: 'AppTraces | where (Message startswith "[search" and Message contains "failed") or (Message contains "[ai-search]" and Message contains "retried without it")'
+          // `[search/summary]` is its own alternative because that route answers 200 on failure, so
+          // this rule is the ONLY thing that can see a summary outage. The warn lines under both
+          // tags say nothing about failure and are excluded by the `failed` literal.
+          //
+          // The third is the schema-drift degrade in src/search/ai-search.js: it drops the field the
+          // index cannot answer and retries, so a 200 is served, no 502 is logged and NOTHING else
+          // here would fire. `contains` rather than `startswith` because no `[ai-search]` line has
+          // been observed in this workspace to anchor the tag against.
+          query: 'AppTraces | where (Message startswith "[search]" and Message contains "failed") or (Message startswith "[search/summary]" and Message contains "failed") or (Message contains "[ai-search]" and Message contains "retried without it")'
           timeAggregation: 'Count'
           operator: 'GreaterThanOrEqual'
           threshold: 3

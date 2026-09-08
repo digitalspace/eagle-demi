@@ -19,7 +19,6 @@ const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'obser
 const AVAILABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'availability.bicep'), 'utf8');
 const SEARCH_CONTROLLER = fs.readFileSync(path.join(ROOT, 'src', 'controllers', 'search.js'), 'utf8');
 const ROUTES = fs.readFileSync(path.join(ROOT, 'src', 'http', 'routes.js'), 'utf8');
-const AI_SEARCH = fs.readFileSync(path.join(ROOT, 'src', 'search', 'ai-search.js'), 'utf8');
 const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
 const DEVBOX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'devbox.bicep'), 'utf8');
 const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
@@ -812,6 +811,23 @@ test('both APIM APIs expose wildcard operations over every method', () => {
 // files, and every way of getting it wrong is silent — a rule that matches nothing keeps evaluating
 // and keeps finding nothing, which reads exactly like a healthy service. Text-structural, with the
 // same honest limits as the drift guard above.
+// Every `logger.<level>` message under the request path, rendered the way the runtime renders it:
+// interpolations stand in as `x`, and a message split across concatenated literals is rejoined.
+const LOG_SOURCES = ['controllers', 'search'].flatMap((dir) => {
+  const base = path.join(ROOT, 'src', dir);
+  return fs.readdirSync(base, { recursive: true })
+    .filter(f => f.endsWith('.js'))
+    .map(f => ({ file: path.join('src', dir, f), source: fs.readFileSync(path.join(base, f), 'utf8') }));
+});
+
+const LITERAL = /`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'/;
+
+const logLines = (level) => LOG_SOURCES.flatMap(({ file, source }) =>
+  [...source.matchAll(new RegExp(
+    `logger\\.${level}\\(\\s*((?:${LITERAL.source})(?:\\s*\\+\\s*(?:${LITERAL.source}))*)`, 'g'))]
+    .map(m => [...m[1].matchAll(new RegExp(LITERAL.source, 'g'))].map(s => s[0].slice(1, -1)).join(''))
+    .map(line => ({ file, line: line.replace(/\$\{[^}]+\}/g, 'x').replace(/\\(.)/g, '$1') })));
+
 const rule = (name) => OBSERVABILITY
   .split(/^resource /m)
   .find(b => b.includes(`name: '${name}-\${environmentName}'`));
@@ -824,7 +840,7 @@ const ruleQuery = (name) => {
   return { block, query: query[1] };
 };
 
-test('the search failure alert matches a line search.js actually logs', () => {
+test('the search failure alert matches every search failure and nothing else', () => {
   const { block, query } = ruleQuery('demi-search-failures');
 
   assert.match(query, /^AppTraces \|/,
@@ -845,52 +861,45 @@ test('the search failure alert matches a line search.js actually logs', () => {
     ({ op, needle }) => (op === 'startswith' ? line.startsWith(needle) : line.includes(needle)));
   const matches = (line) => alternatives.some(clauses => carries(line, clauses));
 
-  // Every error the search controller logs, rendered as the runtime would render it. `[search`
-  // unclosed: `[search]` and `[search/summary]` are both search failures.
-  const logged = [...SEARCH_CONTROLLER.matchAll(/logger\.error\(`([^`]+)`\)/g)]
-    .map(m => m[1].replace(/\$\{[^}]+\}/g, 'x'))
-    .filter(line => line.startsWith('[search'));
-  assert.ok(logged.length, 'search.js logs no [search…] error lines at all any more');
+  // EVERY error line the request path can write, not just search.js's: the tag namespace is shared,
+  // and a rule that pages on somebody else's tag is a rule people learn to ignore. Lines are
+  // concatenated across several string literals, so the pieces are joined before a clause is read
+  // against them.
+  const logged = logLines('error');
+  assert.ok(logged.some(({ line }) => line.startsWith('[search]')),
+    'search.js logs no [search] error lines at all any more');
 
-  const matched = logged.filter(matches);
-  assert.ok(matched.length,
-    `the rule looks for ${JSON.stringify(alternatives)}, which no line in ${JSON.stringify(logged)} carries`);
-
-  // The other alternative is the schema-drift degrade, and it is not in search.js: ai-search.js
-  // drops the field the index cannot answer, logs, and serves a 200, so no 502 and no 5xx follows
-  // and this rule is the only thing that can see it. Its error lines are concatenated across
-  // several string literals, so the pieces are joined before the clause is read against them.
-  const LITERAL = /`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'/;
-  const degradeLogged = [...AI_SEARCH.matchAll(
-    new RegExp(`logger\\.error\\(\\s*((?:${LITERAL.source})(?:\\s*\\+\\s*(?:${LITERAL.source}))*)`, 'g'))]
-    .map(m => [...m[1].matchAll(new RegExp(LITERAL.source, 'g'))]
-      .map(s => s[0].slice(1, -1)).join(''))
-    .map(line => line.replace(/\$\{[^}]+\}/g, 'x').replace(/\\(.)/g, '$1'));
-  assert.ok(degradeLogged.length, 'ai-search.js logs no error lines at all any more');
-
-  // Every alternative, not just one: `matched` above is satisfied by whichever alternative still
-  // works, so a disjunct whose literals match nothing anybody logs would pass unseen — and a rule
-  // that matches nothing keeps evaluating and keeps finding nothing.
-  const everythingLogged = [...logged, ...degradeLogged];
+  // Every alternative, not just one: a disjunct whose literals match nothing anybody logs would
+  // pass unseen behind the others — and a rule that matches nothing keeps evaluating and keeps
+  // finding nothing, which reads exactly like a healthy service.
   for (const clauses of alternatives) {
-    assert.ok(everythingLogged.some(line => carries(line, clauses)),
-      `no line search.js or ai-search.js logs carries every literal of ${JSON.stringify(clauses)}`);
+    assert.ok(logged.some(({ line }) => carries(line, clauses)),
+      `nothing under src/controllers or src/search logs a line carrying every literal of ${JSON.stringify(clauses)}`);
+  }
+
+  // The tags that mean a REQUEST WAS SERVED BADLY. `[search-schema]` is deliberately not one:
+  // GET /health/search-schema is anonymous and unthrottled, it serves no page, and its probe
+  // failures are a caller's business rather than an outage. An unclosed `[search` prefix swallows
+  // it, which is what this enumerates the whole tree to catch.
+  const SERVING_TAGS = new Set(['[search]', '[search/summary]', '[ai-search]']);
+  for (const { file, line } of logged) {
+    if (!matches(line)) continue;
+    const tag = (/^\[[^\]]+\]/.exec(line) || [''])[0];
+    assert.ok(SERVING_TAGS.has(tag),
+      `the rule pages on ${JSON.stringify(tag)} from ${file}: ${JSON.stringify(line)}`);
   }
 
   // GET /search/summary answers 200 on failure — see the catch in search.js — so no 5xx ratio can
   // ever see a summary outage and this rule is the only thing that covers it.
-  const summary = logged.filter(line => line.startsWith('[search/summary]'));
+  const summary = logged.filter(({ line }) => line.startsWith('[search/summary]'));
   assert.ok(summary.length, 'search.js logs no [search/summary] error line any more');
-  for (const line of summary) {
+  for (const { line } of summary) {
     assert.ok(matches(line), `the rule misses ${JSON.stringify(line)}, which nothing else can see`);
   }
 
   // The other half: the warn lines carrying the same tags are not failures, and a rule that counted
   // them would page on a query nobody could express.
-  const warned = [...SEARCH_CONTROLLER.matchAll(/logger\.warn\(\s*[`']([^`']+)[`']/g)]
-    .map(m => m[1].replace(/\$\{[^}]+\}/g, 'x'))
-    .filter(line => line.startsWith('[search'));
-  for (const line of warned) {
+  for (const { line } of logLines('warn')) {
     assert.ok(!matches(line), `the rule also matches the warn line ${JSON.stringify(line)}`);
   }
 
