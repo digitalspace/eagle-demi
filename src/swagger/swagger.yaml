@@ -2396,7 +2396,8 @@ components:
           type: string
           enum: [upsert, delete]
           description: |-
-            `delete` when the push carried `doc.isDeleted: true`.
+            `delete` when the push carried `doc.isDeleted: true`. Documents and comment periods
+            only — the other mirrors always answer `upsert`.
 
     ShortLink:
       type: object

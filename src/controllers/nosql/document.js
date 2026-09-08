@@ -303,7 +303,9 @@ exports.updateDocument = async (req, res) => {
     // the 409 on PUT /documents/:id/published that stops a document being published under a
     // private project. Visibility changes go through that route, which enforces the parent.
     // `ownRead` goes with them: it is the pre-cascade ACL, so setting it by hand widens the
-    // document the next time setAclForProject re-derives `read` from it.
+    // document the next time setAclForProject re-derives `read` from it. `isDeleted` is the same
+    // authority by a shorter route — clearing it lets the next project publish republish a
+    // document Eagle deleted — and only an eagle-api push writes it.
     //
     // The Cosmos bookkeeping keys are dropped for a different reason, the same one as project.js:
     // a caller who GETs a document and PUTs the response back sends them, and they are catalogued
@@ -311,6 +313,7 @@ exports.updateDocument = async (req, res) => {
     const {
       id: _ignoredId, projectId: _ignoredPk,
       read: _ignoredRead, ownRead: _ignoredOwnRead, isPublished: _ignoredPublished,
+      isDeleted: _ignoredDeleted,
       _rid: _ignoredRid, _self: _ignoredSelf, _attachments: _ignoredAttachments,
       _ts: _ignoredTs, _etag: _ignoredEtag,
       ...changes
