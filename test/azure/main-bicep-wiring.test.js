@@ -19,6 +19,7 @@ const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'obser
 const AVAILABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'availability.bicep'), 'utf8');
 const SEARCH_CONTROLLER = fs.readFileSync(path.join(ROOT, 'src', 'controllers', 'search.js'), 'utf8');
 const ROUTES = fs.readFileSync(path.join(ROOT, 'src', 'http', 'routes.js'), 'utf8');
+const AI_SEARCH = fs.readFileSync(path.join(ROOT, 'src', 'search', 'ai-search.js'), 'utf8');
 const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
 const DEVBOX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'devbox.bicep'), 'utf8');
 const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
@@ -840,8 +841,9 @@ test('the search failure alert matches a line search.js actually logs', () => {
     'an alternative filtering on one literal is broader than it looks');
   assert.ok(!/\bhas "\[/.test(query),
     '`has` tokenises on brackets — a bracketed tag has to be matched with startswith or contains');
-  const matches = (line) => alternatives.some(clauses => clauses.every(
-    ({ op, needle }) => (op === 'startswith' ? line.startsWith(needle) : line.includes(needle))));
+  const carries = (line, clauses) => clauses.every(
+    ({ op, needle }) => (op === 'startswith' ? line.startsWith(needle) : line.includes(needle)));
+  const matches = (line) => alternatives.some(clauses => carries(line, clauses));
 
   // Every error the search controller logs, rendered as the runtime would render it. `[search`
   // unclosed: `[search]` and `[search/summary]` are both search failures.
@@ -853,6 +855,27 @@ test('the search failure alert matches a line search.js actually logs', () => {
   const matched = logged.filter(matches);
   assert.ok(matched.length,
     `the rule looks for ${JSON.stringify(alternatives)}, which no line in ${JSON.stringify(logged)} carries`);
+
+  // The other alternative is the schema-drift degrade, and it is not in search.js: ai-search.js
+  // drops the field the index cannot answer, logs, and serves a 200, so no 502 and no 5xx follows
+  // and this rule is the only thing that can see it. Its error lines are concatenated across
+  // several string literals, so the pieces are joined before the clause is read against them.
+  const LITERAL = /`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'/;
+  const degradeLogged = [...AI_SEARCH.matchAll(
+    new RegExp(`logger\\.error\\(\\s*((?:${LITERAL.source})(?:\\s*\\+\\s*(?:${LITERAL.source}))*)`, 'g'))]
+    .map(m => [...m[1].matchAll(new RegExp(LITERAL.source, 'g'))]
+      .map(s => s[0].slice(1, -1)).join(''))
+    .map(line => line.replace(/\$\{[^}]+\}/g, 'x').replace(/\\(.)/g, '$1'));
+  assert.ok(degradeLogged.length, 'ai-search.js logs no error lines at all any more');
+
+  // Every alternative, not just one: `matched` above is satisfied by whichever alternative still
+  // works, so a disjunct whose literals match nothing anybody logs would pass unseen — and a rule
+  // that matches nothing keeps evaluating and keeps finding nothing.
+  const everythingLogged = [...logged, ...degradeLogged];
+  for (const clauses of alternatives) {
+    assert.ok(everythingLogged.some(line => carries(line, clauses)),
+      `no line search.js or ai-search.js logs carries every literal of ${JSON.stringify(clauses)}`);
+  }
 
   // GET /search/summary answers 200 on failure — see the catch in search.js — so no 5xx ratio can
   // ever see a summary outage and this rule is the only thing that covers it.
