@@ -527,6 +527,11 @@ function listLookupFrom(doc, labels) {
  * it would orphan the chunks and re-queue the document through the GPU), and the ACL, which is
  * narrowed against the parent project's — unless that parent is a `ProjectNotification`,
  * which carries no ACL to narrow against.
+ *
+ * A DELETE is a push like any other, the same convention the comment-period mirror follows:
+ * eagle-api hard-deletes the record and pushes what it removed with `isDeleted: true`. DEMI narrows
+ * the row to level 2 and flags it rather than dropping it, so staff and the reconcile still see
+ * what Eagle no longer holds, and `documents.setAclForProject` refuses to widen it again.
  */
 exports.upsertFromEagle = async (req, res) => {
   try {
@@ -552,6 +557,13 @@ exports.upsertFromEagle = async (req, res) => {
     // The cascade restores a narrowed ACL from `ownRead` (documents.setAclForProject), so the
     // push must carry the unconstrained Eagle ACL. A re-seed drops it deliberately; this does not.
     row.ownRead = seedAcl(doc.read);
+    // Eagle no longer holds this record. It is a fact about the row, not an ACL: `read` below is
+    // what hides it, this is what says why, and it is what stops a cascade widening it again.
+    row.isDeleted = doc.isDeleted === true;
+    if (row.isDeleted) {
+      row.read = documents.constrainToProject(row.read, documents.DELETED_CEILING);
+      row.isPublished = row.read.includes('public');
+    }
     const saved = await documents.upsert(row);
 
     // A document that moved project lands in a NEW partition and Cosmos leaves the old row behind,
@@ -570,7 +582,10 @@ exports.upsertFromEagle = async (req, res) => {
       detail: {
         eagleId,
         isPublishedFrom: existing ? existing.isPublished : null,
-        isPublishedTo: saved.isPublished
+        isPublishedTo: saved.isPublished,
+        // The action stays `document.push` — `document.delete` is the purge below, a different
+        // thing — so the flag is what separates a delete push from an ordinary one.
+        isDeleted: saved.isDeleted
       }
     });
 
@@ -578,13 +593,20 @@ exports.upsertFromEagle = async (req, res) => {
     // visibility just changed stays listed under its old ACL until the indexer's next PT5M pass.
     // Only on a change, and only against an existing row — a document DEMI has never seen has no
     // index row to correct, and a metadata edit does not move the ACL.
-    if (existing && saved.isPublished !== existing.isPublished) {
+    //
+    // The LEVEL, not `isPublished`: a delete push narrows an idir document from 3 to 2 without
+    // touching `isPublished`, and comparing the flags alone would leave that row idir-readable in
+    // the index until something else moved it.
+    if (existing && levelOfRead(saved.read) !== levelOfRead(existing.read)) {
       await aiSearch.writeAcls(aiSearch.indexes().documents, [
         { id: saved.id, read: saved.read, isPublished: saved.isPublished }
       ]);
     }
 
-    return res.json({ id: saved.id, projectId: saved.projectId, action: 'upsert' });
+    return res.json({
+      id: saved.id, projectId: saved.projectId,
+      action: saved.isDeleted ? 'delete' : 'upsert'
+    });
   } catch (err) {
     return serverError(res, err, 'document controller failed');
   }

@@ -3,7 +3,8 @@
 /**
  * Diff the published Eagle id sets against the rows the Eagle push mirrored into DEMI.
  *
- * eagle-api hard-deletes with no tombstone, so the push cannot tell DEMI a row is gone. This
+ * Only the document and comment-period pushes carry a tombstone (`isDeleted: true`); every other
+ * container is hard-deleted with none, so the push cannot tell DEMI those rows are gone. This
  * reports both directions and CHANGES NOTHING — a DEMI row absent from Eagle's public search may
  * equally be one Eagle merely unpublished, and eagle-api gives an anonymous caller no way to tell
  * the two apart (see `unpublishedOrDeleted` below), so there is nothing here it is safe to delete.

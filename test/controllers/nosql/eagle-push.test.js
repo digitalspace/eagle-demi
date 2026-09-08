@@ -26,7 +26,10 @@ const authMiddleware = require('../../../src/middleware/auth');
 const { requireWrite, requireAdmin } = require('../../../src/middleware/require-roles');
 const { routeChains } = require('../../helpers/router-source');
 // One id space for the whole push suite: the notification the public-read mirrors already use.
-const { NOTIFICATION_EAGLE_ID } = require('../../helpers/eagle-mirror-fixtures');
+const {
+  NOTIFICATION_EAGLE_ID, anonymous, staff
+} = require('../../helpers/eagle-mirror-fixtures');
+const { canRead } = require('../../../src/helpers/access-sql');
 
 function mockRes() {
   return {
@@ -658,6 +661,111 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 
     assert.strictEqual(res.statusCode, 400);
     assert.strictEqual(upserts, 0);
+  });
+});
+
+/**
+ * eagle-api hard-deletes a document and pushes the record it just removed with `isDeleted: true`,
+ * the same convention the comment-period mirror already follows. What is asserted is what an
+ * anonymous visitor is answered afterwards, and that nothing later widens the row back: the raw
+ * Eagle copy beside it still says `public`, so the flag — not that copy — is what the project
+ * cascade has to gate on (repositories/document-acl-cascade.test.js asserts that half).
+ */
+test('PUT /eagle/documents/:eagleId — a deleted document', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('the row is kept, flagged, and narrowed out of the public\'s reach', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: true, read: ['staff', 'idir', 'public']
+    }));
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+    const indexWrites = [];
+    t.mock.method(aiSearch, 'writeAcls', async (index, rows) => {
+      indexWrites.push(rows); return rows.length;
+    });
+
+    const res = mockRes();
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ isDeleted: true }) }, user: STAFF
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(res.body,
+      { id: DOC_EAGLE_ID, projectId: '207', action: 'delete' }, 'what the pusher gets to log');
+    assert.strictEqual(written.isDeleted, true);
+    assert.strictEqual(written.isPublished, false);
+    assert.deepStrictEqual(written.read, ['staff'], 'narrowed to the takedown level, not deleted');
+    assert.strictEqual(canRead(written, anonymous()), false, 'an anonymous visitor may not see it');
+    assert.strictEqual(canRead(written, staff()), true, 'staff still see what Eagle no longer holds');
+    // The unconstrained Eagle ACL is kept whole, which is why the flag has to outrank it.
+    assert.deepStrictEqual(written.ownRead, ['public', 'sysadmin']);
+    // The index is a separate store and no list read is live, so the narrowing has to be pushed.
+    assert.deepStrictEqual(indexWrites,
+      [[{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false }]]);
+  });
+
+  await t.test('a delete of a document only idir could see still reaches the index', async () => {
+    // Level 3 -> 2 moves no `isPublished` flag, and the index would otherwise keep answering idir
+    // callers with a document Eagle no longer holds.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: false, read: ['staff', 'idir']
+    }));
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+    const indexWrites = [];
+    t.mock.method(aiSearch, 'writeAcls', async (index, rows) => {
+      indexWrites.push(rows); return rows.length;
+    });
+
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ read: ['sysadmin', 'staff', 'idir'], isDeleted: true }) },
+      user: STAFF
+    }, mockRes());
+
+    assert.deepStrictEqual(written.read, ['staff']);
+    assert.deepStrictEqual(indexWrites,
+      [[{ id: DOC_EAGLE_ID, read: ['staff'], isPublished: false }]]);
+  });
+
+  await t.test('an ordinary push stores the flag false and leaves read[] alone', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => null);
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument() }, user: STAFF
+    }, mockRes());
+
+    assert.strictEqual(written.isDeleted, false, 'stored explicitly — a missing field is not false');
+    assert.deepStrictEqual(written.read, ['staff', 'idir', 'public']);
+    assert.strictEqual(written.isPublished, true);
+  });
+
+  await t.test('only eagle-api sending the record again brings it back', async () => {
+    // Nothing inside DEMI clears the flag. Mongo does not reuse an ObjectId, so a push under this
+    // id is Eagle holding the record again — the one thing that should republish it.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: '207', isPublished: false, read: ['staff'], isDeleted: true
+    }));
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+    t.mock.method(aiSearch, 'writeAcls', async (index, rows) => rows.length);
+
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument() }, user: STAFF
+    }, mockRes());
+
+    assert.strictEqual(written.isDeleted, false);
+    assert.deepStrictEqual(written.read, ['staff', 'idir', 'public']);
   });
 });
 

@@ -25,6 +25,13 @@ const notificationController = require('../../src/controllers/nosql/notification
 const updateController = require('../../src/controllers/nosql/update');
 const updates = require('../../src/repositories/updates');
 
+const { resolveAccess } = require('../../src/helpers/access-sql');
+
+/** The two callers every mirror assertion is about: the visitor it must hide a row from, and the
+ * staff caller it must keep it visible to. */
+const anonymous = () => resolveAccess({});
+const staff = () => resolveAccess({ user: { realm_access: { roles: ['staff'] } } });
+
 const PROJECT_EAGLE_ID = '588511d0aaecd9001b825604';
 const PERIOD_EAGLE_ID = '5b8bcf0d0f5e9c0019a7a1c1';
 const COMMENT_EAGLE_ID = '5b8bcf0d0f5e9c0019a7a1c2';
@@ -236,5 +243,7 @@ module.exports = {
   eagleUpdate,
   mockRes,
   STAFF,
+  anonymous,
+  staff,
   captureMirror
 };

@@ -23,7 +23,7 @@ const lists = require('../../../src/repositories/lists');
 const projects = require('../../../src/repositories/projects');
 const apiKeys = require('../../../src/repositories/api-keys');
 const { generateKey } = require('../../../src/helpers/api-key');
-const { canRead, resolveAccess } = require('../../../src/helpers/access-sql');
+const { canRead } = require('../../../src/helpers/access-sql');
 const { forgetCachedKey } = require('../../../src/helpers/auth');
 
 const commentPeriodController = require('../../../src/controllers/nosql/comment-period');
@@ -35,7 +35,7 @@ const {
   PERIOD_EAGLE_ID, COMMENT_EAGLE_ID, ORG_EAGLE_ID, NOTIFICATION_EAGLE_ID,
   PUBLIC_ACL, PRIVATE_ACL, storedProject, storedPeriod,
   eaglePeriod, eagleComment, eagleOrganization, eagleNotification,
-  mockRes, STAFF
+  mockRes, STAFF, anonymous, staff
 } = require('../../helpers/eagle-mirror-fixtures');
 
 /**
@@ -85,8 +85,7 @@ function pushTo(controller, repo, eagleId, doc, t, { existing = null } = {}) {
   ).then(() => ({ res, written: () => written }));
 }
 
-const anonymous = () => resolveAccess({});
-const staff = () => resolveAccess({ user: { realm_access: { roles: ['staff'] } } });
+
 
 /** Serve the comment ACL rows of one period, and capture the patch the cascade plans. */
 function stubCommentCascade(t, commentRows, { failed = 0 } = {}) {
