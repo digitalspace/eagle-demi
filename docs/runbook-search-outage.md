@@ -19,18 +19,21 @@ time. This page is the response, in the order to do it.
 ## 1. Name the cause, one curl
 
 ```bash
-curl -s https://www.projects.eao.gov.bc.ca/demi-search/health/search-schema
-```
-
-`{"ok":true}` means every committed field is in the live index. A 503 names the index and the
-missing fields. A 404 means the deployed build predates that endpoint — use the query itself:
-
-```bash
 curl -s "https://www.projects.eao.gov.bc.ca/demi-search/search?dataset=Document&pageSize=1"
 ```
 
 502 is the drift shape. 200 with `searchResultsTotal` above zero means search is up and the problem
 is elsewhere.
+
+To have the missing field named for you rather than inferred, there is also a schema health check,
+available from the release that includes PR #349:
+
+```bash
+curl -s https://www.projects.eao.gov.bc.ca/demi-search/health/search-schema
+```
+
+`{"ok":true}` means every committed field is in the live index. A 503 names the index and the
+missing fields. On an older build the curl answers 404; use the search curl above.
 
 ## 2. Read the real error
 

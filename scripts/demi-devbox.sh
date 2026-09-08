@@ -150,7 +150,14 @@ remote_script() {
   printf 'cd %s && { %s ; }; echo DEMI_EXIT=$?' "$DEVBOX_CHECKOUT" "$1"
 }
 
-remote_ok() { grep -q 'DEMI_EXIT=0' <<<"$1"; }
+# The LAST DEMI_EXIT line of ONE call's output. Never hand this the output of several calls joined
+# together: `--only documents,projects` makes one call per index and every exit line lands in the
+# same text, so a grep for DEMI_EXIT=0 lets a clean index hide a failing one.
+remote_ok() {
+  local last
+  last="$(grep -o 'DEMI_EXIT=[0-9][0-9]*' <<<"$1" | tail -1 || true)"
+  [[ "$last" == 'DEMI_EXIT=0' ]]
+}
 
 devbox_run() {
   local cmd="$1" out script
@@ -216,10 +223,12 @@ only_args() {
 do_drift() {
   resolve_env
   preflight_rbac
-  local out
-  out="$(with_grant "$0" __drift-run --env "$ENV_NAME" ${ONLY:+--only "$ONLY"})" || true
+  local out rc=0
+  # The verdict is the re-entered run's exit status, not a grep of its output: it checks each index
+  # separately and already fails on any one of them, and the output holds every index's exit line.
+  out="$(with_grant "$0" __drift-run --env "$ENV_NAME" ${ONLY:+--only "$ONLY"})" || rc=$?
   printf '%s\n' "$out"
-  if ! remote_ok "$out"; then
+  if [[ "$rc" -ne 0 ]]; then
     die "drift detected, or the check itself failed — see the output above"
   fi
   echo "demi-devbox: no drift on ${SERVICE}"
@@ -252,11 +261,14 @@ do_apply() {
   # read-only half runs under a grant. It is a separate grant from the writing half below: the
   # prompt in between can sit unanswered for as long as the operator likes, and a grant should not
   # wait on a human.
-  with_grant "$0" __dry-run --env "$ENV_NAME" ${ONLY:+--only "$ONLY"} | tee "$dry_log" || true
+  local dry_rc=0
+  with_grant "$0" __dry-run --env "$ENV_NAME" ${ONLY:+--only "$ONLY"} | tee "$dry_log" || dry_rc=$?
   local dry
   dry="$(cat "$dry_log")"
   rm -f "$dry_log"
-  remote_ok "$dry" || die "the dry run failed — nothing was written"
+  # Same reason as `drift`: one index's clean dry run must not stand in for the whole gate, or the
+  # other index gets PUT live after its dry run failed.
+  [[ "$dry_rc" -eq 0 ]] || die "the dry run failed — nothing was written"
 
   # The dry run names every data source whose live SELECT differs from the committed copy. Parsed
   # from its output rather than re-derived here: the comparison needs the LIVE query, and only the

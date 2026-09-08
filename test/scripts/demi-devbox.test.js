@@ -59,13 +59,16 @@ if [[ -n "\${payload:-}" ]]; then printf "%s" "$scripts" > "$payload"; fi
 
 group() { if [[ "$sub" == "${PROD_SUB}" ]]; then echo "rg-demi-prod"; else echo "c4b0a8-test-rg"; fi; }
 
+# Call 1 is the pre-reset read. AZ_STALE_POLLS says how many polls AFTER the reset still answer
+# with that same execution — the PT5M steady-state tick that is already in the history and would
+# read as "success" to anything not comparing start times.
 status_reply() {
-  local n=1
+  local n=1 stale="\${AZ_STALE_POLLS:-0}"
   if [[ -f "\${AZ_STATUS_COUNT}" ]]; then n=$(( $(cat "\${AZ_STATUS_COUNT}") + 1 )); fi
   echo "$n" > "\${AZ_STATUS_COUNT}"
   if [[ -n "\${AZ_INDEXER_INPROGRESS:-}" ]]; then
     echo "STATUS=inProgress START=2026-09-08T20:00:00Z ITEMS=0 FAILED=0"
-  elif [[ "$n" -le 1 ]]; then
+  elif [[ "$n" -le $(( 1 + stale )) ]]; then
     echo "STATUS=success START=2026-09-08T20:00:00Z ITEMS=0 FAILED=0"
   else
     echo "STATUS=success START=2026-09-08T21:00:00Z ITEMS=61587 FAILED=0"
@@ -73,28 +76,46 @@ status_reply() {
   echo "DEMI_EXIT=0"
 }
 
+# The index name of a per-index remote call: the --only value, empty when the run named none.
+only_of() { sed -n "s/.*--only \\([A-Za-z0-9-]*\\).*/\\1/p" <<<"$1" | head -1; }
+
+# AZ_DRIFT / AZ_DRY_FAIL: "1" for every index, or a comma list to fail just those. An --only a,b
+# run makes one remote call per name, so this is what lets a test mix a clean index with a dirty one.
+fails_for() {
+  local want="$1" name="$2"
+  [[ -n "$want" ]] || return 1
+  [[ "$want" == "1" || ",\${want}," == *",\${name},"* ]]
+}
+
 remote_reply() {
   local s="$1"
   echo "Enable succeeded:"
   echo "[stdout]"
+  local name
+  name="$(only_of "$s")"
   if [[ "$s" == *"--check"* ]]; then
-    if [[ -n "\${AZ_DRIFT:-}" ]]; then
-      echo "drift documents: missing fields fileSize"
+    if fails_for "\${AZ_DRIFT:-}" "$name"; then
+      echo "drift \${name:-documents}: missing fields fileSize"
       echo "DEMI_EXIT=1"
     else
-      echo "ok documents"
+      echo "ok \${name:-documents}"
       echo "DEMI_EXIT=0"
     fi
   elif [[ "$s" == *"apply-search-definitions.js --live"* ]]; then
     echo "applied 2 definition(s)."
     echo "DEMI_EXIT=0"
   elif [[ "$s" == *"apply-search-definitions.js"* ]]; then
-    echo "index    documents                exists   <- documents.json"
+    echo "index    \${name:-documents}                exists   <- documents.json"
     if [[ -n "\${AZ_DS_DIFFERS:-}" ]]; then
       echo "  !! data source demi-documents-ds DIFFERS from the committed copy. The indexer will"
     fi
-    echo "dry run — nothing was written."
-    echo "DEMI_EXIT=0"
+    if fails_for "\${AZ_DRY_FAIL:-}" "$name"; then
+      echo "the live index could not be read."
+      echo "DEMI_EXIT=1"
+    else
+      echo "dry run — nothing was written."
+      echo "DEMI_EXIT=0"
+    fi
   elif [[ "$s" == *"put-search-datasources.js"* ]]; then
     echo "demi-documents-ds 204 -> demicosmos/documents"
     echo "DEMI_EXIT=0"
@@ -231,6 +252,23 @@ test('demi-devbox.sh', async (t) => {
     assert.strictEqual(deletes(r.calls).length, 1, 'a failed check must still revoke');
   });
 
+  await t.test('drift over several indexes fails when any one of them drifts', () => {
+    // Each name is a separate remote call and every DEMI_EXIT line lands in the same output, so a
+    // verdict read off that text green-lights a release whenever one index happens to be clean.
+    // Both positions: whether the dirty index is checked first or last must not change the answer.
+    for (const dirty of ['documents', 'projects']) {
+      const clean = dirty === 'documents' ? 'projects' : 'documents';
+      const r = run(['drift', '--only', 'documents,projects'], { env: { AZ_DRIFT: dirty } });
+      assert.strictEqual(r.status, 1, `${dirty} drifted, so the run must fail: ${r.stdout}`);
+      assert.match(r.stdout, new RegExp(`drift ${dirty}: missing fields fileSize`));
+      assert.match(r.stdout, new RegExp(`ok ${clean}`),
+        'the clean index still reports, it just does not decide');
+      assert.match(r.stderr, /drift detected, or the check itself failed/);
+      assert.ok(r.remote.some(c => c.includes('--check --only documents')));
+      assert.ok(r.remote.some(c => c.includes('--check --only projects')));
+    }
+  });
+
   await t.test('stops before granting when az cannot read role assignments', () => {
     // An expired Graph refresh token does not fail the grant loudly: with-search-admin.sh prints
     // "grant not readable after 20 tries", runs anyway, and the devbox answers 403.
@@ -258,6 +296,22 @@ test('demi-devbox.sh', async (t) => {
       'nothing may be written before the operator says yes');
     assert.strictEqual(deletes(r.calls).length, creates(r.calls).length,
       'every grant taken for the dry run is given back');
+  });
+
+  await t.test('apply stops before any write when one index fails its dry run', () => {
+    // "always dry-runs first" has to mean all of them: a --only list that dry-runs one index clean
+    // and one dirty must not PUT the clean one live. Both positions, for the same reason as the
+    // drift case — the failing index is as likely to be the first call as the last.
+    for (const failing of ['documents', 'projects']) {
+      const r = run(['apply', '--only', 'documents,projects', '--yes'],
+        { env: { AZ_DRY_FAIL: failing } });
+      assert.strictEqual(r.status, 1, `${failing} failed its dry run: ${r.stdout}`);
+      assert.match(r.stderr, /the dry run failed — nothing was written/);
+      assert.ok(!r.stdout.includes('About to write'), 'the run must not reach the write plan');
+      assert.ok(r.remote.every(c => !c.includes('--live')),
+        `no index may be written: ${r.remote.filter(c => c.includes('--live')).join(' | ')}`);
+      assert.strictEqual(deletes(r.calls).length, creates(r.calls).length, 'no grant left standing');
+    }
   });
 
   await t.test('apply --yes writes in order: index, data source, indexer reset, poll', () => {
@@ -293,6 +347,20 @@ test('demi-devbox.sh', async (t) => {
 
     assert.match(r.stdout, /documents-indexer finished, 61587 processed/);
     assert.strictEqual(deletes(r.calls).length, creates(r.calls).length, 'no grant left standing');
+  });
+
+  await t.test('the indexer poll ignores the execution that was already there', () => {
+    // The PT5M schedule keeps appending steady-state ticks with itemsProcessed 0. Here the two
+    // polls after the reset still answer with the pre-reset execution, and only the third is the
+    // run that was asked for: "success" on its own would report a finish that never happened.
+    const r = run(['apply', '--env', 'prod', '--only', 'documents', '--yes'],
+      { env: { AZ_DS_DIFFERS: '1', AZ_STALE_POLLS: '2' } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const status = r.remote.filter(c => c.includes('/status?api-version'));
+    assert.strictEqual(status.length, 4,
+      'one pre-reset read, then polls until the start time changes');
+    assert.match(r.stdout, /documents-indexer finished, 61587 processed/);
+    assert.ok(!/finished, 0 processed/.test(r.stdout), 'the stale tick is not a finish');
   });
 
   await t.test('apply skips the data source and the reset when nothing differs', () => {
