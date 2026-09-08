@@ -115,6 +115,17 @@ Cosmos query per period — too much for the nightly timer, which is why the ale
 `comments: skipped` when it was not asked for. A container the run did not sweep never reports zero
 drift.
 
+### Rate limits
+
+eagle-api allows 200 requests a minute per client (`ratelimit-policy: 200;w=60`). A comment sweep
+and the `comments` backfill stage both spend that inside a minute, so the shared fetch helper in
+`src/seed/sources.js` waits a `429` out instead of failing: `retry-after` when the response names
+one, otherwise the window from `ratelimit-reset` or `ratelimit-policy`, otherwise 5, 15 then 60
+seconds. It gives up after five waits on the same request.
+
+Each wait logs one line, so a long run that goes quiet for a minute at a time is being throttled,
+not stuck. Ordinary failures are unaffected — they keep the three short retries they always had.
+
 ### Unresolved parents
 
 A comment period Eagle publishes is not always a period DEMI should hold. eagle-api's

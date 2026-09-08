@@ -240,3 +240,76 @@ test('loadTrackWorkPhases yields an empty map with no reader client, and never t
   assert.ok(byProject instanceof Map);
   assert.strictEqual(byProject.size, 0, 'the checked-in export carries no phases');
 });
+
+/**
+ * Rate limiting. eagle-api answers 200 requests a minute, and a comment sweep spends that inside a
+ * minute, so what the fetch helper does with a 429 decides whether the sweep finishes. Waits go
+ * through the injected `sleep`, so none of these tests costs wall-clock time.
+ */
+const throttled = (headers = {}) => ({ status: 429, ok: false, headers: new Headers(headers) });
+const served = (body) => ({ status: 200, ok: true, headers: new Headers(), json: async () => body });
+
+/** Answers with each response in turn, repeating the last, and records the calls and the waits. */
+function fetchSequence(t, responses) {
+  const calls = [];
+  const waits = [];
+  t.mock.method(global, 'fetch', async (url) => {
+    calls.push(String(url));
+    return responses[Math.min(calls.length - 1, responses.length - 1)];
+  });
+  return { calls, waits, sleep: async (ms) => { waits.push(ms); } };
+}
+
+const COMMENT_URL = 'https://eagle.example/api/public/comment?period=59d&count=true';
+
+test('a 429 carrying retry-after waits that long and then succeeds', async (t) => {
+  const { calls, waits, sleep } = fetchSequence(t, [
+    throttled({ 'retry-after': '2', 'ratelimit-policy': '200;w=60' }),
+    served([{ _id: 'c1' }])
+  ]);
+
+  const body = await fetchJson(COMMENT_URL, undefined, { sleep });
+
+  assert.deepStrictEqual(body, [{ _id: 'c1' }], 'the retry is what the caller gets back');
+  assert.deepStrictEqual(waits, [2000], "the server's own retry-after, in ms, over the window");
+  assert.strictEqual(calls.length, 2, 'the throttled request is re-sent, not abandoned');
+});
+
+test('a 429 without retry-after waits the window the rate-limit headers name', async (t) => {
+  const { waits, sleep } = fetchSequence(t, [
+    throttled({ 'ratelimit-reset': '12', 'ratelimit-policy': '200;w=60' }),
+    throttled({ 'ratelimit-policy': '200;w=60' }),
+    served([])
+  ]);
+
+  await fetchJson(COMMENT_URL, undefined, { sleep });
+
+  assert.deepStrictEqual(waits, [12000, 60000],
+    'seconds left in the window first, the window length when that is missing');
+});
+
+test('five 429s are waited out on the 5/15/60 ladder and the sixth throws', async (t) => {
+  const { calls, waits, sleep } = fetchSequence(t, [throttled()]);
+
+  await assert.rejects(
+    fetchJson(COMMENT_URL, undefined, { sleep }),
+    /still throttled after 5 waits/,
+    'a run that stays throttled fails loudly rather than reporting a short read');
+
+  assert.deepStrictEqual(waits, [5000, 15000, 60000, 60000, 60000],
+    'the fallback ladder, because a bare 429 names no window');
+  assert.strictEqual(calls.length, 6, 'the first request plus five retries');
+});
+
+test('a non-429 failure keeps the three short attempts it always had', async (t) => {
+  const { calls, waits, sleep } = fetchSequence(t, [
+    { status: 500, ok: false, statusText: 'Server Error', headers: new Headers() }
+  ]);
+
+  await assert.rejects(
+    fetchJson(COMMENT_URL, undefined, { sleep }),
+    /after 3 attempts: HTTP 500 Server Error/);
+
+  assert.deepStrictEqual(waits, [1000, 2000], 'the 1s/2s retry, not the rate-limit ladder');
+  assert.strictEqual(calls.length, 3, 'the rate-limit budget is not spent on ordinary failures');
+});
