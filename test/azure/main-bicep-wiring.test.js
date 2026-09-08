@@ -339,12 +339,25 @@ test('the analytics read routes allow the admin origins and the Authorization he
     'main.bicep must derive the origins rather than take them as a parameter');
   assert.match(MAIN, /filter\(frontendHostNames, host => startsWith\(host, 'demi-admin'\)\)/,
     'the admin app is the only frontend that builds a query');
-  // Unconditionally appended, this WAS prod's only allowed origin: prod's frontendHostNames is
-  // empty on purpose, so the derived list would have held one developer's machine and nothing else.
+  // Unconditionally appended, this would sit alongside the real admin host below and give a
+  // developer's machine the same standing as the deployed prod frontend.
   assert.match(MAIN, /environmentName == 'prod' \? \[\] : \[ 'http:\/\/localhost:4200' \]/,
     'localhost is a developer origin and must never be appended in prod');
-  assert.match(PROD_PARAMS, /^param frontendHostNames = \[\]$/m,
-    'prod has no DEMI frontend, so its origin list stays empty and the gate above allows no browser');
+
+  // Prod now has one DEMI frontend, the admin console on eagle-edge-prod. Its origin list holds
+  // exactly that host and nothing else — no eagle-public entry, no leftover eagle-search host.
+  const frontendMatch = /^param frontendHostNames = \[([\s\S]*?)\]$/m.exec(PROD_PARAMS);
+  assert.ok(frontendMatch, 'prod must declare frontendHostNames explicitly');
+  const prodFrontendHosts = [...frontendMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.strictEqual(prodFrontendHosts.length, 1,
+    'prod has exactly one DEMI frontend, the admin console — a second entry is undocumented');
+  assert.match(prodFrontendHosts[0], /^demi-admin-/,
+    'the one prod frontend host is the DEMI admin console');
+  assert.match(prodFrontendHosts[0], /\.azurefd\.net$/,
+    'the admin console is served from Front Door, not composed by hand');
+  assert.ok(!prodFrontendHosts.some((host) => host.startsWith('demi-frontend-')),
+    'the DEMI public frontend has no presence in prod — only the admin console does');
+
   assert.match(MAIN, /^\s+analyticsBrowserOrigins: analyticsAdminOrigins$/m,
     'declared but unwired means every browser request is refused at the gateway');
 });

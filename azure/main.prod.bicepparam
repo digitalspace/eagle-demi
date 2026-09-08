@@ -88,10 +88,15 @@ param trustedProxyIps = '142.34.194.121,142.34.194.122,142.34.194.123,142.34.194
 // secret and ignores the header, rather than failing the build on a value it does not use.
 param edgeSecret = readEnvironmentVariable('EDGE_SECRET', '')
 
-// Empty, deliberately. There is no DEMI frontend in prod — eagle-public is the consumer and it
-// reaches this API same-origin through rproxy, so no browser origin needs allowing. Empty leaves
-// CORS_ORIGIN unset and src/app.js falls back to localhost only: fail closed, not open.
-param frontendHostNames = []
+// The browser origins allowed to call the API. `siteConfig.appSettings` is a whole-collection PUT,
+// so this list IS CORS_ORIGIN on demi-api-fc-prod. eagle-public needs no entry — it reaches the API
+// same-origin through rproxy. The one entry is the DEMI admin console's Front Door endpoint on
+// eagle-edge-prod, read from eagle-edge's edgeEndpointHostNames output, never composed. main.bicep
+// also filters this list down to demi-admin hosts for the analytics allowlist.
+param frontendHostNames = [
+  // DEMI admin console prod endpoint on eagle-edge-prod, created 2026-09-08.
+  'demi-admin-prod-hfgebphjbucqd5bt.a01.azurefd.net'
+]
 
 // ── Compute ───────────────────────────────────────────────────────────────────────────────────
 param deployApim = true
