@@ -55,14 +55,16 @@ npm run db:seed-public-reads -- --live --only lists
 npm run db:seed-public-reads -- --live --since 2026-01-01
 ```
 
-Each stage logs one line:
+Each stage logs one line. The counts are that run's, not a running total:
 
 ```
-[backfill] commentPeriods: fetched=1204 written=1198 skipped=6 errors=0
+[backfill] commentPeriods (this run): fetched=1204 written=1198 skipped=6 dropped=4 errors=0
 ```
 
 `skipped` counts rows the run chose not to write — a row outside `--since`, or one whose parent is
-not in DEMI. `errors` counts rows that failed to write; the first 20 are logged with their id.
+not in DEMI. `dropped` counts the second kind on its own. Those rows are still owed: the parent
+belongs to another stage, and it may be published tomorrow. `errors` counts rows that failed to
+write; the first 20 are logged with their id.
 
 A dry run reports `would-write` in place of `written` and touches nothing, including the state file.
 
@@ -75,11 +77,17 @@ one.
 
 `--only` overrides that: a stage named on the command line runs whether or not the state file says
 it finished. Naming a stage is how a repair is asked for, and the stage needing repair is always one
-that has completed before.
+that has completed before. `--only comments` ignores the per-period list as well, so a repair
+reaches periods an earlier run already checkpointed.
 
-Nothing that failed is recorded: a period holding a comment that failed to write stays off the
-per-period list, and a stage that logged errors is not marked complete. Both would otherwise be
-skipped next time, leaving those rows missing for good.
+Nothing that failed is recorded, and neither is anything still owed. A period holding a comment that
+failed to write stays off the per-period list, and a stage is marked complete only when its errors
+and its drops are both zero. Both would otherwise be skipped next time, leaving those rows missing
+for good.
+
+A stage that dropped rows therefore runs again on the next plain rerun, without being asked for by
+name. Stages that finished clean are still skipped, and the comment stage keeps its per-period list
+through the rerun, so it walks only the periods it owes.
 
 Delete the state file to force a full rerun. Every write is an upsert, so replaying costs request
 units and nothing else.
@@ -173,5 +181,6 @@ npm run db:seed-public-reads -- --live --only commentPeriods,comments --state ./
 Documents first, because a document moves partition on its own re-seed. The period re-mirror moves
 the row to the notification partition, deletes the row left in the project partition, and cascades
 the corrected access list to the comments under it; the comments stage then follows, because a
-comment stores its period's `projectId` and nothing else rewrites it. A fresh `--state` path is
-what makes the comments stage revisit periods an earlier run checkpointed.
+comment stores its period's `projectId` and nothing else rewrites it. The separate `--state` path
+keeps the repair's bookkeeping out of the main state file; `--only comments` revisits the
+checkpointed periods either way.
