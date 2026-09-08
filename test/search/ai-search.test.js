@@ -10,7 +10,16 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const aiSearch = require('../../src/search/ai-search');
+const { filterFor } = require('../../src/helpers/access-odata');
+const { TIER } = require('../../src/helpers/access-sql');
 const { projectedColumns } = require('../helpers/search-datasource');
+
+// The anonymous caller's ACL, from the builder the controller uses rather than a literal: these
+// tests assert that a degraded retry carries it back UNCHANGED, and a hand-written approximation
+// would stop being the thing that ships the moment `filterFor` changes shape.
+const ANONYMOUS_ACL = filterFor(
+  { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] }
+).filter;
 
 /**
  * Replace global.fetch and the token call.
@@ -1556,7 +1565,7 @@ test('a field the live index cannot answer', async (t) => {
       ));
 
       const res = await aiSearch.searchDocuments({
-        filter: null, keywords: 'ajax', orderby: 'fileSize desc, id asc', top: 10
+        filter: ANONYMOUS_ACL, keywords: 'ajax', orderby: 'fileSize desc, id asc', top: 10
       });
 
       assert.strictEqual(calls.length, 2, 'exactly one retry, not a strip-until-it-passes loop');
@@ -1565,6 +1574,9 @@ test('a field the live index cannot answer', async (t) => {
       assert.strictEqual(calls[1].body.orderby, 'id asc',
         'and it cannot be ordered by either — an orderby on a missing field is the same 400');
       assert.strictEqual(calls[1].body.search, calls[0].body.search, 'same query, narrower select');
+      // Byte for byte, and against the ACL itself rather than only against leg one: a filter that
+      // lost a term admits MORE rows, so the retry either carries the whole clause or is not made.
+      assert.strictEqual(calls[0].body.filter, ANONYMOUS_ACL, 'leg one carried the ACL');
       assert.strictEqual(calls[1].body.filter, calls[0].body.filter, 'and the same ACL');
 
       assert.deepStrictEqual(res.meta.degraded, { missing: ['fileSize'] });
@@ -1581,7 +1593,9 @@ test('a field the live index cannot answer', async (t) => {
     // to ignore a key that is only ever set when something is wrong.
     captureFetch(tt, () => ({ json: { value: [{ id: 'd1' }], '@odata.count': 1 } }));
 
-    const res = await aiSearch.searchDocuments({ filter: null, keywords: 'ajax', top: 10 });
+    const res = await aiSearch.searchDocuments({
+      filter: ANONYMOUS_ACL, keywords: 'ajax', top: 10
+    });
     assert.strictEqual(res.meta, undefined);
   });
 
@@ -1593,7 +1607,7 @@ test('a field the live index cannot answer', async (t) => {
       const calls = captureFetch(tt, () => narrow(field));
 
       await assert.rejects(
-        () => aiSearch.searchProjects({ filter: null, keywords: 'site c', top: 10 }),
+        () => aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'site c', top: 10 }),
         /HTTP 400/,
         'the controller turns this into a 502 SEARCH_SCHEMA_DRIFT naming the field'
       );
@@ -1607,10 +1621,12 @@ test('a field the live index cannot answer', async (t) => {
     const calls = captureFetch(tt, (i) => narrow(i === 0 ? 'fileSize' : 'documentSource'));
 
     await assert.rejects(
-      () => aiSearch.searchDocuments({ filter: null, keywords: 'ajax', top: 10 }),
+      () => aiSearch.searchDocuments({ filter: ANONYMOUS_ACL, keywords: 'ajax', top: 10 }),
       /HTTP 400/
     );
     assert.strictEqual(calls.length, 2, 'one degrade attempt, then stop');
+    assert.strictEqual(calls[1].body.filter, ANONYMOUS_ACL,
+      'the one retry it did make carried the whole ACL');
   });
 
   await t.test('and the budget is the whole page, not each request that fills it', async (tt) => {
@@ -1625,22 +1641,49 @@ test('a field the live index cannot answer', async (t) => {
     });
 
     await assert.rejects(
-      () => aiSearch.searchDocuments({ filter: null, keywords: 'ajax', top: 500 }),
+      () => aiSearch.searchDocuments({ filter: ANONYMOUS_ACL, keywords: 'ajax', top: 500 }),
       /HTTP 400/
     );
     assert.strictEqual(calls.length, 3, 'the fill request is not given a second strip');
   });
 
-  await t.test('a 400 naming nothing this layer sends is not retried at all', async (tt) => {
-    // A field named only in the FILTER is the caller's ACL clause, and a filter that lost a term
-    // admits more rows. Nothing to drop means the retry would fail identically, so it is not made.
-    const calls = captureFetch(tt, () => narrow('someFilterOnlyField'));
+  await t.test('a 400 naming a field only the filter sends is not retried at all', async (tt) => {
+    // `sourceSystem` is filterable and in no select — the shape `buildFilter` emits for
+    // `and[sourceSystem]=eagle`, which puts the caller's own term first and the ACL last. A filter
+    // that lost either term admits MORE rows, so there is nothing here it is safe to strip:
+    // the retry would fail identically and is not made.
+    const calls = captureFetch(tt, () => narrow('sourceSystem'));
 
     await assert.rejects(
-      () => aiSearch.searchProjects({ filter: null, keywords: 'site c', top: 10 }),
+      () => aiSearch.searchProjects({
+        filter: `sourceSystem eq 'eagle' and ${ANONYMOUS_ACL}`, keywords: 'site c', top: 10
+      }),
       /HTTP 400/
     );
-    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls.length, 1, 'the filter is never degraded, so no retry can differ');
+    assert.strictEqual(calls[0].body.filter, `sourceSystem eq 'eagle' and ${ANONYMOUS_ACL}`);
+  });
+});
+
+// The refusals inside the drop, asserted directly on it. A search cannot reach them: the one-retry
+// latch caps a call at a single drop, and every select the app emits is wider than one field — so
+// without this the guard that stops a degrade from emptying `select` has no test at all.
+test('the field drop behind the degrade', async (t) => {
+  await t.test('refuses the whole drop rather than emptying the select', () => {
+    const body = { search: '*', select: 'id', filter: ANONYMOUS_ACL };
+
+    assert.strictEqual(aiSearch.dropField(body, 'id'), false,
+      'a request with no select returns every RETRIEVABLE field — on chunks, the passage text');
+    assert.deepStrictEqual(body, { search: '*', select: 'id', filter: ANONYMOUS_ACL },
+      'and refusing means the body does not move at all, so the caller rethrows the 400');
+  });
+
+  await t.test('lets the orderby empty, because relevance order is the narrower answer', () => {
+    const body = { search: '*', select: 'id,displayName', orderby: 'fileSize desc' };
+
+    assert.strictEqual(aiSearch.dropField(body, 'fileSize'), true);
+    assert.ok(!('orderby' in body), 'no orderby is the service\'s own order, not an extra row');
+    assert.strictEqual(body.select, 'id,displayName', 'and the select it did not name is untouched');
   });
 });
 

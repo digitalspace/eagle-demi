@@ -157,6 +157,11 @@ paths:
         as-is (`{"fields": [{"name": ...}]}`, whose retrievable fields become the select). An index
         named in the body but not queried by this app is a 400; an index left out keeps the
         deployed select.
+
+        Bounded, because the route is anonymous and every entry becomes a live query: at most the
+        three known indexes, 64 entries per `select` and per `orderby`, each a field name of at
+        most 64 characters optionally followed by `asc` or `desc`, and 12 probes per request. The
+        committed definitions fit inside all of them.
       requestBody:
         required: false
         content:
@@ -172,7 +177,9 @@ paths:
         '200':
           description: Every supplied field exists in the live index.
         '400':
-          description: The body named an index this app does not query.
+          description: >-
+            The body named an index this app does not query, or an override was outside the bounds
+            above (`{"error": "schema override out of bounds"}`). No probe is issued.
         '503':
           description: A supplied field is missing from the live index, or the probe could not run.
 

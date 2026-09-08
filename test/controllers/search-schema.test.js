@@ -228,6 +228,84 @@ test('search schema health', async (t) => {
     assert.match(out.body.error, /chunks, projects, documents/);
   });
 
+  // The route is anonymous and the gateway has no per-caller throttle for an anonymous product
+  // (azure/modules/apim.bicep:473), so a posted list is a request multiplier against the shared
+  // search service: 32 orders per probe, three indexes, one curl. The bound is the only thing
+  // between a 10 MB body and tens of thousands of sequential live queries.
+  await t.test('an oversized orderby is refused before a single probe is issued', async (tt) => {
+    const probes = stubProbe(tt);
+
+    const { out, res } = capture();
+    await searchSchema.searchSchema(request({
+      indexes: { documents: { orderby: Array.from({ length: 200000 }, () => 'id') } }
+    }), res);
+
+    assert.strictEqual(out.status, 400);
+    assert.strictEqual(out.body.error, 'schema override out of bounds');
+    assert.strictEqual(probes.length, 0, 'nothing upstream is asked, not even the other indexes');
+  });
+
+  await t.test('the bound is a count, not a size: 65 names is already too many', async (tt) => {
+    const probes = stubProbe(tt);
+
+    const { out, res } = capture();
+    await searchSchema.searchSchema(request({
+      indexes: { documents: { select: Array.from({ length: 65 }, (_, i) => `field${i}`) } }
+    }), res);
+
+    assert.strictEqual(out.status, 400);
+    assert.strictEqual(out.body.error, 'schema override out of bounds');
+    assert.strictEqual(probes.length, 0);
+  });
+
+  // An entry is a field name, optionally with its direction. Anything else is not a question this
+  // endpoint can ask, and a probe that carries it is a live query built from caller text.
+  await t.test('an entry that is not a bare field name is refused', async (tt) => {
+    const probes = stubProbe(tt);
+
+    for (const entry of ['id desc, fileSize asc', 'search.score() desc', "id asc'", 'x'.repeat(65)]) {
+      const { out, res } = capture();
+      await searchSchema.searchSchema(request({ indexes: { documents: { orderby: [entry] } } }), res);
+
+      assert.strictEqual(out.status, 400, `refused: ${entry}`);
+      assert.strictEqual(out.body.error, 'schema override out of bounds');
+    }
+    assert.strictEqual(probes.length, 0);
+  });
+
+  // The bounds exist for the anonymous caller, not for CI: what the deploy workflow posts is these
+  // three files, and they have to keep passing or the gate stops being runnable.
+  await t.test('the committed index definitions still fit inside the bounds', async (tt) => {
+    const probes = stubProbe(tt);
+
+    const { out, res } = capture();
+    await searchSchema.searchSchema(request({
+      indexes: {
+        chunks: require('../../azure/search/indexes/chunks.json'),
+        projects: require('../../azure/search/indexes/projects.json'),
+        documents: require('../../azure/search/indexes/documents.json')
+      }
+    }), res);
+
+    assert.strictEqual(out.status, 200);
+    assert.strictEqual(probes.length, 3, 'one select probe per index, and no order to batch');
+  });
+
+  // The widest index emits 14 orders, so the app's own probe costs 3 indexes x 2 calls. The cap is
+  // what stops a body from turning the same route into an arbitrary number of them.
+  await t.test('a request is capped at twelve probes however the body is split', async (tt) => {
+    const probes = stubProbe(tt);
+    const orderby = Array.from({ length: 64 }, (_, i) => `field${i}`);
+
+    const { out, res } = capture();
+    await searchSchema.searchSchema(request({
+      indexes: { chunks: { orderby }, projects: { orderby }, documents: { orderby } }
+    }), res);
+
+    assert.strictEqual(out.status, 200, '3 x (1 select + 2 order batches) = 9 is inside the cap');
+    assert.strictEqual(probes.length, 9);
+  });
+
   await t.test('no search endpoint is a 503, not a clean bill of health', async (tt) => {
     const probes = stubProbe(tt);
     const endpoint = process.env.SEARCH_ENDPOINT;

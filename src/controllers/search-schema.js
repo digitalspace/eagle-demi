@@ -58,6 +58,56 @@ const INDEXES = [
 const ORDERBY_CLAUSES_PER_PROBE = 32;
 
 /**
+ * What a POSTED override may ask for, and it is a bound rather than a preference.
+ *
+ * THE ROUTE IS ANONYMOUS AND NOTHING IN FRONT OF IT COUNTS REQUESTS (see the route comment and
+ * `azure/modules/apim.bicep`), so an override's length is a request multiplier at a shared 1-SU
+ * search service: an `orderby` array is batched 32 at a time into one live call each, across three
+ * indexes. Unbounded, a single 1 MB body measured 6,254 sequential calls and the 10 MB body limit
+ * puts ~65,000 within reach of one curl.
+ *
+ * The numbers are sized off the committed definitions, which are what CI posts: the widest index
+ * declares 23 fields and 14 sortable ones, and the longest field name is well under 64 characters.
+ * A body over these is not a probe this endpoint has any reason to run.
+ */
+const MAX_OVERRIDE_ENTRIES = 64;
+const MAX_ENTRY_CHARS = 64;
+/** `field` or `field asc|desc` — an index field name, which is all a probe can ask about. */
+const ENTRY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*( (asc|desc))?$/;
+/** Three indexes × (one select probe + at most three `orderby` batches). */
+const MAX_PROBES_PER_REQUEST = 12;
+
+/**
+ * One message for every bound, because the caller is CI or a curl and the answer is the same:
+ * post the committed definition, or a select and an order the app could actually emit. Naming
+ * which bound was hit would only describe the limits to someone probing for them.
+ */
+function outOfBounds() {
+  const err = new Error('schema override out of bounds');
+  err.status = 400;
+  return err;
+}
+
+/**
+ * A caller-supplied list of field names, checked before it can become upstream calls.
+ *
+ * A string is split the way `probeIndexSchema` would join it, so `select: 'a,b'` and
+ * `select: ['a','b']` are bounded identically rather than the string form slipping past.
+ *
+ * @throws {Error} status 400 when the list is too long, or any entry is not a bare field name
+ */
+function boundedList(value) {
+  const entries = Array.isArray(value) ? value : String(value).split(',');
+  if (entries.length > MAX_OVERRIDE_ENTRIES) throw outOfBounds();
+  return entries.map(entry => {
+    if (typeof entry !== 'string' && typeof entry !== 'number') throw outOfBounds();
+    const text = String(entry).trim();
+    if (text.length > MAX_ENTRY_CHARS || !ENTRY_PATTERN.test(text)) throw outOfBounds();
+    return text;
+  });
+}
+
+/**
  * Every index field an `$orderby` from this app can name, asked of `buildOrderBy` rather than
  * restated here.
  *
@@ -116,6 +166,7 @@ function overridesFrom(body) {
   if (!indexes || typeof indexes !== 'object' || Array.isArray(indexes)) return out;
 
   const known = INDEXES.map(entry => entry.schema);
+  if (Object.keys(indexes).length > known.length) throw outOfBounds();
   for (const [name, value] of Object.entries(indexes)) {
     if (!known.includes(name)) {
       const err = new Error(`indexes must name one of: ${known.join(', ')}`);
@@ -128,15 +179,21 @@ function overridesFrom(body) {
       out[name] = {
         // A non-retrievable field cannot be selected at all — asking is its own 400, and one that
         // says nothing about drift.
-        select: value.fields.filter(f => f && f.name && f.retrievable !== false).map(f => f.name),
+        select: boundedList(
+          value.fields.filter(f => f && f.name && f.retrievable !== false).map(f => f.name)
+        ),
         orderby: []
       };
       continue;
     }
 
     const override = {};
-    if (Array.isArray(value.select) || typeof value.select === 'string') override.select = value.select;
-    if (Array.isArray(value.orderby)) override.orderby = value.orderby.map(orderbyClause);
+    if (Array.isArray(value.select) || typeof value.select === 'string') {
+      override.select = boundedList(value.select);
+    }
+    // Bounded BEFORE the direction is added, so `orderbyClause`'s output is not what the pattern
+    // has to describe: what a caller may send is a field name, optionally with its direction.
+    if (Array.isArray(value.orderby)) override.orderby = boundedList(value.orderby).map(orderbyClause);
     out[name] = override;
   }
   return out;
@@ -149,12 +206,7 @@ function overridesFrom(body) {
  * clause carried it: a select fault reported against an order sends an operator to `SORT_KEYS`
  * instead of to the select. The select is also the one that took prod down.
  */
-async function probeIndex(entry, override, liveName) {
-  const select = (override && override.select) || entry.select();
-  const orderby = override && override.orderby
-    ? override.orderby
-    : orderbyFieldsFor(entry).map(orderbyClause);
-
+async function probeIndex({ liveName, select, orderby }) {
   const fail = result => {
     logger.warn(
       `[search-schema] ${liveName} is missing ${result.missing.join(', ')} — the live index cannot ` +
@@ -197,9 +249,25 @@ exports.searchSchema = async (req, res) => {
     return res.status(503).json({ ok: false, error: 'Search is not configured.' });
   }
 
-  let overrides;
+  // Everything the request will cost, settled BEFORE the first upstream call: the bounds in
+  // `overridesFrom` cap each list, and the budget here caps the whole request. A body that would
+  // buy more probes than the committed definitions need is refused rather than half-run.
+  let plan;
   try {
-    overrides = overridesFrom(req.body);
+    const overrides = overridesFrom(req.body);
+    plan = INDEXES.map(entry => {
+      const override = overrides[entry.schema];
+      return {
+        schema: entry.schema,
+        liveName: entry.liveName(cfg),
+        select: (override && override.select) || entry.select(),
+        orderby: (override && override.orderby) || orderbyFieldsFor(entry).map(orderbyClause)
+      };
+    });
+    const probes = plan.reduce(
+      (total, index) => total + 1 + Math.ceil(index.orderby.length / ORDERBY_CLAUSES_PER_PROBE), 0
+    );
+    if (probes > MAX_PROBES_PER_REQUEST) throw outOfBounds();
   } catch (err) {
     if (!err.status) throw err;
     return res.status(err.status).json({ ok: false, error: err.message });
@@ -207,9 +275,9 @@ exports.searchSchema = async (req, res) => {
 
   const indexes = {};
   let ok = true;
-  for (const entry of INDEXES) {
-    const result = await probeIndex(entry, overrides[entry.schema], entry.liveName(cfg));
-    indexes[entry.schema] = result;
+  for (const index of plan) {
+    const result = await probeIndex(index);
+    indexes[index.schema] = result;
     if (!result.ok) ok = false;
   }
 

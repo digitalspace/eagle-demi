@@ -1437,6 +1437,10 @@ module.exports = {
   // The live-schema gate and the error classification behind `SEARCH_SCHEMA_DRIFT`.
   probeIndexSchema,
   missingPropertyFrom,
+  // Exported for tests. Its refusals are the safety argument for the whole degrade — an emptied
+  // `select` returns every RETRIEVABLE field, chunk text included — and the one-retry latch above
+  // puts them out of reach of any `searchDocuments`/`searchChunks` call that could assert them.
+  dropField,
   searchChunks,
   searchProjects,
   searchDocuments,

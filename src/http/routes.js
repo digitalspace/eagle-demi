@@ -72,6 +72,14 @@ const routes = [
   // POST is the SAME handler, not a second one: a body overrides the selects so CI can probe the
   // incoming tag's committed index definitions through the currently deployed app, and a GET body
   // is not read by the adapter (or by most clients).
+  //
+  // ANONYMOUS BY DESIGN, AND BOUNDED IN THE CONTROLLER BECAUSE NOTHING ELSE COUNTS THESE REQUESTS.
+  // The gateway applies `rate-limit` to the keyed product only — `rate-limit-by-key` and
+  // `quota-by-key` do not exist on this tier, so an anonymous product has no per-caller throttle
+  // at all (azure/modules/apim.bicep:473). The body names selects and orders that become live
+  // queries against the shared 1-SU search service the public site runs on, so
+  // `controllers/search-schema.js` caps the list lengths and the probes per request, and answers
+  // 400 before any of them is issued.
   { method: 'get', path: '/health/search-schema', guards: [], load: () => searchSchemaController().searchSchema },
   { method: 'post', path: '/health/search-schema', guards: [], load: () => searchSchemaController().searchSchema },
 
