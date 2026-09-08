@@ -516,6 +516,41 @@ test('the bulk download worker', async (t) => {
       'and the documents after it are still packed');
   });
 
+  await t.test('a buffered source that dies while it is parked is re-opened at its turn', async (tt) => {
+    config.bulkFetchConcurrency = 2;
+    config.bulkFetchBufferBytes = 30;
+    const docs = [doc('d0'), doc('d1'), doc('d2')];
+    const opens = [];
+    const { patches, uploads, zipText } = harness(tt, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => {
+        opens.push(key);
+        // d0 is the long one, so d1's socket dies while it is still parked behind it. Nothing reads
+        // a parked buffer, so both it and the source it is piped from are streams whose 'error'
+        // only the window is subscribed to.
+        if (key === 'etl/d1.pdf' && opens.filter(k => k === 'etl/d1.pdf').length === 1) {
+          return trickle(key, 20, null, null, 1);
+        }
+        return trickle(key, key === 'etl/d0.pdf' ? 12 : 2);
+      }
+    });
+    tt.mock.method(logger, 'warn', () => {});
+
+    await worker.run('job-1');
+
+    assert.strictEqual(opens.filter(key => key === 'etl/d1.pdf').length, 2,
+      'the buffer in front of that socket held it open through another document — a fresh open at ' +
+      'its turn is what the unbuffered read would have given it');
+    assert.strictEqual(statusPatch(patches).status, 'ready');
+    assert.strictEqual(readyPatch(patches).errorCount, 0,
+      'a socket dropped while its buffer was parked must not cost the caller the file');
+    assert.strictEqual(readyPatch(patches).includedCount, 3);
+    const text = zipText([...uploads.keys()][0]);
+    assert.match(text, /chunk 2 of etl\/d1\.pdf/,
+      'and the entry holds the re-opened object, not the byte the dead buffer had reached');
+  });
+
   await t.test('a fatal part error closes the sockets behind the buffers too', async (tt) => {
     config.bulkFetchConcurrency = 4;
     config.bulkFetchBufferBytes = 4096;
