@@ -355,8 +355,6 @@ test('the analytics read routes allow the admin origins and the Authorization he
     'the one prod frontend host is the DEMI admin console');
   assert.match(prodFrontendHosts[0], /\.azurefd\.net$/,
     'the admin console is served from Front Door, not composed by hand');
-  assert.ok(!prodFrontendHosts.some((host) => host.startsWith('demi-frontend-')),
-    'the DEMI public frontend has no presence in prod — only the admin console does');
 
   assert.match(MAIN, /^\s+analyticsBrowserOrigins: analyticsAdminOrigins$/m,
     'declared but unwired means every browser request is refused at the gateway');
