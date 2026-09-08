@@ -47,9 +47,6 @@ param analyticsAuditHeaderValue string = ''
 @description('Browser origins, scheme included, allowed on the analytics read routes. Named rather than `*` because those requests carry a Keycloak bearer; ingest stays open to any origin. Empty deploys no CORS policy on those routes, so no browser reaches them at all — fail closed.')
 param analyticsBrowserOrigins array = []
 
-@description('Resource id of the demi-logs-<env> Log Analytics workspace that gateway logs go to. Rows land in the resource-specific ApiManagementGatewayLogs table, not the shared AzureDiagnostics one. Empty deploys no diagnostic setting, so ApiManagementGatewayLogs stays empty.')
-param logsWorkspaceId string = ''
-
 var backendUrl = 'https://${apiHostName}/api'
 var machineApiName = 'demi-machine'
 
@@ -77,6 +74,8 @@ var machineConsumers = [
   'eagle-api'
 ]
 
+// The Consumption tier emits no resource logs, so there is no GatewayLogs diagnostic setting here.
+// Per-call gateway logging on this tier needs an Application Insights logger instead.
 resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   name: apimName
   location: location
@@ -95,30 +94,6 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
     // Live state on both instances, and off is where we want it: the legacy portal is the
     // deprecated one and nothing here uses it. Unmodelled, every apply proposes turning it back on.
     legacyPortalStatus: 'Disabled'
-  }
-}
-
-// Per-request gateway rows — status, backend time, caller ip, subscription — which nothing else
-// records: the landing zone's `setByPolicy-LogAnalytics` setting ships audit categories to its own
-// workspace, so without this `ApiManagementGatewayLogs` in demi-logs-<env> has no rows at all.
-// Dedicated is what puts them in that table: see the property below.
-resource apimGatewayDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(logsWorkspaceId)) {
-  scope: apim
-  // Distinctly named: a name colliding with a `setByPolicy-*` setting would have the two overwrite
-  // each other on every deploy.
-  name: 'demi-gateway-logs'
-  properties: {
-    workspaceId: logsWorkspaceId
-    // The ARM default is AzureDiagnostics, where gateway rows land as column soup in a table shared
-    // with every other resource and `ApiManagementGatewayLogs` never appears at all. Same trap as
-    // the Cosmos control-plane setting in cosmos-nosql.bicep.
-    logAnalyticsDestinationType: 'Dedicated'
-    logs: [
-      {
-        category: 'GatewayLogs'
-        enabled: true
-      }
-    ]
   }
 }
 
