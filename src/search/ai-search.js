@@ -83,6 +83,21 @@ const PROJECT_SELECT = 'id,name,displayName,description,proponent,sector,status,
   'legacyEagleId,read,isPublished,type,currentPhaseName,currentPhaseNameId,eacDecision,' +
   'eacDecisionId,decisionDate,vis';
 
+/**
+ * The fields a CHUNK hit carries back. Same invariant as the two above: every name must exist in
+ * the index or every chunk query is a 400.
+ *
+ * `content` IS DELIBERATELY ABSENT, and that is the whole reason this list is narrow. `content` was
+ * `retrievable: false`, so the index enforced it; semantic ranking requires its configured fields
+ * to be retrievable, so that flipped and the guarantee now lives here. Adding `content` is not a
+ * display tweak — it starts returning full chunk text to every caller.
+ *
+ * Named and exported like the other two so `/health/search-schema` probes the live index with what
+ * the app actually sends, and so a test can hold it against the committed `chunks.json`. It was an
+ * inline literal with no test at all while both of its neighbours had one.
+ */
+const CHUNK_SELECT = 'chunkId,documentId,projectId,pageNumber,read';
+
 /** Rows one search request can return. A larger page costs more requests, not fewer rows. */
 const SERVICE_MAX_TOP = 250;
 
@@ -617,6 +632,43 @@ async function runSearch(index, opts = {}) {
 
   const path = `/indexes/${index}/docs/search?api-version=${API_VERSION}`;
 
+  // What the live index could not answer, for this request as a whole. The fill loop below issues
+  // more than one call, so the one-retry budget and the mark it leaves both span all of them.
+  let degraded = null;
+
+  /**
+   * One service call, with the schema-drift degrade around it.
+   *
+   * A 400 naming a field the live index does not carry is the failure that took prod's Document
+   * tab down for 65 minutes on 2026-09-08: the deploy pipeline applies no index definition, so a
+   * release that widens a select against an index nobody widened 400s EVERY query. Dropping the
+   * field costs that one column; rethrowing costs the whole tab.
+   *
+   * ONE retry, and only for a field this layer may drop:
+   * - a second 400 rethrows, because narrowing until the query passes is how a deploy against a
+   *   wholly stale index would answer 200 with none of what the caller asked for;
+   * - a visibility field rethrows, and the controller answers 502 SEARCH_SCHEMA_DRIFT;
+   * - a field named nowhere this can edit rethrows unretried, since the retry would be identical.
+   */
+  const send = async () => {
+    try {
+      return await request(path, body);
+    } catch (err) {
+      const field = err.status === 400 ? missingPropertyFrom(err) : null;
+      if (!field || degraded || VISIBILITY_FIELDS.has(field) || !dropField(body, field)) throw err;
+      degraded = { missing: [field] };
+      // ERROR, not warn: nothing else says the index is behind the code, and the page being served
+      // is missing a column the app asked for. `{index, field}` are log fields so the alert and
+      // the operator can filter on the field rather than parse the sentence.
+      logger.error(
+        `[ai-search] the ${index} index cannot answer '${field}' — retried without it, so this ` +
+        'page is narrower than the app asked for. Widen the index and reindex.',
+        { index, field }
+      );
+      return request(path, body);
+    }
+  };
+
   const once = async () => {
     // Counted per REQUEST, not per call: a page larger than SERVICE_MAX_TOP costs one semantic
     // query per request and the scorecard divides by this number. `semanticQuery` is deleted after
@@ -624,7 +676,7 @@ async function runSearch(index, opts = {}) {
     if (semantic && body.semanticQuery) semanticCounters.requested++;
     let data;
     try {
-      data = await request(path, body);
+      data = await send();
     } catch (err) {
       if (!semantic || err.status !== 402) throw err;
       noteSemanticExhausted();
@@ -635,7 +687,7 @@ async function runSearch(index, opts = {}) {
       delete body.semanticQuery;
       delete body.semanticConfiguration;
       delete body.semanticErrorHandling;
-      data = await request(path, body);
+      data = await send();
     }
 
     // Whether L2 actually ran is invisible in the results — the same shape comes back either way,
@@ -678,7 +730,117 @@ async function runSearch(index, opts = {}) {
     value.push(...rows);
   }
 
-  return { value, count };
+  return { value, count, degraded };
+}
+
+/**
+ * The index field named in an AI Search 400, or null when the failure is something else.
+ *
+ * ONE COPY OF THE PATTERN, because two readers depend on it: the schema probe below turns a match
+ * into `{ok: false}`, and `controllers/search.js` turns it into the `SEARCH_SCHEMA_DRIFT` code on
+ * its 502. A second spelling of the regex is a second thing to be quietly wrong.
+ *
+ * The message is the service's own: `Invalid expression: Could not find a property named
+ * 'fileSize' on type 'search.document'.` — the exact 400 that took prod's Document tab down on
+ * 2026-09-08, when the deployed app selected a field the live index did not carry.
+ */
+function missingPropertyFrom(err) {
+  const match = /Could not find a property named '([^']+)'/.exec((err && err.message) || '');
+  return match ? match[1] : null;
+}
+
+/**
+ * The fields the degrade above must never drop.
+ *
+ * Dropping one of these does not narrow the answer, it WIDENS it. `read` is the caller's ACL,
+ * `isPublished` is the mirror the redactor derives from it, and `vis` is the per-record dial map —
+ * a hit that comes back without `vis` has every field at its `defaultVis`, which is the fail-open
+ * direction the redactor tests hold. An index that cannot answer them is a 502
+ * (`SEARCH_SCHEMA_DRIFT`) so an operator widens the index, rather than a page served wider than
+ * the caller may see.
+ */
+const VISIBILITY_FIELDS = new Set(['read', 'isPublished', 'vis']);
+
+/**
+ * Take one field name out of every list in a search body that can name it.
+ *
+ * `filter` is deliberately not one of them: it carries the ACL clause, and a filter that lost a
+ * term admits MORE rows. A field named only there changes nothing here, so `false` comes back and
+ * the caller rethrows rather than paying for a retry that fails identically.
+ *
+ * An emptied `select` or `searchFields` refuses the whole drop instead of being deleted: a request
+ * with no `select` returns every RETRIEVABLE field, which on the chunks index is the entire passage
+ * text — the one thing CHUNK_SELECT exists to withhold. `orderby` and `highlight` may go: the
+ * service's own relevance order and no highlights are both narrower answers, not wider ones.
+ *
+ * @returns {boolean} whether the body changed, so the caller knows a retry can differ
+ */
+function dropField(body, field) {
+  const changes = [];
+  for (const key of ['select', 'searchFields', 'highlight', 'orderby']) {
+    if (typeof body[key] !== 'string') continue;
+    const parts = body[key].split(',');
+    // `select`, `searchFields` and `highlight` are field names; an `orderby` clause is
+    // `<field> asc|desc` and a `highlight` entry may carry a `-<count>` suffix.
+    const kept = parts.filter(part => part.trim().split(/[\s-]/)[0] !== field);
+    if (kept.length === parts.length) continue;
+    if (kept.length === 0 && (key === 'select' || key === 'searchFields')) return false;
+    changes.push([key, kept]);
+  }
+  for (const [key, kept] of changes) {
+    // Rejoined the way each list is written elsewhere in this module, so a body that degraded reads
+    // like one that never had the field.
+    if (kept.length === 0) delete body[key];
+    else body[key] = kept.map(part => part.trim()).join(key === 'orderby' ? ', ' : ',');
+  }
+  return changes.length > 0;
+}
+
+/**
+ * One `degraded` mark for a search that ran in several legs — document search runs up to three.
+ * Null when every leg answered in full, so the controller can spread it into `meta` unconditionally.
+ */
+function mergeDegraded(results) {
+  const missing = [...new Set(
+    results.flatMap(result => (result && result.degraded ? result.degraded.missing : []))
+  )];
+  return missing.length > 0 ? { missing } : null;
+}
+
+/**
+ * Ask the LIVE index whether it can answer a `select` and an `$orderby` — the committed-vs-live
+ * gate the deploy pipeline had no way to run.
+ *
+ * `top: 0, count: false` so the service validates the projection and the order and returns no rows
+ * and no count: the answer is a status, not data, and it costs one empty page. Needs no role beyond
+ * the Search Index Data Reader the app already holds, which is the point — applying index
+ * definitions needs Search Service Contributor and the Function identity does not have it.
+ *
+ * ONLY the missing-property 400 resolves; every other failure throws. A probe that answered
+ * `{ok: false}` for a timeout or a 403 would report schema drift for a network blip and send an
+ * operator to widen an index that is already correct.
+ *
+ * @param {object} opts
+ * @param {string} opts.indexName   the LIVE index name, not the schema name
+ * @param {string|string[]} [opts.select]
+ * @param {string|string[]} [opts.orderby]
+ * @returns {Promise<{ok: boolean, index: string, missing?: string[]}>}
+ */
+async function probeIndexSchema({ indexName, select, orderby } = {}) {
+  const list = value => (Array.isArray(value) ? value.join(',') : value);
+  const body = { search: '*', top: 0, count: false };
+  if (select) body.select = list(select);
+  // Joined with ', ' — `$orderby` clauses are comma-separated and each carries its own direction.
+  if (orderby) body.orderby = Array.isArray(orderby) ? orderby.join(', ') : orderby;
+
+  try {
+    await request(`/indexes/${indexName}/docs/search?api-version=${API_VERSION}`, body);
+    return { ok: true, index: indexName };
+  } catch (err) {
+    const missing = err.status === 400 ? missingPropertyFrom(err) : null;
+    if (!missing) throw err;
+    return { ok: false, index: indexName, missing: [missing] };
+  }
 }
 
 /**
@@ -751,7 +913,7 @@ async function searchChunks(opts = {}) {
     return { items: [], count: 0 };
   }
 
-  const { value, count } = await runSearch(index, {
+  const { value, count, degraded } = await runSearch(index, {
     ...opts,
     // ON by default, and only here — the chunk index is the only one with a semantic
     // configuration, and asking for one that does not exist is a 400. Measured on 78 labels,
@@ -766,16 +928,17 @@ async function searchChunks(opts = {}) {
     // the case is the consistent direction, not the aggregate. Pass `semantic: false` to opt out,
     // which is how the scorecard measures the BM25 arm.
     semantic: opts.semantic !== false,
-    // This `select` is what stops the API shipping whole chunks — it did not used to be. `content`
-    // was `retrievable: false`, so the index enforced it; semantic ranking requires its configured
-    // fields to be retrievable, so that flipped and the guarantee now lives HERE. Adding `content`
-    // to this list is not a display tweak: it starts returning full chunk text to every caller.
-    select: 'chunkId,documentId,projectId,pageNumber,read',
+    // This `select` is what stops the API shipping whole chunks — see CHUNK_SELECT.
+    select: CHUNK_SELECT,
     highlight: 'content'
   });
 
   return {
     count,
+    // Present only when the live index could not answer a field — see `send` in runSearch. The
+    // controller spreads it into the response `meta`, so a degraded page says so instead of
+    // looking like a column the app forgot to ask for.
+    ...(degraded ? { meta: { degraded } } : {}),
     items: value.map(hit => ({
       chunkId: hit.chunkId,
       documentId: hit.documentId,
@@ -806,7 +969,7 @@ async function searchProjects(opts = {}) {
     throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
   }
 
-  const { value, count } = await runSearch(projectsIndex, {
+  const { value, count, degraded } = await runSearch(projectsIndex, {
     ...opts,
     prefix: true,
     // `nameTokens` is `name` under the `filename` analyzer — `keywords=mine` matches "Mine Project",
@@ -823,6 +986,8 @@ async function searchProjects(opts = {}) {
 
   return {
     count,
+    // See searchChunks: only present when a field was dropped to keep the page answerable.
+    ...(degraded ? { meta: { degraded } } : {}),
     items: value.map(hit => ({
       ...hit,
       // The analyzer's own account of what it matched. The browser used to reconstruct this with a
@@ -892,6 +1057,9 @@ async function searchDocuments(opts = {}) {
   // The total, assembled below from every leg that contributes rows. `direct.count` alone is what
   // it starts as, and what it stays when there is no project leg to run.
   let total = direct.count;
+  // Every leg that ran, for the `degraded` mark alone: a narrow index shows up in whichever leg
+  // happens to ask first, and one page is one answer however many requests built it.
+  const legs = [direct];
 
   // Leg two runs on EVERY page, not only when there is room for its rows. It owns part of the
   // total — `byProject.count` is index-wide — and eagle-public divides that total by `pageSize` to
@@ -921,6 +1089,7 @@ async function searchDocuments(opts = {}) {
       select: 'id',
       top: MAX_PROJECT_FANOUT
     });
+    legs.push(projects);
 
     const projectIds = projects.value.map(p => String(p.id)).filter(Boolean);
     if (projectIds.length > 0) {
@@ -967,6 +1136,7 @@ async function searchDocuments(opts = {}) {
         skip: Math.max(0, (Number(opts.skip) || 0) - (direct.count || 0)),
         filter: opts.filter ? `(${opts.filter}) and ${scope}` : scope
       });
+      legs.push(byProject);
 
       for (const doc of byProject.value) {
         if (items.length >= top) break;
@@ -982,11 +1152,15 @@ async function searchDocuments(opts = {}) {
     }
   }
 
+  const degraded = mergeDegraded(legs);
+
   // Leg two's documents matched on their PROJECT's name, not their own metadata, so they carry no
   // `@search.highlights` — `markedField` returns their escaped text and the card renders unmarked,
   // which is the honest result: nothing in that document's own fields matched the query.
   return {
     count: total,
+    // See searchChunks: only present when a field was dropped to keep the page answerable.
+    ...(degraded ? { meta: { degraded } } : {}),
     items: items.map(hit => ({
       ...hit,
       highlighted: {
@@ -1259,6 +1433,14 @@ async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
 module.exports = {
   DOCUMENT_SELECT,
   PROJECT_SELECT,
+  CHUNK_SELECT,
+  // The live-schema gate and the error classification behind `SEARCH_SCHEMA_DRIFT`.
+  probeIndexSchema,
+  missingPropertyFrom,
+  // Exported for tests. Its refusals are the safety argument for the whole degrade — an emptied
+  // `select` returns every RETRIEVABLE field, chunk text included — and the one-retry latch above
+  // puts them out of reach of any `searchDocuments`/`searchChunks` call that could assert them.
+  dropField,
   searchChunks,
   searchProjects,
   searchDocuments,

@@ -362,8 +362,12 @@ test('API deploy package', async (t) => {
     const packagedIndexers = [...entries].filter(e => e.startsWith('azure/search/indexers/')).sort();
     assert.deepStrictEqual(packagedIndexers, indexersOnDisk, 'every committed indexer definition must be packaged');
 
-    // DATA SOURCES MUST NOT SHIP. connectionString comes back redacted on export, so the committed
-    // copy could only restore a broken one — and nothing reads them at runtime.
+    // DATA SOURCES MUST NOT SHIP, and the reason is where the two scripts that read them run.
+    // `put-search-datasources.js` and the DIFFERS comparison in `apply-search-definitions.js` both
+    // execute on the devbox, and `/opt/eagle-demi` there is a git checkout, so the directory is
+    // already present — `scripts/demi-devbox.sh apply` copies the files it needs out of it. Nothing
+    // in the Function container reads them, and nothing there could use them anyway: the data plane
+    // is private-endpoint only and Kudu has no managed-identity endpoint to authenticate with.
     const packagedDatasources = [...entries].filter(e => e.startsWith('azure/search/datasources/'));
     assert.deepStrictEqual(packagedDatasources, [], 'data source definitions must not be packaged');
   });

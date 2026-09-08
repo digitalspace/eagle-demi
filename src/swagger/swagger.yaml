@@ -5,8 +5,8 @@ info:
     Central authoritative storage and spatial search engine for projects, documents, and
     administrative region boundaries.
 
-    NOT THE CONTRACT. This file is hand-maintained, covers 39 of the 52 paths in src/http/routes.js
-    (50 of its 67 operations), and has drifted from what the API actually serves. Undocumented here:
+    NOT THE CONTRACT. This file is hand-maintained, covers 41 of the 54 paths in src/http/routes.js
+    (53 of its 70 operations), and has drifted from what the API actually serves. Undocumented here:
     /search/summary, /boundaries, /admin/api-keys and more. GET /s/{code} is a
     browser redirect rather than an API call and is documented in the wiki. The routes in
     src/http/routes.js are authoritative; read them, or the endpoint itself, before relying on
@@ -111,11 +111,77 @@ paths:
             type: string
       responses:
         '200':
-          description: One-element array of search results, the measured total and metadata.
+          description: >-
+            One-element array of search results, the measured total and metadata. A field the live
+            index could not answer is dropped from the query and named under
+            `meta[0].degraded.missing`, so the page is served with that column missing rather than
+            failed — except for the visibility fields, which stay a 502.
         '400':
           description: Unknown dataset, unsupported query parameter, or dataset=Comment with no period.
         '502':
-          description: The backing search index or database could not be read.
+          description: >-
+            The backing search index or database could not be read. The body carries `code`
+            (`SEARCH_SCHEMA_DRIFT` when the live index is missing a field this app needs, and then
+            `field` names it; `SEARCH_UPSTREAM` otherwise) and `traceId`.
+
+  /api/health/search-schema:
+    get:
+      summary: Can the live search indexes answer what this app asks them?
+      description: >-
+        Unauthenticated, like the other health routes. Each live index is asked for an empty page
+        (`top: 0`) with the `select` and the `$orderby` clauses the app emits; Azure AI Search
+        answers a 400 naming the first field the index does not carry. Nothing applies index
+        definitions on deploy, so the committed `azure/search/indexes/*.json` can be wider than the
+        live index — this is the only check that compares the two.
+
+        Returns no rows and no counts, and nothing is cached.
+      responses:
+        '200':
+          description: >-
+            `{ "ok": true, "indexes": { "documents": { "ok": true }, ... } }` — every live index can
+            answer every query this app builds.
+        '503':
+          description: >-
+            `{ "ok": false, "indexes": { "documents": { "ok": false, "missing": ["fileSize"] } } }`
+            — the named index is narrower than the app, so every query against it is a 400. Also
+            answered when `SEARCH_ENDPOINT` is unset, and when a probe failed for a reason that is
+            not a missing field (`"error": "probe failed"`, details in the log).
+    post:
+      summary: Probe the live indexes with a supplied schema
+      description: >-
+        The same check, against selects the caller supplies rather than the deployed ones, so a
+        release pipeline can hold the INCOMING tag's schema against the live index before it swaps
+        the code.
+
+        Per index, either `{"select": [...], "orderby": [...]}` or a committed index definition
+        as-is (`{"fields": [{"name": ...}]}`, whose retrievable fields become the select). An index
+        named in the body but not queried by this app is a 400; an index left out keeps the
+        deployed select.
+
+        Bounded, because the route is anonymous and every entry becomes a live query: at most the
+        three known indexes, 64 entries per `select` and per `orderby`, each a field name of at
+        most 64 characters optionally followed by `asc` or `desc`, and 12 probes per request. The
+        committed definitions fit inside all of them.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                indexes:
+                  type: object
+                  additionalProperties:
+                    type: object
+      responses:
+        '200':
+          description: Every supplied field exists in the live index.
+        '400':
+          description: >-
+            The body named an index this app does not query, or an override was outside the bounds
+            above (`{"error": "schema override out of bounds"}`). No probe is issued.
+        '503':
+          description: A supplied field is missing from the live index, or the probe could not run.
 
   /api/config:
     get:

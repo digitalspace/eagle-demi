@@ -103,12 +103,18 @@ live index schema and reports any committed field the live index does not have â
 that reached prod once already, undetected. Read-only, exit 1 on drift:
 
 ```bash
-demi-devbox.sh drift [--env test|prod]
-# equivalent, run by hand on the devbox:
+scripts/demi-devbox.sh drift --env test      # or --env prod
+# what it runs, if you would rather do it by hand:
 scripts/with-search-admin.sh -- \
   az vm run-command invoke -g c4b0a8-test-rg -n demi-devbox-test --command-id RunShellScript \
   --scripts "sudo -u demi /usr/local/bin/demi-run 'cd /opt/eagle-demi && node src/scripts/apply-search-definitions.js --check'"
 ```
+
+`scripts/demi-devbox.sh apply --env <env> [--only documents]` is the repair: it dry-runs, prints
+what it would write, asks, and then does the three writes in the order that keeps the site up â€”
+index, data source, indexer reset and run. It reads the resource group, the tenant and the indexer
+identity off the resources themselves, so a prod run cannot inherit the test defaults. Outage
+symptoms and the rest of the response: `docs/runbook-search-outage.md`.
 
 ```bash
 npm run db:seed-nosql            # dry run by default; --live to write
