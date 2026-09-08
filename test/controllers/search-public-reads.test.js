@@ -148,8 +148,10 @@ const periodRow = (over = {}) => ({
   dateStarted: '2026-08-01T00:00:00.000Z',
   dateCompleted: '2026-08-30T00:00:00.000Z',
   instructions: 'Tell us what you think.',
+  additionalText: 'Comment on the amendment application.',
   isMet: false,
   metURL: '',
+  metBannerImageUrl: 'https://engage.gov.bc.ca/banner.jpg',
   informationLabel: 'Read the application',
   isPublished: true,
   read: PUBLIC_ACL,
@@ -301,6 +303,11 @@ test('GET /search?dataset=CommentPeriod', async (t) => {
     assert.strictEqual(row.project, PROJECT_EAGLE_ID);
     assert.strictEqual(row.projectId, '207');
     assert.strictEqual(row.instructions, 'Tell us what you think.');
+    // Both carried from Eagle at the same visibility as `instructions`: eagle-public renders
+    // `additionalText` as the period's blurb, and the Engage callout has no image without
+    // `metBannerImageUrl`. A field the catalog does not publish is dropped here, silently.
+    assert.strictEqual(row.additionalText, 'Comment on the amendment application.');
+    assert.strictEqual(row.metBannerImageUrl, 'https://engage.gov.bc.ca/banner.jpg');
     assert.strictEqual(body[0].count, 3);
     assert.strictEqual(body[0].meta[0].searchResultsTotal, 3);
     // `canScopeToProject` must admit this dataset, or the guard answers 0 rows and reports the
@@ -327,6 +334,38 @@ test('GET /search?dataset=CommentPeriod', async (t) => {
 
     // The unresolved Eagle id passes through as a literal and matches no partition.
     assert.deepStrictEqual(body[0].searchResults, []);
+  });
+
+  await t.test('a period under a ProjectNotification carries the notification id back', async () => {
+    // Eagle hangs some periods off a ProjectNotification, and the mirror partitions those under
+    // the notification's own id. Resolving the parent through `projects` alone answered
+    // `project: null`, and eagle-public's CommentPeriod model has nowhere to link that.
+    const notification = notificationRow();
+    const seen = stubCosmos(t, {
+      notifications: [notification],
+      commentPeriods: [periodRow({ projectId: notification.id })]
+    });
+
+    const { status, body } = await get(
+      `/api/search?dataset=CommentPeriod&and%5Bproject%5D=${notification.id}`);
+
+    assert.strictEqual(status, 200);
+    const [row] = body[0].searchResults;
+    assert.strictEqual(row._id, PERIOD_EAGLE_ID);
+    assert.strictEqual(row.project, notification.id);
+    assert.strictEqual(row.projectId, notification.id);
+    // The read is a partition read on the notification id: the id space is the caller's own.
+    assert.ok(boundValues(specsFor(seen, 'commentPeriods')[0]).includes(notification.id));
+  });
+
+  await t.test('a period under a notification this caller cannot see carries no parent', async () => {
+    // The lookup is ACL-enforcing on the notification too, and a period row that survived the
+    // period ACL must not be labelled with a parent the caller may not read.
+    stubCosmos(t, { notifications: [], commentPeriods: [periodRow({ projectId: 'PN1' })] });
+
+    const { body } = await get('/api/search?dataset=CommentPeriod&and%5Bproject%5D=PN1');
+
+    assert.strictEqual(body[0].searchResults[0].project, null);
   });
 
   await t.test('and[_id] fetches one period', async () => {

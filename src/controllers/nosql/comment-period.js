@@ -9,6 +9,12 @@
  * the same rule `seed/transform.js` applies to documents, and it is what stops an unpublished
  * project's engagement tab from being readable through this container.
  *
+ * A PERIOD MAY ALSO HANG OFF A `ProjectNotification`. Eagle's `project` reference holds either id,
+ * and a notification is not a project: it carries no ACL a child could out-rank, so such a period
+ * keeps its own `read[]` verbatim and is partitioned under the notification's own id — the same
+ * two rules `seed/transform.js` and the document mirror apply to a notification-parented document.
+ * `helpers/parent-admit` is the one place that tells the two parents apart.
+ *
  * A COMMENT FOLLOWS ITS PERIOD ONLY BECAUSE THIS WRITES IT DOWN. `/search?dataset=Comment` filters
  * on the comment's own stored `read[]` and never re-reads the period, so every level change here
  * is re-derived onto the comments below it. That is the opposite of a chunk, which is gated by a
@@ -29,8 +35,8 @@
 
 const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');
-const projects = require('../../repositories/projects');
 const { constrainToProject } = require('../../repositories/documents');
+const { admitParent } = require('../../helpers/parent-admit');
 const { seedAcl } = require('../../seed/transform');
 const { systemAccess, levelOfRead } = require('../../helpers/access-sql');
 // The widest a deleted period may be stored at, and the ceiling the cascade later re-derives it
@@ -39,7 +45,7 @@ const { DELETED_CEILING } = require('../../helpers/acl-cascade');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
-const { eaglePush, upsertWithRetry, refId } = require('./eagle-mirror');
+const { eaglePush, upsertWithRetry } = require('./eagle-mirror');
 
 /** The mirror row: the fields eagle-public renders, plus the raw Eagle record behind them. */
 function mirrorItem(eagleId, doc, projectId, read, existing) {
@@ -47,7 +53,9 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
     id: eagleId,
     eagleId,
     // The DEMI project id, as `documents` stores it — not the Eagle one, so both project-partitioned
-    // containers answer a scoped caller on the same value.
+    // containers answer a scoped caller on the same value. On a notification-parented period this
+    // is the notification's OWN id, which is what `documents` partitions those under and what
+    // eagle-public already sends as its `project` filter.
     projectId: String(projectId),
     sourceSystem: 'eagle',
 
@@ -56,8 +64,13 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
     dateAdded: doc.dateAdded || null,
     isMet: doc.isMet === true,
     metURL: doc.metURL || '',
+    // The Engage banner the project overview renders beside `metURL`. Without it the callout has
+    // no image at all.
+    metBannerImageUrl: doc.metBannerImageUrl || '',
     informationLabel: doc.informationLabel || '',
     instructions: doc.instructions || '',
+    // What eagle-public's comment period card and comments page render as the period's blurb.
+    additionalText: doc.additionalText || '',
     openHouses: Array.isArray(doc.openHouses) ? doc.openHouses : [],
     relatedDocuments: Array.isArray(doc.relatedDocuments) ? doc.relatedDocuments : [],
     commentTip: doc.commentTip || '',
@@ -75,22 +88,25 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
 
 /**
  * Mirror one raw Eagle `CommentPeriod`, whoever asked — the push handler below or the backfill
- * (src/scripts/seed-public-reads.js). NULL when the parent project is not in DEMI: a push answers
+ * (src/scripts/seed-public-reads.js). NULL when the parent is in neither container: a push answers
  * that with a 404, a backfill counts it and moves on.
  *
- * @param {object} [parentRow] the DEMI project row, when the caller already holds it
+ * @param {object} [parentRow] the admitted parent, when the caller already holds it — the shape
+ *   `helpers/parent-admit` returns. A row without `kind` is read as a project, which is what every
+ *   stored project row is.
  * @returns {Promise<{saved: object, existing: object|null, cascadeError: string|null}|null>}
  */
 async function mirrorFromEagle(eagleId, doc, parentRow) {
-  // systemAccess on every read: the mirror must find a private parent and a private existing row.
-  const parentEagleId = refId(doc.project);
-  const parent = parentRow || (parentEagleId
-    ? await projects.getByEagleId(systemAccess(), parentEagleId)
-    : null);
+  const parent = parentRow || await admitParent(doc.project);
   if (!parent) return null;
 
-  const constrained = constrainToProject(seedAcl(doc.read), parent.read);
-  // Both ceilings, lower wins: the project's, and level 2 once Eagle has deleted the record.
+  // A notification carries no ACL a period could out-rank, so there is nothing to narrow against
+  // and the period keeps what Eagle published it as.
+  const own = seedAcl(doc.read);
+  const constrained = parent.kind === 'notification'
+    ? own
+    : constrainToProject(own, parent.read);
+  // Both ceilings, lower wins: the parent's, and level 2 once Eagle has deleted the record.
   const read = doc.isDeleted === true
     ? constrainToProject(constrained, DELETED_CEILING)
     : constrained;
@@ -101,8 +117,8 @@ async function mirrorFromEagle(eagleId, doc, parentRow) {
     () => commentPeriods.getById(systemAccess(), eagleId)
   );
 
-  // A period whose project changed lands in a NEW partition, and Cosmos leaves the old row
-  // behind — still listable under the old project. Same removal as the document mirror.
+  // A period whose parent changed lands in a NEW partition, and Cosmos leaves the old row
+  // behind — still listable under the old parent. Same removal as the document mirror.
   if (existing && String(existing.projectId) !== saved.projectId) {
     await commentPeriods.deleteById(existing.id, existing.projectId);
   }

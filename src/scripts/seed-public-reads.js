@@ -39,8 +39,10 @@
  *
  * Resumable. Each finished dataset is written to the state file, and a rerun skips it; the comment
  * stage checkpoints per comment period, so a killed run resumes at the period it died in rather
- * than at the first one. Delete the state file to force a full rerun. Writes are upserts, so a
- * replay is harmless either way.
+ * than at the first one. Writes are upserts, so a replay is harmless either way.
+ *
+ * `--only <stage>` RE-RUNS the stages it names, checkpoint or no checkpoint — it is how a repair is
+ * asked for. Delete the state file to force a full rerun of everything.
  */
 
 const fs = require('fs');
@@ -78,7 +80,9 @@ const COMMENT_FIELDS = ['author', 'comment', 'commentId', 'dateAdded', 'document
 const MAX_LOGGED_ERRORS = 20;
 
 function parseArgs(argv) {
-  const args = { live: false, only: ALL_STAGES, since: null, state: DEFAULT_STATE };
+  const args = {
+    live: false, only: ALL_STAGES, onlyExplicit: false, since: null, state: DEFAULT_STATE
+  };
   let explicitDryRun = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -88,6 +92,7 @@ function parseArgs(argv) {
     else if (a === '--state') args.state = String(argv[++i] || '');
     else if (a === '--since') args.since = String(argv[++i] || '');
     else if (a === '--only') {
+      args.onlyExplicit = true;
       args.only = String(argv[++i] || '').split(',').map(s => s.trim()).filter(Boolean);
       // A missing or empty value would otherwise select nothing and exit 0 having done nothing —
       // the same silent no-op the unknown-stage guard below exists to prevent.
@@ -385,9 +390,10 @@ async function backfill(argv = [], overrides = {}) {
   const summary = { eagle: deps.sources.EAGLE_API_BASE, live: args.live, stages: {}, skipped: [] };
 
   for (const stage of args.only) {
-    // A finished dataset is skipped whole. Deleting the state file is how a rerun is asked for —
-    // see the header.
-    if (state[stage] && state[stage].completedAt && stage !== 'comments') {
+    // A finished dataset is skipped whole, so an interrupted run resumes where it stopped. NOT
+    // when the operator named the stage: `--only` is the repair tool, and a stage that has
+    // already completed once is exactly the one a repair is asked for.
+    if (!args.onlyExplicit && state[stage] && state[stage].completedAt && stage !== 'comments') {
       summary.skipped.push(stage);
       logger.info(`[backfill] ${stage}: already done at ${state[stage].completedAt}, skipping`);
       continue;

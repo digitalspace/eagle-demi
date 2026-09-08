@@ -412,12 +412,16 @@ function listRow(row) {
 }
 
 /**
- * A period row carries `project` as the EAGLE project id STRING, because eagle-public's
+ * A period row carries `project` as the EAGLE parent id STRING, because eagle-public's
  * CommentPeriod model reads `period.project` and passes it straight back into a project URL. The
  * stored `projectId` is the DEMI id and stays on the row beside it, never in place of it.
  *
  * The two ids are not derived from each other, so the Eagle one is READ — under the caller's own
- * access, deduplicated, and null when the project is not visible to them.
+ * access, deduplicated, and null when the parent is not visible to them.
+ *
+ * A period parented by a `ProjectNotification` is partitioned under the notification's own Eagle
+ * id, so the second lookup answers with that id itself. Without it those rows carry
+ * `project: null` and eagle-public has nothing to link them to.
  */
 async function periodRows(access, rows) {
   const demiIds = Array.from(new Set(rows.map(r => r.projectId).filter(Boolean).map(String)));
@@ -425,6 +429,15 @@ async function periodRows(access, rows) {
     ? redactAllForAccess('projects', await projectsRepo.listByIds(access, demiIds), access)
     : [];
   const eagleIdByDemiId = new Map(parents.map(p => [String(p.id), p.eagleId ? String(p.eagleId) : null]));
+
+  const unmatched = demiIds.filter(id => !eagleIdByDemiId.has(id));
+  const notificationParents = unmatched.length
+    ? redactAllForAccess('notifications',
+      await notificationsRepo.listByIds(access, unmatched), access)
+    : [];
+  for (const parent of notificationParents) {
+    eagleIdByDemiId.set(String(parent.id), String(parent.id));
+  }
 
   return cosmosRows('commentPeriods', rows, access, 'CommentPeriod',
     (row) => ({ project: eagleIdByDemiId.get(String(row.projectId)) || null }));

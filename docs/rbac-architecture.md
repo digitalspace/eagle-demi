@@ -102,7 +102,9 @@ stored ACL is rewritten. eagle-api's push keeps mirroring EPIC's own `read[]` ve
 body field and answer 400 without it; on every other move `reason` is optional, because the audit
 row already carries actor, time, from and to. Nothing widens automatically — no job, no push, no
 merge raises a record's level. A document still cannot out-rank its project, nor a comment period,
-nor a comment its period; a project's change cascades to all three. The audit buffer flushes on graceful instance shutdown;
+nor a comment its period; a project's change cascades to all three. A document or period parented by
+a `ProjectNotification` instead of a project has no such ceiling — a notification carries no access
+list to narrow against — so it keeps the one Eagle published it with. The audit buffer flushes on graceful instance shutdown;
 a forced kill can drop up to one second of buffered rows.
 
 Pulling a record BACK from level 4 is `sysadmin` only, always audited as `record.takedown`, and is
