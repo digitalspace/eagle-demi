@@ -165,6 +165,8 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
 
     assert.strictEqual(res.statusCode, 404);
     assert.strictEqual(upserts, 0);
+    // The body names both containers, as swagger's 404 does: a notification is a parent here too.
+    assert.deepStrictEqual(res.body, { error: 'Parent project or notification not found' });
   });
 
   // Eagle's `project` reference holds either id. Resolving it through `projects` alone dropped 10
@@ -189,16 +191,57 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, true);
   });
 
-  await t.test('a notification is only consulted when there is no project row', async () => {
-    // A point read per push against a container that answers nothing for 99.99% of them.
-    t.mock.method(projects, 'getByEagleId', async () => storedProject());
-    t.mock.method(notifications, 'getById', async () => { throw new Error('must not be read'); });
+  // Track 351 and 353 carry a ProjectNotification _id in `epic_guid`, which the merge copies onto
+  // the project row's `eagleId`, so `getByEagleId` answers with the Track project for a ref that
+  // names the notification. Measured on test 2026-09-08: the periods under those two were stored
+  // in partition '353' at read ['staff'], and 88 comments cascaded to staff behind them.
+  await t.test('a project row carrying the notification id does not claim the period', async () => {
+    t.mock.method(projects, 'getByEagleId', async () =>
+      ({ id: '353', eagleId: NOTIFICATION_EAGLE_ID, read: ['staff'] }));
+    t.mock.method(notifications, 'getById', async () =>
+      ({ id: NOTIFICATION_EAGLE_ID, read: PUBLIC_ACL }));
 
-    const { res } = await pushTo(
-      commentPeriodController, commentPeriods, PERIOD_EAGLE_ID, eaglePeriod(), t);
+    const { res, written } = await pushTo(
+      commentPeriodController, commentPeriods, PERIOD_EAGLE_ID,
+      eaglePeriod({ project: NOTIFICATION_EAGLE_ID }), t);
 
     assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.strictEqual(written().projectId, NOTIFICATION_EAGLE_ID,
+      'the notification owns the partition, not the Track project holding its id');
+    // Verbatim: the Track project's ACL is not a ceiling for a child that never named it.
+    assert.deepStrictEqual(written().read, PUBLIC_ACL);
+    assert.strictEqual(written().isPublished, true);
   });
+
+  await t.test('a period misfiled under the Track project moves out and leaves nothing behind',
+    async () => {
+      t.mock.method(projects, 'getByEagleId', async () =>
+        ({ id: '353', eagleId: NOTIFICATION_EAGLE_ID, read: ['staff'] }));
+      t.mock.method(notifications, 'getById', async () =>
+        ({ id: NOTIFICATION_EAGLE_ID, read: PUBLIC_ACL }));
+      // What the project-first rule wrote: the period in the Track project's partition, narrowed
+      // to its level-2 ACL. Re-mirroring is the repair, so it has to clear that row.
+      const misfiled = {
+        id: PERIOD_EAGLE_ID, projectId: '353', read: ['staff'], _etag: '"misfiled"'
+      };
+      const { store } = partitionedCosmos(t, 'projectId', [misfiled]);
+      t.mock.method(commentPeriods, 'getById', async () => misfiled);
+      // The level moves staff -> public, so the comment cascade runs; it is asserted in its own
+      // subtests, and here it only has to not reach Cosmos for real.
+      stubCommentCascade(t, []);
+
+      const res = mockRes();
+      await commentPeriodController.upsertFromEagle({
+        params: { eagleId: PERIOD_EAGLE_ID }, query: {},
+        body: { doc: eaglePeriod({ project: NOTIFICATION_EAGLE_ID }) }, user: STAFF
+      }, res);
+
+      assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+      assert.deepStrictEqual([...store.keys()], [`${NOTIFICATION_EAGLE_ID}::${PERIOD_EAGLE_ID}`],
+        'only the notification partition holds the period');
+      assert.deepStrictEqual(store.get(`${NOTIFICATION_EAGLE_ID}::${PERIOD_EAGLE_ID}`).read,
+        PUBLIC_ACL);
+    });
 
   // The repository and its Cosmos calls are REAL below: mocking `repo.upsert` proves the controller
   // asked for a write, never that the write could land. Reparenting is precisely where it could not.

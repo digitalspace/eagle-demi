@@ -104,7 +104,11 @@ row already carries actor, time, from and to. Nothing widens automatically — n
 merge raises a record's level. A document still cannot out-rank its project, nor a comment period,
 nor a comment its period; a project's change cascades to all three. A document or period parented by
 a `ProjectNotification` instead of a project has no such ceiling — a notification carries no access
-list to narrow against — so it keeps the one Eagle published it with. The audit buffer flushes on graceful instance shutdown;
+list to narrow against — so it keeps the one Eagle published it with. Which of the two is the parent
+is decided in one place, `helpers/parent-admit.js`, and a notification wins over a project row
+carrying the same id: some Track projects hold a `ProjectNotification` `_id` in `epic_guid`, which
+the merge copies to `eagleId`, and letting the project win narrowed those children to a Track-only
+project's level 2. The audit buffer flushes on graceful instance shutdown;
 a forced kill can drop up to one second of buffered rows.
 
 Pulling a record BACK from level 4 is `sysadmin` only, always audited as `record.takedown`, and is

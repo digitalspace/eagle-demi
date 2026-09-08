@@ -549,6 +549,8 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 
     assert.strictEqual(res.statusCode, 404);
     assert.strictEqual(upserts, 0, 'never seed an orphan document');
+    // The body names both containers, as swagger's 404 does: a notification is a parent here too.
+    assert.deepStrictEqual(res.body, { error: 'Parent project or notification not found' });
   });
 
   // Eagle's `project` reference holds either id, and prod publishes documents under 17
@@ -576,6 +578,41 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     // the Eagle list is stored as it arrived — the same row `seed/transform.js` writes.
     assert.deepStrictEqual(written.read, ['public', 'sysadmin']);
     assert.strictEqual(written.isPublished, true);
+  });
+
+  // A Track `epic_guid` that is really a ProjectNotification _id lands on the project row's
+  // `eagleId`, so the project answers a lookup for the notification's own id (test 2026-09-08:
+  // Track 351 and 353). The documents under it were filed in the Track project's partition and
+  // narrowed to its ACL.
+  await t.test('a project row carrying the notification id does not claim the document', async () => {
+    t.mock.method(projects, 'getByEagleId', async () =>
+      storedProject({ id: '353', eagleId: NOTIFICATION_EAGLE_ID, read: ['staff'] }));
+    t.mock.method(notifications, 'getById', async () =>
+      ({ id: NOTIFICATION_EAGLE_ID, read: ['public', 'staff', 'sysadmin'] }));
+    // The row the project-first rule wrote: same document, wrong partition, narrowed ACL.
+    t.mock.method(documents, 'getById', async () => ({
+      id: DOC_EAGLE_ID, projectId: '353', isPublished: false, read: ['staff']
+    }));
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+    const deletes = [];
+    t.mock.method(documents, 'deleteById', async (id, projectId) => { deletes.push([id, projectId]); });
+
+    const res = mockRes();
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ project: NOTIFICATION_EAGLE_ID, read: ['public', 'sysadmin'] }) },
+      user: STAFF
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.strictEqual(written.projectId, NOTIFICATION_EAGLE_ID,
+      'the notification owns the partition, not the Track project holding its id');
+    // Verbatim: the Track project's level-2 ACL is not a ceiling for a child that never named it.
+    assert.deepStrictEqual(written.read, ['public', 'sysadmin']);
+    assert.strictEqual(written.isPublished, true);
+    assert.deepStrictEqual(deletes, [[DOC_EAGLE_ID, '353']],
+      're-mirroring is the repair, so the misfiled row has to go');
   });
 
   await t.test('a visibility flip writes the index ACL; a rename does not', async () => {

@@ -541,7 +541,7 @@ exports.upsertFromEagle = async (req, res) => {
     // seed makes (`seed-nosql.js:documentAdmission`) and the period mirror makes.
     const parent = await admitParent(doc.project);
     if (!parent) {
-      return res.status(404).json({ error: 'Parent project not found' });
+      return res.status(404).json({ error: 'Parent project or notification not found' });
     }
 
     const existing = await documents.getById(systemAccess(), eagleId);

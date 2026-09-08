@@ -17,6 +17,7 @@ const assert = require('node:assert');
 const cosmos = require('../../../src/db/cosmos-nosql');
 const updates = require('../../../src/repositories/updates');
 const projects = require('../../../src/repositories/projects');
+const notifications = require('../../../src/repositories/notifications');
 const notify = require('../../../src/services/notify');
 const controller = require('../../../src/controllers/nosql/update');
 const { routeChains } = require('../../helpers/router-source');
@@ -126,6 +127,22 @@ test('PUT /eagle/updates/:eagleId', async (t) => {
     assert.strictEqual(seen.published[0].projectName, 'Nicomen Wind Energy');
     assert.strictEqual(seen.published[0].item.id, UPDATE_EAGLE_ID);
     assert.deepStrictEqual(seen.releases, []);
+  });
+
+  // Same parent precedence as the mirrors: an update whose `projectId` is really a
+  // ProjectNotification _id must not be labelled with the Track project that carries that id in
+  // `eagleId` — subscribers would be told about a project the update is not under.
+  await t.test('an update under a notification is announced with the notification name', async () => {
+    t.mock.method(updates, 'getById', async () => null);
+    t.mock.method(updates, 'upsert', async (item) => item);
+    t.mock.method(projects, 'getByEagleId', async () => ({ id: '353', name: 'Shadow Track Project' }));
+    t.mock.method(notifications, 'getById', async () =>
+      ({ id: NOTIFICATION_EAGLE_ID, name: 'Sunny Ridge Quarry' }));
+    const seen = wiredNotify(t);
+
+    await push({ doc: eagleUpdate({ project: NOTIFICATION_EAGLE_ID }) });
+
+    assert.strictEqual(seen.published[0].projectName, 'Sunny Ridge Quarry');
   });
 
   await t.test('a project-less update is announced with no project name', async () => {

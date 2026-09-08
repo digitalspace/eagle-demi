@@ -84,7 +84,11 @@ function diff(rows, keyOf, eagleIds, pushOwned = () => true, parentPublished = (
 function driftOf(summary) {
   return LABELS.reduce((total, label) => {
     const s = summary[label];
-    return s ? total + s.unpublishedOrDeleted.length + s.eagleOnly.length : total;
+    if (!s) return total;
+    // A misfiled row is drift the id-set diffs cannot see — present in both, stored under the
+    // wrong parent — so it counts here or the alert stays quiet about it.
+    return total + s.unpublishedOrDeleted.length + s.eagleOnly.length +
+      (s.misfiledParent ? s.misfiledParent.length : 0);
   }, 0);
 }
 
@@ -226,10 +230,23 @@ async function reconcile(argv = [], deps = {}) {
   const eagleNotificationIds = await eagleIds(src, 'ProjectNotification');
   const eagleUpdateIds = await eagleIds(src, 'RecentActivity');
 
+  // Rows that ARE mirrored, under a parent the admission rule would not choose. Nothing above sees
+  // these: they are in both Eagle and DEMI, so every id-set diff reads them as clean. They are the
+  // shape the project-first rule wrote — a period whose Eagle ref names a `ProjectNotification`
+  // filed in a Track project's partition, under that project's ACL, with its comments cascaded to
+  // the same level. Periods only: `listSeededIds` carries no partition for the documents.
+  const misfiledPeriods = periodRows
+    .filter(row => {
+      const parent = admit(eaglePeriodProject.get(String(row.id)));
+      return parent !== null && String(row.projectId) !== parent;
+    })
+    .map(row => String(row.id));
+
   summary.commentPeriods = {
     inDemi: periodRows.length, inEagle: eaglePeriodIds.size,
     ...diff(periodRows, row => String(row.id), eaglePeriodIds, undefined,
-      id => admit(eaglePeriodProject.get(id)) !== null)
+      id => admit(eaglePeriodProject.get(id)) !== null),
+    misfiledParent: misfiledPeriods
   };
   summary.lists = {
     inDemi: listRows.length, inEagle: eagleListIds.size,
@@ -325,6 +342,10 @@ function report(summary, { json } = {}) {
     if (s.unresolvedParent.length) {
       line('unresolvedParent (Eagle-only, but its own project is unpublished/gone — seed-nosql ' +
         'drops these too, not counted as drift)', s.unresolvedParent);
+    }
+    if (s.misfiledParent && s.misfiledParent.length) {
+      line('misfiledParent (mirrored, but stored under a parent the admission rule would not ' +
+        'choose — re-mirror to move them)', s.misfiledParent);
     }
     if (s.trackOnly.length) {
       lines.push(`  ${s.trackOnly.length} Track-sourced project(s) are also gone from Eagle's ` +

@@ -11,6 +11,8 @@ const searchController = require('../../src/controllers/search');
 const aiSearch = require('../../src/search/ai-search');
 const documentsRepo = require('../../src/repositories/documents');
 const projectsRepo = require('../../src/repositories/projects');
+const notificationsRepo = require('../../src/repositories/notifications');
+const { NOTIFICATION_EAGLE_ID } = require('../helpers/eagle-mirror-fixtures');
 const chunksRepo = require('../../src/repositories/chunks');
 const summarizer = require('../../src/ai/summarize');
 const { logger } = require('../../src/utils/logger');
@@ -1505,6 +1507,32 @@ test('the eagle-public response contract', async (t) => {
     assert.ok(sent.filter.includes("projectId eq '207'"), 'the DEMI id reaches OData');
     assert.ok(!sent.filter.includes('588511c4aaecd9001b826192'), 'the Eagle id must not');
     assert.ok(sent.filter.includes("read/any(r: search.in(r, 'public', ','))"), 'ACL clause intact');
+  });
+
+  // A ProjectNotification _id sometimes sits in a Track project's `epic_guid`, and the merge copies
+  // it to that project row's `eagleId` — so the project lookup answers for an id that names a
+  // notification. Its documents are partitioned under the notification, so translating the filter
+  // to the project id searched a partition holding none of them.
+  await t.test('a project row carrying a notification id does not capture the filter', async () => {
+    let sent;
+    t.mock.method(aiSearch, 'searchDocuments', async (opts) => { sent = opts; return { count: 0, items: [] }; });
+    t.mock.method(projectsRepo, 'getByEagleId', async () =>
+      ({ id: '353', eagleId: NOTIFICATION_EAGLE_ID, name: 'Shadow' }));
+    t.mock.method(notificationsRepo, 'getById', async (access, id) => {
+      assert.ok(access, 'the lookup runs under the caller, not a system context');
+      assert.strictEqual(id, NOTIFICATION_EAGLE_ID);
+      return { id: NOTIFICATION_EAGLE_ID, name: 'Bear Creek Quarry' };
+    });
+
+    const { res } = capture();
+    await searchController.search({
+      query: { dataset: 'Document', keywords: 'fish', 'and[project]': NOTIFICATION_EAGLE_ID },
+      header: () => null
+    }, res);
+
+    assert.ok(sent.filter.includes(`projectId eq '${NOTIFICATION_EAGLE_ID}'`),
+      `the notification id is the partition its documents live in: ${sent.filter}`);
+    assert.ok(!sent.filter.includes("projectId eq '353'"), 'the shadowing project must not win');
   });
 
   // Dropping an unresolvable project filter would answer the WHOLE corpus to a request that asked

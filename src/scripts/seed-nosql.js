@@ -34,9 +34,13 @@ const fs = require('fs');
 
 const sources = require('../seed/sources');
 const transform = require('../seed/transform');
-const { buildRegistry, buildProjectIndex, carryEagleOnlyFields } = require('../merge/project');
+const { buildRegistry, buildProjectIndex, carryEagleOnlyFields, notificationShadowedProjects } =
+  require('../merge/project');
 
 const { systemAccess } = require('../helpers/access-sql');
+// The parent rule, shared with the push mirrors: which of the two containers claims a child.
+const { pickParent } = require('../helpers/parent-admit');
+const { refId } = require('../controllers/nosql/eagle-mirror');
 const { logger } = require('../utils/logger');
 const purgeHelpers = require('../helpers/purge');
 const auditHelpers = require('../utils/audit');
@@ -148,6 +152,11 @@ async function truncatedReads(access, pairs) {
  * real project. Admitted by KNOWN notification id, never by "the ref resolved to nothing": a
  * parent in neither list is a document with no home, and its caller drops it.
  *
+ * A NOTIFICATION WINS OVER A REGISTRY HIT, and `helpers/parent-admit.js:pickParent` is where that
+ * rule lives — the same one the push mirrors apply, against Cosmos rows rather than these ids.
+ * A Track project's `epic_guid` is sometimes a notification `_id`, and the registry resolves it,
+ * so project-first filed those children under the Track project instead.
+ *
  * Shared with `reconcile-eagle.js`, which decides the same question. Its own copy tested the
  * currently-published Eagle project set instead of the registry, so a document under a Track row's
  * dangling epic_guid — which the registry resolves and this admits — read as unresolvable there.
@@ -167,8 +176,17 @@ async function documentAdmission(src, projectIndex) {
   return {
     notificationIds,
     fetch: { total, fetched: notifications.length },
-    admit: ref => projectIndex.resolve(ref) ||
-      (notificationIds.has(String(ref)) ? String(ref) : null)
+    admit: ref => {
+      // `refId` on both lookups, so a populated `{_id}` ref resolves as a bare ObjectId does.
+      const eagleId = refId(ref);
+      if (!eagleId) return null;
+      const projectId = projectIndex.resolve(eagleId);
+      const parent = pickParent(
+        projectId ? { id: projectId } : null,
+        notificationIds.has(eagleId) ? { id: eagleId } : null
+      );
+      return parent ? parent.id : null;
+    }
   };
 }
 
@@ -448,6 +466,15 @@ async function seed(argv = [], deps = {}) {
     notificationFetch = fetch;
     log(`  ${notificationIds.size} notifications`);
 
+    // Reported, never repaired here: the project row is retained and flagged, and `pickParent`
+    // already keeps it from claiming the notification's children.
+    const shadowedProjects = notificationShadowedProjects(projects, notificationIds);
+    if (shadowedProjects.length) {
+      log(`  ${shadowedProjects.length} project row(s) carry a notification id as eagleId — ` +
+        `${shadowedProjects.slice(0, 5).map(p => `${p.id}->${p.eagleId}`).join(', ')}; ` +
+        'their Eagle children file under the notification, not under the project');
+    }
+
     log('Streaming Eagle documents (60k+, paged at 100)...');
 
     const buffers = new Map();          // projectId -> pending raw docs
@@ -571,6 +598,9 @@ async function seed(argv = [], deps = {}) {
       fetched: count,
       built: stats.built,
       notificationParented: stats.notificationParented,
+      // Which project rows hold a notification id in `eagleId`, and so would have claimed those
+      // children before `pickParent` gave the notification precedence.
+      notificationShadowedProjects: shadowedProjects,
       droppedUnresolvable: stats.unresolved,
       // The refs themselves, not just the count: a drop is only visible in the output if the run
       // says WHAT it dropped. Capped — an upstream fault could produce thousands of distinct refs

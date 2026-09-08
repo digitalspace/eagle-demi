@@ -3,6 +3,8 @@
 // Searches go to Azure AI Search. A KEYWORDLESS project list is a read, not a search, and comes
 // from the Cosmos NoSQL repositories — see wiki Search-Query-Construction#project-reads-split-between-cosmos-and-the-index.
 const { resolveAccess } = require('../helpers/access-sql');
+// Which container owns an Eagle id, said once for the mirrors, the seed and this read path.
+const { pickParent } = require('../helpers/parent-admit');
 const { redactForAccess, redactAllForAccess } = require('../vis/redact');
 const { dialsForIndex } = require('../vis/catalog/index-projects-renames');
 const { logger } = require('../utils/logger');
@@ -63,6 +65,9 @@ async function labelWithProjectNames(access, docs) {
 /**
  * Rewrite `&project=`/`&and[project]=` from Eagle ObjectIds into DEMI project ids.
  *
+ * A `ProjectNotification` id stays itself: it IS the partition its periods and documents live
+ * under, and it outranks a project row carrying the same id (`helpers/parent-admit`).
+ *
  * Done here and not in `buildFilter` because the translation is a read. An unresolved ObjectId is
  * passed through as a literal rather than refused — see
  * wiki Search-Query-Construction#unresolved-project-ids-pass-through-as-literals.
@@ -79,10 +84,19 @@ async function resolveProjectFilter(access, query) {
       demiIds.push(id);
       continue;
     }
-    const project = await projectsRepo.getByEagleId(access, id);
-    // No project row: keep the caller's own id. Either a ProjectNotification `_id` holding real
-    // documents, or an id that matches nothing — which is the right answer for both.
-    demiIds.push(project ? String(project.id) : id);
+    // Both containers, under the CALLER's access, and `pickParent` decides — the same rule the
+    // mirrors partition by, so the filter names the partition the rows are actually in. A project
+    // row may carry a notification's id in `eagleId` (a Track `epic_guid` that is really a
+    // `ProjectNotification` _id), and translating to that project would search a partition holding
+    // none of the notification's rows.
+    const [project, notification] = await Promise.all([
+      projectsRepo.getByEagleId(access, id),
+      notificationsRepo.getById(access, id)
+    ]);
+    const parent = pickParent(project, notification);
+    // Neither row: keep the caller's own id. It may still name a real partition, and an id that
+    // matches nothing is the right answer for one that names nothing.
+    demiIds.push(parent ? parent.id : id);
   }
 
   return eagleQuery.withProjectIds(query, demiIds);
