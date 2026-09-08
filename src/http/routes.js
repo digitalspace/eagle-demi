@@ -66,6 +66,10 @@ const routes = [
   { method: 'get', path: '/health/db', guards: [], load: () => healthController().db },
 
   { method: 'get', path: '/config', guards: [], load: () => configController().getConfig },
+  // The PUBLIC site's config, and a separate document rather than more keys on /config: the two
+  // answer different frontends, so neither key set can widen the other, and this one refuses to
+  // guess. Missing document = 503, never a defaulted payload — see getPublicConfig.
+  { method: 'get', path: '/config/public', guards: [], load: () => configController().getPublicConfig },
   // Passive, not authMiddleware: an anonymous caller gets the public tier, not a 401.
   { method: 'get', path: '/me', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => meController().getMe },
   // Authenticated, though the body describes a HYPOTHETICAL caller and the handler reads no

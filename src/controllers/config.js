@@ -24,6 +24,32 @@ const OVERRIDABLE_KEYS = [
   'USE_MOCK_DATA'
 ];
 
+// The keys GET /config/public may serve to the PUBLIC site. Its own list, not a slice of
+// OVERRIDABLE_KEYS: the two documents answer different frontends, and a key added for the DEMI
+// admin console must not become public because the lists were shared.
+//
+// This is eagle-api's own PUBLIC_KEYS (api/controllers/config.js) minus KEYCLOAK_* — the public
+// site does not log in — and minus ANALYTICS_API_URL, a constant shim eagle-api keeps for an
+// Angular version this endpoint has no reason to carry.
+//
+// Adding a key here publishes it to anonymous callers the moment the document carries it, so the
+// same rule as above applies: nothing that is not already public information.
+const PUBLIC_KEYS = [
+  'ENVIRONMENT',
+  'BANNER_COLOUR',
+  'LOG_LEVEL',
+  'API_PATH',
+  'SEARCH_API_PATH',
+  'DEMI_PROJECTS_PATH',
+  'ADMIN_PATH',
+  'CONTENT_SEARCH',
+  'EAGLE_ANALYTICS_URL',
+  'APPINSIGHTS_CONNECTION_STRING',
+  'SURVEY_URL',
+  'SHOW_SURVEY_BANNER',
+  'ACCESS_GATE'
+];
+
 // Which build is actually answering, read ONCE at load from a file stamped into the deploy package
 // by scripts/package-api.py.
 //
@@ -115,3 +141,50 @@ exports.getConfig = async (req, res) => {
 
   res.json(payload);
 };
+
+/**
+ * Returns the PUBLIC site's runtime configuration, straight from the `public` document.
+ *
+ * UNAUTHENTICATED, like /config above, and the same rule holds: everything here is public, so
+ * never add a secret. What is served is exactly the `PUBLIC_KEYS` the document carries — no app
+ * settings overlay and no defaults, because this container is not where those values come from.
+ * eagle-api's Mongo `Config` is the source of truth; this document is a seeded copy of it.
+ *
+ * A missing or unreadable document answers 503, where /config degrades to app settings. The
+ * difference is deliberate and it is the whole reason this is a separate route: a defaulted
+ * payload would serve `ACCESS_GATE: false` and open the access curtain on a site that is meant to
+ * be gated. Refusing to answer is safe — eagle-public falls back to eagle-api's /api/config —
+ * while answering with a guess is not. `no-store` so no cache can hold the refusal, or serve it
+ * on after the document is seeded.
+ */
+exports.getPublicConfig = async (req, res) => {
+  let stored;
+  try {
+    stored = await configRepository.getPublic();
+  } catch (err) {
+    logger.error(`[config] public config read failed: ${err.message}`);
+    return res.set('Cache-Control', 'no-store').status(503)
+      .json({ error: 'Public configuration is unavailable.' });
+  }
+
+  if (!stored) {
+    logger.error('[config] public config document is not seeded — see src/scripts/seed-public-config.js');
+    return res.set('Cache-Control', 'no-store').status(503)
+      .json({ error: 'Public configuration is unavailable.' });
+  }
+
+  const payload = {};
+  for (const key of PUBLIC_KEYS) {
+    const value = stored[key];
+    // Only absence is skipped. A stored `false` — ACCESS_GATE above all — is a real answer and
+    // must survive as a boolean; treating it as missing is how the curtain opens.
+    if (value === undefined || value === null) continue;
+    payload[key] = value;
+  }
+
+  res.json(payload);
+};
+
+// Exported for src/scripts/seed-public-config.js, so the seeded document and the served payload
+// are filtered by ONE list rather than two that drift.
+exports.PUBLIC_KEYS = PUBLIC_KEYS;

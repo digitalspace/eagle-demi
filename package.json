@@ -8,6 +8,7 @@
     "start": "func start",
     "db:seed-nosql": "NODE_PATH=node_modules node -r dotenv/config src/scripts/seed-nosql.js",
     "db:seed-public-reads": "NODE_PATH=node_modules node -r dotenv/config src/scripts/seed-public-reads.js",
+    "db:seed-public-config": "NODE_PATH=node_modules node -r dotenv/config src/scripts/seed-public-config.js",
     "db:copy-blobs": "NODE_PATH=node_modules node -r dotenv/config src/scripts/copy-blobs-to-azure.js",
     "db:purge-extraction": "NODE_PATH=node_modules node -r dotenv/config src/scripts/purge-extraction.js",
     "db:backfill-eac-number": "NODE_PATH=node_modules node -r dotenv/config src/scripts/backfill-eac-number.js",
