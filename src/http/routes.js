@@ -30,6 +30,7 @@ const accessSimulateController = () => require('../controllers/access-simulate')
 const dbController = () => require('../controllers/db');
 const adminReadsController = () => require('../controllers/admin-reads');
 const searchController = () => require('../controllers/search');
+const searchSchemaController = () => require('../controllers/search-schema');
 const wildfireController = () => require('../controllers/wildfire');
 const projectController = () => require('../controllers/nosql/project');
 const documentController = () => require('../controllers/nosql/document');
@@ -64,6 +65,15 @@ const openApiSpec = (req, res) =>
 const routes = [
   { method: 'get', path: '/health', guards: [], load: () => liveness },
   { method: 'get', path: '/health/db', guards: [], load: () => healthController().db },
+  // Anonymous like the two above, and for the same reason: the prod deploy job and an operator with
+  // one curl both need it before anything holds a token. It discloses index field names the public
+  // repo already carries, and no row.
+  //
+  // POST is the SAME handler, not a second one: a body overrides the selects so CI can probe the
+  // incoming tag's committed index definitions through the currently deployed app, and a GET body
+  // is not read by the adapter (or by most clients).
+  { method: 'get', path: '/health/search-schema', guards: [], load: () => searchSchemaController().searchSchema },
+  { method: 'post', path: '/health/search-schema', guards: [], load: () => searchSchemaController().searchSchema },
 
   { method: 'get', path: '/config', guards: [], load: () => configController().getConfig },
   // The PUBLIC site's config, and a separate document rather than more keys on /config: the two

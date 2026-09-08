@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
+const { projectedColumns } = require('../helpers/search-datasource');
+
 const index = require('../../azure/search/indexes/documents.json');
 const datasource = require('../../azure/search/datasources/demi-documents-ds.json');
 
@@ -16,23 +18,6 @@ const PAIRS = [
 
 // Selected for the change detection policy, not for the index — the only column with no field.
 const NOT_INDEXED = new Set(['_ts']);
-
-/**
- * The index definition and the data source query are two hand-PUT files that never see each other,
- * and the indexer maps them BY NAME: a field the index declares and the query does not project is
- * indexed as null on every row, under a 200 from every PUT and a green indexer run. That drift is
- * invisible to the container, to CI and to the app — which reads the index definition and so
- * believes the field is populated. This is the only place the two are compared.
- */
-function projectedColumns(query) {
-  const select = query.slice(query.indexOf('SELECT') + 'SELECT'.length, query.indexOf(' FROM '));
-  return new Map(select.split(',').map((col) => {
-    const alias = /^\s*(\S+)\s+AS\s+(\S+)\s*$/i.exec(col);
-    if (alias) return [alias[2], alias[1].replace(/^c\./, '')];
-    const name = col.trim().replace(/^c\./, '');
-    return [name, name];
-  }));
-}
 
 for (const [idx, ds] of PAIRS) {
   test(`every field of the ${idx.name} index is projected by ${ds.name}`, () => {

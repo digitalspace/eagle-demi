@@ -50,6 +50,12 @@ Flex instance warm), and the reconcile drift alert.
 - `https://demi-api-fc-prod.azurewebsites.net/api/health` 200; Cosmos/Search reachable over the
   PEs (a real `/api/search` answers).
 - `https://demi-apim-prod.azure-api.net/api/health` 200 anonymous.
+- `.../api/health/search-schema` 200. A 503 names the index and the field the live index is missing.
+  Nothing applies index definitions on deploy, so a wider committed definition proves nothing on its
+  own. Run this check even when search looks healthy: the app drops a missing field and retries once
+  rather than failing the tab, so drift now shows up as `meta[0].degraded.missing` in a 200 and an
+  `[ai-search] the <index> index cannot answer` error line — not as the 502 it used to be. The 502
+  is still what a missing `read`, `isPublished` or `vis` gives, with `code: SEARCH_SCHEMA_DRIFT`.
 - `/machine/<auth route>` 401 without a key, 200 with the `eagle-api` subscription key
   (`az apim subscription list-keys`) resolving `demi-service-write`.
 - Cold start after 30 min idle recorded.

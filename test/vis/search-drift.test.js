@@ -52,21 +52,21 @@ test('PROJECT_SELECT is a subset of maxVis 4 index fields', () => {
 });
 
 // Chunk text has two enforcement points and both are asserted here: the catalog entry, and the
-// select string (docs/rbac-architecture.md §2 item 9 — semantic ranking needs `content` retrievable
-// in the index, so the index cannot hold the line). The select is read off the source, comments
-// stripped, because it is an inline literal and not an exported constant.
+// select (docs/rbac-architecture.md §2 item 9 — semantic ranking needs `content` retrievable in the
+// index, so the index cannot hold the line). The source is still scanned as well as the three
+// exported constants, because leg two of the document search selects an inline `'id'` and any
+// future inline select must meet the same bar.
 test('content is maxVis 0 and absent from every select', () => {
   assert.strictEqual(catalogFor('chunks').content.maxVis, 0,
     'a chunk field above maxVis 0 would be shippable; chunk text is never a response field');
 
+  assert.strictEqual(aiSearch.CHUNK_SELECT, 'chunkId,documentId,projectId,pageNumber,read',
+    'adding a name here ships that column to every chunk caller; `content` ships whole chunk text');
+
   const source = code(fs.readFileSync(AI_SEARCH_PATH, 'utf8'));
   const selects = [...source.matchAll(/select: '([^']*)'/g)].map(m => m[1]);
-  const chunkSelects = selects.filter(s => s.split(',').includes('chunkId'));
-
-  assert.strictEqual(chunkSelects.length, 1, 'exactly one select names chunkId');
-  assert.strictEqual(chunkSelects[0], 'chunkId,documentId,projectId,pageNumber,read',
-    'adding a name here ships that column to every chunk caller; `content` ships whole chunk text');
-  for (const select of selects) {
+  for (const select of selects.concat(
+    aiSearch.CHUNK_SELECT, aiSearch.DOCUMENT_SELECT, aiSearch.PROJECT_SELECT)) {
     assert.ok(!select.split(',').includes('content'), `content is selected by '${select}'`);
   }
 });
