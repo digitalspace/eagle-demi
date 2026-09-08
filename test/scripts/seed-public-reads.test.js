@@ -303,14 +303,15 @@ test('comments', async (t) => {
     t2.mock.method(comments, 'upsert', async (item) => { written.push(item); return item; });
     t2.mock.method(logger, 'error', () => {});
 
+    const state = statePath();
     const sources = stubSources({
       datasets: { CommentPeriod: [period] }, commentItems: items, commentTotal: total
     });
-    const summary = await backfill(['--live', '--only', 'comments', '--state', statePath()], {
+    const summary = await backfill(['--live', '--only', 'comments', '--state', state], {
       sources,
       commentPeriodsRepo: { getById: async () => periodRow }
     });
-    return { written, summary, urls: sources.urls };
+    return { written, summary, urls: sources.urls, state };
   };
 
   await t.test('pages the period until the x-total-count header is satisfied', async (t2) => {
@@ -499,14 +500,44 @@ test('comments', async (t) => {
       t2.mock.restoreAll();
     });
 
+  await t.test('a page row with no _id is dropped from the page, not mirrored under "undefined"',
+    async (t2) => {
+      // `String(row._id)` on a row without one is the literal "undefined", which is a legal Cosmos
+      // id: the row lands, and every later page carrying junk overwrites the same document.
+      t2.mock.method(logger, 'error', () => {});
+      const wrote = [];
+
+      const summary = await backfill(['--live', '--only', 'comments', '--state', statePath()], {
+        sources: {
+          ...stubSources({ datasets: { CommentPeriod: [period] } }),
+          // The header counts the one real comment; the junk row is not part of the total.
+          fetchJsonWithHeaders: async () => ({
+            body: [{ text: 'no id here' }, eagleComment({ _id: 'C1' })],
+            headers: new Headers({ 'x-total-count': '1' })
+          })
+        },
+        commentPeriodsRepo: { getById: async () => storedPeriod() },
+        commentMirror: recordingMirror('comments', wrote)
+      });
+
+      assert.deepStrictEqual(wrote.map(w => w[1]), ['C1'], 'only the row that has an id');
+      assert.strictEqual(summary.stages.comments.written, 1, 'and the count agrees');
+      assert.strictEqual(summary.stages.comments.errors, 0);
+      t2.mock.restoreAll();
+    });
+
   await t.test('a period DEMI has not mirrored is skipped whole, not written under nothing',
     async (t2) => {
-      const { written, summary } = await captureComments(t2, {
+      const { written, summary, state } = await captureComments(t2, {
         items: [eagleComment()], total: 1, periodRow: null
       });
       assert.deepStrictEqual(written, []);
       assert.strictEqual(summary.stages.comments.skipped, 1);
       assert.strictEqual(summary.stages.comments.errors, 0);
+      // The period is owed, not refused: `commentPeriods` can mirror it on a later run, so the
+      // stage must not carry a completedAt that would skip it.
+      assert.strictEqual(summary.stages.comments.dropped, 1);
+      assert.strictEqual(fs.existsSync(state), false, 'the stage is not checkpointed complete');
       t2.mock.restoreAll();
     });
 });

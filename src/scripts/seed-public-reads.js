@@ -370,7 +370,6 @@ async function backfillComments(args, deps, state) {
     }
 
     const errorsBefore = counts.errors;
-    const droppedBefore = counts.dropped;
     try {
       await eachCommentPage(periodId, deps, async (items) => {
         for (const doc of items) {
@@ -381,8 +380,8 @@ async function backfillComments(args, deps, state) {
       // Only a period whose every comment landed is checkpointed. `writeRow` swallows a row failure
       // into `counts.errors` rather than throwing, so without this the period would be recorded
       // done, the next run would skip it, and the failed comments would be missing for good. A
-      // dropped comment is owed the same retry — its parent can land after this run.
-      if (counts.errors === errorsBefore && counts.dropped === droppedBefore) {
+      // comment cannot be dropped here: its period is this loop's, and a missing one skips above.
+      if (counts.errors === errorsBefore) {
         done.add(periodId);
         if (args.live) {
           state.comments = { ...state.comments, periods: [...done] };
