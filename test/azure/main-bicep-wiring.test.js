@@ -16,6 +16,9 @@ const PROD_PARAMS = fs.readFileSync(path.join(ROOT, 'azure', 'main.prod.biceppar
 const SEARCH_EXISTING = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'search-existing.bicep'), 'utf8');
 const COSMOS_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'cosmos-nosql.bicep'), 'utf8');
 const OBSERVABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'observability.bicep'), 'utf8');
+const AVAILABILITY = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'availability.bicep'), 'utf8');
+const SEARCH_CONTROLLER = fs.readFileSync(path.join(ROOT, 'src', 'controllers', 'search.js'), 'utf8');
+const ROUTES = fs.readFileSync(path.join(ROOT, 'src', 'http', 'routes.js'), 'utf8');
 const APIM_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'apim.bicep'), 'utf8');
 const DEVBOX_MODULE = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'devbox.bicep'), 'utf8');
 const KEY_VAULT = fs.readFileSync(path.join(ROOT, 'azure', 'modules', 'key-vault.bicep'), 'utf8');
@@ -801,4 +804,119 @@ test('both APIM APIs expose wildcard operations over every method', () => {
     );
     assert.match(APIM_MODULE, block, `${parent} must declare a wildcard operation per method`);
   }
+});
+
+// The two search alerts are the answer to the 2026-09-08 outage: 65 minutes of `dataset=Document`
+// 502s that only a log line recorded. Both halves are strings in different languages in different
+// files, and every way of getting it wrong is silent — a rule that matches nothing keeps evaluating
+// and keeps finding nothing, which reads exactly like a healthy service. Text-structural, with the
+// same honest limits as the drift guard above.
+const rule = (name) => OBSERVABILITY
+  .split(/^resource /m)
+  .find(b => b.includes(`name: '${name}-\${environmentName}'`));
+
+const ruleQuery = (name) => {
+  const block = rule(name);
+  assert.ok(block, `no ${name} rule in observability.bicep`);
+  const query = /query: '([^']+)'/.exec(block);
+  assert.ok(query, `${name} declares no query`);
+  return { block, query: query[1] };
+};
+
+test('the search failure alert matches a line search.js actually logs', () => {
+  const { block, query } = ruleQuery('demi-search-failures');
+
+  assert.match(query, /^AppTraces \|/,
+    'AppTraces, not traces — the classic table does not exist in this workspace, and a rule ' +
+    'against it returns no rows rather than an error');
+
+  // The query is a disjunction of parenthesised conjunctions — one alternative per log tag it
+  // covers. Each clause is tested the way its operator means it, so swapping startswith for
+  // contains cannot pass by accident.
+  const groups = [...query.matchAll(/\(([^()]*)\)/g)].map(m => m[1]);
+  const alternatives = (groups.length ? groups : [query]).map(
+    g => [...g.matchAll(/(startswith|contains) "([^"]+)"/g)].map(m => ({ op: m[1], needle: m[2] })));
+  assert.ok(alternatives.every(clauses => clauses.length >= 2),
+    'an alternative filtering on one literal is broader than it looks');
+  assert.ok(!/\bhas "\[/.test(query),
+    '`has` tokenises on brackets — a bracketed tag has to be matched with startswith or contains');
+  const matches = (line) => alternatives.some(clauses => clauses.every(
+    ({ op, needle }) => (op === 'startswith' ? line.startsWith(needle) : line.includes(needle))));
+
+  // Every error the search controller logs, rendered as the runtime would render it. `[search`
+  // unclosed: `[search]` and `[search/summary]` are both search failures.
+  const logged = [...SEARCH_CONTROLLER.matchAll(/logger\.error\(`([^`]+)`\)/g)]
+    .map(m => m[1].replace(/\$\{[^}]+\}/g, 'x'))
+    .filter(line => line.startsWith('[search'));
+  assert.ok(logged.length, 'search.js logs no [search…] error lines at all any more');
+
+  const matched = logged.filter(matches);
+  assert.ok(matched.length,
+    `the rule looks for ${JSON.stringify(alternatives)}, which no line in ${JSON.stringify(logged)} carries`);
+
+  // GET /search/summary answers 200 on failure — see the catch in search.js — so no 5xx ratio can
+  // ever see a summary outage and this rule is the only thing that covers it.
+  const summary = logged.filter(line => line.startsWith('[search/summary]'));
+  assert.ok(summary.length, 'search.js logs no [search/summary] error line any more');
+  for (const line of summary) {
+    assert.ok(matches(line), `the rule misses ${JSON.stringify(line)}, which nothing else can see`);
+  }
+
+  // The other half: the warn lines carrying the same tags are not failures, and a rule that counted
+  // them would page on a query nobody could express.
+  const warned = [...SEARCH_CONTROLLER.matchAll(/logger\.warn\(\s*[`']([^`']+)[`']/g)]
+    .map(m => m[1].replace(/\$\{[^}]+\}/g, 'x'))
+    .filter(line => line.startsWith('[search'));
+  for (const line of warned) {
+    assert.ok(!matches(line), `the rule also matches the warn line ${JSON.stringify(line)}`);
+  }
+
+  assert.match(block, /severity: 1$/m, 'a search that cannot answer is an error, not a warning');
+  assert.match(block, /actionGroups: \[ alertGroup\.id \]/,
+    'the rule must mail the shared action group, not one of its own');
+});
+
+test('the search 5xx rule matches the paths the search routes are mounted at', () => {
+  const { block, query } = ruleQuery('demi-search-5xx-ratio');
+
+  assert.match(query, /^AppRequests \|/, 'the ratio is over requests, not traces');
+
+  // api/index.js registers ONE catch-all function, so every request in this workspace shares an
+  // operation name and only the URL separates search from everything else.
+  const paths = [...query.matchAll(/endswith "([^"]+)"/g)].map(m => m[1]);
+  assert.ok(paths.length, 'the rule filters on no path at all — it would measure the whole API');
+
+  const declared = [...ROUTES.matchAll(/path: '(\/search[^']*)'/g)].map(m => m[1]);
+  assert.ok(declared.length, 'routes.js declares no /search route any more');
+  for (const p of paths) {
+    assert.ok(declared.includes(p), `the rule watches ${p}, which routes.js does not serve`);
+  }
+  for (const d of declared) {
+    assert.ok(paths.includes(d), `routes.js serves ${d}, which the rule does not watch`);
+  }
+
+  // ResultCode is a STRING column: without toint, ">= 500" is a lexicographic comparison and "50"
+  // sorts above "500".
+  assert.match(query, /toint\(ResultCode\) >= 500/,
+    'ResultCode has to be converted before it can be compared as a number');
+  assert.match(query, /total >= 5/,
+    'without a floor, one failed request in an idle five minutes reads as 100% broken');
+  assert.match(query, /todouble\(failed\) \/ total > 0\.2/,
+    'integer division would floor every ratio under 1 to 0 and the rule could never fire');
+
+  assert.match(block, /severity: 1$/m, 'same severity as the trace rule — it is the same outage');
+  assert.match(block, /actionGroups: \[ alertGroup\.id \]/,
+    'the rule must mail the shared action group, not one of its own');
+});
+
+// A content match against a key the API stopped emitting fails every probe run, which is an outage
+// that is not one. `searchResultsTotal` is attached only where a total was measured, so it is a
+// stronger check than a status code and a more fragile one than a corpus-independent string looks.
+test('the availability probe matches on a key the search response still carries', () => {
+  const match = /ContentMatch: '([^']+)'/.exec(AVAILABILITY);
+  assert.ok(match, 'the web test validates no content — a 200 that is not an answer stays green');
+  assert.ok(SEARCH_CONTROLLER.includes(match[1]),
+    `the probe requires ${JSON.stringify(match[1])}, which search.js no longer emits`);
+  assert.match(AVAILABILITY, /PassIfTextFound: true/,
+    'the match has to mean "present", not "absent"');
 });

@@ -259,6 +259,117 @@ resource bulkDownloadPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06
   }
 }
 
+// Search is down. On 2026-09-08 every `dataset=Document` query answered 502 for 65 minutes and
+// nothing raised a hand: the cause sat in `AppTraces` as `[search] document search failed` and was
+// found by eye. This rule reads that line.
+//
+// Unconditional, unlike the two rules above: every environment serves search, so the line this
+// matches is one an environment can always write.
+//
+// Three in five minutes, not one. `search.js` logs one line per failed request, so a single line is
+// a client that asked for something the index could not answer; a broken index or a dead upstream
+// produces them continuously. Three is the smallest count that separates the two at the 5-minute
+// window a page has to fit inside.
+resource searchFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'demi-search-failures-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI search is failing'
+    description: 'The API logged three or more `[search] … failed` lines in five minutes. Callers are getting 502s. Check the index against the deployed build first: GET /health/search-schema names a missing field. Runbook: Runbook-Search-Outage in the DEMI wiki.'
+    // Error, not warning: the public site cannot search at all while this is true.
+    severity: 1
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT5M'
+    // Same length as the frequency — no overlap, so one failure is not counted twice.
+    windowSize: 'PT5M'
+    criteria: {
+      allOf: [
+        {
+          // `[search`, unclosed on purpose: search.js logs under two tags, `[search]` and
+          // `[search/summary]`, and the summary route answers 200 on failure — so this rule is the
+          // ONLY thing that can see a summary outage. `startswith` rather than `has` because `has`
+          // tokenises on the brackets (see reconcileDriftAlert), and rather than `contains` because
+          // every message in this workspace does begin at its tag. Both tags plus `failed` are only
+          // ever logged at error level; the warn lines under the same tags say nothing about failure.
+          //
+          // The second clause is the schema-drift degrade in src/search/ai-search.js: it drops the
+          // field the index cannot answer and retries, so the page is served, no 502 is logged and
+          // NOTHING else here would fire. It is `contains` rather than `startswith` because no
+          // `[ai-search]` line has been observed in this workspace to anchor the tag against.
+          query: 'AppTraces | where (Message startswith "[search" and Message contains "failed") or (Message contains "[ai-search]" and Message contains "retried without it")'
+          timeAggregation: 'Count'
+          operator: 'GreaterThanOrEqual'
+          threshold: 3
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
+// The same outage seen from the other side, and the one that still fires when the process dies
+// before it can log anything. A ratio rather than a count, because search traffic swings by two
+// orders of magnitude between a crawler pass and a quiet night, and a fixed count of 5xx is either
+// deaf at the top or screaming at the bottom.
+//
+// `total >= 5` is the floor that keeps a single failed request in an idle five minutes from reading
+// as 100% broken.
+resource search5xxRatioAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'demi-search-5xx-ratio-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI search 5xx rate over 20%'
+    description: 'More than a fifth of the search requests in the last five minutes answered 5xx, over at least five requests. Same runbook as demi-search-failures: Runbook-Search-Outage in the DEMI wiki.'
+    severity: 1
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT5M'
+    criteria: {
+      allOf: [
+        {
+          // Filtered on the PATH, not on `OperationName`. api/index.js registers ONE catch-all
+          // function (`app.http('api', { route: '{*path}' })`) because the Functions host matches
+          // routes in discovery order, so every request in this workspace — search, projects,
+          // health — carries the same operation name and only the URL tells them apart. `endswith`
+          // rather than an equality: the host mounts these under `/api`, which src/http/router.js
+          // strips at dispatch, so the recorded path is `/api/search` today and `/search` if that
+          // mount ever changes. The timer and queue functions land in this table too, with no Url
+          // at all; the same filter drops them.
+          // `ResultCode` is a string column; `toint` is what makes `>= 500` a numeric comparison
+          // rather than a lexicographic one.
+          query: 'AppRequests | extend p = tostring(parse_url(Url).Path) | where p endswith "/search" or p endswith "/search/summary" | summarize total = count(), failed = countif(toint(ResultCode) >= 500) | where total >= 5 and todouble(failed) / total > 0.2'
+          // The query answers with one row or none, so the rule counts rows: a row means the ratio
+          // was already over the line.
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
 @description('Connection string the apps use to reach Application Insights')
 output connectionString string = appInsights.properties.ConnectionString
 

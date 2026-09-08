@@ -64,12 +64,20 @@ resource webTest 'Microsoft.Insights/webtests@2022-06-15' = {
         { key: 'X-Synthetic-Probe', value: 'availability' }
       ]
     }
-    // Status only. The response body is JSON whose contents move with the corpus, so a content match
-    // would be a second thing to keep true.
+    // Status, plus one key out of the body. `searchResultsTotal` is not a result — it is the key
+    // `search.js` attaches to `meta` whenever the total was MEASURED, so it is there on an empty
+    // page and absent the moment the search answers without counting. That makes it stable against
+    // the corpus (the objection that kept this a status-only check) while still catching a 200 that
+    // is not really an answer, which a status code cannot.
     ValidationRules: {
       ExpectedHttpStatusCode: 200
       SSLCheck: true
       SSLCertRemainingLifetimeCheck: 14
+      ContentValidation: {
+        ContentMatch: 'searchResultsTotal'
+        IgnoreCase: false
+        PassIfTextFound: true
+      }
     }
   }
 }
