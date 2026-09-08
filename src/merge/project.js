@@ -50,10 +50,11 @@ const TRACK_PRECEDENCE = [
  * Fields only Eagle has. Copied straight across — the EA process record, contacts and CAC
  * data that make DEMI more than a Track mirror.
  *
- * Five of these are ObjectIds in Mongo and mean nothing outside Eagle, so they have to reach DEMI
+ * Four of these are ObjectIds in Mongo and mean nothing outside Eagle, so they have to reach DEMI
  * already resolved: `applicableRegulation` as `{_id, name, item}`, `pins` as
- * `[{_id, name, province}]`, `featuredDocuments` as Eagle document ids, `proponentId` and
- * `proponentName` off the Organization. The push sends all five that way. The seed's feed does not,
+ * `[{_id, name, province}]`, `featuredDocuments` as Eagle document ids, and `proponentId` off the
+ * Organization (`proponentName` is a TRACK_PRECEDENCE slot, not one of these). The push sends all
+ * four that way. The seed's feed does not,
  * so `normalizeEagleSlot` below fills what it can from the feed and from the Organization lookup
  * the seed hands it. Nothing here reads Mongo.
  */
