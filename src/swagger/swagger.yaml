@@ -1346,11 +1346,15 @@ paths:
         content:
           application/json:
             schema:
-              allOf:
-                - $ref: '#/components/schemas/PublicConfig'
-                - type: object
-                  additionalProperties: true
-                  required: [ENVIRONMENT, ACCESS_GATE]
+              type: object
+              required: [ENVIRONMENT, ACCESS_GATE]
+              properties:
+                ENVIRONMENT:
+                  type: string
+                ACCESS_GATE:
+                  type: boolean
+              additionalProperties: true
+              description: Extra keys are dropped to the `PublicConfig` allowlist.
       responses:
         '200':
           description: Stored. The body is the document as `GET /api/config/public` will serve it.
