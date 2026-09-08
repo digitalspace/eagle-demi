@@ -298,6 +298,46 @@ test('reconcile', async (t) => {
       assert.strictEqual(summary.drift, 6);
     });
 
+  // Eagle hangs periods off a ProjectNotification too, exactly as it does documents (D4 above).
+  // The old gate tested `projectIndex` alone, so every one of those read as unresolvable and its
+  // absence from DEMI never reached the alert.
+  await t.test('a period under a ProjectNotification DEMI never mirrored is drift', async () => {
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, {
+        ...EAGLE_BY_DATASET,
+        CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-pn', project: 'N1' }]
+      })
+    }));
+
+    assert.deepStrictEqual(summary.commentPeriods.eagleOnly, ['CP-pn']);
+    assert.deepStrictEqual(summary.commentPeriods.unresolvedParent, []);
+    assert.strictEqual(summary.drift, 6);
+  });
+
+  // And the DEMI side of the same row. `commentPeriods` partitions on the parent, so a period
+  // under a notification lives in the notification's partition and a sweep of the project
+  // partitions alone never sees it — it would report as missing on every run.
+  await t.test('a period DEMI holds under a ProjectNotification partition is clean', async () => {
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, {
+        ...EAGLE_BY_DATASET,
+        CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-pn', project: 'N1' }]
+      }),
+      commentPeriods: {
+        listByProject: async (projectId, access) => {
+          assertSystem(access);
+          return ({ ...PERIOD_ROWS, N1: [{ id: 'CP-pn', projectId: 'N1' }] })[projectId] || [];
+        }
+      }
+    }));
+
+    assert.strictEqual(summary.commentPeriods.inDemi, 2);
+    assert.deepStrictEqual(summary.commentPeriods.eagleOnly, []);
+    assert.deepStrictEqual(summary.commentPeriods.unresolvedParent, []);
+    assert.deepStrictEqual(summary.commentPeriods.unpublishedOrDeleted, []);
+    assert.strictEqual(summary.drift, 5);
+  });
+
   // A period carrying no project ref at all: the mirror has nothing to resolve, so it drops it.
   await t.test('a period with no project ref is unresolvedParent', async () => {
     const summary = await reconcile([], makeDeps({

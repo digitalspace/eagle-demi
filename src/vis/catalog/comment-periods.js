@@ -25,8 +25,11 @@ module.exports = {
   // `isMet` says the period is run in Engage rather than here, and `metURL` is where it lives.
   isMet: { defaultVis: 4, maxVis: 4 },
   metURL: { defaultVis: 4, maxVis: 4 },
+  metBannerImageUrl: { defaultVis: 4, maxVis: 4 },
   informationLabel: { defaultVis: 4, maxVis: 4 },
   instructions: { defaultVis: 4, maxVis: 4 },
+  // Rendered on the public card and the comments page, exactly as `instructions` is.
+  additionalText: { defaultVis: 4, maxVis: 4 },
   openHouses: { defaultVis: 4, maxVis: 4 },
   relatedDocuments: { defaultVis: 4, maxVis: 4 },
   commentTip: { defaultVis: 4, maxVis: 4 },

@@ -1013,7 +1013,9 @@ paths:
         RAW Eagle record plus the labels for its four List ObjectId references. Idempotent: the
         same eagleId replaces. Two things are NOT taken from the push — extraction state, carried
         off the row already in DEMI, and the ACL, which is the lower of the document's own ladder
-        level and its parent project's.
+        level and its parent project's. `doc.project` may name a `ProjectNotification` instead of a
+        project; such a document is partitioned under the notification's own id and keeps its own
+        ACL, since a notification has no ACL to narrow against.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -1046,7 +1048,7 @@ paths:
             Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
             higher.
         '404':
-          description: The document's parent project is not in DEMI.
+          description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
 
   /api/eagle/updates/{eagleId}:
     put:
@@ -1098,7 +1100,9 @@ paths:
         Receives one `CommentPeriod` pushed by eagle-api, keyed by the Eagle `_id`. The body
         carries the RAW Eagle record. The stored ACL is the period's own, CONSTRAINED to its
         project's: a period may never out-rank the project it belongs to, so one published under a
-        project that is not stays private here.
+        project that is not stays private here. `doc.project` may name a `ProjectNotification`
+        instead; that period is partitioned under the notification's own id and keeps its own ACL,
+        since a notification has no ACL to narrow against.
 
         Whenever the stored level moves, the comments under the period are re-derived from it:
         `/search?dataset=Comment` filters on the comment's own ACL and never re-reads the period.
@@ -1138,7 +1142,7 @@ paths:
             Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
             higher.
         '404':
-          description: The project named by `doc.project` is not mirrored yet.
+          description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
         '500':
           description: |-
             The period was mirrored, but the comments under it were not all re-derived. The push

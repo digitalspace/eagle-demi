@@ -126,8 +126,10 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
       dateAdded: '2026-07-20T00:00:00.000Z',
       isMet: false,
       metURL: '',
+      metBannerImageUrl: 'https://engage.gov.bc.ca/banner.jpg',
       informationLabel: 'Read the application',
       instructions: 'Tell us what you think.',
+      additionalText: 'Comment on the amendment application.',
       openHouses: [{ eventDate: '2026-08-10T00:00:00.000Z', description: 'Community hall' }],
       relatedDocuments: ['5cf00c03a266b7e187750002'],
       commentTip: 'Comments are public.',
@@ -150,8 +152,9 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(written().isPublished, false);
   });
 
-  await t.test('a period whose project is not mirrored is a 404 and no write', async () => {
+  await t.test('a period whose parent is in neither container is a 404 and no write', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
+    t.mock.method(notifications, 'getById', async () => null);
     let upserts = 0;
     t.mock.method(commentPeriods, 'upsert', async () => { upserts++; });
 
@@ -162,6 +165,39 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
 
     assert.strictEqual(res.statusCode, 404);
     assert.strictEqual(upserts, 0);
+  });
+
+  // Eagle's `project` reference holds either id. Resolving it through `projects` alone dropped 10
+  // periods and the 232 comments under them on test, measured 2026-09-07.
+  await t.test('a period under a ProjectNotification is stored under it, ACL verbatim', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    t.mock.method(notifications, 'getById', async () => ({
+      id: NOTIFICATION_EAGLE_ID, read: PRIVATE_ACL
+    }));
+
+    const { res, written } = await pushTo(
+      commentPeriodController, commentPeriods, PERIOD_EAGLE_ID,
+      eaglePeriod({ project: NOTIFICATION_EAGLE_ID }), t);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.strictEqual(written().projectId, NOTIFICATION_EAGLE_ID,
+      'partitioned under the notification, which is what eagle-public filters on');
+    // The notification's own ACL is not a ceiling — it is not the period's parent project, and it
+    // says nothing about who may read the period. So the Eagle list is stored as it arrived, which
+    // is what `seed/transform.js` already does for a notification-parented document.
+    assert.deepStrictEqual(written().read, PUBLIC_ACL);
+    assert.strictEqual(written().isPublished, true);
+  });
+
+  await t.test('a notification is only consulted when there is no project row', async () => {
+    // A point read per push against a container that answers nothing for 99.99% of them.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    t.mock.method(notifications, 'getById', async () => { throw new Error('must not be read'); });
+
+    const { res } = await pushTo(
+      commentPeriodController, commentPeriods, PERIOD_EAGLE_ID, eaglePeriod(), t);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
   });
 
   // The repository and its Cosmos calls are REAL below: mocking `repo.upsert` proves the controller

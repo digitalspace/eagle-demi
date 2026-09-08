@@ -19,10 +19,11 @@
  * The API app also runs `run()` nightly on a Functions timer when RECONCILE_SCHEDULE is set — see
  * api/index.js, and azure/modules/observability.bicep for the alert that reads the line.
  *
- * A document only counts as `eagleOnly` when seed-nosql would seed it. That is not a rule
- * restated here: `documentAdmission` IS seed-nosql's own function, run over the same merged
- * project registry. The rest report separately under `unresolvedParent`, since seed-nosql drops
- * them too and they are not push drift.
+ * A document or a comment period only counts as `eagleOnly` when DEMI would hold it — its Eagle
+ * `project` ref names a project in the merged registry, or a `ProjectNotification`. That is not a
+ * rule restated here: `documentAdmission` IS seed-nosql's own function, run over the same merged
+ * project registry. The rest report separately under `unresolvedParent`, since the seed and the
+ * mirrors drop them too and they are not push drift.
  */
 
 const sources = require('../seed/sources');
@@ -157,6 +158,8 @@ async function reconcile(argv = [], deps = {}) {
   // project row for such a guid, so a child under one is drift rather than unresolvable.
   const projectIndex = buildProjectIndex(
     buildRegistry(await src.loadTrackProjects(), eagleProjects).projects);
+  // `admit` is the parent gate for BOTH children Eagle hangs off a `project` reference: a document
+  // and a comment period. Either may name a `ProjectNotification` there.
   const { admit } = await documentAdmission(src, projectIndex);
   const eagleDocumentIds = new Set();
   const eagleDocumentProject = new Map(); // doc id -> its Eagle project id
@@ -193,15 +196,16 @@ async function reconcile(argv = [], deps = {}) {
   // Eagle publishes under a project it does not publish is still in the id set — while the mirror
   // drops it, because its parent project row is not in DEMI. Measured on test 2026-09-07: 29 such
   // periods under 20 unpublished projects, every one of them reported as push drift.
+  const notificationRows = await notificationsRepo.list(access, {});
   const periodRows = [];
-  // MAX_PAGE_SIZE caps ONE partition's read, so the ceiling is per project. Comparing the running
+  // MAX_PAGE_SIZE caps ONE partition's read, so the ceiling is per parent. Comparing the running
   // total against it would fire on every real run once DEMI holds that many periods in all.
   let periodPageFilled = false;
-  for (const project of projectRows) {
-    // Per project, because `commentPeriods` partitions on it. Every project a period can hang off
-    // is in this list: the mirror resolves its parent through `getByEagleId`, so a period under a
-    // project with no `eagleId` cannot exist.
-    const rows = await periodsRepo.listByProject(project.id, access, {});
+  // Every partition a period can live in: `commentPeriods` partitions on the parent, and the
+  // mirror admits a project or a `ProjectNotification` — nothing else.
+  const periodParents = [...projectRows, ...notificationRows];
+  for (const parent of periodParents) {
+    const rows = await periodsRepo.listByProject(parent.id, access, {});
     periodPageFilled = periodPageFilled || rows.length >= MAX_PAGE_SIZE;
     periodRows.push(...rows);
   }
@@ -209,15 +213,13 @@ async function reconcile(argv = [], deps = {}) {
     ...await listsRepo.listByKind(listsRepo.KINDS.LIST, access, {}),
     ...await listsRepo.listByKind(listsRepo.KINDS.ORGANIZATION, access, {})
   ];
-  const notificationRows = await notificationsRepo.list(access, {});
   const updateRows = await updatesRepo.list(access, {});
 
   // One `lists` container holds both kinds, so both id sets are one comparison.
   const eagleListIds = await eagleIds(src, 'Organization', await eagleIds(src, 'List'));
-  // The period's own project ref rides along: it is the only thing that says whether the mirror
-  // could have resolved a parent for it. A project ONLY — unlike documents, no comment period
-  // hangs off a ProjectNotification, so `admit` is not the gate here, `projectIndex` is.
-  const eaglePeriodProject = new Map(); // period id -> its Eagle project id
+  // The period's own parent ref rides along: it is the only thing that says whether the mirror
+  // could have resolved a parent for it.
+  const eaglePeriodProject = new Map(); // period id -> its Eagle parent ref
   const eaglePeriodIds = await eagleIds(src, 'CommentPeriod', new Set(), row => {
     eaglePeriodProject.set(String(row._id), row.project != null ? String(row.project) : null);
   });
@@ -227,7 +229,7 @@ async function reconcile(argv = [], deps = {}) {
   summary.commentPeriods = {
     inDemi: periodRows.length, inEagle: eaglePeriodIds.size,
     ...diff(periodRows, row => String(row.id), eaglePeriodIds, undefined,
-      id => projectIndex.resolve(eaglePeriodProject.get(id)) !== null)
+      id => admit(eaglePeriodProject.get(id)) !== null)
   };
   summary.lists = {
     inDemi: listRows.length, inEagle: eagleListIds.size,

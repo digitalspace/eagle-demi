@@ -25,7 +25,14 @@ The stages run in dependency order, and `--only` selects stages without reorderi
 6. `comments` — one pass per comment period over `/api/public/comment`
 
 Projects come first of all, and they are not this script's: run `db:seed-nosql` before it. A comment
-period whose project is not in DEMI is skipped, and so is a comment whose period is not.
+period whose parent is not in DEMI is skipped, and so is a comment whose period is not.
+
+A period's parent is a project or a `ProjectNotification` — Eagle's `project` reference holds either
+id, and prod publishes periods and documents under notifications. A notification-parented period is
+stored under the notification's own id and keeps the access list Eagle published it with, because a
+notification carries none of its own for the period to be narrowed against. That is the same rule
+`seed-nosql` applies to a notification-parented document. Because the `notifications` stage runs
+first, a period under one resolves on the same run.
 
 ## Running it
 
@@ -58,6 +65,10 @@ A finished stage is recorded in the state file (`./seed-public-reads.state.json`
 wrote, so a run killed part way through resumes at the period it stopped on rather than at the first
 one.
 
+`--only` overrides that: a stage named on the command line runs whether or not the state file says
+it finished. Naming a stage is how a repair is asked for, and the stage needing repair is always one
+that has completed before.
+
 Nothing that failed is recorded: a period holding a comment that failed to write stays off the
 per-period list, and a stage that logged errors is not marked complete. Both would otherwise be
 skipped next time, leaving those rows missing for good.
@@ -74,8 +85,8 @@ against the environment the migration ran in:
 npm run db:seed-public-reads -- --live --only lists
 ```
 
-The state file will already hold a completed `lists` entry from the first backfill; delete the file,
-or point `--state` somewhere else, or the stage is skipped.
+The state file will already hold a completed `lists` entry from the first backfill. `--only lists`
+runs it anyway.
 
 ## What the backfill cannot recover
 
@@ -109,10 +120,14 @@ drift.
 A comment period Eagle publishes is not always a period DEMI should hold. eagle-api's
 `dataset=CommentPeriod` gates on the period's own `read[]` and joins no parent, so a period stays in
 the published set even when its project does not — while the mirror drops it, because there is no
-DEMI project row to hang it off. Those ids are reported under `unresolvedParent` and excluded from
+DEMI parent row to hang it off. Those ids are reported under `unresolvedParent` and excluded from
 `drift=`, the same treatment a document under an unresolvable parent already gets. Measured on test
 2026-09-07: 29 periods under 20 unpublished projects, every one of them previously counted as push
 drift.
+
+The gate is the seed's own `documentAdmission`, so a period whose parent is a published
+`ProjectNotification` resolves and is expected in DEMI, exactly as a document under one is. Both
+sweeps read the notification partitions as well as the project ones.
 
 `--comments` walks those unresolved period ids too, so Eagle's comments under them are reported
 rather than silently missed — sweeping DEMI's periods alone never fetched them at all. They also

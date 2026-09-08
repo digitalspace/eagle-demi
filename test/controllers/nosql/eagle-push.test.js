@@ -18,12 +18,15 @@ const assert = require('node:assert');
 
 const projects = require('../../../src/repositories/projects');
 const documents = require('../../../src/repositories/documents');
+const notifications = require('../../../src/repositories/notifications');
 const aiSearch = require('../../../src/search/ai-search');
 const projectController = require('../../../src/controllers/nosql/project');
 const documentController = require('../../../src/controllers/nosql/document');
 const authMiddleware = require('../../../src/middleware/auth');
 const { requireWrite, requireAdmin } = require('../../../src/middleware/require-roles');
 const { routeChains } = require('../../helpers/router-source');
+// One id space for the whole push suite: the notification the public-read mirrors already use.
+const { NOTIFICATION_EAGLE_ID } = require('../../helpers/eagle-mirror-fixtures');
 
 function mockRes() {
   return {
@@ -532,8 +535,9 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
     assert.strictEqual(written.documentAuthorType, null);
   });
 
-  await t.test('a document with no parent project in DEMI is a 404 and no write', async () => {
+  await t.test('a document with no parent in DEMI is a 404 and no write', async () => {
     t.mock.method(projects, 'getByEagleId', async () => null);
+    t.mock.method(notifications, 'getById', async () => null);
     let upserts = 0;
     t.mock.method(documents, 'upsert', async () => { upserts++; });
 
@@ -545,6 +549,33 @@ test('PUT /eagle/documents/:eagleId', async (t) => {
 
     assert.strictEqual(res.statusCode, 404);
     assert.strictEqual(upserts, 0, 'never seed an orphan document');
+  });
+
+  // Eagle's `project` reference holds either id, and prod publishes documents under 17
+  // notifications. Resolving through `projects` alone dropped every one of them.
+  await t.test('a document under a ProjectNotification is stored under it, ACL verbatim', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => null);
+    t.mock.method(notifications, 'getById', async () => ({
+      id: NOTIFICATION_EAGLE_ID, read: ['sysadmin', 'staff']
+    }));
+    t.mock.method(documents, 'getById', async () => null);
+    let written;
+    t.mock.method(documents, 'upsert', async (item) => { written = item; return item; });
+
+    const res = mockRes();
+    await documentController.upsertFromEagle({
+      params: { eagleId: DOC_EAGLE_ID }, query: {},
+      body: { doc: eagleDocument({ project: NOTIFICATION_EAGLE_ID, read: ['public', 'sysadmin'] }) },
+      user: STAFF
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.strictEqual(written.projectId, NOTIFICATION_EAGLE_ID,
+      'partitioned under the notification, which is what eagle-public filters on');
+    // The notification's own narrower ACL is NOT a ceiling: it says nothing about the document, so
+    // the Eagle list is stored as it arrived — the same row `seed/transform.js` writes.
+    assert.deepStrictEqual(written.read, ['public', 'sysadmin']);
+    assert.strictEqual(written.isPublished, true);
   });
 
   await t.test('a visibility flip writes the index ACL; a rename does not', async () => {

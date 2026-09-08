@@ -24,6 +24,7 @@ const {
 const { serverError } = require('../../helpers/response');
 const aiSearch = require('../../search/ai-search');
 const { purgeDocument } = require('../../helpers/purge');
+const { admitParent } = require('../../helpers/parent-admit');
 const { logger } = require('../../utils/logger');
 const { auditEvent, analyticsEvent } = require('../../utils/audit');
 const { transformDocument, seedAcl } = require('../../seed/transform');
@@ -524,7 +525,8 @@ function listLookupFrom(doc, labels) {
  * push and a re-seed produce the same row. Two things are NOT taken from the push: extraction
  * state, which is carried off the row already in Cosmos (an upsert replaces the item, and losing
  * it would orphan the chunks and re-queue the document through the GPU), and the ACL, which is
- * narrowed against the parent project's.
+ * narrowed against the parent project's — unless that parent is a `ProjectNotification`,
+ * which carries no ACL to narrow against.
  */
 exports.upsertFromEagle = async (req, res) => {
   try {
@@ -534,12 +536,10 @@ exports.upsertFromEagle = async (req, res) => {
       return res.status(400).json({ error: 'body.doc._id must match the :eagleId in the path' });
     }
 
-    // systemAccess on both reads: the push is a mirror, so a private parent and a private existing
-    // row must both be visible to it.
-    const parentEagleId = String((doc.project && doc.project._id) || doc.project || '');
-    const parent = parentEagleId
-      ? await projects.getByEagleId(systemAccess(), parentEagleId)
-      : null;
+    // A ProjectNotification is a parent here too — prod publishes documents under 17 of them —
+    // and it carries no ACL to narrow against, so those keep their own read[]. Same admission the
+    // seed makes (`seed-nosql.js:documentAdmission`) and the period mirror makes.
+    const parent = await admitParent(doc.project);
     if (!parent) {
       return res.status(404).json({ error: 'Parent project not found' });
     }
@@ -547,7 +547,7 @@ exports.upsertFromEagle = async (req, res) => {
     const existing = await documents.getById(systemAccess(), eagleId);
     const row = transformDocument(
       doc, parent.id, listLookupFrom(doc, req.body.labels),
-      { existing, projectRead: parent.read }
+      { existing, projectRead: parent.kind === 'notification' ? undefined : parent.read }
     );
     // The cascade restores a narrowed ACL from `ownRead` (documents.setAclForProject), so the
     // push must carry the unconstrained Eagle ACL. A re-seed drops it deliberately; this does not.

@@ -180,21 +180,42 @@ test('a rerun skips a dataset the state file already calls done', async () => {
   fs.writeFileSync(state, JSON.stringify({
     organizations: { completedAt: '2026-09-01T00:00:00.000Z' }
   }));
+  // No `--only`: this is the resume, and every other stage has an empty dataset behind it.
   const sources = stubSources({
-    datasets: { Organization: [{ _id: 'O1' }], ProjectNotification: [{ _id: 'N1' }] }
+    datasets: {
+      List: [], Organization: [{ _id: 'O1' }], ProjectNotification: [{ _id: 'N1' }],
+      RecentActivity: [], CommentPeriod: []
+    }
   });
 
-  const summary = await backfill(
-    ['--live', '--only', 'organizations,notifications', '--state', state],
-    {
-      sources,
-      organizationMirror: recordingMirror('organizations', wrote),
-      notificationMirror: recordingMirror('notifications', wrote)
-    });
+  const summary = await backfill(['--live', '--state', state], {
+    sources,
+    organizationMirror: recordingMirror('organizations', wrote),
+    notificationMirror: recordingMirror('notifications', wrote)
+  });
 
   assert.deepStrictEqual(summary.skipped, ['organizations']);
   assert.deepStrictEqual(wrote.map(w => w[0]), ['notifications'],
     'the finished dataset is not refetched, the unfinished one still runs');
+});
+
+test('--only re-runs a stage the state file calls done', async () => {
+  // This script is the repair tool — a List migration in eagle-api writes to Mongo and fires no
+  // push — and the stage needing repair has always completed before. Skipping it made
+  // `--only lists` a no-op that exits 0 and reads like a successful backfill.
+  const wrote = [];
+  const state = statePath();
+  fs.writeFileSync(state, JSON.stringify({
+    organizations: { completedAt: '2026-09-01T00:00:00.000Z' }
+  }));
+  const sources = stubSources({ datasets: { Organization: [{ _id: 'O1' }] } });
+
+  const summary = await backfill(['--live', '--only', 'organizations', '--state', state],
+    { sources, organizationMirror: recordingMirror('organizations', wrote) });
+
+  assert.deepStrictEqual(summary.skipped, []);
+  assert.deepStrictEqual(wrote.map(w => w[1]), ['O1']);
+  assert.strictEqual(summary.stages.organizations.written, 1);
 });
 
 test('a mirror that answers null is a skip, not a write', async () => {
