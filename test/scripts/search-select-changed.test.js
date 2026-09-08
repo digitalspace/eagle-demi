@@ -78,6 +78,16 @@ test('search-select-changed.sh', async (t) => {
     assert.strictEqual(result.stdout.trim(), 'unchanged');
   });
 
+  await t.test('an empty base ref fails instead of reading as "unchanged"', async () => {
+    const dir = repoWith(BASE, BASE);
+    for (const args of [[''], []]) {
+      const result = await runScript(SCRIPT, args, { cwd: dir });
+      assert.strictEqual(result.status, 1, JSON.stringify(args));
+      assert.match(result.stderr, /no base ref/);
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   await t.test('CHUNK_SELECT counts once it exists, and its absence is not a difference', async () => {
     assert.strictEqual((await run(BASE, BASE)).stdout.trim(), 'unchanged');
 

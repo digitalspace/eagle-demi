@@ -9,9 +9,10 @@ usage() {
 Usage: scripts/search-schema-probe.sh <base-url> [indexes-dir]
 
 Builds a probe body from azure/search/indexes/*.json — per index, every retrievable
-field as `select` and every sortable one as `orderby` — and POSTs it to
-<base-url>/health/search-schema. The endpoint runs each list against the live index
-with `top: 0`, so the answer is about the LIVE schema, not the committed JSON.
+field as `select` — and POSTs it to <base-url>/health/search-schema. The endpoint
+runs that select, plus the orders it derives from the app's own query builder,
+against the live index with `top: 0`, so the answer is about the LIVE schema, not
+the committed JSON.
 
 <indexes-dir> defaults to azure/search/indexes next to this script.
 
@@ -21,22 +22,25 @@ field the live index does not have (2026-09-08, `fileSize`, 65 minutes of 502s).
 
 Exit codes:
   0  live indexes answer every select (200)
-  1  drift (503), an unexpected status, a 404, or the API could not be reached
+  1  drift (503), an unexpected status, a 404, bad usage, or the API was unreachable
 
 A 404 means the running app has no /health/search-schema. That is a real failure —
 the endpoint is expected to be there — except on the one deploy that first ships it.
 Set SEARCH_SCHEMA_ALLOW_MISSING=1 to pass that deploy, once.
 
-Non-retrievable fields are left out of `select` and geography points out of
-`orderby`: AI Search rejects both, and a 400 from a legal-but-unusable field would
-read as drift.
+Non-retrievable fields are left out of `select`: AI Search rejects one, and a 400
+from a legal-but-unusable field would read as drift. No `orderby` is sent, so the
+orders checked are the ones the app can actually emit — restating that type gate
+here would order by fields no query sorts on, and block a release over them.
 
 DEMI_ENV (default prod) only names the environment in the "widen it with" hint.
 EOF
 }
 
 case "${1:-}" in
-  -h|--help|'') usage; exit 0 ;;
+  -h|--help) usage; exit 0 ;;
+  # An empty base URL asked the live index nothing. Exiting 0 on it would read as a passing gate.
+  '') echo "❌ no base URL — this gate would have checked nothing." >&2; usage >&2; exit 1 ;;
 esac
 
 [ $# -eq 1 ] || [ $# -eq 2 ] || { usage; exit 1; }
@@ -56,10 +60,9 @@ for (const file of fs.readdirSync(dir).filter((n) => n.endsWith(".json")).sort()
   const def = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
   const fields = def.fields || [];
   if (!def.name || !fields.length) throw new Error(`${file} is not an index definition`);
-  indexes[def.name] = {
-    select: fields.filter((f) => f.retrievable !== false).map((f) => f.name),
-    orderby: fields.filter((f) => f.sortable && f.type !== "Edm.GeographyPoint").map((f) => f.name)
-  };
+  // No orderby key: the endpoint then derives the orders from buildOrderBy, the one authority on
+  // what this app can sort by. The `sortable` flags do not answer that question.
+  indexes[def.name] = { select: fields.filter((f) => f.retrievable !== false).map((f) => f.name) };
 }
 if (!Object.keys(indexes).length) throw new Error(`no index definitions under ${dir}`);
 process.stdout.write(JSON.stringify({ indexes }));

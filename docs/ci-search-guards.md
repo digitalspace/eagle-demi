@@ -10,12 +10,22 @@ identity holds Search Service Contributor. So these guards check, they do not fi
 
 ## Three checks
 
-**Before a production deploy.** `verify-search-schema` in `azure-deploy-prod.yaml` checks out the
-tag being deployed, builds a probe body from that tag's `azure/search/indexes/*.json`, and POSTs it
-to the API that is currently serving production (`scripts/search-schema-probe.sh`). The endpoint
-`/health/search-schema` — it arrives with PR #349 — runs each select and orderby against the live
-index with `top: 0` and answers 503 naming the missing fields. A 503 stops the release before
-`deploy-api` runs.
+**Before a production deploy.** `verify-search-schema` in `azure-deploy-prod.yaml` builds a probe
+body from the deployed tag's `azure/search/indexes/*.json` and POSTs it to the API that is
+currently serving production (`scripts/search-schema-probe.sh`). The endpoint
+`/health/search-schema` — it arrives with PR #349 — runs the select against the live index with
+`top: 0`, together with the orders it derives from the app's own query builder, and answers 503
+naming the missing fields. A 503 stops the release before `deploy-api` runs. The probe sends no
+`orderby` of its own: an index's `sortable` flags are not the set the app can order by, and a list
+built from them would block a release over fields no query sorts on.
+
+Like the rollback below, the job takes its tooling from the ref the workflow is running and only
+the index definitions from the tag: it checks that ref out at the workspace root, the tag into
+`release/`, and passes `release/azure/search/indexes` to the probe. `deploy-api` splits the same
+way — root for the composite action and `scripts/`, `release/` for the source it packages. No
+release up to `v0.78.0` carries any of these files, so reading them from the tag would fail every
+deploy and rollback of a tag cut before this merge, including the manual dispatch the runbook
+prescribes during an outage.
 
 A 404 also stops it: an endpoint that is not there checked nothing, and the release would go out on
 the same evidence the 2026-09-08 one had. The exception is the single deploy that first carries the
@@ -70,9 +80,15 @@ the public path also depends on the OpenShift rproxy, which these workflows do n
 
 ```
 scripts/search-schema-probe.sh https://demi-api-fc-prod.azurewebsites.net
+scripts/search-schema-probe.sh https://demi-api-fc-prod.azurewebsites.net release/azure/search/indexes
 scripts/search-smoke.sh https://demi-api-fc-prod.azurewebsites.net
 scripts/search-select-changed.sh main
 ```
+
+The probe's optional second argument is the directory of index definitions to build the body from;
+it defaults to `azure/search/indexes` beside the script. That is what lets the workflow's copy of
+the script ask about another checkout's definitions. An empty first argument is a usage error in
+both scripts, not a pass — a gate that asked nothing must not report success.
 
 All three print their contract with `--help`. Tests: `test/scripts/search-schema-probe.test.js` and
 `test/scripts/search-smoke.test.js` drive the two HTTP scripts against a stub server;

@@ -56,13 +56,20 @@ jobs:
             exit 1
           fi
 
-      # `ref:` is the whole point: without it the checkout is the branch the dispatch was fired from
-      # and the job ships `main` while claiming to deploy a tag. Depth 0 for `git describe --tags`.
+      # scripts/ comes from the ref this workflow is running, NEVER from the tag: no release up to
+      # v0.68.0 carries `wait-for-function.sh`, and the deploy would fail on a missing script after
+      # it had already published. Root first — a checkout cleans the directory it lands in.
+      - name: Checkout this workflow's ref for the tooling
+        uses: actions/checkout@v7
+
+      # `ref:` is the whole point: without it the packaged extractor is the branch the dispatch was
+      # fired from and the job ships `main` while claiming to deploy a tag. Source only, in a
+      # subdirectory. No fetch-depth: nothing here reads history.
       - name: Checkout the tag
         uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ inputs.version }}
-          fetch-depth: 0
+          path: release
 
       - name: Azure Login
         uses: azure/login@v3
@@ -95,7 +102,7 @@ jobs:
       - name: Package the extractor
         if: steps.probe.outputs.found == 'true'
         run: |
-          cd extractor
+          cd release/extractor
           zip -r /tmp/extractor.zip function_app.py extract.py ocr.py requirements.txt host.json
           unzip -l /tmp/extractor.zip
 
@@ -144,11 +151,20 @@ jobs:
             exit 1
           fi
 
-      # The TAG's index definitions, not main's. No fetch-depth: nothing here reads history.
+      # The probe script comes from the ref this workflow is running, NEVER from the tag: no
+      # release up to v0.78.0 carries it, and the gate would die on a missing script while its job
+      # summary talked about schema drift. Root first — a checkout cleans the directory it lands in.
+      - name: Checkout this workflow's ref for the tooling
+        uses: actions/checkout@v7
+
+      # The TAG's index definitions, not main's — that half of the question has to come from the
+      # version about to ship. In a subdirectory, passed to the probe below. No fetch-depth:
+      # nothing here reads history.
       - name: Checkout the tag
         uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ inputs.version }}
+          path: release
 
       # No setup-node and no install: the probe reads JSON and curls, on the runner's own node.
       # The dispatch input is the only way a 404 passes, and it has to be ticked per run: a 404 on
@@ -156,7 +172,7 @@ jobs:
       - name: Probe the live indexes with this tag's index definitions
         env:
           SEARCH_SCHEMA_ALLOW_MISSING: ${{ inputs.allow_missing_schema_probe && '1' || '0' }}
-        run: ./scripts/search-schema-probe.sh "$API_BASE_URL"
+        run: ./scripts/search-schema-probe.sh "$API_BASE_URL" release/azure/search/indexes
 
       - name: Report the failed gate to the job summary
         if: failure()
@@ -207,16 +223,26 @@ jobs:
             exit 1
           fi
 
+      # The composite action and scripts/ come from the ref this workflow is running, NEVER from
+      # the tag: no release up to v0.78.0 carries either, so `./.github/actions/deploy-api-flex`
+      # would fail to resolve before anything was deployed. Root first — a checkout cleans the
+      # directory it lands in.
+      - name: Checkout this workflow's ref for the tooling
+        uses: actions/checkout@v7
+
+      # Source only, in a subdirectory. fetch-depth 0 for the tag ancestry `git describe` reads.
       - name: Checkout the tag
         uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ inputs.version }}
           fetch-depth: 0
+          path: release
 
       # Install, package, publish, wait. Shared with the rollback job below so the two cannot drift.
       - name: Deploy the API
         uses: ./.github/actions/deploy-api-flex
         with:
+          working-directory: release
           resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
           app-name: ${{ env.API_FLEX_APP_NAME }}
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -224,7 +250,8 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       # Registered and started is not the same fact as answering. Three real queries, because the
-      # 2026-09-08 outage had a healthy `/health` throughout.
+      # 2026-09-08 outage had a healthy `/health` throughout. Runs from the root, so it is this
+      # workflow's copy of the script asking, not the deployed tag's.
       - name: Smoke test production search
         id: smoke
         env:

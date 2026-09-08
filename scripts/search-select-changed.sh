@@ -27,7 +27,9 @@ EOF
 }
 
 case "${1:-}" in
-  -h|--help|'') usage; exit 0 ;;
+  -h|--help) usage; exit 0 ;;
+  # An empty base ref compared nothing. Exiting 0 on it would read as "no select changed".
+  '') echo "❌ no base ref — nothing was compared." >&2; usage >&2; exit 1 ;;
 esac
 
 [ $# -eq 1 ] || { usage; exit 1; }

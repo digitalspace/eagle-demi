@@ -11,6 +11,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const { startStub, runScript } = require('../helpers/stub-http');
@@ -47,14 +49,51 @@ test('search-schema-probe.sh', async (t) => {
     // answers 400, which this script would report as drift that is not there.
     assert.ok(!indexes.documents.select.includes('fileNameTokens'));
     assert.ok(!indexes.projects.select.includes('nameTokens'));
-    // Sortable but not retrievable: wrong for select, right for orderby.
+    // Sortable but not retrievable: still out of the select.
     assert.ok(!indexes.documents.select.includes('displayNameSort'));
-    assert.ok(indexes.documents.orderby.includes('displayNameSort'));
-    // A geography point is sortable only through geo.distance(), never as a bare orderby field.
     assert.ok(indexes.projects.select.includes('centroid'));
-    assert.ok(!indexes.projects.orderby.includes('centroid'));
-    // Collection fields are not sortable at all.
-    assert.ok(!indexes.documents.orderby.includes('read'));
+    // No orderby: the endpoint derives the orders from buildOrderBy, which knows the app orders
+    // `documents` by displayNameSort and never by displayName. Sending a list built from the
+    // `sortable` flags would block a release over fields no query sorts on.
+    assert.ok(!('orderby' in indexes.documents));
+    assert.ok(!('orderby' in indexes.projects));
+    assert.ok(!('orderby' in indexes.chunks));
+  });
+
+  await t.test('probes the index definitions it is pointed at, not the ones beside the script', async () => {
+    // The prod gate runs the WORKFLOW REF's copy of this script against the DEPLOYED TAG's index
+    // definitions, checked out under release/. An ignored argument would gate the release on
+    // main's definitions, which is not the version being shipped.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-indexes-'));
+    fs.writeFileSync(path.join(dir, 'documents.json'), JSON.stringify({
+      name: 'documents',
+      fields: [{ name: 'id' }, { name: 'fieldOnlyThisTagHas' }, { name: 'hidden', retrievable: false }]
+    }));
+
+    const stub = await startStub(() => ({ status: 200, json: { ok: true } }));
+    let run;
+    try {
+      // Relative, resolved against the working directory, the way the workflow passes it.
+      run = await runScript(SCRIPT, [stub.url, path.relative(REPO_ROOT, dir)], { cwd: REPO_ROOT });
+    } finally {
+      await stub.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    assert.strictEqual(run.status, 0, run.stderr);
+    const { indexes } = JSON.parse(stub.requests[0].body);
+    assert.deepStrictEqual(Object.keys(indexes), ['documents']);
+    assert.deepStrictEqual(indexes.documents.select, ['id', 'fieldOnlyThisTagHas']);
+  });
+
+  await t.test('an empty base URL fails instead of reading as a passing gate', async () => {
+    // One renamed repository variable away: a step that exits 0 having asked the live index
+    // nothing is the ungated release this gate exists to stop.
+    for (const args of [[''], []]) {
+      const run = await runScript(SCRIPT, args, { cwd: REPO_ROOT });
+      assert.strictEqual(run.status, 1, JSON.stringify(args));
+      assert.match(run.stderr, /no base URL/);
+    }
   });
 
   await t.test('fails the release on drift, naming the field and how to widen the index', async () => {
