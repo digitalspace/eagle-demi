@@ -50,11 +50,12 @@ const TRACK_PRECEDENCE = [
  * Fields only Eagle has. Copied straight across — the EA process record, contacts and CAC
  * data that make DEMI more than a Track mirror.
  *
- * Five of these arrive from eagle-api already resolved, because Mongo stores them as ObjectIds
- * that mean nothing outside Eagle: `applicableRegulation` as `{_id, name, item}`, `pins` as
+ * Five of these are ObjectIds in Mongo and mean nothing outside Eagle, so they have to reach DEMI
+ * already resolved: `applicableRegulation` as `{_id, name, item}`, `pins` as
  * `[{_id, name, province}]`, `featuredDocuments` as Eagle document ids, `proponentId` and
- * `proponentName` off the Organization. The merge stores whatever the push sends and resolves
- * nothing itself — it has no Mongo to read.
+ * `proponentName` off the Organization. The push sends all five that way. The seed's feed does not,
+ * so `normalizeEagleSlot` below fills what it can from the feed and from the Organization lookup
+ * the seed hands it. Nothing here reads Mongo.
  */
 const EAGLE_ONLY_FIELDS = [
   'eaStatus', 'eacDecision', 'decisionDate', 'currentPhaseName', 'phaseHistory',
