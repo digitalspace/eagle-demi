@@ -172,7 +172,9 @@ exports.upsertFromEagle = async (req, res) => {
     const { eagleId, doc } = push;
 
     const mirrored = await mirrorFromEagle(eagleId, doc);
-    if (!mirrored) return res.status(404).json({ error: 'Parent project not found' });
+    if (!mirrored) {
+      return res.status(404).json({ error: 'Parent project or notification not found' });
+    }
     const { saved, existing, cascadeError } = mirrored;
 
     auditEvent(req, {

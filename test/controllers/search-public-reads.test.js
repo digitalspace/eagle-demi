@@ -358,6 +358,29 @@ test('GET /search?dataset=CommentPeriod', async (t) => {
     assert.ok(boundValues(specsFor(seen, 'commentPeriods')[0]).includes(notification.id));
   });
 
+  // Some Track projects carry a ProjectNotification _id in `epic_guid`, which the merge copies to
+  // the project row's `eagleId` (test 2026-09-08: Track 351 and 353). eagle-public sends the
+  // notification's own id as its project filter, so translating it to that project searched a
+  // partition holding none of the notification's periods.
+  await t.test('a project row carrying the notification id does not capture the filter', async () => {
+    const notification = notificationRow();
+    const seen = stubCosmos(t, {
+      projects: [{ id: '353', eagleId: notification.id, name: 'Shadow', read: PUBLIC_ACL }],
+      notifications: [notification],
+      commentPeriods: [periodRow({ projectId: notification.id })]
+    });
+
+    const { status, body } = await get(
+      `/api/search?dataset=CommentPeriod&and%5Bproject%5D=${notification.id}`);
+
+    assert.strictEqual(status, 200);
+    assert.strictEqual(body[0].searchResults.length, 1, 'the notification partition was read');
+    assert.strictEqual(body[0].searchResults[0]._id, PERIOD_EAGLE_ID);
+    const bound = boundValues(specsFor(seen, 'commentPeriods')[0]);
+    assert.ok(bound.includes(notification.id), 'the filter keeps the notification id');
+    assert.ok(!bound.includes('353'), 'and never becomes the shadowing project id');
+  });
+
   await t.test('a period under a notification this caller cannot see carries no parent', async () => {
     // The lookup is ACL-enforcing on the notification too, and a period row that survived the
     // period ACL must not be labelled with a parent the caller may not read.

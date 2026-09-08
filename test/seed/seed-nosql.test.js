@@ -532,6 +532,42 @@ test('seed() end to end with stubbed sources', async (t) => {
     assert.deepStrictEqual(summary.failures, []);
   });
 
+  // Track 351 and 353 carry a ProjectNotification _id in `epic_guid` (test, 2026-09-08). The merge
+  // copies the guid onto the project row's `eagleId`, so the registry resolves that id to the
+  // project and the seed filed the notification's documents under it — in its partition, and under
+  // its level-2 ACL, because a Track project with no Eagle counterpart is not public.
+  await t.test('a Track project holding a notification id does not claim its documents', async () => {
+    const notificationId = '5efe366b3a147c00223be181';
+    const shadowing = {
+      ...stubSources,
+      loadTrackProjects: () => [...track,
+        { track_project_id: 353, name: 'Shadow', epic_guid: notificationId }],
+      fetchAllPages: async (base, dataset) =>
+        (dataset === 'ProjectNotification' ? [{ _id: notificationId }] : []),
+      streamEagleDocuments: async (onPage) => {
+        await onPage([eagleDoc('doc1', matchedGuid), eagleDoc('pn1', notificationId)], 2, 2);
+        return { count: 2, total: 2 };
+      }
+    };
+
+    const { written, repos } = makeRepos();
+    const summary = await seed(['--live', '--only', 'documents'],
+      { sources: shadowing, repos, now: NOW });
+
+    assert.deepStrictEqual(written.documents.filter(([pid]) => pid === '353'), [],
+      'nothing may be written under the project that merely holds the notification id');
+    const batch = written.documents.find(([pid]) => pid === notificationId);
+    assert.ok(batch, `nothing was written under ${notificationId}`);
+    assert.deepStrictEqual(batch[1].map(d => d.id), ['pn1']);
+    // Verbatim: there is no project ACL over a notification-parented document to narrow against.
+    assert.ok(batch[1][0].read.includes('public'), JSON.stringify(batch[1][0].read));
+    assert.strictEqual(summary.stages.documents.notificationParented, 1);
+    // And the run names the row that would have claimed it, so the collision is visible.
+    assert.deepStrictEqual(summary.stages.documents.notificationShadowedProjects,
+      [{ id: '353', eagleId: notificationId }]);
+    assert.deepStrictEqual(summary.failures, []);
+  });
+
   await t.test('the dropped-ref report separates the true count from the capped sample', async () => {
     // Two fields that look redundant and are not: `distinctUnresolvedRefs` is a COUNT and
     // `unresolvedRefs` a SAMPLE capped at 20, because an upstream fault could produce thousands of

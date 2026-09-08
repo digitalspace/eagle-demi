@@ -34,6 +34,14 @@ notification carries none of its own for the period to be narrowed against. That
 `seed-nosql` applies to a notification-parented document. Because the `notifications` stage runs
 first, a period under one resolves on the same run.
 
+**A notification wins over a project row of the same id.** The two id spaces do not overlap in
+Eagle, but they collide in DEMI: some Track projects carry a `ProjectNotification` `_id` in
+`epic_guid`, and the merge copies that guid onto the project row's `eagleId`, so a lookup by eagle
+id answers with a project for a reference that names a notification. `helpers/parent-admit.js`
+holds the rule for every caller — the push mirrors, this backfill, `seed-nosql` and the reconcile —
+and the notification takes the child. The project row stays as it is; it just may not claim
+children that name a notification.
+
 ## Running it
 
 The script takes the environment from the settings the process starts with, never from a flag:
@@ -115,6 +123,17 @@ Cosmos query per period — too much for the nightly timer, which is why the ale
 `comments: skipped` when it was not asked for. A container the run did not sweep never reports zero
 drift.
 
+### Rate limits
+
+eagle-api allows 200 requests a minute per client (`ratelimit-policy: 200;w=60`). A comment sweep
+and the `comments` backfill stage both spend that inside a minute, so the shared fetch helper in
+`src/seed/sources.js` waits a `429` out instead of failing: `retry-after` when the response names
+one, otherwise the window from `ratelimit-reset` or `ratelimit-policy`, otherwise 5, 15 then 60
+seconds. It gives up after five waits on the same request.
+
+Each wait logs one line, so a long run that goes quiet for a minute at a time is being throttled,
+not stuck. Ordinary failures are unaffected — they keep the three short retries they always had.
+
 ### Unresolved parents
 
 A comment period Eagle publishes is not always a period DEMI should hold. eagle-api's
@@ -132,3 +151,27 @@ sweeps read the notification partitions as well as the project ones.
 `--comments` walks those unresolved period ids too, so Eagle's comments under them are reported
 rather than silently missed — sweeping DEMI's periods alone never fetched them at all. They also
 land under `unresolvedParent`.
+
+### Misfiled parents
+
+`misfiledParent` counts rows that ARE mirrored but sit under a parent the admission rule would not
+choose. Both Eagle and DEMI hold the id, so every id-set comparison reads them as clean — this is
+the one check that sees them. It counts toward `drift=`.
+
+The class it exists for is the collision above: before the notification took precedence, a period
+whose Eagle reference named a notification was filed in the Track project's partition and narrowed
+to that project's access list, with its comments cascaded to the same level. Measured on test
+2026-09-08: Track projects 351 and 353, and 88 comments under one period.
+
+The repair is to re-mirror, in this order:
+
+```bash
+npm run db:seed-nosql -- --live --only documents
+npm run db:seed-public-reads -- --live --only commentPeriods,comments --state ./repair.state.json
+```
+
+Documents first, because a document moves partition on its own re-seed. The period re-mirror moves
+the row to the notification partition, deletes the row left in the project partition, and cascades
+the corrected access list to the comments under it; the comments stage then follows, because a
+comment stores its period's `projectId` and nothing else rewrites it. A fresh `--state` path is
+what makes the comments stage revisit periods an earlier run checkpointed.

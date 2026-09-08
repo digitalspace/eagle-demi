@@ -481,6 +481,31 @@ function buildRegistry(trackProjects, eagleProjects, opts = {}) {
 }
 
 /**
+ * Registry rows whose `eagleId` is a `ProjectNotification` id rather than an Eagle project id.
+ *
+ * `buildRegistry` already counts these as `trackOnlyDanglingGuid` — a Track `epic_guid` matching
+ * nothing in the Eagle project fetch — which reads as ordinary upstream drift. It is more than
+ * that when the guid names a notification: `mergeTrackProject` copies the guid onto `eagleId`, so
+ * every period and document Eagle hangs off that notification also resolves to THIS project by
+ * eagle id. `helpers/parent-admit.js:pickParent` is what stops the project claiming them; this
+ * names the rows, so a run says which projects shadow a notification instead of leaving it to be
+ * found from a user-facing zero. Measured 2026-09-08: Track 351 and 353 on test.
+ *
+ * Not folded into `buildRegistry`: the notification ids are a separate upstream fetch the projects
+ * stage never makes. The seed calls this from its documents stage, which already holds them.
+ *
+ * @param {Array} projects        merged registry rows
+ * @param {Set}   notificationIds `ProjectNotification` `_id`s, as strings
+ * @returns {Array<{id: string, eagleId: string}>}
+ */
+function notificationShadowedProjects(projects, notificationIds) {
+  if (!notificationIds || notificationIds.size === 0) return [];
+  return (projects || [])
+    .filter(p => p.eagleId && notificationIds.has(String(p.eagleId)))
+    .map(p => ({ id: String(p.id), eagleId: String(p.eagleId) }));
+}
+
+/**
  * Index for resolving an upstream identity (an Eagle id or a Track id) to a canonical project.
  *
  * The seeder's documents stage uses it to resolve partition keys, so it must survive any change
@@ -527,5 +552,6 @@ module.exports = {
   mergeTrackProject,
   mergeEagleOnlyProject,
   buildRegistry,
-  buildProjectIndex
+  buildProjectIndex,
+  notificationShadowedProjects
 };

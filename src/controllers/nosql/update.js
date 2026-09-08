@@ -10,6 +10,8 @@
 
 const updates = require('../../repositories/updates');
 const projects = require('../../repositories/projects');
+const notifications = require('../../repositories/notifications');
+const { pickParent } = require('../../helpers/parent-admit');
 const { systemAccess } = require('../../helpers/access-sql');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
@@ -34,10 +36,18 @@ async function announce(item, existing) {
       const claimed = await updates.claimForNotify(item.id, new Date().toISOString());
       if (!claimed) return;
 
-      const project = item.projectId
-        ? await projects.getByEagleId(systemAccess(), item.projectId)
-        : null;
-      const pushed = await notify.updatePublished(item, project ? project.name : null);
+      // Same precedence as every other parent lookup: an update whose `projectId` is really a
+      // `ProjectNotification` id must be labelled with the notification, not with the Track
+      // project that happens to carry that id in `eagleId`.
+      const [project, notification] = item.projectId
+        ? await Promise.all([
+          projects.getByEagleId(systemAccess(), item.projectId),
+          notifications.getById(systemAccess(), item.projectId)
+        ])
+        : [null, null];
+      const parent = pickParent(project, notification);
+      const named = parent && parent.kind === 'notification' ? notification : project;
+      const pushed = await notify.updatePublished(item, named ? named.name : null);
       if (!pushed) await updates.releaseNotify(item.id);
       return;
     }

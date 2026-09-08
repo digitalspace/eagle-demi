@@ -338,6 +338,62 @@ test('reconcile', async (t) => {
     assert.strictEqual(summary.drift, 5);
   });
 
+  // The class the sweep could not see: Track 353's epic_guid is the ProjectNotification's own _id,
+  // so the registry resolves that ref to project '353' and the old rule stored the period there,
+  // under the Track project's ACL. Both containers hold it, so every id-set diff read it as clean.
+  await t.test('a period stored under a Track project that shadows its notification is misfiled',
+    async () => {
+      const summary = await reconcile([], makeDeps({
+        sources: stubSources({
+          loadTrackProjects: () => [...TRACK_PROJECTS,
+            { track_project_id: 353, name: 'Shadow', epic_guid: 'N1' }]
+        }, {
+          ...EAGLE_BY_DATASET,
+          CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-pn', project: 'N1' }]
+        }),
+        projects: {
+          listWithEagleId: async (access) => {
+            assertSystem(access);
+            return [...PROJECT_ROWS, { id: '353', eagleId: 'N1', sourceSystem: 'track' }];
+          },
+          countWithEagleId: async () => PROJECT_ROWS.length + 1
+        },
+        commentPeriods: {
+          listByProject: async (projectId, access) => {
+            assertSystem(access);
+            return ({ ...PERIOD_ROWS, 353: [{ id: 'CP-pn', projectId: '353' }] })[projectId] || [];
+          }
+        }
+      }));
+
+      assert.deepStrictEqual(summary.commentPeriods.misfiledParent, ['CP-pn'],
+        'the notification owns it, so the row in the project partition is drift');
+      // Mirrored, not missing: the id is in both, which is why nothing else reports it.
+      assert.deepStrictEqual(summary.commentPeriods.eagleOnly, []);
+      assert.deepStrictEqual(summary.commentPeriods.unresolvedParent, []);
+      assert.strictEqual(summary.drift, 6, 'and the alert line carries it');
+      assert.match(report(summary), /misfiledParent \(mirrored, but stored under a parent.*\): 1 — CP-pn/);
+    });
+
+  // A period the rule DOES place where it sits reports nothing, or every clean run would alert.
+  await t.test('a period under the notification partition is not misfiled', async () => {
+    const summary = await reconcile([], makeDeps({
+      sources: stubSources({}, {
+        ...EAGLE_BY_DATASET,
+        CommentPeriod: [{ _id: 'CP1', project: 'P1' }, { _id: 'CP-pn', project: 'N1' }]
+      }),
+      commentPeriods: {
+        listByProject: async (projectId, access) => {
+          assertSystem(access);
+          return ({ ...PERIOD_ROWS, N1: [{ id: 'CP-pn', projectId: 'N1' }] })[projectId] || [];
+        }
+      }
+    }));
+
+    assert.deepStrictEqual(summary.commentPeriods.misfiledParent, []);
+    assert.strictEqual(summary.drift, 5);
+  });
+
   // A period carrying no project ref at all: the mirror has nothing to resolve, so it drops it.
   await t.test('a period with no project ref is unresolvedParent', async () => {
     const summary = await reconcile([], makeDeps({
@@ -479,6 +535,21 @@ test('the admission rule is seed-nosql\'s own', async (t) => {
       assert.strictEqual(!summary.documents.unresolvedParent.includes(doc._id),
         admit(doc.project) !== null, `${doc._id} classified differently from seed-nosql`);
     }
+  });
+
+  // A Track `epic_guid` is sometimes a ProjectNotification _id (test 2026-09-08: Track 351 and
+  // 353), and the merge puts it in the project row's `eagleId`, so the registry resolves it. The
+  // seed must still file that notification's children under the notification.
+  await t.test('a Track project holding a notification id does not claim its children', async () => {
+    const shadowTrack = [{ track_project_id: 353, name: 'Shadow', epic_guid: 'N1' }];
+    const index = buildProjectIndex(buildRegistry(shadowTrack, EAGLE_PROJECTS).projects);
+    const { admit } = await documentAdmission(stubSources(), index);
+
+    assert.strictEqual(index.resolve('N1'), '353',
+      'the registry does resolve it — that is what makes the precedence load-bearing');
+    assert.strictEqual(admit('N1'), 'N1');
+    // And a populated ref answers the same, as it does in the push mirrors.
+    assert.strictEqual(admit({ _id: 'N1' }), 'N1');
   });
 });
 

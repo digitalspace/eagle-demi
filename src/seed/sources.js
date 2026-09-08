@@ -34,21 +34,87 @@ const FETCH_TIMEOUT_MS = parseInt(process.env.SEED_FETCH_TIMEOUT_MS || '120000',
 const FETCH_RETRIES = 3;
 
 /**
+ * Being throttled gets its own, longer budget than an ordinary failure.
+ *
+ * eagle-api allows 200 requests a minute (`ratelimit-policy: 200;w=60`) and a comment sweep spends
+ * that inside a minute, so the whole run used to die on `HTTP 429` a few minutes in. Waiting the
+ * window out is the fix; three one-second retries are not, and they cost the run its budget.
+ */
+const RATE_LIMIT_RETRIES = 5;
+
+/** Used only when the response names no window of its own. */
+const RATE_LIMIT_BACKOFF_MS = [5000, 15000, 60000];
+
+/** A header asking for longer than this must not park a nightly run; at the cap we ask again. */
+const RATE_LIMIT_MAX_WAIT_MS = 120000;
+
+const sleepMs = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** One header as a non-negative number of seconds, or null when it is absent or unparseable. */
+function headerSeconds(headers, name) {
+  const raw = headers && typeof headers.get === 'function' ? headers.get(name) : null;
+  const seconds = Number(raw);
+  return raw === null || raw === '' || !Number.isFinite(seconds) || seconds < 0 ? null : seconds;
+}
+
+/**
+ * How long to wait out a 429.
+ *
+ * `retry-after` wins because it is the server's own instruction, then `ratelimit-reset` (seconds
+ * left in the current window), then the window length off `ratelimit-policy` (`200;w=60`). A
+ * response carrying none of them falls back to a 5/15/60 second ladder.
+ */
+function rateLimitWaitMs(headers, attempt) {
+  const policy = headers && typeof headers.get === 'function' ? headers.get('ratelimit-policy') : null;
+  const window = policy && String(policy).match(/(?:^|[;,])\s*w=(\d+)/);
+  const seconds = headerSeconds(headers, 'retry-after')
+    ?? headerSeconds(headers, 'ratelimit-reset')
+    ?? (window ? Number(window[1]) : null);
+
+  const ladder = RATE_LIMIT_BACKOFF_MS[Math.min(attempt, RATE_LIMIT_BACKOFF_MS.length) - 1];
+  const waitMs = seconds === null ? ladder : seconds * 1000;
+  // Floored because a `ratelimit-reset: 0` would otherwise retry instantly and spend the budget on
+  // nothing; capped so one bad header cannot hold the run for an hour.
+  return Math.min(Math.max(waitMs, 1000), RATE_LIMIT_MAX_WAIT_MS);
+}
+
+/**
  * The body AND the response headers, retried.
  *
  * `/api/public/comment` reports its total in `x-total-count` rather than in the body, so the
  * comment backfill needs the header. Everything else wants the body alone — see `fetchJson`.
  *
- * @param {object} [headers] request headers — the Track team feed needs a bearer token.
+ * A 429 is not counted as one of those attempts: it means the request was never served, so it is
+ * waited out against its own budget and the ordinary retries stay for real failures.
+ *
+ * @param {object} [headers]    request headers — the Track team feed needs a bearer token.
+ * @param {function} [deps.sleep] test seam, so a backoff costs a test no wall-clock time.
  * @returns {Promise<{body: *, headers: Headers}>}
  */
-async function fetchJsonWithHeaders(url, headers) {
+async function fetchJsonWithHeaders(url, headers, deps = {}) {
+  const sleep = deps.sleep || sleepMs;
   let lastError;
-  for (let attempt = 1; attempt <= FETCH_RETRIES; attempt++) {
+  let attempt = 1;
+  let throttled = 0;
+
+  while (attempt <= FETCH_RETRIES) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
       const res = await fetch(url, { signal: controller.signal, headers });
+      if (res.status === 429) {
+        throttled++;
+        if (throttled > RATE_LIMIT_RETRIES) {
+          lastError = new Error(
+            `HTTP 429 Too Many Requests, still throttled after ${RATE_LIMIT_RETRIES} waits`);
+          break;
+        }
+        const waitMs = rateLimitWaitMs(res.headers, throttled);
+        logger.warn(`[seed] 429 from ${url}: waiting ${Math.round(waitMs / 1000)}s ` +
+          `(${throttled}/${RATE_LIMIT_RETRIES})`);
+        await sleep(waitMs);
+        continue;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
       return { body: await res.json(), headers: res.headers };
     } catch (err) {
@@ -56,18 +122,24 @@ async function fetchJsonWithHeaders(url, headers) {
       // A transient failure mid-seed would otherwise truncate the corpus silently, so retry
       // rather than letting a partial page count as the end of the data.
       if (attempt < FETCH_RETRIES) {
-        await new Promise(r => setTimeout(r, 1000 * attempt));
+        await sleep(1000 * attempt);
       }
+      attempt++;
     } finally {
       clearTimeout(timer);
     }
   }
-  throw new Error(`[seed] failed to fetch ${url} after ${FETCH_RETRIES} attempts: ${lastError.message}`);
+  // `attempt` counts ordinary failures, `throttled` the 429s: the sum is the requests actually made.
+  throw new Error(
+    `[seed] failed to fetch ${url} after ${attempt - 1 + throttled} attempts: ${lastError.message}`);
 }
 
-/** @param {object} [headers] request headers — the Track team feed needs a bearer token. */
-async function fetchJson(url, headers) {
-  return (await fetchJsonWithHeaders(url, headers)).body;
+/**
+ * @param {object} [headers] request headers — the Track team feed needs a bearer token.
+ * @param {object} [deps]    see `fetchJsonWithHeaders`.
+ */
+async function fetchJson(url, headers, deps) {
+  return (await fetchJsonWithHeaders(url, headers, deps)).body;
 }
 
 /**
@@ -377,6 +449,8 @@ function loadBoundaries() {
 module.exports = {
   EAGLE_API_BASE,
   PAGE_SIZE,
+  RATE_LIMIT_RETRIES,
+  rateLimitWaitMs,
   fetchJson,
   fetchJsonWithHeaders,
   unwrapSearchResponse,
