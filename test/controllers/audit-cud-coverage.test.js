@@ -35,6 +35,7 @@ const apiKeys = require('../../src/repositories/api-keys');
 const links = require('../../src/repositories/links');
 const aiSearch = require('../../src/search/ai-search');
 const wildfiresRepo = require('../../src/repositories/wildfires');
+const configRepository = require('../../src/repositories/config');
 const documentController = require('../../src/controllers/nosql/document');
 const boundaryController = require('../../src/controllers/nosql/boundary');
 const projectController = require('../../src/controllers/nosql/project');
@@ -44,6 +45,7 @@ const sealedController = require('../../src/controllers/nosql/sealed');
 const userdata = require('../../src/repositories/userdata');
 const userDataController = require('../../src/controllers/nosql/userdata');
 const wildfireController = require('../../src/controllers/wildfire');
+const configController = require('../../src/controllers/config');
 
 function mockRes() {
   return {
@@ -78,6 +80,47 @@ async function rowsFrom(fn) {
 test('authenticated CUD audit coverage', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
   t.after(() => audit._resetTransport());
+
+  await t.test('a public config push writes one config.push naming the keys it moved', async () => {
+    // The Eagle mirror for configuration. What it stores is what an anonymous site boots on, so
+    // the trail has to say which keys a push moved — the values are already public.
+    t.mock.method(configRepository, 'getPublic', async () => null);
+    t.mock.method(configRepository, 'upsertPublic', async (doc) => ({ id: 'public', ...doc }));
+
+    const res = mockRes();
+    const written = await rowsFrom(() => configController.upsertPublicFromEagle({
+      query: {},
+      params: {},
+      body: { ENVIRONMENT: 'test', ACCESS_GATE: false, SEARCH_API_PATH: '/demi-search' },
+      user: STAFF
+    }, res));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(written.length, 1);
+    assert.strictEqual(written[0].Action, 'config.push');
+    assert.strictEqual(written[0].TargetType, 'config');
+    assert.strictEqual(written[0].TargetId, 'public');
+    assert.deepStrictEqual(written[0].Detail.changed,
+      ['ENVIRONMENT', 'SEARCH_API_PATH', 'ACCESS_GATE']);
+    assert.strictEqual(written[0].Detail.accessGate, false);
+    assert.strictEqual(written[0].ActorId, 'kc-sub-1');
+  });
+
+  await t.test('a rejected config push writes no audit row', async () => {
+    // A 400 changed nothing, and a trail that records attempts as actions is a trail nobody can
+    // read the state of the document out of.
+    t.mock.method(configRepository, 'getPublic', async () => null);
+    t.mock.method(configRepository, 'upsertPublic', async () => ({ id: 'public' }));
+
+    const res = mockRes();
+    const written = await rowsFrom(() => configController.upsertPublicFromEagle({
+      query: {}, params: {}, body: { ENVIRONMENT: 'test' }, user: STAFF
+    }, res));
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.deepStrictEqual(written, []);
+    assert.strictEqual(configRepository.upsertPublic.mock.callCount(), 0);
+  });
 
   await t.test('document upload writes one document.create marked via upload', async () => {
     // Same action as createDocument by design — the two doors stay one query — so `via` is the

@@ -5,6 +5,7 @@ const path = require('path');
 const config = require('../config');
 const configRepository = require('../repositories/config');
 const { serverError } = require('../helpers/response');
+const { auditEvent } = require('../utils/audit');
 const { logger } = require('../utils/logger');
 
 // The keys the stored document is allowed to supply. Anything else in the container is ignored,
@@ -243,8 +244,19 @@ exports.upsertPublicFromEagle = async (req, res) => {
     const previous = await configRepository.getPublic();
     const document = pickPublicKeys(req.body);
     const saved = await configRepository.upsertPublic(document);
+    const changed = changedKeys(previous, document);
 
-    logger.info(`[config] public config pushed by eagle-api — ${changeSummary(previous, document)}`);
+    auditEvent(req, {
+      action: 'config.push',
+      targetType: 'config',
+      targetId: configRepository.PUBLIC_ITEM_ID,
+      // What the row is read for later: which environment's curtain moved, and which keys. The
+      // values themselves are already public, so the trail can carry the gate it landed on.
+      detail: { environment: document.ENVIRONMENT, accessGate: document.ACCESS_GATE, changed }
+    });
+
+    logger.info(
+      `[config] public config pushed by eagle-api — ${changeSummary(previous, changed)}`);
 
     return res.json(pickPublicKeys(saved));
   } catch (err) {
@@ -252,11 +264,21 @@ exports.upsertPublicFromEagle = async (req, res) => {
   }
 };
 
-/** Which allowlisted keys the push moved, for the log line. */
-function changeSummary(previous, document) {
+/**
+ * Which allowlisted keys the push moved — the audit detail, and the log line.
+ *
+ * Compared as JSON so a boolean and the string that looks like it are not the same value, and
+ * because absent and null are: the served payload skips both, so neither is a change the reader of
+ * a trail would recognise.
+ */
+function changedKeys(previous, document) {
+  return PUBLIC_KEYS.filter(key =>
+    JSON.stringify((previous && previous[key]) ?? null) !== JSON.stringify(document[key] ?? null));
+}
+
+/** The `changedKeys` list as the log line says it. */
+function changeSummary(previous, changed) {
   if (!previous) return 'first document written';
-  const changed = PUBLIC_KEYS.filter(
-    key => JSON.stringify(previous[key] ?? null) !== JSON.stringify(document[key] ?? null));
   return changed.length ? `changed: ${changed.join(', ')}` : 'no key changed';
 }
 
