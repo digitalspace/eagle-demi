@@ -61,6 +61,9 @@ param deployReconcileDriftAlert = false
 // bulkCleanupSchedule is set here only to move the hour.
 param bulkDownloadsQueue = 'bulk-downloads'
 param deployBulkDownloadPoisonAlert = true
+// Overridden because this is the environment the throughput is measured in: 4 concurrent object
+// reads against NRS, 64 MiB of buffer each. docs/bulk-download-performance.md says how to remeasure.
+param bulkFetchConcurrency = 4
 
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //

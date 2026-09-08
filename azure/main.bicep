@@ -276,6 +276,12 @@ param bulkMaxTotalBytes int = 21474836480
 @description('Objects the worker opens ahead of the zip entry it is writing, so the next round trips overlap the current append.')
 param bulkFetchAhead int = 3
 
+@description('Objects the worker READS at once, buffering the ones ahead of the entry it is writing. 1 reads one at a time, which is the behaviour bulkFetchAhead alone gives. Above 1 it supersedes bulkFetchAhead.')
+param bulkFetchConcurrency int = 1
+
+@description('Bytes those concurrent reads may hold in total, split evenly between them.')
+param bulkFetchBufferBytes int = 268435456
+
 @description('Unfinished jobs one requester may hold.')
 param bulkMaxPending int = 3
 
@@ -551,6 +557,8 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     bulkMaxBytes: bulkMaxBytes
     bulkMaxTotalBytes: bulkMaxTotalBytes
     bulkFetchAhead: bulkFetchAhead
+    bulkFetchConcurrency: bulkFetchConcurrency
+    bulkFetchBufferBytes: bulkFetchBufferBytes
     bulkMaxPending: bulkMaxPending
     bulkZipRetentionDays: bulkZipRetentionDays
     bulkJobTtlDays: bulkJobTtlDays

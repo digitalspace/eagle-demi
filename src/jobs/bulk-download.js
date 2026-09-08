@@ -134,14 +134,23 @@ function shielded(source, onTruncate) {
 }
 
 /**
- * Object opens kept running ahead of the archive, at most `ahead` at a time, in document order.
+ * Object reads kept running ahead of the archive, in document order: `concurrency` of them at once,
+ * or — at `concurrency` 1 — `ahead` opens whose bytes still wait for the append.
  *
- * Only the APPEND has to be serial — that is the archive's single-writer constraint, and it is what
- * fixes the order of the entries. The round trip to the object store does not, so the next
- * documents' are already in flight while the current one is being written.
+ * Only the APPEND has to be serial: that is the archive's single-writer constraint, and it is what
+ * fixes the order of the entries. Neither the round trip nor the transfer does.
+ * docs/bulk-download-performance.md holds the numbers and how to remeasure them.
  */
-function readAhead(docs, ahead) {
-  const limit = Math.max(1, ahead);
+function readAhead(docs, { ahead, concurrency, bufferBytes }) {
+  const transfers = Math.max(1, concurrency);
+  // `concurrency` counts the object reads running at once, one of which is the entry being appended,
+  // so the window parks one fewer than that and each read gets an equal share of the budget. 1 read
+  // means no buffer at all — the archive is the only reader, which is the behaviour without this.
+  const perStream = transfers > 1 ? Math.max(1, Math.floor(bufferBytes / transfers)) : 0;
+  // `concurrency` supersedes `ahead` rather than adding to it: an open that is transferring is
+  // strictly better than one that is only waiting, and a window wider than the transfer budget
+  // would hand the next slot to a later document than the one the archive reaches first.
+  const limit = perStream > 0 ? Math.max(1, transfers - 1) : Math.max(1, ahead);
   const pending = new Map();
 
   /**
@@ -151,14 +160,35 @@ function readAhead(docs, ahead) {
    * that takes the worker down mid-job. The listener goes on the moment the stream exists and
    * stays on: `shielded` adds its own later, and both firing is harmless.
    */
-  const open = i => {
-    const entry = { stream: null, error: null, dropped: false };
+  const open = (i, buffered) => {
+    const entry = { stream: null, source: null, error: null, dropped: false };
     entry.opened = (async () => {
       try {
-        const stream = await storage.getObjectStream(docs[i].s3Key);
-        stream.on('error', err => { entry.error = entry.error || err; });
-        if (entry.dropped) stream.destroy();
-        else entry.stream = stream;
+        const source = await storage.getObjectStream(docs[i].s3Key);
+        entry.source = source;
+        // Piping starts the transfer now instead of at this document's turn. `highWaterMark` is the
+        // bound: the buffer stops reading the socket there and resumes as the archive drains it.
+        const stream = buffered
+          ? source.pipe(new PassThrough({ highWaterMark: perStream }))
+          : source;
+        if (stream !== source) {
+          // Same reason as the source's listener below: a buffer sitting in the window has no
+          // reader, so the error the line under this raises on it would take the worker down.
+          stream.on('error', err => { entry.error = entry.error || err; });
+        }
+        source.on('error', err => {
+          entry.error = entry.error || err;
+          // A buffer whose source died never ends on its own, and the archive may be reading it.
+          // Destroyed WITH the error, so an entry already being appended is reported truncated
+          // rather than quietly ending short.
+          if (stream !== source) stream.destroy(err);
+        });
+        if (entry.dropped) {
+          source.destroy();
+          if (stream !== source) stream.destroy();
+        } else {
+          entry.stream = stream;
+        }
       } catch (err) {
         entry.error = err;
       }
@@ -173,6 +203,7 @@ function readAhead(docs, ahead) {
     if (!entry) return;
     entry.dropped = true;
     if (entry.stream) entry.stream.destroy();
+    if (entry.source && entry.source !== entry.stream) entry.source.destroy();
   };
 
   // The one taken but not yet handed to the archive. Held here because `destroy` has to reach it:
@@ -183,12 +214,14 @@ function readAhead(docs, ahead) {
     /** Keep the window full from `next` on, past the end of this part — see `destroy`. */
     fill(next) {
       for (let i = next; i < docs.length && pending.size < limit; i += 1) {
-        if (!pending.has(i)) pending.set(i, open(i));
+        if (!pending.has(i)) pending.set(i, open(i, perStream > 0));
       }
     },
     /** Called twice for the same document to re-open it — the first entry is closed here. */
     take(i) {
-      if (!pending.has(i)) pending.set(i, open(i));
+      // Unbuffered: an open made at its own turn is read by the archive straight away, so a buffer
+      // in front of it would only copy bytes.
+      if (!pending.has(i)) pending.set(i, open(i, false));
       const entry = pending.get(i);
       pending.delete(i);
       drop(current);
@@ -261,7 +294,11 @@ async function buildPart({ jobId, n, docs, from, projectNames, access, errors, m
   const orDie = promise => Promise.race([promise, died]);
 
   const taken = new Set();
-  const ahead = readAhead(docs, config.bulkFetchAhead);
+  const ahead = readAhead(docs, {
+    ahead: config.bulkFetchAhead,
+    concurrency: config.bulkFetchConcurrency,
+    bufferBytes: config.bulkFetchBufferBytes
+  });
   let included = 0;
   let cancelled = false;
   let i = from;
@@ -607,7 +644,9 @@ async function run(jobId, { attempt = 1, maxAttempts = 1 } = {}) {
     // No telemetry call: auditEvent and analyticsEvent both take a request, and there is no request
     // here — src/utils/audit.js has no request-less variant to use.
     logger.info(
-      `[bulk] job ready ${id} parts=${done.length} documents=${includedCount} errors=${errors.length}`
+      `[bulk] job ready ${id} parts=${done.length} documents=${includedCount} ` +
+      `errors=${errors.length} fetch=${config.bulkFetchConcurrency} ` +
+      `buffer=${config.bulkFetchConcurrency > 1 ? config.bulkFetchBufferBytes : 0}`
     );
 
     return { id, parts: done, includedCount, bytes, errorCount: errors.length };

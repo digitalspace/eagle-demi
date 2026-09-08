@@ -211,6 +211,12 @@ param bulkMaxTotalBytes int = 21474836480
 @description('Object opens the worker keeps ahead of the archive append, so the next documents overlap the current one. Sockets and buffers in flight per instance.')
 param bulkFetchAhead int = 3
 
+@description('Objects READ at once, the entry being appended included. 1 keeps the transfers serial, which is what bulkFetchAhead alone does; above 1 it supersedes bulkFetchAhead. One connection to NRS carries about 6.4 MB/s.')
+param bulkFetchConcurrency int = 1
+
+@description('Bytes those concurrent reads hold in total, split evenly between them. The memory this trades for the throughput, on top of the one 64 MiB multipart upload buffer.')
+param bulkFetchBufferBytes int = 268435456
+
 @description('Unfinished jobs one requester may hold. The abuse boundary for the anonymous path — APIM Consumption cannot rate-limit by key.')
 param bulkMaxPending int = 3
 
@@ -558,6 +564,14 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'BULK_FETCH_AHEAD'
           value: string(bulkFetchAhead)
+        }
+        {
+          name: 'BULK_FETCH_CONCURRENCY'
+          value: string(bulkFetchConcurrency)
+        }
+        {
+          name: 'BULK_FETCH_BUFFER_BYTES'
+          value: string(bulkFetchBufferBytes)
         }
         {
           name: 'BULK_MAX_PENDING'
