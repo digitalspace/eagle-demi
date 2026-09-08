@@ -141,6 +141,27 @@ test('document field redaction', async (t) => {
     assert.strictEqual(saved._rid, undefined, 'the bookkeeping key is not written back');
     assert.deepStrictEqual(saved.ownRead, STORED.ownRead, 'ownRead comes off the stored row');
   });
+
+  await t.test('an ordinary edit cannot clear the Eagle tombstone', async () => {
+    // `isDeleted` decides what `setAclForProject` may derive the row back to, so a body that
+    // cleared it would hand a document Eagle deleted back to the public on the next project
+    // publish. Only an eagle-api push writes it.
+    const deleted = { ...structuredClone(STORED), read: ['staff'], isPublished: false,
+      isDeleted: true };
+    t.mock.method(documents, 'getById', async () => structuredClone(deleted));
+    let saved;
+    t.mock.method(documents, 'upsert', async (doc) => { saved = doc; return doc; });
+
+    const res = mockRes();
+    await documentController.updateDocument({
+      params: { id: 'd1' }, query: {}, user: SYSADMIN,
+      body: { isDeleted: false, displayName: 'Renamed' }
+    }, res);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(saved.isDeleted, true, 'the tombstone comes off the stored row');
+    assert.strictEqual(saved.displayName, 'Renamed', 'the edit itself still lands');
+  });
 });
 
 

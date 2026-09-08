@@ -325,7 +325,7 @@ test('access gate coverage', async (t) => {
 
     // Proves the filter above is not vacuous: the hand-built sites really are in the scan, so a new
     // one that DID name a row bare would be caught rather than silently skipped.
-    assert.ok(emissions.some(e => /action: 'upsert'/.test(e)), 'the Eagle push ack is in the scan');
+    assert.ok(emissions.some(e => /'upsert'/.test(e)), 'the Eagle push ack is in the scan');
     assert.ok(emissions.some(e => /chunks:/.test(e)), 'a chunk ingest ack is in the scan');
 
     // The download payload is no longer a res.json site, so the scan cannot see it. It is the one

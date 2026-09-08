@@ -156,6 +156,44 @@ test('setAclForProject', async (t) => {
       'the snapshot is level 4, the live value level 1 — reading the live one would lose the row');
   });
 
+  await t.test('a document Eagle deleted is not republished by its project', async (tt) => {
+    // `ownRead` is the row's ACL at the moment of the delete — public, because Eagle published it
+    // right up to then — so without the flag this cascade would hand a deleted document back to
+    // the public. The mirror stores the flag (controllers/nosql/eagle-push.test.js).
+    const cap = harness(tt, [
+      { id: 'd1', read: ['staff'], ownRead: ['public', 'sysadmin'], isDeleted: true }
+    ]);
+
+    await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
+
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['staff'], 'held at the takedown level');
+    assert.strictEqual(opValue(cap.ops[0], '/isPublished'), false);
+  });
+
+  await t.test('the same row without the flag does come back', async (tt) => {
+    // The control for the case above: the ceiling is the flag, not something else about the row.
+    const cap = harness(tt, [
+      { id: 'd1', read: ['staff'], ownRead: ['public', 'sysadmin'], isDeleted: false }
+    ]);
+
+    await documents.setAclForProject(systemAccess(), '207', PUBLIC_PROJECT);
+
+    assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['staff', 'idir', 'public']);
+    assert.strictEqual(opValue(cap.ops[0], '/isPublished'), true);
+  });
+
+  await t.test('a deleted document under a private project takes the lower of the two',
+    async (tt) => {
+      // The ceiling narrows, it never lifts a row to level 2.
+      const cap = harness(tt, [
+        { id: 'd1', read: ['team'], ownRead: ['project-team'], isDeleted: true }
+      ]);
+
+      await documents.setAclForProject(systemAccess(), '207', PRIVATE_PROJECT);
+
+      assert.deepStrictEqual(opValue(cap.ops[0], '/read'), ['team']);
+    });
+
   await t.test('every row is patched in one request, pinned to the project partition',
     async (tt) => {
       const cap = harness(tt, [

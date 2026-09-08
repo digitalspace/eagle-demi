@@ -210,13 +210,16 @@ async function listByIds(access, ids, projectIds) {
  * `c.read` and `c.ownRead` rather than `VALUE c.id`, because the cascade takes the lower of the two
  * levels and cannot do that without the document's own ACL. Cosmos loads the whole item to project
  * any field — no index-only path for this filter — so the extra columns cost response bytes only.
+ *
+ * `c.isDeleted` rides along because `ownRead` outlives the record: a document Eagle deleted was
+ * published right up to the delete, so its snapshot still says `public`.
  */
 async function aclRowsForProject(access, projectId) {
   const spec = selectWhere({
     access,
     partitionField: PARTITION_FIELD,
     criteria: [eq('projectId', String(projectId), '@projectId')],
-    select: 'c.id, c.read, c.ownRead'
+    select: 'c.id, c.read, c.ownRead, c.isDeleted'
   });
   const { items } = await cosmos.query(CONTAINER, spec, { partitionKey: String(projectId) });
   return items;
@@ -232,6 +235,14 @@ async function aclRowsForProject(access, projectId) {
 function constrainToProject(ownRead, projectRead) {
   return readForLevel(Math.min(levelOfRead(ownRead), levelOfRead(projectRead)));
 }
+
+/**
+ * The widest a row Eagle has deleted may be stored at, and the ceiling a cascade may derive it
+ * back to — staff, the same level a takedown narrows to. Beside `constrainToProject` because every
+ * holder of the flag applies it through that function; `helpers/acl-cascade` and both Eagle
+ * mirrors read it from here so the level is stated once.
+ */
+const DELETED_CEILING = readForLevel(2);
 
 /**
  * Re-derive every document's ACL from its own and its project's.
@@ -292,7 +303,11 @@ async function setAclForProject(access, projectId, read) {
     // nobody can rule out from outside the private endpoint.
     const own = Array.isArray(row.ownRead) && row.ownRead.length > 0 ? row.ownRead
       : (Array.isArray(row.read) ? row.read : []);
-    const next = constrainToProject(own, read);
+    // Both ceilings, lower wins: the project's, and level 2 once Eagle has deleted the record —
+    // without the second, the next project publish would republish a document Eagle no longer has.
+    const next = row.isDeleted === true
+      ? constrainToProject(constrainToProject(own, read), DELETED_CEILING)
+      : constrainToProject(own, read);
     derived.push({ id: String(row.id), read: next, isPublished: next.includes('public') });
     return {
       operationType: 'Patch',
@@ -495,6 +510,7 @@ module.exports = {
   listByIdsUnscoped,
   aclRowsForProject,
   constrainToProject,
+  DELETED_CEILING,
   setAclForProject,
   extractionRowsForProject,
   listSeededIds,

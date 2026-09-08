@@ -35,13 +35,12 @@
 
 const commentPeriods = require('../../repositories/comment-periods');
 const comments = require('../../repositories/comments');
-const { constrainToProject } = require('../../repositories/documents');
+// The widest a deleted period may be stored at, and the ceiling the cascade later re-derives it
+// under: one value, so the two cannot drift apart.
+const { constrainToProject, DELETED_CEILING } = require('../../repositories/documents');
 const { admitParent } = require('../../helpers/parent-admit');
 const { seedAcl } = require('../../seed/transform');
 const { systemAccess, levelOfRead } = require('../../helpers/access-sql');
-// The widest a deleted period may be stored at, and the ceiling the cascade later re-derives it
-// under: one value, so the two cannot drift apart.
-const { DELETED_CEILING } = require('../../helpers/acl-cascade');
 const { serverError } = require('../../helpers/response');
 const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
