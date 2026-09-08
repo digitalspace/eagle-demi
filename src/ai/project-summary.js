@@ -35,6 +35,8 @@ const { logger } = require('../utils/logger');
 // generator run off the network, and a destructured copy cannot be replaced.
 const summarizer = require('./summarize');
 const { PROMPT_VERSION, SHAPES, INSTRUCTIONS, systemPrompt } = require('./project-summary-prompts');
+const { levelOfRead } = require('../helpers/access-sql');
+const { ANONYMOUS_LEVEL } = require('../vis/level');
 
 /**
  * The model the COST is priced against, whatever model actually ran.
@@ -62,6 +64,24 @@ const dateOf = doc => String((doc && doc.datePosted) || '');
 
 const isType = (doc, type) => typeOf(doc).toLowerCase() === type.toLowerCase();
 const nameMatches = (doc, re) => re.test(nameOf(doc));
+
+/** The access every source document must satisfy, and what `sourceAccess` on the record asserts. */
+const SOURCE_ACCESS = 'public';
+
+/**
+ * May this document be summarised? Published, and public on the ladder.
+ *
+ * The stored record carries no ACL of its own and the read route gates on the PROJECT, so a
+ * narrower document's prose, name, chunk id and page number would reach a caller who 404s on that
+ * document. `read[]` is authoritative and `isPublished` mirrors it; the API strips `read` at the
+ * response boundary (vis/catalog/documents.js) and derives `isPublished` from it there, so an API
+ * row is judged on the mirror and a raw Cosmos row on both.
+ */
+function isPublicSource(doc) {
+  if (!doc || doc.isDeleted === true) return false;
+  if (Array.isArray(doc.read) && levelOfRead(doc.read) !== ANONYMOUS_LEVEL) return false;
+  return doc.isPublished === true;
+}
 
 /** Newest by `datePosted`. A row with no date sorts last rather than winning on a blank string. */
 function newest(docs) {
@@ -662,7 +682,16 @@ async function generateProjectSummary(projectId, opts = {}) {
   const project = await sources.project(projectId);
   if (!project) throw new Error(`project ${projectId} not found, or not readable`);
 
-  const documents = await sources.documents(projectId);
+  // The ONE place source documents are narrowed. Every section and every `facts` entry is picked
+  // from this list, so nothing downstream can reintroduce a document the reader may not see.
+  const listed = await sources.documents(projectId);
+  const documents = listed.filter(isPublicSource);
+  if (documents.length !== listed.length) {
+    logger.info('[project-summary] non-public documents excluded', {
+      projectId: String(projectId), excluded: listed.length - documents.length
+    });
+  }
+
   const facts = buildFacts(documents);
   const registry = citationRegistry();
   const projectName = sanitisePromptName(project.name || project.displayName || projectId);
@@ -774,6 +803,8 @@ async function generateProjectSummary(projectId, opts = {}) {
     projectId: String(projectId),
     eagleId: project.eagleId ? String(project.eagleId) : null,
     generatedAt: now || new Date().toISOString(),
+    // What the record may be shown to. The write route refuses a record that does not carry it.
+    sourceAccess: SOURCE_ACCESS,
     // What actually ran, which is not necessarily what the cost was priced against.
     model: models.size ? Array.from(models).join(',') : null,
     pricedAs: PRICED_AS,
@@ -806,6 +837,8 @@ module.exports = {
   SECTIONS,
   PROMPT_VERSION,
   PRICED_AS,
+  SOURCE_ACCESS,
+  isPublicSource,
   // Exported for tests: each is a gate with its own failure mode, and each is worth pinning apart
   // from a whole-record run.
   buildFacts,

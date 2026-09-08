@@ -9,6 +9,7 @@ const controller = require('../../src/controllers/project-summary');
 const documentsRepo = require('../../src/repositories/documents');
 const chunksRepo = require('../../src/repositories/chunks');
 const routes = require('../../src/http/routes');
+const { MAX_PAGE_SIZE } = require('../../src/helpers/access-sql');
 
 function mockRes() {
   const res = {
@@ -85,6 +86,21 @@ test('GET /documents/:id/chunks', async (t) => {
     assert.deepStrictEqual(first.body.items.map(c => c.pageNumber), [1, 2]);
     assert.deepStrictEqual(second.body.items.map(c => c.pageNumber), [3, 4]);
     assert.strictEqual(second.body.count, 5, 'the total is the whole document, not the page');
+  });
+
+  await t.test('clamps the page size to the shared list ceiling', async () => {
+    // `pageSizeFor` owns MAX_PAGE_SIZE for every list read. A clamp of its own here would keep this
+    // route at 1,000 the day that ceiling moves.
+    t.mock.method(documentsRepo, 'getById', async () => ({ id: 'docB' }));
+    t.mock.method(chunksRepo, 'allForDocument', async () => [row(1)]);
+
+    const asked = mockRes();
+    await controller.getDocumentChunks(req({ pageSize: '5000' }), asked);
+    assert.strictEqual(asked.body.pageSize, MAX_PAGE_SIZE);
+
+    const omitted = mockRes();
+    await controller.getDocumentChunks(req(), omitted);
+    assert.strictEqual(omitted.body.pageSize, MAX_PAGE_SIZE, 'the default is the ceiling too');
   });
 
   await t.test('is declared once, and the handler it names exists', () => {

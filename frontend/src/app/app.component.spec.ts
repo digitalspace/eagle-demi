@@ -81,6 +81,28 @@ describe('AppComponent', () => {
     expect(labelOf('/projects/272')).toBe('AI Project Summary');
   });
 
+  // A screen owns every URL under its path, so the deep link the sidebar points at is still the
+  // AI Project Summary screen and not an unknown one.
+  it('treats a URL under a screen path as that screen', async () => {
+    const { fixture } = await renderAs(true, false);
+
+    await TestBed.inject(Router).navigateByUrl('/projects/272');
+
+    expect(fixture.componentInstance.screenKey()).toBe('project');
+  });
+
+  it('opens the info panel for the screen the deep link belongs to', async () => {
+    const { el, fixture } = await renderAs(true, false);
+    await TestBed.inject(Router).navigateByUrl('/projects/272');
+    fixture.detectChanges();
+
+    el.querySelector<HTMLButtonElement>('button[aria-label="How this screen is built"]')!.click();
+    fixture.detectChanges();
+
+    expect(el.querySelector('[role="dialog"] h2')?.textContent)
+      .toContain('How AI Project Summary is built');
+  });
+
   it('sends an old /profile link to My account', async () => {
     await renderAs(true, false);
     const router = TestBed.inject(Router);

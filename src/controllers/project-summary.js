@@ -7,17 +7,20 @@
  * stored; this is a point read. That is what makes the page instant and the cost bounded per
  * generation rather than per view.
  *
- * The access gate is the PROJECT, not the record. A summary row carries no ACL of its own — it is
- * derived from documents that were already ACL-filtered when it was generated — so the question
- * "may this caller see it" is answered by re-reading the project under the caller's access, exactly
- * as `GET /projects/:id` does. A caller who gets 404 there gets 404 here.
+ * The access gate is the PROJECT, not the record. A summary row carries no ACL of its own, and it
+ * does not need one: every source document it was built from is public (`isPublicSource` in
+ * src/ai/project-summary.js), which `putProjectSummary` refuses a record that does not assert. So
+ * nothing in the record is narrower than the project, and "may this caller see it" is answered by
+ * re-reading the project under the caller's access, exactly as `GET /projects/:id` does. A caller
+ * who gets 404 there gets 404 here.
  */
 
 const projects = require('../repositories/projects');
 const documents = require('../repositories/documents');
 const chunks = require('../repositories/chunks');
 const projectSummaries = require('../repositories/projectSummaries');
-const { resolveAccess } = require('../helpers/access-sql');
+const { resolveAccess, pageSizeFor } = require('../helpers/access-sql');
+const { SOURCE_ACCESS } = require('../ai/project-summary');
 const { serverError } = require('../helpers/response');
 const { logger } = require('../utils/logger');
 const config = require('../config');
@@ -56,6 +59,16 @@ exports.getProjectSummary = async (req, res) => {
       return res.status(404).json({ error: 'no_summary' });
     }
 
+    // A record stored before the generator filtered its sources may cite a document narrower than
+    // the project, and the project gate alone would serve it. Withheld until it is regenerated —
+    // the same answer as no record at all, which is what it now is.
+    if (record.sourceAccess !== SOURCE_ACCESS) {
+      logger.warn('[project-summary] record withheld: it does not assert public sources', {
+        projectId: String(project.id), sourceAccess: record.sourceAccess || null
+      });
+      return res.status(404).json({ error: 'no_summary' });
+    }
+
     return res.json(record);
   } catch (err) {
     return serverError(res, err, 'project summary controller failed');
@@ -85,7 +98,8 @@ exports.getDocumentChunks = async (req, res) => {
       return res.status(404).json({ error: 'Document not found' });
     }
 
-    const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 500, 1), 1000);
+    const { pageSize, error } = pageSizeFor(access, req.query.pageSize);
+    if (error) return res.status(400).json({ error });
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
 
     const rows = await chunks.allForDocument(access, String(doc.id));
@@ -142,6 +156,9 @@ function citationNumbers(value, found = []) {
 function contractError(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return 'body must be an object';
   if (typeof body.generatedAt !== 'string' || !body.generatedAt) return 'generatedAt is required';
+  // The record's own claim that it cites public documents only, which is what lets the read route
+  // gate on the project alone. A generator that does not assert it is one that predates the filter.
+  if (body.sourceAccess !== SOURCE_ACCESS) return `sourceAccess must be "${SOURCE_ACCESS}"`;
   if (!body.facts || typeof body.facts !== 'object') return 'facts is required';
   if (!body.sections || typeof body.sections !== 'object') return 'sections is required';
   if (!Array.isArray(body.citations)) return 'citations must be an array';

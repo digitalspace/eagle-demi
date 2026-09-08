@@ -91,11 +91,12 @@ const UNGATED = {
     'systemAccess(). There is no query read and no read route, so there is nothing for ' +
     'visibilityFor to compose — the point read is still canRead-gated in getById.',
   'projectSummaries.js':
-    'A summary row carries no read[] of its own — it is derived from documents that were already ' +
-    'ACL-filtered when it was generated — so there is no tier that may read part of one. The gate ' +
-    'is the PROJECT: both /projects/:id/summary routes re-read the project under the caller\'s ' +
-    'access and 404 when it is not readable, exactly as GET /projects/:id does, and both are ' +
-    'behind authMiddleware (asserted below). A second, weaker ACL here would not narrow that.',
+    'A summary row carries no read[] of its own, and needs none: the generator builds it from ' +
+    'level-4 documents only (isPublicSource in src/ai/project-summary.js) and the row asserts that ' +
+    'as sourceAccess, which putProjectSummary refuses a record without. So no part of a row is ' +
+    'narrower than its project, and the gate is the PROJECT: both /projects/:id/summary routes ' +
+    're-read the project under the caller\'s access and 404 when it is not readable, exactly as ' +
+    'GET /projects/:id does, and both are behind authMiddleware (asserted below).',
   'userdata.js':
     'The partition key IS the access rule: every function takes the owner as its first argument ' +
     'and the controller only ever passes the caller\'s own token username, so a row of another ' +

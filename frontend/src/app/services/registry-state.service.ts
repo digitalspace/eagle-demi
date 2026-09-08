@@ -38,6 +38,12 @@ const EPIC_PUBLIC_DOCUMENT_BASE = 'https://projects.eao.gov.bc.ca/api/public/doc
 export const epicPublicDownloadUrl = (documentId: string): string =>
   `${EPIC_PUBLIC_DOCUMENT_BASE}/${encodeURIComponent(documentId)}/download`;
 
+/**
+ * An Eagle ObjectId. Seeded rows reuse it as their DEMI id, so it is also what says a document
+ * exists on the public EPIC site; a DEMI-native upload carries a uuid and exists nowhere else.
+ */
+export const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
+
 /** Boundary layer id -> the denormalised project field naming that boundary. */
 const BOUNDARY_PROPS = {
   regionalDistricts: 'regionalDistrict',
@@ -1588,8 +1594,9 @@ export class RegistryStateService {
    * returns 403 rather than a link. Throws with a message meant for the user.
    *
    * Two paths end at the public EPIC copy instead: demo mode, which has no API to ask, and a
-   * presigned request that failed. The public file is the same document, so a reader gets it
-   * either way rather than a link that goes nowhere.
+   * presigned request that failed on a SEEDED document — its DEMI id is the Eagle id, so the same
+   * file is there. A DEMI-native upload's uuid names nothing on EPIC, so that failure is raised
+   * rather than sent to a URL that cannot resolve.
    *
    * ponytail: map-explorer.component.ts has this same fetch inline; point it here next time that
    * file is touched.
@@ -1621,6 +1628,10 @@ export class RegistryStateService {
     // copy is not the way around that.
     if (refused) throw new Error('You do not have permission to download this document.');
     if (presigned) return presigned;
+
+    if (!EAGLE_OBJECT_ID.test(documentId)) {
+      throw failure instanceof Error ? failure : new Error('Could not prepare download.');
+    }
 
     if (!this.downloadFallbackWarned) {
       this.downloadFallbackWarned = true;

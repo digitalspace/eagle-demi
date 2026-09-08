@@ -42,6 +42,7 @@ export const MOCK_PROJECT_SUMMARY: ProjectSummaryRecord = {
   projectId: '272',
   eagleId: '588511a0aaecd9001b82316d',
   generatedAt: '2026-09-09T02:00:00.000Z',
+  sourceAccess: 'public',
   model: 'gpt-4.1-mini',
   promptVersion: 1,
   usage: { promptTokens: 74812, completionTokens: 3140 },

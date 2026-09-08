@@ -175,6 +175,8 @@ export interface ProjectSummaryRecord {
   projectId: string;
   eagleId?: string | null;
   generatedAt: string;
+  /** The access every cited document satisfied. Always `public`; the API stores nothing else. */
+  sourceAccess?: 'public';
   /** Null when no section reached the model — a record made entirely of facts. */
   model: string | null;
   /** The rate card the cost estimate was priced against, which need not be `model`. */

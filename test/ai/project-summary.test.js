@@ -11,17 +11,22 @@ const {
   buildFacts, buildItems, sanitisePromptName, PRICED_AS
 } = require('../../src/ai/project-summary');
 
+/** What `readForLevel(4)` writes. Level 4 is the only level a stored summary may be built from. */
+const PUBLIC_READ = ['staff', 'idir', 'public'];
+
 const SCHEDULE_B = {
   id: 'docB', type: 'Certificate Package',
-  displayName: 'Schedule B - Table of Conditions', datePosted: '2014-10-14'
+  displayName: 'Schedule B - Table of Conditions', datePosted: '2014-10-14',
+  isPublished: true, read: PUBLIC_READ
 };
 const CERTIFICATE = {
   id: 'docC', type: 'Certificate Package',
-  displayName: 'Environmental Assessment Certificate #E14-02', datePosted: '2014-10-14'
+  displayName: 'Environmental Assessment Certificate #E14-02', datePosted: '2014-10-14',
+  isPublished: true, read: PUBLIC_READ
 };
 const INSPECTION = {
   id: 'docI', type: 'Inspection Record', displayName: 'Inspection Record 2024-03',
-  datePosted: '2024-03-02'
+  datePosted: '2024-03-02', isPublished: true, read: PUBLIC_READ
 };
 
 const chunk = (n, content, documentId = 'docB') => ({
@@ -290,6 +295,67 @@ test('generateProjectSummary', async (t) => {
       'the name stays on one line, inside its own quotes');
     assert.ok(!/^-/m.test(system.split('Rules:')[0]),
       'nothing the name carried became a rule ahead of the real ones');
+  });
+
+  await t.test('skips an unpublished newest inspection and summarises the published one', async () => {
+    // The read route gates on the PROJECT alone, so a document narrower than its project must never
+    // reach the record. The newest Inspection Record is the compliance section's source, and an
+    // unpublished one is exactly what a reader who 404s on that document would otherwise be told
+    // about. The API strips `read[]` at the response boundary and returns `isPublished` derived
+    // from it, so these rows carry the mirror and no ACL.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    stubModel(t, JSON.stringify({
+      paragraph: 'One non-compliance was recorded.', citations: [1]
+    }));
+
+    const sources = fakeSources({
+      documents: [
+        { id: 'docNew', type: 'Inspection Record', displayName: 'Inspection Record 2026-08',
+          datePosted: '2026-08-01', isPublished: false },
+        { id: 'docOld', type: 'Inspection Record', displayName: 'Inspection Record 2026-02',
+          datePosted: '2026-02-01', isPublished: true }
+      ],
+      chunks: {
+        docNew: [chunk(1, 'Two non-compliances were recorded.', 'docNew')],
+        docOld: [chunk(1, 'One non-compliance was recorded.', 'docOld')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'compliance' });
+
+    assert.strictEqual(record.sections.compliance.sourceDocumentId, 'docOld');
+    assert.deepStrictEqual(sources.asked, ['docOld'],
+      'the unpublished document was never even read');
+    assert.strictEqual(record.facts.inspections.latest.documentId, 'docOld');
+    assert.strictEqual(record.facts.inspections.count, 1, 'facts count public documents only');
+    assert.strictEqual(record.facts.documentTotal, 1);
+    assert.ok(record.citations.every(c => c.documentId === 'docOld'),
+      'nothing on the record names the unpublished document');
+    assert.strictEqual(record.sourceAccess, 'public',
+      'the record asserts what the write route refuses without');
+  });
+
+  await t.test('never cites a document whose read[] is not public', async () => {
+    // `read[]` is authoritative and `isPublished` only mirrors it, so a row where the two disagree
+    // is judged on `read[]`. This one is a Schedule B, the conditions section's only source: with
+    // it dropped there is nothing to summarise and no model call to make.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      items: [{ category: 'Water', title: 'Water quality', oneLiner: 'Monitor it.',
+        bullets: [], citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [{ ...SCHEDULE_B, read: ['staff', 'idir'] }],
+      chunks: { docB: [chunk(1, 'Monitor it.')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(record.sections.conditions, null);
+    assert.deepStrictEqual(record.citations, []);
+    assert.deepStrictEqual(record.facts.keyDocuments, []);
+    assert.strictEqual(calls.length, 0, 'the model was never handed the document');
   });
 
   await t.test('generates nothing while the feature is off', async () => {

@@ -12,6 +12,9 @@ const config = require('../../src/config');
 
 const RECORD = {
   id: '272', projectId: '272', generatedAt: '2026-09-09T02:00:00Z',
+  // The generator's assertion that every cited document was public. Without it the project gate
+  // would not be enough, so the write route refuses a record that omits it.
+  sourceAccess: 'public',
   model: 'gpt-4.1-mini', pricedAs: 'gpt-4.1-mini', estimatedCostCad: 0.08,
   facts: { documentTotal: 2158 },
   sections: { status: { sentence: 'A sentence.', citations: [1] } },
@@ -85,6 +88,23 @@ test('GET /projects/:id/summary', async (t) => {
     assert.deepStrictEqual(res.body, RECORD);
   });
 
+  await t.test('withholds a record that does not assert public sources', async () => {
+    // Records written before the generator filtered its sources are already in the container. The
+    // write gate cannot reach them, and the project gate alone would serve prose about a document
+    // this caller may not read, so the read side checks the same claim.
+    config.summaryEnabled = true;
+    t.mock.method(projectsRepo, 'getById', async () => ({ id: '272', name: 'Site C' }));
+    const { sourceAccess, ...stale } = RECORD;
+    t.mock.method(summariesRepo, 'getById', async () => stale);
+
+    const res = mockRes();
+    await controller.getProjectSummary(req('272'), res);
+
+    assert.strictEqual(res.statusCode, 404);
+    assert.strictEqual(res.body.error, 'no_summary');
+    assert.strictEqual(sourceAccess, 'public', 'the field the stale record is missing');
+  });
+
   await t.test('looks the record up by the DEMI id, not the id in the URL', async () => {
     // eagle-public holds Eagle ObjectIds; the record is stored under the DEMI project id. Keying on
     // the URL id would 404 every request that arrived through an Eagle id.
@@ -122,6 +142,24 @@ test('PUT /projects/:id/summary', async (t) => {
 
     assert.strictEqual(res.statusCode, 400);
     assert.match(res.body.error, /generatedAt/);
+    assert.strictEqual(writes, 0);
+  });
+
+  await t.test('400s a record that does not assert public sources', async () => {
+    // The record is read back under the PROJECT's ACL alone. A record that does not say every
+    // document it cites was public has no gate of its own, so it is refused rather than stored and
+    // served to a caller who cannot read those documents.
+    t.mock.method(projectsRepo, 'getById', async () => ({ id: '272' }));
+    let writes = 0;
+    t.mock.method(summariesRepo, 'upsert', async (r) => { writes++; return r; });
+
+    for (const sourceAccess of [undefined, 'staff', true]) {
+      const res = mockRes();
+      await controller.putProjectSummary(req('272', { ...RECORD, sourceAccess }), res);
+
+      assert.strictEqual(res.statusCode, 400, `sourceAccess ${JSON.stringify(sourceAccess)}`);
+      assert.match(res.body.error, /sourceAccess/);
+    }
     assert.strictEqual(writes, 0);
   });
 

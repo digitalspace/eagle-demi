@@ -10,7 +10,7 @@ const { parseArgs, mergeSection } = require('../../src/scripts/generate-project-
 const cite = (n, chunkId) => ({ n, chunkId, documentId: 'docB', pageNumber: n, documentName: 'B' });
 
 const STORED = {
-  id: '272', projectId: '272', generatedAt: '2026-09-01T00:00:00Z',
+  id: '272', projectId: '272', generatedAt: '2026-09-01T00:00:00Z', sourceAccess: 'public',
   usage: { promptTokens: 900, completionTokens: 90 }, estimatedCostCad: 0.9,
   facts: { documentTotal: 1 },
   sections: {
@@ -24,7 +24,7 @@ const STORED = {
 };
 
 const FRESH = {
-  id: '272', projectId: '272', generatedAt: '2026-09-08T00:00:00Z',
+  id: '272', projectId: '272', generatedAt: '2026-09-08T00:00:00Z', sourceAccess: 'public',
   model: 'qwen3.6:35b-a3b', pricedAs: 'gpt-4.1-mini', promptVersion: 1,
   usage: { promptTokens: 100, completionTokens: 10 }, estimatedCostCad: 0.1,
   facts: { documentTotal: 2 },
@@ -96,5 +96,19 @@ test('mergeSection', async (t) => {
 
   await t.test('takes the fresh record whole when nothing is stored yet', () => {
     assert.strictEqual(mergeSection(null, FRESH, 'conditions'), FRESH);
+  });
+
+  await t.test('refuses to merge into a record built from a wider set of documents', () => {
+    // The sections nobody regenerated keep the STORED record's sources. Merging into a record that
+    // predates the public-only filter would relabel those sections as public without rereading a
+    // single document.
+    const stale = { ...STORED, sourceAccess: undefined };
+
+    assert.throws(() => mergeSection(stale, FRESH, 'conditions'),
+      /regenerate the whole record/);
+  });
+
+  await t.test('carries the source access forward', () => {
+    assert.strictEqual(mergeSection(STORED, FRESH, 'conditions').sourceAccess, 'public');
   });
 });

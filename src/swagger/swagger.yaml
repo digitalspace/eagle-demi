@@ -367,12 +367,16 @@ paths:
           description: Unauthorized.
         '404':
           description: >-
-            Project not found, or `{"error": "no_summary"}` when the project has no stored record.
+            Project not found, or `{"error": "no_summary"}` when the project has no stored record —
+            which includes a record whose `sourceAccess` is not `public`, since one written before
+            the generator filtered its sources may cite documents this caller cannot read.
     put:
       summary: Store a project's AI summary
       description: >-
         The generator's write (`npm run ai:project-summary -- --project <id> --live`). The stored
-        `id` and `projectId` come from the resolved project, not from the body.
+        `id` and `projectId` come from the resolved project, not from the body. `sourceAccess` must
+        be `public`: the record is read back under the project's ACL alone, so it may only cite
+        documents an anonymous caller could read.
       security:
         - ApiKeyAuth: []
         - BearerAuth: []
@@ -388,10 +392,14 @@ paths:
           application/json:
             schema:
               type: object
-              required: [generatedAt, facts, sections, citations]
+              required: [generatedAt, sourceAccess, facts, sections, citations]
               properties:
                 generatedAt:
                   type: string
+                sourceAccess:
+                  type: string
+                  enum: [public]
+                  description: The access every cited document satisfied when the record was built.
                 model:
                   type: string
                   description: The deployment that ran.
@@ -416,7 +424,7 @@ paths:
         '200':
           description: The stored record.
         '400':
-          description: The body is not a summary record, or a section cites a source number outside the record's citations.
+          description: The body is not a summary record, its `sourceAccess` is not `public`, or a section cites a source number outside the record's citations.
         '401':
           description: Unauthorized.
         '404':
@@ -754,9 +762,10 @@ paths:
         - name: pageSize
           in: query
           required: false
+          description: Same ceiling as every other list read; see `pageSizeFor`.
           schema:
             type: integer
-            default: 500
+            default: 1000
             maximum: 1000
       responses:
         '200':

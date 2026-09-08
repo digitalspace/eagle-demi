@@ -820,7 +820,12 @@ describe('RegistryStateService — loadSummary gating', () => {
   });
 
   // The demo runs with no API behind it, so every citation chip on the project summary used to
-  // 404. Demo mode and a failed presigned request both end at the public EPIC copy instead.
+  // 404. Demo mode and a failed presigned request both end at the public EPIC copy instead — but
+  // only for a SEEDED document, whose DEMI id is the Eagle id EPIC serves the same file under.
+  const SEEDED_DOC = '588511a0aaecd9001b82316d';
+  const SEEDED_DOC_2 = '588511a0aaecd9001b82316e';
+  // What createDocument gives a DEMI-native upload: crypto.randomUUID(), which EPIC has never seen.
+  const DEMI_NATIVE_DOC = '0f8f4a5e-1c2b-4d3e-9a7b-6c5d4e3f2a1b';
 
   it('returns the public EPIC url in demo mode without asking the API', async () => {
     TestBed.inject(ConfigService).config['USE_MOCK_DATA'] = true;
@@ -830,19 +835,35 @@ describe('RegistryStateService — loadSummary gating', () => {
     expect(sharedFetchSpy).not.toHaveBeenCalled();
   });
 
-  it('falls back to the public EPIC url when the presigned request fails', async () => {
+  it('falls back to the public EPIC url when a seeded document\'s presigned request fails', async () => {
     sharedFetchSpy.and.resolveTo(new Response('{}', { status: 500 }));
 
-    await expectAsync(service.getDownloadUrl('doc1', 'proj1'))
-      .toBeResolvedTo(epicPublicDownloadUrl('doc1'));
+    await expectAsync(service.getDownloadUrl(SEEDED_DOC, 'proj1'))
+      .toBeResolvedTo(epicPublicDownloadUrl(SEEDED_DOC));
+  });
+
+  it('raises the failure for a DEMI-native id rather than sending the reader to EPIC', async () => {
+    // The composed URL would name no EPIC document, so the reader would get EPIC's error page with
+    // nothing saying why. The failure itself is the honest answer.
+    sharedFetchSpy.and.resolveTo(new Response('{}', { status: 500 }));
+
+    await expectAsync(service.getDownloadUrl(DEMI_NATIVE_DOC, 'proj1'))
+      .toBeRejectedWithError('Could not prepare download (HTTP 500).');
+  });
+
+  it('raises a network failure for a DEMI-native id', async () => {
+    sharedFetchSpy.and.rejectWith(new TypeError('Failed to fetch'));
+
+    await expectAsync(service.getDownloadUrl(DEMI_NATIVE_DOC, 'proj1'))
+      .toBeRejectedWithError('Failed to fetch');
   });
 
   it('warns once, not once per click, while the presigned leg is down', async () => {
     const warn = spyOn(console, 'warn');
     sharedFetchSpy.and.rejectWith(new TypeError('Failed to fetch'));
 
-    await service.getDownloadUrl('doc1', 'proj1');
-    await service.getDownloadUrl('doc2', 'proj1');
+    await service.getDownloadUrl(SEEDED_DOC, 'proj1');
+    await service.getDownloadUrl(SEEDED_DOC_2, 'proj1');
 
     expect(warn).toHaveBeenCalledTimes(1);
   });

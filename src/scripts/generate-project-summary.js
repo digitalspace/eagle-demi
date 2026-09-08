@@ -72,6 +72,15 @@ function parseArgs(argv) {
 function mergeSection(stored, fresh, section) {
   if (!stored) return fresh;
 
+  // The sections that are NOT being regenerated keep the stored record's sources. A record that
+  // does not assert the same source access was built from a wider set of documents, and merging
+  // one fresh section into it would relabel the rest as public.
+  if (stored.sourceAccess !== fresh.sourceAccess) {
+    throw new Error(`[project-summary] stored record sourceAccess ` +
+      `"${stored.sourceAccess}" is not this run's "${fresh.sourceAccess}"; ` +
+      `regenerate the whole record instead of one section`);
+  }
+
   const kept = { ...stored.sections, [section]: fresh.sections[section] };
 
   // Renumber every surviving section's citations into one list. A section keeps the sources it
