@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('../config');
 const configRepository = require('../repositories/config');
+const { serverError } = require('../helpers/response');
 const { logger } = require('../utils/logger');
 
 // The keys the stored document is allowed to supply. Anything else in the container is ignored,
@@ -143,12 +144,30 @@ exports.getConfig = async (req, res) => {
 };
 
 /**
+ * `source` narrowed to PUBLIC_KEYS — the one filter behind the served payload, the accepted push
+ * and the seeded document, so none of the three can drift from the allowlist or from each other.
+ *
+ * Only absence is skipped. A `false` — ACCESS_GATE above all — is a real answer and must survive
+ * as a boolean; treating it as missing is how the curtain opens.
+ */
+function pickPublicKeys(source) {
+  const picked = {};
+  for (const key of PUBLIC_KEYS) {
+    const value = source[key];
+    if (value === undefined || value === null) continue;
+    picked[key] = value;
+  }
+  return picked;
+}
+
+/**
  * Returns the PUBLIC site's runtime configuration, straight from the `public` document.
  *
  * UNAUTHENTICATED, like /config above, and the same rule holds: everything here is public, so
  * never add a secret. What is served is exactly the `PUBLIC_KEYS` the document carries — no app
  * settings overlay and no defaults, because this container is not where those values come from.
- * eagle-api's Mongo `Config` is the source of truth; this document is a seeded copy of it.
+ * eagle-api's Mongo `Config` is the source of truth; this document is a live mirror of it, kept
+ * fresh by PUT /eagle/config/public and bootstrapped by src/scripts/seed-public-config.js.
  *
  * A missing or unreadable document answers 503, where /config degrades to app settings. The
  * difference is deliberate and it is the whole reason this is a separate route: a defaulted
@@ -173,18 +192,75 @@ exports.getPublicConfig = async (req, res) => {
       .json({ error: 'Public configuration is unavailable.' });
   }
 
-  const payload = {};
-  for (const key of PUBLIC_KEYS) {
-    const value = stored[key];
-    // Only absence is skipped. A stored `false` — ACCESS_GATE above all — is a real answer and
-    // must survive as a boolean; treating it as missing is how the curtain opens.
-    if (value === undefined || value === null) continue;
-    payload[key] = value;
-  }
-
-  res.json(payload);
+  res.json(pickPublicKeys(stored));
 };
 
-// Exported for src/scripts/seed-public-config.js, so the seeded document and the served payload
-// are filtered by ONE list rather than two that drift.
+/**
+ * Why a push must not be trusted to be a config payload.
+ *
+ * The stored document is what an anonymous site boots on, and the caller here is a machine. An
+ * rproxy that fell through to a SPA answers 200 with something that is not eagle-api's config, and
+ * the seeder already refuses that case for the same reason. These two keys are the ones whose
+ * absence is dangerous rather than merely wrong: ENVIRONMENT names which environment the payload
+ * describes, and an ACCESS_GATE that is missing or a string leaves the curtain undecided.
+ *
+ * @returns {string|null} the message to answer 400 with, or null when the body may be stored.
+ */
+function publicConfigRejection(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return 'Body must be a JSON object of public config values.';
+  }
+  if (typeof body.ENVIRONMENT !== 'string' || body.ENVIRONMENT.trim() === '') {
+    return 'ENVIRONMENT must be a non-empty string.';
+  }
+  if (typeof body.ACCESS_GATE !== 'boolean') {
+    return 'ACCESS_GATE must be a boolean.';
+  }
+  return null;
+}
+
+/**
+ * PUT /eagle/config/public — eagle-api pushing its live public config into the `public` document.
+ *
+ * The Eagle mirror for configuration, and the reason the stored document is a live copy rather
+ * than the snapshot the seeder leaves behind: eagle-api pushes on every Config write, so a hand
+ * edit in Mongo no longer waits for somebody to re-run the script. The seeder stays the bootstrap
+ * and the manual override.
+ *
+ * Unlike the record mirrors the body is the payload itself, not `{ doc }`: there is one config
+ * document and no Eagle `_id` to key it by. Only PUBLIC_KEYS are stored — the same allowlist the
+ * GET serves through — so eagle-api may push its whole /api/config and the KEYCLOAK_* block and
+ * BUILD_ID stay out of a document an anonymous site reads. Idempotent: the same body stores the
+ * same document.
+ */
+exports.upsertPublicFromEagle = async (req, res) => {
+  const rejection = publicConfigRejection(req.body);
+  if (rejection) return res.status(400).json({ error: rejection });
+
+  try {
+    // Read before write only to name the changed keys in the log line. One point read in the same
+    // partition, on a route that fires when a staff member edits Config — not a hot path.
+    const previous = await configRepository.getPublic();
+    const document = pickPublicKeys(req.body);
+    const saved = await configRepository.upsertPublic(document);
+
+    logger.info(`[config] public config pushed by eagle-api — ${changeSummary(previous, document)}`);
+
+    return res.json(pickPublicKeys(saved));
+  } catch (err) {
+    return serverError(res, err, 'public config push failed');
+  }
+};
+
+/** Which allowlisted keys the push moved, for the log line. */
+function changeSummary(previous, document) {
+  if (!previous) return 'first document written';
+  const changed = PUBLIC_KEYS.filter(
+    key => JSON.stringify(previous[key] ?? null) !== JSON.stringify(document[key] ?? null));
+  return changed.length ? `changed: ${changed.join(', ')}` : 'no key changed';
+}
+
+// Exported for src/scripts/seed-public-config.js, so the seeded document, the pushed one and the
+// served payload are filtered by ONE list rather than three that drift.
 exports.PUBLIC_KEYS = PUBLIC_KEYS;
+exports.pickPublicKeys = pickPublicKeys;

@@ -141,8 +141,9 @@ paths:
         Unauthenticated, and everything it answers is public — never add a secret. What eagle-public
         boots on, served from the `public` document exactly as stored: only the allowlisted keys
         below, no app-settings overlay and no defaults. eagle-api's Mongo `Config` is the source of
-        truth; this is a copy seeded by `src/scripts/seed-public-config.js`, so a hand edit in Mongo
-        leaves it stale until the script is re-run.
+        truth; this is a live mirror of it — eagle-api pushes every Config write to
+        `PUT /api/eagle/config/public`, and `src/scripts/seed-public-config.js` bootstraps the
+        document before the first push.
 
         Unlike `/api/config` this route does NOT degrade. A defaulted payload would answer
         `ACCESS_GATE: false` and open the access curtain on a site meant to be gated, so a missing
@@ -1312,6 +1313,55 @@ paths:
                 $ref: '#/components/schemas/EaglePushResult'
         '400':
           description: Body is not `{ doc }`, or `doc._id` disagrees with the path.
+        '401':
+          description: Unauthorized.
+        '403':
+          description: |-
+            Forbidden. The credential is read-only — the mirror needs `demi-service-write` or
+            higher.
+
+  /api/eagle/config/public:
+    put:
+      summary: Mirror the public site configuration from eagle-api
+      description: |-
+        Receives eagle-api's live public config and stores it as the `public` document that
+        `GET /api/config/public` serves. The config mirror, and the reason that document is a live
+        copy rather than a snapshot: eagle-api pushes on every `Config` write, so a hand edit in its
+        Mongo lands here without anyone re-running the seeder.
+
+        Unlike the record mirrors the body is the payload itself, not `{ doc }`, and there is no
+        `{eagleId}`: there is one config document and Eagle has no id for it. Only the `PublicConfig`
+        allowlist is stored, so eagle-api may push its whole `/api/config` and the `KEYCLOAK_*`
+        block, `BUILD_ID` and `API_LOCATION` stay out of a document an anonymous site reads.
+        Idempotent — the same body stores the same document.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        description: >-
+          eagle-api's config payload. Anything outside the allowlist is dropped rather than
+          rejected; `ENVIRONMENT` and `ACCESS_GATE` are required because a payload missing either
+          is not an eagle-api config, and a missing gate leaves the access curtain undecided.
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/PublicConfig'
+                - type: object
+                  additionalProperties: true
+                  required: [ENVIRONMENT, ACCESS_GATE]
+      responses:
+        '200':
+          description: Stored. The body is the document as `GET /api/config/public` will serve it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicConfig'
+        '400':
+          description: >-
+            Body is not a JSON object, `ENVIRONMENT` is missing or empty, or `ACCESS_GATE` is not a
+            boolean.
         '401':
           description: Unauthorized.
         '403':
