@@ -14,8 +14,11 @@ const { execFile } = require('node:child_process');
 /**
  * Start a stub on loopback.
  *
+ * `destroy` kills the connection without answering, which is how a caller sees the
+ * never-completed request that curl reports as status 000.
+ *
  * @param {(req: import('node:http').IncomingMessage, body: string) =>
- *   { status?: number, body?: string, json?: unknown }} respond
+ *   { status?: number, body?: string, json?: unknown, destroy?: boolean }} respond
  * @returns {Promise<{ url: string, requests: Array<{ method: string, url: string, body: string }>,
  *   close: () => Promise<void> }>}
  */
@@ -28,6 +31,7 @@ async function startStub(respond) {
       const body = Buffer.concat(chunks).toString('utf8');
       requests.push({ method: req.method, url: req.url, body });
       const answer = respond(req, body) || {};
+      if (answer.destroy) return req.socket.destroy();
       const payload = answer.json === undefined ? (answer.body || '') : JSON.stringify(answer.json);
       res.writeHead(answer.status || 200, { 'content-type': 'application/json' });
       res.end(payload);

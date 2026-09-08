@@ -114,8 +114,8 @@ jobs:
           # 0 so the base branch is fetched as well: the diff below is against origin/<base>.
           fetch-depth: 0
 
-      # Two shapes count. `azure/search/**` is the index definition itself; a `*_SELECT` line in
-      # ai-search.js is the code asking for a field. Either one alone breaks the pair.
+      # Two shapes count. `azure/search/**` is the index definition itself; the `*_SELECT` constants
+      # in ai-search.js are the code asking for fields. Either one alone breaks the pair.
       - name: Does this PR change what search selects?
         id: touched
         env:
@@ -128,9 +128,9 @@ jobs:
           if grep -q '^azure/search/' <<<"$CHANGED"; then
             TOUCHED=true
           fi
-          if grep -qx 'src/search/ai-search.js' <<<"$CHANGED" &&
-             git diff -U0 "origin/$BASE_REF...HEAD" -- src/search/ai-search.js |
-               grep -qE '^[+-].*_SELECT'; then
+          # Values, not diff lines: the constants are multi-line concatenations, so a widening
+          # lands on a continuation line that carries no `_SELECT` token.
+          if [ "$(./scripts/search-select-changed.sh "origin/$BASE_REF")" = changed ]; then
             TOUCHED=true
           fi
           echo "touched=$TOUCHED" >> "$GITHUB_OUTPUT"
@@ -138,6 +138,9 @@ jobs:
 
       # Against TEST, with the branch's own index definitions: test is where the author widens the
       # live index first, and this is the proof they did.
+      #
+      # SEARCH_SCHEMA_ALLOW_MISSING is deliberately unset here. Test runs main, so it always has
+      # /health/search-schema; a 404 is the endpoint regressing, not a bootstrap.
       - name: Probe the test indexes with this branch's index definitions
         if: steps.touched.outputs.touched == 'true'
         run: ./scripts/search-schema-probe.sh "$TEST_API_BASE_URL"
@@ -163,7 +166,8 @@ jobs:
           {
             echo "### ❌ Search schema gate"
             echo ""
-            echo "This PR changes \`azure/search/**\` or a \`*_SELECT\` in \`src/search/ai-search.js\`."
+            echo "This PR changes \`azure/search/**\`, or the fields a \`*_SELECT\` in"
+            echo "\`src/search/ai-search.js\` asks for."
             echo "Widen the live TEST indexes before merging:"
             echo ""
             echo '```'

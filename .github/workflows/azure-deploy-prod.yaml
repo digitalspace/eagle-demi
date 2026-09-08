@@ -10,6 +10,11 @@ on:
         description: 'Tag to deploy (e.g. v1.2.3). Every push to main cuts one — pick the one verified on staging. Do NOT publish its draft first; this workflow publishes it after a green deploy.'
         required: true
         type: string
+      allow_missing_schema_probe:
+        description: 'first deploy after the /health/search-schema endpoint; skips the gate when the running app answers 404'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: deploy-azure-prod
@@ -146,23 +151,34 @@ jobs:
           ref: refs/tags/${{ inputs.version }}
 
       # No setup-node and no install: the probe reads JSON and curls, on the runner's own node.
+      # The dispatch input is the only way a 404 passes, and it has to be ticked per run: a 404 on
+      # any other release means the deployed app has no route and nothing checked the live indexes.
       - name: Probe the live indexes with this tag's index definitions
+        env:
+          SEARCH_SCHEMA_ALLOW_MISSING: ${{ inputs.allow_missing_schema_probe && '1' || '0' }}
         run: ./scripts/search-schema-probe.sh "$API_BASE_URL"
 
-      - name: Report the drift to the job summary
+      - name: Report the failed gate to the job summary
         if: failure()
         run: |
           {
-            echo "### ❌ Production search indexes are narrower than \`${{ inputs.version }}\`"
+            echo "### ❌ The live search indexes were not proved to fit \`${{ inputs.version }}\`"
             echo ""
-            echo "Deploying it would 502 every affected query. Widen the live indexes first:"
+            echo "**If the step log shows drift (503):** deploying would 502 every affected query."
+            echo "Widen the live indexes first, then re-run this workflow:"
             echo ""
             echo '```'
             echo "scripts/demi-devbox.sh apply --env prod"
             echo '```'
             echo ""
-            echo "Then re-run this workflow. Runbook: \`eagle-demi.wiki/Runbook-Search-Outage.md\`."
             echo "The missing field names are in the step log above."
+            echo ""
+            echo "**If the step log shows a 404:** the app serving production has no"
+            echo "\`/health/search-schema\`. On the first release after that endpoint ships, re-run"
+            echo "with **allow_missing_schema_probe** ticked — once. Any other time it means the"
+            echo "deployed app lost the route, and no release should go out unchecked."
+            echo ""
+            echo "Runbook: \`eagle-demi.wiki/Runbook-Search-Outage.md\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy-api:

@@ -13,10 +13,16 @@ identity holds Search Service Contributor. So these guards check, they do not fi
 **Before a production deploy.** `verify-search-schema` in `azure-deploy-prod.yaml` checks out the
 tag being deployed, builds a probe body from that tag's `azure/search/indexes/*.json`, and POSTs it
 to the API that is currently serving production (`scripts/search-schema-probe.sh`). The endpoint
-`/health/search-schema` runs each select and orderby against the live index with `top: 0` and
-answers 503 naming the missing fields. A 503 stops the release before `deploy-api` runs. A 404 —
-the running app predates the endpoint — warns and passes, so the rollout that adds the endpoint is
-not blocked by its own absence.
+`/health/search-schema` — it arrives with PR #349 — runs each select and orderby against the live
+index with `top: 0` and answers 503 naming the missing fields. A 503 stops the release before
+`deploy-api` runs.
+
+A 404 also stops it: an endpoint that is not there checked nothing, and the release would go out on
+the same evidence the 2026-09-08 one had. The exception is the single deploy that first carries the
+endpoint into an environment, where the app already running is necessarily older. Tick the
+`allow_missing_schema_probe` input on that one dispatch — it sets `SEARCH_SCHEMA_ALLOW_MISSING=1`
+for the probe, and the log says the release shipped ungated. Any later 404 means the deployed app
+lost the route.
 
 **After a deploy.** `scripts/search-smoke.sh` asks three real queries: Document, Project, and
 Document filtered by a project. Each must answer 200, and the two unfiltered ones must report
@@ -28,8 +34,15 @@ release unpublished. Staging runs the same smoke test with no rollback — test 
 is supposed to stop.
 
 **On a pull request.** `search-schema-change` in `pr.yaml` fires when the diff touches
-`azure/search/**` or a `*_SELECT` line in `src/search/ai-search.js`. It probes the test API with
-the branch's index definitions and requires the PR description to carry a line:
+`azure/search/**`, or when `scripts/search-select-changed.sh` reports that the branch selects
+different fields than its base. That script compares the VALUES of `DOCUMENT_SELECT`,
+`PROJECT_SELECT` and `CHUNK_SELECT`, because each is a multi-line concatenation: the field that
+took production down on 2026-09-08 was added on a continuation line, which no grep for `_SELECT`
+can see. The PR gate never sets `SEARCH_SCHEMA_ALLOW_MISSING` — test runs `main`, so a 404 there is
+the endpoint regressing.
+
+The job probes the test API with the branch's index definitions and requires the PR description to
+carry a line:
 
 ```
 Search-Schema: applied test
@@ -45,6 +58,7 @@ is what makes forgetting it visible.
 | --- | --- | --- |
 | `SEARCH_SMOKE_PROJECT_ID` | repository or environment variable | `5e31dc4462cdea0021d974b4` (Fording River Extension, Castle) |
 | `DEMI_ENV` | env var read by the probe script | `prod`; only names the environment in the "widen it with" hint |
+| `SEARCH_SCHEMA_ALLOW_MISSING` | env var read by the probe script; the prod workflow's `allow_missing_schema_probe` input sets it | unset — a 404 fails |
 
 Both smoke targets are the Function App's own host, not `www.projects.eao.gov.bc.ca/demi-search`:
 the public path also depends on the OpenShift rproxy, which these workflows do not deploy.
@@ -54,9 +68,11 @@ the public path also depends on the OpenShift rproxy, which these workflows do n
 ```
 scripts/search-schema-probe.sh https://demi-api-fc-prod.azurewebsites.net
 scripts/search-smoke.sh https://demi-api-fc-prod.azurewebsites.net
+scripts/search-select-changed.sh main
 ```
 
-Both print their contract with `--help`. Tests: `test/scripts/search-schema-probe.test.js` and
-`test/scripts/search-smoke.test.js` drive them against a stub HTTP server.
+All three print their contract with `--help`. Tests: `test/scripts/search-schema-probe.test.js` and
+`test/scripts/search-smoke.test.js` drive the two HTTP scripts against a stub server;
+`test/scripts/search-select-changed.test.js` drives the third against a throwaway git repository.
 
 Runbook for an outage in progress: `eagle-demi.wiki/Runbook-Search-Outage.md`.

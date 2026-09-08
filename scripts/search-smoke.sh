@@ -50,15 +50,23 @@ probe() {
   local label="$1" query="$2" rows="${3:-}"
   local status total
 
+  # One file, three probes: empty it so it can only ever hold this probe's bytes. curl truncates it
+  # itself for any answer that arrives — it is the answer that never arrives that leaves it stale.
+  : > "$RESPONSE"
+
   # No --retry: curl counts 502, 503 and 504 as transient and would re-ask the exact answer this
   # check exists to report. --max-time covers a cold start; the wait-for-function step ran first.
   status=$(curl -sS --max-time 60 -o "$RESPONSE" -w '%{http_code}' "$BASE_URL/search?$query") \
     || status=000
 
   if [ "$status" != "200" ]; then
-    echo "❌ $label: HTTP $status" >&2
-    head -c 1000 "$RESPONSE" >&2
-    echo "" >&2
+    if [ "$status" = "000" ]; then
+      echo "❌ $label: no response — the request did not complete (refused, DNS, TLS or timeout)" >&2
+    else
+      echo "❌ $label: HTTP $status" >&2
+      head -c 1000 "$RESPONSE" >&2
+      echo "" >&2
+    fi
     FAILURES=$((FAILURES + 1))
     return
   fi

@@ -20,9 +20,12 @@ version about to be deployed: that is the pairing that catches a release selecti
 field the live index does not have (2026-09-08, `fileSize`, 65 minutes of 502s).
 
 Exit codes:
-  0  live indexes answer every select (200), or the running app predates the
-     endpoint (404) — the first rollout of the endpoint itself must not be blocked
-  1  drift (503), an unexpected status, or the API could not be reached
+  0  live indexes answer every select (200)
+  1  drift (503), an unexpected status, a 404, or the API could not be reached
+
+A 404 means the running app has no /health/search-schema. That is a real failure —
+the endpoint is expected to be there — except on the one deploy that first ships it.
+Set SEARCH_SCHEMA_ALLOW_MISSING=1 to pass that deploy, once.
 
 Non-retrievable fields are left out of `select` and geography points out of
 `orderby`: AI Search rejects both, and a 400 from a legal-but-unusable field would
@@ -81,10 +84,19 @@ case "$STATUS" in
     exit 0
     ;;
   404)
-    echo "⚠️ $BASE_URL has no /health/search-schema — the running app predates the endpoint."
-    echo "   Passing this once so the rollout that ADDS the endpoint is not blocked by its absence."
-    echo "   The next deploy is gated for real; if this repeats, the deploy did not ship the route."
-    exit 0
+    # Passing a 404 unconditionally is how this gate would pass forever without ever asking the
+    # live index anything. The one deploy that ships the endpoint is the only case that needs it.
+    if [ "${SEARCH_SCHEMA_ALLOW_MISSING:-}" = "1" ]; then
+      echo "⚠️ $BASE_URL has no /health/search-schema — passing because SEARCH_SCHEMA_ALLOW_MISSING=1."
+      echo "   This deploy is ungated. The next one must not set it: a 404 then means the route"
+      echo "   was not shipped, and nothing checked the live indexes."
+      exit 0
+    fi
+    echo "❌ $BASE_URL has no /health/search-schema, so nothing checked the live indexes." >&2
+    echo "   If this is the first deploy after the endpoint shipped, re-run with the" >&2
+    echo "   allow_missing_schema_probe input (SEARCH_SCHEMA_ALLOW_MISSING=1 by hand)." >&2
+    echo "   Otherwise the deployed app lost the route. Runbook: $RUNBOOK" >&2
+    exit 1
     ;;
   503)
     echo "❌ live search indexes are narrower than the index definitions being deployed:" >&2
