@@ -23,6 +23,7 @@ const lists = require('../../../src/repositories/lists');
 const projects = require('../../../src/repositories/projects');
 const apiKeys = require('../../../src/repositories/api-keys');
 const { generateKey } = require('../../../src/helpers/api-key');
+const { canRead, resolveAccess } = require('../../../src/helpers/access-sql');
 const { forgetCachedKey } = require('../../../src/helpers/auth');
 
 const commentPeriodController = require('../../../src/controllers/nosql/comment-period');
@@ -84,6 +85,25 @@ function pushTo(controller, repo, eagleId, doc, t, { existing = null } = {}) {
   ).then(() => ({ res, written: () => written }));
 }
 
+const anonymous = () => resolveAccess({});
+const staff = () => resolveAccess({ user: { realm_access: { roles: ['staff'] } } });
+
+/** Serve the comment ACL rows of one period, and capture the patch the cascade plans. */
+function stubCommentCascade(t, commentRows, { failed = 0 } = {}) {
+  const writes = [];
+  t.mock.method(cosmos, 'query', async (container) =>
+    ({ items: container === 'comments' ? commentRows : [] }));
+  t.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
+    writes.push({ container, operations });
+    return { succeeded: operations.length - failed, failed, statusCounts: {}, requestCharge: 1 };
+  });
+  return writes;
+}
+
+/** The value one planned patch would write to one path. */
+const opValue = (operation, path) =>
+  operation.resourceBody.operations.find(o => o.path === path).value;
+
 test('PUT /eagle/commentperiods/:eagleId', async (t) => {
   t.afterEach(() => t.mock.restoreAll());
 
@@ -111,6 +131,7 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
       openHouses: [{ eventDate: '2026-08-10T00:00:00.000Z', description: 'Community hall' }],
       relatedDocuments: ['5cf00c03a266b7e187750002'],
       commentTip: 'Comments are public.',
+      isDeleted: false,
       isPublished: true,
       read: ['staff', 'idir', 'public'],
       sources: { eagle: eaglePeriod() }
@@ -179,6 +200,178 @@ test('PUT /eagle/commentperiods/:eagleId', async (t) => {
     assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
     assert.deepStrictEqual(replaced, ['"v1"']);
     assert.deepStrictEqual([...store.keys()], [`207::${PERIOD_EAGLE_ID}`]);
+  });
+});
+
+/**
+ * eagle-api hard-deletes a comment period and pushes the record it just removed with
+ * `isDeleted: true` — the one push that carries a fact the stored document cannot say. What is
+ * asserted is what an anonymous visitor would then be answered, on the period AND on the comments
+ * under it: the period row alone is not what hides a comment, because a comment is gated by its
+ * own ACL.
+ *
+ * `comments.setAclForPeriod`, `deriveAcls` and the SQL are all real here; only Cosmos is doubled,
+ * so the assertions are about the patch the container would receive.
+ */
+test('PUT /eagle/commentperiods/:eagleId — a deleted period', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('the row is kept, flagged, and narrowed out of the public\'s reach', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    stubCommentCascade(t, []);
+
+    const { res, written } = await pushTo(commentPeriodController, commentPeriods,
+      PERIOD_EAGLE_ID, eaglePeriod({ isDeleted: true }), t);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(res.body, { id: PERIOD_EAGLE_ID, action: 'delete' });
+    const row = written();
+    assert.strictEqual(row.isDeleted, true);
+    assert.strictEqual(row.isPublished, false);
+    assert.deepStrictEqual(row.read, ['staff'], 'narrowed to the takedown level, not deleted');
+    // The predicate a point read runs, on the row the controller actually wrote.
+    assert.strictEqual(canRead(row, anonymous()), false, 'an anonymous visitor may not see it');
+    assert.strictEqual(canRead(row, staff()), true, 'staff still see what Eagle no longer holds');
+    // The raw Eagle record is kept whole — that is what a reconcile reads it back from.
+    assert.deepStrictEqual(row.sources.eagle.read, PUBLIC_ACL);
+  });
+
+  await t.test('its comments are narrowed with it, each capped by its own Eagle ACL', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    const writes = stubCommentCascade(t, [
+      { id: 'c1', read: ['staff', 'idir', 'public'], eagleRead: PUBLIC_ACL },
+      // Eagle never published this one; the cascade must not widen it on the way down either.
+      { id: 'c2', read: ['staff'], eagleRead: PRIVATE_ACL }
+    ]);
+
+    const { res } = await pushTo(commentPeriodController, commentPeriods,
+      PERIOD_EAGLE_ID, eaglePeriod({ isDeleted: true }), t);
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(writes.map(w => w.container), ['comments']);
+    const [patch] = writes;
+    assert.deepStrictEqual(patch.operations.map(o => o.partitionKey), [PERIOD_EAGLE_ID, PERIOD_EAGLE_ID]);
+    for (const operation of patch.operations) {
+      assert.deepStrictEqual(opValue(operation, '/read'), ['staff'], operation.id);
+      assert.strictEqual(opValue(operation, '/isPublished'), false, operation.id);
+      assert.strictEqual(
+        canRead({ read: opValue(operation, '/read'), projectId: '207' }, anonymous()), false);
+    }
+  });
+
+  await t.test('a period whose comments did not all land answers 500, and stays narrowed',
+    async () => {
+      // The period's own write has already happened. A 200 here would tell the log nothing, and
+      // the comments that failed are still public.
+      t.mock.method(projects, 'getByEagleId', async () => storedProject());
+      stubCommentCascade(t, [{ id: 'c1', read: PUBLIC_ACL, eagleRead: PUBLIC_ACL }], { failed: 1 });
+
+      const { res, written } = await pushTo(commentPeriodController, commentPeriods,
+        PERIOD_EAGLE_ID, eaglePeriod({ isDeleted: true }), t);
+
+      assert.strictEqual(res.statusCode, 500);
+      assert.match(res.body.error, /comments were not fully updated/);
+      assert.deepStrictEqual(written().read, ['staff']);
+    });
+
+  await t.test('only eagle-api sending the record again brings it back', async () => {
+    // The rule the controller header states. Nothing inside DEMI clears the flag — see
+    // acl-cascade.test.js for the cascade that used to — but a push carrying the record means
+    // Eagle holds one again, and Mongo does not reuse an ObjectId.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    stubCommentCascade(t, []);
+    const deleted = { id: PERIOD_EAGLE_ID, projectId: '207', read: ['staff'], isDeleted: true };
+
+    const { res, written } = await pushTo(commentPeriodController, commentPeriods,
+      PERIOD_EAGLE_ID, eaglePeriod(), t, { existing: deleted });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(written().isDeleted, false);
+    assert.deepStrictEqual(written().read, ['staff', 'idir', 'public']);
+  });
+});
+
+/**
+ * A period Eagle published or unpublished, and the comments under it.
+ *
+ * The comment's OWN stored `read[]` is the only gate on `/search?dataset=Comment` — that branch
+ * never re-reads the period, unlike the chunk branch, which reads its parent document. So a period
+ * that moves level and leaves its comments where they were is a period whose comments are still
+ * readable by anyone who knows the period id.
+ */
+test('PUT /eagle/commentperiods/:eagleId — a period that changed level', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const PUBLIC_READ = ['staff', 'idir', 'public'];
+  const storedAt = (read) => ({ id: PERIOD_EAGLE_ID, projectId: '207', read });
+
+  await t.test('an unpublish narrows the comments under it', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    const writes = stubCommentCascade(t, [
+      { id: 'c1', read: PUBLIC_READ, eagleRead: PUBLIC_ACL }
+    ]);
+
+    // Eagle unpublished the period: the push carries the narrowed record, under a project that is
+    // still public, so the project ceiling is not what moves it.
+    const { res, written } = await pushTo(commentPeriodController, commentPeriods,
+      PERIOD_EAGLE_ID, eaglePeriod({ read: PRIVATE_ACL }), t, { existing: storedAt(PUBLIC_READ) });
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(written().read, ['staff']);
+    const [patch] = writes;
+    assert.strictEqual(patch.container, 'comments');
+    assert.deepStrictEqual(opValue(patch.operations[0], '/read'), ['staff']);
+    assert.strictEqual(opValue(patch.operations[0], '/isPublished'), false);
+    assert.strictEqual(canRead({ read: opValue(patch.operations[0], '/read'), projectId: '207' },
+      anonymous()), false, 'the comment is what an anonymous reader is refused');
+  });
+
+  await t.test('a re-publish restores exactly the comments Eagle published', async () => {
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    const writes = stubCommentCascade(t, [
+      { id: 'c1', read: ['staff'], eagleRead: PUBLIC_ACL },
+      // Eagle never published this one. A cascade that assigned rather than narrowed would.
+      { id: 'c2', read: ['staff'], eagleRead: PRIVATE_ACL }
+    ]);
+
+    const { res, written } = await pushTo(commentPeriodController, commentPeriods,
+      PERIOD_EAGLE_ID, eaglePeriod(), t, { existing: storedAt(['staff']) });
+
+    assert.strictEqual(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepStrictEqual(written().read, PUBLIC_READ);
+    const [patch] = writes;
+    assert.deepStrictEqual(opValue(patch.operations[0], '/read'), PUBLIC_READ);
+    assert.strictEqual(opValue(patch.operations[0], '/isPublished'), true);
+    assert.deepStrictEqual(opValue(patch.operations[1], '/read'), ['staff'],
+      'a comment Eagle kept private is not published by its period');
+    assert.strictEqual(canRead({ read: opValue(patch.operations[1], '/read'), projectId: '207' },
+      anonymous()), false);
+  });
+
+  await t.test('a push that did not move the level costs no cascade', async () => {
+    // Most pushes are an edit to the text. Re-deriving every comment on each of them is a bulk
+    // patch per push for no change.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    const writes = stubCommentCascade(t, [{ id: 'c1', read: PUBLIC_READ, eagleRead: PUBLIC_ACL }]);
+
+    const { res } = await pushTo(commentPeriodController, commentPeriods, PERIOD_EAGLE_ID,
+      eaglePeriod({ instructions: 'Tell us more.' }), t, { existing: storedAt(PUBLIC_READ) });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(writes, []);
+  });
+
+  await t.test('a legacy ACL that means the same level is not a change', async () => {
+    // The seed wrote `['public','sysadmin','staff']`; the mirror writes ladder tokens. Both are
+    // level 4, and comparing the arrays instead of the levels would cascade on every push.
+    t.mock.method(projects, 'getByEagleId', async () => storedProject());
+    const writes = stubCommentCascade(t, [{ id: 'c1', read: PUBLIC_READ, eagleRead: PUBLIC_ACL }]);
+
+    const { res } = await pushTo(commentPeriodController, commentPeriods, PERIOD_EAGLE_ID,
+      eaglePeriod(), t, { existing: storedAt(PUBLIC_ACL) });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(writes, []);
   });
 });
 

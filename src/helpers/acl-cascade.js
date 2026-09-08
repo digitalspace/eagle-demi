@@ -13,9 +13,19 @@
 const cosmos = require('../db/cosmos-nosql');
 const { constrainToProject } = require('../repositories/documents');
 const { seedAcl } = require('../seed/transform');
+const { readForLevel } = require('../helpers/access-sql');
 
 /**
- * @param {Array}  rows        `{id, read, eagleRead}` from the container's own acl projection
+ * The widest a row Eagle has deleted may be derived back to, and the widest the mirror stores one
+ * at — staff, the same level a takedown narrows to. Exported so the mirror in
+ * `controllers/nosql/comment-period.js` states the level once, here, rather than beside it. That
+ * file also says why the row is kept at all.
+ */
+const DELETED_CEILING = readForLevel(2);
+
+/**
+ * @param {Array}  rows        `{id, read, eagleRead, isDeleted}` from the container's own acl
+ *   projection. `isDeleted` is projected only by the containers that carry the flag.
  * @param {string} parentRead  the parent's new ACL
  * @returns {Array} `{id, read, isPublished}` per row, in `rows` order
  */
@@ -27,7 +37,11 @@ function deriveAcls(rows, parentRead) {
     const own = Array.isArray(row.eagleRead) && row.eagleRead.length > 0
       ? seedAcl(row.eagleRead)
       : (Array.isArray(row.read) && row.read.length > 0 ? row.read : seedAcl(null));
-    const next = constrainToProject(own, parentRead);
+    // A deleted row's raw Eagle record still says `public` — it was published right up to the
+    // delete — so without this ceiling the next project publish would republish it.
+    const next = row.isDeleted === true
+      ? constrainToProject(constrainToProject(own, parentRead), DELETED_CEILING)
+      : constrainToProject(own, parentRead);
     return { id: String(row.id), read: next, isPublished: next.includes('public') };
   });
 }
@@ -64,4 +78,4 @@ async function cascadeAcl(container, partitionKey, rows, parentRead) {
   return { ...result, ids: derived.map(r => r.id), rows: derived };
 }
 
-module.exports = { deriveAcls, cascadeAcl };
+module.exports = { deriveAcls, cascadeAcl, DELETED_CEILING };

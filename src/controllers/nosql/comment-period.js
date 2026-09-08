@@ -8,14 +8,36 @@
  * so a period Eagle published under a project Eagle has taken down is stored private here. That is
  * the same rule `seed/transform.js` applies to documents, and it is what stops an unpublished
  * project's engagement tab from being readable through this container.
+ *
+ * A COMMENT FOLLOWS ITS PERIOD ONLY BECAUSE THIS WRITES IT DOWN. `/search?dataset=Comment` filters
+ * on the comment's own stored `read[]` and never re-reads the period, so every level change here
+ * is re-derived onto the comments below it. That is the opposite of a chunk, which is gated by a
+ * live read of its parent document.
+ *
+ * A DELETE is a push like any other. eagle-api hard-deletes a period (`findOneAndDelete`), which
+ * leaves nothing to re-read, so it pushes the record it just removed with `isDeleted: true`. DEMI
+ * never hard-deletes it in return — the takedown convention is narrow and flag, so staff and the
+ * reconcile still see what Eagle no longer holds. The row goes to level 2 with `isDeleted: true`,
+ * and its comments follow.
+ *
+ * WHAT MAY UNDO THAT: only another eagle-api push of the same record. Nothing inside DEMI clears
+ * the flag, and the project ACL cascade cannot republish the row past it — the raw Eagle copy
+ * beside it still says `public`, so `helpers/acl-cascade` gates on the flag rather than on the
+ * copy. Mongo does not reuse an ObjectId, so a later push under this id is Eagle holding a record
+ * again, which is the one thing that should bring it back.
  */
 
 const commentPeriods = require('../../repositories/comment-periods');
+const comments = require('../../repositories/comments');
 const projects = require('../../repositories/projects');
 const { constrainToProject } = require('../../repositories/documents');
 const { seedAcl } = require('../../seed/transform');
-const { systemAccess } = require('../../helpers/access-sql');
+const { systemAccess, levelOfRead } = require('../../helpers/access-sql');
+// The widest a deleted period may be stored at, and the ceiling the cascade later re-derives it
+// under: one value, so the two cannot drift apart.
+const { DELETED_CEILING } = require('../../helpers/acl-cascade');
 const { serverError } = require('../../helpers/response');
+const { logger } = require('../../utils/logger');
 const { auditEvent } = require('../../utils/audit');
 const { eaglePush, upsertWithRetry, refId } = require('./eagle-mirror');
 
@@ -40,6 +62,10 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
     relatedDocuments: Array.isArray(doc.relatedDocuments) ? doc.relatedDocuments : [],
     commentTip: doc.commentTip || '',
 
+    // Eagle no longer holds this record. It is a fact about the row, not an ACL: `read` above is
+    // what hides it, this is what says why, and it is what stops a cascade widening it again.
+    isDeleted: doc.isDeleted === true,
+
     // read[] is authoritative and isPublished mirrors it (ADR-004), as every other mirror does.
     isPublished: read.includes('public'),
     read,
@@ -53,7 +79,7 @@ function mirrorItem(eagleId, doc, projectId, read, existing) {
  * that with a 404, a backfill counts it and moves on.
  *
  * @param {object} [parentRow] the DEMI project row, when the caller already holds it
- * @returns {Promise<{saved: object, existing: object|null}|null>}
+ * @returns {Promise<{saved: object, existing: object|null, cascadeError: string|null}|null>}
  */
 async function mirrorFromEagle(eagleId, doc, parentRow) {
   // systemAccess on every read: the mirror must find a private parent and a private existing row.
@@ -63,7 +89,11 @@ async function mirrorFromEagle(eagleId, doc, parentRow) {
     : null);
   if (!parent) return null;
 
-  const read = constrainToProject(seedAcl(doc.read), parent.read);
+  const constrained = constrainToProject(seedAcl(doc.read), parent.read);
+  // Both ceilings, lower wins: the project's, and level 2 once Eagle has deleted the record.
+  const read = doc.isDeleted === true
+    ? constrainToProject(constrained, DELETED_CEILING)
+    : constrained;
 
   const { saved, existing } = await upsertWithRetry(
     commentPeriods,
@@ -77,7 +107,42 @@ async function mirrorFromEagle(eagleId, doc, parentRow) {
     await commentPeriods.deleteById(existing.id, existing.projectId);
   }
 
-  return { saved, existing };
+  // WHENEVER THE LEVEL MOVED, not only on a delete. A comment is gated by its own stored `read[]`
+  // and nothing re-reads its period at query time — unlike a chunk, which derives from its parent
+  // document in the search branch — so a period Eagle unpublished leaves every comment under it
+  // readable until they are re-derived here.
+  const moved = !existing || levelOfRead(existing.read) !== levelOfRead(saved.read);
+  const cascadeError = moved ? await cascadeToComments(saved) : null;
+
+  return { saved, existing, cascadeError };
+}
+
+/**
+ * Re-derive the comments of one period from the period's new ACL.
+ *
+ * The same derivation a project publish runs, one level down: `deriveAcls` takes the lower of each
+ * comment's own upstream ACL and the ceiling passed in, so it narrows on an unpublish and restores
+ * on a re-publish without ever widening a comment Eagle itself kept private.
+ *
+ * @returns {Promise<string|null>} an error message the caller must 500 with, or null
+ */
+async function cascadeToComments(period) {
+  const counts = { periodId: period.id, projectId: period.projectId };
+  try {
+    const cascade = await comments.setAclForPeriod(systemAccess(), period.id, period.read);
+    if (cascade.failed > 0) {
+      logger.error('[Comment Period Controller] comment ACL cascade partially failed',
+        { ...counts, comments: cascade.succeeded, commentsFailed: cascade.failed });
+      return 'Comment period mirrored, but its comments were not fully updated.';
+    }
+    logger.info('[Comment Period Controller] comment ACL cascade',
+      { ...counts, comments: cascade.succeeded });
+    return null;
+  } catch (cascadeErr) {
+    logger.error('[Comment Period Controller] comment ACL cascade failed',
+      { ...counts, error: cascadeErr.message });
+    return 'Comment period mirrored, but its comments were not updated.';
+  }
 }
 
 exports.mirrorFromEagle = mirrorFromEagle;
@@ -92,10 +157,10 @@ exports.upsertFromEagle = async (req, res) => {
 
     const mirrored = await mirrorFromEagle(eagleId, doc);
     if (!mirrored) return res.status(404).json({ error: 'Parent project not found' });
-    const { saved, existing } = mirrored;
+    const { saved, existing, cascadeError } = mirrored;
 
     auditEvent(req, {
-      action: 'commentPeriod.push',
+      action: saved.isDeleted ? 'commentPeriod.delete' : 'commentPeriod.push',
       targetType: 'commentPeriod',
       targetId: saved.id,
       projectId: saved.projectId,
@@ -106,7 +171,11 @@ exports.upsertFromEagle = async (req, res) => {
       }
     });
 
-    return res.json({ id: saved.id, action: 'upsert' });
+    // The row is already narrowed; what failed is the comments under it. eagle-api does not await
+    // this push, so the 500 is for the log and the reconcile, not for a retry.
+    if (cascadeError) return res.status(500).json({ error: cascadeError });
+
+    return res.json({ id: saved.id, action: saved.isDeleted ? 'delete' : 'upsert' });
   } catch (err) {
     return serverError(res, err, 'comment period controller failed');
   }

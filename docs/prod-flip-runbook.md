@@ -1,6 +1,14 @@
 # Search backend switch
 
-One Mongo field decides which backend eagle-public calls for Project and Document search.
+One Mongo field decides which backend eagle-public calls for search. Which datasets move with it
+depends on the eagle-public line deployed:
+
+- `develop`, the line prod runs today: `Project`, `Document`, `DocumentChunk`.
+- `react`, from `v3.0.0`: those three plus `List`, `Organization`, `RecentActivity` and
+  `ProjectNotification`. Not merged into `develop`, so none of those four move on prod yet.
+
+Neither line covers `CommentPeriod` or `Comment`: eagle-public reads those from eagle-api whatever
+the field says.
 eagle-api serves it from `/api/config`; the browser reads it once per page load.
 `/api/config` serves the new value within 19–38 s (measured 2026-08-21); poll up to 60 s before
 concluding the change did not land.
@@ -11,7 +19,7 @@ concluding the change did not land.
 
 | Value | Meaning |
 |---|---|
-| `/demi-search` | Live: eagle-public calls `demi-api-fc-prod` for Project/Document search. |
+| `/demi-search` | Live: eagle-public calls `demi-api-fc-prod` for the datasets its line moves. |
 | `''` | Kill switch: eagle-api serves search itself from Mongo. |
 
 ## Statements
@@ -34,7 +42,11 @@ db.epic.updateOne({ _schemaName: 'Config' }, { $set: { SEARCH_API_PATH: '<value>
   return 200 with `searchResultsTotal` > 0 (only meaningful when the field is `/demi-search`).
 - Browser: `/projects` list renders, a document search returns rows, and the network log shows
   calls to the backend the field currently names.
-- `dataset=List` is still answered by eagle-api regardless of `SEARCH_API_PATH`.
+- On the `develop` line prod runs today, `dataset=List` is still answered by eagle-api regardless
+  of `SEARCH_API_PATH`, and so are `Organization`, `RecentActivity` and `ProjectNotification`.
+  They move with the field only once prod runs `react` (`v3.0.0`).
+- `dataset=CommentPeriod` and `dataset=Comment` are answered by eagle-api on both lines — those
+  two are not on this switch.
 - `/api/config` 200, `/admin/` 200.
 
 ## After a change
