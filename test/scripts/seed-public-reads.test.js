@@ -238,6 +238,46 @@ test('a mirror that answers null is a skip, not a write', async () => {
   assert.strictEqual(summary.stages.commentPeriods.errors, 0, 'and a missing parent is not an error');
 });
 
+test('a stage that dropped a row for want of a parent is not checkpointed complete', async () => {
+  // On test this stage dropped 19 comment periods, recorded itself complete because errors was 0,
+  // and every plain rerun after that skipped it — the periods, and the 88 comments hanging off
+  // them, were unreachable until the state file was deleted by hand. A drop is not a failure, but
+  // it is a row still owed: the parent project can be published after this run.
+  const state = statePath();
+  fs.writeFileSync(state, JSON.stringify({
+    organizations: { completedAt: '2026-09-01T00:00:00.000Z' }
+  }));
+  const attempts = [];
+  const deps = () => ({
+    sources: stubSources({
+      datasets: {
+        List: [], Organization: [{ _id: 'O1' }], ProjectNotification: [], RecentActivity: [],
+        CommentPeriod: [{ _id: 'CP1' }, { _id: 'CP2' }]
+      }
+    }),
+    // CP1's project is not in DEMI, so its mirror answers null. CP2 lands.
+    commentPeriodMirror: {
+      mirrorFromEagle: async (eagleId) => {
+        attempts.push(eagleId);
+        return eagleId === 'CP1' ? null : { saved: { id: eagleId }, existing: null };
+      }
+    }
+  });
+
+  const first = await backfill(['--live', '--state', state], deps());
+  assert.strictEqual(first.stages.commentPeriods.dropped, 1, 'the parentless row is a drop');
+  assert.strictEqual(first.stages.commentPeriods.errors, 0, 'and still not an error');
+  assert.strictEqual(JSON.parse(fs.readFileSync(state, 'utf8')).commentPeriods, undefined,
+    'a stage owing rows must stay off the checkpoint');
+
+  const second = await backfill(['--live', '--state', state], deps());
+  assert.ok(second.skipped.includes('organizations'),
+    'the stage that finished clean is still skipped — the rerun is not a full replay');
+  assert.ok(!second.skipped.includes('commentPeriods'), 'only the stage owing rows runs again');
+  assert.deepStrictEqual(attempts, ['CP1', 'CP2', 'CP1', 'CP2'],
+    'and the dropped row is walked again rather than left behind a completedAt');
+});
+
 test('a stage that logged errors is NOT checkpointed', async (t) => {
   t.mock.method(logger, 'error', () => {});
   const state = statePath();
@@ -385,6 +425,77 @@ test('comments', async (t) => {
       assert.strictEqual(second.stages.comments.errors, 0);
       assert.deepStrictEqual(checkpointedPeriods(state), [PERIOD_EAGLE_ID],
         'and only the clean run records the period');
+      t2.mock.restoreAll();
+    });
+
+  await t.test('--only comments ignores the per-period checkpoint, so a repair can reach a period',
+    async () => {
+      // The header promises `--only <stage>` re-runs the stages it names, checkpoint or no
+      // checkpoint. The stage checkpoint was honoured; the per-period one was not, so the repair
+      // walked every period, skipped all of them, and exited 0 looking like a completed backfill.
+      const state = statePath();
+      fs.writeFileSync(state, JSON.stringify({
+        comments: { completedAt: '2026-09-01T00:00:00.000Z', periods: [PERIOD_EAGLE_ID] }
+      }));
+      const wrote = [];
+
+      const summary = await backfill(['--live', '--only', 'comments', '--state', state], {
+        sources: stubSources({
+          datasets: { CommentPeriod: [period] }, commentItems: [eagleComment({ _id: 'C1' })]
+        }),
+        commentPeriodsRepo: { getById: async () => storedPeriod() },
+        commentMirror: recordingMirror('comments', wrote)
+      });
+
+      assert.deepStrictEqual(wrote.map(w => w[1]), ['C1'],
+        'the comment under the already-checkpointed period is re-mirrored');
+      assert.strictEqual(summary.stages.comments.written, 1);
+      assert.deepStrictEqual(checkpointedPeriods(state), [PERIOD_EAGLE_ID],
+        'and the repaired period is recorded again');
+    });
+
+  await t.test('a comment page that lost its total or its shape is an error, not a zero',
+    async (t2) => {
+      // `Number(null)` is 0, which satisfies the truncation check, and without `count=true` the
+      // body is the `[{ total_items, results }]` envelope whose rows carry no `_id` and filter
+      // away to nothing. Either one alone records the period as holding zero comments, errors 0,
+      // and checkpoints it — the period looks swept and its comments are gone from DEMI for good.
+      const logged = [];
+      t2.mock.method(logger, 'error', (msg, meta) => logged.push(meta && meta.error));
+
+      const runWith = async (fetchJsonWithHeaders) => {
+        logged.length = 0;
+        const state = statePath();
+        const wrote = [];
+        const summary = await backfill(['--live', '--only', 'comments', '--state', state], {
+          sources: { ...stubSources({ datasets: { CommentPeriod: [period] } }),
+            fetchJsonWithHeaders },
+          commentPeriodsRepo: { getById: async () => storedPeriod() },
+          commentMirror: recordingMirror('comments', wrote)
+        });
+        return { summary, wrote, periods: checkpointedPeriods(state), logged: [...logged] };
+      };
+
+      // No header and an empty body: the truncation check reads 0 against 0 and is satisfied, so
+      // the period was recorded swept with zero comments — indistinguishable from a real one.
+      const noHeader = await runWith(async () => ({ body: [], headers: new Headers({}) }));
+      assert.strictEqual(noHeader.summary.stages.comments.errors, 1,
+        'a missing x-total-count is an error for the period, not a total of zero');
+      assert.match(noHeader.logged[0], /x-total-count/, 'and it says which contract broke');
+      assert.deepStrictEqual(noHeader.periods, [], 'so the period is not checkpointed');
+
+      // The envelope the endpoint answers without `count=true`: its one row has no `_id`, so the
+      // filter empties the page. Reported as a truncated read, which sends the operator hunting a
+      // withdrawn comment instead of the query that lost its flag.
+      const envelope = await runWith(async () => ({
+        body: [{ total_items: 88, results: [eagleComment({ _id: 'C1' })] }],
+        headers: new Headers({ 'x-total-count': '88' })
+      }));
+      assert.strictEqual(envelope.summary.stages.comments.errors, 1);
+      assert.match(envelope.logged[0], /count=true contract/,
+        'the wrong shape is named as the wrong shape, not as a short read');
+      assert.deepStrictEqual(envelope.wrote, [], 'nothing is mirrored out of either answer');
+      assert.deepStrictEqual(envelope.periods, []);
       t2.mock.restoreAll();
     });
 

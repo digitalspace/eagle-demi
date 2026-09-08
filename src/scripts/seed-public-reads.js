@@ -41,8 +41,15 @@
  * stage checkpoints per comment period, so a killed run resumes at the period it died in rather
  * than at the first one. Writes are upserts, so a replay is harmless either way.
  *
+ * A stage is only FINISHED when it neither errored nor dropped a row for want of a parent. A drop
+ * is not a failure — the parent is another stage's to supply, and may be published tomorrow — but
+ * it does mean rows are still owed, so the stage stays off the checkpoint and a plain rerun walks
+ * it again. The comment stage's per-period checkpoint survives that rerun, so it only re-walks the
+ * periods it owes. The counters in the state file and in the log line are one run's, not a total.
+ *
  * `--only <stage>` RE-RUNS the stages it names, checkpoint or no checkpoint — it is how a repair is
- * asked for. Delete the state file to force a full rerun of everything.
+ * asked for, and `--only comments` ignores the per-period checkpoint for the same reason. Delete
+ * the state file to force a full rerun of everything.
  */
 
 const fs = require('fs');
@@ -223,13 +230,19 @@ function saveState(path, state) {
   fs.writeFileSync(path, JSON.stringify(state, null, 2));
 }
 
-/** Counters every stage reports, and the line the run is read off. */
-const newCounts = () => ({ fetched: 0, written: 0, skipped: 0, errors: 0 });
+/**
+ * Counters every stage reports, and the line the run is read off.
+ *
+ * `dropped` is the subset of `skipped` whose parent was not in DEMI. It is counted apart because
+ * the two skips mean opposite things about completeness: a row outside `--since` was never wanted,
+ * a dropped row is still owed and lands as soon as its parent does.
+ */
+const newCounts = () => ({ fetched: 0, written: 0, skipped: 0, dropped: 0, errors: 0 });
 
 function stageLine(stage, counts, live) {
-  return `[backfill] ${stage}: fetched=${counts.fetched} ` +
+  return `[backfill] ${stage} (this run): fetched=${counts.fetched} ` +
     `${live ? 'written' : 'would-write'}=${counts.written} ` +
-    `skipped=${counts.skipped} errors=${counts.errors}`;
+    `skipped=${counts.skipped} dropped=${counts.dropped} errors=${counts.errors}`;
 }
 
 /** One row. Returns what it did, so the caller only counts. */
@@ -241,8 +254,9 @@ async function writeRow(doc, write, args, deps, counts) {
   try {
     // A mirror answers null when the row's parent is not in DEMI — an unpublished project's
     // comment period, say. That is a skip, not an error: the parent is seed-nosql's to supply.
+    // It is also counted as a drop, so the stage is not checkpointed complete over rows it owes.
     const result = await write(doc, deps);
-    if (result) counts.written++; else counts.skipped++;
+    if (result) counts.written++; else { counts.skipped++; counts.dropped++; }
   } catch (err) {
     counts.errors++;
     if (counts.errors <= MAX_LOGGED_ERRORS) {
@@ -270,17 +284,31 @@ async function backfillDataset(stage, args, deps) {
  * `/search` has no Comment dataset, so this is the per-period endpoint instead. `count=true` makes
  * the body a bare array of comments and puts the total in `x-total-count` — it is the only place
  * the total is reported, so the truncation check below has nowhere else to read it.
+ *
+ * BOTH HALVES OF THAT CONTRACT ARE CHECKED, because breaking either is silent: a missing header
+ * reads as `Number(null)` = 0, which satisfies the truncation check, and an envelope body carries
+ * no `_id` to survive the filter. Either way the period records zero comments and is checkpointed.
  */
 async function fetchCommentPage(base, periodId, pageNum, deps) {
   const url = `${base}/comment?period=${encodeURIComponent(periodId)}&count=true` +
     `&pageNum=${pageNum}&pageSize=${deps.sources.PAGE_SIZE}` +
     `&fields=${encodeURIComponent(COMMENT_FIELDS.join('|'))}`;
   const { body, headers } = await deps.sources.fetchJsonWithHeaders(url);
-  const total = Number(headers.get('x-total-count'));
-  return {
-    items: (Array.isArray(body) ? body : []).filter(row => row && row._id),
-    total: Number.isFinite(total) ? total : null
-  };
+
+  const rows = Array.isArray(body) ? body : [];
+  if (rows.length && rows[0] && rows[0].total_items !== undefined && !rows[0]._id) {
+    throw new Error(`period ${periodId} page ${pageNum}: eagle-api answered the total_items ` +
+      'envelope, not a comment array — the count=true contract is broken');
+  }
+
+  const raw = headers.get('x-total-count');
+  const total = Number(raw);
+  if (raw === null || raw === '' || !Number.isFinite(total)) {
+    throw new Error(`period ${periodId} page ${pageNum}: eagle-api sent no usable ` +
+      `x-total-count (${JSON.stringify(raw)}) — refusing to read a missing total as zero`);
+  }
+
+  return { items: rows.filter(row => row && row._id), total };
 }
 
 /**
@@ -325,7 +353,10 @@ async function eachCommentPage(periodId, deps, onPage) {
 async function backfillComments(args, deps, state) {
   const counts = newCounts();
   const periods = await deps.sources.fetchAllPages(deps.sources.EAGLE_API_BASE, 'CommentPeriod');
-  const done = new Set((state.comments && state.comments.periods) || []);
+  // `--only comments` is the repair, and the per-period checkpoint is what it must ignore — the
+  // same reason `backfill` ignores the stage checkpoint for a stage the operator named. Honouring
+  // it made `--only comments` a no-op that exits 0 and reads like a completed repair.
+  const done = new Set(args.onlyExplicit ? [] : ((state.comments && state.comments.periods) || []));
 
   for (const row of periods) {
     const periodId = String(row._id);
@@ -334,10 +365,12 @@ async function backfillComments(args, deps, state) {
     const period = await deps.commentPeriodsRepo.getById(systemAccess(), periodId);
     if (!period) {
       counts.skipped++;
+      counts.dropped++;
       continue;
     }
 
     const errorsBefore = counts.errors;
+    const droppedBefore = counts.dropped;
     try {
       await eachCommentPage(periodId, deps, async (items) => {
         for (const doc of items) {
@@ -347,8 +380,9 @@ async function backfillComments(args, deps, state) {
       });
       // Only a period whose every comment landed is checkpointed. `writeRow` swallows a row failure
       // into `counts.errors` rather than throwing, so without this the period would be recorded
-      // done, the next run would skip it, and the failed comments would be missing for good.
-      if (counts.errors === errorsBefore) {
+      // done, the next run would skip it, and the failed comments would be missing for good. A
+      // dropped comment is owed the same retry — its parent can land after this run.
+      if (counts.errors === errorsBefore && counts.dropped === droppedBefore) {
         done.add(periodId);
         if (args.live) {
           state.comments = { ...state.comments, periods: [...done] };
@@ -407,8 +441,9 @@ async function backfill(argv = [], overrides = {}) {
     logger.info(stageLine(stage, counts, args.live));
 
     // Only a clean stage is checkpointed: a run that logged errors has rows it did not write, and
-    // skipping it next time would leave them missing for good.
-    if (args.live && counts.errors === 0) {
+    // skipping it next time would leave them missing for good. A stage that DROPPED rows is in the
+    // same position: the parent it waited on can be published after this run.
+    if (args.live && counts.errors === 0 && counts.dropped === 0) {
       // Spread the stage's own entry back in: the comment stage keeps its per-period checkpoint
       // there, and overwriting it would make the next run walk every period again.
       state[stage] = { ...state[stage], completedAt: new Date().toISOString(), ...counts };
