@@ -42,10 +42,13 @@ function criteriaFor(projectId) {
 }
 
 /**
- * The periods of one project, as this caller may see them.
+ * The periods of one parent, as this caller may see them.
  *
- * @param {string} projectId  the DEMI project id — `mirrorItem` stores the parent's `id`, not its
- *   `eagleId`, so both project-partitioned containers answer a scoped caller on the same value
+ * @param {string} projectId  the DEMI id of the parent the periods hang off. Usually a project,
+ *   but `helpers/parent-admit.js` also admits a `ProjectNotification`, and the mirror partitions a
+ *   period under whichever parent it picked — so `reconcile-eagle.js` walks both id spaces here.
+ *   Always the parent's `id`, never its `eagleId`, so a caller scoped to a project passes the same
+ *   value the projects container answers on.
  */
 async function listByProject(projectId, access, { pageNum, pageSize, sortBy } = {}) {
   const spec = selectWhere({
