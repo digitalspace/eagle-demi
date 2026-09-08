@@ -26,6 +26,34 @@ const { analyticsEvent } = require('../utils/audit');
 const config = require('../config');
 
 /**
+ * The body of a 502 from a search that FAILED — never a search that found nothing.
+ *
+ * The status and the public sentence are unchanged; what is added is enough to act on. On
+ * 2026-09-08 the browser console said only "Document search is unavailable" for 65 minutes while
+ * the cause — the live index missing `fileSize` — sat in AppTraces, and finding it took a Log
+ * Analytics query, the code and the git history.
+ *
+ * `code` separates the two failures an operator handles differently: SEARCH_SCHEMA_DRIFT means the
+ * live index cannot answer what this app asks (widen the index — `/health/search-schema` names the
+ * field), SEARCH_UPSTREAM means the service did not answer (a role, a timeout, a Cosmos fault).
+ * `traceId` is the request id every log line for this request already carries, so the body names
+ * the trace to open rather than describing it.
+ *
+ * THE UPSTREAM TEXT ITSELF NEVER GOES IN: this route is reachable anonymously, and a search error
+ * message carries the service endpoint, the index name and sometimes the OData filter — which is
+ * the caller's ACL clause. `field` is a name from the app's own select, not caller data.
+ */
+function searchUnavailable(req, err, message) {
+  const field = aiSearch.missingPropertyFrom(err);
+  return {
+    error: message,
+    code: field ? 'SEARCH_SCHEMA_DRIFT' : 'SEARCH_UPSTREAM',
+    ...(field ? { field } : {}),
+    ...(req && req.id ? { traceId: req.id } : {})
+  };
+}
+
+/**
  * A stored GeoJSON point as the frontend wants it: `[lng, lat]`. Cosmos, the index and the frontend
  * all use that order, so nothing is swapped here.
  */
@@ -545,6 +573,15 @@ exports.search = async (req, res) => {
       droppedKeys[kind].push(...keys);
     };
 
+    // A FIELD THE LIVE INDEX COULD NOT ANSWER, told to the caller the same way `dropped` is. The
+    // search layer drops such a field and retries once rather than failing the whole page (see
+    // `send` in ai-search), which keeps the tab up — but a page quietly missing a column reads
+    // exactly like a page whose column is empty, and on 2026-09-08 that column was the only clue.
+    let degraded = null;
+    const noteDegraded = (meta) => {
+      if (meta && meta.degraded) degraded = meta.degraded;
+    };
+
     // The eagle envelope AND the usage event, applied once by wrapping the response rather than at
     // each of a dozen exits. `meta` is additive, and `searchResultsTotal` is emitted only where a
     // total was MEASURED — see wiki Search-Query-Construction#totals-are-measured-never-the-page-length.
@@ -580,7 +617,9 @@ exports.search = async (req, res) => {
             : {}),
           // OMITTED when nothing was dropped, and carrying BOTH `.filter` and `.sort` when present
           // — see wiki Search-Query-Construction#the-dropped-keys-report.
-          ...(droppedKeys.filter.length || droppedKeys.sort.length ? { dropped: droppedKeys } : {})
+          ...(droppedKeys.filter.length || droppedKeys.sort.length ? { dropped: droppedKeys } : {}),
+          // OMITTED unless a field was dropped to keep the search answerable at all.
+          ...(degraded ? { degraded } : {})
         }];
       }
       return sendJson(payload);
@@ -623,7 +662,7 @@ exports.search = async (req, res) => {
 
             // `count` is the index-wide total, not the page — eagle-public pages against it and the
             // column header shows it.
-            const { items, count } = await aiSearch.searchProjects({
+            const { items, count, meta } = await aiSearch.searchProjects({
               filter,
               orderby,
               skip,
@@ -634,6 +673,7 @@ exports.search = async (req, res) => {
               fuzzy,
               top: pageSize
             });
+            noteDegraded(meta);
 
             if (items.length > 0) {
               const searchResults = items.map(hit => {
@@ -708,7 +748,7 @@ exports.search = async (req, res) => {
           // either — see wiki Search-Query-Construction#a-failed-search-is-never-an-empty-one. The
           // status stays 502 whatever eagle-public does with it.
           logger.error(`[search] project search failed: ${err.message}`);
-          return res.status(502).json({ error: 'Project search is unavailable' });
+          return res.status(502).json(searchUnavailable(req, err, 'Project search is unavailable'));
         }
       }
 
@@ -791,7 +831,7 @@ exports.search = async (req, res) => {
         // See the keyword branch above: a search that FAILED is not a search that found nothing.
         // 200 with `[]` told every visitor of /projects that the EA registry contains no projects.
         logger.error(`[search] project list failed: ${cosmosErr.message}`);
-        return res.status(502).json({ error: 'Project search is unavailable' });
+        return res.status(502).json(searchUnavailable(req, cosmosErr, 'Project search is unavailable'));
       }
     } else if (dataset === 'Document') {
       // EVERY document read is answered by the index — NOT the Project rule, and the difference is
@@ -821,7 +861,7 @@ exports.search = async (req, res) => {
             eagleQuery.buildOrderBy(req.query.sortBy, dataset, Boolean(keywords), access);
           noteDropped('sort', sortDropped);
 
-          const { items, count } = await aiSearch.searchDocuments({
+          const { items, count, meta } = await aiSearch.searchDocuments({
             filter: scopedDocFilter,
             orderby,
             // Rows in the caller's own `pageSize`, computed once above and shared with every other
@@ -837,6 +877,7 @@ exports.search = async (req, res) => {
             fuzzy,
             top: pageSize
           });
+          noteDegraded(meta);
 
           if (items.length > 0) {
             const mappedDocs = items.map(hit => {
@@ -893,7 +934,7 @@ exports.search = async (req, res) => {
         // Same rule as the project branch: a search that failed is not a search that found nothing,
         // and there is nothing to fall through to now.
         logger.error(`[search] document search failed: ${err.message}`);
-        return res.status(502).json({ error: 'Document search is unavailable' });
+        return res.status(502).json(searchUnavailable(req, err, 'Document search is unavailable'));
       }
     } else if (dataset === 'DocumentChunk') {
       // Deep Search over extracted document TEXT. NO fallback to another source on an empty
@@ -937,7 +978,7 @@ exports.search = async (req, res) => {
         // `pageSize` is a fetch knob for this dataset, not a row count. See
         // wiki Search-Query-Construction#chunk-paging-is-a-window.
         const chunkWindow = groupChunks.windowFor(pageSize, aiSearch.SERVICE_MAX_TOP);
-        const { items, count } = await aiSearch.searchChunks({
+        const { items, count, meta } = await aiSearch.searchChunks({
           filter: scopedFilter,
           // No `orderby`: every field in `chunks` is `sortable: false`, the key included, and
           // naming a non-sortable field is a 400. Chunk pages are relevance-ordered with no
@@ -947,6 +988,7 @@ exports.search = async (req, res) => {
           fuzzy,
           top: chunkWindow
         });
+        noteDegraded(meta);
 
         if (items.length === 0) {
           // `count` rather than a bare empty answer: a page past the end of a large result set
@@ -1035,7 +1077,7 @@ exports.search = async (req, res) => {
         // status code is the only place that difference can be said. DEMI's chunk leg already
         // renders a non-2xx as an unknown count.
         logger.error(`[search] chunk search failed: ${err.message}`);
-        return res.status(502).json({ error: 'Deep Search is unavailable' });
+        return res.status(502).json(searchUnavailable(req, err, 'Deep Search is unavailable'));
       }
     } else if (COSMOS_DATASETS[dataset]) {
       // The reads eagle-public used to make against eagle-api. Cosmos, never the index: these
@@ -1059,7 +1101,7 @@ exports.search = async (req, res) => {
         return res.json([{ searchResults: result.searchResults, count: result.count }]);
       } catch (err) {
         logger.error(`[search] ${dataset} read failed: ${err.message}`);
-        return res.status(502).json({ error: `${dataset} search is unavailable` });
+        return res.status(502).json(searchUnavailable(req, err, `${dataset} search is unavailable`));
       }
     } else {
       return res.status(400).json({ error: `Invalid or unsupported dataset: ${dataset}` });
