@@ -154,15 +154,27 @@ order takes the live search down for anonymous callers.
    returns 204, which is how a projection changes without anyone handling the secret the export
    redacts. Send the committed file with that one value swapped.
 
-   **The `DIFFERS` warning cannot fire where you run this, so do not wait for it.** The script
-   compares the live `container.query` against the committed copy — but `scripts/package-api.py`
-   ships `azure/search/indexes` and NOT `azure/search/datasources`, so inside the container there is
-   no committed copy to compare and the run prints `(ds demi-projects-ds ok)` while the data source
-   is stale. Measured 2026-08-23. **Verify the live query directly instead**: GET the data source
-   before and after and grep the new column out of `container.query`.
+   **Whether the `DIFFERS` warning can fire depends on where you run this.** The script compares the
+   live `container.query` against the committed copy. Only the packaged container lacks that copy:
+   `scripts/package-api.py` ships `azure/search/indexes` and NOT `azure/search/datasources`, so
+   inside the container there is nothing to compare against and the run prints
+   `(ds demi-projects-ds ok)` while the data source is stale. Measured 2026-08-23. From a checkout
+   the directory is present, and the devbox has one, so there the warning does fire and you can
+   trust it. In the container **verify the live query directly instead**: GET the data source before
+   and after and grep the new column out of `container.query`.
 3. **Then the indexer.** A schema-only widening re-pulls **nothing** — the high-water mark is
    `_ts`, so existing rows are untouched and the new column stays `null` on every one of them,
    which makes the new filter match zero rows under a 200. The reset is what re-pulls them:
+
+   **Do not reset while an execution is in progress.** The `PT5M` schedule means a tick can already
+   be running when the reset lands, and when that tick finishes it writes back the high-water mark it
+   started with, undoing the clear. The `run` that follows then has nothing to pick up and reports
+   0 rows processed, which looks like a broken reset rather than a lost one (hit 2026-09-07). Check
+   before you reset, and wait until it answers anything other than `inProgress`:
+
+   ```bash
+   curl -s "{endpoint}/indexers/{name}/status?api-version=2024-07-01" | jq -r '.executionHistory[0].status'
+   ```
 
    ```
    POST {endpoint}/indexers/{name}/reset?api-version=2024-07-01    -> 204

@@ -184,6 +184,10 @@ require_secrets() {
   # `val` via indirect expansion, then ${#val}. There is no ${#!name} form — bash rejects it as a
   # bad substitution, and `bash -n` does not catch it because it is a runtime expansion error.
   #
+  # `${!name:-}` and NOT `${!name}`. Under `set -u` an unset name kills the script with
+  # `<NAME>: unbound variable` and exit 1, before the checks below can name what is missing — and
+  # unset is the normal case for the two APIM headers, which only ever arrive as a hand export.
+  #
   # MIN_LEN rather than a bare emptiness check. `[ -z ]` passes a single space, which is exactly how
   # a throwaway test value reached a real deployment and destroyed two live credentials. Nothing
   # here is legitimately shorter than 8 characters — the real ones are 11, 40, 48 and 64.
@@ -194,9 +198,9 @@ require_secrets() {
     # ENDS ONLY for the SSH key: it is `<algorithm> <base64> [comment]`, and the full strip the six
     # opaque secrets get eats those separators and hands Compute a one-field string ARM rejects.
     if [ "$name" = 'DEVBOX_SSH_PUBLIC_KEY' ]; then
-      val="$(printf '%s' "${!name}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+      val="$(printf '%s' "${!name:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     else
-      val="$(printf '%s' "${!name}" | tr -d '[:space:]')"
+      val="$(printf '%s' "${!name:-}" | tr -d '[:space:]')"
     fi
     if [ -z "$val" ]; then
       echo -e "${RED}  ✗ ${name} is empty${NC}" >&2
@@ -229,6 +233,11 @@ there is no rollback — ARM does not retain @secure() parameter values.
   NOTIFY_API_KEY                           OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
                                            (the eagle-notify function key; only asked for where the
                                            param file sets a non-empty notifyApiBase)
+  APIM_SHARED_HEADER_VALUE / AUDIT_SHARED_HEADER_VALUE
+                                           NOT in OpenShift. GitHub environment secrets of the same
+                                           names, on eagle-analytics and on this repository — export
+                                           both by hand; only asked for where the param file sets a
+                                           non-empty analyticsBackendUrl
   DEVBOX_SSH_PUBLIC_KEY                    OpenShift secret demi-app-secrets in 6cdc9e-${ENVIRONMENT}
                                            (a PUBLIC key — 'ssh-keygen -t ed25519' and store the .pub,
                                            or export it; only asked for when deployDevbox = true)
