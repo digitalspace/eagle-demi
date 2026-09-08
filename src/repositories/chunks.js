@@ -66,6 +66,35 @@ async function listVisible(access, opts = {}) {
   return cosmos.query(CONTAINER, spec, options);
 }
 
+/**
+ * Every chunk of ONE document, in page order.
+ *
+ * From COSMOS, not AI Search: chunk `content` is `maxVis 0` and never a select in `ai-search.js`
+ * (test/vis/search-drift.test.js pins that), so the index cannot serve text. This is the same
+ * source the summary endpoint reads its text from, and `listVisible` composes the same predicate.
+ *
+ * Sorted here because the container has no ORDER BY that survives paging, and a chunk id carries
+ * its own order — `<docId>::p<page>::c<index>` — so page then index is deterministic.
+ *
+ * `max` is a real ceiling, not a formality: this drains a partition, and the caller is an offline
+ * generator rather than a request path.
+ */
+async function allForDocument(access, documentId, { max = 2000 } = {}) {
+  const rows = [];
+  let continuationToken;
+  do {
+    const page = await listVisible(access, { documentId, pageSize: 1000, continuationToken });
+    for (const row of page.items) rows.push(row);
+    continuationToken = page.continuationToken;
+  } while (continuationToken && rows.length < max);
+
+  rows.sort((a, b) =>
+    ((a.pageNumber ?? 0) - (b.pageNumber ?? 0)) ||
+    ((a.chunkIndex ?? 0) - (b.chunkIndex ?? 0)));
+
+  return rows.slice(0, max);
+}
+
 async function getById(access, id, documentId) {
   const doc = await cosmos.readItem(CONTAINER, String(id), String(documentId));
   if (!doc) return null;
@@ -226,6 +255,7 @@ module.exports = {
   SCOPE_FIELD,
   chunkId,
   listVisible,
+  allForDocument,
   getById,
   idsForDocument,
   setAclForDocument,

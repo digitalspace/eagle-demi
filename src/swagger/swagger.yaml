@@ -340,6 +340,88 @@ paths:
         '404':
           description: Project not found.
 
+  /api/projects/{id}/summary:
+    get:
+      summary: Get a project's stored AI summary
+      description: >-
+        The per-project summary generated offline and stored, not computed on request — nothing
+        here calls a model. Privileged only, like `/api/search/summary`, and gated on the PROJECT:
+        a caller who gets 404 from `GET /api/projects/{id}` gets 404 here. Returns
+        `{"summary": null, "reason": "disabled"}` while `SUMMARY_ENABLED` is off.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: A DEMI project id, or the project's Eagle ObjectId.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: >-
+            The stored record — `facts` (counts and document ids, computed by code), `sections`
+            (model output, each item citing its sources) and `citations` (the chunks cited).
+        '401':
+          description: Unauthorized.
+        '404':
+          description: >-
+            Project not found, or `{"error": "no_summary"}` when the project has no stored record.
+    put:
+      summary: Store a project's AI summary
+      description: >-
+        The generator's write (`npm run ai:project-summary -- --project <id> --live`). The stored
+        `id` and `projectId` come from the resolved project, not from the body.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [generatedAt, facts, sections, citations]
+              properties:
+                generatedAt:
+                  type: string
+                model:
+                  type: string
+                  description: The deployment that ran.
+                pricedAs:
+                  type: string
+                  description: The model `estimatedCostCad` was priced against.
+                promptVersion:
+                  type: integer
+                usage:
+                  type: object
+                estimatedCostCad:
+                  type: number
+                facts:
+                  type: object
+                sections:
+                  type: object
+                citations:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: The stored record.
+        '400':
+          description: The body is not a summary record, or a section cites a source number outside the record's citations.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Project not found.
+
   /api/projects/{id}/level:
     put:
       summary: Set a project's ladder level
@@ -636,6 +718,55 @@ paths:
           description: Document not found.
         '409':
           description: The document would out-rank its project.
+
+  /api/documents/{id}/chunks:
+    get:
+      summary: A document's extracted text, in page order
+      description: >-
+        The ONLY route that returns full chunk `content`; the chunk search deliberately does not.
+        It exists so the project-summary generator can read a document's text from outside the
+        VNet, where Cosmos and AI Search are unreachable. Privileged only, like
+        `/api/search/summary`, and the parent document's ACL is re-applied before anything is
+        fetched — a chunk's own `read[]` is an ingest-time snapshot and can outlive its parent's
+        visibility.
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          description: Parent project id, the partition key.
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: One-based page number.
+          schema:
+            type: integer
+            default: 1
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 500
+            maximum: 1000
+      responses:
+        '200':
+          description: >-
+            `{items, count, page, pageSize}`. `count` is the whole document, not the page. Each
+            item carries `chunkId`, `documentId`, `projectId`, `pageNumber` and `content`.
+        '401':
+          description: Unauthorized.
+        '404':
+          description: Document not found.
 
   /api/documents/{id}/published:
     put:

@@ -93,6 +93,19 @@ function estimateCostCad(usage) {
 }
 
 /**
+ * Chat-completions URL for the configured deployment.
+ *
+ * Exported because `ai/project-summary.js` calls the same deployment with a different prompt: two
+ * copies of this string is two places to update when the API version moves, and a wrong one fails
+ * as a 404 that reads like a missing deployment.
+ */
+function foundryChatUrl() {
+  return `${config.foundryEndpoint.replace(/\/$/, '')}/openai/deployments/` +
+    `${encodeURIComponent(config.foundryDeployment)}/chat/completions` +
+    `?api-version=${encodeURIComponent(config.foundryApiVersion)}`;
+}
+
+/**
  * Trim a chunk to the configured ceiling.
  *
  * Cost is bounded here, before the request, rather than discovered on the bill. Cutting on a word
@@ -170,9 +183,7 @@ async function summarize(keywords, chunks) {
   const used = chunks.slice(0, config.summaryMaxChunks);
   const prompt = buildPrompt(keywords, used, config.summaryMaxChars);
 
-  const url = `${config.foundryEndpoint.replace(/\/$/, '')}/openai/deployments/` +
-    `${encodeURIComponent(config.foundryDeployment)}/chat/completions` +
-    `?api-version=${encodeURIComponent(config.foundryApiVersion)}`;
+  const url = foundryChatUrl();
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.summaryTimeoutMs);
@@ -236,6 +247,9 @@ async function summarize(keywords, chunks) {
 module.exports = {
   summarize,
   estimateCostCad,
+  // Shared with ai/project-summary.js, which calls the same deployment with its own prompts.
+  getToken,
+  foundryChatUrl,
   // Exported for tests: prompt shape bounds the bill, and citation parsing bounds what the UI links.
   buildPrompt,
   parseCitations,

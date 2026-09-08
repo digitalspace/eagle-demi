@@ -32,6 +32,7 @@ const adminReadsController = () => require('../controllers/admin-reads');
 const searchController = () => require('../controllers/search');
 const wildfireController = () => require('../controllers/wildfire');
 const projectController = () => require('../controllers/nosql/project');
+const projectSummaryController = () => require('../controllers/project-summary');
 const documentController = () => require('../controllers/nosql/document');
 const updateController = () => require('../controllers/nosql/update');
 const commentPeriodController = () => require('../controllers/nosql/comment-period');
@@ -108,6 +109,13 @@ const routes = [
   // Projects Routes
   { method: 'get', path: '/projects', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => projectController().getProjects },
   { method: 'get', path: '/projects/:id', guards: [passiveAuthMiddleware, credentialsMiddleware], load: () => projectController().getProject },
+  // The stored AI summary. Same guards as `/search/summary` and for the same reason — every AI
+  // surface is privileged-only while cost, abuse and the review workflow are unsettled. A point
+  // read of a record generated offline; nothing here calls a model.
+  { method: 'get', path: '/projects/:id/summary', guards: [authMiddleware, credentialsMiddleware], load: () => projectSummaryController().getProjectSummary },
+  // The generator's write. `requireWrite`, so a read-only credential cannot store prose that
+  // renders as EAO's account of a project.
+  { method: 'put', path: '/projects/:id/summary', guards: [authMiddleware, requireWrite], load: () => projectSummaryController().putProjectSummary },
   { method: 'post', path: '/projects', guards: [authMiddleware, requireWrite], load: () => projectController().createProject },
   { method: 'put', path: '/projects/:id', guards: [authMiddleware, requireWrite], load: () => projectController().updateProject },
   // Ladder moves — docs/rbac-architecture.md §1, "Widening is an act". Nothing else raises a level.
@@ -134,6 +142,10 @@ const routes = [
   // handler reads off `req.stream`. The caller supplies text only — never an ACL: read[] is copied
   // from the live document inside the controller, so an extraction host cannot widen visibility.
   { method: 'post', path: '/documents/:id/chunks', guards: [authMiddleware, requireWrite], load: () => documentController().ingestChunks },
+  // Read side of the line above, and the ONLY route that returns full chunk text. Same guards as
+  // `/search/summary`: it exists so the project-summary generator can read a document's text from
+  // outside the VNet, and the parent-document ACL is re-applied inside the controller.
+  { method: 'get', path: '/documents/:id/chunks', guards: [authMiddleware, credentialsMiddleware], load: () => projectSummaryController().getDocumentChunks },
   { method: 'delete', path: '/documents/:id', guards: [authMiddleware, requireWrite], load: () => documentController().deleteDocument },
 
   // Bulk download. Same chain as /documents/:id/download and for the same reason: the ACL runs

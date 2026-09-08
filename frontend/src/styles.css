@@ -22,8 +22,15 @@ html, body {
   min-height: 0;
 }
 
+/* `position: relative` is load-bearing, not decoration. `.visually-hidden` is absolutely
+   positioned with no inset, so without a positioned ancestor its containing block is the initial
+   containing block: it is laid out at its static offset measured from the DOCUMENT, which for a
+   label far down this scrolling column is ~3,800px. The document then grew to match and the window
+   scrolled thousands of pixels past a shell that is only 100vh tall. Positioning the scroll
+   container keeps every absolute descendant inside it. */
 .app__main {
   overflow-y: auto;
+  position: relative;
 }
 
 .app-sidebar {
@@ -314,3 +321,506 @@ svg.leaflet-zoom-animated:focus {
 
 /* Route host elements are display:block; the map screen needs the host to stretch and shrink. */
 .app__main > app-map-explorer { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* ============================================================================
+   screen: Project summary (/projects/:id)
+
+   One 880px reading column, following the reference status page. Classes rather than the inline
+   styles the other screens use: this page needs a media query (the card grid drops to one column
+   under 600px), :focus-visible, :hover and dialog::backdrop, none of which a style attribute can
+   express. Same place map-explorer's own screen classes live. Every value is a design token.
+   ============================================================================ */
+
+.ps {
+  max-width: 55rem; /* 880px at the 16px root */
+  margin: 0 auto;
+}
+
+.ps__header {
+  margin-bottom: var(--layout-margin-large);
+}
+
+.ps__eyebrow {
+  margin: 0 0 var(--layout-margin-xsmall);
+}
+
+.ps__title {
+  font: var(--typography-bold-h2);
+  margin: 0;
+}
+
+.ps__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-medium);
+  font: var(--typography-regular-body);
+  color: var(--typography-color-secondary);
+  margin: var(--layout-margin-xsmall) 0 0;
+}
+
+/* The status card. The 5px bar states the decision a second time in colour; the label beside it
+   is the primary carrier, so nothing is lost when the colour is not perceived. */
+.ps-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-large);
+  justify-content: space-between;
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-left: 5px solid var(--surface-color-border-medium);
+  border-radius: var(--layout-border-radius-medium);
+  padding: var(--layout-padding-large);
+  margin-bottom: var(--layout-margin-large);
+}
+
+.ps-status--success { border-left-color: var(--support-border-color-success); }
+.ps-status--warning { border-left-color: var(--support-border-color-warning); }
+.ps-status--neutral { border-left-color: var(--surface-color-border-medium); }
+
+.ps-status__body {
+  flex: 1 1 22rem;
+  min-width: 0;
+}
+
+.ps-status__label {
+  font: var(--typography-bold-h5);
+  margin: 0;
+}
+
+.ps-status__sentence {
+  font: var(--typography-regular-body);
+  margin: 0;
+}
+
+.ps-status__dates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--layout-margin-small);
+  margin: 0;
+  text-align: right;
+}
+
+.ps-status__dates dt {
+  font: var(--typography-bold-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--typography-color-secondary);
+}
+
+.ps-status__dates dd {
+  font: var(--typography-bold-small-body);
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-badge-row {
+  margin: var(--layout-margin-small) 0;
+}
+
+.ps-section {
+  padding: var(--layout-margin-large) 0;
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.ps-section:last-child {
+  border-bottom: none;
+}
+
+.ps-section__title {
+  font: var(--typography-bold-h4);
+  margin: 0 0 var(--layout-margin-small);
+}
+
+.ps-section__lede {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  max-width: 46rem;
+  margin: 0 0 var(--layout-margin-medium);
+}
+
+/* A one-line answer, not an alert: no generated summary is a normal state of this page. */
+.ps-note {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  background: var(--surface-color-background-light-gray);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-small);
+  padding: var(--layout-padding-small) var(--layout-padding-medium);
+  margin: 0 0 var(--layout-margin-large);
+}
+
+/* Timeline. Undated phase rows carry an em dash rather than being hidden — the phase happened,
+   the registry just holds no date for it. */
+.ps-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ps-timeline__row {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: var(--layout-margin-medium);
+  padding: var(--layout-padding-small) 0;
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  font: var(--typography-regular-small-body);
+}
+
+.ps-timeline__row:last-child {
+  border-bottom: none;
+}
+
+.ps-timeline__date {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-timeline__label {
+  display: block;
+  min-width: 0;
+}
+
+.ps-timeline__mark {
+  margin-left: var(--layout-margin-xsmall);
+}
+
+/* Card grid — two columns, one under 600px. */
+.ps-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--layout-margin-medium);
+}
+
+@media (max-width: 600px) {
+  .ps-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ps-timeline__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .ps-status__dates {
+    text-align: left;
+  }
+}
+
+.ps-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--layout-margin-xsmall);
+  background: var(--surface-color-background-white);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+  padding: var(--layout-padding-medium);
+  text-align: left;
+}
+
+.ps-card--wide {
+  grid-column: 1 / -1;
+}
+
+.ps-card--action {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ps-card--action:hover {
+  border-color: var(--surface-color-border-active);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
+}
+
+.ps-card--action:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ps-card--action {
+    transition: none;
+  }
+}
+
+.ps-card__category {
+  color: var(--typography-color-secondary);
+}
+
+.ps-card__title {
+  font: var(--typography-bold-small-body);
+}
+
+.ps-card__text {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  margin: 0;
+}
+
+/* Gold underline, never gold text: gold on white is about 1.7:1 and cannot carry a label. */
+.ps-card__cue {
+  font: var(--typography-bold-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--typography-color-link);
+  border-bottom: 2px solid var(--theme-primary-gold);
+  margin-top: auto;
+  padding-top: var(--layout-margin-xsmall);
+}
+
+.ps-card__link {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-link);
+  text-decoration: underline;
+}
+
+.ps-card__link--button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.ps-card__link--button:disabled {
+  color: var(--typography-color-disabled);
+  cursor: default;
+}
+
+.ps-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-large);
+  margin: 0;
+}
+
+.ps-figures dt {
+  font: var(--typography-bold-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--typography-color-secondary);
+}
+
+.ps-figures dd {
+  font: var(--typography-bold-h5);
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ps-list__row {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: var(--layout-margin-medium);
+  padding: var(--layout-padding-small) 0;
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+}
+
+.ps-list__row:last-child {
+  border-bottom: none;
+}
+
+.ps-list__date {
+  font: var(--typography-bold-small-body);
+  color: var(--typography-color-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-list__title {
+  display: block;
+  font: var(--typography-bold-small-body);
+}
+
+.ps-list__text {
+  display: block;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
+
+@media (max-width: 600px) {
+  .ps-list__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}
+
+.ps-unmatched {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--layout-margin-xsmall) var(--layout-margin-small);
+  font: var(--typography-regular-small-body);
+  padding: var(--layout-padding-small) 0;
+  border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  margin: var(--layout-margin-medium) 0 0;
+}
+
+.ps-unmatched__name {
+  font: var(--typography-bold-small-body);
+}
+
+.ps-unmatched__note {
+  color: var(--typography-color-secondary);
+}
+
+/* Citation chips. Same contract as the AI Summary sources table: a number, the document it points
+   at, and a leg that mints a presigned URL under the caller's own access. */
+.ps-cites {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--layout-margin-xsmall);
+  margin: var(--layout-margin-small) 0 0;
+  padding: 0;
+  /* Inside a card the chip is wider than the column it sits in, and a flex item does not shrink
+     below its content unless it is told it may. Without these three it hangs off the card. */
+  align-self: stretch;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ps-cites li {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.ps-cite {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--layout-margin-xsmall);
+  max-width: 100%;
+  min-width: 0;
+  background: var(--surface-color-background-light-gray);
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-circular);
+  padding: 3px 12px;
+  font: var(--typography-regular-label);
+  color: var(--typography-color-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ps-cite:hover {
+  background: var(--surface-color-background-light-blue);
+}
+
+.ps-cite:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: 2px;
+}
+
+.ps-cite:disabled {
+  cursor: default;
+  color: var(--typography-color-secondary);
+}
+
+.ps-cite__n {
+  font: var(--typography-bold-label);
+}
+
+.ps-cite__doc {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 20rem;
+}
+
+.ps-cite__page,
+.ps-cite__action {
+  color: var(--typography-color-secondary);
+  white-space: nowrap;
+}
+
+.ps-cite__action {
+  color: var(--typography-color-link);
+  text-decoration: underline;
+}
+
+/* Condition modal. Native <dialog>: Escape and the top layer come free, and the sheet scrolls
+   inside a viewport-bounded box so a long condition never pushes Close out of reach. */
+.ps-dialog {
+  width: min(38rem, calc(100vw - 2rem));
+  max-height: 85vh;
+  padding: 0;
+  border: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  border-radius: var(--layout-border-radius-medium);
+  background: var(--surface-color-background-white);
+  color: var(--typography-color-primary);
+}
+
+.ps-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.ps-dialog__sheet {
+  padding: var(--layout-padding-large);
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.ps-dialog__title {
+  font: var(--typography-bold-h4);
+  margin: var(--layout-margin-xsmall) 0 0;
+}
+
+.ps-dialog__bullets {
+  font: var(--typography-regular-body);
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.ps-dialog__bullets li {
+  margin-bottom: var(--layout-margin-small);
+}
+
+.ps-dialog__footnote {
+  margin-top: var(--layout-margin-medium);
+}
+
+.ps-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--layout-margin-medium);
+}
+
+.ps-button {
+  background: var(--surface-color-primary-default);
+  color: var(--surface-color-background-white);
+  border: none;
+  border-radius: var(--layout-border-radius-small);
+  padding: 0.6rem 1.2rem;
+  font: var(--typography-bold-small-body);
+  cursor: pointer;
+}
+
+.ps-button:hover {
+  background: var(--surface-color-primary-hover);
+}
+
+.ps-button:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: 2px;
+}
+
+.ps-footer {
+  border-top: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  padding-top: var(--layout-margin-medium);
+  margin-bottom: var(--layout-margin-large);
+}
+
+.ps-footer p {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  margin: 0 0 var(--layout-margin-xsmall);
+}
+
+.ps-footer a {
+  color: var(--typography-color-link);
+}

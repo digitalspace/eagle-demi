@@ -13,6 +13,7 @@
     "db:purge-extraction": "NODE_PATH=node_modules node -r dotenv/config src/scripts/purge-extraction.js",
     "db:backfill-eac-number": "NODE_PATH=node_modules node -r dotenv/config src/scripts/backfill-eac-number.js",
     "rbac:sync-teams": "NODE_PATH=node_modules node -r dotenv/config src/scripts/sync-track-teams.js",
+    "ai:project-summary": "NODE_PATH=node_modules node -r dotenv/config src/scripts/generate-project-summary.js",
     "deploy:azure:frontend": "bash scripts/deploy-azure.sh frontend",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

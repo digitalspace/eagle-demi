@@ -765,6 +765,43 @@ resource linksContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/cont
   }
 }
 
+// Stored per-project AI summaries, one row per project. Partitioned on /id (the project id): the
+// page read is a point read, and there is nothing to query across. Only /generatedAt is indexed —
+// the refresh pass asks "which rows are older than their project's documents"; nothing filters on
+// the generated prose, and indexing it would index every condition bullet of every project.
+resource projectSummariesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: database
+  name: 'projectSummaries'
+  properties: {
+    resource: {
+      id: 'projectSummaries'
+      partitionKey: {
+        paths: [
+          '/id'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/generatedAt/?'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/*'
+          }
+          {
+            path: '/_etag/?'
+          }
+        ]
+      }
+    }
+  }
+}
+
 // Per-user data — saved lassos, preferences. Partitioned on /userId (the owner's IDIR username):
 // every read and write is one user's partition, and the id carries the type (`lasso:<slug>`).
 // `/ring/*` stays out of the index — a 500-vertex polygon is stored, never filtered on.

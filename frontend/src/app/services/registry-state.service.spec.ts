@@ -1,7 +1,8 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { RegistryStateService } from './registry-state.service';
+import { RegistryStateService, epicPublicDownloadUrl } from './registry-state.service';
+import { ConfigService } from './config.service';
 import { Project } from '../models/registry.models';
 
 // Any payload loadData() accepts. At module scope because the default stub below needs it before
@@ -816,6 +817,34 @@ describe('RegistryStateService — loadSummary gating', () => {
 
     await expectAsync(service.getDownloadUrl('doc1', 'proj1'))
       .toBeRejectedWithError('You do not have permission to download this document.');
+  });
+
+  // The demo runs with no API behind it, so every citation chip on the project summary used to
+  // 404. Demo mode and a failed presigned request both end at the public EPIC copy instead.
+
+  it('returns the public EPIC url in demo mode without asking the API', async () => {
+    TestBed.inject(ConfigService).config['USE_MOCK_DATA'] = true;
+
+    await expectAsync(service.getDownloadUrl('doc1', 'proj1'))
+      .toBeResolvedTo('https://projects.eao.gov.bc.ca/api/public/document/doc1/download');
+    expect(sharedFetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the public EPIC url when the presigned request fails', async () => {
+    sharedFetchSpy.and.resolveTo(new Response('{}', { status: 500 }));
+
+    await expectAsync(service.getDownloadUrl('doc1', 'proj1'))
+      .toBeResolvedTo(epicPublicDownloadUrl('doc1'));
+  });
+
+  it('warns once, not once per click, while the presigned leg is down', async () => {
+    const warn = spyOn(console, 'warn');
+    sharedFetchSpy.and.rejectWith(new TypeError('Failed to fetch'));
+
+    await service.getDownloadUrl('doc1', 'proj1');
+    await service.getDownloadUrl('doc2', 'proj1');
+
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });
 
