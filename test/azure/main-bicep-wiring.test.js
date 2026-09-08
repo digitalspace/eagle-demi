@@ -213,6 +213,28 @@ test('the gateway pins the legacy developer portal off', () => {
     'legacyPortalStatus must be set on the service, or the apply turns the legacy portal on');
 });
 
+// Both halves of the gateway diagnostic setting fail silently. Unwired, the module's own
+// `if (!empty(logsWorkspaceId))` gate deploys no setting at all; without Dedicated the rows go to
+// the shared AzureDiagnostics table instead. Either way `az bicep build` exits 0 and
+// ApiManagementGatewayLogs in demi-logs-<env> has no rows, which reads like an idle gateway. The
+// wiring is a module output rather than a main.bicep param, so the WIRED list above cannot cover it.
+test('gateway logs are wired to demi-logs and land in the resource-specific table', () => {
+  const block = MAIN.split(/^module /m).find(b => b.includes("'./modules/apim.bicep'"));
+  assert.ok(block, 'main.bicep must call the apim module');
+  assert.match(block, /^\s+logsWorkspaceId: observability\.outputs\.workspaceId$/m,
+    'the apim module must be fed the demi-logs workspace, or its gate deploys no diagnostic setting');
+
+  const setting = APIM_MODULE
+    .split(/^resource /m)
+    .find(b => b.startsWith('apimGatewayDiagnostics '));
+  assert.ok(setting, 'apim.bicep must declare the gateway diagnostic setting');
+  assert.match(setting, /^\s+category: 'GatewayLogs'$/m,
+    'the setting must enable the GatewayLogs category — nothing else records per-request rows');
+  assert.match(setting, /^\s+logAnalyticsDestinationType: 'Dedicated'$/m,
+    'the ARM default is AzureDiagnostics, and ApiManagementGatewayLogs is never created without ' +
+    'Dedicated (same trap as the Cosmos control-plane setting)');
+});
+
 // src/config.js throws on an empty allowlist in test and prod, so a param file that omits this
 // deploys an app that boot-loops. `az bicep build` says nothing: main.bicep's param has no default,
 // but a `param allowedClients = ''` line satisfies the compiler and fails at runtime.

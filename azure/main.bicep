@@ -603,6 +603,9 @@ module apim './modules/apim.bicep' = if (deployApim && !empty(apiFlexSubnetId)) 
     apiHostName: apiFunctionFlex!.outputs.apiFunctionAppHostName
     keyVaultName: keyVault.outputs.vaultName
     gatewaySecretName: apimGatewaySecretName
+    // Gateway request rows land in demi-logs-<env> beside the app's own traces, not in the audit
+    // workspace: they are operational, and a dropped one is not a lost audit record.
+    logsWorkspaceId: observability.outputs.workspaceId
     // Another repository's estate: the module's own !empty() gate skips the analytics API when
     // eagle-analytics has not been deployed here.
     analyticsBackendUrl: analyticsBackendUrl
