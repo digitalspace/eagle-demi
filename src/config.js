@@ -137,6 +137,13 @@ const config = {
   // to the object store overlap the current one. Bounded by the sockets and buffers an instance
   // can hold at once, not by how slow the object store is.
   bulkFetchAhead:       intFromEnv('BULK_FETCH_AHEAD', 3),
+  // Object TRANSFERS that run at once. 1 = off, and the worker is bound by one connection's
+  // throughput to the object store (6.4 MB/s measured from Azure): an open ahead of the append
+  // sits on an idle socket until its turn, so only the round trip overlaps, not the bytes.
+  bulkFetchConcurrency: intFromEnv('BULK_FETCH_CONCURRENCY', 1),
+  // Total bytes those transfers may hold, split evenly between them — the memory ceiling of the
+  // setting above. An instance also holds one 64 MiB multipart upload buffer (src/storage/minio.js).
+  bulkFetchBufferBytes: intFromEnv('BULK_FETCH_BUFFER_BYTES', 268435456),
   // Concurrent jobs per requester. No app rate limiter exists and APIM Consumption cannot key-limit
   // an anonymous caller, so this is the abuse boundary for the feature.
   bulkMaxPending:       intFromEnv('BULK_MAX_PENDING', 3),

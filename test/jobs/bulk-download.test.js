@@ -64,6 +64,32 @@ function collect(stream) {
   });
 }
 
+// One chunk per read, pushed a tick late: a stream built from an array is fully buffered the moment
+// it exists and so cannot tell a transfer that is running from a socket nobody is reading yet.
+function trickle(key, chunks, onPush, onEnd, failAt) {
+  let pushed = 0;
+  let reads = 0;
+  return new Readable({
+    // 1 byte, or the stream's own 16 KiB buffer is what the byte-bound assertions measure: a paused
+    // Readable keeps prefetching to its high-water mark whatever the destination has room for.
+    highWaterMark: 1,
+    read() {
+      reads += 1;
+      const at = reads;
+      setTimeout(() => {
+        if (failAt && at >= failAt) return void this.destroy(new Error(`ECONNRESET reading ${key}`));
+        if (pushed >= chunks) {
+          if (onEnd) onEnd(key);
+          return void this.push(null);
+        }
+        pushed += 1;
+        if (onPush) onPush(key, pushed);
+        this.push(`chunk ${pushed} of ${key}\n`);
+      }, 1);
+    }
+  });
+}
+
 /**
  * Stub every dependency the worker has and hand back what each recorded.
  * `docs` is what the manifest read returns — leaving a requested id out of it is how a test says
@@ -129,12 +155,16 @@ test('the bulk download worker', async (t) => {
   const maxTotalBytes = config.bulkMaxTotalBytes;
   const maxJobAgeMs = config.bulkMaxJobAgeMs;
   const fetchAhead = config.bulkFetchAhead;
+  const fetchConcurrency = config.bulkFetchConcurrency;
+  const fetchBufferBytes = config.bulkFetchBufferBytes;
   t.afterEach(() => {
     t.mock.restoreAll();
     config.bulkMaxBytes = maxBytes;
     config.bulkMaxTotalBytes = maxTotalBytes;
     config.bulkMaxJobAgeMs = maxJobAgeMs;
     config.bulkFetchAhead = fetchAhead;
+    config.bulkFetchConcurrency = fetchConcurrency;
+    config.bulkFetchBufferBytes = fetchBufferBytes;
   });
 
   await t.test('objects are opened ahead of the append, no more than the window at once', async (tt) => {
@@ -372,6 +402,147 @@ test('the bulk download worker', async (t) => {
     assert.deepStrictEqual(destroyedUnread.sort(),
       ['etl/d20.pdf', 'etl/d21.pdf', 'etl/d22.pdf'],
       'every object opened ahead of the cancel is closed, and nothing else is');
+  });
+
+  await t.test('transfers run concurrently while an earlier entry is packed, in document order', async (tt) => {
+    config.bulkFetchConcurrency = 4;
+    config.bulkFetchBufferBytes = 4096;
+    const docs = Array.from({ length: 4 }, (_, i) => doc(`d${i}`));
+    const started = new Set();
+    let startedWhenFirstEnded = 0;
+    const { uploads, zipText } = harness(tt, {
+      row: job(docs),
+      docs,
+      // d0 is the long one, so its end is the picture of what was moving while it was packed.
+      getObjectStream: async key => trickle(key, key === 'etl/d0.pdf' ? 8 : 4,
+        k => started.add(k),
+        k => { if (k === 'etl/d0.pdf') startedWhenFirstEnded = started.size; })
+    });
+
+    await worker.run('job-1');
+
+    assert.strictEqual(startedWhenFirstEnded, 4,
+      'the first document finished with fewer transfers running than the window allows — opening ' +
+      'a socket ahead is not reading it, which is what bounds a job to one connection');
+    const text = zipText([...uploads.keys()][0]);
+    const positions = docs.map(d => text.indexOf(`Site C Clean Energy/${d.id}.pdf`));
+    assert.ok(positions.every(at => at >= 0), 'every document has to be in the zip');
+    assert.deepStrictEqual(positions, [...positions].sort((a, b) => a - b),
+      'transfers finish in whatever order they like; the entries stay in the order asked for');
+    for (const d of docs) {
+      assert.match(text, new RegExp(`chunk 4 of etl/${d.id}\\.pdf`),
+        'and each entry holds the whole object, not the part that fitted in a buffer');
+    }
+  });
+
+  await t.test('the default reads one object at a time, however far ahead it opens', async (tt) => {
+    const docs = Array.from({ length: 4 }, (_, i) => doc(`d${i}`));
+    const started = new Set();
+    let startedWhenFirstEnded = 0;
+    harness(tt, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => trickle(key, key === 'etl/d0.pdf' ? 8 : 4,
+        k => started.add(k),
+        k => { if (k === 'etl/d0.pdf') startedWhenFirstEnded = started.size; })
+    });
+
+    await worker.run('job-1');
+
+    assert.strictEqual(config.bulkFetchConcurrency, 1, 'the shipped default is the kill switch');
+    assert.strictEqual(startedWhenFirstEnded, 1,
+      'BULK_FETCH_CONCURRENCY=1 must read only what the archive is appending, so the setting can ' +
+      'be turned back to the behaviour that was measured');
+  });
+
+  await t.test('a parked transfer stops at its share of the buffer and holds the rest back', async (tt) => {
+    config.bulkFetchConcurrency = 2;
+    // 10 bytes each for the two parked transfers and the one being appended — less than one chunk,
+    // so a buffer that respects the budget holds exactly one and then stops reading the socket.
+    config.bulkFetchBufferBytes = 30;
+    const docs = Array.from({ length: 4 }, (_, i) => doc(`d${i}`));
+    const pushed = new Map();
+    let parked = null;
+    let moving = null;
+    const { uploads, zipText } = harness(tt, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => trickle(key, key === 'etl/d0.pdf' ? 12 : 40,
+        k => pushed.set(k, (pushed.get(k) || 0) + 1),
+        k => {
+          if (k !== 'etl/d0.pdf') return;
+          parked = pushed.get('etl/d1.pdf') || 0;
+          moving = [...pushed.keys()].sort();
+        })
+    });
+
+    await worker.run('job-1');
+
+    assert.ok(parked > 0, 'the parked document has to have started, or nothing is overlapping');
+    assert.ok(parked <= 2,
+      `a parked transfer read ${parked} chunks of a 30-byte budget: the buffer is not bounding it, ` +
+      'so a job of large documents holds the whole read-ahead window in memory');
+    assert.deepStrictEqual(moving, ['etl/d0.pdf', 'etl/d1.pdf'],
+      'and the documents past the concurrency bound are not being read at all yet');
+    const text = zipText([...uploads.keys()][0]);
+    for (const d of docs) {
+      assert.match(text, new RegExp(`chunk 12 of etl/${d.id}\\.pdf`),
+        'the bound is on what is held early, not on what is packed');
+    }
+  });
+
+  await t.test('a buffered source that dies while the archive reads it truncates that entry', async (tt) => {
+    config.bulkFetchConcurrency = 2;
+    config.bulkFetchBufferBytes = 30;
+    const docs = [doc('d0'), doc('d1'), doc('d2')];
+    const { patches, uploads, zipText } = harness(tt, {
+      row: job(docs),
+      docs,
+      // d1 fails on a read only the archive can reach: parked, its buffer stops at the first chunk.
+      getObjectStream: async key => (key === 'etl/d1.pdf'
+        ? trickle(key, 20, null, null, 4)
+        : trickle(key, key === 'etl/d0.pdf' ? 8 : 2))
+    });
+    tt.mock.method(logger, 'warn', () => {});
+
+    await worker.run('job-1');
+
+    assert.strictEqual(statusPatch(patches).status, 'ready',
+      'a source that dies mid-entry must not leave the archive waiting on a buffer that never ends');
+    assert.deepStrictEqual(readyPatch(patches).errors,
+      [{ documentId: 'd1', name: 'd1.pdf', reason: 'truncated' }]);
+    assert.strictEqual(readyPatch(patches).includedCount, 2);
+    assert.match(zipText([...uploads.keys()][0]), /chunk 2 of etl\/d2\.pdf/,
+      'and the documents after it are still packed');
+  });
+
+  await t.test('a fatal part error closes the sockets behind the buffers too', async (tt) => {
+    config.bulkFetchConcurrency = 4;
+    config.bulkFetchBufferBytes = 4096;
+    const docs = Array.from({ length: 4 }, (_, i) => doc(`d${i}`));
+    const opened = [];
+    const destroyed = [];
+    const { patches } = harness(tt, {
+      row: job(docs),
+      docs,
+      getObjectStream: async key => {
+        opened.push(key);
+        const source = trickle(key, 40);
+        const destroy = source.destroy.bind(source);
+        source.destroy = (...args) => { destroyed.push(key); return destroy(...args); };
+        return source;
+      },
+      putObjectStream: async () => { throw new Error('403 from the object store'); }
+    });
+    tt.mock.method(logger, 'error', () => {});
+
+    await assert.rejects(worker.run('job-1'), /403 from the object store/);
+    await new Promise(resolve => setTimeout(resolve, 40));
+
+    assert.deepStrictEqual(destroyed.sort(), opened.sort(),
+      'destroying a buffer does not close the socket feeding it, so every source has to be closed ' +
+      'by name — otherwise a failed job leaks one connection per transfer it had running');
+    assert.strictEqual(statusPatch(patches).status, 'failed');
   });
 
   await t.test('a document the manifest no longer returns is dropped and named in errors.txt', async () => {

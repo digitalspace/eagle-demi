@@ -109,6 +109,9 @@ outside BC Gov's network, independent of caller.
 | `alwaysReady` | `[]` (none) |
 | `host.json` queue | `messageEncoding: none`, `batchSize: 1`, `newBatchThreshold: 0`, `maxDequeueCount: 3`, `visibilityTimeout: 01:00:00` |
 | `src/storage/minio.js` | `UPLOAD_PART_SIZE = 64 * 1024 * 1024` (64 MiB) |
+| `BULK_FETCH_AHEAD` | `3` (default) |
+| `BULK_FETCH_CONCURRENCY` | `4` on test, `1` (default, off) elsewhere |
+| `BULK_FETCH_BUFFER_BYTES` | `268435456` (256 MiB, default) |
 
 `batchSize: 1` means one zip per instance at a time; Flex scales instances
 horizontally (up to 20) rather than running several zips per instance — this
@@ -129,14 +132,24 @@ count, with no sign of overlap.
 (non-missing) documents — the only step in the loop that scales with document
 count rather than being a fixed per-job cost.
 
-**Fix, applied**: a bounded read-ahead inside `buildPart` — see "Changes
-applied" below. Zip entry order, and therefore `zip-stream`'s single-writer
-constraint, binds the *append* only, so the fetch overlaps it. The read-ahead
-holds object streams to read from, not upload buffers, so the part-size
-budget in #4 is unchanged. Still untested against a job built from several
-≥10 MB documents: the test corpus is mostly small and mostly missing.
+**Fix, applied, in two halves** — see "Changes applied" below. Zip entry
+order, and therefore `zip-stream`'s single-writer constraint, binds the
+*append* only, so the reads overlap it.
+
+1. `BULK_FETCH_AHEAD` opens the next objects early. That overlaps the
+   round trip (#2) and nothing else: a stream waiting its turn has no reader,
+   so its socket is idle and the job still moves one object's worth of bytes
+   at a time.
+2. `BULK_FETCH_CONCURRENCY` reads them early too, into bounded buffers, so
+   `N` transfers share the wall time instead of queueing behind each other.
+   That is the half that beats the 6.4 MB/s a single connection to NRS
+   carries.
+
+Still untested against a job built from several ≥10 MB documents: the test
+corpus is mostly small and mostly missing.
 
 **Measure after**: ms/doc for a matched-size job, against the numbers above.
+The ceiling is now the single-connection upload of the zip — #8.
 
 ### 2. Per-object round-trip / connect latency to NRS
 
@@ -197,12 +210,15 @@ triggers a second part for a typical file.
 **Estimated share**: ~0% of wall time. Only matters for documents over
 64 MiB, which are rare.
 
-**Fix**: none. The read-ahead in #1 does not touch this budget: it opens
-object streams to read from, while the archive still feeds one multipart
-upload per part, so there is still one 64 MiB buffer per instance. Re-sizing
-becomes necessary only if several parts are ever uploaded at once — and
-reducing the part size without redoing that arithmetic reintroduces the exact
-OOM risk the 64 MiB choice was sized to avoid.
+**Fix**: none, but the arithmetic now has a second term. The archive still
+feeds one multipart upload per part, so there is still one 64 MiB upload
+buffer per instance; the concurrent reads in #1 add `BULK_FETCH_BUFFER_BYTES`
+(256 MiB by default, split evenly between the reads) on top of it. Both
+together have to fit the 2048 MB instance, so raising either means checking
+the other. Re-sizing the part becomes necessary only if several parts are
+ever uploaded at once — and reducing the part size without redoing that
+arithmetic reintroduces the exact OOM risk the 64 MiB choice was sized to
+avoid.
 
 ### 5. zip-stream overhead
 
@@ -241,6 +257,31 @@ step the Function has no control over.
 CDN in front of NRS or a real byte-count from production traffic would be
 the next step, not a code change here.
 
+### 8. The zip is uploaded over one connection
+
+**Evidence**: `putObjectStream` in `src/storage/minio.js` hands the archive to
+`minio.putObject`, which for a stream of unknown length runs
+`Client.uploadStream` — a `for await` over 64 MiB blocks that `await`s each
+`PUT` before cutting the next one (minio 8.0.7,
+`dist/main/internal/client.js`). The parts are therefore strictly serial, and
+the SDK exposes no concurrency option for this path; the only knob is
+`partSize`. Entries are STORED, not deflated, so the bytes uploaded are the
+bytes read: a job's upload is as large as its fetch.
+
+**Estimated share**: once the reads in #1 run concurrently, this is what is
+left — a floor of roughly `job bytes / one connection's throughput`, whatever
+`BULK_FETCH_CONCURRENCY` is set to. It has never been measured on its own,
+because until now the serial fetch hid it.
+
+**Fix, not applied**: parallel part uploads mean hand-rolling multipart in
+`src/storage/minio.js` (`initiateNewMultipartUpload` / `uploadPart` /
+`completeMultipartUpload`, plus abort on failure), and each in-flight part is
+another 64 MiB against the instance budget in #4. Worth doing only against a
+measured number, so: measure the upload half first, on the job below, before
+spending anything here. The Azure Blob backend needs none of this — its
+`uploadStream` already runs 5 concurrent blocks — but no environment uses it
+for documents (`STORAGE_BACKEND` is `minio` in test and prod).
+
 ## Recommendation
 
 #1 (sequential fetch) is applied — it was the only cause that scales with
@@ -251,8 +292,10 @@ needs remeasuring against those numbers; how, and against what, is in
 #3 (cold start) still needs a real number before anything is spent on
 `alwaysReady`. Half of the instrumentation gap is closed — the POST now logs
 the job id, so submit-to-`Executing` is joinable — but `Warning`-level host
-logging still hides scale-out events. #2, #5, #6 and #7 need no code change
-based on what is measured here.
+logging still hides scale-out events. #8 (serial part upload) is the next
+lever and is deliberately unbuilt until the fetch concurrency is measured, as
+it is what decides how much of the wall time is left to win. #2, #5, #6 and #7
+need no code change based on what is measured here.
 
 ## Changes applied
 
@@ -265,9 +308,31 @@ Against cause #1, in `src/jobs/bulk-download.js`:
   open is still that one document's error; a stream reset while it waits its
   turn gets one fresh open first, which is what its turn would have given it
   before the window existed. Opens the part never reaches — a part that
-  rolled, a cancel, a fatal error — are destroyed without waiting on them. Part size (#4) is untouched: the archive still holds one
-  multipart upload buffer, and the read-ahead adds object streams, not
-  upload buffers.
+  rolled, a cancel, a fatal error — are destroyed without waiting on them.
+- **Concurrent transfers in `buildPart`.** `BULK_FETCH_CONCURRENCY`
+  (`config.bulkFetchConcurrency`, default 1) objects are READ at once, the
+  entry being appended included: each one ahead of the append is piped into a
+  buffer that starts pulling bytes immediately, so `N` connections to NRS
+  carry the job instead of one. `BULK_FETCH_BUFFER_BYTES`
+  (`config.bulkFetchBufferBytes`, default 268435456) is what they may hold in
+  total, split evenly, and it is a hard bound: a buffer at its share stops
+  reading its socket until the archive drains it, which is how a job of large
+  documents cannot grow past the budget. Entry order is untouched — the append
+  is still serial and still in document order, whatever order the transfers
+  finish in.
+  - `1` is off, and is the shipped default: the archive is then the only
+    reader, which is the behaviour the numbers above were measured against.
+    Above 1 it supersedes `BULK_FETCH_AHEAD`, because an open that is
+    transferring is strictly better than one that is only waiting, and a
+    window wider than the transfer budget would give the next slot to a
+    document the archive reaches later.
+  - A source that dies while its buffer is parked gets one fresh open at its
+    turn, as before. One that dies while the archive is draining its buffer
+    ends that entry as `truncated`: the buffer is destroyed WITH the error, or
+    the entry would quietly end short.
+  - Memory: `BULK_FETCH_BUFFER_BYTES` plus the one 64 MiB multipart upload
+    buffer, per instance — the budget in #4, which is why the two numbers have
+    to be read together.
 - **`POST /api/bulk-downloads` logs `[bulk] job queued job=<id>`.** The access
   log still masks the job id out of the request path, so this line is what a
   job's queue wait is measured from: join it to the worker's `Executing`
@@ -280,3 +345,23 @@ document readable (`errors=0`), from the same `AppTraces` `Executing` /
 to beat are 1,088 and 1,811 ms/doc. Use a corpus of comparable file sizes —
 the mostly-missing test bucket produces jobs that finish in 1.6-3.5 s and
 measure nothing.
+
+**Measuring the concurrency, on test**: the reference job is the same
+10 documents / 83 MiB one that took 18 s of worker time on 2026-09-03, at
+`BULK_FETCH_CONCURRENCY=1`. Run it once per setting and compare:
+
+1. `POST /api/bulk-downloads` with the 10 documentIds, note the id from
+   `[bulk] job queued job=<id>`.
+2. Take the worker's wall time from the `Executing` / `Executed ...
+   Duration=` pair for that invocation, and the settings from the summary
+   line: `[bulk] job ready <id> parts=… documents=… errors=… fetch=<N>
+   buffer=<bytes>`, which is what says which configuration the number belongs
+   to.
+3. Change `BULK_FETCH_CONCURRENCY` in `azure/main.test.bicepparam` and
+   redeploy the infra (`appSettings` is a whole-collection PUT — a hand-set
+   app setting is gone at the next deploy).
+
+83 MiB in 18 s is 4.6 MB/s, against 6.4 MB/s measured for one connection, so
+a job that is purely fetch-bound should approach 3-5 s at `4`. It will not:
+whatever is left is the serial upload (#8), and the gap between the two is
+the number that says whether #8 is worth building.
