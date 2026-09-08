@@ -135,9 +135,12 @@ order takes the live search down for anonymous callers.
    JSON at require time, so an app deployed ahead of the index emits `$orderby datePosted desc`
    against a service with no such field. That is a 400, 400 is not retried, and the controller
    answers 502.
-2. **PUT the data source with `src/scripts/put-search-datasources.js`** (packaged; the datasource
-   files are not — upload `azure/search/datasources/` to the container and point `DS_DIR` at it;
-   run under `with-search-admin.sh`). The committed files carry no credential and no identity; the
+2. **PUT the data source with `src/scripts/put-search-datasources.js`** (run under
+   `with-search-admin.sh`; `scripts/demi-devbox.sh apply` does steps 1 to 3 in this order for you).
+   `/opt/eagle-demi` is a git checkout, so the devbox already has `azure/search/datasources/` and
+   `DS_DIR` only matters when narrowing a run to one file — which is what `apply` uses it for,
+   since this script writes every file in the directory it is given and `--only documents` must not
+   rewrite the chunks data source on the way past. The committed files carry no credential and no identity; the
    script adds both at PUT time: a `ResourceId=…;IdentityAuthType=AccessToken` connection string
    for the Cosmos account in `COSMOS_ENDPOINT`, and an `identity` block
    (`#Microsoft.Azure.Search.DataUserAssignedIdentity`, `DS_IDENTITY_ID`) because both services run
@@ -233,6 +236,32 @@ explains why the grant stays temporary rather than becoming permanent; the short
 scripts/with-search-admin.sh -- \
   az vm run-command invoke -g c4b0a8-test-rg -n demi-devbox-test --command-id RunShellScript \
   --scripts "sudo -u demi /usr/local/bin/demi-run 'cd /opt/eagle-demi && node src/scripts/apply-search-definitions.js --live --only projects'"
+```
+
+**`scripts/demi-devbox.sh` assembles that line for you, per environment**, which is worth using for
+prod: `with-search-admin.sh` defaults to the test names, so a prod run made without overriding all
+four grants Search Service Contributor on a test scope and then 403s against prod.
+
+| | test | prod |
+|---|---|---|
+| `SUBSCRIPTION` | `7897ceb1-9a86-4639-87d7-7f9ff67142b3` | `be5924ac-1083-4a1b-be92-7b444882cfd9` |
+| `RG` | `c4b0a8-test-rg` | `rg-demi-prod` |
+| `SERVICE` | `demi-search-test` | `demi-search-prod` |
+| `IDENTITY` | `demi-identity-test` | `demi-identity-prod` |
+| devbox VM | `demi-devbox-test` | `demi-devbox-prod` |
+
+The groups do not follow one pattern, so confirm rather than guess: `az group list --subscription
+<sub> -o table`, or let `demi-devbox.sh` read the group off the search service.
+
+**The grant needs a Graph-scoped `az` login, and an expired one fails quietly.** `az role assignment
+create` returns nothing useful, `with-search-admin.sh` prints `grant not readable after 20 tries`,
+runs the command anyway, and the devbox answers 403 — which reads like a network or role problem
+rather than a login problem. One read settles it before granting (`demi-devbox.sh` does this first):
+
+```bash
+az role assignment list --subscription <sub> --scope <search service resource id> --query "[0].id" -o tsv
+# AADSTS70043 or similar means the token, not the permission:
+az login --tenant <tenant id> --scope "https://graph.microsoft.com//.default"
 ```
 
 **READ THE LIVE NAMES FIRST — never take them from a filename.** Since the cutover the two agree, so
