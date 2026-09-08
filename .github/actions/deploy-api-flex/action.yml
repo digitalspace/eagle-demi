@@ -4,8 +4,12 @@
 # copy of these steps in a rollback job is a copy that drifts, and it would drift in the one path
 # nobody exercises until an outage.
 #
-# The caller checks out the ref to deploy first, at fetch-depth 0: this action packages the working
-# tree it finds, and BUILD_ID comes from `git describe --tags`, which needs the tag ancestry.
+# The caller checks out the ref to deploy first, at fetch-depth 0: this action packages the source
+# tree it is pointed at, and BUILD_ID comes from `git describe --tags`, which needs the tag ancestry.
+#
+# `working-directory` separates the two: the SOURCE being packaged can be an old tag in a
+# subdirectory, while the tooling (scripts/) always runs from the workspace root, which holds the
+# checkout of the ref this workflow is running. Older tags do not carry these scripts.
 
 name: Deploy API to a Flex app
 description: Install, package and config-zip the API onto a Flex Consumption Function App, then wait for the function to register.
@@ -26,6 +30,10 @@ inputs:
   subscription-id:
     description: Subscription holding the Function App.
     required: true
+  working-directory:
+    description: Directory holding the source to install and package, relative to the workspace root. Tooling under scripts/ is always read from the root.
+    required: false
+    default: '.'
 
 runs:
   using: composite
@@ -48,17 +56,20 @@ runs:
       with:
         node-version: '22'
         cache: 'yarn'
+        cache-dependency-path: ${{ inputs.working-directory }}/yarn.lock
 
     # Dependencies only. Packaging belongs to `scripts/package-api.py`. demi-api-prod is retired
     # from serving and a deploy onto it broke it (2026-09-01) — the Flex app is the only target.
     - name: Install Dependencies
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       run: yarn install --immutable
 
     # Dev dependencies are half the package's file count, and the Flex extract phase is paid per
     # file. Nothing after this step needs them.
     - name: Drop dev dependencies from the package
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       run: yarn workspaces focus --production
 
     # `config-zip`: a Flex app has no Kudu wwwroot to POST into — it publishes to the deployment
@@ -68,16 +79,19 @@ runs:
       env:
         AZURE_RESOURCE_GROUP: ${{ inputs.resource-group }}
         API_FLEX_APP_NAME: ${{ inputs.app-name }}
+        SOURCE_DIR: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
-        export BUILD_ID="$(git describe --tags --always --dirty)-$(date -u +%H%M%S)"
-        python3 scripts/package-api.py . /tmp/api-flex.zip
+        # BUILD_ID names the source being shipped, so `git describe` reads the source tree's tags.
+        export BUILD_ID="$(git -C "$SOURCE_DIR" describe --tags --always --dirty)-$(date -u +%H%M%S)"
+        python3 scripts/package-api.py "$SOURCE_DIR" /tmp/api-flex.zip
         az functionapp deployment source config-zip \
           -g "$AZURE_RESOURCE_GROUP" \
           -n "$API_FLEX_APP_NAME" \
           --src /tmp/api-flex.zip
 
     # `api` is the catch-all route in api/index.js; a deploy that registers nothing 404s every route.
+    # Reads no repository file — it polls Azure — so it runs from the root like the rest of scripts/.
     - name: Verify the api function is registered
       shell: bash
       run: ./scripts/wait-for-function.sh "${{ inputs.resource-group }}" "${{ inputs.app-name }}" api

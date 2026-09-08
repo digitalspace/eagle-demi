@@ -278,15 +278,25 @@ jobs:
           echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
           echo "Rolling production back to $PREVIOUS"
 
+      # The composite action and scripts/ come from the ref this workflow is running, NEVER from
+      # the tag being restored: a release cut before they existed carries neither, and the rollback
+      # would fail to resolve `./.github/actions/deploy-api-flex` before it deployed anything.
+      # Root first — a checkout cleans the directory it lands in.
+      - name: Checkout this workflow's ref for the tooling
+        uses: actions/checkout@v7
+
+      # Source only, in a subdirectory. fetch-depth 0 for the tag ancestry `git describe` reads.
       - name: Checkout the previous release
         uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ steps.previous.outputs.previous }}
           fetch-depth: 0
+          path: release
 
       - name: Deploy the API
         uses: ./.github/actions/deploy-api-flex
         with:
+          working-directory: release
           resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
           app-name: ${{ env.API_FLEX_APP_NAME }}
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -294,7 +304,8 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       # The rollback is a claim until search answers. A failure here means production is down on
-      # BOTH versions and the cause is not the application build.
+      # BOTH versions and the cause is not the application build. Runs from the root, so it is this
+      # workflow's copy of the script asking the questions, not the restored tag's.
       - name: Smoke test production search
         env:
           SMOKE_PROJECT_ID: ${{ vars.SEARCH_SMOKE_PROJECT_ID }}

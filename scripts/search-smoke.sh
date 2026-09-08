@@ -50,8 +50,7 @@ probe() {
   local label="$1" query="$2" rows="${3:-}"
   local status total
 
-  # One file, three probes: empty it so it can only ever hold this probe's bytes. curl truncates it
-  # itself for any answer that arrives — it is the answer that never arrives that leaves it stale.
+  # One file, three probes: bound it to this probe's bytes.
   : > "$RESPONSE"
 
   # No --retry: curl counts 502, 503 and 504 as transient and would re-ask the exact answer this

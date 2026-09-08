@@ -130,7 +130,11 @@ jobs:
           fi
           # Values, not diff lines: the constants are multi-line concatenations, so a widening
           # lands on a continuation line that carries no `_SELECT` token.
-          if [ "$(./scripts/search-select-changed.sh "origin/$BASE_REF")" = changed ]; then
+          #
+          # Captured on its own line: `set -e` does not fire on a command substitution inside an
+          # `if` condition, so a broken script would read as "schema untouched" and pass the gate.
+          SELECT_CHANGED=$(./scripts/search-select-changed.sh "origin/$BASE_REF")
+          if [ "$SELECT_CHANGED" = changed ]; then
             TOUCHED=true
           fi
           echo "touched=$TOUCHED" >> "$GITHUB_OUTPUT"
@@ -139,8 +143,8 @@ jobs:
       # Against TEST, with the branch's own index definitions: test is where the author widens the
       # live index first, and this is the proof they did.
       #
-      # SEARCH_SCHEMA_ALLOW_MISSING is deliberately unset here. Test runs main, so it always has
-      # /health/search-schema; a 404 is the endpoint regressing, not a bootstrap.
+      # SEARCH_SCHEMA_ALLOW_MISSING is deliberately unset here. The test app has the endpoint once
+      # main with #349 is deployed to test; a 404 there after that is a regression, not a bootstrap.
       - name: Probe the test indexes with this branch's index definitions
         if: steps.touched.outputs.touched == 'true'
         run: ./scripts/search-schema-probe.sh "$TEST_API_BASE_URL"

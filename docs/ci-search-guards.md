@@ -30,16 +30,19 @@ Document filtered by a project. Each must answer 200, and the two unfiltered one
 counts. In production a failure here rolls back: the `rollback` job redeploys the newest published
 release that is not the one just deployed, through the same composite action the forward deploy
 uses (`.github/actions/deploy-api-flex`), re-runs the smoke test, and leaves the run red with the
-release unpublished. Staging runs the same smoke test with no rollback — test is where a bad build
-is supposed to stop.
+release unpublished. The rollback's tooling always comes from the ref the workflow is running, not
+from the tag being restored — releases cut before these files existed carry neither the action nor
+the scripts. The job checks that ref out at the workspace root and the tag into `release/`, and
+passes `working-directory: release` so only the restored source is installed and packaged. Staging
+runs the same smoke test with no rollback — test is where a bad build is supposed to stop.
 
 **On a pull request.** `search-schema-change` in `pr.yaml` fires when the diff touches
 `azure/search/**`, or when `scripts/search-select-changed.sh` reports that the branch selects
 different fields than its base. That script compares the VALUES of `DOCUMENT_SELECT`,
 `PROJECT_SELECT` and `CHUNK_SELECT`, because each is a multi-line concatenation: the field that
 took production down on 2026-09-08 was added on a continuation line, which no grep for `_SELECT`
-can see. The PR gate never sets `SEARCH_SCHEMA_ALLOW_MISSING` — test runs `main`, so a 404 there is
-the endpoint regressing.
+can see. The PR gate never sets `SEARCH_SCHEMA_ALLOW_MISSING`: the test app has the endpoint once
+`main` with #349 is deployed to test, so a 404 there after that is the endpoint regressing.
 
 The job probes the test API with the branch's index definitions and requires the PR description to
 carry a line:
