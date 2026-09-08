@@ -10,6 +10,16 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const aiSearch = require('../../src/search/ai-search');
+const { filterFor } = require('../../src/helpers/access-odata');
+const { TIER } = require('../../src/helpers/access-sql');
+const { projectedColumns } = require('../helpers/search-datasource');
+
+// The anonymous caller's ACL, from the builder the controller uses rather than a literal: these
+// tests assert that a degraded retry carries it back UNCHANGED, and a hand-written approximation
+// would stop being the thing that ships the moment `filterFor` changes shape.
+const ANONYMOUS_ACL = filterFor(
+  { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] }
+).filter;
 
 /**
  * Replace global.fetch and the token call.
@@ -1482,4 +1492,255 @@ test('writeAcls', async (t) => {
     assert.strictEqual(await aiSearch.writeAcls('documents', []), 0);
     assert.strictEqual(calls.length, 0);
   });
+});
+
+// The third select, and the one that had no guard at all while both of its neighbours had one: it
+// was an inline literal inside `searchChunks`, so a name that is not in the index would have been a
+// 400 on every Deep Search — the same failure `fileSize` caused on the document side.
+test('every field the chunk search selects exists in the committed index', () => {
+  const definition = require('../../azure/search/indexes/chunks.json');
+  const inIndex = new Set(definition.fields.map(f => f.name));
+  const missing = aiSearch.CHUNK_SELECT.split(',').filter(name => !inIndex.has(name));
+  assert.deepStrictEqual(missing, [], `not in ${definition.name}: ${missing.join(', ')}`);
+});
+
+// One step further back than the three subset tests. A field can be declared by the index, be
+// selected by the app, and still be null on every row because the DATA SOURCE query never projects
+// it — a 200 with a blank column, which is what `fileSize` and `displayNameSort` are on prod today.
+// The indexer names both halves, so the pairing here is the committed one rather than one restated.
+const SELECT_SOURCES = [
+  ['DOCUMENT_SELECT', require('../../azure/search/indexers/documents-indexer.json')],
+  ['PROJECT_SELECT', require('../../azure/search/indexers/projects-indexer.json')],
+  ['CHUNK_SELECT', require('../../azure/search/indexers/chunks-indexer.json')]
+];
+
+for (const [selectName, indexer] of SELECT_SOURCES) {
+  test(`every field ${selectName} asks for is filled by ${indexer.name}`, () => {
+    const datasource = require(`../../azure/search/datasources/${indexer.dataSourceName}.json`);
+    const projected = projectedColumns(datasource.container.query);
+    // A field mapping renames a projected column on its way into the index: `chunkId` is the
+    // source `id` under a second name, and no data source projects it.
+    const renamed = new Map((indexer.fieldMappings || [])
+      .map(m => [m.targetFieldName, m.sourceFieldName]));
+    const unfilled = aiSearch[selectName].split(',').filter(name =>
+      !projected.has(name) && !(renamed.has(name) && projected.has(renamed.get(name))));
+
+    assert.deepStrictEqual(unfilled, [],
+      `selected by ${selectName} but never projected by ${indexer.dataSourceName}, so every hit ` +
+      `carries null: ${unfilled.join(', ')}`);
+  });
+}
+
+// The failure that took the prod Document tab down for 65 minutes on 2026-09-08: the deployed app
+// selected `fileSize`, the live index did not carry it, and a 400 on a `$select` field is a 400 on
+// EVERY query. Nothing in the deploy applies index definitions, so this is reachable on any release
+// that widens a select — the degrade keeps the tab up and says, loudly, that it did.
+test('a field the live index cannot answer', async (t) => {
+  const narrow = (field) => ({
+    ok: false,
+    status: 400,
+    json: {
+      error: {
+        message: `Invalid expression: Could not find a property named '${field}' on type ` +
+          "'search.document'. Parameter name: $select"
+      }
+    }
+  });
+
+  // The log line IS the alerting surface — nothing else says the index is behind the code.
+  const captureErrors = (tt) => {
+    const errors = [];
+    const { logger } = require('../../src/utils/logger');
+    const originalError = logger.error;
+    logger.error = (msg, meta) => errors.push({ msg: String(msg), meta });
+    tt.after(() => { logger.error = originalError; });
+    return errors;
+  };
+
+  await t.test('is dropped from the select, retried once, and reported on the result',
+    async (tt) => {
+      const errors = captureErrors(tt);
+      const calls = captureFetch(tt, (i) => (
+        i === 0 ? narrow('fileSize') : { json: { value: [{ id: 'd1' }], '@odata.count': 1 } }
+      ));
+
+      const res = await aiSearch.searchDocuments({
+        filter: ANONYMOUS_ACL, keywords: 'ajax', orderby: 'fileSize desc, id asc', top: 10
+      });
+
+      assert.strictEqual(calls.length, 2, 'exactly one retry, not a strip-until-it-passes loop');
+      assert.ok(calls[0].body.select.split(',').includes('fileSize'), 'leg one asked for it');
+      assert.ok(!calls[1].body.select.split(',').includes('fileSize'), 'the retry does not');
+      assert.strictEqual(calls[1].body.orderby, 'id asc',
+        'and it cannot be ordered by either — an orderby on a missing field is the same 400');
+      assert.strictEqual(calls[1].body.search, calls[0].body.search, 'same query, narrower select');
+      // Byte for byte, and against the ACL itself rather than only against leg one: a filter that
+      // lost a term admits MORE rows, so the retry either carries the whole clause or is not made.
+      assert.strictEqual(calls[0].body.filter, ANONYMOUS_ACL, 'leg one carried the ACL');
+      assert.strictEqual(calls[1].body.filter, calls[0].body.filter, 'and the same ACL');
+
+      assert.deepStrictEqual(res.meta.degraded, { missing: ['fileSize'] });
+      assert.strictEqual(res.count, 1, 'the page is served rather than failed');
+
+      const logged = errors.find(e => e.msg.includes("'fileSize'"));
+      assert.ok(logged, `the degrade must be logged at error level, got: ${JSON.stringify(errors)}`);
+      assert.strictEqual(logged.meta.field, 'fileSize');
+      assert.ok(logged.meta.index, 'and the index, so an operator knows which one to widen');
+    });
+
+  await t.test('answers in full when nothing is missing', async (tt) => {
+    // The other side of the mark: a healthy search must not carry `meta`, or the frontend learns
+    // to ignore a key that is only ever set when something is wrong.
+    captureFetch(tt, () => ({ json: { value: [{ id: 'd1' }], '@odata.count': 1 } }));
+
+    const res = await aiSearch.searchDocuments({
+      filter: ANONYMOUS_ACL, keywords: 'ajax', top: 10
+    });
+    assert.strictEqual(res.meta, undefined);
+  });
+
+  // Dropping one of these does not narrow the answer, it WIDENS it — a hit with no `vis` has every
+  // field back at its `defaultVis`, and a row with no `read` cannot be checked against the caller
+  // at all. Staying up is not worth serving rows nobody was cleared to see.
+  for (const field of ['read', 'isPublished', 'vis']) {
+    await t.test(`is never dropped when it is the ${field} gate`, async (tt) => {
+      const calls = captureFetch(tt, () => narrow(field));
+
+      await assert.rejects(
+        () => aiSearch.searchProjects({ filter: ANONYMOUS_ACL, keywords: 'site c', top: 10 }),
+        /HTTP 400/,
+        'the controller turns this into a 502 SEARCH_SCHEMA_DRIFT naming the field'
+      );
+      assert.strictEqual(calls.length, 1, 'no retry: there is nothing safe to strip');
+    });
+  }
+
+  await t.test('a second 400 naming another field is surfaced, not stripped too', async (tt) => {
+    // Narrowing until the query passes is how a deploy against a wholly stale index would answer
+    // 200 with none of the columns the caller asked for. One field is a degrade; two is drift.
+    const calls = captureFetch(tt, (i) => narrow(i === 0 ? 'fileSize' : 'documentSource'));
+
+    await assert.rejects(
+      () => aiSearch.searchDocuments({ filter: ANONYMOUS_ACL, keywords: 'ajax', top: 10 }),
+      /HTTP 400/
+    );
+    assert.strictEqual(calls.length, 2, 'one degrade attempt, then stop');
+    assert.strictEqual(calls[1].body.filter, ANONYMOUS_ACL,
+      'the one retry it did make carried the whole ACL');
+  });
+
+  await t.test('and the budget is the whole page, not each request that fills it', async (tt) => {
+    // A page wider than the service's 250-row cap is assembled from several requests against the
+    // SAME body. Without one budget across them, a stale index buys a fresh strip per request and
+    // the page arrives with an arbitrary number of columns gone.
+    const page = Array.from({ length: 250 }, (_, i) => ({ id: `d${i}` }));
+    const calls = captureFetch(tt, (i) => {
+      if (i === 0) return narrow('fileSize');
+      if (i === 1) return { json: { value: page, '@odata.count': 500 } };
+      return narrow('documentSource');
+    });
+
+    await assert.rejects(
+      () => aiSearch.searchDocuments({ filter: ANONYMOUS_ACL, keywords: 'ajax', top: 500 }),
+      /HTTP 400/
+    );
+    assert.strictEqual(calls.length, 3, 'the fill request is not given a second strip');
+  });
+
+  await t.test('a 400 naming a field only the filter sends is not retried at all', async (tt) => {
+    // `sourceSystem` is filterable and in no select — the shape `buildFilter` emits for
+    // `and[sourceSystem]=eagle`, which puts the caller's own term first and the ACL last. A filter
+    // that lost either term admits MORE rows, so there is nothing here it is safe to strip:
+    // the retry would fail identically and is not made.
+    const calls = captureFetch(tt, () => narrow('sourceSystem'));
+
+    await assert.rejects(
+      () => aiSearch.searchProjects({
+        filter: `sourceSystem eq 'eagle' and ${ANONYMOUS_ACL}`, keywords: 'site c', top: 10
+      }),
+      /HTTP 400/
+    );
+    assert.strictEqual(calls.length, 1, 'the filter is never degraded, so no retry can differ');
+    assert.strictEqual(calls[0].body.filter, `sourceSystem eq 'eagle' and ${ANONYMOUS_ACL}`);
+  });
+});
+
+// The refusals inside the drop, asserted directly on it. A search cannot reach them: the one-retry
+// latch caps a call at a single drop, and every select the app emits is wider than one field — so
+// without this the guard that stops a degrade from emptying `select` has no test at all.
+test('the field drop behind the degrade', async (t) => {
+  await t.test('refuses the whole drop rather than emptying the select', () => {
+    const body = { search: '*', select: 'id', filter: ANONYMOUS_ACL };
+
+    assert.strictEqual(aiSearch.dropField(body, 'id'), false,
+      'a request with no select returns every RETRIEVABLE field — on chunks, the passage text');
+    assert.deepStrictEqual(body, { search: '*', select: 'id', filter: ANONYMOUS_ACL },
+      'and refusing means the body does not move at all, so the caller rethrows the 400');
+  });
+
+  await t.test('lets the orderby empty, because relevance order is the narrower answer', () => {
+    const body = { search: '*', select: 'id,displayName', orderby: 'fileSize desc' };
+
+    assert.strictEqual(aiSearch.dropField(body, 'fileSize'), true);
+    assert.ok(!('orderby' in body), 'no orderby is the service\'s own order, not an extra row');
+    assert.strictEqual(body.select, 'id,displayName', 'and the select it did not name is untouched');
+  });
+});
+
+// The committed-vs-live gate. The subset tests above compare the code with the JSON in this repo,
+// and both passed while prod's live index was narrower than either — nothing applies these
+// definitions on deploy. This asks the service instead.
+test('the schema probe', async (t) => {
+  await t.test('asks for no rows, so the answer is a status and not data', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: {} }));
+
+    const result = await aiSearch.probeIndexSchema({
+      indexName: 'documents',
+      select: aiSearch.DOCUMENT_SELECT,
+      orderby: ['displayNameSort asc', 'id asc']
+    });
+
+    assert.deepStrictEqual(result, { ok: true, index: 'documents' });
+    assert.match(calls[0].url, /\/indexes\/documents\/docs\/search/);
+    assert.deepStrictEqual(calls[0].body, {
+      search: '*',
+      top: 0,
+      count: false,
+      select: aiSearch.DOCUMENT_SELECT,
+      orderby: 'displayNameSort asc, id asc'
+    });
+  });
+
+  // The 400 the live service answered on 2026-09-08, verbatim.
+  await t.test('names the field the live index does not carry', async (tt) => {
+    captureFetch(tt, () => ({
+      ok: false,
+      status: 400,
+      json: {
+        error: {
+          message: "Invalid expression: Could not find a property named 'fileSize' on type " +
+            "'search.document'. Parameter name: $select"
+        }
+      }
+    }));
+
+    assert.deepStrictEqual(
+      await aiSearch.probeIndexSchema({ indexName: 'documents', select: aiSearch.DOCUMENT_SELECT }),
+      { ok: false, index: 'documents', missing: ['fileSize'] });
+  });
+
+  // A probe that answered `{ok: false}` for a role or a network fault would report drift against an
+  // index that is correct, and send an operator to widen one that needs nothing.
+  await t.test('a failure that is not a missing field throws rather than reporting drift',
+    async (tt) => {
+      captureFetch(tt, () => ({
+        ok: false,
+        status: 403,
+        json: { error: { message: 'Forbidden. The request is not authorized.' } }
+      }));
+
+      await assert.rejects(
+        aiSearch.probeIndexSchema({ indexName: 'documents', select: aiSearch.DOCUMENT_SELECT }),
+        /HTTP 403/);
+    });
 });

@@ -1428,6 +1428,41 @@ test('the eagle-public response contract', async (t) => {
     assert.strictEqual(meta.documentsOnPage, 1);
   });
 
+  // A page served with a column the live index could not answer is a 200 that looks exactly like a
+  // page whose column is empty — which is how the 2026-09-08 drift stayed invisible in the browser
+  // for 65 minutes. The search layer keeps the tab up by dropping the field; `meta` is where the
+  // caller learns it happened.
+  await t.test('a degraded search says which field the index could not answer', async () => {
+    t.mock.method(aiSearch, 'searchDocuments', async () => ({
+      count: 3,
+      meta: { degraded: { missing: ['fileSize'] } },
+      items: [{ id: 'd1', displayName: 'Application', projectId: '207', read: ['public'] }]
+    }));
+    t.mock.method(projectsRepo, 'listByIds', async () => ([{ id: '207', name: 'Site C' }]));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Document', keywords: 'river' }, header: () => null }, res);
+
+    const [meta] = out.body[0].meta;
+    assert.deepStrictEqual(meta.degraded, { missing: ['fileSize'] });
+    assert.strictEqual(meta.searchResultsTotal, 3, 'and the page is still a measured page');
+  });
+
+  // The key is absent on a healthy search, not present and empty: a frontend that has to read
+  // `meta.degraded.missing.length` learns to ignore it.
+  await t.test('a search that answered in full carries no degraded key', async () => {
+    t.mock.method(aiSearch, 'searchProjects', async () => ({
+      count: 1, items: [{ id: '207', name: 'Site C', read: ['public'] }]
+    }));
+
+    const { out, res } = capture();
+    await searchController.search(
+      { query: { dataset: 'Project', keywords: 'site c' }, header: () => null }, res);
+
+    assert.strictEqual(out.body[0].meta[0].degraded, undefined);
+  });
+
   // A parameter nobody reads is the dangerous class: `page=2` for `pageNum=1` answers page one
   // with a 200, and nothing anywhere says so.
   await t.test('an unknown parameter is refused, not ignored', async () => {
@@ -2156,6 +2191,54 @@ test('the answer matches the request that was made', async (t) => {
 
     assert.strictEqual(listed, false, 'the corpus listing must not answer a keyword search');
     assert.strictEqual(out.status, 502);
+  });
+
+  // [S2] What the 502 SAYS. For 65 minutes on 2026-09-08 the only thing a browser console carried
+  // was "Document search is unavailable", while the cause — the live index missing `fileSize` —
+  // sat in AppTraces and took a Log Analytics query, the code and the git history to find.
+  await t.test('a 502 names the class of failure and the trace to open', async (tt) => {
+    await tt.test('a missing index field is drift, and the field is named', async () => {
+      t.mock.method(aiSearch, 'searchDocuments', async () => {
+        throw Object.assign(new Error(
+          "HTTP 400 {\"error\":{\"message\":\"Invalid expression: Could not find a property named " +
+          "'fileSize' on type 'search.document'. Parameter name: $select\"}} [abc123]"), { status: 400 });
+      });
+
+      const { out, res } = capture();
+      await searchController.search({
+        id: 'req-42', query: { dataset: 'Document', keywords: 'mine' }, header: () => null
+      }, res);
+
+      assert.strictEqual(out.status, 502);
+      assert.deepStrictEqual(out.body, {
+        error: 'Document search is unavailable',
+        code: 'SEARCH_SCHEMA_DRIFT',
+        field: 'fileSize',
+        traceId: 'req-42'
+      });
+    });
+
+    // The upstream text carries the service endpoint, the index name and the caller's own ACL
+    // clause. This route is reachable anonymously.
+    await tt.test('anything else is an upstream failure, described by nothing but its code',
+      async () => {
+        t.mock.method(aiSearch, 'searchProjects', async () => {
+          throw new Error("HTTP 403 Forbidden. demi-search-prod.search.windows.net rejected " +
+            "filter read/any(r: r eq 'sysadmin')");
+        });
+
+        const { out, res } = capture();
+        await searchController.search({
+          id: 'req-43', query: { dataset: 'Project', keywords: 'mine' }, header: () => null
+        }, res);
+
+        assert.strictEqual(out.status, 502);
+        assert.deepStrictEqual(out.body, {
+          error: 'Project search is unavailable',
+          code: 'SEARCH_UPSTREAM',
+          traceId: 'req-43'
+        });
+      });
   });
 
   // [C7] Two id-spaces, two fields, neither derived from the other. `project._id` is the EAGLE
