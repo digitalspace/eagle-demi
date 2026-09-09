@@ -808,6 +808,13 @@ describe('MapExplorerComponent invasive species overlay', () => {
     expect(sld.indexOf('#ce3e39')).toBeLessThan(sld.indexOf('ElseFilter'));
     expect(absence).not.toContain('#ce3e39');
     expect(absence).toContain('<CssParameter name="fill-opacity">0.45</CssParameter>');
+    // Colour alone would fail WCAG 1.4.1, so absences also read as dashed outlines and hollow points.
+    const presence = sld.slice(0, sld.indexOf('ElseFilter'));
+    expect(absence).toContain('<CssParameter name="stroke-dasharray">4 2</CssParameter>');
+    expect(presence).not.toContain('stroke-dasharray');
+    const absenceMark = absence.slice(absence.indexOf('<Mark>'), absence.indexOf('</Mark>'));
+    expect(absenceMark).withContext('absence points are hollow').not.toContain('<Fill>');
+    expect(absenceMark).toContain('<CssParameter name="stroke">#42814a</CssParameter>');
   });
 
   it('says so when the pixel carries no observation', async () => {

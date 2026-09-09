@@ -33,7 +33,9 @@ const OGL_BC_ATTRIBUTION = 'Contains information licensed under the Open Governm
  * One row in five is a survey that confirmed the plant absent — good news, so those draw in the
  * success green rather than the danger red an infestation earns. Colours are
  * `--typography-color-danger` and `--support-border-color-success`; a server-side style cannot read
- * a CSS variable.
+ * a CSS variable. Absences also draw dashed, and their points hollow, so the two kinds stay apart
+ * for anyone who cannot tell the hues apart (WCAG 1.4.1). The dash pattern spends the room the
+ * absence stroke used to give to stroke-opacity: the whole style rides in a query string.
  */
 const INVASIVES_RED = '#ce3e39';
 const INVASIVES_GREEN = '#42814a';
@@ -51,10 +53,11 @@ const INVASIVES_SLD = '<StyledLayerDescriptor version="1.0.0" xmlns="http://www.
   + `<PolygonSymbolizer><Fill><CssParameter name="fill">${INVASIVES_GREEN}</CssParameter>`
   + '<CssParameter name="fill-opacity">0.45</CssParameter></Fill>'
   + `<Stroke><CssParameter name="stroke">${INVASIVES_GREEN}</CssParameter>`
-  + '<CssParameter name="stroke-width">1</CssParameter>'
-  + '<CssParameter name="stroke-opacity">0.8</CssParameter></Stroke></PolygonSymbolizer>'
+  + '<CssParameter name="stroke-width">1.5</CssParameter>'
+  + '<CssParameter name="stroke-dasharray">4 2</CssParameter></Stroke></PolygonSymbolizer>'
   + '<PointSymbolizer><Graphic><Mark><WellKnownName>circle</WellKnownName>'
-  + `<Fill><CssParameter name="fill">${INVASIVES_GREEN}</CssParameter></Fill></Mark><Size>6</Size></Graphic></PointSymbolizer></Rule>`
+  + `<Stroke><CssParameter name="stroke">${INVASIVES_GREEN}</CssParameter>`
+  + '<CssParameter name="stroke-width">1.5</CssParameter></Stroke></Mark><Size>6</Size></Graphic></PointSymbolizer></Rule>'
   + '</FeatureTypeStyle></UserStyle></NamedLayer></StyledLayerDescriptor>';
 
 /** The style's two rules, as CQL, so the count can be split the same way the map is. */
