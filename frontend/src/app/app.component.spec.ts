@@ -78,7 +78,17 @@ describe('AppComponent', () => {
       el.querySelector<HTMLAnchorElement>(`.app-sidebar__link[href="${path}"]`)?.textContent?.trim();
 
     expect(labelOf('/summary')).toBe('AI Search Summary');
-    expect(labelOf('/projects/272')).toBe('AI Project Summary');
+    expect(labelOf('/projects')).toBe('AI Project Summary');
+  });
+
+  // The sidebar links at the picker, not at one hard-coded project.
+  it('points the project screen at the picker', async () => {
+    const { el } = await renderAs(true, false);
+    const hrefs = Array.from(el.querySelectorAll<HTMLAnchorElement>('.app-sidebar__link'))
+      .map(a => a.getAttribute('href'));
+
+    expect(hrefs).toContain('/projects');
+    expect(hrefs.some(href => href?.startsWith('/projects/'))).toBe(false);
   });
 
   // A screen owns every URL under its path, so the deep link the sidebar points at is still the

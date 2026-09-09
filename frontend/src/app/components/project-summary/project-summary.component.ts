@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, ElementRef, OnInit, computed, inject, signal, viewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { ProjectSummaryService } from '../../services/project-summary.service';
 import { RegistryStateService } from '../../services/registry-state.service';
 import {
@@ -40,7 +40,7 @@ const phaseDate = (entry: PhaseHistoryEntry): string | null =>
 @Component({
   selector: 'app-project-summary',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, RouterLink],
   templateUrl: './project-summary.component.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
