@@ -30,12 +30,13 @@ const OGL_BC_ATTRIBUTION = 'Contains information licensed under the Open Governm
  * GetFeatureInfo answers from it too, so a click finds a polygon where the published style would
  * have shown bare ground.
  *
- * One row in five is a survey that confirmed the plant absent, so those draw as a muted outline
- * rather than in the danger red an infestation earns. Colours are `--typography-color-danger` and
- * `--surface-color-border-default`; a server-side style cannot read a CSS variable.
+ * One row in five is a survey that confirmed the plant absent — good news, so those draw in the
+ * success green rather than the danger red an infestation earns. Colours are
+ * `--typography-color-danger` and `--support-border-color-success`; a server-side style cannot read
+ * a CSS variable.
  */
 const INVASIVES_RED = '#ce3e39';
-const INVASIVES_GREY = '#d8d8d8';
+const INVASIVES_GREEN = '#42814a';
 const INVASIVES_SLD = '<StyledLayerDescriptor version="1.0.0" xmlns="http://www.opengis.net/sld" xmlns:ogc="http://www.opengis.net/ogc">'
   + `<NamedLayer><Name>${INVASIVES_LAYER}</Name><UserStyle><FeatureTypeStyle>`
   + '<Rule><ogc:Filter><ogc:Not><ogc:PropertyIsNull>'
@@ -47,11 +48,13 @@ const INVASIVES_SLD = '<StyledLayerDescriptor version="1.0.0" xmlns="http://www.
   + '<PointSymbolizer><Graphic><Mark><WellKnownName>circle</WellKnownName>'
   + `<Fill><CssParameter name="fill">${INVASIVES_RED}</CssParameter></Fill></Mark><Size>6</Size></Graphic></PointSymbolizer></Rule>`
   + '<Rule><ElseFilter/>'
-  + `<PolygonSymbolizer><Stroke><CssParameter name="stroke">${INVASIVES_GREY}</CssParameter>`
-  + '<CssParameter name="stroke-opacity">0.5</CssParameter></Stroke></PolygonSymbolizer>'
+  + `<PolygonSymbolizer><Fill><CssParameter name="fill">${INVASIVES_GREEN}</CssParameter>`
+  + '<CssParameter name="fill-opacity">0.45</CssParameter></Fill>'
+  + `<Stroke><CssParameter name="stroke">${INVASIVES_GREEN}</CssParameter>`
+  + '<CssParameter name="stroke-width">1</CssParameter>'
+  + '<CssParameter name="stroke-opacity">0.8</CssParameter></Stroke></PolygonSymbolizer>'
   + '<PointSymbolizer><Graphic><Mark><WellKnownName>circle</WellKnownName>'
-  + `<Stroke><CssParameter name="stroke">${INVASIVES_GREY}</CssParameter>`
-  + '<CssParameter name="stroke-opacity">0.5</CssParameter></Stroke></Mark><Size>6</Size></Graphic></PointSymbolizer></Rule>'
+  + `<Fill><CssParameter name="fill">${INVASIVES_GREEN}</CssParameter></Fill></Mark><Size>6</Size></Graphic></PointSymbolizer></Rule>`
   + '</FeatureTypeStyle></UserStyle></NamedLayer></StyledLayerDescriptor>';
 
 /** The style's two rules, as CQL, so the count can be split the same way the map is. */

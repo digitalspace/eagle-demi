@@ -795,17 +795,19 @@ describe('MapExplorerComponent invasive species overlay', () => {
     expect(card.textContent).toBe('Could not load observation details.');
   });
 
-  it('draws a confirmed absence as an outline, not as an infestation', () => {
+  it('draws a confirmed absence in the success green, not as an infestation', () => {
     component.toggleInvasives();
     fixture.detectChanges();
 
     const sld = map.addLayer.calls.mostRecent().args[0].wmsParams.SLD_BODY as string;
     expect(sld).toContain('INVASIVE_PLANT_POSITIVE');
-    expect(sld).toContain('#d8d8d8');
+    expect(sld).toContain('#42814a');
     expect(sld.match(/<Rule>/g)?.length).withContext('one rule per presence state').toBe(2);
-    // The red rule fills; the absence rule only strokes.
+    // Both rules fill, so an absence stays visible, but only the red one reads as an infestation.
+    const absence = sld.slice(sld.indexOf('ElseFilter'));
     expect(sld.indexOf('#ce3e39')).toBeLessThan(sld.indexOf('ElseFilter'));
-    expect(sld.slice(sld.indexOf('ElseFilter'))).not.toContain('fill');
+    expect(absence).not.toContain('#ce3e39');
+    expect(absence).toContain('<CssParameter name="fill-opacity">0.45</CssParameter>');
   });
 
   it('says so when the pixel carries no observation', async () => {
