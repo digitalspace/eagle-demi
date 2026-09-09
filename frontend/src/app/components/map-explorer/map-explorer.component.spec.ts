@@ -119,15 +119,25 @@ describe('MapExplorerComponent layers badge', () => {
     service.activeBoundaryLayers.set([]);
   });
 
-  it('counts boundary layers plus the wildfire and invasives toggles', () => {
-    expect(component.activeLayersCount()).toBe(0);
+  // The Filters button has its own '.pill--info' badge, so scope to the button labelled Layers.
+  const layersBadge = () => {
+    const button = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button'))
+      .find(btn => (btn.textContent ?? '').includes('Layers'));
+    return button?.querySelector('.pill--info')?.textContent?.trim() ?? null;
+  };
+
+  it('renders the count of boundary layers plus the wildfire and invasives toggles', () => {
+    fixture.detectChanges();
+    expect(layersBadge()).toBeNull();
 
     component.toggleWildfires();
     component.toggleInvasives();
-    expect(component.activeLayersCount()).toBe(2);
+    fixture.detectChanges();
+    expect(layersBadge()).toBe('2');
 
     component.toggleLayer('regions');
-    expect(component.activeLayersCount()).toBe(3);
+    fixture.detectChanges();
+    expect(layersBadge()).toBe('3');
   });
 });
 
