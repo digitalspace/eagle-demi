@@ -25,8 +25,9 @@
  * NOTHING HERE EDITS A RECORD BY HAND. Every stored claim has to have come out of the generator,
  * over that project's own chunks, past the citation and number gates — a hand-edited record would
  * carry the same "AI-generated, cited" badge with none of that behind it. Tuning happens in
- * `project-summary-prompts.js` and in the code; the server re-checks the record's contract on the
- * way in either way.
+ * `project-summary-prompts.js` and in the code. The server checks the record's shape, its
+ * `sourceAccess` and that every citation number is in range — nothing more: the grounding gate runs
+ * in the generator only, so an edited record's prose is checked against its sources nowhere.
  *
  * Reads and writes through the DEMI API (src/ai/project-summary-sources.js), because Cosmos and AI
  * Search are private-endpoint only and this runs from a workstation. Environment:
@@ -147,14 +148,18 @@ function mergeSection(stored, fresh, section) {
  * The one line a run is judged on: what was produced, what it cost, and whether it was stored.
  *
  * Section names rather than a count, because "5 sections" and "the conditions section is null" are
- * different answers and only the second one says the generation went wrong.
+ * different answers and only the second one says the generation went wrong. `failed` names the
+ * sections that were attempted and did not come back, which a missing name alone does not say —
+ * a project with no Schedule B has no conditions section either.
  */
 function summaryLine(record, live) {
   const filled = Object.entries(record.sections)
     .filter(([, v]) => v !== null && (!Array.isArray(v) || v.length > 0))
     .map(([k]) => k);
+  const failed = Object.keys(record.sectionErrors || {});
 
   return `[project-summary] project=${record.projectId} sections=${filled.join(',') || 'none'} ` +
+    `failed=${failed.join(',') || 'none'} ` +
     `citations=${record.citations.length} model=${record.model || 'none'} ` +
     `pricedAs=${record.pricedAs} tokens=${record.usage.promptTokens}/${record.usage.completionTokens} ` +
     `estimatedCostCad=${record.estimatedCostCad.toFixed(4)} stored=${live}`;

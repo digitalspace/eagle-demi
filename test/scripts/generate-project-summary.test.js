@@ -8,7 +8,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { parseArgs, mergeSection, run } = require('../../src/scripts/generate-project-summary');
+const {
+  parseArgs, mergeSection, summaryLine, run
+} = require('../../src/scripts/generate-project-summary');
 
 const cite = (n, chunkId) => ({ n, chunkId, documentId: 'docB', pageNumber: n, documentName: 'B' });
 
@@ -178,5 +180,22 @@ test('mergeSection', async (t) => {
 
   await t.test('carries the source access forward', () => {
     assert.strictEqual(mergeSection(STORED, FRESH, 'conditions').sourceAccess, 'public');
+  });
+});
+
+test('summaryLine', async (t) => {
+  await t.test('names the sections that were attempted and failed', () => {
+    const line = summaryLine({
+      ...FRESH, sections: { ...FRESH.sections, conditions: null },
+      sectionErrors: { conditions: 'not_json (batch 2 of 3)' }
+    }, false);
+
+    assert.match(line, /sections=none /);
+    assert.match(line, /failed=conditions /,
+      'a section that was tried and came back empty is not the same as one with no document');
+  });
+
+  await t.test('says none when every section that ran came back', () => {
+    assert.match(summaryLine({ ...FRESH, sectionErrors: {} }, true), /failed=none /);
   });
 });

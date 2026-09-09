@@ -250,6 +250,9 @@ async function chatFoundry(system, user, maxTokens) {
  * than five minutes dies as `TypeError: fetch failed` with the generation still running — which is
  * how the 2026-09-09 Site C run lost its conditions retry. Raising undici's `headersTimeout` needs
  * the `undici` package, which Node does not expose to `require`; `node:http` has no such clock.
+ *
+ * Waiting forever is the point, so every way the connection can end has to settle the promise:
+ * without that, a socket dropped mid-reply hangs the run with no error instead of failing it.
  */
 function postJson(url, payload) {
   const target = new URL(url);
@@ -257,6 +260,15 @@ function postJson(url, payload) {
   const body = JSON.stringify(payload);
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+    const dropped = () =>
+      fail(new Error(`${target.host} closed the connection before the reply ended`));
+
     const req = client.request(target, {
       method: 'POST',
       headers: {
@@ -267,9 +279,19 @@ function postJson(url, payload) {
       let text = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { text += chunk; });
-      res.on('end', () => resolve({ status: res.statusCode, body: text }));
+      res.on('error', fail);
+      res.on('aborted', dropped);
+      res.on('end', () => {
+        // `end` also fires on a body cut short; `complete` is what says the whole reply arrived.
+        if (!res.complete) return dropped();
+        if (settled) return;
+        settled = true;
+        resolve({ status: res.statusCode, body: text });
+      });
     });
-    req.on('error', reject);
+    req.on('error', fail);
+    // Last resort: a destroyed socket does not always reach one of the handlers above.
+    req.on('close', dropped);
     req.end(body);
   });
 }
@@ -607,8 +629,11 @@ async function runSection({ section, document, chunks, registry, projectName, in
   const values = [];
   let model = null;
   let reason = null;
+  // Which batch failed, when there was more than one: "conditions is null" and "conditions is null
+  // because its third batch never parsed" send an operator to different places.
+  const batchLabel = i => (batches.length > 1 ? ` (batch ${i + 1} of ${batches.length})` : '');
 
-  for (const batch of batches) {
+  for (const [index, batch] of batches.entries()) {
     const user = userPrompt(document, batch);
 
     const overflow = contextOverflow(system, user, maxTokens);
@@ -621,7 +646,7 @@ async function runSection({ section, document, chunks, registry, projectName, in
         numPredict: maxTokens,
         numCtx: config.projectSummaryOllamaCtx
       });
-      reason = 'context_overflow';
+      reason = `context_overflow${batchLabel(index)}`;
       break;
     }
 
@@ -656,11 +681,12 @@ async function runSection({ section, document, chunks, registry, projectName, in
 
     if (!parsed) {
       logger.warn(`[project-summary] ${section}: rejected a reply that was not JSON`, {
-        documentId, sources: batch.length
+        documentId, sources: batch.length, batch: index + 1, batches: batches.length
       });
-      // A batch, not the section: the batches that did answer keep their items.
-      reason = reply.truncated ? 'truncated' : 'not_json';
-      continue;
+      // The whole section, not just this batch: `mergeItemBatches` renumbers from 1, so a list
+      // missing the batch that failed reads exactly like a complete one.
+      reason = `${reply.truncated ? 'truncated' : 'not_json'}${batchLabel(index)}`;
+      break;
     }
 
     // Citations are numbered within the batch that produced them, so the registry is handed that
@@ -668,7 +694,7 @@ async function runSection({ section, document, chunks, registry, projectName, in
     values.push(build(parsed, batch, n => registry.map(n, batch, nameOf(document))));
   }
 
-  const value = listSection ? mergeItemBatches(values) : (values[0] || null);
+  const value = reason ? null : (listSection ? mergeItemBatches(values) : (values[0] || null));
   return { value, usage, model, documentId, reason };
 }
 

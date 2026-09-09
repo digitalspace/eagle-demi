@@ -14,6 +14,9 @@ const {
   buildFacts, buildItems, sanitisePromptName, PRICED_AS
 } = require('../../src/ai/project-summary');
 
+/** The transport before any stub, for the test that has to reach a real socket. */
+const realHttpRequest = http.request;
+
 /** What `readForLevel(4)` writes. Level 4 is the only level a stored summary may be built from. */
 const PUBLIC_READ = ['staff', 'idir', 'public'];
 
@@ -78,7 +81,8 @@ function fakeSources({ project, documents = [], chunks = {}, organizations = [],
  *
  * Stubbed at `http.request`, which is the transport the generator reaches Ollama on: `fetch` gives
  * up on a reply that takes more than five minutes to start. A reply is either the content string,
- * or `{content, doneReason}` for a run that has to see how Ollama ended the completion.
+ * or `{content, doneReason, status}` for a run that has to see how Ollama ended the completion, or
+ * what status it answered with.
  */
 function stubModel(t, replies, trace = []) {
   const calls = [];
@@ -91,7 +95,8 @@ function stubModel(t, replies, trace = []) {
     const reply = typeof next === 'string' ? { content: next } : next;
 
     const res = new Readable({ read() {} });
-    res.statusCode = 200;
+    res.statusCode = reply.status || 200;
+    res.complete = true;
     return {
       on: () => {},
       setTimeout: ms => call.timeouts.push(ms),
@@ -151,6 +156,8 @@ test('generateProjectSummary', async (t) => {
     enabled: config.summaryEnabled,
     provider: config.projectSummaryProvider,
     ollamaCtx: config.projectSummaryOllamaCtx,
+    ollamaUrl: config.ollamaUrl,
+    batchChunks: config.projectSummaryBatchChunks,
     foundryEndpoint: config.foundryEndpoint,
     foundryDeployment: config.foundryDeployment
   };
@@ -158,6 +165,8 @@ test('generateProjectSummary', async (t) => {
     config.summaryEnabled = original.enabled;
     config.projectSummaryProvider = original.provider;
     config.projectSummaryOllamaCtx = original.ollamaCtx;
+    config.ollamaUrl = original.ollamaUrl;
+    config.projectSummaryBatchChunks = original.batchChunks;
     config.foundryEndpoint = original.foundryEndpoint;
     config.foundryDeployment = original.foundryDeployment;
   });
@@ -385,6 +394,48 @@ test('generateProjectSummary', async (t) => {
     assert.strictEqual(record.sectionErrors.conditions, undefined);
   });
 
+  /** 48 sources, so the count cap makes three batches of 16. */
+  const batchedConditions = () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryBatchChunks = 16;
+    const chunks = Array.from({ length: 48 }, (_, i) => chunk(
+      i + 1, `Condition ${i + 1}. The Holder must monitor water quality and report findings.`));
+    return fakeSources({ documents: [SCHEDULE_B], chunks: { docB: chunks } });
+  };
+
+  const CONDITION_ITEMS = JSON.stringify({
+    items: [{ category: 'Water', title: 'Water quality', oneLiner: 'Monitor water quality.',
+      bullets: [], citations: [1] }]
+  });
+
+  await t.test('drops the whole list when its first batch fails both attempts', async () => {
+    // A merged list is renumbered from 1, so a third of Schedule B missing reads exactly like a
+    // complete table. Null is the only answer that says the section did not come out.
+    const calls = stubModel(t, ['not json', 'still not json', CONDITION_ITEMS, CONDITION_ITEMS]);
+    const sources = batchedConditions();
+
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(record.sections.conditions, null);
+    assert.strictEqual(record.sectionErrors.conditions, 'not_json (batch 1 of 3)',
+      'the error names which batch failed, out of how many');
+    assert.strictEqual(calls.length, 2,
+      'the batches after the failure are not generated, and not paid for');
+  });
+
+  await t.test('drops the whole list when a later batch fails, keeping no partial list', async () => {
+    const calls = stubModel(t, [CONDITION_ITEMS, 'not json', 'still not json', CONDITION_ITEMS]);
+    const sources = batchedConditions();
+
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(record.sections.conditions, null,
+      'the items batch 1 answered are dropped with the section');
+    assert.strictEqual(record.sectionErrors.conditions, 'not_json (batch 2 of 3)');
+    assert.strictEqual(calls.length, 3);
+  });
+
   await t.test('gives the Ollama call no timeout, so a long generation is not cut off', async () => {
     // `fetch` is undici, which abandons a request after 300 s without response headers — and Ollama
     // sends none until the whole reply is generated. A batch of conditions takes longer than that,
@@ -402,6 +453,70 @@ test('generateProjectSummary', async (t) => {
     assert.strictEqual(calls[0].options.method, 'POST');
     assert.strictEqual(calls[0].options.timeout, undefined, 'no timeout in the request options');
     assert.deepStrictEqual(calls[0].timeouts, [], 'and none set on the request');
+  });
+
+  await t.test('fails the run when the connection drops mid-reply', async () => {
+    // There is no timeout to fall back on, by design, so a dropped socket has to settle the call
+    // itself: over a real socket, not the stub, because the stub can only end a reply cleanly.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+
+    // The stub the other tests install lives on this file's mock tracker, so put the real
+    // transport back for the one test that needs a socket.
+    t.mock.method(http, 'request', realHttpRequest);
+
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.write('{"message":{"content":"{');
+      // Once the client holds the headers and part of the body, nothing on the REQUEST fails any
+      // more — the reply is what stops arriving. That is the state a reset LAN connection leaves.
+      setTimeout(() => req.socket.destroy(), 50);
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    config.ollamaUrl = `http://127.0.0.1:${server.address().port}`;
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: { docC: [chunk(1, 'A sentence.', 'docC')] }
+    });
+
+    const hung = Symbol('hung');
+    try {
+      const outcome = await Promise.race([
+        generateProjectSummary('272', { sources, section: 'status' }).then(() => 'resolved', e => e),
+        new Promise(resolve => setTimeout(() => resolve(hung), 5000).unref())
+      ]);
+
+      assert.notStrictEqual(outcome, hung, 'the call settled rather than waiting forever');
+      assert.ok(outcome instanceof Error, `the run failed, got ${String(outcome)}`);
+      assert.ok(outcome.message, 'and says something an operator can act on');
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
+  await t.test('throws on an Ollama error status rather than reading the body as a reply', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    // A body that would parse into a perfectly good section, behind a 500. Without the status
+    // check, a failing model server produces a section indistinguishable from a real one.
+    const calls = stubModel(t, {
+      status: 500,
+      content: JSON.stringify({
+        items: [{ category: 'Water', title: 'Water quality', oneLiner: 'Monitor it.',
+          bullets: [], citations: [1] }]
+      })
+    });
+
+    const sources = fakeSources({
+      documents: [SCHEDULE_B],
+      chunks: { docB: [chunk(1, 'Monitor it.')] }
+    });
+
+    await assert.rejects(
+      generateProjectSummary('272', { sources, section: 'conditions' }),
+      /ollama 500/);
+    assert.strictEqual(calls.length, 1, 'an error status is not retried as an unparseable reply');
   });
 
   await t.test('asks once for a conditions document that fits in one window', async () => {
