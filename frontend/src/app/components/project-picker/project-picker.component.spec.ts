@@ -162,6 +162,15 @@ describe('ProjectPickerComponent', () => {
     expect(squash(el.querySelector('.pp-count')?.textContent)).toBe('4 projects · 4 of 900 loaded');
   });
 
+  it('says no projects are visible rather than a blank-query non-match, when the registry is empty', async () => {
+    stubHappyPath([], 0);
+
+    const el = await render();
+
+    expect(squash(el.querySelector('.pp-count')?.textContent)).toBe('0 projects');
+    expect(squash(el.querySelector('[role="status"]')?.textContent)).toBe('No projects are visible to you.');
+  });
+
   it('reports a failed read instead of showing an empty registry', async () => {
     routeFetch(url =>
       url.includes('dataset=Project') ? json({ error: 'boom' }, 500) : json([{ searchResults: [] }]));
@@ -170,6 +179,41 @@ describe('ProjectPickerComponent', () => {
 
     expect(squash(el.querySelector('[role="alert"]')?.textContent)).toContain('could not be loaded');
     expect(el.querySelectorAll('.pp-result').length).toBe(0);
+  });
+
+  it('shows the skeleton while the project read is in flight, then clears it', async () => {
+    let resolveProjects!: (res: Response) => void;
+    spyOn(window, 'fetch').and.callFake((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('dataset=Project')) return new Promise<Response>(resolve => { resolveProjects = resolve; });
+      return Promise.resolve(json([{ searchResults: [], count: 0 }]));
+    });
+
+    await TestBed.configureTestingModule({
+      imports: [ProjectPickerComponent],
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), provideRouter([])]
+    }).compileComponents();
+    const registry = TestBed.inject(RegistryStateService);
+    await registry.authReady;
+    const service = TestBed.inject(ProjectSummaryService);
+    service.projects.set(null);
+    service.projectsTotal.set(null);
+    service.projectsError.set('');
+    service.lists.set(null);
+
+    fixture = TestBed.createComponent(ProjectPickerComponent);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.querySelectorAll('.skeleton').length).toBeGreaterThan(0);
+    expect(el.querySelector('[aria-busy]')?.getAttribute('aria-busy')).toBe('true');
+
+    resolveProjects(projectSearch([{ id: 1, name: 'Only Project' }]));
+    for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    expect(el.querySelectorAll('.skeleton').length).toBe(0);
+    expect(names(el)).toEqual(['Only Project']);
   });
 
   it('focuses the search box and walks into the results with the arrow keys', async () => {

@@ -225,10 +225,12 @@ export class ProjectSummaryService {
   /**
    * Every project the caller may see, in one read, cached for the session — the picker's list.
    *
-   * The same `dataset=Project` search the registry screens make, but deliberately not their
-   * `projects()` signal: that one carries whatever the global keyword query last matched, and a
-   * picker that filters in the browser has to hold the whole list. The `List` lookup rides along
-   * because a row's phase is an id on every record the backfill left unresolved.
+   * The same `dataset=Project` search the registry screens make. Reused straight off
+   * `registry.projects()` when the global keyword box is empty, because an unfiltered registry
+   * read IS the whole list this picker wants; a live keyword still gets its own read, since
+   * `registry.projects()` would then be whatever that query last matched, not the whole list. The
+   * `List` lookup rides along because a row's phase is an id on every record the backfill left
+   * unresolved.
    */
   async loadProjects(): Promise<void> {
     if (this.projects() || this.projectsLoading()) return;
@@ -243,6 +245,23 @@ export class ProjectSummaryService {
         proponent: p.proponent ?? null
       })));
       this.projectsTotal.set(MOCK_PROJECTS.length);
+      return;
+    }
+
+    const registryRows = this.registry.projects();
+    if (registryRows && !this.registry.searchQuery().trim()) {
+      // Registry rows are already defaulted (name/id can never be blank there), so nothing to
+      // drop. Phase is not on this mapped row — re-asking for it would be the exact duplicate
+      // read this reuse exists to avoid, so the phase segment is absent until the reader opens
+      // the project itself.
+      this.projects.set(registryRows.map(row => ({
+        id: String(row.id),
+        name: row.name,
+        region: row.region ?? null,
+        proponent: row.proponent ?? null,
+        currentPhaseName: null
+      })));
+      this.projectsTotal.set(this.registry.projectMatchCount() ?? registryRows.length);
       return;
     }
 

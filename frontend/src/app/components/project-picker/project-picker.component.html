@@ -43,7 +43,12 @@
         }
       </ul>
     } @else if (!matches().length) {
-      <p role="status" style="margin: 0;">No project matches “{{ query() }}”.</p>
+      <!-- Distinct from a query that matched nothing: the ACL left this reader zero rows to search. -->
+      @if (!service.projects()?.length) {
+        <p role="status" style="margin: 0;">No projects are visible to you.</p>
+      } @else {
+        <p role="status" style="margin: 0;">No project matches “{{ query() }}”.</p>
+      }
     } @else {
       <ul class="pp-list">
         @for (item of visible(); track item.row.id; let i = $index) {
