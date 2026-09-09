@@ -94,6 +94,53 @@ describe('MapExplorerComponent wildfire panel', () => {
   });
 });
 
+describe('MapExplorerComponent layers badge', () => {
+  let fixture: ComponentFixture<MapExplorerComponent>;
+  let component: MapExplorerComponent;
+  let service: RegistryStateService;
+
+  beforeEach(async () => {
+    spyOn(window, 'fetch').and.callFake(() =>
+      Promise.resolve(new Response(JSON.stringify([{ searchResults: [] }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+    );
+
+    await TestBed.configureTestingModule({
+      imports: [MapExplorerComponent],
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), provideRouter([])]
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(MapExplorerComponent);
+    component = fixture.componentInstance;
+    spyOn(component as any, 'initMap');
+    service = TestBed.inject(RegistryStateService);
+    service.activeBoundaryLayers.set([]);
+  });
+
+  // The Filters button has its own '.pill--info' badge, so scope to the button labelled Layers.
+  const layersBadge = () => {
+    const button = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('button'))
+      .find(btn => (btn.textContent ?? '').includes('Layers'));
+    return button?.querySelector('.pill--info')?.textContent?.trim() ?? null;
+  };
+
+  it('renders the count of boundary layers plus the wildfire and invasives toggles', () => {
+    fixture.detectChanges();
+    expect(layersBadge()).toBeNull();
+
+    component.toggleWildfires();
+    component.toggleInvasives();
+    fixture.detectChanges();
+    expect(layersBadge()).toBe('2');
+
+    component.toggleLayer('regions');
+    fixture.detectChanges();
+    expect(layersBadge()).toBe('3');
+  });
+});
+
 describe('MapExplorerComponent EAC number', () => {
   let fixture: ComponentFixture<MapExplorerComponent>;
   let service: RegistryStateService;
