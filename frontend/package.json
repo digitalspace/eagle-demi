@@ -9,7 +9,8 @@
     "watch": "ng build --watch --configuration development",
     "lint": "ng lint",
     "lint:fix": "ng lint --fix",
-    "test": "ng test"
+    "test": "ng test",
+    "species:refresh": "node scripts/fetch-invasive-species.mjs"
   },
   "private": true,
   "dependencies": {
