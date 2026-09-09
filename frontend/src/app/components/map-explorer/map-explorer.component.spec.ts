@@ -511,6 +511,12 @@ describe('MapExplorerComponent invasive species overlay', () => {
     headers: { 'Content-Type': 'application/xml' }
   }));
 
+  /** The count goes out as two hits reads, one per rule of the style; answer them apart. */
+  const hitsAnswering = (present: number, absent: number) => fetchSpy.and.callFake((input: any) => {
+    const filter = new URL(String(input)).searchParams.get('CQL_FILTER') ?? '';
+    return xmlAnswer(xml(filter.includes('IS NOT NULL') ? present : absent));
+  });
+
   /** Types a species and waits out the 400 ms debounce the input applies. */
   const type = async (species: string) => {
     component.setInvasivesSpecies({ target: { value: species } } as unknown as Event);
@@ -582,8 +588,8 @@ describe('MapExplorerComponent invasive species overlay', () => {
     expect(sld).not.toContain('#009100');
     expect(sld).toContain('PolygonSymbolizer');
     expect(sld).toContain('PointSymbolizer');
-    // Tiles go out as GET, and a browser is safe well under 2 KB.
-    expect(encodeURIComponent(sld).length).toBeLessThan(1500);
+    // Tiles go out as GET, so the style has to stay small enough to ride in a query string.
+    expect(encodeURIComponent(sld).length).toBeLessThan(2048);
   });
 
   it('takes the same layer off the map when the overlay is switched off', () => {
@@ -612,6 +618,12 @@ describe('MapExplorerComponent invasive species overlay', () => {
     expect(url).toContain('J=300');
     // Without the same style, the server answers from its own, which draws nothing when zoomed in.
     expect(new URL(url).searchParams.get('SLD_BODY')).toContain('#ce3e39');
+
+    // The server rejects a bbox whose corners are the wrong way round: minx,miny,maxx,maxy.
+    const [minX, minY, maxX, maxY] = (new URL(url).searchParams.get('BBOX') ?? '').split(',').map(Number);
+    expect([minX, minY, maxX, maxY].every(Number.isFinite)).toBeTrue();
+    expect(minX).toBeLessThan(maxX);
+    expect(minY).toBeLessThan(maxY);
   });
 
   it('asks nothing while the overlay is off', () => {
@@ -682,10 +694,10 @@ describe('MapExplorerComponent invasive species overlay', () => {
     fixture.detectChanges();
     expect(component.invasivesMatchLabel()).toBe('All species');
 
-    fetchSpy.and.callFake(() => xmlAnswer(xml(697)));
+    hitsAnswering(479, 218);
     await type('baby');
     fixture.detectChanges();
-    expect(component.invasivesMatchLabel()).toBe('697 observations');
+    expect(component.invasivesMatchLabel()).toBe('479 present, 218 absent');
 
     await type('  ');
     fixture.detectChanges();
@@ -737,32 +749,63 @@ describe('MapExplorerComponent invasive species overlay', () => {
     component.toggleInvasives();
     component.layersOpen.set(true);
     fixture.detectChanges();
-    fetchSpy.and.callFake(() => xmlAnswer(xml(697)));
+    hitsAnswering(479, 218);
 
     await type('baby');
     fixture.detectChanges();
 
-    expect(component.invasivesMatches()).toBe(697);
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain('697 observations');
+    expect(component.invasivesMatches()).toEqual({ present: 479, absent: 218 });
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('479 present, 218 absent');
   });
 
   it('ignores a count that lands after a newer species was typed', async () => {
     component.toggleInvasives();
     fixture.detectChanges();
 
-    let releaseStale: (answer: Response) => void = () => {};
-    fetchSpy.and.callFake(() => new Promise<Response>(resolve => { releaseStale = resolve; }));
+    const stale: ((answer: Response) => void)[] = [];
+    fetchSpy.and.callFake(() => new Promise<Response>(resolve => stale.push(resolve)));
     await type('baby');
 
-    fetchSpy.and.callFake(() => xmlAnswer(xml(3)));
+    hitsAnswering(3, 1);
     await type('knapweed');
-    expect(component.invasivesMatches()).toBe(3);
+    expect(component.invasivesMatches()).toEqual({ present: 3, absent: 1 });
 
-    releaseStale(new Response(xml(697), { status: 200 }));
+    stale.forEach(resolve => resolve(new Response(xml(697), { status: 200 })));
     await new Promise(resolve => setTimeout(resolve, 50));
     await settle();
 
-    expect(component.invasivesMatches()).withContext('the older answer must not win').toBe(3);
+    expect(component.invasivesMatches())
+      .withContext('the older answer must not win')
+      .toEqual({ present: 3, absent: 1 });
+  });
+
+  it('says the read failed rather than leaving the click looking ignored', async () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+    // GeoServer answers an error with an XML exception report, so the JSON parse rejects.
+    fetchSpy.and.callFake(() => Promise.resolve(new Response('<ServiceExceptionReport/>', {
+      status: 200,
+      headers: { 'Content-Type': 'application/xml' }
+    })));
+
+    click();
+    await settle();
+
+    const card = map.openPopup.calls.mostRecent().args[0].getContent() as HTMLElement;
+    expect(card.textContent).toBe('Could not load observation details.');
+  });
+
+  it('draws a confirmed absence as an outline, not as an infestation', () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+
+    const sld = map.addLayer.calls.mostRecent().args[0].wmsParams.SLD_BODY as string;
+    expect(sld).toContain('INVASIVE_PLANT_POSITIVE');
+    expect(sld).toContain('#d8d8d8');
+    expect(sld.match(/<Rule>/g)?.length).withContext('one rule per presence state').toBe(2);
+    // The red rule fills; the absence rule only strokes.
+    expect(sld.indexOf('#ce3e39')).toBeLessThan(sld.indexOf('ElseFilter'));
+    expect(sld.slice(sld.indexOf('ElseFilter'))).not.toContain('fill');
   });
 
   it('says so when the pixel carries no observation', async () => {

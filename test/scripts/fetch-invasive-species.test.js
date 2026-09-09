@@ -64,6 +64,34 @@ test('fetch-invasive-species', async (t) => {
     assert.deepStrictEqual(result.species, ['Bull thistle (Cirsium vulgare)']);
   });
 
+  await t.test('keeps paging while a page comes back full', async () => {
+    // The live layer needs 14 pages, so a loop that stops after the first one silently ships a
+    // fraction of the species.
+    const full = name => page(Array.from({ length: script.PAGE_SIZE }, (_, i) => `x,${i},${name},9`));
+    const pages = [
+      full('Bull thistle (Cirsium vulgare)'),
+      full('Common tansy (Tanacetum vulgare)'),
+      page(['x,1,American elm (Ulmus americana),9'])
+    ];
+    const asked = [];
+    const fetchImpl = async (url) => {
+      const body = pages[asked.length];
+      asked.push(url);
+      return { ok: true, text: async () => body };
+    };
+
+    const result = await script.fetchSpecies(fetchImpl);
+
+    assert.strictEqual(asked.length, 3);
+    assert.strictEqual(new URL(asked[1]).searchParams.get('startIndex'), String(script.PAGE_SIZE));
+    assert.strictEqual(result.rows, script.PAGE_SIZE * 2 + 1);
+    assert.deepStrictEqual(result.species, [
+      'American elm (Ulmus americana)',
+      'Bull thistle (Cirsium vulgare)',
+      'Common tansy (Tanacetum vulgare)'
+    ]);
+  });
+
   await t.test('fails loudly on a bad answer instead of writing a short list', async () => {
     const fetchImpl = async () => ({ ok: false, status: 502, text: async () => '' });
     await assert.rejects(() => script.fetchSpecies(fetchImpl), /502/);

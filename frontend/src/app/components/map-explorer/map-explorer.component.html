@@ -190,6 +190,14 @@
           </label>
           @if (showInvasives()) {
             <div style="padding: 2px 0 4px 1.4rem;">
+              <p class="cell__sub" style="display: flex; align-items: center; gap: 0.75rem; margin: 0 0 4px;">
+                <span style="display: inline-flex; align-items: center; gap: 0.3rem;">
+                  <span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 2px; background: #ce3e39;"></span>Present
+                </span>
+                <span style="display: inline-flex; align-items: center; gap: 0.3rem;">
+                  <span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--surface-color-border-default);"></span>Confirmed absent
+                </span>
+              </p>
               <label for="demi-invasives-species" class="micro-label" style="display: block; margin-bottom: 2px;">Species</label>
               <input id="demi-invasives-species" type="text" list="demi-invasives-species-options" autocomplete="off" placeholder="e.g. Baby's breath" [value]="invasivesSpecies()" (input)="setInvasivesSpecies($event)"
                      style="width: 100%; box-sizing: border-box; padding: 0.35rem 0.6rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
