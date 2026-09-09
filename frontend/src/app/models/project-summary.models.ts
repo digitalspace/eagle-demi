@@ -65,6 +65,22 @@ export interface ProjectFacts {
   phaseHistory?: PhaseHistoryEntry[];
 }
 
+/**
+ * One row of the project picker: only what the list renders.
+ *
+ * The three descriptive fields are `ListRef` rather than `string` because the search response
+ * carries whichever shape the record was written in — a resolved `{_id, name}` for `proponent`,
+ * a plain name for `region`, an Eagle `List` id for a phase the backfill did not resolve. They go
+ * through the same `resolveListLabel` the summary page uses, so a row never renders an id.
+ */
+export interface ProjectListRow {
+  id: string;
+  name: string;
+  region?: ListRef;
+  proponent?: ListRef;
+  currentPhaseName?: ListRef;
+}
+
 /** A document the summary points at. `datePosted` is an ISO string when the index carried one. */
 export interface SummaryDocumentRef {
   documentId: string;

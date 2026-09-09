@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { ActivatedRoute, convertToParamMap } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { ProjectSummaryComponent } from './project-summary.component';
 import { ProjectSummaryService } from '../../services/project-summary.service';
 import { RegistryStateService } from '../../services/registry-state.service';
@@ -45,6 +45,8 @@ describe('ProjectSummaryComponent', () => {
       providers: [
         provideHttpClient(withXhr()),
         provideHttpClientTesting(),
+        provideRouter([]),
+        // After provideRouter, so the stubbed snapshot wins over the router's own ActivatedRoute.
         { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap({ id: '272' }) } } }
       ]
     }).compileComponents();
@@ -93,6 +95,21 @@ describe('ProjectSummaryComponent', () => {
     // Nothing generated may render without a record behind it.
     expect(el.querySelectorAll('.ps-card--action').length).toBe(0);
     expect(el.querySelector('.ps-footer')).toBeNull();
+  });
+
+  // The screen is reached from the picker and from a deep link; both need the way back.
+  it('links back to the project list', async () => {
+    routeFetch(url => {
+      if (url.includes('/summary')) return json({ error: 'not found' }, 404);
+      if (url.includes('dataset=List')) return listSearch();
+      if (url.includes('/search?')) return json([{ searchResults: [], count: 0 }]);
+      return json(MOCK_PROJECT_SUMMARY_FACTS);
+    });
+
+    const back = (await render()).querySelector<HTMLAnchorElement>('.ps__back')!;
+
+    expect(back.getAttribute('href')).toBe('/projects');
+    expect(squash(back.textContent)).toContain('All projects');
   });
 
   it('reads Eagle phase names as a sequence under the status, not as timeline rows', async () => {

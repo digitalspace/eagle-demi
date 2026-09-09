@@ -149,3 +149,110 @@ describe('ProjectSummaryService list lookup', () => {
     expect(service.resolveLabel(PHASE_ID).pending).toBeFalse();
   });
 });
+
+describe('ProjectSummaryService project list', () => {
+  let service: ProjectSummaryService;
+  let registry: RegistryStateService;
+  let fetchSpy: jasmine.Spy;
+
+  /** URLs the service asked for, so a reuse claim is checked against calls that did not happen. */
+  const projectUrls = () =>
+    fetchSpy.calls.allArgs().map(args => String(args[0])).filter(url => url.includes('dataset=Project'));
+
+  beforeEach(async () => {
+    fetchSpy = spyOn(window, 'fetch').and.callFake((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('dataset=List')) return Promise.resolve(jsonResponse([{ searchResults: [], count: 0 }]));
+      return Promise.resolve(jsonResponse([{ searchResults: [], count: 0 }]));
+    });
+
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), RegistryStateService, ProjectSummaryService]
+    });
+    registry = TestBed.inject(RegistryStateService);
+    await registry.authReady;
+    service = TestBed.inject(ProjectSummaryService);
+    service.projects.set(null);
+    service.projectsLoading.set(false);
+    service.projectsError.set('');
+    service.projectsTotal.set(null);
+    fetchSpy.calls.reset();
+  });
+
+  async function settle(turns = 5) {
+    for (let i = 0; i < turns; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  it('drops a search row with no name or no id', async () => {
+    fetchSpy.and.callFake((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('dataset=Project')) {
+        return Promise.resolve(jsonResponse([{
+          count: 3,
+          searchResults: [
+            { id: '1', name: 'Named Project' },
+            { id: '', name: 'No id, cannot be searched for' },
+            { id: '2', name: '' }
+          ]
+        }]));
+      }
+      return Promise.resolve(jsonResponse([{ searchResults: [], count: 0 }]));
+    });
+
+    await service.loadProjects();
+    await settle();
+
+    expect(service.projects()?.map(p => p.name)).toEqual(['Named Project']);
+  });
+
+  it('reuses the registry\'s already-loaded, unfiltered project list instead of asking again', async () => {
+    registry.projects.set([
+      { id: '9', name: 'Reused Project', gatingState: 'admitted', region: 'Peace', proponent: 'BC Hydro' }
+    ]);
+    registry.projectMatchCount.set(1);
+
+    await service.loadProjects();
+    await settle();
+
+    expect(projectUrls()).toEqual([]);
+    expect(service.projects()).toEqual([
+      { id: '9', name: 'Reused Project', region: 'Peace', proponent: 'BC Hydro', currentPhaseName: null }
+    ]);
+  });
+
+  it('reads its own page when the registry list is narrowed by a live keyword search', async () => {
+    // A filtered registry() is a subset, not the picker's whole list — reusing it here would
+    // silently hide every project the global search box does not currently match.
+    registry.projects.set([{ id: '9', name: 'Filtered match', gatingState: 'admitted' }]);
+    registry.searchQuery.set('pipeline');
+    fetchSpy.and.callFake((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('dataset=Project')) {
+        return Promise.resolve(jsonResponse([{ searchResults: [{ id: '9', name: 'Full list' }], count: 1 }]));
+      }
+      return Promise.resolve(jsonResponse([{ searchResults: [], count: 0 }]));
+    });
+
+    await service.loadProjects();
+    await settle();
+
+    expect(projectUrls().length).toBe(1);
+    expect(service.projects()?.map(p => p.name)).toEqual(['Full list']);
+  });
+
+  it('reads its own page when the registry has not loaded a project list yet', async () => {
+    fetchSpy.and.callFake((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('dataset=Project')) {
+        return Promise.resolve(jsonResponse([{ searchResults: [{ id: '9', name: 'Own read' }], count: 1 }]));
+      }
+      return Promise.resolve(jsonResponse([{ searchResults: [], count: 0 }]));
+    });
+
+    await service.loadProjects();
+    await settle();
+
+    expect(projectUrls().length).toBe(1);
+    expect(service.projects()?.map(p => p.name)).toEqual(['Own read']);
+  });
+});

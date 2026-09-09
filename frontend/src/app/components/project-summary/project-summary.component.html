@@ -31,6 +31,8 @@
 
 <div class="ps">
 
+  <a class="ps__back" routerLink="/projects"><span aria-hidden="true">←</span> All projects</a>
+
   @if (service.factsError(); as err) {
     <div class="callout callout--warning" role="alert">
       <p>{{ err }}</p>

@@ -847,3 +847,51 @@ svg.leaflet-zoom-animated:focus {
 .ps-footer a {
   color: var(--typography-color-link);
 }
+
+.ps__back {
+  display: inline-block;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-link);
+  margin-bottom: var(--layout-margin-small);
+}
+
+/* Project picker. A list of links: hover and focus are the only styling it needs, and neither
+   can be a style attribute. */
+.pp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pp-result {
+  display: block;
+  padding: var(--layout-padding-small);
+  border-bottom: var(--layout-border-width-small) solid var(--surface-color-border-default);
+  color: var(--typography-color-primary);
+  text-decoration: none;
+}
+
+.pp-list li:last-child .pp-result,
+.pp-list .pp-result:last-child {
+  border-bottom: none;
+}
+
+.pp-result:hover {
+  background: var(--surface-color-background-light-gray);
+}
+
+.pp-result:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: -2px;
+}
+
+.pp-result__name {
+  display: block;
+  font: var(--typography-bold-small-body);
+}
+
+.pp-result__meta {
+  display: block;
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+}
