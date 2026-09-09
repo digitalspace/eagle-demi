@@ -12,7 +12,7 @@ const summarizer = require('../../src/ai/summarize');
 const { logger } = require('../../src/utils/logger');
 const {
   generateProjectSummary, validCitations, groundedInCitations, normaliseNationName, joinNations,
-  buildFacts, buildItems, sanitisePromptName, PRICED_AS, PICK
+  buildFacts, buildItems, buildTimeline, sanitisePromptName, PRICED_AS, PICK
 } = require('../../src/ai/project-summary');
 
 /** The transport before any stub, for the test that has to reach a real socket. */
@@ -1314,6 +1314,48 @@ test('generateProjectSummary', async (t) => {
       'the event the source dates survives, and the one it does not is still dropped');
   });
 
+  await t.test('tells a reply of the wrong shape from a list every gate emptied', async () => {
+    // Both stored `no_grounded_content`, and they send an operator to different places: one is the
+    // model answering a shape nothing reads, the other is the gates doing their job.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    stubModel(t, JSON.stringify({ timeline: [] }));
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: { docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(record.sectionErrors.timelineEvents, 'no_list');
+  });
+
+  await t.test('names the token that dropped an ungrounded event', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    stubModel(t, JSON.stringify({
+      events: [{ date: '2019-03-14', label: 'Certificate amended', citations: [1] }]
+    }));
+    const warned = [];
+    t.mock.method(logger, 'warn', line => { warned.push(String(line)); });
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [chunk(1, 'Amended in 2019. Issued on October 14, 2014.', 'docC')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(record.sections.timelineEvents, null);
+    assert.strictEqual(record.sectionErrors.timelineEvents, 'no_grounded_content');
+    assert.ok(
+      warned.some(line => line.includes('2019-03-14') && line.includes('Certificate amended')),
+      `the log names the failing token and the claim: ${warned.join(' | ')}`);
+    assert.ok(warned.some(line => line.includes('listed 1 entries')),
+      `and how many entries the reply carried: ${warned.join(' | ')}`);
+  });
+
   await t.test('generates nothing while the feature is off', async () => {
     config.summaryEnabled = false;
     const calls = stubModel(t, '{}');
@@ -1460,6 +1502,33 @@ test('groundedInCitations', async (t) => {
     assert.strictEqual(groundedInCitations('Monitoring is required within 30 days.', [1], chunks),
       true);
   });
+
+  await t.test('matches a date the source wrapped across a line', () => {
+    // The chunks are PDF text, so a date lands across a line break, or with a double space after
+    // the comma, as often as not.
+    assert.strictEqual(groundedInCitations('Order made 2012-07-06.', [1],
+      [{ content: 'The order was made on July 6,\n  2012 under section 10.' }]), true);
+    assert.strictEqual(groundedInCitations('Order made 2012-07-06.', [1],
+      [{ content: 'Made on July\t6,  2012.' }]), true);
+  });
+
+  await t.test('matches the ordinal and legal spellings a certificate dates itself with', () => {
+    for (const content of [
+      'Issued October 14th, 2014.',
+      'Dated this 14th day of October, 2014.',
+      'Dated this 14 day of October, 2014.',
+      'Issued 14.10.2014.',
+      'Issued 2014/10/14.'
+    ]) {
+      assert.strictEqual(
+        groundedInCitations('Certificate issued 2014-10-14.', [1], [{ content }]), true, content);
+    }
+  });
+
+  await t.test('still refuses a dotted date the source never wrote', () => {
+    assert.strictEqual(groundedInCitations('Certificate issued 2014-10-11.', [1],
+      [{ content: 'Issued 14.10.2014.' }]), false);
+  });
 });
 
 test('federal decision picker', async (t) => {
@@ -1535,6 +1604,89 @@ test('key document pickers', async (t) => {
     ]).keyDocuments;
 
     assert.strictEqual(roles.find(r => r.role === 'assessmentReport').documentId, 'docAR3');
+  });
+
+  await t.test('does not read a proponent\'s appendix as the EAO assessment report', () => {
+    // Site C holds ZERO documents typed "Assessment Report", so the title was the whole picker and
+    // this 2013 EIS appendix won it. The timeline built off it covered a worker camp.
+    const appendix = {
+      id: 'docJ2', type: 'Application Materials', datePosted: '2013-01-25',
+      displayName: 'Volume 1, Appendix J2 - Worker Accomodation Options Assessment Report'
+    };
+    assert.strictEqual(PICK.assessmentReport([appendix]), null,
+      'nothing qualifies, so the timeline falls back to the certificate');
+    assert.strictEqual(PICK.application([appendix]), null);
+  });
+
+  await t.test('takes the office\'s own report, however the registry types it', () => {
+    const eao = { id: 'docE', datePosted: '2014-09-30',
+      displayName: 'EAO Assessment Report - Site C Clean Energy Project' };
+    assert.strictEqual(PICK.assessmentReport([eao]).id, 'docE');
+  });
+
+  await t.test('picks the application itself out of the documents filed under it', () => {
+    // 378 Site C documents carry the type; on the type alone the application was "Appendix A".
+    const documents = [
+      { id: 'docAppA', type: 'Application Materials', datePosted: '2013-08-01',
+        displayName: 'Appendix A - Concordance Table' },
+      { id: 'docEIS', type: 'Application Materials', datePosted: '2013-01-25',
+        displayName: 'Environmental Impact Statement' },
+      { id: 'docAIR', type: 'Application Materials', datePosted: '2013-06-01',
+        displayName: 'Application Information Requirements' }
+    ];
+    assert.strictEqual(PICK.application(documents).id, 'docEIS');
+  });
+
+  await t.test('links the assessment report the sections were written from', () => {
+    // The picker runs over the documents that HAVE text to choose a source and over the whole
+    // registry for the link, so a newer unextracted report would name one document on the page
+    // beside prose drawn from another.
+    const withText = { id: 'docAR1', type: 'Assessment Report', datePosted: '2014-01-15',
+      displayName: 'Assessment Report', contentExtracted: true };
+    const withoutText = { id: 'docAR9', type: 'Assessment Report', datePosted: '2021-04-04',
+      displayName: 'Assessment Report' };
+
+    const roles = buildFacts([withoutText, withText], [withText]).keyDocuments;
+    assert.strictEqual(roles.find(r => r.role === 'assessmentReport').documentId, 'docAR1');
+  });
+});
+
+test('buildTimeline', async (t) => {
+  t.mock.method(logger, 'warn', () => {});
+  const chunks = [{ content: 'The certificate was issued on the 14th day of October, 2014.' }];
+  const events = parsed => buildTimeline(parsed, chunks, n => n, 'timelineEvents');
+
+  await t.test('rejects a reply that carries no events key', () => {
+    assert.strictEqual(events({ timeline: [] }), null);
+  });
+
+  await t.test('drops an event whose date is not ISO', () => {
+    // A timeline row sorts against the fact rows the page puts beside it, so a free-text date is a
+    // row that cannot be placed.
+    assert.strictEqual(events({
+      events: [{ date: 'October 14, 2014', label: 'Certificate issued', citations: [1] }]
+    }), null);
+  });
+
+  await t.test('drops an event that cites nothing', () => {
+    assert.strictEqual(events({
+      events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [] }]
+    }), null);
+  });
+
+  await t.test('drops an event carrying a date the cited chunk does not', () => {
+    assert.strictEqual(events({
+      events: [{ date: '2015-01-01', label: 'Certificate issued', citations: [1] }]
+    }), null);
+  });
+
+  await t.test('keeps the event the source dates in its own spelling', () => {
+    assert.deepStrictEqual(events({
+      events: [
+        { date: '2014-10-14', label: 'Certificate issued', citations: [1] },
+        { date: '2015-01-01', label: 'Certificate amended', citations: [1] }
+      ]
+    }), [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
   });
 });
 

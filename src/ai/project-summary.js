@@ -167,6 +167,62 @@ const preferOriginal = docs =>
   newest(docs.filter(d => !nameMatches(d, AMENDMENT_TITLE))) || newest(docs);
 
 /**
+ * The filing structure UNDER a big submission, never the submission itself.
+ *
+ * Site C files 378 documents under type "Application Materials" and every appendix and volume of
+ * the 2013 EIS is one of them. Matched on type alone the application picker returned "Appendix A".
+ */
+const SUBSIDIARY_TITLE = /\bappendix\b|\bappendices\b|\bvolume\b|\bannex\b|\bpart\s+\d/i;
+
+/** A proponent's own study, whatever it calls itself. */
+const PROPONENT_STUDY_TITLE =
+  /\bstudy\b|\bstudies\b|\boptions\b|\bplan\b|\bhauling\b|\baccomm?odation\b/i;
+
+/** The office, however a title names it. */
+const EAO_TITLE = /\beao\b|environmental\s+assessment\s+office/i;
+
+const ASSESSMENT_REPORT_TITLE = /assessment\s+report/i;
+
+/**
+ * The EAO's assessment report on the project — the document the regulatory chronology lives in.
+ *
+ * Site C holds ZERO documents of type "Assessment Report", so the title half of this test is the
+ * whole picker there, and on a bare "assessment report" substring it returned "Volume 1, Appendix
+ * J2 - Worker Accomodation Options Assessment Report": a 2013 EIS appendix by the proponent. The
+ * timeline built off it covered a worker camp. So a title-only match must read like the office's
+ * own report — naming itself first, or naming the office — and must not read like a study filed
+ * under a submission.
+ *
+ * Returns nothing rather than a near miss: `timelineDoc` falls back to the certificate, and the
+ * certificate's recitals are a real chronology where an appendix is not.
+ */
+function isAssessmentReport(doc) {
+  if (isType(doc, 'Assessment Report')) return true;
+  const title = nameOf(doc);
+  if (!ASSESSMENT_REPORT_TITLE.test(title)) return false;
+  if (SUBSIDIARY_TITLE.test(title) || PROPONENT_STUDY_TITLE.test(title)) return false;
+  return /^\s*assessment\s+report\b/i.test(title) || EAO_TITLE.test(title);
+}
+
+/** The application's own main volume, by the two names it is filed under. */
+const APPLICATION_MAIN_TITLE = /environmental\s+impact\s+statement|application\s+for\s+an?\s+/i;
+
+const APPLICATION_TITLE = /\bapplication\b/i;
+
+/**
+ * The application itself, not one of the hundreds of documents filed beneath it.
+ *
+ * The type is not enough on its own — see `SUBSIDIARY_TITLE` — so a document either names itself
+ * as the application whatever its type, or carries the type AND names an application.
+ */
+function isApplication(doc) {
+  const title = nameOf(doc);
+  if (SUBSIDIARY_TITLE.test(title)) return false;
+  if (APPLICATION_MAIN_TITLE.test(title)) return true;
+  return isType(doc, 'Application Materials') && APPLICATION_TITLE.test(title);
+}
+
+/**
  * The source document for each section, by type and title pattern.
  *
  * Title patterns, not ids: the ids in the plan are Site C's, and a picker hardcoded to them
@@ -185,10 +241,15 @@ const PICK = {
     nameMatches(d, /certificate/i) &&
     !nameMatches(d, /schedule\s*[ab]/i))),
   amendedCertificate: docs => newest(docs.filter(d => nameMatches(d, /amended\s+certificate/i))),
-  assessmentReport: docs => preferOriginal(docs.filter(d =>
-    isType(d, 'Assessment Report') || nameMatches(d, /assessment\s+report/i))),
-  application: docs => preferOriginal(docs.filter(d =>
-    isType(d, 'Application Materials') || nameMatches(d, /application\s+(materials|for an?)/i))),
+  assessmentReport: docs => preferOriginal(docs.filter(isAssessmentReport)),
+  // Two tiers: the document that names itself the application wins over anything else the type
+  // sweeps in, so a project whose EIS is filed beside a hundred supporting documents still links
+  // the EIS.
+  application: docs => {
+    const pool = docs.filter(isApplication);
+    return preferOriginal(pool.filter(d => nameMatches(d, APPLICATION_MAIN_TITLE)))
+      || preferOriginal(pool);
+  },
   newestInspection: docs => newest(docs.filter(d => isType(d, 'Inspection Record'))),
   amendments: docs => byDateDesc(docs.filter(d => isType(d, 'Amendment Package'))),
   inspections: docs => docs.filter(d => isType(d, 'Inspection Record')),
@@ -223,7 +284,7 @@ function docRef(doc) {
  * Everything here is a count, a date or an id. If a number on the rendered page can be counted, it
  * is counted here; the model is only ever asked for prose no query can produce.
  */
-function buildFacts(documents) {
+function buildFacts(documents, sourcePool = documents) {
   const inspections = PICK.inspections(documents);
   const selfReports = PICK.selfReports(documents);
 
@@ -234,7 +295,11 @@ function buildFacts(documents) {
     selfReports: { count: selfReports.length, latest: docRef(selfReports[0] || null) },
     keyDocuments: KEY_DOCUMENT_ROLES
       .map(([role, pick]) => {
-        const ref = docRef(pick(documents));
+        // The document the SECTIONS were written from wins. `timelineDoc` picks its assessment
+        // report out of the documents that have extracted text, and a link naming a different one
+        // beside prose drawn from this one is the page contradicting itself. A role no source
+        // document fills still links whatever the registry holds for it.
+        const ref = docRef(pick(sourcePool) || pick(documents));
         return ref ? { role, ...ref } : null;
       })
       .filter(Boolean)
@@ -454,7 +519,16 @@ const LIST_SECTIONS = ['conditions', 'federal'];
  */
 const SECTION_MAX_TOKENS = { conditions: 8000, federal: 8000, nations: 8000 };
 
+/**
+ * The sections whose reply is a LIST at all, batched or not.
+ *
+ * Kept apart from `LIST_SECTIONS`, which says which ones are SPLIT across calls: this one is read
+ * to tell a reply of the wrong shape (`no_list`) from a list every gate emptied.
+ */
+const LIST_SHAPE_SECTIONS = ['conditions', 'federal', 'timelineEvents', 'nations'];
+
 const isListSection = name => LIST_SECTIONS.includes(name);
+const isListShape = name => LIST_SHAPE_SECTIONS.includes(name);
 const maxTokensFor = name => SECTION_MAX_TOKENS[name] || config.projectSummaryMaxTokens;
 
 /**
@@ -522,13 +596,20 @@ function validCitations(value, sourceCount) {
 }
 
 /**
- * Thousands separators removed, so "50,000" and "50000" are the same figure.
+ * The one normalisation BOTH sides of the grounding comparison get: runs of whitespace collapsed
+ * to a single space, thousands separators removed.
  *
- * Applied to BOTH the claim and the chunk before they are compared: without it a bullet saying
- * "50,000" would fail against a source that writes "50000", and one saying "50000" would pass
- * against a source that says nothing of the kind.
+ * Thousands, so "50,000" and "50000" are the same figure — without it a bullet saying "50,000"
+ * would fail against a source that writes "50000", and one saying "50000" would pass against a
+ * source that says nothing of the kind.
+ *
+ * Whitespace, because the chunks are PDF text and a date lands across a line break as often as not.
+ * "July 6,\n 2012" is one date written two ways, and compared literally against the single-spaced
+ * spelling this gate builds, it read as a date the source never carried and dropped the claim.
  */
-const normaliseNumbers = text => String(text || '').replace(/(\d),(?=\d{3}(\D|$))/g, '$1');
+const normalise = text => String(text || '')
+  .replace(/\s+/g, ' ')
+  .replace(/(\d),(?=\d{3}(\D|$))/g, '$1');
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
   'September', 'October', 'November', 'December'];
@@ -536,6 +617,13 @@ const MONTHS = MONTH_NAMES.join('|');
 const MONTH_NUMBER = new Map(MONTH_NAMES.map((name, i) => [name.toLowerCase(), i + 1]));
 
 const pad2 = n => String(n).padStart(2, '0');
+
+/** "14th", "1st". Days only, so 11-13 are the whole irregular case. */
+function ordinal(day) {
+  const n = Number(day);
+  const suffix = n >= 11 && n <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
+  return `${n}${suffix}`;
+}
 
 /** A date token in any spelling `claimTokens` produces, as ISO. Null when it is not a date. */
 function isoDate(token) {
@@ -577,15 +665,22 @@ function dateSpellings(iso) {
   const days = Number(day) >= 10 ? [day] : [day, String(Number(day))];
   const months = Number(month) >= 10 ? [month] : [month, String(Number(month))];
 
-  const out = [iso];
+  const out = [iso, `${year}/${month}/${day}`];
   for (const d of days) {
+    const ord = ordinal(d);
     out.push(
       `${name} ${d}, ${year}`, `${name} ${d} ${year}`, `${d} ${name} ${year}`,
+      `${name} ${ord}, ${year}`, `${name} ${ord} ${year}`, `${ord} ${name} ${year}`,
       `${abbr} ${d}, ${year}`, `${abbr}. ${d}, ${year}`,
       `${abbr} ${d} ${year}`, `${abbr}. ${d} ${year}`,
-      `${d} ${abbr} ${year}`, `${d} ${abbr}. ${year}`
+      `${d} ${abbr} ${year}`, `${d} ${abbr}. ${year}`,
+      // How a certificate, an order and a schedule write their own date of issue.
+      `${d} day of ${name}, ${year}`, `${d} day of ${name} ${year}`,
+      `${ord} day of ${name}, ${year}`, `${ord} day of ${name} ${year}`
     );
-    for (const m of months) out.push(`${d}/${m}/${year}`, `${m}/${d}/${year}`);
+    for (const m of months) {
+      out.push(`${d}/${m}/${year}`, `${m}/${d}/${year}`, `${d}.${m}.${year}`, `${m}.${d}.${year}`);
+    }
   }
   return out.map(s => s.toLowerCase());
 }
@@ -598,7 +693,7 @@ function dateSpellings(iso) {
  * digits is where a claim starts being a quantity or a year — the things a model invents fluently.
  */
 function claimTokens(text) {
-  const s = normaliseNumbers(text);
+  const s = normalise(text);
   const found = new Set();
   for (const m of s.matchAll(/\d{4,}/g)) found.add(m[0]);
   for (const m of s.matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)) found.add(m[0]);
@@ -620,20 +715,51 @@ function claimTokens(text) {
  * into a claim with none.
  */
 function groundedInCitations(text, citations, chunks) {
-  const tokens = claimTokens(text);
-  if (tokens.length === 0) return true;
+  return ungroundedToken(text, citations, chunks) === null;
+}
 
-  const cited = normaliseNumbers(
+/**
+ * The first figure or date in `text` that the cited chunks do not carry, or null when they carry
+ * every one of them.
+ *
+ * `groundedInCitations` is this with the answer collapsed to a boolean. Split so a drop can name
+ * the token that failed: "the section produced nothing" sends an operator nowhere, "it claimed
+ * 2019-03-14 and the chunk it cites says 2019-04-14" sends them to the retrieval or the model.
+ */
+function ungroundedToken(text, citations, chunks) {
+  const tokens = claimTokens(text);
+  if (tokens.length === 0) return null;
+
+  const cited = normalise(
     citations.map(n => (chunks[n - 1] && chunks[n - 1].content) || '').join('\n')
   ).toLowerCase();
 
-  return tokens.every(token => {
+  for (const token of tokens) {
     const lower = token.toLowerCase();
-    if (cited.includes(lower)) return true;
+    if (cited.includes(lower)) continue;
     // A date the source spells differently is the same date, so it is grounded.
     const iso = isoDate(lower);
-    return !!iso && dateSpellings(iso).some(spelling => spellingMatches(cited, spelling));
-  });
+    if (iso && dateSpellings(iso).some(spelling => spellingMatches(cited, spelling))) continue;
+    return token;
+  }
+  return null;
+}
+
+/** How much of a dropped claim a log line carries. Enough to find it, never the whole reply. */
+const DROP_EXCERPT_MAX = 160;
+
+/**
+ * A claim the grounding gate dropped, named by the token that failed.
+ *
+ * @returns {boolean} true when the claim is grounded and survives
+ */
+function keepGrounded(section, text, citations, chunks) {
+  const token = ungroundedToken(text, citations, chunks);
+  if (token === null) return true;
+  const where = section ? `${section}: ` : '';
+  logger.warn(`[project-summary] ${where}dropped a claim whose "${token}" is in none of the ` +
+    `sources it cites: ${String(text).trim().slice(0, DROP_EXCERPT_MAX)}`, { section, token });
+  return false;
 }
 
 /**
@@ -644,7 +770,7 @@ function groundedInCitations(text, citations, chunks) {
  * 1, 2014") already delimit themselves and use plain `includes`.
  */
 function spellingMatches(cited, spelling) {
-  if (!/^[\d/-]+$/.test(spelling)) return cited.includes(spelling);
+  if (!/^[\d/.-]+$/.test(spelling)) return cited.includes(spelling);
   const escaped = spelling.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(^|[^0-9])${escaped}(?![0-9])`).test(cited);
 }
@@ -893,12 +1019,22 @@ async function runSection({ section, document, chunks, registry, projectName, in
 
     // Citations are numbered within the batch that produced them, so the registry is handed that
     // batch's chunks — this is what keeps a batch-2 `[1]` off batch 1's first source.
-    values.push(build(parsed, batch, n => registry.map(n, batch, nameOf(document))));
+    values.push(build(parsed, batch, n => registry.map(n, batch, nameOf(document)), section));
   }
 
   const value = reason ? null : (listSection ? mergeItemBatches(values) : (values[0] || null));
   if (!reason && value === null) {
-    reason = sawList && declared === 0 ? 'empty' : 'no_grounded_content';
+    // Three different faults wore one name. A list reply that carried no recognised key is a model
+    // answering the wrong shape; a list that came back empty is an honest nothing; a list whose
+    // every entry was dropped is the citation or grounding gate doing its job, or failing at it.
+    if (!isListShape(section)) reason = 'no_grounded_content';
+    else if (!sawList) reason = 'no_list';
+    else reason = declared === 0 ? 'empty' : 'no_grounded_content';
+
+    if (sawList && declared > 0) {
+      logger.warn(`[project-summary] ${section}: the reply listed ${declared} entries and the ` +
+        'citation and grounding gates dropped every one', { documentId, declared });
+    }
   }
   return { value, usage, model, documentId, reason };
 }
@@ -913,19 +1049,19 @@ function mergeItemBatches(values) {
 }
 
 /** `{sentence, citations}` — dropped whole if the sentence is ungrounded. */
-function buildSentence(parsed, chunks, toGlobal) {
+function buildSentence(parsed, chunks, toGlobal, section) {
   if (!isStr(parsed.sentence)) return null;
   const local = validCitations(parsed.citations, chunks.length);
   if (local.length === 0) return null;
-  if (!groundedInCitations(parsed.sentence, local, chunks)) return null;
+  if (!keepGrounded(section, parsed.sentence, local, chunks)) return null;
   return { sentence: parsed.sentence.trim(), citations: toGlobal(local) };
 }
 
-function buildParagraph(parsed, chunks, toGlobal) {
+function buildParagraph(parsed, chunks, toGlobal, section) {
   if (!isStr(parsed.paragraph)) return null;
   const local = validCitations(parsed.citations, chunks.length);
   if (local.length === 0) return null;
-  if (!groundedInCitations(parsed.paragraph, local, chunks)) return null;
+  if (!keepGrounded(section, parsed.paragraph, local, chunks)) return null;
   return { paragraph: parsed.paragraph.trim(), citations: toGlobal(local) };
 }
 
@@ -937,7 +1073,7 @@ function buildParagraph(parsed, chunks, toGlobal) {
  * are all dropped is kept with an empty list — its title and one-liner were cited and checked in
  * their own right.
  */
-function buildItems(parsed, chunks, toGlobal) {
+function buildItems(parsed, chunks, toGlobal, section) {
   const declared = listOf(parsed, 'items');
   if (!declared) return null;
 
@@ -949,14 +1085,14 @@ function buildItems(parsed, chunks, toGlobal) {
 
     const local = validCitations(raw.citations, chunks.length);
     if (local.length === 0) continue;
-    if (!groundedInCitations(`${raw.title} ${raw.oneLiner}`, local, chunks)) continue;
+    if (!keepGrounded(section, `${raw.title} ${raw.oneLiner}`, local, chunks)) continue;
 
     items.push({
       n: items.length + 1,
       category: isStr(raw.category) ? raw.category.trim() : '',
       title: raw.title.trim(),
       oneLiner: raw.oneLiner.trim(),
-      bullets: (raw.bullets || []).filter(b => groundedInCitations(b, local, chunks)),
+      bullets: (raw.bullets || []).filter(b => keepGrounded(section, b, local, chunks)),
       citations: toGlobal(local)
     });
   }
@@ -964,7 +1100,7 @@ function buildItems(parsed, chunks, toGlobal) {
   return items.length ? { items } : null;
 }
 
-function buildTimeline(parsed, chunks, toGlobal) {
+function buildTimeline(parsed, chunks, toGlobal, section) {
   const declared = listOf(parsed, 'events');
   if (!declared) return null;
 
@@ -978,7 +1114,7 @@ function buildTimeline(parsed, chunks, toGlobal) {
 
     const local = validCitations(raw.citations, chunks.length);
     if (local.length === 0) continue;
-    if (!groundedInCitations(`${raw.date} ${raw.label}`, local, chunks)) continue;
+    if (!keepGrounded(section, `${raw.date} ${raw.label}`, local, chunks)) continue;
 
     events.push({ date: raw.date.trim(), label: raw.label.trim(), citations: toGlobal(local) });
   }
@@ -1118,15 +1254,17 @@ async function generateProjectSummary(projectId, opts = {}) {
     });
   }
 
-  const facts = buildFacts(documents);
-  // Only a document with extracted text can be a SOURCE. `facts` above is computed over every
-  // public document, so the counts and the key-document links still describe the whole registry.
+  // Only a document with extracted text can be a SOURCE. `facts` is still computed over every
+  // public document, so the counts describe the whole registry; only the key-document LINKS prefer
+  // a source document, so a link and the prose beside it name the same file.
   const extracted = documents.filter(hasExtractedText);
   if (extracted.length !== documents.length) {
     logger.info('[project-summary] documents with no extracted text cannot be sources', {
       projectId: String(projectId), withoutText: documents.length - extracted.length
     });
   }
+
+  const facts = buildFacts(documents, extracted);
 
   const registry = citationRegistry();
   const projectName = sanitisePromptName(project.name || project.displayName || projectId);
@@ -1171,6 +1309,10 @@ async function generateProjectSummary(projectId, opts = {}) {
   const scheduleB = PICK.scheduleB(extracted);
   const federalDoc = PICK.federal(extracted);
   const complianceDoc = PICK.newestInspection(extracted);
+  // The project's regulatory chronology: the EAO's assessment report where there is one, else the
+  // certificate, whose recitals date the application, the assessment and the decision. Amendments
+  // are NOT read here — the page already puts `facts.amendments` and Track's phase rows on the same
+  // timeline, so a model asked to re-derive them would only produce rows the page already has.
   const timelineDoc = PICK.assessmentReport(extracted) || PICK.certificate(extracted);
   const amendmentDocs = facts.amendments
     .map(ref => ({ ref, document: documents.find(d => String(d.id) === ref.documentId) }))
@@ -1405,5 +1547,6 @@ module.exports = {
   joinNations,
   buildItems,
   buildNations,
+  buildTimeline,
   PICK
 };

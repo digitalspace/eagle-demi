@@ -160,19 +160,29 @@ function mergeSection(stored, fresh, section) {
  *
  * Section names rather than a count, because "5 sections" and "the conditions section is null" are
  * different answers and only the second one says the generation went wrong. `failed` names sections
- * that errored for a real reason (`not_json`, `truncated`, `no_chunks`, ...); `absent` names ones
- * whose reason is a `QUIET_REASONS` entry (`no_document`, `no_source`, `empty`) — the registry
- * simply has nothing there, which a missing name alone does not say: a project with no Schedule B
- * has no conditions section either, but that is not a failure to investigate.
+ * that errored for a real reason (`not_json`, `truncated`, `no_list`, `no_chunks`, ...); `absent`
+ * names ones that produced nothing for a `QUIET_REASONS` entry (`no_document`, `no_source`,
+ * `no_text`, `empty`) — the registry simply has nothing there, which a missing name alone does not
+ * say: a project with no Schedule B has no conditions section either, but that is not a failure to
+ * investigate.
  */
 function summaryLine(record, live) {
   const filled = Object.entries(record.sections)
     .filter(([, v]) => v !== null && (!Array.isArray(v) || v.length > 0))
     .map(([k]) => k);
   const errors = Object.entries(record.sectionErrors || {});
-  const isQuiet = (reason) => QUIET_REASONS.includes((reason.match(/^[a-z_]+/) || [reason])[0]);
+  // The amendments reason joins one entry per failing document ("no_text: a, b; not_json: c"), so
+  // a reason is quiet only when EVERY part of it is: reading the first part alone filed a real
+  // parse failure under `absent`.
+  const isQuiet = (reason) => String(reason).split(';')
+    .every(part => QUIET_REASONS.includes((part.match(/[a-z_]+/) || [''])[0]));
   const failed = errors.filter(([, reason]) => !isQuiet(reason)).map(([k]) => k);
-  const absent = errors.filter(([, reason]) => isQuiet(reason)).map(([k]) => k);
+  // A section that produced something is not absent, whatever else its reason names. Amendments
+  // record `no_text` per unextracted document while the ones with text still render, and listing
+  // the section under both `sections=` and `absent=` says it is there and missing at once.
+  const absent = errors
+    .filter(([name, reason]) => isQuiet(reason) && !filled.includes(name))
+    .map(([k]) => k);
 
   return `[project-summary] project=${record.projectId} sections=${filled.join(',') || 'none'} ` +
     `failed=${failed.join(',') || 'none'} absent=${absent.join(',') || 'none'} ` +

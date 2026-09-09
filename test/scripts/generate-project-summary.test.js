@@ -238,6 +238,32 @@ test('summaryLine', async (t) => {
     assert.match(line, /absent=none /);
   });
 
+  await t.test('does not call a section absent when it produced something', () => {
+    // Amendments record `no_text` per unextracted package while the ones with text still render,
+    // and the line said the section was both there and missing.
+    const line = summaryLine({
+      ...FRESH,
+      sections: {
+        ...FRESH.sections,
+        amendments: [{ documentId: 'docA', sentence: 'The first amendment.', citations: [1] }]
+      },
+      sectionErrors: { amendments: 'no_text: docA2' }
+    }, false);
+
+    assert.match(line, /sections=conditions,amendments /);
+    assert.match(line, /absent=none /);
+  });
+
+  await t.test('reads a real failure joined behind a quiet one', () => {
+    const line = summaryLine({
+      ...FRESH, sections: { ...FRESH.sections, amendments: null },
+      sectionErrors: { amendments: 'no_text: docA2; not_json: docA3' }
+    }, false);
+
+    assert.match(line, /failed=amendments /);
+    assert.match(line, /absent=none /);
+  });
+
   await t.test('lists quiet reasons under absent, not failed', () => {
     // no_document, no_source and empty are the registry having nothing — not a break to chase.
     const line = summaryLine({
