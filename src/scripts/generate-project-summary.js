@@ -5,20 +5,28 @@
  *
  *   node src/scripts/generate-project-summary.js --project 272 [--live] [--section conditions]
  *                                               [--out record.json]
+ *   node src/scripts/generate-project-summary.js --project 272 --store record.json
  *
  * Dry run by default: it prints the record and what it cost and writes NOTHING to the API. `--live`
- * is the only thing that stores. That split matters because the record IS the page — a bad
- * generation that lands is visible to anyone who opens the project.
+ * and `--store` are the only things that store. That split matters because the record IS the page —
+ * a bad generation that lands is visible to anyone who opens the project.
  *
  * `--section` regenerates ONE section and merges it into the stored record, leaving the others as
  * they are. That is what makes prompt tuning affordable: re-running conditions against Site C is
  * one model call, not eight. `--out` writes the dry-run record to a file so two runs can be
  * diffed.
  *
- * NOTHING HERE EDITS A RECORD BY HAND, and there is no flag that uploads one. Every stored claim
- * has to have come out of the generator, over that project's own chunks, past the citation and
- * number gates — a hand-edited record would carry the same "AI-generated, cited" badge with none of
- * that behind it. Tuning happens in `project-summary-prompts.js` and in the code.
+ * `--store` uploads a record `--out` already wrote, BYTE FOR BYTE: no generation, no merge, no
+ * edit of any kind, and it refuses a file whose project is not `--project`. It exists because a
+ * generation takes minutes while the staff token it was read with lasts five, so a good record can
+ * be produced and then fail to land. Storing it is a retry of the upload, not a second chance to
+ * change what is in it.
+ *
+ * NOTHING HERE EDITS A RECORD BY HAND. Every stored claim has to have come out of the generator,
+ * over that project's own chunks, past the citation and number gates — a hand-edited record would
+ * carry the same "AI-generated, cited" badge with none of that behind it. Tuning happens in
+ * `project-summary-prompts.js` and in the code; the server re-checks the record's contract on the
+ * way in either way.
  *
  * Reads and writes through the DEMI API (src/ai/project-summary-sources.js), because Cosmos and AI
  * Search are private-endpoint only and this runs from a workstation. Environment:
@@ -40,13 +48,14 @@ const config = require('../config');
 const { logger } = require('../utils/logger');
 
 function parseArgs(argv) {
-  const args = { project: null, live: false, section: null, out: null };
+  const args = { project: null, live: false, section: null, out: null, store: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--live') args.live = true;
     else if (a === '--project') args.project = argv[++i];
     else if (a === '--section') args.section = argv[++i];
     else if (a === '--out') args.out = argv[++i];
+    else if (a === '--store') args.store = argv[++i];
     else throw new Error(`[project-summary] unknown argument: ${a}`);
   }
   // Required, with no all-projects mode: a backfill is a different job with a different cost, and
@@ -55,6 +64,12 @@ function parseArgs(argv) {
   if (args.section && !SECTIONS.includes(args.section)) {
     throw new Error(`[project-summary] unknown section "${args.section}"; ` +
       `one of ${SECTIONS.join(', ')}`);
+  }
+  // `--store` generates nothing, so the generation flags would read as instructions this run is
+  // going to ignore — on the one path that writes to the API.
+  if (args.store && (args.live || args.section || args.out)) {
+    throw new Error('[project-summary] --store uploads a file as it stands; ' +
+      'it takes no --live, --section or --out');
   }
   return args;
 }
@@ -145,8 +160,32 @@ function summaryLine(record, live) {
     `estimatedCostCad=${record.estimatedCostCad.toFixed(4)} stored=${live}`;
 }
 
-async function run({ project, live = false, section = null, out = null, sources } = {}) {
+/**
+ * Upload a record from disk exactly as it is.
+ *
+ * The id check is the whole guard: `save` addresses the record by its own `id`, so a file from
+ * another project would be written to that project through this run's ACL check, under a `--project`
+ * that says otherwise. Nothing else is inspected — the server's contract check is what judges the
+ * record, and a second opinion here that disagreed with it would only be a way to be wrong twice.
+ */
+async function storeRecord(adapter, project, file) {
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+
+  if (String(record.projectId) !== String(project) || String(record.id) !== String(project)) {
+    throw new Error(`[project-summary] ${file} holds project ` +
+      `${record.projectId} (id ${record.id}), not ${project}`);
+  }
+
+  await adapter.save(record);
+  logger.info(summaryLine(record, true));
+  return { record, stored: true, code: 0 };
+}
+
+async function run({ project, live = false, section = null, out = null, store = null,
+  sources } = {}) {
   const adapter = sources || sourceFor();
+
+  if (store) return storeRecord(adapter, project, store);
 
   const fresh = await generateProjectSummary(project, { sources: adapter, section });
   if (!fresh) {
@@ -179,8 +218,10 @@ if (require.main === module) {
     process.exit(1);
   }
 
-  logger.info(`[project-summary] provider=${config.projectSummaryProvider} ` +
-    `maxChunks=${config.projectSummaryMaxChunks} live=${args.live}`);
+  logger.info(args.store
+    ? `[project-summary] storing ${args.store} as project ${args.project}, unchanged`
+    : `[project-summary] provider=${config.projectSummaryProvider} ` +
+      `maxChunks=${config.projectSummaryMaxChunks} live=${args.live}`);
 
   run(args)
     .then(({ code }) => { if (code !== 0) process.exit(code); })

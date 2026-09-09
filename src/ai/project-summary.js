@@ -34,7 +34,8 @@ const { logger } = require('../utils/logger');
 // Required as a MODULE, not destructured: the three are the seam a test replaces to keep a
 // generator run off the network, and a destructured copy cannot be replaced.
 const summarizer = require('./summarize');
-const { PROMPT_VERSION, SHAPES, INSTRUCTIONS, systemPrompt } = require('./project-summary-prompts');
+const { PROMPT_VERSION, SHAPES, INSTRUCTIONS, RETRY_INSTRUCTION, systemPrompt } =
+  require('./project-summary-prompts');
 const { levelOfRead } = require('../helpers/access-sql');
 const { ANONYMOUS_LEVEL } = require('../vis/level');
 
@@ -189,16 +190,16 @@ function buildSourceBlock(chunks) {
  * One JSON completion, from whichever provider is configured.
  *
  * Both providers are asked for the same thing in their own dialect: deterministic, JSON-only, with
- * a token ceiling. The caller sees one shape — `{content, usage, model}` — so nothing downstream
- * knows or cares which one ran.
+ * a token ceiling. The caller sees one shape — `{content, usage, model, truncated}` — so nothing
+ * downstream knows or cares which one ran.
  */
-async function chatJson(system, user) {
+async function chatJson(system, user, maxTokens) {
   return config.projectSummaryProvider === 'ollama'
-    ? chatOllama(system, user)
-    : chatFoundry(system, user);
+    ? chatOllama(system, user, maxTokens)
+    : chatFoundry(system, user, maxTokens);
 }
 
-async function chatFoundry(system, user) {
+async function chatFoundry(system, user, maxTokens) {
   if (!config.foundryEndpoint || !config.foundryDeployment) {
     throw new Error('FOUNDRY_ENDPOINT/FOUNDRY_DEPLOYMENT is unset');
   }
@@ -210,7 +211,7 @@ async function chatFoundry(system, user) {
     body: JSON.stringify({
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       temperature: 0,
-      max_tokens: config.projectSummaryMaxTokens,
+      max_tokens: maxTokens,
       response_format: { type: 'json_object' }
     })
   });
@@ -224,7 +225,8 @@ async function chatFoundry(system, user) {
   return {
     content: data?.choices?.[0]?.message?.content || '',
     usage: data?.usage || null,
-    model: config.foundryDeployment
+    model: config.foundryDeployment,
+    truncated: data?.choices?.[0]?.finish_reason === 'length'
   };
 }
 
@@ -242,7 +244,7 @@ async function chatFoundry(system, user) {
  *
  * No auth header: Ollama has none. It is a LAN service, reached only from a workstation.
  */
-async function chatOllama(system, user) {
+async function chatOllama(system, user, maxTokens) {
   const res = await fetch(`${config.ollamaUrl.replace(/\/$/, '')}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -255,7 +257,7 @@ async function chatOllama(system, user) {
       options: {
         temperature: 0,
         num_ctx: config.projectSummaryOllamaCtx,
-        num_predict: config.projectSummaryMaxTokens
+        num_predict: maxTokens
       }
     })
   });
@@ -274,7 +276,11 @@ async function chatOllama(system, user) {
       prompt_tokens: Number(data && data.prompt_eval_count) || 0,
       completion_tokens: Number(data && data.eval_count) || 0
     },
-    model: config.ollamaModel
+    model: config.ollamaModel,
+    // `length` means the reply stopped at `num_predict` rather than at its own end, so what came
+    // back is a prefix. With `format: 'json'` that prefix is well-formed up to the cut and nothing
+    // else, which is why it fails to parse rather than arriving as visible prose.
+    truncated: (data && data.done_reason) === 'length'
   };
 }
 
@@ -294,13 +300,23 @@ async function chatOllama(system, user) {
  *
  * @returns {number|null} the estimated prompt tokens when the prompt will not fit, else null
  */
-function contextOverflow(system, user) {
+function contextOverflow(system, user, maxTokens) {
   if (config.projectSummaryProvider !== 'ollama') return null;
   const estimate = Math.ceil((system.length + user.length) / 4);
-  return estimate + config.projectSummaryMaxTokens > config.projectSummaryOllamaCtx
-    ? estimate
-    : null;
+  return estimate + maxTokens > config.projectSummaryOllamaCtx ? estimate : null;
 }
+
+/**
+ * The completion budget a section is allowed, by section name.
+ *
+ * The default suits a sentence or a paragraph. A table of conditions is not one of those: Site C's
+ * Schedule B holds around 77 conditions with bullets, and a list that long stops at the budget
+ * mid-item — the reply is then a JSON prefix that parses as nothing and the whole section is lost.
+ * `federal` is the same shape over a federal decision statement.
+ */
+const SECTION_MAX_TOKENS = { conditions: 8000, federal: 8000 };
+
+const maxTokensFor = name => SECTION_MAX_TOKENS[name] || config.projectSummaryMaxTokens;
 
 // ---------------------------------------------------------------------------------------------
 // Validation
@@ -489,7 +505,8 @@ function joinNations(names, organizations) {
  *   reason: string|null}>} `value` is null when the section could not be produced; `reason` names
  *   why when the cause is a run condition rather than the model's answer.
  */
-async function runSection({ document, chunks, registry, projectName, instruction, shape, build }) {
+async function runSection({ section, document, chunks, registry, projectName, instruction, shape,
+  build, maxTokens }) {
   // A document with no extracted text is the same case as no document: nothing to ground on.
   if (chunks.length === 0) {
     return { value: null, usage: null, model: null, documentId: String(document.id), reason: null };
@@ -499,13 +516,13 @@ async function runSection({ document, chunks, registry, projectName, instruction
   const system = systemPrompt(projectName, instruction, shape);
   const user = `Sources from "${nameOf(document)}":\n\n${buildSourceBlock(used)}`;
 
-  const overflow = contextOverflow(system, user);
+  const overflow = contextOverflow(system, user, maxTokens);
   if (overflow !== null) {
     logger.warn('[project-summary] prompt exceeds the context window; section not generated', {
       documentId: String(document.id),
       sources: used.length,
       estimatedPromptTokens: overflow,
-      numPredict: config.projectSummaryMaxTokens,
+      numPredict: maxTokens,
       numCtx: config.projectSummaryOllamaCtx
     });
     return {
@@ -514,14 +531,46 @@ async function runSection({ document, chunks, registry, projectName, instruction
     };
   }
 
-  const { content, usage, model } = await chatJson(system, user);
-  const parsed = parseJson(content);
+  const usage = { prompt_tokens: 0, completion_tokens: 0 };
+  let model = null;
+
+  const ask = async (systemText) => {
+    const reply = await chatJson(systemText, user, maxTokens);
+    if (reply.usage) {
+      usage.prompt_tokens += Number(reply.usage.prompt_tokens) || 0;
+      usage.completion_tokens += Number(reply.usage.completion_tokens) || 0;
+    }
+    if (reply.model) model = reply.model;
+    if (reply.truncated) {
+      // Named apart from a malformed reply because the remedy is different: the model answered the
+      // question and ran out of budget, so the budget is what has to move. The console format drops
+      // metadata, so the numbers an operator acts on are in the message.
+      logger.warn(`[project-summary] ${section}: the reply stopped at the ${maxTokens}-token ` +
+        'completion budget, so what came back is a fragment', {
+        documentId: String(document.id), sources: used.length, numPredict: maxTokens
+      });
+    }
+    return reply;
+  };
+
+  let reply = await ask(system);
+  let parsed = parseJson(reply.content);
 
   if (!parsed) {
-    logger.warn('[project-summary] rejected a reply that was not JSON', {
+    logger.warn(`[project-summary] ${section}: reply did not parse as JSON; asking once more ` +
+      'with a stricter instruction', { documentId: String(document.id) });
+    reply = await ask(systemPrompt(projectName, `${instruction} ${RETRY_INSTRUCTION}`, shape));
+    parsed = parseJson(reply.content);
+  }
+
+  if (!parsed) {
+    logger.warn(`[project-summary] ${section}: rejected a reply that was not JSON`, {
       documentId: String(document.id), sources: used.length
     });
-    return { value: null, usage, model, documentId: String(document.id), reason: 'not_json' };
+    return {
+      value: null, usage, model, documentId: String(document.id),
+      reason: reply.truncated ? 'truncated' : 'not_json'
+    };
   }
 
   const value = build(parsed, used, n => registry.map(n, used, nameOf(document)));
@@ -703,11 +752,62 @@ async function generateProjectSummary(projectId, opts = {}) {
   const sectionErrors = {};
   const wanted = name => !section || section === name;
 
+  // Which document each section reads, decided before anything is fetched.
+  //
+  // Status: the newest amendment if there is one, else the certificate. The sentence the card
+  // carries is about where the project stands NOW, so the most recent decision document wins.
+  const statusDoc = facts.amendments.length
+    ? documents.find(d => String(d.id) === facts.amendments[0].documentId)
+    : PICK.certificate(documents);
+  const scheduleB = PICK.scheduleB(documents);
+  const federalDoc = PICK.federal(documents);
+  // Nations from the certificate, falling back to the assessment report — Site C has no Section 11
+  // Order document in DEMI, which is where this would otherwise be read.
+  const nationsDoc = PICK.certificate(documents) || PICK.assessmentReport(documents);
+  const complianceDoc = PICK.newestInspection(documents);
+  const timelineDoc = PICK.assessmentReport(documents) || PICK.certificate(documents);
+  const amendmentDocs = facts.amendments
+    .map(ref => ({ ref, document: documents.find(d => String(d.id) === ref.documentId) }))
+    .filter(a => a.document);
+
+  // EVERY API READ HAPPENS HERE, BEFORE THE FIRST MODEL CALL.
+  //
+  // The generator runs from a workstation on a staff token that expires five minutes after it is
+  // issued, and one call over a 120-source prompt takes minutes. Reads interleaved with model calls
+  // therefore hit 401 partway through a run and lose everything generated before it. Reading first
+  // puts the whole token-bearing part of the run inside a minute, after which the model works from
+  // memory and the token can expire harmlessly.
+  const chunksByDocument = new Map();
+  const prefetch = async (name, document) => {
+    if (!wanted(name) || !document) return;
+    const id = String(document.id);
+    if (chunksByDocument.has(id)) return;
+    const { items } = await sources.chunksForDocument(id);
+    chunksByDocument.set(id, items || []);
+  };
+  const chunksOf = document => chunksByDocument.get(String(document.id)) || [];
+
+  await prefetch('status', statusDoc);
+  await prefetch('conditions', scheduleB);
+  await prefetch('federal', federalDoc);
+  await prefetch('nations', nationsDoc);
+  await prefetch('compliance', complianceDoc);
+  await prefetch('timelineEvents', timelineDoc);
+  for (const { document } of amendmentDocs) await prefetch('amendments', document);
+
+  // The Organization rows the nation names are joined to. Read here, on the same token, rather than
+  // after the nations section returns; skipped when that section cannot run at all.
+  const organizations = wanted('nations') && nationsDoc && chunksOf(nationsDoc).length
+    ? await sources.organizations()
+    : [];
+
   /** One section end to end, with its usage folded into the record's totals. */
   const run = async (name, document, spec) => {
     if (!wanted(name) || !document) return null;
-    const { items: chunks } = await sources.chunksForDocument(String(document.id));
-    const result = await runSection({ document, chunks, registry, projectName, ...spec });
+    const result = await runSection({
+      section: name, document, chunks: chunksOf(document), registry, projectName,
+      maxTokens: maxTokensFor(name), ...spec
+    });
     if (result.reason) sectionErrors[name] = result.reason;
     if (result.usage) {
       usage.prompt_tokens += Number(result.usage.prompt_tokens) || 0;
@@ -717,48 +817,36 @@ async function generateProjectSummary(projectId, opts = {}) {
     return result;
   };
 
-  // Status: the newest amendment if there is one, else the certificate. The sentence the card
-  // carries is about where the project stands NOW, so the most recent decision document wins.
-  const statusDoc = facts.amendments.length
-    ? documents.find(d => String(d.id) === facts.amendments[0].documentId)
-    : PICK.certificate(documents);
   const status = await run('status', statusDoc, {
     shape: SHAPES.status,
     instruction: INSTRUCTIONS.status,
     build: buildSentence
   });
 
-  const scheduleB = PICK.scheduleB(documents);
   const conditions = await run('conditions', scheduleB, {
     shape: SHAPES.conditions,
     instruction: INSTRUCTIONS.conditions,
     build: buildItems
   });
 
-  const federalDoc = PICK.federal(documents);
   const federal = await run('federal', federalDoc, {
     shape: SHAPES.conditions,
     instruction: INSTRUCTIONS.federal,
     build: buildItems
   });
 
-  // Nations from the certificate, falling back to the assessment report — Site C has no Section 11
-  // Order document in DEMI, which is where this would otherwise be read.
-  const nationsDoc = PICK.certificate(documents) || PICK.assessmentReport(documents);
   const nationsResult = await run('nations', nationsDoc, {
     shape: SHAPES.nations,
     instruction: INSTRUCTIONS.nations,
     build: buildNations
   });
 
-  const complianceDoc = PICK.newestInspection(documents);
   const compliance = await run('compliance', complianceDoc, {
     shape: SHAPES.compliance,
     instruction: INSTRUCTIONS.compliance,
     build: buildParagraph
   });
 
-  const timelineDoc = PICK.assessmentReport(documents) || PICK.certificate(documents);
   const timelineEvents = await run('timelineEvents', timelineDoc, {
     shape: SHAPES.timeline,
     instruction: INSTRUCTIONS.timelineEvents,
@@ -769,9 +857,8 @@ async function generateProjectSummary(projectId, opts = {}) {
   // sentence about one amendment cite another's chunks.
   const amendments = [];
   if (wanted('amendments')) {
-    for (const ref of facts.amendments) {
-      const doc = documents.find(d => String(d.id) === ref.documentId);
-      const result = await run('amendments', doc, {
+    for (const { ref, document } of amendmentDocs) {
+      const result = await run('amendments', document, {
         shape: SHAPES.amendment,
         instruction: INSTRUCTIONS.amendments,
         build: buildSentence
@@ -782,7 +869,6 @@ async function generateProjectSummary(projectId, opts = {}) {
     }
   }
 
-  const organizations = nationsResult && nationsResult.value ? await sources.organizations() : [];
   const nations = nationsResult && nationsResult.value
     ? joinNations(nationsResult.value, organizations)
     : null;

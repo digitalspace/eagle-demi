@@ -4,8 +4,11 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
-const { parseArgs, mergeSection } = require('../../src/scripts/generate-project-summary');
+const { parseArgs, mergeSection, run } = require('../../src/scripts/generate-project-summary');
 
 const cite = (n, chunkId) => ({ n, chunkId, documentId: 'docB', pageNumber: n, documentName: 'B' });
 
@@ -55,6 +58,71 @@ test('parseArgs', async (t) => {
 
   await t.test('takes an output path', () => {
     assert.strictEqual(parseArgs(['--project', '272', '--out', '/tmp/x.json']).out, '/tmp/x.json');
+  });
+
+  await t.test('takes a file to upload as it stands', () => {
+    assert.strictEqual(parseArgs(['--project', '272', '--store', '/tmp/x.json']).store,
+      '/tmp/x.json');
+  });
+
+  await t.test('refuses generation flags beside --store, which generates nothing', () => {
+    for (const extra of [['--live'], ['--section', 'conditions'], ['--out', '/tmp/y.json']]) {
+      assert.throws(
+        () => parseArgs(['--project', '272', '--store', '/tmp/x.json', ...extra]),
+        /--store uploads a file as it stands/, extra.join(' '));
+    }
+  });
+});
+
+test('--store', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'project-summary-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  /** An adapter that only saves. Any read is a generation this run was told not to do. */
+  const saveOnly = () => {
+    const saved = [];
+    const refuse = (what) => async () => {
+      throw new Error(`--store must not read ${what}`);
+    };
+    return {
+      saved,
+      save: async (record) => { saved.push(record); return record; },
+      project: refuse('the project'),
+      documents: refuse('the document list'),
+      chunksForDocument: refuse('chunks'),
+      summary: refuse('the stored record')
+    };
+  };
+
+  const write = (name, record) => {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, JSON.stringify(record, null, 2));
+    return file;
+  };
+
+  await t.test('uploads the file unchanged, generating nothing', async () => {
+    // The record took minutes to generate on a token that lasts five, so this is a retry of the
+    // upload. A record that changed on the way up would be one nothing had checked.
+    const file = write('record.json', STORED);
+    const sources = saveOnly();
+
+    const result = await run({ project: '272', store: file, sources });
+
+    assert.strictEqual(result.stored, true);
+    assert.strictEqual(result.code, 0);
+    assert.deepStrictEqual(sources.saved, [JSON.parse(fs.readFileSync(file, 'utf8'))],
+      'what was PUT is what was on disk');
+  });
+
+  await t.test('refuses a file holding a different project', async () => {
+    // `save` addresses the record by its own id, so a mismatched file would be written to the
+    // project the FILE names while the operator read the one they typed.
+    const file = write('other.json', { ...STORED, id: '999', projectId: '999' });
+    const sources = saveOnly();
+
+    await assert.rejects(() => run({ project: '272', store: file, sources }),
+      /holds project 999 \(id 999\), not 272/);
+    assert.deepStrictEqual(sources.saved, [], 'nothing was written');
   });
 });
 

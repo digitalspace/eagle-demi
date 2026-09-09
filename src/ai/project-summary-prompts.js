@@ -12,7 +12,7 @@
  * when any string in this file changes.
  */
 
-const PROMPT_VERSION = 1;
+const PROMPT_VERSION = 2;
 
 /**
  * The shared half of every prompt.
@@ -87,4 +87,17 @@ const INSTRUCTIONS = {
     'Write ONE sentence stating what this amendment changed.'
 };
 
-module.exports = { PROMPT_VERSION, SHAPES, INSTRUCTIONS, systemPrompt };
+/**
+ * Appended to a section's instruction on the one retry after an unparseable reply.
+ *
+ * The two ways a constrained reply still fails to parse are a stray wrapper around the object and a
+ * list long enough to be cut off mid-item, so this addresses both — shorter is a valid answer,
+ * unfinished is not.
+ */
+const RETRY_INSTRUCTION = [
+  'Your previous reply could not be parsed as JSON. Reply with the JSON object ONLY: no prose',
+  'before or after it, no code fence, no explanation. Finish the object. If the full list would be',
+  'long, return fewer items — a short complete answer is correct and an unfinished one is not.'
+].join(' ');
+
+module.exports = { PROMPT_VERSION, SHAPES, INSTRUCTIONS, RETRY_INSTRUCTION, systemPrompt };

@@ -28,6 +28,10 @@ const INSPECTION = {
   id: 'docI', type: 'Inspection Record', displayName: 'Inspection Record 2024-03',
   datePosted: '2024-03-02', isPublished: true, read: PUBLIC_READ
 };
+const AMENDMENT = {
+  id: 'docA', type: 'Amendment Package', displayName: 'Amendment #1',
+  datePosted: '2016-05-01', isPublished: true, read: PUBLIC_READ
+};
 
 const chunk = (n, content, documentId = 'docB') => ({
   chunkId: `${documentId}::p${n}::c0`, documentId, projectId: '272', pageNumber: n, content
@@ -39,33 +43,53 @@ const chunk = (n, content, documentId = 'docB') => ({
  * `save` throws: nothing in this file is a live run, and a generator that wrote would say so here
  * rather than in a review.
  */
-function fakeSources({ project, documents = [], chunks = {}, organizations = [] } = {}) {
+function fakeSources({ project, documents = [], chunks = {}, organizations = [],
+  trace = [] } = {}) {
   const asked = [];
   return {
     asked,
-    project: async () => (project === undefined ? { id: '272', name: 'Site C', eagleId: 'abc' } : project),
-    documents: async () => documents,
+    trace,
+    project: async () => {
+      trace.push('project');
+      return project === undefined ? { id: '272', name: 'Site C', eagleId: 'abc' } : project;
+    },
+    documents: async () => {
+      trace.push('documents');
+      return documents;
+    },
     chunksForDocument: async (id) => {
       asked.push(id);
+      trace.push(`chunks:${id}`);
       return { items: chunks[id] || [] };
     },
-    organizations: async () => organizations,
+    organizations: async () => {
+      trace.push('organizations');
+      return organizations;
+    },
     save: async () => { throw new Error('save must not be called by a dry generation'); }
   };
 }
 
-/** A model that answers every call with the same JSON, counting how often it was asked. */
-function stubModel(t, replies) {
+/**
+ * A model that answers every call with the same JSON, counting how often it was asked.
+ *
+ * A reply is either the content string, or `{content, doneReason}` for a run that has to see how
+ * Ollama ended the completion.
+ */
+function stubModel(t, replies, trace = []) {
   const calls = [];
   const queue = Array.isArray(replies) ? replies.slice() : null;
   t.mock.method(global, 'fetch', async (url, init) => {
     calls.push({ url: String(url), body: JSON.parse(init.body) });
-    const content = queue ? (queue.shift() ?? '{}') : replies;
+    trace.push('model');
+    const next = queue ? (queue.shift() ?? '{}') : replies;
+    const reply = typeof next === 'string' ? { content: next } : next;
     return {
       ok: true,
       status: 200,
       json: async () => ({
-        message: { content },
+        message: { content: reply.content },
+        done_reason: reply.doneReason || 'stop',
         prompt_eval_count: 100,
         eval_count: 10
       })
@@ -107,10 +131,44 @@ test('generateProjectSummary', async (t) => {
     assert.strictEqual(calls.length, 1, 'only the one section with a source document was generated');
   });
 
-  await t.test('rejects a reply that is not JSON', async () => {
+  await t.test('finishes every API read before the first model call', async () => {
+    // The generator runs from a workstation on a staff token that expires five minutes after it is
+    // issued, and one call over a full document takes minutes. A read that waits behind a model
+    // call is a 401 partway through the run, which is what ended the 2026-09-09 Site C run and cost
+    // everything generated up to it.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
-    stubModel(t, 'Here are the conditions: 1. Environment...');
+    const trace = [];
+    stubModel(t, JSON.stringify({ sentence: 'A sentence.', citations: [1] }), trace);
+
+    const sources = fakeSources({
+      trace,
+      documents: [SCHEDULE_B, CERTIFICATE, INSPECTION, AMENDMENT],
+      chunks: {
+        docB: [chunk(1, 'Condition 1.')],
+        docC: [chunk(1, 'A sentence.', 'docC')],
+        docI: [chunk(1, 'No non-compliance.', 'docI')],
+        docA: [chunk(1, 'A sentence.', 'docA')]
+      },
+      organizations: [{ id: 'org-1', name: 'Saulteau First Nations' }]
+    });
+    await generateProjectSummary('272', { sources });
+
+    const firstCall = trace.indexOf('model');
+    assert.ok(firstCall > 0, `the model was called: ${trace.join(' ')}`);
+    assert.deepStrictEqual(
+      trace.slice(firstCall).filter(step => step !== 'model'), [],
+      `nothing is read after the first model call: ${trace.join(' ')}`);
+    assert.ok(trace.slice(0, firstCall).includes('organizations'),
+      'the Organization rows the nation names join to are read on the same token');
+    assert.deepStrictEqual(sources.asked, ['docA', 'docB', 'docC', 'docI'],
+      'each source document is read once, whichever sections share it');
+  });
+
+  await t.test('rejects a reply that is not JSON, after one stricter retry', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, 'Here are the conditions: 1. Environment...');
 
     const sources = fakeSources({
       documents: [SCHEDULE_B],
@@ -119,6 +177,78 @@ test('generateProjectSummary', async (t) => {
     const record = await generateProjectSummary('272', { sources, section: 'conditions' });
 
     assert.strictEqual(record.sections.conditions, null);
+    assert.strictEqual(record.sectionErrors.conditions, 'not_json');
+    assert.strictEqual(calls.length, 2, 'asked again once, and only once');
+    assert.match(calls[1].body.messages[0].content, /could not be parsed as JSON/,
+      'the second ask says what was wrong with the first reply');
+  });
+
+  await t.test('keeps a section the retry answers properly', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, [
+      'Here are the conditions: 1. Environment...',
+      JSON.stringify({
+        items: [{ category: 'Water', title: 'Water quality', oneLiner: 'Monitor it.',
+          bullets: [], citations: [1] }]
+      })
+    ]);
+
+    const sources = fakeSources({
+      documents: [SCHEDULE_B],
+      chunks: { docB: [chunk(1, 'Monitor it.')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.deepStrictEqual(record.sections.conditions.items.map(i => i.title), ['Water quality']);
+    assert.strictEqual(record.sectionErrors.conditions, undefined);
+    assert.strictEqual(calls.length, 2);
+  });
+
+  await t.test('reports a reply cut off at the completion budget as truncation', async () => {
+    // Ollama constrains decoding to JSON, so a reply that fails to parse is almost always a reply
+    // that stopped at `num_predict` mid-object. "Not JSON" would send whoever reads the record
+    // looking at the prompt; the budget is what actually has to move.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const cutOff = { content: '{"items": [{"category": "Water", "title": "Water qual',
+      doneReason: 'length' };
+    const calls = stubModel(t, [cutOff, cutOff]);
+
+    const sources = fakeSources({
+      documents: [SCHEDULE_B],
+      chunks: { docB: [chunk(1, 'Monitor water quality.')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(record.sections.conditions, null);
+    assert.strictEqual(record.sectionErrors.conditions, 'truncated');
+    assert.deepStrictEqual(record.usage, { promptTokens: 200, completionTokens: 20 },
+      'both attempts are paid for and both are counted');
+    assert.strictEqual(calls.length, 2);
+  });
+
+  await t.test('gives a table of conditions a bigger completion budget than a sentence', async () => {
+    // Site C's Schedule B holds around 77 conditions with bullets. At the budget a one-sentence
+    // section needs, that list stops mid-item and the whole section is lost.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({ sentence: 'A sentence.', citations: [1] }));
+
+    const sources = fakeSources({
+      documents: [SCHEDULE_B, CERTIFICATE],
+      chunks: {
+        docB: [chunk(1, 'Condition 1.')],
+        docC: [chunk(1, 'A sentence.', 'docC')]
+      }
+    });
+    await generateProjectSummary('272', { sources });
+
+    const budgetFor = (re) => calls
+      .find(c => re.test(c.body.messages[0].content)).body.options.num_predict;
+    assert.strictEqual(budgetFor(/table of conditions/), 8000);
+    assert.strictEqual(budgetFor(/ONE sentence stating what this document decided/),
+      config.projectSummaryMaxTokens);
   });
 
   await t.test('drops an item whose citation is out of range', async () => {
