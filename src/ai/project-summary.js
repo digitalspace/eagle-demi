@@ -632,8 +632,21 @@ function groundedInCitations(text, citations, chunks) {
     if (cited.includes(lower)) return true;
     // A date the source spells differently is the same date, so it is grounded.
     const iso = isoDate(lower);
-    return !!iso && dateSpellings(iso).some(spelling => cited.includes(spelling));
+    return !!iso && dateSpellings(iso).some(spelling => spellingMatches(cited, spelling));
   });
+}
+
+/**
+ * `spelling` present in `cited`, on a digit boundary for numeric forms.
+ *
+ * `1/10/2014` is a plain substring of `11/10/2014` and of `1/10/20140`: a numeric spelling needs
+ * digits on neither side, or it grounds a claim the source never made. Month-name spellings ("October
+ * 1, 2014") already delimit themselves and use plain `includes`.
+ */
+function spellingMatches(cited, spelling) {
+  if (!/^[\d/-]+$/.test(spelling)) return cited.includes(spelling);
+  const escaped = spelling.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^0-9])${escaped}(?![0-9])`).test(cited);
 }
 
 /**

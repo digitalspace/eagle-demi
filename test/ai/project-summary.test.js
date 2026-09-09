@@ -1225,7 +1225,7 @@ test('generateProjectSummary', async (t) => {
   });
 
   await t.test('spreads the nations sources over documents instead of draining the first', async () => {
-    // The search ranked a 2011 province-wide workshop roster first, its chunks took the whole
+    // The search ranked a 2021 province-wide workshop roster first, its chunks took the whole
     // budget, and 69 other documents contributed nothing — so nations that appear on a provincial
     // roster and nowhere near this project were cited for it.
     config.summaryEnabled = true;
@@ -1235,7 +1235,7 @@ test('generateProjectSummary', async (t) => {
     const calls = stubModel(t, JSON.stringify({ nations: [] }));
 
     const roster = { id: 'docW', type: 'Plan', displayName: 'Province-wide workshop attendees',
-      datePosted: '2011-03-01', isPublished: true, read: PUBLIC_READ, ...EXTRACTED };
+      datePosted: '2021-03-01', isPublished: true, read: PUBLIC_READ, ...EXTRACTED };
     const decision = { id: 'docD', type: 'Decision Materials',
       displayName: 'Reasons for Ministers\' Decision', datePosted: '2014-10-14',
       isPublished: true, read: PUBLIC_READ, ...EXTRACTED };
@@ -1442,6 +1442,17 @@ test('groundedInCitations', async (t) => {
 
   await t.test('rejects a date in a month the source never names', () => {
     assert.strictEqual(groundedInCitations('Certificate issued 2014-11-14.', [1], chunks), false);
+  });
+
+  await t.test('rejects an unpadded slash date that only substring-matches a longer one', () => {
+    // "1/10/2014" is a plain substring of "11/10/2014" and would falsely ground October 1 off a
+    // source that names October 11.
+    assert.strictEqual(
+      groundedInCitations('Issued 2014-10-01.', [1], [{ content: 'Issued 11/10/2014.' }]), false);
+    assert.strictEqual(
+      groundedInCitations('Issued 2014-10-01.', [1], [{ content: 'Issued 1/10/2014.' }]), true);
+    assert.strictEqual(
+      groundedInCitations('Issued 2014-10-01.', [1], [{ content: 'Issued 21/10/2014.' }]), false);
   });
 
   await t.test('accepts a claim with no figures or dates at all', () => {
