@@ -86,6 +86,16 @@ test('search-smoke.sh', async (t) => {
     assert.strictEqual(run.status, 0, run.stderr);
   });
 
+  await t.test('an empty base URL fails instead of reading as a passing gate', async () => {
+    // One renamed repository variable away: a post-deploy check that exits 0 having asked the
+    // deploy nothing is the green release the 2026-09-08 outage already shipped once.
+    for (const args of [[''], []]) {
+      const run = await runScript(SCRIPT, args, { cwd: REPO_ROOT });
+      assert.strictEqual(run.status, 1, JSON.stringify(args));
+      assert.match(run.stderr, /no base URL/);
+    }
+  });
+
   await t.test('fails on a 200 with no documents — an index that answers nothing', async () => {
     const stub = await stubOf({ document: 0, project: 5, documentFiltered: 5 });
     let run;

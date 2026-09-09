@@ -25,12 +25,15 @@ src/data/track_projects_enriched.json). Override it if that project is ever unpu
 is how a release selecting a field the live index lacked served 502s for 65 minutes
 (2026-09-08) behind a green deploy.
 
-Exit codes: 0 all three answered, 1 any status other than 200 or a zero total on 1 or 2.
+Exit codes: 0 all three answered, 1 bad usage, any status other than 200, or a zero
+total on 1 or 2.
 EOF
 }
 
 case "${1:-}" in
-  -h|--help|'') usage; exit 0 ;;
+  -h|--help) usage; exit 0 ;;
+  # An empty base URL asked the deployed app nothing. Exiting 0 on it would read as a passing gate.
+  '') echo "❌ no base URL — this check would have asked the deploy nothing." >&2; usage >&2; exit 1 ;;
 esac
 
 [ $# -eq 1 ] || [ $# -eq 2 ] || { usage; exit 1; }

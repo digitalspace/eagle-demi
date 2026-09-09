@@ -207,9 +207,13 @@ jobs:
     environment: prod
     timeout-minutes: 30
     outputs:
-      # Read by the rollback job. A failure BEFORE the app was published — packaging, zipdeploy —
-      # leaves this unset, and rolling back a deploy that never landed would be a pointless deploy.
+      # Both read by the rollback job. `published` is what says production is now serving this
+      # build: everything after the zipdeploy — trigger sync, warm-up, smoke — fails on a version
+      # that is already live. `smoke-failed` only distinguishes WHICH of those failed, for the log.
+      # A failure BEFORE the publish leaves both unset, and rolling back a deploy that never landed
+      # would be a pointless deploy.
       smoke-failed: ${{ steps.smoke.outputs.failed }}
+      published: ${{ steps.deploy.outputs.published }}
     env:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
     steps:
@@ -240,6 +244,7 @@ jobs:
 
       # Install, package, publish, wait. Shared with the rollback job below so the two cannot drift.
       - name: Deploy the API
+        id: deploy
         uses: ./.github/actions/deploy-api-flex
         with:
           working-directory: release
@@ -248,6 +253,14 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # A Flex app cold-starts in ~50s and answers 5xx while it does. Asking `/health` with retries
+      # first means the smoke below measures the deployed build rather than the wake-up, so a slow
+      # start cannot roll production back. `/health` is liveness only and needs no auth
+      # (src/http/routes.js); host.json sets routePrefix "" so it is not under /api. Same step
+      # staging runs before its smoke.
+      - name: Warm the app up before smoking search
+        run: curl -fsS --retry 3 --retry-delay 5 "$API_BASE_URL/health"
 
       # Registered and started is not the same fact as answering. Three real queries, because the
       # 2026-09-08 outage had a healthy `/health` throughout. Runs from the root, so it is this
@@ -271,13 +284,22 @@ jobs:
           echo "### ❌ API deployment failed" >> $GITHUB_STEP_SUMMARY
           echo "Check step logs above for details on packaging or Azure Function App deployment errors." >> $GITHUB_STEP_SUMMARY
 
-  # Only when the deployed build answered badly — not on a packaging or upload failure, which never
-  # changed what production is serving.
+  # Only once the zip reached the app — not on a packaging or upload failure, which never changed
+  # what production is serving. Everything from the trigger-sync wait onwards fails on a build
+  # production is already running, so the gate is `published`, not the smoke result: the smoke step
+  # never runs when the wait before it times out, and that path leaves the new build serving.
   rollback:
     name: Roll back to the previous release
     runs-on: ubuntu-latest
     needs: deploy-api
-    if: failure() && needs.deploy-api.outputs.smoke-failed == 'true'
+    # `!cancelled()` rather than `failure()`: the gate below is the precise question, and a cancelled
+    # run must not start a deploy. `smoke-failed` is kept as a second key so a broken output chain
+    # cannot silently drop the rollback path this workflow exists for.
+    if: >-
+      !cancelled()
+      && needs.deploy-api.result == 'failure'
+      && (needs.deploy-api.outputs.published == 'true'
+      || needs.deploy-api.outputs.smoke-failed == 'true')
     environment: prod
     timeout-minutes: 30
     env:
@@ -330,6 +352,11 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # The restored build cold-starts like any other. Same warm-up as the forward deploy, so the
+      # rollback is not reported as failed over a ~50s Flex start.
+      - name: Warm the app up before smoking search
+        run: curl -fsS --retry 3 --retry-delay 5 "$API_BASE_URL/health"
+
       # The rollback is a claim until search answers. A failure here means production is down on
       # BOTH versions and the cause is not the application build. Runs from the root, so it is this
       # workflow's copy of the script asking the questions, not the restored tag's.
@@ -344,7 +371,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### ↩️ \`${{ inputs.version }}\` failed its search smoke test"
+            echo "### ↩️ \`${{ inputs.version }}\` was published and did not come up"
             echo ""
             if [ "${{ job.status }}" = "success" ]; then
               echo "Production was rolled back to \`${{ steps.previous.outputs.previous }}\` and answers search."

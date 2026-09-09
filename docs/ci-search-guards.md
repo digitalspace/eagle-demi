@@ -37,13 +37,17 @@ lost the route.
 **After a deploy.** `scripts/search-smoke.sh` asks three real queries: Document, Project, and
 Document filtered by a project. Each must answer 200, and the two unfiltered ones must report
 `searchResultsTotal > 0`. The filtered one may legitimately match nothing, so only its status
-counts. In production a failure here rolls back: the `rollback` job redeploys the newest published
-release that is not the one just deployed, through the same composite action the forward deploy
-uses (`.github/actions/deploy-api-flex`), re-runs the smoke test, and leaves the run red with the
-release unpublished. The rollback's tooling always comes from the ref the workflow is running, not
-from the tag being restored — releases cut before these files existed carry neither the action nor
-the scripts. The job checks that ref out at the workspace root and the tag into `release/`, and
-passes `working-directory: release` so only the restored source is installed and packaged. Staging
+counts. Production warms the app with a retried `/health` request first, so a ~50s Flex cold start
+is not read as a bad build. A failure after that rolls back, and so does any other failure once the
+zip is on the app — the composite action reports `published`, and the trigger-sync wait after the
+publish can time out with the new build already serving. The `rollback` job redeploys the newest
+published release that is not the one just deployed, through the same composite action the forward
+deploy uses (`.github/actions/deploy-api-flex`), re-runs the smoke test, and leaves the run red with
+the release unpublished. A packaging or upload failure does not roll back: production never
+changed. The rollback's tooling always comes from the ref the workflow is running, not from the tag
+being restored — releases cut before these files existed carry neither the action nor the scripts.
+The job checks that ref out at the workspace root and the tag into `release/`, and passes
+`working-directory: release` so only the restored source is installed and packaged. Staging
 runs the same smoke test with no rollback — test is where a bad build is supposed to stop.
 
 **On a pull request.** `search-schema-change` in `pr.yaml` fires when the diff touches
