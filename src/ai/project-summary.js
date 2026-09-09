@@ -122,23 +122,49 @@ function byDateDesc(docs) {
   return docs.slice().sort((a, b) => dateOf(b).localeCompare(dateOf(a)));
 }
 
-/**
- * A federal decision: Canada's own decision document, by title or by type.
- *
- * "Joint review panel" is not one on its own — EAO's "Recommendations of the Executive Director to
- * the Joint Review Panel" carries the phrase and is provincial, and Site C's federal section was
- * built from it, so provincial advice was published as Canada's decision.
- */
-const FEDERAL_DECISION = new RegExp([
-  'decision\\s+statement',
+/** The federal agencies, however a title names them. */
+const FEDERAL_AGENCY = new RegExp([
   'canadian\\s+environmental\\s+assessment\\s+agency',
   '\\bceaa\\b',
   'impact\\s+assessment\\s+agency',
   '\\biaac\\b'
 ].join('|'), 'i');
 
+const DECISION_STATEMENT = /decision\s+statement/i;
+const DECISION_WORD = /\bdecision\b/i;
+
+/** Correspondence and public input. A federal decision is never filed as one, whatever it is called. */
+const CORRESPONDENCE_TYPE = /\bletters?\b|\be-?mails?\b|\bcomment\s+period/i;
+
+/**
+ * A federal decision: Canada's own decision document.
+ *
+ * Naming an agency is not enough. 62 of Site C's letters and emails mention "(CEAA)" in their
+ * titles, and on a bare agency match the newest of them — a consultant's letter about a panel
+ * report errata — was published as Canada's decision. So the title must either name the document
+ * kind outright, or name an agency AND the word "decision".
+ */
+function isFederalDecision(doc) {
+  if (CORRESPONDENCE_TYPE.test(typeOf(doc))) return false;
+  const title = nameOf(doc);
+  if (DECISION_STATEMENT.test(title)) return true;
+  return FEDERAL_AGENCY.test(title) && DECISION_WORD.test(title);
+}
+
 /** Advice to a decision maker, never the decision itself. */
 const EAO_ADVICE = /recommendations?/i;
+
+/** Amendment paperwork, which is not the original report or application it amends. */
+const AMENDMENT_TITLE = /amendment/i;
+
+/**
+ * The newest match that is not an amendment's paperwork, else the newest match.
+ *
+ * Site C's newest "Assessment Report" by date is an amendment's, and a timeline built from it
+ * covers one amendment rather than the project's own assessment.
+ */
+const preferOriginal = docs =>
+  newest(docs.filter(d => !nameMatches(d, AMENDMENT_TITLE))) || newest(docs);
 
 /**
  * The source document for each section, by type and title pattern.
@@ -159,9 +185,9 @@ const PICK = {
     nameMatches(d, /certificate/i) &&
     !nameMatches(d, /schedule\s*[ab]/i))),
   amendedCertificate: docs => newest(docs.filter(d => nameMatches(d, /amended\s+certificate/i))),
-  assessmentReport: docs => newest(docs.filter(d =>
+  assessmentReport: docs => preferOriginal(docs.filter(d =>
     isType(d, 'Assessment Report') || nameMatches(d, /assessment\s+report/i))),
-  application: docs => newest(docs.filter(d =>
+  application: docs => preferOriginal(docs.filter(d =>
     isType(d, 'Application Materials') || nameMatches(d, /application\s+(materials|for an?)/i))),
   newestInspection: docs => newest(docs.filter(d => isType(d, 'Inspection Record'))),
   amendments: docs => byDateDesc(docs.filter(d => isType(d, 'Amendment Package'))),
@@ -171,9 +197,7 @@ const PICK = {
     nameMatches(d, /self[\s-]?report/i) && nameMatches(d, /compliance|annual/i))),
   // Federal. Hidden unless the registry actually holds a FEDERAL DECISION — Site C has none in
   // DEMI, and a section invented for a project without one is exactly the claim this must not make.
-  federal: docs => newest(docs.filter(d =>
-    (FEDERAL_DECISION.test(nameOf(d)) || FEDERAL_DECISION.test(typeOf(d))) &&
-    !nameMatches(d, EAO_ADVICE)))
+  federal: docs => newest(docs.filter(d => isFederalDecision(d) && !nameMatches(d, EAO_ADVICE)))
 };
 
 /** The `role` values `facts.keyDocuments` carries, and the picker behind each. */
@@ -412,19 +436,26 @@ function contextOverflow(system, user, maxTokens) {
 }
 
 /**
- * The sections that are a LIST over the whole document rather than one sentence about it.
+ * The sections whose replies are BATCHED and concatenated: `fitBatches` splits them and
+ * `mergeItemBatches` joins the results back up.
  *
- * Named in one place because two things follow. They get a much larger completion budget — Site C's
- * Schedule B holds around 77 conditions with bullets, and at the default budget the list stops
- * mid-item, which parses as nothing. And because that budget comes out of the same `num_ctx` the
- * prompt is measured against, they are the sections `fitBatches` splits rather than refuses.
+ * Only `{items}` sections belong here. `buildNations` and `buildTimeline` return a bare array, which
+ * `mergeItemBatches` reads as nothing, so listing either one here would silently empty it.
  */
 const LIST_SECTIONS = ['conditions', 'federal'];
-const LIST_SECTION_MAX_TOKENS = 8000;
+
+/**
+ * The completion budget per section, where the default is too small for the answer.
+ *
+ * Site C's Schedule B holds around 77 conditions with bullets and its consultation records name
+ * around 30 nations; at the 1500-token default both stop mid-item, and a list cut off mid-item
+ * parses as nothing. Kept apart from `LIST_SECTIONS` because a budget and a batching strategy are
+ * different decisions: nations needs the budget and must not be batched.
+ */
+const SECTION_MAX_TOKENS = { conditions: 8000, federal: 8000, nations: 8000 };
 
 const isListSection = name => LIST_SECTIONS.includes(name);
-const maxTokensFor = name =>
-  (isListSection(name) ? LIST_SECTION_MAX_TOKENS : config.projectSummaryMaxTokens);
+const maxTokensFor = name => SECTION_MAX_TOKENS[name] || config.projectSummaryMaxTokens;
 
 /**
  * `chunks` split into runs that each fit the context window, in page order.
@@ -499,7 +530,65 @@ function validCitations(value, sourceCount) {
  */
 const normaliseNumbers = text => String(text || '').replace(/(\d),(?=\d{3}(\D|$))/g, '$1');
 
-const MONTHS = 'January|February|March|April|May|June|July|August|September|October|November|December';
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
+  'September', 'October', 'November', 'December'];
+const MONTHS = MONTH_NAMES.join('|');
+const MONTH_NUMBER = new Map(MONTH_NAMES.map((name, i) => [name.toLowerCase(), i + 1]));
+
+const pad2 = n => String(n).padStart(2, '0');
+
+/** A date token in any spelling `claimTokens` produces, as ISO. Null when it is not a date. */
+function isoDate(token) {
+  const s = String(token).trim().toLowerCase();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  const monthFirst = /^([a-z]+)\s+(\d{1,2}),?\s+(\d{4})$/.exec(s);
+  if (monthFirst && MONTH_NUMBER.has(monthFirst[1])) {
+    return `${monthFirst[3]}-${pad2(MONTH_NUMBER.get(monthFirst[1]))}-${pad2(monthFirst[2])}`;
+  }
+
+  const dayFirst = /^(\d{1,2})\s+([a-z]+)\s+(\d{4})$/.exec(s);
+  if (dayFirst && MONTH_NUMBER.has(dayFirst[2])) {
+    return `${dayFirst[3]}-${pad2(MONTH_NUMBER.get(dayFirst[2]))}-${pad2(dayFirst[1])}`;
+  }
+
+  return null;
+}
+
+/**
+ * Every spelling of one date a source might use, lowercased.
+ *
+ * The model is constrained to ISO by the timeline shape and the documents are not: a certificate
+ * writes "October 14, 2014" for the date its own event carries. Compared literally, every event on
+ * the 2026-09-09 Site C run was dropped as ungrounded — a 100% failure that looked like a model
+ * that had invented all of them.
+ *
+ * Both slash orders are accepted because dd/mm and mm/dd are indistinguishable in a source that
+ * does not say which it uses, and refusing a real date is the worse error. A WRONG date still
+ * fails: nothing here widens the match past the one day the claim names.
+ */
+function dateSpellings(iso) {
+  const [year, month, day] = iso.split('-');
+  const name = MONTH_NAMES[Number(month) - 1];
+  if (!name) return [iso];
+
+  const abbr = name.slice(0, 3);
+  // Padded and unpadded both, because "October 04" and "October 4" are the same day.
+  const days = Number(day) >= 10 ? [day] : [day, String(Number(day))];
+  const months = Number(month) >= 10 ? [month] : [month, String(Number(month))];
+
+  const out = [iso];
+  for (const d of days) {
+    out.push(
+      `${name} ${d}, ${year}`, `${name} ${d} ${year}`, `${d} ${name} ${year}`,
+      `${abbr} ${d}, ${year}`, `${abbr}. ${d}, ${year}`,
+      `${abbr} ${d} ${year}`, `${abbr}. ${d} ${year}`,
+      `${d} ${abbr} ${year}`, `${d} ${abbr}. ${year}`
+    );
+    for (const m of months) out.push(`${d}/${m}/${year}`, `${m}/${d}/${year}`);
+  }
+  return out.map(s => s.toLowerCase());
+}
 
 /**
  * Every figure and date a claim commits to.
@@ -538,8 +627,23 @@ function groundedInCitations(text, citations, chunks) {
     citations.map(n => (chunks[n - 1] && chunks[n - 1].content) || '').join('\n')
   ).toLowerCase();
 
-  return tokens.every(token => cited.includes(token.toLowerCase()));
+  return tokens.every(token => {
+    const lower = token.toLowerCase();
+    if (cited.includes(lower)) return true;
+    // A date the source spells differently is the same date, so it is grounded.
+    const iso = isoDate(lower);
+    return !!iso && dateSpellings(iso).some(spelling => cited.includes(spelling));
+  });
 }
+
+/**
+ * A ```json fence around an otherwise good reply.
+ *
+ * `format: 'json'` constrains decoding and still does not stop every model wrapping the object in
+ * one — Site C's nations reply came back fenced, was rejected as `not_json`, and paid for the retry
+ * that came back fenced again.
+ */
+const CODE_FENCE = /^\s*```[a-z]*\s*\n?([\s\S]*?)\n?\s*```\s*$/i;
 
 /**
  * JSON or null. A reply that is not JSON at all is a rejected section, not a parse to retry.
@@ -549,8 +653,10 @@ function groundedInCitations(text, citations, chunks) {
  * failure on the record — which is what Site C's nations section stored as `not_json`.
  */
 function parseJson(content) {
+  const text = String(content || '');
+  const fenced = CODE_FENCE.exec(text);
   try {
-    const parsed = JSON.parse(String(content || ''));
+    const parsed = JSON.parse(fenced ? fenced[1] : text);
     return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;
@@ -919,6 +1025,27 @@ function sanitisePromptName(name) {
 const NATIONS_KEYWORDS = 'First Nation';
 const NATIONS_MENTION = /first\s+nations?/i;
 
+/** Document types whose nation names are this project's, read before anything else names one. */
+const NATIONS_DOCUMENT_TYPES = ['Decision Materials', 'Order', 'Certificate Package',
+  'Assessment Report', 'Application Materials'];
+
+/**
+ * The hit documents in the order their passages are worth reading.
+ *
+ * Which documents contribute matters as much as how many. A project-wide keyword search ranks a
+ * 2011 province-wide workshop roster alongside the certificate, and a roster names every nation in
+ * the province — so K'omoks was cited for Site C. Decisions and applications speak for THIS
+ * project; everything else follows, newest first.
+ */
+function orderNationDocuments(documents) {
+  const rank = doc => {
+    const i = NATIONS_DOCUMENT_TYPES.findIndex(type => isType(doc, type));
+    return i === -1 ? NATIONS_DOCUMENT_TYPES.length : i;
+  };
+  // Sort is stable, so within one rank the date order set up here survives.
+  return byDateDesc(documents).sort((a, b) => rank(a) - rank(b));
+}
+
 /**
  * The nations section's source: the project's own passages, not one document.
  *
@@ -931,7 +1058,7 @@ const NATIONS_SOURCE = { id: null, displayName: 'passages that name a First Nati
  * Reasons that describe what the registry holds rather than something that went wrong, so they are
  * logged at INFO. Everything else is a run that could have produced a section and did not.
  */
-const QUIET_REASONS = ['no_document', 'no_source', 'empty'];
+const QUIET_REASONS = ['no_document', 'no_source', 'no_text', 'empty'];
 
 /** Every section, so `--section` can name one and the runner can check the name is real. */
 const SECTIONS = ['status', 'conditions', 'amendments', 'timelineEvents', 'compliance',
@@ -1073,19 +1200,30 @@ async function generateProjectSummary(projectId, opts = {}) {
       projectId: String(projectId), keywords: NATIONS_KEYWORDS
     });
     const byId = new Map(extracted.map(d => [String(d.id), d]));
-    for (const id of new Set(hits.map(hit => String(hit.documentId || '')))) {
-      // A hit outside the public, extracted list is not a source, however well it ranked.
-      const document = byId.get(id);
-      if (!document || nationsChunks.length >= config.projectSummaryNationChunks) continue;
+    // A hit outside the public, extracted list is not a source, however well it ranked.
+    const hitDocuments = orderNationDocuments(
+      Array.from(new Set(hits.map(hit => String(hit.documentId || ''))), id => byId.get(id))
+        .filter(Boolean));
+
+    let contributed = 0;
+    for (const document of hitDocuments) {
+      if (nationsChunks.length >= config.projectSummaryNationChunks) break;
       await prefetch('nations', document);
+      // Per document, so one long roster cannot spend the whole budget and leave the rest of the
+      // registry unread.
+      let taken = 0;
       for (const chunk of chunksOf(document)) {
+        if (taken >= config.projectSummaryNationChunksPerDoc) break;
         if (nationsChunks.length >= config.projectSummaryNationChunks) break;
         if (!NATIONS_MENTION.test(String(chunk.content || ''))) continue;
         nationsChunks.push({ ...chunk, documentName: nameOf(document) });
+        taken += 1;
       }
+      if (taken) contributed += 1;
     }
     logger.info('[project-summary] nations sources', {
-      projectId: String(projectId), documents: hits.length, chunks: nationsChunks.length
+      projectId: String(projectId), documents: hits.length, contributing: contributed,
+      chunks: nationsChunks.length
     });
   }
 
@@ -1165,7 +1303,9 @@ async function generateProjectSummary(projectId, opts = {}) {
       if (!hasExtractedText(document)) {
         // 8 of Site C's 21 amendment packages have no extracted text. The amendment still counts in
         // `facts` and still renders as a row; what it does not get is a sentence made from nothing.
-        record('amendments', 'no_chunks', ref.documentId);
+        // Quiet, and named apart from `no_chunks`: nothing went wrong here, where a document whose
+        // flag says extracted and whose chunk read comes back empty is a real fault.
+        record('amendments', 'no_text', ref.documentId);
         continue;
       }
       const result = await run('amendments', document, {

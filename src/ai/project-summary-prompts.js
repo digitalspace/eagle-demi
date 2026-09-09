@@ -12,7 +12,7 @@
  * when any string in this file changes.
  */
 
-const PROMPT_VERSION = 2;
+const PROMPT_VERSION = 3;
 
 /**
  * The shared half of every prompt.
@@ -67,10 +67,16 @@ const INSTRUCTIONS = {
   // NAMES ONLY, and the prompt says so three ways. Address and website come from the Organization
   // row in code; a hallucinated postal address for a First Nation on a government page is a
   // different class of error from a wrong summary sentence.
+  //
+  // The sources reach here by keyword search across the whole project, so some of them are
+  // province-wide: a 2011 workshop roster names every nation in British Columbia, and read plainly
+  // it made K'omoks a nation consulted on Site C.
   nations: [
-    'List the First Nations named as consulted, engaged or potentially affected. Return the NAME',
-    'exactly as the source writes it and nothing else — no addresses, no contact details, no',
-    'websites, no description.'
+    'List ONLY the First Nations identified as consulted on, or affected by, THIS project. Do not',
+    'list the attendees of a workshop or meeting, and do not list names from a province-wide or',
+    'region-wide roster: a name appearing in a source is not enough, the source must tie it to this',
+    'project. Return the NAME exactly as the source writes it and nothing else — no addresses, no',
+    'contact details, no websites, no description.'
   ].join(' '),
 
   compliance: [

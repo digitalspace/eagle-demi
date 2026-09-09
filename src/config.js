@@ -236,6 +236,11 @@ const config = {
   // than from one document. The same names repeat from document to document, so past a few pages of
   // them a larger set costs prompt and adds no nation.
   projectSummaryNationChunks: parseInt(process.env.PROJECT_SUMMARY_NATION_CHUNKS || '40', 10),
+  // Passages any ONE document may contribute to that set. Without a per-document cap the first hit
+  // fills it: a 2011 province-wide workshop roster took all 40 on Site C, so 69 other documents
+  // contributed nothing and nations that were never consulted on the project were cited for it.
+  projectSummaryNationChunksPerDoc:
+    parseInt(process.env.PROJECT_SUMMARY_NATION_CHUNKS_PER_DOC || '4', 10),
 
   // Which deployment answers the generator. `foundry` is the deployed path (managed identity, the
   // same account the query-time summariser uses). `ollama` is a local model on the LAN, for

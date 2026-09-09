@@ -9,9 +9,10 @@ const { Readable } = require('node:stream');
 
 const config = require('../../src/config');
 const summarizer = require('../../src/ai/summarize');
+const { logger } = require('../../src/utils/logger');
 const {
   generateProjectSummary, validCitations, groundedInCitations, normaliseNationName, joinNations,
-  buildFacts, buildItems, sanitisePromptName, PRICED_AS
+  buildFacts, buildItems, sanitisePromptName, PRICED_AS, PICK
 } = require('../../src/ai/project-summary');
 
 /** The transport before any stub, for the test that has to reach a real socket. */
@@ -175,6 +176,7 @@ test('generateProjectSummary', async (t) => {
     ollamaUrl: config.ollamaUrl,
     batchChunks: config.projectSummaryBatchChunks,
     nationChunks: config.projectSummaryNationChunks,
+    nationChunksPerDoc: config.projectSummaryNationChunksPerDoc,
     foundryEndpoint: config.foundryEndpoint,
     foundryDeployment: config.foundryDeployment
   };
@@ -185,6 +187,7 @@ test('generateProjectSummary', async (t) => {
     config.ollamaUrl = original.ollamaUrl;
     config.projectSummaryBatchChunks = original.batchChunks;
     config.projectSummaryNationChunks = original.nationChunks;
+    config.projectSummaryNationChunksPerDoc = original.nationChunksPerDoc;
     config.foundryEndpoint = original.foundryEndpoint;
     config.foundryDeployment = original.foundryDeployment;
   });
@@ -959,11 +962,16 @@ test('generateProjectSummary', async (t) => {
 
   await t.test('names the amendments it could not summarise, keeping the ones it could', async () => {
     // 8 of Site C's 21 amendment packages have no extracted text. Their sentences are missing and
-    // nothing on the record said which ones or why.
+    // nothing on the record said which ones or why. It is not a fault — the extractor has nothing
+    // to give — so it is named apart from `no_chunks` and logged quietly.
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';
     const calls = stubModel(t,
       JSON.stringify({ sentence: 'The first amendment changed the schedule.', citations: [1] }));
+    const warned = [];
+    const noted = [];
+    t.mock.method(logger, 'warn', line => { warned.push(String(line)); });
+    t.mock.method(logger, 'info', line => { noted.push(String(line)); });
 
     const sources = fakeSources({
       documents: [
@@ -979,9 +987,13 @@ test('generateProjectSummary', async (t) => {
     assert.deepStrictEqual(record.facts.amendments.map(a => a.documentId), ['docA2', 'docA'],
       'both amendments are facts, whatever can be summarised');
     assert.deepStrictEqual(record.sections.amendments.map(a => a.documentId), ['docA']);
-    assert.strictEqual(record.sectionErrors.amendments, 'no_chunks: docA2',
+    assert.strictEqual(record.sectionErrors.amendments, 'no_text: docA2',
       'the record names the amendment that has no text');
     assert.strictEqual(calls.length, 1, 'the amendment with no text was never asked about');
+    assert.ok(noted.some(line => line.includes('no_text')),
+      `an amendment with no extracted text is reported quietly: ${noted.join(' | ')}`);
+    assert.deepStrictEqual(warned.filter(line => line.includes('no_text')), [],
+      'and never as a warning');
   });
 
   await t.test('reads the nations from the passages the keyword search found', async () => {
@@ -1190,6 +1202,118 @@ test('generateProjectSummary', async (t) => {
     assert.deepStrictEqual(record.sections.federal.items.map(i => i.title), ['Fish habitat']);
   });
 
+  await t.test('takes a reply the model wrapped in a code fence', async () => {
+    // `format: 'json'` constrains decoding and still does not stop every model fencing the object.
+    // Site C's nations reply came back fenced, was rejected as `not_json`, and the retry it paid
+    // for came back fenced too.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, '```json\n' +
+      JSON.stringify({ nations: [{ name: 'Saulteau First Nation', citations: [1] }] }) + '\n```');
+
+    const sources = fakeSources({
+      documents: [APPENDIX],
+      chunks: { docX: [chunk(1, 'Saulteau First Nations were consulted.', 'docX')] },
+      chunkHits: [{ documentId: 'docX' }],
+      organizations: [{ id: 'org-1', name: 'Saulteau First Nations' }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'nations' });
+
+    assert.deepStrictEqual(record.sections.nations.map(n => n.name), ['Saulteau First Nation']);
+    assert.strictEqual(record.sectionErrors.nations, undefined);
+    assert.strictEqual(calls.length, 1, 'a fenced object is an answer, not a reply to ask again for');
+  });
+
+  await t.test('spreads the nations sources over documents instead of draining the first', async () => {
+    // The search ranked a 2011 province-wide workshop roster first, its chunks took the whole
+    // budget, and 69 other documents contributed nothing — so nations that appear on a provincial
+    // roster and nowhere near this project were cited for it.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryNationChunks = 8;
+    config.projectSummaryNationChunksPerDoc = 3;
+    const calls = stubModel(t, JSON.stringify({ nations: [] }));
+
+    const roster = { id: 'docW', type: 'Plan', displayName: 'Province-wide workshop attendees',
+      datePosted: '2011-03-01', isPublished: true, read: PUBLIC_READ, ...EXTRACTED };
+    const decision = { id: 'docD', type: 'Decision Materials',
+      displayName: 'Reasons for Ministers\' Decision', datePosted: '2014-10-14',
+      isPublished: true, read: PUBLIC_READ, ...EXTRACTED };
+
+    const sources = fakeSources({
+      documents: [roster, decision],
+      chunks: {
+        docW: Array.from({ length: 10 },
+          (_, i) => chunk(i + 1, `Roster page ${i + 1}. First Nations of British Columbia.`, 'docW')),
+        docD: Array.from({ length: 5 },
+          (_, i) => chunk(i + 1, `Decision page ${i + 1}. First Nations were consulted.`, 'docD'))
+      },
+      // The order the keyword search ranked them in: the roster mentions nations most often.
+      chunkHits: [{ documentId: 'docW' }, { documentId: 'docD' }]
+    });
+    await generateProjectSummary('272', { sources, section: 'nations' });
+
+    const prompt = calls[0].body.messages[1].content;
+    assert.strictEqual((prompt.match(/Roster page/g) || []).length, 3,
+      'no document contributes more than the per-document cap');
+    assert.strictEqual((prompt.match(/Decision page/g) || []).length, 3);
+    assert.match(prompt, /\[1\] \(page \d+\) Decision page/,
+      'a decision document is read before a roster, whatever the search ranked first');
+  });
+
+  await t.test('asks for the nations list on one call, with room for the whole list', async () => {
+    // An honest list for Site C is around 2,600 tokens and the default budget is 1,500, so the
+    // list stopped mid-item and parsed as nothing. The budget is what has to move: nations cannot
+    // be batched like the conditions list, because its builder returns a bare array and the merge
+    // that joins batches reads one as empty.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryNationChunks = 40;
+    const calls = stubModel(t, JSON.stringify({
+      nations: [{ name: 'Saulteau First Nation', citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [APPENDIX],
+      chunks: {
+        docX: Array.from({ length: 30 },
+          (_, i) => chunk(i + 1, `Page ${i + 1}. First Nations were consulted.`, 'docX'))
+      },
+      chunkHits: [{ documentId: 'docX' }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'nations' });
+
+    assert.strictEqual(calls.length, 1, 'one call, not one per batch');
+    assert.strictEqual(calls[0].body.options.num_predict, 8000);
+    assert.deepStrictEqual(record.sections.nations.map(n => n.name), ['Saulteau First Nation']);
+  });
+
+  await t.test('keeps a timeline event the source dates in long form', async () => {
+    // The timeline shape forces an ISO date and the documents write "October 14, 2014", so a
+    // literal comparison dropped every event Site C produced — a 100% failure that read on the
+    // record as a model that had invented all of them.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    stubModel(t, JSON.stringify({
+      events: [
+        { date: '2014-10-14', label: 'Certificate issued', citations: [1] },
+        { date: '2016-08-09', label: 'Certificate amended', citations: [1] }
+      ]
+    }));
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.deepStrictEqual(record.sections.timelineEvents,
+      [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }],
+      'the event the source dates survives, and the one it does not is still dropped');
+  });
+
   await t.test('generates nothing while the feature is off', async () => {
     config.summaryEnabled = false;
     const calls = stubModel(t, '{}');
@@ -1271,7 +1395,11 @@ test('validCitations', async (t) => {
 });
 
 test('groundedInCitations', async (t) => {
-  const chunks = [{ content: 'Sampling at 1,200 metres, reported by 2024-03-02.' }];
+  // Source text as the documents actually write it: dates in prose, not ISO. The model is forced
+  // into ISO by the timeline shape, so a literal comparison fails on every real event.
+  const chunks = [{
+    content: 'Sampling at 1,200 metres. The certificate was issued on October 14, 2014.'
+  }];
 
   await t.test('accepts a claim whose figures appear in the cited chunk', () => {
     assert.strictEqual(groundedInCitations('Sampling at 1200 metres.', [1], chunks), true,
@@ -1282,14 +1410,120 @@ test('groundedInCitations', async (t) => {
     assert.strictEqual(groundedInCitations('Sampling at 9900 metres.', [1], chunks), false);
   });
 
-  await t.test('rejects a claim carrying a date the chunk does not have', () => {
-    assert.strictEqual(groundedInCitations('Reported by 2024-03-03.', [1], chunks), false);
+  await t.test('accepts an ISO date the source writes in long form', () => {
+    assert.strictEqual(groundedInCitations('Certificate issued 2014-10-14.', [1], chunks), true);
+  });
+
+  await t.test('matches every spelling a source may write one date in', () => {
+    const spellings = ['October 14, 2014', 'October 14 2014', '14 October 2014', 'Oct 14, 2014',
+      'Oct. 14, 2014', '14 Oct 2014', '2014-10-14', '14/10/2014', '10/14/2014'];
+    for (const written of spellings) {
+      assert.strictEqual(
+        groundedInCitations('The decision was made 2014-10-14.', [1],
+          [{ content: `The decision was made ${written}.` }]),
+        true, `a source writing "${written}" grounds the same ISO date`);
+    }
+  });
+
+  await t.test('reads a long-form claim against a source that writes ISO', () => {
+    assert.strictEqual(
+      groundedInCitations('Issued October 14, 2014.', [1], [{ content: 'Issued 2014-10-14.' }]),
+      true);
+  });
+
+  await t.test('rejects a date one day off the one the source gives', () => {
+    // The equivalence is between spellings of the SAME day. A wrong date is still an invention.
+    assert.strictEqual(groundedInCitations('Certificate issued 2014-10-15.', [1], chunks), false);
+    assert.strictEqual(
+      groundedInCitations('Certificate issued 2014-10-15.', [1],
+        [{ content: 'The certificate was issued on October 14, 2014.' }]),
+      false);
+  });
+
+  await t.test('rejects a date in a month the source never names', () => {
+    assert.strictEqual(groundedInCitations('Certificate issued 2014-11-14.', [1], chunks), false);
   });
 
   await t.test('accepts a claim with no figures or dates at all', () => {
     // Short numbers are ordinary prose ("within 30 days") and this gate says nothing about them.
     assert.strictEqual(groundedInCitations('Monitoring is required within 30 days.', [1], chunks),
       true);
+  });
+});
+
+test('federal decision picker', async (t) => {
+  // 62 of Site C's letters and emails carry "(CEAA)" in their titles. On a bare agency match the
+  // newest of them was picked, and a consultant's letter was published as Canada's decision.
+  const LETTER = {
+    id: 'docL', type: 'Letter', datePosted: '2014-05-21',
+    displayName: 'Site C - Letter dated May 21, 2014 regarding the Errata to the Joint Review ' +
+      'Panel Report identified by Philip Raphals (Helios Centre) to EAO and CEAA - 20140521'
+  };
+  const STATEMENT = {
+    id: 'docS', type: 'Decision Materials', datePosted: '2014-10-14',
+    displayName: 'Decision Statement issued under CEAA 2012'
+  };
+
+  await t.test('does not read a letter that merely mentions an agency as a decision', () => {
+    assert.strictEqual(PICK.federal([LETTER]), null);
+  });
+
+  await t.test('needs the word decision even when the type says nothing', () => {
+    // A `/search` row carries a List ObjectId under `type` and no label, so the correspondence gate
+    // has nothing to read and the title is all there is. Naming an agency is not naming a decision.
+    assert.strictEqual(PICK.federal([{ ...LETTER, type: '5cf00c03a266b7e1877504cf' }]), null);
+  });
+
+  await t.test('picks the decision statement over the letters around it', () => {
+    assert.strictEqual(PICK.federal([LETTER, STATEMENT]).id, 'docS');
+  });
+
+  await t.test('takes an agency title that also carries the word decision', () => {
+    const decision = {
+      id: 'docI', type: 'Decision Materials', datePosted: '2019-02-01',
+      displayName: 'Decision of the Impact Assessment Agency of Canada'
+    };
+    assert.strictEqual(PICK.federal([decision]).id, 'docI');
+  });
+
+  await t.test('never takes a correspondence type, however its title reads', () => {
+    const email = {
+      id: 'docM', type: 'Email', datePosted: '2020-01-01',
+      displayName: 'Decision Statement forwarded for information'
+    };
+    assert.strictEqual(PICK.federal([email]), null);
+  });
+});
+
+test('key document pickers', async (t) => {
+  await t.test('prefers the project\'s own report and application over an amendment\'s', () => {
+    // Site C files an assessment report and an application for each amendment, and they are newer
+    // than the originals. Picked by date alone, the timeline covers one amendment rather than the
+    // project's own assessment.
+    const roles = buildFacts([
+      { id: 'docAR1', type: 'Assessment Report', datePosted: '2014-01-15',
+        displayName: 'Site C Clean Energy Project Assessment Report' },
+      { id: 'docAR2', type: 'Assessment Report', datePosted: '2019-06-02',
+        displayName: 'Assessment Report for Amendment #3' },
+      { id: 'docAP1', type: 'Application Materials', datePosted: '2013-01-25',
+        displayName: 'Environmental Impact Statement - Application Materials' },
+      { id: 'docAP2', type: 'Application Materials', datePosted: '2020-02-02',
+        displayName: 'Application for an Amendment to Certificate #E14-02' }
+    ]).keyDocuments;
+
+    assert.strictEqual(roles.find(r => r.role === 'assessmentReport').documentId, 'docAR1');
+    assert.strictEqual(roles.find(r => r.role === 'application').documentId, 'docAP1');
+  });
+
+  await t.test('falls back to the newest match when every one is an amendment\'s', () => {
+    const roles = buildFacts([
+      { id: 'docAR2', type: 'Assessment Report', datePosted: '2019-06-02',
+        displayName: 'Assessment Report for Amendment #3' },
+      { id: 'docAR3', type: 'Assessment Report', datePosted: '2021-04-04',
+        displayName: 'Assessment Report for Amendment #5' }
+    ]).keyDocuments;
+
+    assert.strictEqual(roles.find(r => r.role === 'assessmentReport').documentId, 'docAR3');
   });
 });
 
