@@ -278,16 +278,20 @@ describe('ProjectSummaryComponent', () => {
     });
   }
 
-  it('orders the whole timeline newest first and sinks an undated event to the end', async () => {
+  it('orders the whole timeline newest first and sinks undated events to the end', async () => {
     // An extracted event is the only row that can reach the timeline without a date: a phase row
-    // and an amendment row are both dropped upstream when theirs is missing.
+    // and an amendment row are both dropped upstream when theirs is missing. `null` and
+    // `undefined` both compare as strings above real dates (`"null"`, `"undefined"` > `"2023-…"`),
+    // so they only sink to the end because of the explicit falsy-date guard in the comparator.
     routeWholePage({
       ...MOCK_PROJECT_SUMMARY,
       sections: {
         ...MOCK_PROJECT_SUMMARY.sections,
         timelineEvents: [
           ...MOCK_PROJECT_SUMMARY.sections!.timelineEvents!,
-          { date: '', label: 'Panel hearings held across the Peace region', citations: [8] }
+          { date: '', label: 'Panel hearings held across the Peace region', citations: [8] },
+          { date: null, label: 'Undated event with a null date', citations: [9] } as any,
+          { date: undefined, label: 'Undated event with an undefined date', citations: [10] } as any
         ]
       }
     });
@@ -306,6 +310,8 @@ describe('ProjectSummaryComponent', () => {
       '14 Oct 2014',
       '1 May 2014',
       '19 Jan 2011',
+      '—',
+      '—',
       '—'
     ]);
     const first = el.querySelector('.ps-timeline__label')!;

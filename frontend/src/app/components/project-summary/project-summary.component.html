@@ -138,13 +138,13 @@
         @for (row of timeline(); track row.key) {
           <li class="ps-timeline__row" [class.ps-timeline__row--ai]="row.kind === 'ai'">
             <span class="ps-timeline__date">{{ row.date ? (row.date | date:'d MMM y') : '—' }}</span>
-            <span class="ps-timeline__label" [attr.title]="row.title || null">
+            <div class="ps-timeline__label" [attr.title]="row.title || null">
               {{ row.label }}
               @if (row.kind === 'ai') {
                 <span class="pill pill--info ps-timeline__mark">AI-extracted</span>
                 <ng-container *ngTemplateOutlet="cites; context: { $implicit: row.citations }"></ng-container>
               }
-            </span>
+            </div>
           </li>
         }
       </ol>
@@ -284,11 +284,11 @@
         -->
         @for (row of nationRows(); track row.note.name) {
           @if (!row.org && !row.pending) {
-            <p class="ps-unmatched">
+            <div class="ps-unmatched">
               <span class="ps-unmatched__name">{{ row.note.name }}</span>
               <span class="ps-unmatched__note">named in the documents; no organisation record matched</span>
               <ng-container *ngTemplateOutlet="cites; context: { $implicit: row.note.citations }"></ng-container>
-            </p>
+            </div>
           }
         }
       } @else {
