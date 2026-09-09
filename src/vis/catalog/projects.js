@@ -62,8 +62,11 @@ module.exports = {
   // assessed under as `{_id, name, item}` — `item` is the public BC Laws URL the label links to.
   CEAALink: { defaultVis: 4, maxVis: 4 },
   applicableRegulation: { defaultVis: 4, maxVis: 4 },
-  // Eagle's own record dates and build tag. Already on the public project page.
+  // Eagle's own record dates and build tag. Already on the public project page — `dateUpdated` is
+  // the "Last updated" stamp there, and is Eagle's edit date, not `updatedAt`, which is DEMI's own
+  // sync stamp and moves on every re-merge.
   dateAdded: { defaultVis: 4, maxVis: 4 },
+  dateUpdated: { defaultVis: 4, maxVis: 4 },
   build: { defaultVis: 4, maxVis: 4 },
   sector: { defaultVis: 4, maxVis: 4 },
   commodity: { defaultVis: 4, maxVis: 4 },

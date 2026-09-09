@@ -104,6 +104,7 @@ const EAGLE_FIXTURE = {
   },
   build: 'modification',
   dateAdded: '2016-12-14T00:00:00.000Z',
+  dateUpdated: '2021-06-02T00:00:00.000Z',
   proponentId: '58850f69aaecd9001b8085cc',
   proponentName: 'Eagle Proponent Ltd',
   pins: [{ _id: '5cf00c03a266b7e187750001', name: 'Some Nation', province: 'BC' }],
