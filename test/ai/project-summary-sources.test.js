@@ -129,6 +129,34 @@ test('apiSource on a 404', async (t) => {
   });
 });
 
+test('apiSource.organizations', async (t) => {
+  await t.test('asks the filtered search for pageSize 500, not 1000', async () => {
+    // `/search` refuses pageSize above 500 for a filtered read — `and[companyType]` is a filter.
+    const { impl, calls } = stubFetch([{ body: [{ searchResults: [{ id: 'org1' }] }] }]);
+
+    await apiSource({ baseUrl: 'https://demi.example/api', token: 't', fetchImpl: impl })
+      .organizations();
+
+    assert.ok(calls[0].url.includes('pageSize=500'), `asked ${calls[0].url}`);
+  });
+
+  await t.test('asks for the next page while a page comes back full', async () => {
+    const first = Array.from({ length: 500 }, (_, i) => ({ id: `org${i}` }));
+    const { impl, calls } = stubFetch([
+      { body: [{ searchResults: first }] },
+      { body: [{ searchResults: [{ id: 'orgLast' }] }] }
+    ]);
+
+    const orgs = await apiSource({
+      baseUrl: 'https://demi.example/api', token: 't', fetchImpl: impl
+    }).organizations();
+
+    assert.strictEqual(orgs.length, 501);
+    assert.strictEqual(orgs[500].id, 'orgLast');
+    assert.ok(calls[1].url.includes('pageNum=1'), `asked ${calls[1].url}`);
+  });
+});
+
 test('apiSource.chunksForDocument', async (t) => {
   await t.test('reads the rows from the document own chunks route', async () => {
     const { impl, calls } = stubFetch([

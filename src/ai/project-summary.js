@@ -29,6 +29,9 @@
  * workstation against the DEMI API.
  */
 
+const http = require('node:http');
+const https = require('node:https');
+
 const config = require('../config');
 const { logger } = require('../utils/logger');
 // Required as a MODULE, not destructured: the three are the seam a test replaces to keep a
@@ -175,11 +178,20 @@ function buildFacts(documents) {
 // Prompting
 // ---------------------------------------------------------------------------------------------
 
+/** One numbered source. `i` is its position in THIS call's sources, which is what a citation means. */
+const sourceLine = (c, i) =>
+  `[${i + 1}] (page ${c.pageNumber ?? 0}) ${String(c.content || '').trim()}`;
+
+const SOURCE_SEPARATOR = '\n\n';
+
 /** The numbered sources, one per chunk, capped by `projectSummaryMaxChunks`. */
 function buildSourceBlock(chunks) {
-  return chunks
-    .map((c, i) => `[${i + 1}] (page ${c.pageNumber ?? 0}) ${String(c.content || '').trim()}`)
-    .join('\n\n');
+  return chunks.map(sourceLine).join(SOURCE_SEPARATOR);
+}
+
+/** The user half of a section's prompt. Called with no chunks it is the header on its own. */
+function userPrompt(document, chunks) {
+  return `Sources from "${nameOf(document)}":\n\n${buildSourceBlock(chunks)}`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -231,6 +243,38 @@ async function chatFoundry(system, user, maxTokens) {
 }
 
 /**
+ * A JSON POST THAT WAITS AS LONG AS THE MODEL TAKES, on `node:http`, not `fetch`.
+ *
+ * `fetch` is undici underneath, and undici gives up after 300 seconds without response HEADERS.
+ * Ollama sends none until the whole reply is generated, so a batch of conditions that takes longer
+ * than five minutes dies as `TypeError: fetch failed` with the generation still running — which is
+ * how the 2026-09-09 Site C run lost its conditions retry. Raising undici's `headersTimeout` needs
+ * the `undici` package, which Node does not expose to `require`; `node:http` has no such clock.
+ */
+function postJson(url, payload) {
+  const target = new URL(url);
+  const client = target.protocol === 'https:' ? https : http;
+  const body = JSON.stringify(payload);
+
+  return new Promise((resolve, reject) => {
+    const req = client.request(target, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { text += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body: text }));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+/**
  * Ollama's NATIVE `/api/chat`, not its OpenAI-compatible shim.
  *
  * The shim works, but a reasoning model returns its chain of thought in a separate field there and
@@ -245,29 +289,24 @@ async function chatFoundry(system, user, maxTokens) {
  * No auth header: Ollama has none. It is a LAN service, reached only from a workstation.
  */
 async function chatOllama(system, user, maxTokens) {
-  const res = await fetch(`${config.ollamaUrl.replace(/\/$/, '')}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: config.ollamaModel,
-      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      stream: false,
-      format: 'json',
-      think: false,
-      options: {
-        temperature: 0,
-        num_ctx: config.projectSummaryOllamaCtx,
-        num_predict: maxTokens
-      }
-    })
+  const res = await postJson(`${config.ollamaUrl.replace(/\/$/, '')}/api/chat`, {
+    model: config.ollamaModel,
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+    stream: false,
+    format: 'json',
+    think: false,
+    options: {
+      temperature: 0,
+      num_ctx: config.projectSummaryOllamaCtx,
+      num_predict: maxTokens
+    }
   });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`ollama ${res.status}: ${body.slice(0, 300)}`);
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`ollama ${res.status}: ${res.body.slice(0, 300)}`);
   }
 
-  const data = await res.json();
+  const data = JSON.parse(res.body);
   return {
     content: (data && data.message && data.message.content) || '',
     // Ollama's own counter names, mapped to the OpenAI ones so `estimateCostCad` prices both
@@ -298,25 +337,69 @@ async function chatOllama(system, user, maxTokens) {
  * wrong in only if the margin is real — so this is a guard against the gross case, not a
  * fitting exercise.
  *
- * @returns {number|null} the estimated prompt tokens when the prompt will not fit, else null
+ * @returns {{estimate: number, excess: number}|null} null when the prompt fits
  */
 function contextOverflow(system, user, maxTokens) {
   if (config.projectSummaryProvider !== 'ollama') return null;
   const estimate = Math.ceil((system.length + user.length) / 4);
-  return estimate + maxTokens > config.projectSummaryOllamaCtx ? estimate : null;
+  const excess = estimate + maxTokens - config.projectSummaryOllamaCtx;
+  return excess > 0 ? { estimate, excess } : null;
 }
 
 /**
- * The completion budget a section is allowed, by section name.
+ * The sections that are a LIST over the whole document rather than one sentence about it.
  *
- * The default suits a sentence or a paragraph. A table of conditions is not one of those: Site C's
- * Schedule B holds around 77 conditions with bullets, and a list that long stops at the budget
- * mid-item — the reply is then a JSON prefix that parses as nothing and the whole section is lost.
- * `federal` is the same shape over a federal decision statement.
+ * Named in one place because two things follow. They get a much larger completion budget — Site C's
+ * Schedule B holds around 77 conditions with bullets, and at the default budget the list stops
+ * mid-item, which parses as nothing. And because that budget comes out of the same `num_ctx` the
+ * prompt is measured against, they are the sections `fitBatches` splits rather than refuses.
  */
-const SECTION_MAX_TOKENS = { conditions: 8000, federal: 8000 };
+const LIST_SECTIONS = ['conditions', 'federal'];
+const LIST_SECTION_MAX_TOKENS = 8000;
 
-const maxTokensFor = name => SECTION_MAX_TOKENS[name] || config.projectSummaryMaxTokens;
+const isListSection = name => LIST_SECTIONS.includes(name);
+const maxTokensFor = name =>
+  (isListSection(name) ? LIST_SECTION_MAX_TOKENS : config.projectSummaryMaxTokens);
+
+/**
+ * `chunks` split into runs that each fit the context window, in page order.
+ *
+ * `num_ctx` holds the prompt AND the reply, so a list section's completion budget lowers its prompt
+ * ceiling to `num_ctx - num_predict`: a 120-chunk Schedule B is over that ceiling and as one call
+ * would be refused outright. A list splits instead — one call per batch, items concatenated.
+ *
+ * Sized in characters against the same four-per-token estimate `contextOverflow` uses, less the
+ * scaffold (`fixedChars`) every batch repeats. A chunk too large for an empty batch is left alone
+ * in one, where `contextOverflow` refuses it: nothing here splits a chunk.
+ *
+ * `projectSummaryBatchChunks` caps a batch on top of that, because fitting the PROMPT is only half
+ * of it: a batch whose sources fill the window asks for a list that does not fit the completion
+ * budget, and a list cut off mid-item parses as nothing.
+ */
+function fitBatches(chunks, fixedChars, maxTokens) {
+  // Only Ollama's window is fixed and silent about overrunning it; Foundry is one call, as before.
+  if (config.projectSummaryProvider !== 'ollama') return [chunks];
+
+  const budget = (config.projectSummaryOllamaCtx - maxTokens) * 4 - fixedChars;
+  const cap = config.projectSummaryBatchChunks;
+  const batches = [];
+  let batch = [];
+  let size = 0;
+
+  for (const [i, chunk] of chunks.entries()) {
+    const cost = sourceLine(chunk, i).length + SOURCE_SEPARATOR.length;
+    if (batch.length && (batch.length >= cap || size + cost > budget)) {
+      batches.push(batch);
+      batch = [];
+      size = 0;
+    }
+    batch.push(chunk);
+    size += cost;
+  }
+  if (batch.length) batches.push(batch);
+
+  return batches;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Validation
@@ -507,74 +590,95 @@ function joinNations(names, organizations) {
  */
 async function runSection({ section, document, chunks, registry, projectName, instruction, shape,
   build, maxTokens }) {
+  const documentId = String(document.id);
   // A document with no extracted text is the same case as no document: nothing to ground on.
   if (chunks.length === 0) {
-    return { value: null, usage: null, model: null, documentId: String(document.id), reason: null };
+    return { value: null, usage: null, model: null, documentId, reason: null };
   }
 
   const used = chunks.slice(0, config.projectSummaryMaxChunks);
   const system = systemPrompt(projectName, instruction, shape);
-  const user = `Sources from "${nameOf(document)}":\n\n${buildSourceBlock(used)}`;
-
-  const overflow = contextOverflow(system, user, maxTokens);
-  if (overflow !== null) {
-    logger.warn('[project-summary] prompt exceeds the context window; section not generated', {
-      documentId: String(document.id),
-      sources: used.length,
-      estimatedPromptTokens: overflow,
-      numPredict: maxTokens,
-      numCtx: config.projectSummaryOllamaCtx
-    });
-    return {
-      value: null, usage: null, model: null,
-      documentId: String(document.id), reason: 'context_overflow'
-    };
-  }
+  const listSection = isListSection(section);
+  const batches = listSection
+    ? fitBatches(used, system.length + userPrompt(document, []).length, maxTokens)
+    : [used];
 
   const usage = { prompt_tokens: 0, completion_tokens: 0 };
+  const values = [];
   let model = null;
+  let reason = null;
 
-  const ask = async (systemText) => {
-    const reply = await chatJson(systemText, user, maxTokens);
-    if (reply.usage) {
-      usage.prompt_tokens += Number(reply.usage.prompt_tokens) || 0;
-      usage.completion_tokens += Number(reply.usage.completion_tokens) || 0;
-    }
-    if (reply.model) model = reply.model;
-    if (reply.truncated) {
-      // Named apart from a malformed reply because the remedy is different: the model answered the
-      // question and ran out of budget, so the budget is what has to move. The console format drops
-      // metadata, so the numbers an operator acts on are in the message.
-      logger.warn(`[project-summary] ${section}: the reply stopped at the ${maxTokens}-token ` +
-        'completion budget, so what came back is a fragment', {
-        documentId: String(document.id), sources: used.length, numPredict: maxTokens
+  for (const batch of batches) {
+    const user = userPrompt(document, batch);
+
+    const overflow = contextOverflow(system, user, maxTokens);
+    if (overflow) {
+      logger.warn(`[project-summary] ${section}: the prompt is ${overflow.excess} tokens over the ` +
+        'context window; section not generated', {
+        documentId,
+        sources: batch.length,
+        estimatedPromptTokens: overflow.estimate,
+        numPredict: maxTokens,
+        numCtx: config.projectSummaryOllamaCtx
       });
+      reason = 'context_overflow';
+      break;
     }
-    return reply;
-  };
 
-  let reply = await ask(system);
-  let parsed = parseJson(reply.content);
-
-  if (!parsed) {
-    logger.warn(`[project-summary] ${section}: reply did not parse as JSON; asking once more ` +
-      'with a stricter instruction', { documentId: String(document.id) });
-    reply = await ask(systemPrompt(projectName, `${instruction} ${RETRY_INSTRUCTION}`, shape));
-    parsed = parseJson(reply.content);
-  }
-
-  if (!parsed) {
-    logger.warn(`[project-summary] ${section}: rejected a reply that was not JSON`, {
-      documentId: String(document.id), sources: used.length
-    });
-    return {
-      value: null, usage, model, documentId: String(document.id),
-      reason: reply.truncated ? 'truncated' : 'not_json'
+    const ask = async (systemText) => {
+      const reply = await chatJson(systemText, user, maxTokens);
+      if (reply.usage) {
+        usage.prompt_tokens += Number(reply.usage.prompt_tokens) || 0;
+        usage.completion_tokens += Number(reply.usage.completion_tokens) || 0;
+      }
+      if (reply.model) model = reply.model;
+      if (reply.truncated) {
+        // Named apart from a malformed reply because the remedy is different: the model answered
+        // the question and ran out of budget, so the budget is what has to move. The console format
+        // drops metadata, so the numbers an operator acts on are in the message.
+        logger.warn(`[project-summary] ${section}: the reply stopped at the ${maxTokens}-token ` +
+          'completion budget, so what came back is a fragment', {
+          documentId, sources: batch.length, numPredict: maxTokens
+        });
+      }
+      return reply;
     };
+
+    let reply = await ask(system);
+    let parsed = parseJson(reply.content);
+
+    if (!parsed) {
+      logger.warn(`[project-summary] ${section}: reply did not parse as JSON; asking once more ` +
+        'with a stricter instruction', { documentId });
+      reply = await ask(systemPrompt(projectName, `${instruction} ${RETRY_INSTRUCTION}`, shape));
+      parsed = parseJson(reply.content);
+    }
+
+    if (!parsed) {
+      logger.warn(`[project-summary] ${section}: rejected a reply that was not JSON`, {
+        documentId, sources: batch.length
+      });
+      // A batch, not the section: the batches that did answer keep their items.
+      reason = reply.truncated ? 'truncated' : 'not_json';
+      continue;
+    }
+
+    // Citations are numbered within the batch that produced them, so the registry is handed that
+    // batch's chunks — this is what keeps a batch-2 `[1]` off batch 1's first source.
+    values.push(build(parsed, batch, n => registry.map(n, batch, nameOf(document))));
   }
 
-  const value = build(parsed, used, n => registry.map(n, used, nameOf(document)));
-  return { value, usage, model, documentId: String(document.id), reason: null };
+  const value = listSection ? mergeItemBatches(values) : (values[0] || null);
+  return { value, usage, model, documentId, reason };
+}
+
+/** The list batches as one list, renumbered end to end so `n` is contiguous across the section. */
+function mergeItemBatches(values) {
+  const items = [];
+  for (const value of values) {
+    for (const item of (value && value.items) || []) items.push({ ...item, n: items.length + 1 });
+  }
+  return items.length ? { items } : null;
 }
 
 /** `{sentence, citations}` — dropped whole if the sentence is ungrounded. */

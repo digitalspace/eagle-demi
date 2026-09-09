@@ -13,8 +13,8 @@
  *
  * `--section` regenerates ONE section and merges it into the stored record, leaving the others as
  * they are. That is what makes prompt tuning affordable: re-running conditions against Site C is
- * one model call, not eight. `--out` writes the dry-run record to a file so two runs can be
- * diffed.
+ * one section, not the whole record. `--out` writes the dry-run record to a file so two runs can
+ * be diffed.
  *
  * `--store` uploads a record `--out` already wrote, BYTE FOR BYTE: no generation, no merge, no
  * edit of any kind, and it refuses a file whose project is not `--project`. It exists because a

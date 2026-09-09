@@ -4,8 +4,11 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const http = require('node:http');
+const { Readable } = require('node:stream');
 
 const config = require('../../src/config');
+const summarizer = require('../../src/ai/summarize');
 const {
   generateProjectSummary, validCitations, groundedInCitations, normaliseNationName, joinNations,
   buildFacts, buildItems, sanitisePromptName, PRICED_AS
@@ -71,43 +74,92 @@ function fakeSources({ project, documents = [], chunks = {}, organizations = [],
 }
 
 /**
- * A model that answers every call with the same JSON, counting how often it was asked.
+ * An Ollama that answers every call with the same JSON, counting how often it was asked.
  *
- * A reply is either the content string, or `{content, doneReason}` for a run that has to see how
- * Ollama ended the completion.
+ * Stubbed at `http.request`, which is the transport the generator reaches Ollama on: `fetch` gives
+ * up on a reply that takes more than five minutes to start. A reply is either the content string,
+ * or `{content, doneReason}` for a run that has to see how Ollama ended the completion.
  */
 function stubModel(t, replies, trace = []) {
   const calls = [];
   const queue = Array.isArray(replies) ? replies.slice() : null;
-  t.mock.method(global, 'fetch', async (url, init) => {
-    calls.push({ url: String(url), body: JSON.parse(init.body) });
+  t.mock.method(http, 'request', (target, options, onResponse) => {
+    const call = { url: String(target), options, timeouts: [] };
+    calls.push(call);
     trace.push('model');
+    const next = queue ? (queue.shift() ?? '{}') : replies;
+    const reply = typeof next === 'string' ? { content: next } : next;
+
+    const res = new Readable({ read() {} });
+    res.statusCode = 200;
+    return {
+      on: () => {},
+      setTimeout: ms => call.timeouts.push(ms),
+      end: (body) => {
+        call.body = JSON.parse(body);
+        onResponse(res);
+        res.push(JSON.stringify({
+          message: { content: reply.content },
+          done_reason: reply.doneReason || 'stop',
+          prompt_eval_count: 100,
+          eval_count: 10
+        }));
+        res.push(null);
+      }
+    };
+  });
+  return calls;
+}
+
+/**
+ * The Foundry provider's wire shape, and the token seam the generator reaches it through.
+ *
+ * Foundry is the deployed default, so its own reply fields — `finish_reason` above all — are worth
+ * pinning apart from Ollama's. A reply is the content string, or `{content, finishReason}`.
+ */
+function stubFoundry(t, replies) {
+  const calls = [];
+  const queue = Array.isArray(replies) ? replies.slice() : null;
+  t.mock.method(summarizer, 'getToken', async () => 'a-token');
+  t.mock.method(summarizer, 'foundryChatUrl', () => 'https://foundry.example/chat/completions');
+  t.mock.method(global, 'fetch', async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(init.body), headers: init.headers });
     const next = queue ? (queue.shift() ?? '{}') : replies;
     const reply = typeof next === 'string' ? { content: next } : next;
     return {
       ok: true,
       status: 200,
       json: async () => ({
-        message: { content: reply.content },
-        done_reason: reply.doneReason || 'stop',
-        prompt_eval_count: 100,
-        eval_count: 10
+        choices: [{
+          message: { content: reply.content },
+          finish_reason: reply.finishReason || 'stop'
+        }],
+        usage: { prompt_tokens: 100, completion_tokens: 10 }
       })
     };
   });
   return calls;
 }
 
+/** The `(page N)` numbers a prompt carried, in the order it numbered them. */
+const pagesIn = call => Array.from(
+  call.body.messages[1].content.matchAll(/\[(\d+)\] \(page (\d+)\)/g),
+  m => ({ local: Number(m[1]), page: Number(m[2]) }));
+
 test('generateProjectSummary', async (t) => {
   const original = {
     enabled: config.summaryEnabled,
     provider: config.projectSummaryProvider,
-    ollamaCtx: config.projectSummaryOllamaCtx
+    ollamaCtx: config.projectSummaryOllamaCtx,
+    foundryEndpoint: config.foundryEndpoint,
+    foundryDeployment: config.foundryDeployment
   };
   t.afterEach(() => {
     config.summaryEnabled = original.enabled;
     config.projectSummaryProvider = original.provider;
     config.projectSummaryOllamaCtx = original.ollamaCtx;
+    config.foundryEndpoint = original.foundryEndpoint;
+    config.foundryDeployment = original.foundryDeployment;
   });
 
   await t.test('never calls the model for a section whose source document is missing', async () => {
@@ -251,6 +303,125 @@ test('generateProjectSummary', async (t) => {
       config.projectSummaryMaxTokens);
   });
 
+  await t.test('splits a conditions document too large for one window into batches', async () => {
+    // The completion budget comes out of the same num_ctx the prompt is measured against, so a full
+    // Schedule B does not fit beside an 8000-token reply. It is a list, so it splits: refusing it
+    // would drop the one section the big budget exists for.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      items: [
+        { category: 'Water', title: 'Water quality', oneLiner: 'Monitor it.',
+          bullets: [], citations: [1] },
+        { category: 'Reporting', title: 'Reporting', oneLiner: 'Report it.',
+          bullets: [], citations: [2] }
+      ]
+    }));
+
+    const chunks = Array.from({ length: config.projectSummaryMaxChunks }, (_, i) => chunk(
+      i + 1,
+      `Condition ${i + 1}. ${'The Holder must monitor water quality and report findings. '.repeat(33)}`
+    ));
+    const sources = fakeSources({ documents: [SCHEDULE_B], chunks: { docB: chunks } });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(calls.length,
+      Math.ceil(config.projectSummaryMaxChunks / config.projectSummaryBatchChunks),
+      'one call per batch of at most projectSummaryBatchChunks sources');
+    assert.strictEqual(record.sectionErrors.conditions, undefined,
+      'a document too large for one call is batched, not refused');
+
+    const batches = calls.map(pagesIn);
+    assert.ok(batches.every(b => b.length <= config.projectSummaryBatchChunks),
+      'no batch asks for a list longer than the completion budget holds');
+    assert.deepStrictEqual(batches.flatMap(b => b.map(s => s.page)), chunks.map(c => c.pageNumber),
+      'every chunk is sent once, in page order');
+    for (const batch of batches) {
+      assert.deepStrictEqual(batch.map(s => s.local), batch.map((_, i) => i + 1),
+        'each batch numbers its own sources from 1');
+    }
+
+    const items = record.sections.conditions.items;
+    assert.strictEqual(items.length, 2 * calls.length, 'every batch contributed its items');
+    assert.deepStrictEqual(items.map(i => i.n), items.map((_, i) => i + 1),
+      'the merged list is numbered contiguously');
+
+    items.forEach((item, i) => {
+      const cited = item.citations.map(n => {
+        assert.ok(record.citations[n - 1], `citation ${n} indexes the record's citation list`);
+        return record.citations[n - 1].chunkId;
+      });
+      // The batch that produced this item, and the source it numbered locally: a batch-2 `[1]` must
+      // resolve to batch 2's first chunk, not the document's.
+      assert.deepStrictEqual(cited, [`docB::p${batches[Math.floor(i / 2)][i % 2].page}::c0`]);
+    });
+
+    assert.deepStrictEqual(record.usage,
+      { promptTokens: 100 * calls.length, completionTokens: 10 * calls.length },
+      'every batch is paid for');
+  });
+
+  await t.test('splits a batch further when its sources alone fill the window', async () => {
+    // The count cap bounds the reply; the window still bounds the prompt, and pages long enough
+    // reach it first.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    // Room for the 8000-token conditions reply and about 2000 tokens of prompt.
+    config.projectSummaryOllamaCtx = 10000;
+    const calls = stubModel(t, JSON.stringify({
+      items: [{ category: 'Water', title: 'Water quality', oneLiner: 'Monitor it.',
+        bullets: [], citations: [1] }]
+    }));
+
+    const chunks = Array.from({ length: 12 }, (_, i) => chunk(
+      i + 1, `Condition ${i + 1}. ${'The Holder must monitor water quality. '.repeat(50)}`));
+    const sources = fakeSources({ documents: [SCHEDULE_B], chunks: { docB: chunks } });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    const batches = calls.map(pagesIn);
+    assert.ok(batches.length > 1 && batches.every(b => b.length < config.projectSummaryBatchChunks),
+      `split below the count cap, got ${batches.map(b => b.length).join('+')}`);
+    assert.deepStrictEqual(batches.flatMap(b => b.map(s => s.page)), chunks.map(c => c.pageNumber));
+    assert.strictEqual(record.sectionErrors.conditions, undefined);
+  });
+
+  await t.test('gives the Ollama call no timeout, so a long generation is not cut off', async () => {
+    // `fetch` is undici, which abandons a request after 300 s without response headers — and Ollama
+    // sends none until the whole reply is generated. A batch of conditions takes longer than that,
+    // and the run died mid-generation with `TypeError: fetch failed` until this moved to node:http.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({ sentence: 'A sentence.', citations: [1] }));
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: { docC: [chunk(1, 'A sentence.', 'docC')] }
+    });
+    await generateProjectSummary('272', { sources, section: 'status' });
+
+    assert.strictEqual(calls[0].options.method, 'POST');
+    assert.strictEqual(calls[0].options.timeout, undefined, 'no timeout in the request options');
+    assert.deepStrictEqual(calls[0].timeouts, [], 'and none set on the request');
+  });
+
+  await t.test('asks once for a conditions document that fits in one window', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      items: [{ category: 'Water', title: 'Water quality', oneLiner: 'Monitor it.',
+        bullets: [], citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [SCHEDULE_B],
+      chunks: { docB: [chunk(1, 'Monitor it.')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(calls.length, 1, 'a prompt that already fits is not split');
+    assert.deepStrictEqual(record.sections.conditions.items.map(i => i.n), [1]);
+  });
+
   await t.test('drops an item whose citation is out of range', async () => {
     // `[9]` against one source is a fabricated reference. Renumbering it onto source 1 would turn
     // an invention into a link that resolves, so the item goes.
@@ -319,6 +490,43 @@ test('generateProjectSummary', async (t) => {
       'the second local source is the first the record cites');
     assert.strictEqual(record.citations[0].chunkId, 'docB::p2::c0');
     assert.strictEqual(record.citations[0].documentName, 'Schedule B - Table of Conditions');
+  });
+
+  await t.test('grounds each amendment in its own document, not another amendment\'s', async () => {
+    // One call per amendment exists so a sentence about one cannot cite another's chunks. Pairing
+    // is by document id, and a pairing that slipped would still produce a full, plausible section —
+    // where each sentence's citations land is the only thing that shows it.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const AMENDMENT_TWO = {
+      id: 'docA2', type: 'Amendment Package', displayName: 'Amendment #2',
+      datePosted: '2018-07-11', isPublished: true, read: PUBLIC_READ
+    };
+    stubModel(t, [
+      JSON.stringify({ sentence: 'The second amendment extended the deadline.', citations: [1] }),
+      JSON.stringify({ sentence: 'The first amendment changed the schedule.', citations: [1] })
+    ]);
+
+    const sources = fakeSources({
+      documents: [SCHEDULE_B, AMENDMENT, AMENDMENT_TWO],
+      chunks: {
+        docB: [chunk(1, 'Condition 1. The Holder must monitor water quality.')],
+        docA: [chunk(1, 'The first amendment changed the schedule.', 'docA')],
+        docA2: [chunk(1, 'The second amendment extended the deadline.', 'docA2')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'amendments' });
+
+    assert.deepStrictEqual(sources.asked, ['docA2', 'docA'],
+      'each amendment is read from its own document, newest first');
+    assert.deepStrictEqual(record.sections.amendments.map(a => a.documentId), ['docA2', 'docA']);
+    for (const amendment of record.sections.amendments) {
+      const cited = amendment.citations.map(n => record.citations[n - 1]);
+      assert.ok(cited.length && cited.every(Boolean), 'every citation resolves');
+      assert.deepStrictEqual(
+        Array.from(new Set(cited.map(c => c.documentId))), [amendment.documentId],
+        `the ${amendment.documentId} sentence cites only ${amendment.documentId}`);
+    }
   });
 
   await t.test('prices an Ollama run at the Foundry rates and says so', async () => {
@@ -401,6 +609,54 @@ test('generateProjectSummary', async (t) => {
     assert.strictEqual(record.sections.status, null);
     assert.strictEqual(record.sectionErrors.status, 'context_overflow',
       'the record says why the section is empty, so a null is not read as "nothing to report"');
+  });
+
+  await t.test('reads a Foundry reply, its usage and the deployment that answered', async () => {
+    // Foundry is the deployed provider, and it reports itself in its own fields: the content is
+    // nested under `choices`, and the usage counters are already the ones the cost is priced on.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'foundry';
+    config.foundryEndpoint = 'https://foundry.example';
+    config.foundryDeployment = 'gpt-4.1-mini-test';
+    const calls = stubFoundry(t, JSON.stringify({
+      sentence: 'The certificate was issued.', citations: [1]
+    }));
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: { docC: [chunk(1, 'The certificate was issued.', 'docC')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'status' });
+
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(record.sections.status.sentence, 'The certificate was issued.');
+    assert.strictEqual(record.sectionErrors.status, undefined);
+    assert.strictEqual(record.model, 'gpt-4.1-mini-test');
+    assert.deepStrictEqual(record.usage, { promptTokens: 100, completionTokens: 10 });
+    assert.strictEqual(calls[0].body.max_tokens, config.projectSummaryMaxTokens);
+    assert.strictEqual(calls[0].body.response_format.type, 'json_object');
+  });
+
+  await t.test('reports a Foundry reply that stopped at max_tokens as truncation', async () => {
+    // `finish_reason: length` is the only thing that tells the two apart: what comes back is a JSON
+    // prefix either way, and "not JSON" would send whoever reads the record at the prompt when the
+    // budget is what has to move.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'foundry';
+    config.foundryEndpoint = 'https://foundry.example';
+    config.foundryDeployment = 'gpt-4.1-mini-test';
+    const cutOff = { content: '{"sentence": "The certificate was iss', finishReason: 'length' };
+    const calls = stubFoundry(t, [cutOff, cutOff]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: { docC: [chunk(1, 'The certificate was issued.', 'docC')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'status' });
+
+    assert.strictEqual(record.sections.status, null);
+    assert.strictEqual(record.sectionErrors.status, 'truncated');
+    assert.strictEqual(calls.length, 2, 'asked again once, and only once');
   });
 
   await t.test('a project name cannot add rules of its own to the prompt', async () => {

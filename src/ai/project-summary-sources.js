@@ -17,8 +17,8 @@ const { logger } = require('../utils/logger');
 
 /** Rows a document list asks for per request. The API caps an authenticated caller at 1,000. */
 const DOCUMENT_PAGE_SIZE = 1000;
-/** Organization rows in one page. There are 246 on test; this is one request with room to spare. */
-const ORGANIZATION_PAGE_SIZE = 1000;
+/** Organization rows in one page. `and[companyType]` is a filter, so `/search` caps this at 500. */
+const ORGANIZATION_PAGE_SIZE = 500;
 
 /**
  * The DEMI API over HTTP.
@@ -114,17 +114,25 @@ function apiSource({ baseUrl, token, apiKey, fetchImpl } = {}) {
      * The Indigenous Group Organization rows, which is what nation names are joined to.
      *
      * Through `/search`, not a repository: it is the read the plan confirmed against test, and it
-     * is the only route that answers this container.
+     * is the only route that answers this container. `and[companyType]` is a filter, so the API
+     * refuses a pageSize above 500 here — paged the same way `documents` pages past its cap.
      */
     async organizations() {
-      const query = new URLSearchParams({
-        dataset: 'Organization',
-        'and[companyType]': 'Indigenous Group',
-        pageSize: String(ORGANIZATION_PAGE_SIZE)
-      });
-      const body = await call(`/search?${query}`);
-      const first = Array.isArray(body) ? body[0] : body;
-      return (first && first.searchResults) || [];
+      const all = [];
+      for (let pageNum = 0; ; pageNum++) {
+        const query = new URLSearchParams({
+          dataset: 'Organization',
+          'and[companyType]': 'Indigenous Group',
+          pageSize: String(ORGANIZATION_PAGE_SIZE),
+          pageNum: String(pageNum)
+        });
+        const body = await call(`/search?${query}`);
+        const first = Array.isArray(body) ? body[0] : body;
+        const page = (first && first.searchResults) || [];
+        for (const row of page) all.push(row);
+        if (page.length < ORGANIZATION_PAGE_SIZE) break;
+      }
+      return all;
     },
 
     /** The record already stored, or null. What `--section` merges its one fresh section into. */
