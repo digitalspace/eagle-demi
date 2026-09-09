@@ -259,6 +259,123 @@ resource bulkDownloadPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06
   }
 }
 
+// Search is down. On 2026-09-08 every `dataset=Document` query answered 502 for 65 minutes and
+// nothing raised a hand: the cause sat in `AppTraces` as `[search] document search failed` and was
+// found by eye. This rule reads that line.
+//
+// Unconditional, unlike the two rules above: every environment serves search, so the line this
+// matches is one an environment can always write.
+//
+// Three in five minutes, not one. `search.js` logs one line per failed request, so a single line is
+// a client that asked for something the index could not answer; a broken index or a dead upstream
+// produces them continuously. Three is the smallest count that separates the two at the 5-minute
+// window a page has to fit inside.
+resource searchFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'demi-search-failures-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI search is failing'
+    description: 'Three or more search errors in five minutes, from either of two branches: `[search] … failed` and `[search/summary] … failed`, where the caller got a 502 or an empty summary, and `[ai-search] … retried without it`, where the live index could not answer a field, so the page was SERVED as a 200 with `meta.degraded` and is missing a column. Check the index against the deployed build first: GET /health/search-schema names a missing field. Runbook: Runbook-Search-Outage in the DEMI wiki.'
+    // Error, not warning: the public site cannot search at all while this is true.
+    severity: 1
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT5M'
+    // Same length as the frequency — no overlap, so one failure is not counted twice.
+    windowSize: 'PT5M'
+    criteria: {
+      allOf: [
+        {
+          // One alternative per tag, each tag CLOSED. An unclosed `[search` prefix also matches
+          // `[search-schema]`, which the anonymous /health/search-schema probe writes — a path that
+          // serves nobody and would page at severity 1 on a caller's malformed request.
+          // `startswith` rather than `has` because `has` tokenises on the brackets (see
+          // reconcileDriftAlert); every message in this workspace begins at its tag.
+          //
+          // `[search/summary]` is its own alternative because that route answers 200 on failure, so
+          // this rule is the ONLY thing that can see a summary outage. The warn lines under both
+          // tags say nothing about failure and are excluded by the `failed` literal.
+          //
+          // The third is the schema-drift degrade in src/search/ai-search.js: it drops the field the
+          // index cannot answer and retries, so a 200 is served, no 502 is logged and NOTHING else
+          // here would fire. `contains` rather than `startswith` because no `[ai-search]` line has
+          // been observed in this workspace to anchor the tag against.
+          //
+          // The fourth is the top-level search error in src/controllers/search.js: when no dataset
+          // branch succeeds, the catch-all handler logs with [demi-api search] and returns 500.
+          query: 'AppTraces | where (Message startswith "[search]" and Message contains "failed") or (Message startswith "[search/summary]" and Message contains "failed") or (Message contains "[ai-search]" and Message contains "retried without it") or (Message startswith "[demi-api search]" and Message contains "error")'
+          timeAggregation: 'Count'
+          operator: 'GreaterThanOrEqual'
+          threshold: 3
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
+// The same outage seen from the other side, and the one that still fires when the process dies
+// before it can log anything. A ratio rather than a count, because search traffic swings by two
+// orders of magnitude between a crawler pass and a quiet night, and a fixed count of 5xx is either
+// deaf at the top or screaming at the bottom.
+//
+// `total >= 5` is the floor that keeps a single failed request in an idle five minutes from reading
+// as 100% broken.
+resource search5xxRatioAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'demi-search-5xx-ratio-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI search 5xx rate over 20%'
+    description: 'More than a fifth of the search requests in the last five minutes answered 5xx, over at least five requests. Same runbook as demi-search-failures: Runbook-Search-Outage in the DEMI wiki.'
+    severity: 1
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT5M'
+    criteria: {
+      allOf: [
+        {
+          // Filtered on the PATH, not on `OperationName`. api/index.js registers ONE catch-all
+          // function (`app.http('api', { route: '{*path}' })`) because the Functions host matches
+          // routes in discovery order, so every request in this workspace — search, projects,
+          // health — carries the same operation name and only the URL tells them apart. `endswith`
+          // rather than an equality: the host mounts these under `/api`, which src/http/router.js
+          // strips at dispatch, so the recorded path is `/api/search` today and `/search` if that
+          // mount ever changes. The timer and queue functions land in this table too, with no Url
+          // at all; the same filter drops them.
+          // `ResultCode` is a string column; `toint` is what makes `>= 500` a numeric comparison
+          // rather than a lexicographic one.
+          query: 'AppRequests | extend p = tostring(parse_url(Url).Path) | where p endswith "/search" or p endswith "/search/summary" | summarize total = count(), failed = countif(toint(ResultCode) >= 500) | where total >= 5 and todouble(failed) / total > 0.2'
+          // The query answers with one row or none, so the rule counts rows: a row means the ratio
+          // was already over the line.
+          timeAggregation: 'Count'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
 @description('Connection string the apps use to reach Application Insights')
 output connectionString string = appInsights.properties.ConnectionString
 

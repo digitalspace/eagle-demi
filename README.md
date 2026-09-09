@@ -752,6 +752,40 @@ Things that will cost you time if you rediscover them:
 More in
 [Environment Reality & Operational Gotchas](https://github.com/digitalspace/eagle-demi/wiki/Environment-Reality-and-Operational-Gotchas).
 
+### Alerts
+
+Everything below mails one action group, `demi-alerts-<env>`, created in
+`azure/modules/observability.bicep`. There is exactly one per environment: `audit-logs.bicep` and
+`availability.bicep` are passed its id rather than making their own.
+
+| Resource | Reads | Severity | Fires when |
+|---|---|---|---|
+| `demi-logs-quota-<env>` | `Usage` | 2 | Billable ingest over 24h passed 80% of the workspace's daily cap |
+| `demi-reconcile-drift-<env>` | `AppTraces` | 2 | The nightly reconcile line says `drift=` over 0. Prod only |
+| `demi-bulk-download-failed-<env>` | `AppTraces` | 2 | A bulk download job failed after its retries. Test only |
+| `demi-search-failures-<env>` | `AppTraces` | 1 | Three or more search errors in five minutes: `[search] … failed`, `[search/summary] … failed`, or `[ai-search] … retried without it` |
+| `demi-search-5xx-ratio-<env>` | `AppRequests` | 1 | Over 20% of `/search` requests answered 5xx in five minutes, over at least five requests |
+| `demi-search-availability-<env>` | `availabilityResults` | 1 | The web test below dropped under 90% over fifteen minutes |
+| `demi-audit-drop-<env>` | `AppTraces` | 1 | Audit rows stopped landing — see `audit-logs.bicep` |
+
+The two search rules are the answer to 2026-09-08, when every `dataset=Document` query returned 502
+for 65 minutes and the only record of it was a log line nobody was reading. They overlap on purpose:
+the trace rule still fires when traffic is too thin for a ratio to mean anything, and the request
+rule still fires when the process dies before it can log. Expect both to page on one real outage.
+
+Not every branch the trace rule watches is a 502. `[ai-search] … retried without it` is the
+schema-drift degrade: the live index cannot answer a field the deployed build asked for, so the
+request drops that field, retries, and is answered 200 with `meta.degraded` — the site stays up and
+the page is missing a column. Nothing else notices that, which is why it pages. Each tag is matched
+closed, so `[search-schema]`, written by the anonymous `/health/search-schema` probe, cannot raise a
+page of its own.
+
+`demi-search-availability-<env>` is the standard web test in `availability.bicep`, deployed only
+where `availabilityUrl` is set (both environments today). It GETs the public search URL every five
+minutes from five probe locations and requires a 200 whose body contains `searchResultsTotal` — the
+key the API attaches only when it actually measured a total, so a 200 that is not really an answer
+fails the test.
+
 ---
 
 ## Releases
