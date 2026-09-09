@@ -160,19 +160,39 @@ const AMENDMENT_TITLE = /amendment/i;
 /**
  * The newest match that is not an amendment's paperwork, else the newest match.
  *
- * Site C's newest "Assessment Report" by date is an amendment's, and a timeline built from it
- * covers one amendment rather than the project's own assessment.
+ * A project files an application for each amendment and they are newer than the original.
  */
 const preferOriginal = docs =>
   newest(docs.filter(d => !nameMatches(d, AMENDMENT_TITLE))) || newest(docs);
 
+/** Filed UNDER a submission's volumes, never the text of one. */
+const UNDER_VOLUME_TITLE = /\bappendix\b|\bappendices\b|\bannex\b|\bpart\s+\d/i;
+
 /**
- * The filing structure UNDER a big submission, never the submission itself.
- *
- * Site C files 378 documents under type "Application Materials" and every appendix and volume of
- * the 2013 EIS is one of them. Matched on type alone the application picker returned "Appendix A".
+ * Filing structure under a big submission, never the submission itself. Site C files 378 documents
+ * under type "Application Materials"; on the type alone the application picker returned "Appendix A".
  */
-const SUBSIDIARY_TITLE = /\bappendix\b|\bappendices\b|\bvolume\b|\bannex\b|\bpart\s+\d/i;
+const isSubsidiary = title => UNDER_VOLUME_TITLE.test(title) || /\bvolume\b/i.test(title);
+
+/** Front matter bound with a submission but carrying none of its text. */
+const FRONT_MATTER_TITLE =
+  /\bcontents\b|\bconcordance\b|\bdefinitions?\b|\bacronyms?\b|\babbreviations?\b|\bauthorship\b|\bcover\b/i;
+
+/**
+ * A submission's own text, where the submission is filed in volumes. Site C files no single EIS
+ * document — 108 "EIS - Volume N" rows — so rejecting every volume leaves it with no application.
+ */
+const isMainVolume = title =>
+  /\bvolume\s+0*1\b/i.test(title) && !UNDER_VOLUME_TITLE.test(title) && !FRONT_MATTER_TITLE.test(title);
+
+/**
+ * A document ABOUT another, never that document. Site C's application picker returned "Technical
+ * Memo - Response to ... Comments on the ... Environmental Impact Statement - dated May 8, 2013".
+ */
+const DERIVATIVE_TITLE = new RegExp([
+  '\\bmemos?\\b', '\\bresponses?\\b', '\\bcomments?\\b', '\\bletters?\\b', '\\be-?mails?\\b',
+  '\\bnotice\\b', 'news\\s+release', '\\baddend(?:um|a)\\b', '\\bguidelines?\\b'
+].join('|'), 'i');
 
 /** A proponent's own study, whatever it calls itself. */
 const PROPONENT_STUDY_TITLE =
@@ -186,41 +206,46 @@ const ASSESSMENT_REPORT_TITLE = /assessment\s+report/i;
 /**
  * The EAO's assessment report on the project — the document the regulatory chronology lives in.
  *
- * Site C holds ZERO documents of type "Assessment Report", so the title half of this test is the
- * whole picker there, and on a bare "assessment report" substring it returned "Volume 1, Appendix
- * J2 - Worker Accomodation Options Assessment Report": a 2013 EIS appendix by the proponent. The
- * timeline built off it covered a worker camp. So a title-only match must read like the office's
- * own report — naming itself first, or naming the office — and must not read like a study filed
- * under a submission.
- *
- * Returns nothing rather than a near miss: `timelineDoc` falls back to the certificate, and the
- * certificate's recitals are a real chronology where an appendix is not.
+ * An amendment title is rejected whatever the registry types a row: an amendment's report assesses
+ * one change and not the project. A registry type of `Assessment Report` is trusted ahead of the
+ * derivative reject, so a typed report keeps its role on a title that merely dates or appends to
+ * itself; an untyped row still loses to a title ABOUT a report, such as a memo or response. The
+ * office naming itself outranks the study words after that — "EAO Assessment Report on the
+ * Environmental Management Plan" is the office's report, not a proponent's plan — so the study
+ * reject runs last, only against a title with no office name in it. Nothing qualifying returns
+ * nothing, and `timelineDoc` falls back to the certificate's recitals.
  */
 function isAssessmentReport(doc) {
-  if (isType(doc, 'Assessment Report')) return true;
   const title = nameOf(doc);
+  if (AMENDMENT_TITLE.test(title)) return false;
+  if (isType(doc, 'Assessment Report')) return true;
+  if (DERIVATIVE_TITLE.test(title)) return false;
   if (!ASSESSMENT_REPORT_TITLE.test(title)) return false;
-  if (SUBSIDIARY_TITLE.test(title)) return false;
-  // The office naming itself outranks the study words: "EAO Assessment Report on the
-  // Environmental Management Plan" is the office's report, not a proponent's plan.
+  if (isSubsidiary(title)) return false;
   if (EAO_TITLE.test(title)) return true;
   return /^\s*assessment\s+report\b/i.test(title) && !PROPONENT_STUDY_TITLE.test(title);
 }
 
-/** The application's own main volume, by the two names it is filed under. */
-const APPLICATION_MAIN_TITLE = /environmental\s+impact\s+statement|application\s+for\s+an?\s+/i;
+/**
+ * Names ITSELF the application, rather than mentioning one it is filed about — so the name leads,
+ * after at most the project prefix the registry puts in front of it ("Site C - ", or the longer
+ * "Pacific NorthWest LNG (Lelu Island) Project - "). A derivative title mentioning the phrase
+ * mid-sentence is rejected earlier in `isApplication`, not by capping this prefix.
+ */
+const APPLICATION_MAIN_TITLE =
+  /^\s*(?:[^-]*-\s*)?(?:eis\s*-|environmental\s+impact\s+statement\b|application\s+for\s+an?\s+)/i;
 
 const APPLICATION_TITLE = /\bapplication\b/i;
 
 /**
- * The application itself, not one of the hundreds of documents filed beneath it.
- *
- * The type is not enough on its own — see `SUBSIDIARY_TITLE` — so a document either names itself
- * as the application whatever its type, or carries the type AND names an application.
+ * The application itself, not one of the hundreds of documents filed beneath or about it. A
+ * document either names itself as the application whatever its type, or carries the type AND
+ * names an application.
  */
 function isApplication(doc) {
   const title = nameOf(doc);
-  if (SUBSIDIARY_TITLE.test(title)) return false;
+  if (DERIVATIVE_TITLE.test(title)) return false;
+  if (isSubsidiary(title) && !isMainVolume(title)) return false;
   if (APPLICATION_MAIN_TITLE.test(title)) return true;
   return isType(doc, 'Application Materials') && APPLICATION_TITLE.test(title);
 }
@@ -244,7 +269,9 @@ const PICK = {
     nameMatches(d, /certificate/i) &&
     !nameMatches(d, /schedule\s*[ab]/i))),
   amendedCertificate: docs => newest(docs.filter(d => nameMatches(d, /amended\s+certificate/i))),
-  assessmentReport: docs => preferOriginal(docs.filter(isAssessmentReport)),
+  // No `preferOriginal` fallback: a registry holding only amendments' reports holds none of the
+  // project's, and the role is dropped rather than filled with the nearest miss.
+  assessmentReport: docs => newest(docs.filter(isAssessmentReport)),
   // Two tiers: the document that names itself the application wins over anything else the type
   // sweeps in, so a project whose EIS is filed beside a hundred supporting documents still links
   // the EIS.

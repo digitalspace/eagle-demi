@@ -1614,15 +1614,20 @@ test('key document pickers', async (t) => {
     assert.strictEqual(roles.find(r => r.role === 'application').documentId, 'docAP1');
   });
 
-  await t.test('falls back to the newest match when every one is an amendment\'s', () => {
+  await t.test('drops the role rather than link an amendment\'s report when every match is one', () => {
+    // A registry holding only amendments' reports holds none of the project's own: Site C's actual
+    // newest "assessment report" is "85th Ave Hauling Plan - The EAO's Amendment Assessment Report",
+    // an amendment's paperwork, and linking it beside prose drawn from the certificate would name a
+    // document the timeline was never built from.
     const roles = buildFacts([
       { id: 'docAR2', type: 'Assessment Report', datePosted: '2019-06-02',
         displayName: 'Assessment Report for Amendment #3' },
-      { id: 'docAR3', type: 'Assessment Report', datePosted: '2021-04-04',
-        displayName: 'Assessment Report for Amendment #5' }
+      { id: 'docAR3', type: 'Amendment Package', datePosted: '2022-06-30',
+        displayName: '85th Ave Hauling Plan - The EAO\'s Amendment Assessment Report' }
     ]).keyDocuments;
 
-    assert.strictEqual(roles.find(r => r.role === 'assessmentReport').documentId, 'docAR3');
+    assert.strictEqual(roles.find(r => r.role === 'assessmentReport'), undefined,
+      'the role is omitted, not filled with the nearest miss');
   });
 
   await t.test('does not read a proponent\'s appendix as the EAO assessment report', () => {
@@ -1657,6 +1662,27 @@ test('key document pickers', async (t) => {
     assert.strictEqual(PICK.assessmentReport([study]), null);
   });
 
+  await t.test('trusts a typed assessment report over a dated or appended title', () => {
+    // Site C's own report is "EAO Assessment Report - Site C Clean Energy Project - dated October
+    // 14, 2014": the registry type is trusted ahead of the derivative reject, which exists for
+    // titles ABOUT a report, not a typed report's own date or appendix suffix.
+    const dated = { id: 'docAR1', type: 'Assessment Report', datePosted: '2014-10-14',
+      displayName: 'EAO Assessment Report - Site C Clean Energy Project - dated October 14, 2014' };
+    const appended = { id: 'docAR2', type: 'Assessment Report', datePosted: '2014-10-14',
+      displayName: 'Assessment Report and Technical Appendices' };
+    assert.strictEqual(PICK.assessmentReport([dated]).id, 'docAR1');
+    assert.strictEqual(PICK.assessmentReport([appended]).id, 'docAR2');
+  });
+
+  await t.test('trusts a typed assessment report even over a genuine derivative word', () => {
+    // The type gate must run BEFORE the derivative reject, not merely avoid the words the reject
+    // no longer carries: a typed report titled with a real derivative word (an addendum to the
+    // report itself, not a comment ABOUT it) still keeps its role.
+    const withAddendum = { id: 'docAR3', type: 'Assessment Report', datePosted: '2014-10-14',
+      displayName: 'Assessment Report Addendum' };
+    assert.strictEqual(PICK.assessmentReport([withAddendum]).id, 'docAR3');
+  });
+
   await t.test('picks the application itself out of the documents filed under it', () => {
     // 378 Site C documents carry the type; on the type alone the application was "Appendix A".
     const documents = [
@@ -1679,6 +1705,67 @@ test('key document pickers', async (t) => {
       displayName: 'Letter regarding the application' };
     assert.strictEqual(PICK.application([supporting]), null);
     assert.strictEqual(PICK.application([letter]), null);
+  });
+
+  await t.test('does not read a memo about the EIS as the application', () => {
+    // Site C's application picker returned "Technical Memo - Response to Working Group and Public
+    // Comments on the Site C Clean Energy Project ECT Environmental Impact Statement - dated May 8,
+    // 2013 - Agriculture": it names the EIS to say what it is ABOUT, never itself.
+    const memo = { id: 'docM', type: 'Scientific Memo', datePosted: '2013-06-06',
+      displayName: 'Technical Memo - Response to Working Group and Public Comments on the Site C ' +
+        'Clean Energy Project ECT Environmental Impact Statement - dated May 8, 2013 - Agriculture' };
+    assert.strictEqual(PICK.application([memo]), null);
+  });
+
+  await t.test('takes the main title after a project prefix longer than one word', () => {
+    // The prefix the registry puts in front of the main title is not capped at a short project
+    // name: Pacific NorthWest LNG's is 46 characters before the " - ".
+    const eis = { id: 'docLNG', type: 'Application Materials', datePosted: '2014-04-11',
+      displayName: 'Pacific NorthWest LNG (Lelu Island) Project - Environmental Impact Statement' };
+    assert.strictEqual(PICK.application([eis]).id, 'docLNG');
+  });
+
+  await t.test('still rejects the EIS phrase mid-sentence in a derivative title', () => {
+    // A long prefix widens what counts as the project's own name, not what counts as the
+    // application: a memo that only mentions the EIS is rejected by the derivative check first,
+    // whatever comes before it.
+    const memo = { id: 'docM2', type: 'Scientific Memo', datePosted: '2013-06-06',
+      displayName: 'Technical Memo - Response to Comments on the Environmental Impact Statement' };
+    assert.strictEqual(PICK.application([memo]), null);
+  });
+
+  await t.test('rejects each derivative word on its own, and picks a title carrying none', () => {
+    // One parameterised case per DERIVATIVE_TITLE alternative: a mutation that drops any single
+    // alternative from the alternation must turn one of these red.
+    const derivativeWords = [
+      'memo', 'response', 'comment', 'letter', 'email', 'notice', 'news release', 'addendum',
+      'addenda', 'guideline'
+    ];
+    for (const word of derivativeWords) {
+      const doc = { id: `doc-${word}`, type: 'Application Materials', datePosted: '2013-01-01',
+        displayName: `${word} - Environmental Impact Statement` };
+      assert.strictEqual(PICK.application([doc]), null, `"${word}" should reject as derivative`);
+    }
+
+    const eis = { id: 'docVol1', type: 'Application Materials', datePosted: '2013-01-01',
+      displayName: 'Environmental Impact Statement - Volume 1' };
+    assert.strictEqual(PICK.application([eis]).id, 'docVol1');
+  });
+
+  await t.test('picks the EIS main volume out of its own appendices and front matter', () => {
+    // Site C files no single EIS document, only "EIS - Volume N" rows. Every other Volume 1 row is
+    // an appendix or front matter filed under it; only the introduction is the volume's own text.
+    const documents = [
+      { id: 'docAppB', type: 'Application Materials', datePosted: '2013-08-21',
+        displayName: 'EIS - Volume 1 - Appendix B - Reservoir Filling and Commissioning Plan' },
+      { id: 'docToc', type: 'Application Materials', datePosted: '2013-08-21',
+        displayName: 'EIS - Volume 1 - Table of Contents' },
+      { id: 'docIntro', type: 'Application Materials', datePosted: '2013-08-07',
+        displayName: 'EIS - Volume 1 - Introduction, Project Planning and Description' },
+      { id: 'docVol4', type: 'Application Materials', datePosted: '2013-08-07',
+        displayName: 'EIS - Volume 4 - Appendix C - Heritage Resources Assessment Report' }
+    ];
+    assert.strictEqual(PICK.application(documents).id, 'docIntro');
   });
 
   await t.test('links the assessment report the sections were written from', () => {
