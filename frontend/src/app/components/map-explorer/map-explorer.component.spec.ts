@@ -94,6 +94,43 @@ describe('MapExplorerComponent wildfire panel', () => {
   });
 });
 
+describe('MapExplorerComponent layers badge', () => {
+  let fixture: ComponentFixture<MapExplorerComponent>;
+  let component: MapExplorerComponent;
+  let service: RegistryStateService;
+
+  beforeEach(async () => {
+    spyOn(window, 'fetch').and.callFake(() =>
+      Promise.resolve(new Response(JSON.stringify([{ searchResults: [] }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+    );
+
+    await TestBed.configureTestingModule({
+      imports: [MapExplorerComponent],
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), provideRouter([])]
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(MapExplorerComponent);
+    component = fixture.componentInstance;
+    spyOn(component as any, 'initMap');
+    service = TestBed.inject(RegistryStateService);
+    service.activeBoundaryLayers.set([]);
+  });
+
+  it('counts boundary layers plus the wildfire and invasives toggles', () => {
+    expect(component.activeLayersCount()).toBe(0);
+
+    component.toggleWildfires();
+    component.toggleInvasives();
+    expect(component.activeLayersCount()).toBe(2);
+
+    component.toggleLayer('regions');
+    expect(component.activeLayersCount()).toBe(3);
+  });
+});
+
 describe('MapExplorerComponent EAC number', () => {
   let fixture: ComponentFixture<MapExplorerComponent>;
   let service: RegistryStateService;

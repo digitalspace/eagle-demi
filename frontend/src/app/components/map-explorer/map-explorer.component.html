@@ -167,8 +167,8 @@
       <button type="button" (click)="toggleLayers()" [attr.aria-expanded]="layersOpen()" style="display: inline-flex; align-items: center; gap: 0.4rem; background: var(--surface-color-background-white); color: var(--typography-color-primary); border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); box-shadow: 0 2px 8px rgba(0,0,0,0.18); padding: 0.45rem 0.8rem; font: var(--typography-bold-small-body); cursor: pointer;">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12,3 21,8 12,13 3,8"></polygon><polyline points="3,13 12,18 21,13"></polyline></svg>
         Layers
-        @if (service.activeBoundaryLayers().length) {
-          <span class="pill pill--info">{{ service.activeBoundaryLayers().length }}</span>
+        @if (activeLayersCount()) {
+          <span class="pill pill--info">{{ activeLayersCount() }}</span>
         }
       </button>
       @if (layersOpen()) {

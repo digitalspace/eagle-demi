@@ -142,6 +142,10 @@ export class MapExplorerComponent implements OnInit, OnDestroy, AfterViewInit {
   // --- Left rail and detail card -------------------------------------------------------------
   filtersOpen = signal<boolean>(false);
   layersOpen = signal<boolean>(false);
+  /** Layers button badge: boundary overlays plus the wildfire and invasives toggles. */
+  activeLayersCount = computed(() =>
+    this.service.activeBoundaryLayers().length + (this.showWildfires() ? 1 : 0) + (this.showInvasives() ? 1 : 0)
+  );
   detailsExpanded = signal<boolean>(false);
   sourceTab = signal<'all' | 'track' | 'epic' | 'demi'>('all');
   sortBy = signal<'relevance' | 'name'>('relevance');
