@@ -221,6 +221,32 @@ const config = {
   summaryCostPerMTokIn:  parseFloat(process.env.SUMMARY_COST_PER_MTOK_IN  || '0.70'),
   summaryCostPerMTokOut: parseFloat(process.env.SUMMARY_COST_PER_MTOK_OUT || '2.70'),
 
+  // Per-project stored summaries (src/ai/project-summary.js). Separate ceilings from the query-time
+  // summariser above, because this path is a different shape of work: Schedule B alone is hundreds
+  // of chunks, so `summaryMaxChunks` (8) would truncate the source out from under the extraction.
+  // Generation is offline and one-off per project, so a large prompt costs cents once rather than
+  // cents per search.
+  projectSummaryMaxChunks: parseInt(process.env.PROJECT_SUMMARY_MAX_CHUNKS || '120', 10),
+  projectSummaryMaxTokens: parseInt(process.env.PROJECT_SUMMARY_MAX_TOKENS || '1500', 10),
+
+  // Which deployment answers the generator. `foundry` is the deployed path (managed identity, the
+  // same account the query-time summariser uses). `ollama` is a local model on the LAN, for
+  // generating a record from a workstation without the Foundry private endpoint.
+  //
+  // COST IS ALWAYS PRICED AT THE FOUNDRY RATES, whichever provider ran — see estimateCostCad and
+  // `pricedAs` on the stored record. A local run is free in cash and the number it stores is what
+  // the same work WOULD cost on the deployed path, so a locally generated record and a deployed one
+  // carry comparable figures.
+  projectSummaryProvider: process.env.PROJECT_SUMMARY_PROVIDER || 'foundry',
+  // A LAN address, not a secret: Ollama has no auth and is not reachable from any deployed
+  // environment. Only ever the local path's default.
+  ollamaUrl:   process.env.OLLAMA_URL || 'http://192.168.3.8:11434',
+  ollamaModel: process.env.OLLAMA_MODEL || 'qwen3.6:35b-a3b',
+  // Ollama's context window, and it MUST be set. The server's own default is 4k tokens and it
+  // TRUNCATES THE PROMPT SILENTLY at that ceiling — Schedule B alone is around 20k, so a run at the
+  // default would extract conditions from the first fifth of the document and report success.
+  projectSummaryOllamaCtx: parseInt(process.env.PROJECT_SUMMARY_OLLAMA_CTX || '65536', 10),
+
   // Audit and usage analytics — Azure Monitor Logs ingestion (see azure/modules/audit-logs.bicep).
   //
   // Keyless: the app publishes with its user-assigned identity, which holds Monitoring Metrics

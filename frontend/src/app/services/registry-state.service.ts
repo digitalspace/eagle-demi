@@ -31,6 +31,19 @@ const KEYCLOAK_BUILTIN_ROLES = ['default-roles-eao-epic', 'offline_access', 'uma
 export const visibleRoles = (roles: string[] | undefined | null): string[] =>
   (roles || []).filter(role => !KEYCLOAK_BUILTIN_ROLES.includes(role));
 
+/** Where the same document sits on the public EPIC site, outside DEMI's presigned storage. */
+const EPIC_PUBLIC_DOCUMENT_BASE = 'https://projects.eao.gov.bc.ca/api/public/document';
+
+/** The public EPIC download for a document, by the Eagle document id DEMI stores. */
+export const epicPublicDownloadUrl = (documentId: string): string =>
+  `${EPIC_PUBLIC_DOCUMENT_BASE}/${encodeURIComponent(documentId)}/download`;
+
+/**
+ * An Eagle ObjectId. Seeded rows reuse it as their DEMI id, so it is also what says a document
+ * exists on the public EPIC site; a DEMI-native upload carries a uuid and exists nowhere else.
+ */
+export const EAGLE_OBJECT_ID = /^[0-9a-f]{24}$/i;
+
 /** Boundary layer id -> the denormalised project field naming that boundary. */
 const BOUNDARY_PROPS = {
   regionalDistricts: 'regionalDistrict',
@@ -1571,26 +1584,60 @@ export class RegistryStateService {
     return await res.json();
   }
 
+  /** One warning per session, not one per click, when the presigned leg is down. */
+  private downloadFallbackWarned = false;
+
   /**
    * Ask the API for a short-lived presigned URL for a document's stored file.
    *
    * The API gates this by the same read ACL as the metadata, so a document the user cannot see
    * returns 403 rather than a link. Throws with a message meant for the user.
    *
+   * Two paths end at the public EPIC copy instead: demo mode, which has no API to ask, and a
+   * presigned request that failed on a SEEDED document — its DEMI id is the Eagle id, so the same
+   * file is there. A DEMI-native upload's uuid names nothing on EPIC, so that failure is raised
+   * rather than sent to a URL that cannot resolve.
+   *
    * ponytail: map-explorer.component.ts has this same fetch inline; point it here next time that
    * file is touched.
    */
   async getDownloadUrl(documentId: string, projectId?: string): Promise<string> {
+    if (this.config.USE_MOCK_DATA) return epicPublicDownloadUrl(documentId);
+
     const query = projectId ? `?project=${encodeURIComponent(projectId)}` : '';
-    const res = await fetch(`${this.getBasePath()}/documents/${encodeURIComponent(documentId)}/download${query}`);
-    if (!res.ok) {
-      throw new Error(res.status === 403
-        ? 'You do not have permission to download this document.'
-        : `Could not prepare download (HTTP ${res.status}).`);
+    let refused = false;
+    let presigned: string | null = null;
+    let failure: unknown = null;
+
+    try {
+      const res = await fetch(`${this.getBasePath()}/documents/${encodeURIComponent(documentId)}/download${query}`);
+      if (res.status === 403) {
+        refused = true;
+      } else if (res.ok) {
+        const body = await res.json().catch(() => null);
+        presigned = body?.url || null;
+        if (!presigned) failure = new Error('The API did not return a download link.');
+      } else {
+        failure = new Error(`Could not prepare download (HTTP ${res.status}).`);
+      }
+    } catch (err) {
+      failure = err;
     }
-    const { url } = await res.json();
-    if (!url) throw new Error('The API did not return a download link.');
-    return url;
+
+    // A 403 is an answer, not an outage: this reader may not have the document, and the public
+    // copy is not the way around that.
+    if (refused) throw new Error('You do not have permission to download this document.');
+    if (presigned) return presigned;
+
+    if (!EAGLE_OBJECT_ID.test(documentId)) {
+      throw failure instanceof Error ? failure : new Error('Could not prepare download.');
+    }
+
+    if (!this.downloadFallbackWarned) {
+      this.downloadFallbackWarned = true;
+      console.warn('[Registry] Presigned download unavailable; using the public EPIC copy:', failure);
+    }
+    return epicPublicDownloadUrl(documentId);
   }
 
   // Handle ingestion

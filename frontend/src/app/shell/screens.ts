@@ -17,7 +17,9 @@ export const SCREENS: Screen[] = [
   { key: 'map', label: 'Map Explorer', group: 'Discover', path: '/map' },
   { key: 'index', label: 'Index Search', group: 'Discover', path: '/index' },
   { key: 'content', label: 'Document Content Search', group: 'Discover', path: '/content' },
-  { key: 'summary', label: 'AI Summary', group: 'Discover', path: '/summary' },
+  { key: 'summary', label: 'AI Search Summary', group: 'Discover', path: '/summary' },
+  // Prototype: one project has a generated summary row, so the sidebar links straight at it.
+  { key: 'project', label: 'AI Project Summary', group: 'Discover', path: '/projects/272' },
   { key: 'notify', label: 'eagle-notify', group: 'Operate', path: '/notify' },
   { key: 'links', label: 'Short URLs', group: 'Operate', path: '/links' },
   { key: 'rbac', label: 'Access model', group: 'Reference', path: '/rbac' },
@@ -54,9 +56,14 @@ export const TECH: Record<string, Tech> = {
     note: 'Ids take the form <documentId>::p<page>::c<index>, so a passage always resolves back to its page and re-ingest reconciles rather than duplicating. "Open document" resolves a five-minute presigned URL under the same ACL as the row.'
   },
   summary: {
-    title: 'AI Summary',
+    title: 'AI Search Summary',
     chips: ['Azure AI Foundry — gpt-4.1-mini', 'retrieval over chunks index', 'server-side citation resolution', 'managed identity, keyless', 'token-based cost estimate'],
     note: 'The model only ever emits a source number; the API maps those numbers back to real chunk ids under the caller’s access, which is what lets a citation render as a link.'
+  },
+  project: {
+    title: 'AI Project Summary',
+    chips: ['Azure AI Foundry — gpt-4.1-mini', 'Cosmos DB — projectSummaries', 'per-document chunk retrieval', 'server-side citation resolution', 'generated offline, read online'],
+    note: 'Nothing on this page calls a model. One script reads the project’s own documents, asks for JSON per section and writes a single row to the projectSummaries container; the page reads that row and the live project record, and joins nation names to registry organisation rows in code so an address is never something a model wrote. A section whose source document is missing is stored as null and hidden here rather than invented, which is why the federal block can be a one-line note.'
   },
   notify: {
     title: 'eagle-notify',

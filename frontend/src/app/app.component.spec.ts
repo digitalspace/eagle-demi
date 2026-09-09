@@ -68,7 +68,39 @@ describe('AppComponent', () => {
     expect(headings).toEqual(['Discover', 'Account', 'Operate', 'Reference']);
 
     // Every screen is in the sidebar; My account and sessions also keep their account-menu shortcuts.
-    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(11);
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(12);
+  });
+
+  // The two generated-summary screens are named apart: one summarises a search, one a project.
+  it('names each AI screen for what it summarises', async () => {
+    const { el } = await renderAs(true, false);
+    const labelOf = (path: string) =>
+      el.querySelector<HTMLAnchorElement>(`.app-sidebar__link[href="${path}"]`)?.textContent?.trim();
+
+    expect(labelOf('/summary')).toBe('AI Search Summary');
+    expect(labelOf('/projects/272')).toBe('AI Project Summary');
+  });
+
+  // A screen owns every URL under its path, so the deep link the sidebar points at is still the
+  // AI Project Summary screen and not an unknown one.
+  it('treats a URL under a screen path as that screen', async () => {
+    const { fixture } = await renderAs(true, false);
+
+    await TestBed.inject(Router).navigateByUrl('/projects/272');
+
+    expect(fixture.componentInstance.screenKey()).toBe('project');
+  });
+
+  it('opens the info panel for the screen the deep link belongs to', async () => {
+    const { el, fixture } = await renderAs(true, false);
+    await TestBed.inject(Router).navigateByUrl('/projects/272');
+    fixture.detectChanges();
+
+    el.querySelector<HTMLButtonElement>('button[aria-label="How this screen is built"]')!.click();
+    fixture.detectChanges();
+
+    expect(el.querySelector('[role="dialog"] h2')?.textContent)
+      .toContain('How AI Project Summary is built');
   });
 
   it('sends an old /profile link to My account', async () => {
@@ -143,6 +175,15 @@ describe('AppComponent', () => {
     const { el, fixture } = await renderAs(true, false);
     await TestBed.inject(Router).navigateByUrl('/map');
     fixture.detectChanges();
-    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(11);
+    expect(el.querySelectorAll('.app-sidebar__link').length).toBe(12);
+  });
+
+  // `.visually-hidden` is position:absolute with no inset. Unpositioned, this scroll container is
+  // not its containing block, so a label far down a long screen is laid out against the document
+  // and the window scrolls thousands of pixels past the 100vh shell.
+  it('makes the scrolling main a containing block for absolute children', async () => {
+    const { el } = await renderAs(true, false);
+    const main = el.querySelector('.app__main')!;
+    expect(getComputedStyle(main).position).toBe('relative');
   });
 });

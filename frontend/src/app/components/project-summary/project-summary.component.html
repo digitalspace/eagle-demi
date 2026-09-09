@@ -1,0 +1,382 @@
+<!--
+  One 880px column. Facts first, generated sections after, each with its own loading and empty
+  state, so a missing summary row costs the reader the AI blocks and nothing else.
+-->
+
+<!-- Cited sources under a generated claim. Same chip everywhere on the page. -->
+<ng-template #cites let-numbers>
+  @if (citations(numbers).length) {
+    <ul class="ps-cites">
+      @for (c of citations(numbers); track c.chunkId) {
+        <li>
+          <button type="button" class="ps-cite" (click)="openDocument(c.documentId)" [disabled]="downloadingId() === c.documentId">
+            <span class="ps-cite__n">[{{ c.n }}]</span>
+            <span class="ps-cite__doc">{{ c.documentName }}</span>
+            <span class="ps-cite__page">p.&nbsp;{{ c.pageNumber }}</span>
+            <span class="ps-cite__action">{{ downloadingId() === c.documentId ? 'Preparing…' : 'Open document' }}</span>
+          </button>
+        </li>
+      }
+    </ul>
+  }
+</ng-template>
+
+<div class="ps">
+
+  @if (service.factsError(); as err) {
+    <div class="callout callout--warning" role="alert">
+      <p>{{ err }}</p>
+    </div>
+  }
+
+  @if (facts(); as f) {
+    <header class="ps__header">
+      <!-- `title` names any id the List lookup could not place; empty removes the attribute. -->
+      @if (eyebrow().text) {
+        <p class="micro-label ps__eyebrow" [attr.title]="eyebrow().title || null">{{ eyebrow().text }}</p>
+      }
+      <h1 class="ps__title">{{ f.name }}</h1>
+      <p class="ps__meta">
+        @if (location().text) {<span [attr.title]="location().title || null">{{ location().text }}</span>}
+        @if (proponent()) {<span>Proponent: <strong>{{ proponent() }}</strong></span>}
+      </p>
+    </header>
+
+    <!-- Status. The border colour repeats what the label already says; it is never the only cue. -->
+    <section class="ps-status" [class]="'ps-status--' + statusTone()" aria-labelledby="ps-status-h">
+      <div class="ps-status__body">
+        <!-- Blank rather than "Status not recorded" while the List lookup is in flight: the two
+             fields behind this heading are ids until it lands, and it must not claim otherwise. -->
+        <h2 id="ps-status-h" class="ps-status__label" [attr.title]="statusLabel().title || null">{{
+          statusLabel().text || (statusLabel().pending ? '' : 'Status not recorded') }}</h2>
+
+        <!-- Eagle's phase names carry no dates, so they read as a sequence here, not timeline rows. -->
+        @if (phaseSequence().rows.length) {
+          <p class="ps__meta">
+            <span [attr.title]="phaseSequence().title || null">Phases:
+              @for (phase of phaseSequence().rows; track $index; let last = $last) {
+                @if (phase.current) {
+                  <!-- &ngsp; survives whitespace removal; a plain space here would be stripped. -->
+                  &ngsp;<strong>{{ phase.name }}</strong><span class="visually-hidden"> (current phase)</span>
+                } @else {
+                  {{ phase.name }}
+                }
+                @if (!last) {<span aria-hidden="true">›</span>}
+              }
+            </span>
+          </p>
+        }
+
+        @if (sections()?.status; as status) {
+          <p class="ps-badge-row">
+            <span class="pill pill--info">AI-generated from the sources below</span>
+          </p>
+          <p class="ps-status__sentence">{{ status.sentence }}</p>
+          <ng-container *ngTemplateOutlet="cites; context: { $implicit: status.citations }"></ng-container>
+        } @else if (service.summaryLoading()) {
+          <p aria-hidden="true">
+            <span class="skeleton skeleton--text" style="width: 100%;"></span>
+            <span class="skeleton skeleton--text" style="width: 72%;"></span>
+          </p>
+        }
+      </div>
+
+      <dl class="ps-status__dates">
+        @if (f.decisionDate) {
+          <div>
+            <dt>Decision</dt>
+            <dd>{{ f.decisionDate | date:'d MMM y' }}</dd>
+          </div>
+        }
+        @if (latestAmendment(); as amended) {
+          <div>
+            <dt>Last amended</dt>
+            <dd>{{ amended | date:'d MMM y' }}</dd>
+          </div>
+        }
+        @if (f.eaCertificate) {
+          <div>
+            <dt>Certificate</dt>
+            <dd>{{ f.eaCertificate }}</dd>
+          </div>
+        }
+      </dl>
+    </section>
+  } @else if (service.factsLoading()) {
+    <header class="ps__header" aria-busy="true">
+      <p class="visually-hidden">Loading the project record…</p>
+      <span class="skeleton skeleton--text" aria-hidden="true" style="width: 14rem;"></span>
+      <span class="skeleton" aria-hidden="true" style="width: 24rem; height: 2.4rem; margin: 0.5rem 0;"></span>
+      <span class="skeleton skeleton--text" aria-hidden="true" style="width: 20rem;"></span>
+    </header>
+  }
+
+  @if (noSummary()) {
+    <!--
+      404 and `reason: 'disabled'` read the same to a reader: there is no generated summary here.
+      One line, not an error banner — the facts above are the page, and they are complete.
+    -->
+    <p class="ps-note" role="status">
+      {{ service.summaryReason() === 'error'
+        ? 'The generated summary could not be loaded. The project record above is unaffected.'
+        : 'No generated summary for this project yet.' }}
+    </p>
+  }
+
+  @if (timeline().length) {
+    <section class="ps-section" aria-labelledby="ps-timeline-h">
+      <h2 id="ps-timeline-h" class="ps-section__title">Timeline</h2>
+      <ol class="ps-timeline">
+        @for (row of timeline(); track row.key) {
+          <li class="ps-timeline__row" [class.ps-timeline__row--ai]="row.kind === 'ai'">
+            <span class="ps-timeline__date">{{ row.date ? (row.date | date:'d MMM y') : '—' }}</span>
+            <span class="ps-timeline__label" [attr.title]="row.title || null">
+              {{ row.label }}
+              @if (row.kind === 'ai') {
+                <span class="pill pill--info ps-timeline__mark">AI-extracted</span>
+                <ng-container *ngTemplateOutlet="cites; context: { $implicit: row.citations }"></ng-container>
+              }
+            </span>
+          </li>
+        }
+      </ol>
+    </section>
+  }
+
+  @if (sections()?.conditions; as conditions) {
+    <section class="ps-section" aria-labelledby="ps-conditions-h">
+      <h2 id="ps-conditions-h" class="ps-section__title">Certificate conditions</h2>
+      <p class="ps-badge-row">
+        <span class="pill pill--info">AI-generated from the sources below</span>
+      </p>
+      <p class="ps-section__lede">
+        Conditions from the certificate’s Schedule B, grouped and summarised. Tap a condition for
+        the detail, and open the certificate itself for the binding wording.
+      </p>
+
+      <div class="ps-cards">
+        @for (item of conditions.items; track item.n) {
+          <button type="button" class="ps-card ps-card--action" (click)="showCondition(item, $event)">
+            <span class="micro-label ps-card__category">{{ item.category }}</span>
+            <span class="ps-card__title">{{ item.title }}</span>
+            <span class="ps-card__text">{{ item.oneLiner }}</span>
+            <span class="ps-card__cue" aria-hidden="true">Tap for summary</span>
+            <span class="visually-hidden">Open the summary of this condition</span>
+          </button>
+        }
+      </div>
+    </section>
+  } @else if (service.summaryLoading()) {
+    <section class="ps-section" aria-busy="true">
+      <p class="visually-hidden">Loading the generated conditions…</p>
+      <span class="skeleton skeleton--text" aria-hidden="true" style="width: 12rem; height: 1.4rem;"></span>
+      <div class="ps-cards" aria-hidden="true">
+        @for (i of [1, 2, 3, 4]; track i) {
+          <span class="skeleton" style="height: 8rem;"></span>
+        }
+      </div>
+    </section>
+  }
+
+  @if (amendmentRows().length) {
+    <section class="ps-section" aria-labelledby="ps-amendments-h">
+      <h2 id="ps-amendments-h" class="ps-section__title">Amendments</h2>
+      <p class="ps-badge-row">
+        <span class="pill pill--info">AI-generated from the sources below</span>
+      </p>
+      <ul class="ps-list">
+        @for (a of amendmentRows(); track a.documentId) {
+          <li class="ps-list__row">
+            <span class="ps-list__date">{{ a.datePosted ? (a.datePosted | date:'d MMM y') : '—' }}</span>
+            <span>
+              <span class="ps-list__title">{{ a.displayName }}</span>
+              @if (a.sentence) {
+                <span class="ps-list__text">{{ a.sentence }}</span>
+                <ng-container *ngTemplateOutlet="cites; context: { $implicit: a.citations }"></ng-container>
+              }
+            </span>
+          </li>
+        }
+      </ul>
+    </section>
+  }
+
+  @if (summary()) {
+    <section class="ps-section" aria-labelledby="ps-federal-h">
+      <h2 id="ps-federal-h" class="ps-section__title">Federal decision</h2>
+      @if (sections()?.federal; as federal) {
+        <p class="ps-badge-row">
+          <span class="pill pill--info">AI-generated from the sources below</span>
+        </p>
+        <div class="ps-cards">
+          @for (item of federal.items; track item.n) {
+            <button type="button" class="ps-card ps-card--action" (click)="showCondition(item, $event)">
+              <span class="micro-label ps-card__category">{{ item.category }}</span>
+              <span class="ps-card__title">{{ item.title }}</span>
+              <span class="ps-card__text">{{ item.oneLiner }}</span>
+              <span class="ps-card__cue" aria-hidden="true">Tap for summary</span>
+              <span class="visually-hidden">Open the summary of this condition</span>
+            </button>
+          }
+        </div>
+      } @else {
+        <p class="ps-note">No federal decision document for this project is in the registry, so no federal conditions are shown.</p>
+      }
+    </section>
+  }
+
+  @if (sections()?.nations; as nations) {
+    <section class="ps-section" aria-labelledby="ps-nations-h">
+      <h2 id="ps-nations-h" class="ps-section__title">First Nations consulted</h2>
+      <p class="ps-badge-row">
+        <span class="pill pill--info">AI-generated from the sources below</span>
+      </p>
+      <p class="ps-section__lede">
+        Names are read from the project’s own certificate and assessment documents. Addresses and
+        websites come from the registry’s organisation records, never from the model.
+      </p>
+
+      <div class="ps-cards">
+        <!-- The names are already known; only the address and website are still in flight. -->
+        @for (row of nationRows(); track row.note.name) {
+          @if (row.pending) {
+            <span class="skeleton" aria-hidden="true" style="height: 7rem;"></span>
+          }
+        }
+        @for (row of nationRows(); track row.note.name) {
+          @if (row.org; as org) {
+            <div class="ps-card">
+              <span class="ps-card__title">{{ org.name }}</span>
+              @if (address(org)) {
+                <span class="ps-card__text">{{ address(org) }}</span>
+              }
+              @if (org.website) {
+                <a class="ps-card__link" [href]="org.website" target="_blank" rel="noopener">
+                  Website<span class="visually-hidden"> for {{ org.name }} (opens in a new tab)</span>
+                </a>
+              }
+              <ng-container *ngTemplateOutlet="cites; context: { $implicit: row.note.citations }"></ng-container>
+            </div>
+          }
+        }
+      </div>
+
+      <!--
+        A name the join could not match gets its name and its citation and no card: an address
+        guessed from a near-match would be a contact detail nobody checked.
+      -->
+      @for (row of nationRows(); track row.note.name) {
+        @if (!row.org && !row.pending) {
+          <p class="ps-unmatched">
+            <span class="ps-unmatched__name">{{ row.note.name }}</span>
+            <span class="ps-unmatched__note">named in the documents; no organisation record matched</span>
+            <ng-container *ngTemplateOutlet="cites; context: { $implicit: row.note.citations }"></ng-container>
+          </p>
+        }
+      }
+    </section>
+  }
+
+  @if (summary()?.facts; as sf) {
+    <section class="ps-section" aria-labelledby="ps-compliance-h">
+      <h2 id="ps-compliance-h" class="ps-section__title">Compliance and enforcement</h2>
+      <div class="ps-card ps-card--wide">
+        <dl class="ps-figures">
+          <div>
+            <dt>Published inspection records</dt>
+            <dd>{{ sf.inspections?.count ?? 0 }}</dd>
+          </div>
+          <div>
+            <dt>Latest inspection</dt>
+            @if (sf.inspections?.latest?.datePosted; as inspected) {
+              <dd>{{ inspected | date:'d MMM y' }}</dd>
+            } @else {
+              <dd>—</dd>
+            }
+          </div>
+          <div>
+            <dt>Published self-reports</dt>
+            <dd>{{ sf.selfReports?.count ?? 0 }}</dd>
+          </div>
+        </dl>
+
+        @if (sections()?.compliance; as compliance) {
+          <p class="ps-badge-row">
+            <span class="pill pill--info">AI-generated from the sources below</span>
+          </p>
+          <p class="ps-card__text">{{ compliance.paragraph }}</p>
+          <ng-container *ngTemplateOutlet="cites; context: { $implicit: compliance.citations }"></ng-container>
+        }
+
+        @if (epicUrl()) {
+          <a class="ps-card__link" [href]="epicUrl()" target="_blank" rel="noopener">
+            Compliance and enforcement on EPIC<span class="visually-hidden"> (opens in a new tab)</span>
+          </a>
+        }
+      </div>
+    </section>
+  }
+
+  @if (keyDocuments().length) {
+    <section class="ps-section" aria-labelledby="ps-docs-h">
+      <h2 id="ps-docs-h" class="ps-section__title">Key documents</h2>
+      <div class="ps-cards">
+        @for (doc of keyDocuments(); track doc.documentId) {
+          <div class="ps-card">
+            <span class="micro-label ps-card__category">{{ doc.label }}</span>
+            <span class="ps-card__title">{{ doc.displayName }}</span>
+            <span class="ps-card__text">{{ doc.note }}</span>
+            <button type="button" class="ps-card__link ps-card__link--button" (click)="openDocument(doc.documentId)" [disabled]="downloadingId() === doc.documentId">
+              {{ downloadingId() === doc.documentId ? 'Preparing…' : 'Open document' }}
+            </button>
+          </div>
+        }
+      </div>
+    </section>
+  }
+
+  @if (downloadError(); as err) {
+    <p class="footnote" role="alert">{{ err }}</p>
+  }
+
+  @if (summary(); as record) {
+    <footer class="ps-footer">
+      <p>
+        Generated {{ record.generatedAt | date:'d MMM y, HH:mm' }}@if (record.model) { by {{ record.model }}}@if (record.estimatedCostCad !== undefined) {, est. {{ record.estimatedCostCad | currency:'CAD':'symbol':'1.4-4' }}}.
+        Estimated from list rates, not billed amounts. Generated once and stored — this page makes no model call.
+      </p>
+      @if (epicUrl()) {
+        <p>
+          <a [href]="epicUrl()" target="_blank" rel="noopener">This project on EPIC<span class="visually-hidden"> (opens in a new tab)</span></a>
+        </p>
+      }
+    </footer>
+  }
+</div>
+
+<!--
+  The dialog element itself is always in the DOM, only its contents are conditional: behind an
+  @if, `showModal()` would be called on an element Angular has not created yet, and the modal
+  would silently never open.
+-->
+<dialog #conditionDialog class="ps-dialog" aria-labelledby="ps-dialog-h" (close)="onDialogClose()" (click)="onDialogClick($event)">
+  @if (openCondition(); as condition) {
+    <div class="ps-dialog__sheet">
+      <p class="micro-label">{{ condition.category }}</p>
+      <h2 id="ps-dialog-h" class="ps-dialog__title">{{ condition.title }}</h2>
+      <p class="ps-badge-row">
+        <span class="pill pill--info">AI-generated from the sources below</span>
+      </p>
+      <ul class="ps-dialog__bullets">
+        @for (bullet of condition.bullets || []; track bullet) {
+          <li>{{ bullet }}</li>
+        }
+      </ul>
+      <ng-container *ngTemplateOutlet="cites; context: { $implicit: condition.citations }"></ng-container>
+      <p class="footnote ps-dialog__footnote">AI-generated from Schedule B, see the certificate for binding wording.</p>
+      <div class="ps-dialog__actions">
+        <button type="button" class="ps-button" (click)="conditionDialog.close()">Close</button>
+      </div>
+    </div>
+  }
+</dialog>

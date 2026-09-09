@@ -6,7 +6,7 @@ export const LANDING_OPTIONS = [
   { key: 'map', label: 'Map Explorer' },
   { key: 'index', label: 'Index Search' },
   { key: 'content', label: 'Document Content Search' },
-  { key: 'summary', label: 'AI Summary' }
+  { key: 'summary', label: 'AI Search Summary' }
 ];
 
 export const PER_PAGE_OPTIONS = [6, 12, 24];

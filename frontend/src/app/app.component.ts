@@ -62,6 +62,8 @@ export class AppComponent {
 
   private keyOf(url: string): string {
     const seg = url.split(/[?#]/)[0].replace(/^\//, '').split('/')[0] || 'map';
-    return SCREENS.find(sc => sc.path === '/' + seg)?.key ?? seg;
+    // Compared on the first segment, not the whole path: a screen may carry a deeper one
+    // (`/projects/272`), and it still owns every URL under it.
+    return SCREENS.find(sc => sc.path.split('/')[1] === seg)?.key ?? seg;
   }
 }
