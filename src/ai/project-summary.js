@@ -191,8 +191,7 @@ const isMainVolume = title =>
  */
 const DERIVATIVE_TITLE = new RegExp([
   '\\bmemos?\\b', '\\bresponses?\\b', '\\bcomments?\\b', '\\bletters?\\b', '\\be-?mails?\\b',
-  '\\bnotice\\b', 'news\\s+release', '\\bguidelines?\\b', '\\baddendum\\b', '\\btechnical\\b',
-  '\\btables?\\b', '\\bdated\\b', '\\bupdates?\\b', '\\blayout\\b'
+  '\\bnotice\\b', 'news\\s+release', '\\baddend(?:um|a)\\b', '\\bguidelines?\\b'
 ].join('|'), 'i');
 
 /** A proponent's own study, whatever it calls itself. */
@@ -207,9 +206,11 @@ const ASSESSMENT_REPORT_TITLE = /assessment\s+report/i;
 /**
  * The EAO's assessment report on the project — the document the regulatory chronology lives in.
  *
- * Amendment and derivative titles are rejected whatever the registry types a row: an amendment's
- * report assesses one change and not the project, and a memo about a report is not the report.
- * The office naming itself outranks the study words after that — "EAO Assessment Report on the
+ * An amendment title is rejected whatever the registry types a row: an amendment's report assesses
+ * one change and not the project. A registry type of `Assessment Report` is trusted ahead of the
+ * derivative reject, so a typed report keeps its role on a title that merely dates or appends to
+ * itself; an untyped row still loses to a title ABOUT a report, such as a memo or response. The
+ * office naming itself outranks the study words after that — "EAO Assessment Report on the
  * Environmental Management Plan" is the office's report, not a proponent's plan — so the study
  * reject runs last, only against a title with no office name in it. Nothing qualifying returns
  * nothing, and `timelineDoc` falls back to the certificate's recitals.
@@ -217,8 +218,8 @@ const ASSESSMENT_REPORT_TITLE = /assessment\s+report/i;
 function isAssessmentReport(doc) {
   const title = nameOf(doc);
   if (AMENDMENT_TITLE.test(title)) return false;
-  if (DERIVATIVE_TITLE.test(title)) return false;
   if (isType(doc, 'Assessment Report')) return true;
+  if (DERIVATIVE_TITLE.test(title)) return false;
   if (!ASSESSMENT_REPORT_TITLE.test(title)) return false;
   if (isSubsidiary(title)) return false;
   if (EAO_TITLE.test(title)) return true;
@@ -227,10 +228,12 @@ function isAssessmentReport(doc) {
 
 /**
  * Names ITSELF the application, rather than mentioning one it is filed about — so the name leads,
- * after at most the project prefix the registry puts in front of it ("Site C - ").
+ * after at most the project prefix the registry puts in front of it ("Site C - ", or the longer
+ * "Pacific NorthWest LNG (Lelu Island) Project - "). A derivative title mentioning the phrase
+ * mid-sentence is rejected earlier in `isApplication`, not by capping this prefix.
  */
 const APPLICATION_MAIN_TITLE =
-  /^\s*(?:[^-]{0,40}-\s*)?(?:eis\s*-|environmental\s+impact\s+statement\b|application\s+for\s+an?\s+)/i;
+  /^\s*(?:[^-]*-\s*)?(?:eis\s*-|environmental\s+impact\s+statement\b|application\s+for\s+an?\s+)/i;
 
 const APPLICATION_TITLE = /\bapplication\b/i;
 
