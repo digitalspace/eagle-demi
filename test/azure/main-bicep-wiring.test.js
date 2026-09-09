@@ -881,7 +881,7 @@ test('the search failure alert matches every search failure and nothing else', (
   // GET /health/search-schema is anonymous and unthrottled, it serves no page, and its probe
   // failures are a caller's business rather than an outage. An unclosed `[search` prefix swallows
   // it, which is what this enumerates the whole tree to catch.
-  const SERVING_TAGS = new Set(['[search]', '[search/summary]', '[ai-search]']);
+  const SERVING_TAGS = new Set(['[search]', '[search/summary]', '[ai-search]', '[demi-api search]']);
   for (const { file, line } of logged) {
     if (!matches(line)) continue;
     const tag = (/^\[[^\]]+\]/.exec(line) || [''])[0];

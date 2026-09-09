@@ -302,7 +302,10 @@ resource searchFailuresAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
           // index cannot answer and retries, so a 200 is served, no 502 is logged and NOTHING else
           // here would fire. `contains` rather than `startswith` because no `[ai-search]` line has
           // been observed in this workspace to anchor the tag against.
-          query: 'AppTraces | where (Message startswith "[search]" and Message contains "failed") or (Message startswith "[search/summary]" and Message contains "failed") or (Message contains "[ai-search]" and Message contains "retried without it")'
+          //
+          // The fourth is the top-level search error in src/controllers/search.js: when no dataset
+          // branch succeeds, the catch-all handler logs with [demi-api search] and returns 500.
+          query: 'AppTraces | where (Message startswith "[search]" and Message contains "failed") or (Message startswith "[search/summary]" and Message contains "failed") or (Message contains "[ai-search]" and Message contains "retried without it") or (Message startswith "[demi-api search]" and Message contains "error")'
           timeAggregation: 'Count'
           operator: 'GreaterThanOrEqual'
           threshold: 3
