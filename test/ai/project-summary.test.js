@@ -20,23 +20,32 @@ const realHttpRequest = http.request;
 /** What `readForLevel(4)` writes. Level 4 is the only level a stored summary may be built from. */
 const PUBLIC_READ = ['staff', 'idir', 'public'];
 
+/** What the extractor writes on a document whose text it has. A source must carry one of these. */
+const EXTRACTED = { contentExtracted: true, contentPageCount: 12 };
+
 const SCHEDULE_B = {
   id: 'docB', type: 'Certificate Package',
   displayName: 'Schedule B - Table of Conditions', datePosted: '2014-10-14',
-  isPublished: true, read: PUBLIC_READ
+  isPublished: true, read: PUBLIC_READ, ...EXTRACTED
 };
 const CERTIFICATE = {
   id: 'docC', type: 'Certificate Package',
   displayName: 'Environmental Assessment Certificate #E14-02', datePosted: '2014-10-14',
-  isPublished: true, read: PUBLIC_READ
+  isPublished: true, read: PUBLIC_READ, ...EXTRACTED
 };
 const INSPECTION = {
   id: 'docI', type: 'Inspection Record', displayName: 'Inspection Record 2024-03',
-  datePosted: '2024-03-02', isPublished: true, read: PUBLIC_READ
+  datePosted: '2024-03-02', isPublished: true, read: PUBLIC_READ, ...EXTRACTED
 };
 const AMENDMENT = {
   id: 'docA', type: 'Amendment Package', displayName: 'Amendment #1',
-  datePosted: '2016-05-01', isPublished: true, read: PUBLIC_READ
+  datePosted: '2016-05-01', isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+};
+
+/** Where a project actually writes nation names: a consultation appendix, not the certificate. */
+const APPENDIX = {
+  id: 'docX', type: 'Plan', displayName: 'Appendix 7D - First Nations Consultation',
+  datePosted: '2013-12-18', isPublished: true, read: PUBLIC_READ, ...EXTRACTED
 };
 
 const chunk = (n, content, documentId = 'docB') => ({
@@ -50,11 +59,18 @@ const chunk = (n, content, documentId = 'docB') => ({
  * rather than in a review.
  */
 function fakeSources({ project, documents = [], chunks = {}, organizations = [],
-  trace = [] } = {}) {
+  chunkHits = [], trace = [] } = {}) {
   const asked = [];
+  const searched = [];
   return {
     asked,
+    searched,
     trace,
+    chunkSearch: async (query) => {
+      searched.push(query);
+      trace.push('chunkSearch');
+      return chunkHits;
+    },
     project: async () => {
       trace.push('project');
       return project === undefined ? { id: '272', name: 'Site C', eagleId: 'abc' } : project;
@@ -158,6 +174,7 @@ test('generateProjectSummary', async (t) => {
     ollamaCtx: config.projectSummaryOllamaCtx,
     ollamaUrl: config.ollamaUrl,
     batchChunks: config.projectSummaryBatchChunks,
+    nationChunks: config.projectSummaryNationChunks,
     foundryEndpoint: config.foundryEndpoint,
     foundryDeployment: config.foundryDeployment
   };
@@ -167,6 +184,7 @@ test('generateProjectSummary', async (t) => {
     config.projectSummaryOllamaCtx = original.ollamaCtx;
     config.ollamaUrl = original.ollamaUrl;
     config.projectSummaryBatchChunks = original.batchChunks;
+    config.projectSummaryNationChunks = original.nationChunks;
     config.foundryEndpoint = original.foundryEndpoint;
     config.foundryDeployment = original.foundryDeployment;
   });
@@ -207,10 +225,11 @@ test('generateProjectSummary', async (t) => {
       documents: [SCHEDULE_B, CERTIFICATE, INSPECTION, AMENDMENT],
       chunks: {
         docB: [chunk(1, 'Condition 1.')],
-        docC: [chunk(1, 'A sentence.', 'docC')],
+        docC: [chunk(1, 'A sentence. Saulteau First Nations were consulted.', 'docC')],
         docI: [chunk(1, 'No non-compliance.', 'docI')],
         docA: [chunk(1, 'A sentence.', 'docA')]
       },
+      chunkHits: [{ documentId: 'docC' }],
       organizations: [{ id: 'org-1', name: 'Saulteau First Nations' }]
     });
     await generateProjectSummary('272', { sources });
@@ -220,9 +239,11 @@ test('generateProjectSummary', async (t) => {
     assert.deepStrictEqual(
       trace.slice(firstCall).filter(step => step !== 'model'), [],
       `nothing is read after the first model call: ${trace.join(' ')}`);
+    assert.ok(trace.slice(0, firstCall).includes('chunkSearch'),
+      'the search that finds the nations passages runs on the same token');
     assert.ok(trace.slice(0, firstCall).includes('organizations'),
       'the Organization rows the nation names join to are read on the same token');
-    assert.deepStrictEqual(sources.asked, ['docA', 'docB', 'docC', 'docI'],
+    assert.deepStrictEqual(sources.asked, ['docA', 'docB', 'docI', 'docC'],
       'each source document is read once, whichever sections share it');
   });
 
@@ -615,7 +636,7 @@ test('generateProjectSummary', async (t) => {
     config.projectSummaryProvider = 'ollama';
     const AMENDMENT_TWO = {
       id: 'docA2', type: 'Amendment Package', displayName: 'Amendment #2',
-      datePosted: '2018-07-11', isPublished: true, read: PUBLIC_READ
+      datePosted: '2018-07-11', isPublished: true, read: PUBLIC_READ, ...EXTRACTED
     };
     stubModel(t, [
       JSON.stringify({ sentence: 'The second amendment extended the deadline.', citations: [1] }),
@@ -813,9 +834,9 @@ test('generateProjectSummary', async (t) => {
     const sources = fakeSources({
       documents: [
         { id: 'docNew', type: 'Inspection Record', displayName: 'Inspection Record 2026-08',
-          datePosted: '2026-08-01', isPublished: false },
+          datePosted: '2026-08-01', isPublished: false, ...EXTRACTED },
         { id: 'docOld', type: 'Inspection Record', displayName: 'Inspection Record 2026-02',
-          datePosted: '2026-02-01', isPublished: true }
+          datePosted: '2026-02-01', isPublished: true, ...EXTRACTED }
       ],
       chunks: {
         docNew: [chunk(1, 'Two non-compliances were recorded.', 'docNew')],
@@ -859,6 +880,290 @@ test('generateProjectSummary', async (t) => {
     assert.strictEqual(calls.length, 0, 'the model was never handed the document');
   });
 
+  await t.test('names the reason a section with no source document is null', async () => {
+    // A null with no reason is what the 2026-09-09 Site C run stored, and it reads as "the model
+    // had nothing to say" whatever the cause was.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    stubModel(t, '{"paragraph":"No non-compliance.","citations":[1]}');
+
+    const sources = fakeSources({
+      documents: [INSPECTION],
+      chunks: { docI: [chunk(1, 'No non-compliance.', 'docI')] }
+    });
+    const record = await generateProjectSummary('272', { sources });
+
+    assert.strictEqual(record.sections.conditions, null);
+    assert.strictEqual(record.sectionErrors.conditions, 'no_document');
+  });
+
+  await t.test('names the reason a section whose document yielded no chunks is null', async () => {
+    // The document says its text was extracted and the chunk read comes back empty: a state the
+    // record has to tell apart from a project that has no Schedule B at all.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, '{"items":[]}');
+
+    const sources = fakeSources({ documents: [SCHEDULE_B], chunks: {} });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(record.sections.conditions, null);
+    assert.strictEqual(record.sectionErrors.conditions, 'no_chunks');
+    assert.strictEqual(calls.length, 0, 'a document with no chunks is never handed to the model');
+  });
+
+  await t.test('names the reason a section whose every item was dropped is null', async () => {
+    // The model answered, and the citation gate took the answer apart. That is a different fault
+    // from a reply that did not parse, and the record has to say which one happened.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Water', title: 'Water quality', oneLiner: 'Monitor it.',
+        bullets: [], citations: [9] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [SCHEDULE_B],
+      chunks: { docB: [chunk(1, 'Monitor it.')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(record.sections.conditions, null);
+    assert.strictEqual(record.sectionErrors.conditions, 'no_grounded_content');
+  });
+
+  await t.test('never reads a document whose text was never extracted', async () => {
+    // Site C's newest inspection record has no extracted text, so the compliance section spent a
+    // read to get nothing and stored a null. The counts still cover both documents.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    stubModel(t, JSON.stringify({ paragraph: 'One non-compliance was recorded.', citations: [1] }));
+
+    const sources = fakeSources({
+      documents: [
+        { id: 'docNew', type: 'Inspection Record', displayName: 'Inspection Record 2026-08',
+          datePosted: '2026-08-01', isPublished: true, read: PUBLIC_READ,
+          contentExtracted: false, contentPageCount: 0 },
+        { id: 'docOld', type: 'Inspection Record', displayName: 'Inspection Record 2026-02',
+          datePosted: '2026-02-01', isPublished: true, read: PUBLIC_READ, ...EXTRACTED }
+      ],
+      chunks: { docOld: [chunk(1, 'One non-compliance was recorded.', 'docOld')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'compliance' });
+
+    assert.strictEqual(record.sections.compliance.sourceDocumentId, 'docOld');
+    assert.deepStrictEqual(sources.asked, ['docOld'], 'the unextracted document was never read');
+    assert.strictEqual(record.facts.inspections.count, 2, 'the count covers both, as the registry does');
+    assert.strictEqual(record.facts.inspections.latest.documentId, 'docNew');
+  });
+
+  await t.test('names the amendments it could not summarise, keeping the ones it could', async () => {
+    // 8 of Site C's 21 amendment packages have no extracted text. Their sentences are missing and
+    // nothing on the record said which ones or why.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t,
+      JSON.stringify({ sentence: 'The first amendment changed the schedule.', citations: [1] }));
+
+    const sources = fakeSources({
+      documents: [
+        AMENDMENT,
+        { id: 'docA2', type: 'Amendment Package', displayName: 'Amendment #2',
+          datePosted: '2018-07-11', isPublished: true, read: PUBLIC_READ,
+          contentExtracted: false, contentPageCount: 0 }
+      ],
+      chunks: { docA: [chunk(1, 'The first amendment changed the schedule.', 'docA')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'amendments' });
+
+    assert.deepStrictEqual(record.facts.amendments.map(a => a.documentId), ['docA2', 'docA'],
+      'both amendments are facts, whatever can be summarised');
+    assert.deepStrictEqual(record.sections.amendments.map(a => a.documentId), ['docA']);
+    assert.strictEqual(record.sectionErrors.amendments, 'no_chunks: docA2',
+      'the record names the amendment that has no text');
+    assert.strictEqual(calls.length, 1, 'the amendment with no text was never asked about');
+  });
+
+  await t.test('reads the nations from the passages the keyword search found', async () => {
+    // The certificate was the old source and Site C's names no First Nation, so a project with
+    // dozens of consulted nations reported none. The names are wherever the project wrote them.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      nations: [{ name: 'Saulteau First Nation', citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE, APPENDIX],
+      chunks: {
+        docC: [chunk(1, 'The certificate was issued.', 'docC')],
+        docX: [chunk(1, 'Introduction to the consultation programme.', 'docX'),
+          chunk(2, 'Saulteau First Nations were consulted.', 'docX')]
+      },
+      chunkHits: [{ documentId: 'docX' }],
+      organizations: [{ id: 'org-1', name: 'Saulteau First Nations' }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'nations' });
+
+    assert.deepStrictEqual(sources.searched, [{ projectId: '272', keywords: 'First Nation' }]);
+    assert.deepStrictEqual(record.sections.nations,
+      [{ name: 'Saulteau First Nation', organizationId: 'org-1', citations: [1] }]);
+    assert.strictEqual(record.citations[0].chunkId, 'docX::p2::c0',
+      'only the passage that names a nation was a source');
+    assert.strictEqual(record.citations[0].documentName, APPENDIX.displayName,
+      'a citation names the document its passage came from');
+    assert.strictEqual(pagesIn(calls[0]).length, 1);
+  });
+
+  await t.test('reads no more nations passages than the configured ceiling', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryNationChunks = 2;
+    const calls = stubModel(t, JSON.stringify({
+      nations: [{ name: 'Saulteau First Nation', citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [APPENDIX],
+      chunks: {
+        docX: Array.from({ length: 5 },
+          (_, i) => chunk(i + 1, `Page ${i + 1}. First Nations were consulted.`, 'docX'))
+      },
+      chunkHits: [{ documentId: 'docX' }]
+    });
+    await generateProjectSummary('272', { sources, section: 'nations' });
+
+    assert.strictEqual(pagesIn(calls[0]).length, 2);
+  });
+
+  await t.test('never takes a nations passage from a document outside the public list', async () => {
+    // The search runs under the caller's own access, but the record is judged on the PROJECT alone:
+    // a passage from a document the reader 404s on must not reach the page.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      nations: [{ name: 'Saulteau First Nation', citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [{ ...APPENDIX, read: ['staff', 'idir'] }],
+      chunks: { docX: [chunk(1, 'Saulteau First Nations were consulted.', 'docX')] },
+      chunkHits: [{ documentId: 'docX' }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'nations' });
+
+    assert.strictEqual(record.sections.nations, null);
+    assert.strictEqual(record.sectionErrors.nations, 'no_source');
+    assert.deepStrictEqual(sources.asked, [], 'the document was never even read');
+    assert.strictEqual(calls.length, 0);
+  });
+
+  await t.test('says the nations section had no source when nothing matched the search', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, '{"nations":[]}');
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: { docC: [chunk(1, 'The certificate was issued.', 'docC')] },
+      chunkHits: []
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'nations' });
+
+    assert.strictEqual(record.sections.nations, null);
+    assert.strictEqual(record.sectionErrors.nations, 'no_source');
+    assert.strictEqual(calls.length, 0);
+    assert.ok(!sources.trace.includes('organizations'),
+      'the Organization rows are not read for a section that cannot run');
+  });
+
+  await t.test('takes an answer the model gave as a bare array', async () => {
+    // The nations shape has one key, and the model answers the list itself. Rejecting that as
+    // malformed cost Site C its nations section.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify([{ name: 'Saulteau First Nation', citations: [1] }]));
+
+    const sources = fakeSources({
+      documents: [APPENDIX],
+      chunks: { docX: [chunk(1, 'Saulteau First Nations were consulted.', 'docX')] },
+      chunkHits: [{ documentId: 'docX' }],
+      organizations: [{ id: 'org-1', name: 'Saulteau First Nations' }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'nations' });
+
+    assert.deepStrictEqual(record.sections.nations.map(n => n.name), ['Saulteau First Nation']);
+    assert.strictEqual(record.sectionErrors.nations, undefined);
+    assert.strictEqual(calls.length, 1, 'a parseable answer is not asked for again');
+  });
+
+  await t.test('reads an empty list as an empty answer, not as a broken one', async () => {
+    // "There are none in this document" is an answer. Stored as `not_json` it reads as a fault,
+    // and the retry it triggers pays for the same answer twice.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, '[]');
+
+    const sources = fakeSources({
+      documents: [APPENDIX],
+      chunks: { docX: [chunk(1, 'Saulteau First Nations were consulted.', 'docX')] },
+      chunkHits: [{ documentId: 'docX' }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'nations' });
+
+    assert.strictEqual(record.sections.nations, null);
+    assert.strictEqual(record.sectionErrors.nations, 'empty');
+    assert.strictEqual(calls.length, 1, 'an empty list is not retried as an unparseable reply');
+  });
+
+  await t.test('builds no federal section from EAO advice to a joint review panel', async () => {
+    // "Recommendations of the Executive Director to the Joint Review Panel" is a provincial
+    // document. Site C's federal section was built from it, so provincial advice was published as
+    // Canada's decision.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Fish habitat', oneLiner: 'Protect it.',
+        bullets: [], citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [{
+        id: 'docR', type: 'Decision Materials', datePosted: '2014-01-17',
+        displayName: 'Recommendations of the Executive Director to the Joint Review Panel',
+        isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+      }],
+      chunks: { docR: [chunk(1, 'Protect it.', 'docR')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(record.sections.federal, null);
+    assert.strictEqual(record.sectionErrors.federal, 'no_document');
+    assert.strictEqual(calls.length, 0);
+  });
+
+  await t.test('builds the federal section from a federal decision statement', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Fish habitat', oneLiner: 'Protect it.',
+        bullets: [], citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [{
+        id: 'docF', type: 'Decision Materials', datePosted: '2014-10-14',
+        displayName: 'Decision Statement issued under the Canadian Environmental Assessment Act',
+        isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+      }],
+      chunks: { docF: [chunk(1, 'Protect it.', 'docF')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(record.sections.federal.sourceDocumentId, 'docF');
+    assert.deepStrictEqual(record.sections.federal.items.map(i => i.title), ['Fish habitat']);
+  });
+
   await t.test('generates nothing while the feature is off', async () => {
     config.summaryEnabled = false;
     const calls = stubModel(t, '{}');
@@ -895,6 +1200,17 @@ test('buildFacts', async (t) => {
     assert.strictEqual(facts.inspections.latest.documentId, 'docI2', 'the newest by datePosted');
     assert.deepStrictEqual(facts.amendments.map(a => a.documentId), ['docA2', 'docA1'],
       'newest amendment first');
+  });
+
+  await t.test('reads the type label off a row whose `type` is a List id', () => {
+    // A `/search` row carries the List ObjectId under `type` and the label under `documentType`.
+    // Read as a label the id matches nothing, and the project reads as one holding no certificate.
+    const roles = buildFacts([{
+      id: 'docC', type: '5cf00c03a266b7e1877504cf', documentType: 'Certificate Package',
+      displayName: 'Environmental Assessment Certificate #E14-02', datePosted: '2014-10-14'
+    }]).keyDocuments;
+
+    assert.strictEqual(roles.find(r => r.role === 'certificate').documentId, 'docC');
   });
 
   await t.test('the schedule and the certificate are separate key documents', () => {

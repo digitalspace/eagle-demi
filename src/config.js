@@ -232,6 +232,10 @@ const config = {
   // REPLY, not the prompt: 16 pages of conditions is a list the model finishes inside its budget,
   // where the whole document is one it stops in the middle of, and a stopped list parses as nothing.
   projectSummaryBatchChunks: parseInt(process.env.PROJECT_SUMMARY_BATCH_CHUNKS || '16', 10),
+  // Passages the nations section reads, gathered by keyword search across the whole project rather
+  // than from one document. The same names repeat from document to document, so past a few pages of
+  // them a larger set costs prompt and adds no nation.
+  projectSummaryNationChunks: parseInt(process.env.PROJECT_SUMMARY_NATION_CHUNKS || '40', 10),
 
   // Which deployment answers the generator. `foundry` is the deployed path (managed identity, the
   // same account the query-time summariser uses). `ollama` is a local model on the LAN, for

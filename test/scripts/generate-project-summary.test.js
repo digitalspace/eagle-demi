@@ -196,6 +196,35 @@ test('summaryLine', async (t) => {
   });
 
   await t.test('says none when every section that ran came back', () => {
-    assert.match(summaryLine({ ...FRESH, sectionErrors: {} }, true), /failed=none /);
+    const line = summaryLine({ ...FRESH, sectionErrors: {} }, true);
+    assert.match(line, /failed=none /);
+    assert.match(line, /absent=none /);
+  });
+
+  await t.test('lists quiet reasons under absent, not failed', () => {
+    // no_document, no_source and empty are the registry having nothing — not a break to chase.
+    const line = summaryLine({
+      ...FRESH,
+      sectionErrors: { status: 'no_document', compliance: 'no_source', amendments: 'empty' }
+    }, false);
+
+    assert.match(line, /failed=none /);
+    assert.match(line, /absent=status,compliance,amendments /);
+  });
+
+  await t.test('sorts a suffixed reason by its leading token', () => {
+    // "no_chunks: id1,id2" and "not_json (batch 2 of 3)" carry extra detail after the reason word;
+    // only the word itself says whether this is quiet or worth investigating.
+    const line = summaryLine({
+      ...FRESH,
+      sectionErrors: {
+        conditions: 'not_json (batch 2 of 3)',
+        amendments: 'no_chunks: id1,id2',
+        status: 'no_document: docA'
+      }
+    }, false);
+
+    assert.match(line, /failed=conditions,amendments /);
+    assert.match(line, /absent=status /);
   });
 });

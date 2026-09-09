@@ -157,6 +157,45 @@ test('apiSource.organizations', async (t) => {
   });
 });
 
+test('apiSource.chunkSearch', async (t) => {
+  await t.test('asks the chunk index for one project passages matching the keyword', async () => {
+    // The only keyword read over chunk TEXT. Scoped to the project on the wire, because a corpus
+    // wide match would put another project's nations on this project's page.
+    const { impl, calls } = stubFetch([{ body: [{ searchResults: [{ documentId: 'docX' }] }] }]);
+
+    await apiSource({ baseUrl: 'https://demi.example/api', token: 't', fetchImpl: impl })
+      .chunkSearch({ projectId: '272', keywords: 'First Nation' });
+
+    const asked = new URL(calls[0].url);
+    assert.strictEqual(asked.pathname, '/api/search');
+    assert.strictEqual(asked.searchParams.get('dataset'), 'DocumentChunk');
+    assert.strictEqual(asked.searchParams.get('and[projectId]'), '272');
+    assert.strictEqual(asked.searchParams.get('keywords'), 'First Nation');
+  });
+
+  await t.test('reads the rows out of the search envelope', async () => {
+    const { impl } = stubFetch([{
+      body: [{ searchResults: [{ documentId: 'docX' }, { documentId: 'docY' }], count: 2 }]
+    }]);
+
+    const hits = await apiSource({
+      baseUrl: 'https://demi.example/api', token: 't', fetchImpl: impl
+    }).chunkSearch({ projectId: '272', keywords: 'First Nation' });
+
+    assert.deepStrictEqual(hits.map(h => h.documentId), ['docX', 'docY']);
+  });
+
+  await t.test('reads a search that matched nothing as no documents', async () => {
+    const { impl } = stubFetch([{ body: [{ searchResults: [], count: 0 }] }]);
+
+    const hits = await apiSource({
+      baseUrl: 'https://demi.example/api', token: 't', fetchImpl: impl
+    }).chunkSearch({ projectId: '272', keywords: 'First Nation' });
+
+    assert.deepStrictEqual(hits, []);
+  });
+});
+
 test('apiSource.chunksForDocument', async (t) => {
   await t.test('reads the rows from the document own chunks route', async () => {
     const { impl, calls } = stubFetch([

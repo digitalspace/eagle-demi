@@ -43,7 +43,7 @@
 
 const fs = require('fs');
 
-const { generateProjectSummary, SECTIONS } = require('../ai/project-summary');
+const { generateProjectSummary, SECTIONS, QUIET_REASONS } = require('../ai/project-summary');
 const { sourceFor } = require('../ai/project-summary-sources');
 const config = require('../config');
 const { logger } = require('../utils/logger');
@@ -148,18 +148,23 @@ function mergeSection(stored, fresh, section) {
  * The one line a run is judged on: what was produced, what it cost, and whether it was stored.
  *
  * Section names rather than a count, because "5 sections" and "the conditions section is null" are
- * different answers and only the second one says the generation went wrong. `failed` names the
- * sections that were attempted and did not come back, which a missing name alone does not say —
- * a project with no Schedule B has no conditions section either.
+ * different answers and only the second one says the generation went wrong. `failed` names sections
+ * that errored for a real reason (`not_json`, `truncated`, `no_chunks`, ...); `absent` names ones
+ * whose reason is a `QUIET_REASONS` entry (`no_document`, `no_source`, `empty`) — the registry
+ * simply has nothing there, which a missing name alone does not say: a project with no Schedule B
+ * has no conditions section either, but that is not a failure to investigate.
  */
 function summaryLine(record, live) {
   const filled = Object.entries(record.sections)
     .filter(([, v]) => v !== null && (!Array.isArray(v) || v.length > 0))
     .map(([k]) => k);
-  const failed = Object.keys(record.sectionErrors || {});
+  const errors = Object.entries(record.sectionErrors || {});
+  const isQuiet = (reason) => QUIET_REASONS.includes((reason.match(/^[a-z_]+/) || [reason])[0]);
+  const failed = errors.filter(([, reason]) => !isQuiet(reason)).map(([k]) => k);
+  const absent = errors.filter(([, reason]) => isQuiet(reason)).map(([k]) => k);
 
   return `[project-summary] project=${record.projectId} sections=${filled.join(',') || 'none'} ` +
-    `failed=${failed.join(',') || 'none'} ` +
+    `failed=${failed.join(',') || 'none'} absent=${absent.join(',') || 'none'} ` +
     `citations=${record.citations.length} model=${record.model || 'none'} ` +
     `pricedAs=${record.pricedAs} tokens=${record.usage.promptTokens}/${record.usage.completionTokens} ` +
     `estimatedCostCad=${record.estimatedCostCad.toFixed(4)} stored=${live}`;
