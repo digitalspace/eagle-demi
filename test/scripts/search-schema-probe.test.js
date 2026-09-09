@@ -1,0 +1,180 @@
+'use strict';
+
+/**
+ * The pre-deploy gate, exercised end to end against a stub API.
+ *
+ * What it has to get right is not "does it POST": it is which field names leave this repo, and
+ * which HTTP answers stop a release. A `select` carrying a non-retrievable field would 400 on a
+ * healthy index and read as drift; a 503 that passed would ship the outage this gate exists to
+ * prevent; a 404 that passed on its own would make every run of this gate decorative.
+ */
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { startStub, runScript } = require('../helpers/stub-http');
+
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const SCRIPT = path.join(REPO_ROOT, 'scripts', 'search-schema-probe.sh');
+
+function runProbe(baseUrl, env = {}) {
+  return runScript(SCRIPT, [baseUrl], { cwd: REPO_ROOT, env });
+}
+
+test('search-schema-probe.sh', async (t) => {
+  await t.test('sends every committed index, with the fields the live index must answer', async () => {
+    const stub = await startStub(() => ({ status: 200, json: { ok: true } }));
+    let run;
+    try {
+      run = await runProbe(stub.url);
+    } finally {
+      await stub.close();
+    }
+
+    assert.strictEqual(run.status, 0, run.stderr);
+    assert.strictEqual(stub.requests.length, 1);
+    assert.strictEqual(stub.requests[0].method, 'POST');
+    assert.strictEqual(stub.requests[0].url, '/health/search-schema');
+
+    const { indexes } = JSON.parse(stub.requests[0].body);
+    assert.deepStrictEqual(Object.keys(indexes).sort(), ['chunks', 'documents', 'projects']);
+
+    // `fileSize` is the field the 2026-09-08 outage shipped without. If it stops being probed the
+    // gate is decorative.
+    assert.ok(indexes.documents.select.includes('fileSize'));
+    // Not retrievable (azure/search/indexes/documents.json), so it cannot be selected — AI Search
+    // answers 400, which this script would report as drift that is not there.
+    assert.ok(!indexes.documents.select.includes('fileNameTokens'));
+    assert.ok(!indexes.projects.select.includes('nameTokens'));
+    // Sortable but not retrievable: still out of the select.
+    assert.ok(!indexes.documents.select.includes('displayNameSort'));
+    assert.ok(indexes.projects.select.includes('centroid'));
+    // No orderby: the endpoint derives the orders from buildOrderBy, which knows the app orders
+    // `documents` by displayNameSort and never by displayName. Sending a list built from the
+    // `sortable` flags would block a release over fields no query sorts on.
+    assert.ok(!('orderby' in indexes.documents));
+    assert.ok(!('orderby' in indexes.projects));
+    assert.ok(!('orderby' in indexes.chunks));
+  });
+
+  await t.test('probes the index definitions it is pointed at, not the ones beside the script', async () => {
+    // The prod gate runs the WORKFLOW REF's copy of this script against the DEPLOYED TAG's index
+    // definitions, checked out under release/. An ignored argument would gate the release on
+    // main's definitions, which is not the version being shipped.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-indexes-'));
+    fs.writeFileSync(path.join(dir, 'documents.json'), JSON.stringify({
+      name: 'documents',
+      fields: [{ name: 'id' }, { name: 'fieldOnlyThisTagHas' }, { name: 'hidden', retrievable: false }]
+    }));
+
+    const stub = await startStub(() => ({ status: 200, json: { ok: true } }));
+    let run;
+    try {
+      // Relative, resolved against the working directory, the way the workflow passes it.
+      run = await runScript(SCRIPT, [stub.url, path.relative(REPO_ROOT, dir)], { cwd: REPO_ROOT });
+    } finally {
+      await stub.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    assert.strictEqual(run.status, 0, run.stderr);
+    const { indexes } = JSON.parse(stub.requests[0].body);
+    assert.deepStrictEqual(Object.keys(indexes), ['documents']);
+    assert.deepStrictEqual(indexes.documents.select, ['id', 'fieldOnlyThisTagHas']);
+  });
+
+  await t.test('an empty base URL fails instead of reading as a passing gate', async () => {
+    // One renamed repository variable away: a step that exits 0 having asked the live index
+    // nothing is the ungated release this gate exists to stop.
+    for (const args of [[''], []]) {
+      const run = await runScript(SCRIPT, args, { cwd: REPO_ROOT });
+      assert.strictEqual(run.status, 1, JSON.stringify(args));
+      assert.match(run.stderr, /no base URL/);
+    }
+  });
+
+  await t.test('fails the release on drift, naming the field and how to widen the index', async () => {
+    const stub = await startStub(() => ({
+      status: 503,
+      json: { ok: false, indexes: { documents: { ok: false, missing: ['fileSize'] } } }
+    }));
+    let run;
+    try {
+      run = await runProbe(stub.url);
+    } finally {
+      await stub.close();
+    }
+
+    assert.strictEqual(run.status, 1);
+    assert.match(run.stderr, /documents: missing fileSize/);
+    assert.match(run.stderr, /demi-devbox\.sh apply --env prod/);
+    assert.match(run.stderr, /Runbook-Search-Outage\.md/);
+  });
+
+  await t.test('names the environment the operator has to widen', async () => {
+    const stub = await startStub(() => ({
+      status: 503,
+      json: { ok: false, indexes: { projects: { ok: false, missing: ['vis'] } } }
+    }));
+    let run;
+    try {
+      run = await runProbe(stub.url, { DEMI_ENV: 'test' });
+    } finally {
+      await stub.close();
+    }
+
+    assert.strictEqual(run.status, 1);
+    assert.match(run.stderr, /demi-devbox\.sh apply --env test/);
+  });
+
+  await t.test('fails on 404 — an endpoint that is not there checked nothing', async () => {
+    const stub = await startStub(() => ({ status: 404, body: '{"error":"not found"}' }));
+    let run;
+    try {
+      run = await runProbe(stub.url);
+    } finally {
+      await stub.close();
+    }
+
+    assert.strictEqual(run.status, 1);
+    assert.match(run.stderr, /no \/health\/search-schema/);
+    assert.match(run.stderr, /allow_missing_schema_probe/);
+  });
+
+  await t.test('passes on 404 only when the bootstrap deploy asks for it', async () => {
+    const stub = await startStub(() => ({ status: 404, body: '{"error":"not found"}' }));
+    let run;
+    try {
+      run = await runProbe(stub.url, { SEARCH_SCHEMA_ALLOW_MISSING: '1' });
+    } finally {
+      await stub.close();
+    }
+
+    assert.strictEqual(run.status, 0, run.stderr);
+    // Silence would be the trap: a deploy that shipped ungated has to say so in the log.
+    assert.match(run.stdout, /SEARCH_SCHEMA_ALLOW_MISSING=1/);
+  });
+
+  await t.test('fails on any other status rather than assuming the index is fine', async () => {
+    const stub = await startStub(() => ({ status: 500, body: 'boom' }));
+    let run;
+    try {
+      run = await runProbe(stub.url);
+    } finally {
+      await stub.close();
+    }
+
+    assert.strictEqual(run.status, 1);
+    assert.match(run.stderr, /answered 500/);
+  });
+
+  await t.test('fails when the API cannot be reached', async () => {
+    // Port 1 on loopback: nothing listens, and the connection is refused rather than hanging.
+    const run = await runProbe('http://127.0.0.1:1');
+    assert.strictEqual(run.status, 1);
+    assert.match(run.stderr, /could not reach/);
+  });
+});

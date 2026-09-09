@@ -191,6 +191,27 @@ test('search schema health', async (t) => {
       [['name asc', 'decisionDate desc']]);
   });
 
+  // What `scripts/search-schema-probe.sh` posts: the tag's selects, and no order at all. The
+  // orders have to keep coming from `buildOrderBy` — a probe body built from the index files'
+  // `sortable` flags would order `documents` by `displayName`, which no query does, and a live
+  // index that made that one unsortable would block a release it cannot affect.
+  await t.test('a select-only override leaves the orders derived from the query builder', async (tt) => {
+    const probes = stubProbe(tt);
+
+    const { out, res } = capture();
+    await searchSchema.searchSchema(
+      request({ indexes: { documents: { select: ['id', 'fileSize'] } } }), res);
+
+    assert.strictEqual(out.status, 200);
+    const documents = probes.filter(p => p.indexName === 'documents-live');
+    assert.deepStrictEqual(documents.filter(p => p.select).map(p => p.select), [['id', 'fileSize']]);
+
+    const ordered = documents.filter(p => p.orderby).flatMap(p => p.orderby)
+      .map(clause => clause.split(' ')[0]);
+    assert.ok(ordered.includes('displayNameSort'));
+    assert.ok(!ordered.includes('displayName'));
+  });
+
   // The committed definition file, posted as it sits in the repo: every field it declares must
   // exist live. Its `sortable` flags are not turned into an order — see `overridesFrom`.
   await t.test('a committed index definition is accepted as the select', async (tt) => {

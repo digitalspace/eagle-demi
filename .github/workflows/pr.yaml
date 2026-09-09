@@ -95,6 +95,93 @@ jobs:
       - name: Build Frontend
         run: yarn --cwd frontend build
 
+  # A schema-touching PR is the only kind that can take production search down (2026-09-08), and it
+  # takes it down at DEPLOY time, long after review. Nothing in the other jobs can see it: they test
+  # the code against the committed JSON, and both sides of that comparison move in the same PR.
+  search-schema-change:
+    name: Search Schema Change
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # The staging app (azure-deploy-staging-api.yaml). Anonymous endpoint, no secret, so this job
+      # works on a fork PR too.
+      TEST_API_BASE_URL: https://demi-api-fc-test.azurewebsites.net
+      DEMI_ENV: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # 0 so the base branch is fetched as well: the diff below is against origin/<base>.
+          fetch-depth: 0
+
+      # Two shapes count. `azure/search/**` is the index definition itself; the `*_SELECT` constants
+      # in ai-search.js are the code asking for fields. Either one alone breaks the pair.
+      - name: Does this PR change what search selects?
+        id: touched
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          CHANGED=$(git diff --name-only "origin/$BASE_REF...HEAD")
+          echo "$CHANGED"
+          TOUCHED=false
+          if grep -q '^azure/search/' <<<"$CHANGED"; then
+            TOUCHED=true
+          fi
+          # Values, not diff lines: the constants are multi-line concatenations, so a widening
+          # lands on a continuation line that carries no `_SELECT` token.
+          #
+          # Captured on its own line: `set -e` does not fire on a command substitution inside an
+          # `if` condition, so a broken script would read as "schema untouched" and pass the gate.
+          SELECT_CHANGED=$(./scripts/search-select-changed.sh "origin/$BASE_REF")
+          if [ "$SELECT_CHANGED" = changed ]; then
+            TOUCHED=true
+          fi
+          echo "touched=$TOUCHED" >> "$GITHUB_OUTPUT"
+          echo "search schema touched: $TOUCHED"
+
+      # Against TEST, with the branch's own index definitions: test is where the author widens the
+      # live index first, and this is the proof they did.
+      #
+      # SEARCH_SCHEMA_ALLOW_MISSING is deliberately unset here. The test app has the endpoint once
+      # main with #349 is deployed to test; a 404 there after that is a regression, not a bootstrap.
+      - name: Probe the test indexes with this branch's index definitions
+        if: steps.touched.outputs.touched == 'true'
+        run: ./scripts/search-schema-probe.sh "$TEST_API_BASE_URL"
+
+      # Read through the environment, never interpolated into the script body: a PR body is
+      # attacker-controlled text.
+      - name: Require the PR to record that test was widened
+        if: steps.touched.outputs.touched == 'true'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          if ! grep -qiE '^[[:space:]]*Search-Schema:[[:space:]]*applied test' <<<"${PR_BODY:-}"; then
+            echo "::error::This PR changes the search schema. Apply the index definitions to test" \
+                 "(scripts/demi-devbox.sh apply --env test), then add a line to the PR description:" \
+                 "Search-Schema: applied test"
+            exit 1
+          fi
+
+      - name: Report the search schema failure to job summary
+        if: failure()
+        run: |
+          {
+            echo "### ❌ Search schema gate"
+            echo ""
+            echo "This PR changes \`azure/search/**\`, or the fields a \`*_SELECT\` in"
+            echo "\`src/search/ai-search.js\` asks for."
+            echo "Widen the live TEST indexes before merging:"
+            echo ""
+            echo '```'
+            echo "scripts/demi-devbox.sh apply --env test"
+            echo '```'
+            echo ""
+            echo "Then add \`Search-Schema: applied test\` to the PR description."
+            echo "Production is widened by hand at release time — see \`docs/ci-search-guards.md\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   validate-bicep:
     name: Validate Bicep Template
     runs-on: ubuntu-latest

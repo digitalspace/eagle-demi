@@ -99,6 +99,14 @@ jobs:
           # az functionapp show returns null hostname for Flex; default host is <app>.azurewebsites.net
           curl -fsS --retry 3 --retry-delay 5 "https://${API_FLEX_APP_NAME}.azurewebsites.net/health"
 
+      # Liveness is not service: a build whose selects the live index cannot answer starts happily
+      # and 502s every search (2026-09-08). No rollback here — test is where that gets found.
+      - name: Smoke test search
+        env:
+          # Empty falls back to the id documented in the script.
+          SMOKE_PROJECT_ID: ${{ vars.SEARCH_SMOKE_PROJECT_ID }}
+        run: ./scripts/search-smoke.sh "https://${API_FLEX_APP_NAME}.azurewebsites.net" "$SMOKE_PROJECT_ID"
+
       - name: Report API Failure to Job Summary
         if: failure()
         run: |
