@@ -29,12 +29,16 @@
  * workstation against the DEMI API.
  */
 
+const http = require('node:http');
+const https = require('node:https');
+
 const config = require('../config');
 const { logger } = require('../utils/logger');
 // Required as a MODULE, not destructured: the three are the seam a test replaces to keep a
 // generator run off the network, and a destructured copy cannot be replaced.
 const summarizer = require('./summarize');
-const { PROMPT_VERSION, SHAPES, INSTRUCTIONS, systemPrompt } = require('./project-summary-prompts');
+const { PROMPT_VERSION, SHAPES, INSTRUCTIONS, RETRY_INSTRUCTION, systemPrompt } =
+  require('./project-summary-prompts');
 const { levelOfRead } = require('../helpers/access-sql');
 const { ANONYMOUS_LEVEL } = require('../vis/level');
 
@@ -51,14 +55,23 @@ const PRICED_AS = 'gpt-4.1-mini';
 // Document selection
 // ---------------------------------------------------------------------------------------------
 
+/** A List ObjectId, which is what `type` carries on a `/search` row. */
+const LIST_ID = /^[0-9a-f]{24}$/i;
+
 /**
- * The document's registry type.
+ * The document's registry type, as a LABEL.
  *
- * `type` is what the DEMI row carries (a resolved List label — "Certificate Package", "Inspection
- * Record"); `documentType` is what an upstream caller may hand us. Reading both means the picker
- * does not care which shape the adapter returned.
+ * A `/documents` row carries the resolved label under `type` ("Certificate Package", "Inspection
+ * Record"). A `/search` row carries the List ObjectId under that same key and the label under
+ * `documentType`. Every picker compares against a label, so an id read as one matches nothing and
+ * the whole run reads as a project whose registry holds no certificate.
  */
-const typeOf = doc => String((doc && (doc.type || doc.documentType)) || '');
+const typeOf = doc => {
+  if (!doc) return '';
+  const type = String(doc.type || '');
+  if (type && !LIST_ID.test(type)) return type;
+  return String(doc.documentType || '');
+};
 const nameOf = doc => String((doc && (doc.displayName || doc.documentFileName)) || '');
 const dateOf = doc => String((doc && doc.datePosted) || '');
 
@@ -83,6 +96,21 @@ function isPublicSource(doc) {
   return doc.isPublished === true;
 }
 
+/**
+ * Has this document any extracted text to ground on?
+ *
+ * A source document with no extracted text costs the section outright: the run reads zero chunks,
+ * makes no call, and stores a null. Site C's status, timeline and compliance sections were all null
+ * on 2026-09-09 for exactly that reason, and 8 of its 21 amendment packages are in the same state.
+ * `/documents` carries both flags — `contentExtracted` is the extractor's verdict, `contentPageCount`
+ * its output — and either one is enough.
+ *
+ * COUNTS ARE NOT NARROWED BY THIS: `facts` is computed over every public document, extracted or
+ * not. 21 amendment packages is what the registry holds, whatever can be summarised.
+ */
+const hasExtractedText = doc =>
+  !!doc && (doc.contentExtracted === true || Number(doc.contentPageCount) > 0);
+
 /** Newest by `datePosted`. A row with no date sorts last rather than winning on a blank string. */
 function newest(docs) {
   const dated = docs.filter(dateOf);
@@ -93,6 +121,24 @@ function newest(docs) {
 function byDateDesc(docs) {
   return docs.slice().sort((a, b) => dateOf(b).localeCompare(dateOf(a)));
 }
+
+/**
+ * A federal decision: Canada's own decision document, by title or by type.
+ *
+ * "Joint review panel" is not one on its own — EAO's "Recommendations of the Executive Director to
+ * the Joint Review Panel" carries the phrase and is provincial, and Site C's federal section was
+ * built from it, so provincial advice was published as Canada's decision.
+ */
+const FEDERAL_DECISION = new RegExp([
+  'decision\\s+statement',
+  'canadian\\s+environmental\\s+assessment\\s+agency',
+  '\\bceaa\\b',
+  'impact\\s+assessment\\s+agency',
+  '\\biaac\\b'
+].join('|'), 'i');
+
+/** Advice to a decision maker, never the decision itself. */
+const EAO_ADVICE = /recommendations?/i;
 
 /**
  * The source document for each section, by type and title pattern.
@@ -123,10 +169,11 @@ const PICK = {
   // Self-reports have no type of their own in the registry; the name is what identifies them.
   selfReports: docs => byDateDesc(docs.filter(d =>
     nameMatches(d, /self[\s-]?report/i) && nameMatches(d, /compliance|annual/i))),
-  // Federal. Hidden unless the registry actually holds one — Site C has none in DEMI, and a
-  // section invented for a project with no federal decision is exactly the claim this must not make.
+  // Federal. Hidden unless the registry actually holds a FEDERAL DECISION — Site C has none in
+  // DEMI, and a section invented for a project without one is exactly the claim this must not make.
   federal: docs => newest(docs.filter(d =>
-    nameMatches(d, /decision\s+statement/i) || nameMatches(d, /joint\s+review\s+panel/i)))
+    (FEDERAL_DECISION.test(nameOf(d)) || FEDERAL_DECISION.test(typeOf(d))) &&
+    !nameMatches(d, EAO_ADVICE)))
 };
 
 /** The `role` values `facts.keyDocuments` carries, and the picker behind each. */
@@ -174,11 +221,20 @@ function buildFacts(documents) {
 // Prompting
 // ---------------------------------------------------------------------------------------------
 
+/** One numbered source. `i` is its position in THIS call's sources, which is what a citation means. */
+const sourceLine = (c, i) =>
+  `[${i + 1}] (page ${c.pageNumber ?? 0}) ${String(c.content || '').trim()}`;
+
+const SOURCE_SEPARATOR = '\n\n';
+
 /** The numbered sources, one per chunk, capped by `projectSummaryMaxChunks`. */
 function buildSourceBlock(chunks) {
-  return chunks
-    .map((c, i) => `[${i + 1}] (page ${c.pageNumber ?? 0}) ${String(c.content || '').trim()}`)
-    .join('\n\n');
+  return chunks.map(sourceLine).join(SOURCE_SEPARATOR);
+}
+
+/** The user half of a section's prompt. Called with no chunks it is the header on its own. */
+function userPrompt(document, chunks) {
+  return `Sources from "${nameOf(document)}":\n\n${buildSourceBlock(chunks)}`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -189,16 +245,16 @@ function buildSourceBlock(chunks) {
  * One JSON completion, from whichever provider is configured.
  *
  * Both providers are asked for the same thing in their own dialect: deterministic, JSON-only, with
- * a token ceiling. The caller sees one shape — `{content, usage, model}` — so nothing downstream
- * knows or cares which one ran.
+ * a token ceiling. The caller sees one shape — `{content, usage, model, truncated}` — so nothing
+ * downstream knows or cares which one ran.
  */
-async function chatJson(system, user) {
+async function chatJson(system, user, maxTokens) {
   return config.projectSummaryProvider === 'ollama'
-    ? chatOllama(system, user)
-    : chatFoundry(system, user);
+    ? chatOllama(system, user, maxTokens)
+    : chatFoundry(system, user, maxTokens);
 }
 
-async function chatFoundry(system, user) {
+async function chatFoundry(system, user, maxTokens) {
   if (!config.foundryEndpoint || !config.foundryDeployment) {
     throw new Error('FOUNDRY_ENDPOINT/FOUNDRY_DEPLOYMENT is unset');
   }
@@ -210,7 +266,7 @@ async function chatFoundry(system, user) {
     body: JSON.stringify({
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
       temperature: 0,
-      max_tokens: config.projectSummaryMaxTokens,
+      max_tokens: maxTokens,
       response_format: { type: 'json_object' }
     })
   });
@@ -224,8 +280,63 @@ async function chatFoundry(system, user) {
   return {
     content: data?.choices?.[0]?.message?.content || '',
     usage: data?.usage || null,
-    model: config.foundryDeployment
+    model: config.foundryDeployment,
+    truncated: data?.choices?.[0]?.finish_reason === 'length'
   };
+}
+
+/**
+ * A JSON POST THAT WAITS AS LONG AS THE MODEL TAKES, on `node:http`, not `fetch`.
+ *
+ * `fetch` is undici underneath, and undici gives up after 300 seconds without response HEADERS.
+ * Ollama sends none until the whole reply is generated, so a batch of conditions that takes longer
+ * than five minutes dies as `TypeError: fetch failed` with the generation still running — which is
+ * how the 2026-09-09 Site C run lost its conditions retry. Raising undici's `headersTimeout` needs
+ * the `undici` package, which Node does not expose to `require`; `node:http` has no such clock.
+ *
+ * Waiting forever is the point, so every way the connection can end has to settle the promise:
+ * without that, a socket dropped mid-reply hangs the run with no error instead of failing it.
+ */
+function postJson(url, payload) {
+  const target = new URL(url);
+  const client = target.protocol === 'https:' ? https : http;
+  const body = JSON.stringify(payload);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+    const dropped = () =>
+      fail(new Error(`${target.host} closed the connection before the reply ended`));
+
+    const req = client.request(target, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { text += chunk; });
+      res.on('error', fail);
+      res.on('aborted', dropped);
+      res.on('end', () => {
+        // `end` also fires on a body cut short; `complete` is what says the whole reply arrived.
+        if (!res.complete) return dropped();
+        if (settled) return;
+        settled = true;
+        resolve({ status: res.statusCode, body: text });
+      });
+    });
+    req.on('error', fail);
+    // Last resort: a destroyed socket does not always reach one of the handlers above.
+    req.on('close', dropped);
+    req.end(body);
+  });
 }
 
 /**
@@ -242,30 +353,25 @@ async function chatFoundry(system, user) {
  *
  * No auth header: Ollama has none. It is a LAN service, reached only from a workstation.
  */
-async function chatOllama(system, user) {
-  const res = await fetch(`${config.ollamaUrl.replace(/\/$/, '')}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: config.ollamaModel,
-      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      stream: false,
-      format: 'json',
-      think: false,
-      options: {
-        temperature: 0,
-        num_ctx: config.projectSummaryOllamaCtx,
-        num_predict: config.projectSummaryMaxTokens
-      }
-    })
+async function chatOllama(system, user, maxTokens) {
+  const res = await postJson(`${config.ollamaUrl.replace(/\/$/, '')}/api/chat`, {
+    model: config.ollamaModel,
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+    stream: false,
+    format: 'json',
+    think: false,
+    options: {
+      temperature: 0,
+      num_ctx: config.projectSummaryOllamaCtx,
+      num_predict: maxTokens
+    }
   });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`ollama ${res.status}: ${body.slice(0, 300)}`);
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`ollama ${res.status}: ${res.body.slice(0, 300)}`);
   }
 
-  const data = await res.json();
+  const data = JSON.parse(res.body);
   return {
     content: (data && data.message && data.message.content) || '',
     // Ollama's own counter names, mapped to the OpenAI ones so `estimateCostCad` prices both
@@ -274,7 +380,11 @@ async function chatOllama(system, user) {
       prompt_tokens: Number(data && data.prompt_eval_count) || 0,
       completion_tokens: Number(data && data.eval_count) || 0
     },
-    model: config.ollamaModel
+    model: config.ollamaModel,
+    // `length` means the reply stopped at `num_predict` rather than at its own end, so what came
+    // back is a prefix. With `format: 'json'` that prefix is well-formed up to the cut and nothing
+    // else, which is why it fails to parse rather than arriving as visible prose.
+    truncated: (data && data.done_reason) === 'length'
   };
 }
 
@@ -292,14 +402,68 @@ async function chatOllama(system, user) {
  * wrong in only if the margin is real — so this is a guard against the gross case, not a
  * fitting exercise.
  *
- * @returns {number|null} the estimated prompt tokens when the prompt will not fit, else null
+ * @returns {{estimate: number, excess: number}|null} null when the prompt fits
  */
-function contextOverflow(system, user) {
+function contextOverflow(system, user, maxTokens) {
   if (config.projectSummaryProvider !== 'ollama') return null;
   const estimate = Math.ceil((system.length + user.length) / 4);
-  return estimate + config.projectSummaryMaxTokens > config.projectSummaryOllamaCtx
-    ? estimate
-    : null;
+  const excess = estimate + maxTokens - config.projectSummaryOllamaCtx;
+  return excess > 0 ? { estimate, excess } : null;
+}
+
+/**
+ * The sections that are a LIST over the whole document rather than one sentence about it.
+ *
+ * Named in one place because two things follow. They get a much larger completion budget — Site C's
+ * Schedule B holds around 77 conditions with bullets, and at the default budget the list stops
+ * mid-item, which parses as nothing. And because that budget comes out of the same `num_ctx` the
+ * prompt is measured against, they are the sections `fitBatches` splits rather than refuses.
+ */
+const LIST_SECTIONS = ['conditions', 'federal'];
+const LIST_SECTION_MAX_TOKENS = 8000;
+
+const isListSection = name => LIST_SECTIONS.includes(name);
+const maxTokensFor = name =>
+  (isListSection(name) ? LIST_SECTION_MAX_TOKENS : config.projectSummaryMaxTokens);
+
+/**
+ * `chunks` split into runs that each fit the context window, in page order.
+ *
+ * `num_ctx` holds the prompt AND the reply, so a list section's completion budget lowers its prompt
+ * ceiling to `num_ctx - num_predict`: a 120-chunk Schedule B is over that ceiling and as one call
+ * would be refused outright. A list splits instead — one call per batch, items concatenated.
+ *
+ * Sized in characters against the same four-per-token estimate `contextOverflow` uses, less the
+ * scaffold (`fixedChars`) every batch repeats. A chunk too large for an empty batch is left alone
+ * in one, where `contextOverflow` refuses it: nothing here splits a chunk.
+ *
+ * `projectSummaryBatchChunks` caps a batch on top of that, because fitting the PROMPT is only half
+ * of it: a batch whose sources fill the window asks for a list that does not fit the completion
+ * budget, and a list cut off mid-item parses as nothing.
+ */
+function fitBatches(chunks, fixedChars, maxTokens) {
+  // Only Ollama's window is fixed and silent about overrunning it; Foundry is one call, as before.
+  if (config.projectSummaryProvider !== 'ollama') return [chunks];
+
+  const budget = (config.projectSummaryOllamaCtx - maxTokens) * 4 - fixedChars;
+  const cap = config.projectSummaryBatchChunks;
+  const batches = [];
+  let batch = [];
+  let size = 0;
+
+  for (const [i, chunk] of chunks.entries()) {
+    const cost = sourceLine(chunk, i).length + SOURCE_SEPARATOR.length;
+    if (batch.length && (batch.length >= cap || size + cost > budget)) {
+      batches.push(batch);
+      batch = [];
+      size = 0;
+    }
+    batch.push(chunk);
+    size += cost;
+  }
+  if (batch.length) batches.push(batch);
+
+  return batches;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -377,14 +541,45 @@ function groundedInCitations(text, citations, chunks) {
   return tokens.every(token => cited.includes(token.toLowerCase()));
 }
 
-/** JSON or null. A reply that is not JSON at all is a rejected section, not a parse to retry. */
+/**
+ * JSON or null. A reply that is not JSON at all is a rejected section, not a parse to retry.
+ *
+ * AN ARRAY IS JSON. Asked for the nations named in a document that names none, the model answers
+ * `[]`, and rejecting the bare array as malformed turned an honest "there are none" into a parse
+ * failure on the record — which is what Site C's nations section stored as `not_json`.
+ */
 function parseJson(content) {
   try {
     const parsed = JSON.parse(String(content || ''));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;
   }
+}
+
+/** The keys a list section's reply may carry its list under, one per list shape. */
+const LIST_KEYS = ['items', 'events', 'nations'];
+
+/** The list under `key`, or the reply itself when it is already an array. Null when neither. */
+const listOf = (parsed, key) => {
+  if (Array.isArray(parsed)) return parsed;
+  return parsed && Array.isArray(parsed[key]) ? parsed[key] : null;
+};
+
+/**
+ * The list a reply declares, whatever key it used, or null when the reply is not a list at all.
+ *
+ * Read for its LENGTH, before the citation and grounding gates run: a section that is null because
+ * the model listed nothing is a different answer from one whose every item was dropped, and only
+ * the second is a fault.
+ */
+function replyList(parsed) {
+  if (Array.isArray(parsed)) return parsed;
+  for (const key of LIST_KEYS) {
+    const list = listOf(parsed, key);
+    if (list) return list;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -419,9 +614,14 @@ function citationRegistry() {
       });
       return n;
     },
-    /** Local one-based source numbers to record-wide ones. */
+    /**
+     * Local one-based source numbers to record-wide ones.
+     *
+     * A chunk found by a keyword search across the project carries its OWN document's name, because
+     * the call it was a source for had no single document to name it with.
+     */
     map(local, chunks, documentName) {
-      return local.map(n => this.register(chunks[n - 1], documentName));
+      return local.map(n => this.register(chunks[n - 1], chunks[n - 1].documentName || documentName));
     },
     list: () => entries
   };
@@ -479,53 +679,118 @@ function joinNations(names, organizations) {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * One section: choose a source document, read its chunks, ask for JSON, validate, number the
- * citations record-wide.
- *
- * NO SOURCE DOCUMENT MEANS NO MODEL CALL. Not an optimisation — a model asked to summarise nothing
- * answers from its own knowledge, and the answer is indistinguishable from a real one.
+ * One section: ask for JSON over the sources it was handed, validate, number the citations
+ * record-wide. Called only with sources — the caller is what refuses an empty set.
  *
  * @returns {Promise<{value: any, usage: object|null, model: string|null, documentId: string|null,
- *   reason: string|null}>} `value` is null when the section could not be produced; `reason` names
- *   why when the cause is a run condition rather than the model's answer.
+ *   reason: string|null}>} `value` is null when the section could not be produced, and `reason`
+ *   always says why.
  */
-async function runSection({ document, chunks, registry, projectName, instruction, shape, build }) {
-  // A document with no extracted text is the same case as no document: nothing to ground on.
-  if (chunks.length === 0) {
-    return { value: null, usage: null, model: null, documentId: String(document.id), reason: null };
-  }
+async function runSection({ section, document, chunks, registry, projectName, instruction, shape,
+  build, maxTokens }) {
+  // Null for a section whose sources came from a search across documents rather than from one.
+  const documentId = document.id ? String(document.id) : null;
 
   const used = chunks.slice(0, config.projectSummaryMaxChunks);
   const system = systemPrompt(projectName, instruction, shape);
-  const user = `Sources from "${nameOf(document)}":\n\n${buildSourceBlock(used)}`;
+  const listSection = isListSection(section);
+  const batches = listSection
+    ? fitBatches(used, system.length + userPrompt(document, []).length, maxTokens)
+    : [used];
 
-  const overflow = contextOverflow(system, user);
-  if (overflow !== null) {
-    logger.warn('[project-summary] prompt exceeds the context window; section not generated', {
-      documentId: String(document.id),
-      sources: used.length,
-      estimatedPromptTokens: overflow,
-      numPredict: config.projectSummaryMaxTokens,
-      numCtx: config.projectSummaryOllamaCtx
-    });
-    return {
-      value: null, usage: null, model: null,
-      documentId: String(document.id), reason: 'context_overflow'
+  const usage = { prompt_tokens: 0, completion_tokens: 0 };
+  const values = [];
+  let model = null;
+  let reason = null;
+  // How many entries the model SAID it found, before the citation and grounding gates ran. A list
+  // that came back empty is an answer; a list whose every entry was dropped is a fault.
+  let declared = 0;
+  let sawList = false;
+  // Which batch failed, when there was more than one: "conditions is null" and "conditions is null
+  // because its third batch never parsed" send an operator to different places.
+  const batchLabel = i => (batches.length > 1 ? ` (batch ${i + 1} of ${batches.length})` : '');
+
+  for (const [index, batch] of batches.entries()) {
+    const user = userPrompt(document, batch);
+
+    const overflow = contextOverflow(system, user, maxTokens);
+    if (overflow) {
+      logger.warn(`[project-summary] ${section}: the prompt is ${overflow.excess} tokens over the ` +
+        'context window; section not generated', {
+        documentId,
+        sources: batch.length,
+        estimatedPromptTokens: overflow.estimate,
+        numPredict: maxTokens,
+        numCtx: config.projectSummaryOllamaCtx
+      });
+      reason = `context_overflow${batchLabel(index)}`;
+      break;
+    }
+
+    const ask = async (systemText) => {
+      const reply = await chatJson(systemText, user, maxTokens);
+      if (reply.usage) {
+        usage.prompt_tokens += Number(reply.usage.prompt_tokens) || 0;
+        usage.completion_tokens += Number(reply.usage.completion_tokens) || 0;
+      }
+      if (reply.model) model = reply.model;
+      if (reply.truncated) {
+        // Named apart from a malformed reply because the remedy is different: the model answered
+        // the question and ran out of budget, so the budget is what has to move. The console format
+        // drops metadata, so the numbers an operator acts on are in the message.
+        logger.warn(`[project-summary] ${section}: the reply stopped at the ${maxTokens}-token ` +
+          'completion budget, so what came back is a fragment', {
+          documentId, sources: batch.length, numPredict: maxTokens
+        });
+      }
+      return reply;
     };
+
+    let reply = await ask(system);
+    let parsed = parseJson(reply.content);
+
+    if (!parsed) {
+      logger.warn(`[project-summary] ${section}: reply did not parse as JSON; asking once more ` +
+        'with a stricter instruction', { documentId });
+      reply = await ask(systemPrompt(projectName, `${instruction} ${RETRY_INSTRUCTION}`, shape));
+      parsed = parseJson(reply.content);
+    }
+
+    if (!parsed) {
+      logger.warn(`[project-summary] ${section}: rejected a reply that was not JSON`, {
+        documentId, sources: batch.length, batch: index + 1, batches: batches.length
+      });
+      // The whole section, not just this batch: `mergeItemBatches` renumbers from 1, so a list
+      // missing the batch that failed reads exactly like a complete one.
+      reason = `${reply.truncated ? 'truncated' : 'not_json'}${batchLabel(index)}`;
+      break;
+    }
+
+    const list = replyList(parsed);
+    if (list) {
+      sawList = true;
+      declared += list.length;
+    }
+
+    // Citations are numbered within the batch that produced them, so the registry is handed that
+    // batch's chunks — this is what keeps a batch-2 `[1]` off batch 1's first source.
+    values.push(build(parsed, batch, n => registry.map(n, batch, nameOf(document))));
   }
 
-  const { content, usage, model } = await chatJson(system, user);
-  const parsed = parseJson(content);
-
-  if (!parsed) {
-    logger.warn('[project-summary] rejected a reply that was not JSON', {
-      documentId: String(document.id), sources: used.length
-    });
-    return { value: null, usage, model, documentId: String(document.id), reason: 'not_json' };
+  const value = reason ? null : (listSection ? mergeItemBatches(values) : (values[0] || null));
+  if (!reason && value === null) {
+    reason = sawList && declared === 0 ? 'empty' : 'no_grounded_content';
   }
+  return { value, usage, model, documentId, reason };
+}
 
-  const value = build(parsed, used, n => registry.map(n, used, nameOf(document)));
-  return { value, usage, model, documentId: String(document.id), reason: null };
+/** The list batches as one list, renumbered end to end so `n` is contiguous across the section. */
+function mergeItemBatches(values) {
+  const items = [];
+  for (const value of values) {
+    for (const item of (value && value.items) || []) items.push({ ...item, n: items.length + 1 });
+  }
+  return items.length ? { items } : null;
 }
 
 /** `{sentence, citations}` — dropped whole if the sentence is ungrounded. */
@@ -554,10 +819,11 @@ function buildParagraph(parsed, chunks, toGlobal) {
  * their own right.
  */
 function buildItems(parsed, chunks, toGlobal) {
-  if (!Array.isArray(parsed.items)) return null;
+  const declared = listOf(parsed, 'items');
+  if (!declared) return null;
 
   const items = [];
-  for (const raw of parsed.items) {
+  for (const raw of declared) {
     if (!raw || typeof raw !== 'object') continue;
     if (!isStr(raw.title) || !isStr(raw.oneLiner)) continue;
     if (raw.bullets !== undefined && !isStrArray(raw.bullets)) continue;
@@ -580,10 +846,11 @@ function buildItems(parsed, chunks, toGlobal) {
 }
 
 function buildTimeline(parsed, chunks, toGlobal) {
-  if (!Array.isArray(parsed.events)) return null;
+  const declared = listOf(parsed, 'events');
+  if (!declared) return null;
 
   const events = [];
-  for (const raw of parsed.events) {
+  for (const raw of declared) {
     if (!raw || typeof raw !== 'object') continue;
     // An ISO date, strictly. A timeline row merges with the fact rows on the page and sorts
     // against them, so a free-text date would be a row that cannot be placed.
@@ -601,11 +868,12 @@ function buildTimeline(parsed, chunks, toGlobal) {
 }
 
 function buildNations(parsed, chunks, toGlobal) {
-  if (!Array.isArray(parsed.nations)) return null;
+  const declared = listOf(parsed, 'nations');
+  if (!declared) return null;
 
   const names = [];
   const seen = new Set();
-  for (const raw of parsed.nations) {
+  for (const raw of declared) {
     if (!raw || typeof raw !== 'object' || !isStr(raw.name)) continue;
     const local = validCitations(raw.citations, chunks.length);
     if (local.length === 0) continue;
@@ -646,6 +914,24 @@ function sanitisePromptName(name) {
     .trim()
     .slice(0, PROMPT_NAME_MAX);
 }
+
+/** What the nations section searches for, and what a chunk it keeps has to actually say. */
+const NATIONS_KEYWORDS = 'First Nation';
+const NATIONS_MENTION = /first\s+nations?/i;
+
+/**
+ * The nations section's source: the project's own passages, not one document.
+ *
+ * `id` is null because there is no single source document, which is also why the section stores no
+ * `sourceDocumentId` — each citation names the document its chunk came from.
+ */
+const NATIONS_SOURCE = { id: null, displayName: 'passages that name a First Nation' };
+
+/**
+ * Reasons that describe what the registry holds rather than something that went wrong, so they are
+ * logged at INFO. Everything else is a run that could have produced a section and did not.
+ */
+const QUIET_REASONS = ['no_document', 'no_source', 'empty'];
 
 /** Every section, so `--section` can name one and the runner can check the name is real. */
 const SECTIONS = ['status', 'conditions', 'amendments', 'timelineEvents', 'compliance',
@@ -693,22 +979,136 @@ async function generateProjectSummary(projectId, opts = {}) {
   }
 
   const facts = buildFacts(documents);
+  // Only a document with extracted text can be a SOURCE. `facts` above is computed over every
+  // public document, so the counts and the key-document links still describe the whole registry.
+  const extracted = documents.filter(hasExtractedText);
+  if (extracted.length !== documents.length) {
+    logger.info('[project-summary] documents with no extracted text cannot be sources', {
+      projectId: String(projectId), withoutText: documents.length - extracted.length
+    });
+  }
+
   const registry = citationRegistry();
   const projectName = sanitisePromptName(project.name || project.displayName || projectId);
 
   const usage = { prompt_tokens: 0, completion_tokens: 0 };
   const models = new Set();
-  // Why a section is null, for the sections where "null" and "nothing was generated" differ. An
-  // absent document is not in here — that is the grounding rule working, not a fault.
+  // Why EVERY null section is null, the ones no model call was made for included. A null with no
+  // reason is what the 2026-09-09 Site C run stored for status, timelineEvents and compliance, and
+  // it reads as "the model had nothing to say" where the cause was three unextracted documents.
   const sectionErrors = {};
+  // Amendments are one call per document, so a single reason would name only the last failure.
+  // Collected per reason, because the document ids are what an operator acts on.
+  const amendmentErrors = new Map();
+
+  /** Record why a section produced nothing, and say it once in the log. */
+  const record = (name, reason, documentId) => {
+    const at = documentId ? `, document ${documentId}` : '';
+    const line = `[project-summary] ${name}: nothing generated (${reason}${at})`;
+    const meta = { projectId: String(projectId), documentId: documentId ? String(documentId) : null };
+    if (QUIET_REASONS.includes(reason)) logger.info(line, meta);
+    else logger.warn(line, meta);
+
+    if (name === 'amendments') {
+      const ids = amendmentErrors.get(reason) || [];
+      if (documentId) ids.push(String(documentId));
+      amendmentErrors.set(reason, ids);
+      return;
+    }
+    sectionErrors[name] = reason;
+  };
+
   const wanted = name => !section || section === name;
 
+  // Which document each section reads, decided before anything is fetched, and picked from the
+  // documents that HAVE text: a picked document with none spends the section for nothing.
+  //
+  // Status: the newest amendment with text if there is one, else the certificate. The sentence the
+  // card carries is about where the project stands NOW, so the most recent decision wins.
+  const statusDoc = facts.amendments
+    .map(ref => extracted.find(d => String(d.id) === ref.documentId))
+    .find(Boolean) || PICK.certificate(extracted);
+  const scheduleB = PICK.scheduleB(extracted);
+  const federalDoc = PICK.federal(extracted);
+  const complianceDoc = PICK.newestInspection(extracted);
+  const timelineDoc = PICK.assessmentReport(extracted) || PICK.certificate(extracted);
+  const amendmentDocs = facts.amendments
+    .map(ref => ({ ref, document: documents.find(d => String(d.id) === ref.documentId) }))
+    .filter(a => a.document);
+
+  // EVERY API READ HAPPENS HERE, BEFORE THE FIRST MODEL CALL.
+  //
+  // The generator runs from a workstation on a staff token that expires five minutes after it is
+  // issued, and one call over a 120-source prompt takes minutes. Reads interleaved with model calls
+  // therefore hit 401 partway through a run and lose everything generated before it. Reading first
+  // puts the whole token-bearing part of the run inside a minute, after which the model works from
+  // memory and the token can expire harmlessly.
+  const chunksByDocument = new Map();
+  const prefetch = async (name, document) => {
+    if (!wanted(name) || !document) return;
+    const id = String(document.id);
+    if (chunksByDocument.has(id)) return;
+    const { items } = await sources.chunksForDocument(id);
+    chunksByDocument.set(id, items || []);
+  };
+  const chunksOf = document => chunksByDocument.get(String(document.id)) || [];
+
+  await prefetch('status', statusDoc);
+  await prefetch('conditions', scheduleB);
+  await prefetch('federal', federalDoc);
+  await prefetch('compliance', complianceDoc);
+  await prefetch('timelineEvents', timelineDoc);
+  for (const { document } of amendmentDocs) {
+    if (hasExtractedText(document)) await prefetch('amendments', document);
+  }
+
+  // Nations come from the project's own passages, not from one document: Site C's certificate names
+  // no First Nation, so a certificate-only source reported nothing on a project with 30 consulted
+  // nations. The keyword search says WHICH documents name one — its rows carry an escaped snippet
+  // and no chunk text — and the chunks themselves come from the per-document read every other
+  // section uses, so what the model sees is text that can be cited and grounded.
+  const nationsChunks = [];
+  if (wanted('nations')) {
+    const hits = await sources.chunkSearch({
+      projectId: String(projectId), keywords: NATIONS_KEYWORDS
+    });
+    const byId = new Map(extracted.map(d => [String(d.id), d]));
+    for (const id of new Set(hits.map(hit => String(hit.documentId || '')))) {
+      // A hit outside the public, extracted list is not a source, however well it ranked.
+      const document = byId.get(id);
+      if (!document || nationsChunks.length >= config.projectSummaryNationChunks) continue;
+      await prefetch('nations', document);
+      for (const chunk of chunksOf(document)) {
+        if (nationsChunks.length >= config.projectSummaryNationChunks) break;
+        if (!NATIONS_MENTION.test(String(chunk.content || ''))) continue;
+        nationsChunks.push({ ...chunk, documentName: nameOf(document) });
+      }
+    }
+    logger.info('[project-summary] nations sources', {
+      projectId: String(projectId), documents: hits.length, chunks: nationsChunks.length
+    });
+  }
+
+  // The Organization rows the nation names are joined to. Read here, on the same token, rather than
+  // after the nations section returns; skipped when that section cannot run at all.
+  const organizations = nationsChunks.length ? await sources.organizations() : [];
+
   /** One section end to end, with its usage folded into the record's totals. */
-  const run = async (name, document, spec) => {
-    if (!wanted(name) || !document) return null;
-    const { items: chunks } = await sources.chunksForDocument(String(document.id));
-    const result = await runSection({ document, chunks, registry, projectName, ...spec });
-    if (result.reason) sectionErrors[name] = result.reason;
+  const run = async (name, document, { chunks, absentReason, ...spec }) => {
+    if (!wanted(name)) return null;
+    const sourceChunks = chunks || (document ? chunksOf(document) : []);
+    if (!document || sourceChunks.length === 0) {
+      // No sources means no model call: a model handed nothing answers from its own knowledge, and
+      // on a regulatory registry that answer is indistinguishable from a real one.
+      record(name, absentReason || (document ? 'no_chunks' : 'no_document'),
+        document && document.id);
+      return null;
+    }
+    const result = await runSection({
+      section: name, document, chunks: sourceChunks, registry, projectName,
+      maxTokens: maxTokensFor(name), ...spec
+    });
+    if (result.reason) record(name, result.reason, result.documentId);
     if (result.usage) {
       usage.prompt_tokens += Number(result.usage.prompt_tokens) || 0;
       usage.completion_tokens += Number(result.usage.completion_tokens) || 0;
@@ -717,48 +1117,40 @@ async function generateProjectSummary(projectId, opts = {}) {
     return result;
   };
 
-  // Status: the newest amendment if there is one, else the certificate. The sentence the card
-  // carries is about where the project stands NOW, so the most recent decision document wins.
-  const statusDoc = facts.amendments.length
-    ? documents.find(d => String(d.id) === facts.amendments[0].documentId)
-    : PICK.certificate(documents);
   const status = await run('status', statusDoc, {
     shape: SHAPES.status,
     instruction: INSTRUCTIONS.status,
     build: buildSentence
   });
 
-  const scheduleB = PICK.scheduleB(documents);
   const conditions = await run('conditions', scheduleB, {
     shape: SHAPES.conditions,
     instruction: INSTRUCTIONS.conditions,
     build: buildItems
   });
 
-  const federalDoc = PICK.federal(documents);
   const federal = await run('federal', federalDoc, {
     shape: SHAPES.conditions,
     instruction: INSTRUCTIONS.federal,
     build: buildItems
   });
 
-  // Nations from the certificate, falling back to the assessment report — Site C has no Section 11
-  // Order document in DEMI, which is where this would otherwise be read.
-  const nationsDoc = PICK.certificate(documents) || PICK.assessmentReport(documents);
-  const nationsResult = await run('nations', nationsDoc, {
+  const nationsResult = await run('nations', NATIONS_SOURCE, {
+    chunks: nationsChunks,
+    // Nothing to summarise here is not a missing document: the search over the whole project found
+    // no passage that names a First Nation.
+    absentReason: 'no_source',
     shape: SHAPES.nations,
     instruction: INSTRUCTIONS.nations,
     build: buildNations
   });
 
-  const complianceDoc = PICK.newestInspection(documents);
   const compliance = await run('compliance', complianceDoc, {
     shape: SHAPES.compliance,
     instruction: INSTRUCTIONS.compliance,
     build: buildParagraph
   });
 
-  const timelineDoc = PICK.assessmentReport(documents) || PICK.certificate(documents);
   const timelineEvents = await run('timelineEvents', timelineDoc, {
     shape: SHAPES.timeline,
     instruction: INSTRUCTIONS.timelineEvents,
@@ -769,9 +1161,14 @@ async function generateProjectSummary(projectId, opts = {}) {
   // sentence about one amendment cite another's chunks.
   const amendments = [];
   if (wanted('amendments')) {
-    for (const ref of facts.amendments) {
-      const doc = documents.find(d => String(d.id) === ref.documentId);
-      const result = await run('amendments', doc, {
+    for (const { ref, document } of amendmentDocs) {
+      if (!hasExtractedText(document)) {
+        // 8 of Site C's 21 amendment packages have no extracted text. The amendment still counts in
+        // `facts` and still renders as a row; what it does not get is a sentence made from nothing.
+        record('amendments', 'no_chunks', ref.documentId);
+        continue;
+      }
+      const result = await run('amendments', document, {
         shape: SHAPES.amendment,
         instruction: INSTRUCTIONS.amendments,
         build: buildSentence
@@ -780,9 +1177,13 @@ async function generateProjectSummary(projectId, opts = {}) {
         amendments.push({ documentId: ref.documentId, ...result.value });
       }
     }
+    // One entry naming every amendment that produced nothing, and why.
+    if (amendmentErrors.size) {
+      sectionErrors.amendments = Array.from(amendmentErrors,
+        ([reason, ids]) => `${reason}: ${ids.join(', ')}`).join('; ');
+    }
   }
 
-  const organizations = nationsResult && nationsResult.value ? await sources.organizations() : [];
   const nations = nationsResult && nationsResult.value
     ? joinNations(nationsResult.value, organizations)
     : null;
@@ -839,6 +1240,7 @@ module.exports = {
   PRICED_AS,
   SOURCE_ACCESS,
   isPublicSource,
+  QUIET_REASONS,
   // Exported for tests: each is a gate with its own failure mode, and each is worth pinning apart
   // from a whole-record run.
   buildFacts,

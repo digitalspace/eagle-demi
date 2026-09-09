@@ -129,6 +129,73 @@ test('apiSource on a 404', async (t) => {
   });
 });
 
+test('apiSource.organizations', async (t) => {
+  await t.test('asks the filtered search for pageSize 500, not 1000', async () => {
+    // `/search` refuses pageSize above 500 for a filtered read — `and[companyType]` is a filter.
+    const { impl, calls } = stubFetch([{ body: [{ searchResults: [{ id: 'org1' }] }] }]);
+
+    await apiSource({ baseUrl: 'https://demi.example/api', token: 't', fetchImpl: impl })
+      .organizations();
+
+    assert.ok(calls[0].url.includes('pageSize=500'), `asked ${calls[0].url}`);
+  });
+
+  await t.test('asks for the next page while a page comes back full', async () => {
+    const first = Array.from({ length: 500 }, (_, i) => ({ id: `org${i}` }));
+    const { impl, calls } = stubFetch([
+      { body: [{ searchResults: first }] },
+      { body: [{ searchResults: [{ id: 'orgLast' }] }] }
+    ]);
+
+    const orgs = await apiSource({
+      baseUrl: 'https://demi.example/api', token: 't', fetchImpl: impl
+    }).organizations();
+
+    assert.strictEqual(orgs.length, 501);
+    assert.strictEqual(orgs[500].id, 'orgLast');
+    assert.ok(calls[1].url.includes('pageNum=1'), `asked ${calls[1].url}`);
+  });
+});
+
+test('apiSource.chunkSearch', async (t) => {
+  await t.test('asks the chunk index for one project passages matching the keyword', async () => {
+    // The only keyword read over chunk TEXT. Scoped to the project on the wire, because a corpus
+    // wide match would put another project's nations on this project's page.
+    const { impl, calls } = stubFetch([{ body: [{ searchResults: [{ documentId: 'docX' }] }] }]);
+
+    await apiSource({ baseUrl: 'https://demi.example/api', token: 't', fetchImpl: impl })
+      .chunkSearch({ projectId: '272', keywords: 'First Nation' });
+
+    const asked = new URL(calls[0].url);
+    assert.strictEqual(asked.pathname, '/api/search');
+    assert.strictEqual(asked.searchParams.get('dataset'), 'DocumentChunk');
+    assert.strictEqual(asked.searchParams.get('and[projectId]'), '272');
+    assert.strictEqual(asked.searchParams.get('keywords'), 'First Nation');
+  });
+
+  await t.test('reads the rows out of the search envelope', async () => {
+    const { impl } = stubFetch([{
+      body: [{ searchResults: [{ documentId: 'docX' }, { documentId: 'docY' }], count: 2 }]
+    }]);
+
+    const hits = await apiSource({
+      baseUrl: 'https://demi.example/api', token: 't', fetchImpl: impl
+    }).chunkSearch({ projectId: '272', keywords: 'First Nation' });
+
+    assert.deepStrictEqual(hits.map(h => h.documentId), ['docX', 'docY']);
+  });
+
+  await t.test('reads a search that matched nothing as no documents', async () => {
+    const { impl } = stubFetch([{ body: [{ searchResults: [], count: 0 }] }]);
+
+    const hits = await apiSource({
+      baseUrl: 'https://demi.example/api', token: 't', fetchImpl: impl
+    }).chunkSearch({ projectId: '272', keywords: 'First Nation' });
+
+    assert.deepStrictEqual(hits, []);
+  });
+});
+
 test('apiSource.chunksForDocument', async (t) => {
   await t.test('reads the rows from the document own chunks route', async () => {
     const { impl, calls } = stubFetch([

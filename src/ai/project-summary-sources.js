@@ -17,8 +17,16 @@ const { logger } = require('../utils/logger');
 
 /** Rows a document list asks for per request. The API caps an authenticated caller at 1,000. */
 const DOCUMENT_PAGE_SIZE = 1000;
-/** Organization rows in one page. There are 246 on test; this is one request with room to spare. */
-const ORGANIZATION_PAGE_SIZE = 1000;
+/** Organization rows in one page. `and[companyType]` is a filter, so `/search` caps this at 500. */
+const ORGANIZATION_PAGE_SIZE = 500;
+/** Documents per page of a chunk search: `pageSize` there is a window of chunks, ten per document. */
+const CHUNK_SEARCH_PAGE_SIZE = 20;
+
+/** The rows of a `/search` answer, which is always `[{searchResults, count}]`. */
+function searchResults(body) {
+  const first = Array.isArray(body) ? body[0] : body;
+  return (first && first.searchResults) || [];
+}
 
 /**
  * The DEMI API over HTTP.
@@ -111,20 +119,45 @@ function apiSource({ baseUrl, token, apiKey, fetchImpl } = {}) {
     },
 
     /**
+     * The project's documents whose text matches `keywords`, best match first.
+     *
+     * `/search?dataset=DocumentChunk` is the only keyword read over chunk text, and it answers
+     * DOCUMENT rows: `pageSize` is a window of chunks grouped by document, and each row carries an
+     * escaped snippet with `content` empty, because the index does not return chunk text. So this
+     * says WHICH documents to read and the caller reads their chunks the usual way — a snippet is
+     * display markup and can be neither cited nor grounded against.
+     */
+    async chunkSearch({ projectId, keywords, pageSize = CHUNK_SEARCH_PAGE_SIZE }) {
+      const query = new URLSearchParams({
+        dataset: 'DocumentChunk',
+        'and[projectId]': String(projectId),
+        keywords: String(keywords),
+        pageSize: String(pageSize)
+      });
+      return searchResults(await call(`/search?${query}`));
+    },
+
+    /**
      * The Indigenous Group Organization rows, which is what nation names are joined to.
      *
      * Through `/search`, not a repository: it is the read the plan confirmed against test, and it
-     * is the only route that answers this container.
+     * is the only route that answers this container. `and[companyType]` is a filter, so the API
+     * refuses a pageSize above 500 here — paged the same way `documents` pages past its cap.
      */
     async organizations() {
-      const query = new URLSearchParams({
-        dataset: 'Organization',
-        'and[companyType]': 'Indigenous Group',
-        pageSize: String(ORGANIZATION_PAGE_SIZE)
-      });
-      const body = await call(`/search?${query}`);
-      const first = Array.isArray(body) ? body[0] : body;
-      return (first && first.searchResults) || [];
+      const all = [];
+      for (let pageNum = 0; ; pageNum++) {
+        const query = new URLSearchParams({
+          dataset: 'Organization',
+          'and[companyType]': 'Indigenous Group',
+          pageSize: String(ORGANIZATION_PAGE_SIZE),
+          pageNum: String(pageNum)
+        });
+        const page = searchResults(await call(`/search?${query}`));
+        for (const row of page) all.push(row);
+        if (page.length < ORGANIZATION_PAGE_SIZE) break;
+      }
+      return all;
     },
 
     /** The record already stored, or null. What `--section` merges its one fresh section into. */
