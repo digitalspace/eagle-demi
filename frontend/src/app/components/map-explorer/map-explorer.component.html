@@ -184,6 +184,25 @@
             <input type="checkbox" [checked]="showWildfires()" (change)="toggleWildfires()">
             Active wildfires
           </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; font: var(--typography-regular-small-body); padding: 3px 0; cursor: pointer;">
+            <input type="checkbox" [checked]="showInvasives()" (change)="toggleInvasives()">
+            Invasive species observations
+          </label>
+          @if (showInvasives()) {
+            <div style="padding: 2px 0 4px 1.4rem;">
+              <label for="demi-invasives-species" class="micro-label" style="display: block; margin-bottom: 2px;">Species</label>
+              <input id="demi-invasives-species" type="text" list="demi-invasives-species-options" autocomplete="off" placeholder="e.g. Baby's breath" [value]="invasivesSpecies()" (input)="setInvasivesSpecies($event)"
+                     style="width: 100%; box-sizing: border-box; padding: 0.35rem 0.6rem; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body);">
+              <datalist id="demi-invasives-species-options">
+                @for (name of invasivesSpeciesList(); track name) {
+                  <option [value]="name"></option>
+                }
+              </datalist>
+              @if (invasivesMatchLabel()) {
+                <span class="cell__sub" style="display: block; margin-top: 2px;">{{ invasivesMatchLabel() }}</span>
+              }
+            </div>
+          }
           <p class="cell__sub" style="margin: var(--layout-margin-xsmall) 0 0;">Overlays change the map. Filters change the results.</p>
         </div>
       }

@@ -2,7 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter, Router } from '@angular/router';
-import { MapExplorerComponent } from './map-explorer.component';
+import { MapExplorerComponent, invasivesCql } from './map-explorer.component';
 import { RegistryStateService } from '../../services/registry-state.service';
 import { UserdataService, SavedLasso } from '../../services/userdata.service';
 import { Project } from '../../models/registry.models';
@@ -464,5 +464,316 @@ describe('MapExplorerComponent lasso chip and save button', () => {
     await fixture.whenStable();
 
     expect(userdata.saveLasso).toHaveBeenCalledWith('Enter Area', jasmine.any(Array));
+  });
+});
+
+describe('MapExplorerComponent invasive species overlay', () => {
+  let fixture: ComponentFixture<MapExplorerComponent>;
+  let component: MapExplorerComponent;
+  let map: any;
+  let fetchSpy: jasmine.Spy;
+
+  const observation = {
+    type: 'FeatureCollection',
+    features: [{
+      properties: {
+        INVASIVE_PLANT: 'Japanese knotweed (Reynoutria / Fallopia japonica)',
+        INVASIVE_PLANT_POSITIVE: 'Japanese knotweed (Reynoutria / Fallopia japonica)',
+        INVASIVE_PLANT_NEGATIVE: null,
+        ACTIVITY_DATE: '2024-12-17Z'
+      }
+    }]
+  };
+
+  const answer = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' }
+  }));
+
+  /** Only the WMS reads, so the registry service's own start-up fetches are not mistaken for one. */
+  const featureInfoUrls = () => fetchSpy.calls.all()
+    .map(call => String(call.args[0]))
+    .filter(url => url.includes('GetFeatureInfo'));
+
+  const click = () => (component as any).onMapClick({ latlng: { lat: 49.67, lng: -125.04 } });
+
+  /** The answer lands a microtask after the body is read, which whenStable alone can miss. */
+  const settle = async () => {
+    await fixture.whenStable();
+    await new Promise(resolve => setTimeout(resolve));
+  };
+
+  const xml = (matched: number) =>
+    `<wfs:FeatureCollection numberMatched="${matched}" numberReturned="0"></wfs:FeatureCollection>`;
+
+  const xmlAnswer = (body: string) => Promise.resolve(new Response(body, {
+    status: 200,
+    headers: { 'Content-Type': 'application/xml' }
+  }));
+
+  /** Types a species and waits out the 400 ms debounce the input applies. */
+  const type = async (species: string) => {
+    component.setInvasivesSpecies({ target: { value: species } } as unknown as Event);
+    await new Promise(resolve => setTimeout(resolve, 450));
+    await settle();
+  };
+
+  const SPECIES_LIST = ["Baby's breath (Gypsophila paniculata)", 'Bull thistle (Cirsium vulgare)'];
+
+  /** The build-time species asset on its own URL; everything else keeps the default stub. */
+  const withSpeciesList = () => fetchSpy.and.callFake((input: any) =>
+    String(input).includes('invasive-species.json')
+      ? answer({ generated: '2026-09-09', source: 'https://catalogue.data.gov.bc.ca', species: SPECIES_LIST })
+      : answer([{ searchResults: [] }]));
+
+  const speciesListUrls = () => fetchSpy.calls.all()
+    .map(call => String(call.args[0]))
+    .filter(url => url.includes('data/invasive-species.json'));
+
+  const options = () => Array.from(
+    (fixture.nativeElement as HTMLElement).querySelectorAll('#demi-invasives-species-options option')
+  ).map(option => (option as HTMLOptionElement).value);
+
+  const speciesBox = () =>
+    (fixture.nativeElement as HTMLElement).querySelector('#demi-invasives-species') as HTMLInputElement | null;
+
+  beforeEach(async () => {
+    fetchSpy = spyOn(window, 'fetch').and.callFake(() => answer([{ searchResults: [] }]));
+
+    await TestBed.configureTestingModule({
+      imports: [MapExplorerComponent],
+      providers: [provideHttpClient(withXhr()), provideHttpClientTesting(), provideRouter([])]
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(MapExplorerComponent);
+    component = fixture.componentInstance;
+    spyOn(component as any, 'initMap');
+
+    map = jasmine.createSpyObj('map',
+      ['addLayer', 'removeLayer', 'getSize', 'getBounds', 'latLngToContainerPoint', 'openPopup', 'on', 'remove']);
+    map.getSize.and.returnValue({ x: 800, y: 600 });
+    map.getBounds.and.returnValue({
+      getSouthWest: () => ({ lat: 49.0, lng: -126.0 }),
+      getNorthEast: () => ({ lat: 50.0, lng: -124.0 })
+    });
+    map.latLngToContainerPoint.and.returnValue({ x: 400, y: 300 });
+    (component as any).map = map;
+    fixture.detectChanges();
+    map.addLayer.calls.reset();
+  });
+
+  it('puts the DataBC WMS tiles on the map when the overlay is switched on', () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+
+    const layer = map.addLayer.calls.mostRecent().args[0];
+    expect(layer.wmsParams.layers).toBe('pub:WHSE_FOREST_VEGETATION.IBC_INVASIVE_SPECIES_OBS_SP');
+    expect(layer.wmsParams.format).toBe('image/png');
+    expect(layer.wmsParams.transparent).toBe(true);
+    expect(layer.options.attribution).toContain('Open Government Licence');
+  });
+
+  it('paints the observations in the danger red, not the green DataBC ships', () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+
+    const sld = map.addLayer.calls.mostRecent().args[0].wmsParams.SLD_BODY as string;
+    expect(sld).toContain('#ce3e39');
+    expect(sld).not.toContain('#009100');
+    expect(sld).toContain('PolygonSymbolizer');
+    expect(sld).toContain('PointSymbolizer');
+    // Tiles go out as GET, and a browser is safe well under 2 KB.
+    expect(encodeURIComponent(sld).length).toBeLessThan(1500);
+  });
+
+  it('takes the same layer off the map when the overlay is switched off', () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+    const layer = map.addLayer.calls.mostRecent().args[0];
+
+    component.toggleInvasives();
+    fixture.detectChanges();
+
+    expect(map.removeLayer).toHaveBeenCalledWith(layer);
+  });
+
+  it('asks the WMS about the clicked pixel while the overlay is on', () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+
+    click();
+
+    const url = featureInfoUrls()[0];
+    expect(url).withContext('a click with the overlay on must query the WMS').toBeDefined();
+    expect(url).toContain('REQUEST=GetFeatureInfo');
+    expect(url).toContain('WHSE_FOREST_VEGETATION.IBC_INVASIVE_SPECIES_OBS_SP');
+    expect(url).toContain('CRS=EPSG%3A3857');
+    expect(url).toContain('I=400');
+    expect(url).toContain('J=300');
+    // Without the same style, the server answers from its own, which draws nothing when zoomed in.
+    expect(new URL(url).searchParams.get('SLD_BODY')).toContain('#ce3e39');
+  });
+
+  it('asks nothing while the overlay is off', () => {
+    click();
+
+    expect(featureInfoUrls()).toEqual([]);
+  });
+
+  it('names the species, the date and the presence in the popup', async () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+    fetchSpy.and.callFake(() => answer(observation));
+
+    click();
+    await settle();
+
+    const card = map.openPopup.calls.mostRecent().args[0].getContent() as HTMLElement;
+    expect(card.textContent).toContain('Japanese knotweed');
+    expect(card.textContent).toContain('Reynoutria / Fallopia japonica');
+    expect(card.textContent).toContain('2024-12-17');
+    expect(card.textContent).toContain('Present');
+  });
+
+  it('reads the species list once, the first time the overlay goes on', async () => {
+    withSpeciesList();
+
+    component.toggleInvasives();
+    fixture.detectChanges();
+    await settle();
+    expect(component.invasivesSpeciesList()).toEqual(SPECIES_LIST);
+
+    component.toggleInvasives();
+    fixture.detectChanges();
+    component.toggleInvasives();
+    fixture.detectChanges();
+    await settle();
+
+    expect(speciesListUrls().length).withContext('the asset never changes inside one visit').toBe(1);
+  });
+
+  it('offers every species as an option under the box', async () => {
+    withSpeciesList();
+    component.layersOpen.set(true);
+    component.toggleInvasives();
+    fixture.detectChanges();
+    await settle();
+    fixture.detectChanges();
+
+    expect(speciesBox()!.getAttribute('list')).toBe('demi-invasives-species-options');
+    expect(options()).toEqual(SPECIES_LIST);
+  });
+
+  it('filters on the whole name when an option is chosen', async () => {
+    withSpeciesList();
+    component.toggleInvasives();
+    fixture.detectChanges();
+    const layer = map.addLayer.calls.mostRecent().args[0];
+
+    await type(SPECIES_LIST[0]);
+
+    expect(layer.wmsParams.CQL_FILTER)
+      .toBe("INVASIVE_PLANT ILIKE '%Baby''s breath (Gypsophila paniculata)%'");
+  });
+
+  it('says All species until a name is typed', async () => {
+    component.layersOpen.set(true);
+    component.toggleInvasives();
+    fixture.detectChanges();
+    expect(component.invasivesMatchLabel()).toBe('All species');
+
+    fetchSpy.and.callFake(() => xmlAnswer(xml(697)));
+    await type('baby');
+    fixture.detectChanges();
+    expect(component.invasivesMatchLabel()).toBe('697 observations');
+
+    await type('  ');
+    fixture.detectChanges();
+    expect(component.invasivesMatchLabel()).toBe('All species');
+  });
+
+  it('quotes a species safely into CQL', () => {
+    expect(invasivesCql("Baby's breath")).toBe("INVASIVE_PLANT ILIKE '%Baby''s breath%'");
+    expect(invasivesCql('50%_knap')).toBe("INVASIVE_PLANT ILIKE '%50\\%\\_knap%'");
+    expect(invasivesCql('   ')).toBe('');
+  });
+
+  it('shows the species box only while the overlay is on', () => {
+    component.layersOpen.set(true);
+    fixture.detectChanges();
+    expect(speciesBox()).toBeNull();
+
+    component.toggleInvasives();
+    fixture.detectChanges();
+
+    expect(speciesBox()).not.toBeNull();
+    expect(speciesBox()!.placeholder).toBe("e.g. Baby's breath");
+  });
+
+  it('puts the typed species on the tiles and takes it off when cleared', async () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+    const layer = map.addLayer.calls.mostRecent().args[0];
+
+    await type('baby');
+    expect(layer.wmsParams.CQL_FILTER).toBe("INVASIVE_PLANT ILIKE '%baby%'");
+
+    await type('');
+    expect(layer.wmsParams.CQL_FILTER).toBeUndefined();
+  });
+
+  it('asks the WMS about the filtered set, not every observation', async () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+    await type("Baby's breath");
+
+    click();
+
+    const asked = new URL(featureInfoUrls()[0]).searchParams.get('CQL_FILTER');
+    expect(asked).toBe("INVASIVE_PLANT ILIKE '%Baby''s breath%'");
+  });
+
+  it('counts what the species matches', async () => {
+    component.toggleInvasives();
+    component.layersOpen.set(true);
+    fixture.detectChanges();
+    fetchSpy.and.callFake(() => xmlAnswer(xml(697)));
+
+    await type('baby');
+    fixture.detectChanges();
+
+    expect(component.invasivesMatches()).toBe(697);
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('697 observations');
+  });
+
+  it('ignores a count that lands after a newer species was typed', async () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+
+    let releaseStale: (answer: Response) => void = () => {};
+    fetchSpy.and.callFake(() => new Promise<Response>(resolve => { releaseStale = resolve; }));
+    await type('baby');
+
+    fetchSpy.and.callFake(() => xmlAnswer(xml(3)));
+    await type('knapweed');
+    expect(component.invasivesMatches()).toBe(3);
+
+    releaseStale(new Response(xml(697), { status: 200 }));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await settle();
+
+    expect(component.invasivesMatches()).withContext('the older answer must not win').toBe(3);
+  });
+
+  it('says so when the pixel carries no observation', async () => {
+    component.toggleInvasives();
+    fixture.detectChanges();
+    fetchSpy.and.callFake(() => answer({ type: 'FeatureCollection', features: [] }));
+
+    click();
+    await settle();
+
+    const card = map.openPopup.calls.mostRecent().args[0].getContent() as HTMLElement;
+    expect(card.textContent).toBe('No observation here.');
   });
 });
