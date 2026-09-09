@@ -203,7 +203,7 @@ describe('ProjectSummaryComponent', () => {
 
     expect(el.querySelector('.ps-status .ps__meta')).toBeNull();
     const labels = Array.from(el.querySelectorAll('.ps-timeline__label')).map(row => squash(row.textContent));
-    expect(labels).toEqual(['Pre-Application', 'Application Review', 'Certificate E14-01 issued']);
+    expect(labels).toEqual(['Certificate E14-01 issued', 'Application Review', 'Pre-Application']);
   });
 
   it('resolves a dated phase row on the timeline as well as the undated ones', async () => {
@@ -221,7 +221,7 @@ describe('ProjectSummaryComponent', () => {
     const el = await render();
 
     const labels = Array.from(el.querySelectorAll('.ps-timeline__label')).map(row => squash(row.textContent));
-    expect(labels).toEqual(['Pre-Application', 'Certificate E14-01 issued']);
+    expect(labels).toEqual(['Certificate E14-01 issued', 'Pre-Application']);
   });
 
   it('renders the conditions and opens the dialog on the card', async () => {
@@ -264,6 +264,127 @@ describe('ProjectSummaryComponent', () => {
     expect(dialog.textContent?.trim()).toBe('');
     // Focus goes back to the card that opened it, not to the top of the page.
     expect(document.activeElement).toBe(cards[0]);
+  });
+
+  /** The whole page from the fixture: facts, summary, organisations and an empty List table. */
+  function routeWholePage(summary: unknown = MOCK_PROJECT_SUMMARY) {
+    routeFetch(url => {
+      if (url.includes('/summary')) return json(summary);
+      if (url.includes('dataset=List')) return listSearch();
+      if (url.includes('/search?')) {
+        return json([{ searchResults: MOCK_ORGANIZATIONS.map(o => ({ ...o, _id: o.id })), count: MOCK_ORGANIZATIONS.length }]);
+      }
+      return json(MOCK_PROJECT_SUMMARY_FACTS);
+    });
+  }
+
+  it('orders the whole timeline newest first and sinks undated events to the end', async () => {
+    // An extracted event is the only row that can reach the timeline without a date: a phase row
+    // and an amendment row are both dropped upstream when theirs is missing. `null` and
+    // `undefined` both compare as strings above real dates (`"null"`, `"undefined"` > `"2023-…"`),
+    // so they only sink to the end because of the explicit falsy-date guard in the comparator.
+    routeWholePage({
+      ...MOCK_PROJECT_SUMMARY,
+      sections: {
+        ...MOCK_PROJECT_SUMMARY.sections,
+        timelineEvents: [
+          ...MOCK_PROJECT_SUMMARY.sections!.timelineEvents!,
+          { date: '', label: 'Panel hearings held across the Peace region', citations: [8] },
+          { date: null, label: 'Undated event with a null date', citations: [9] } as any,
+          { date: undefined, label: 'Undated event with an undefined date', citations: [10] } as any
+        ]
+      }
+    });
+
+    const el = await render();
+
+    // Fact rows and extracted rows interleave: they are one list, sorted after the merge, not two
+    // lists rendered one after the other.
+    const dates = Array.from(el.querySelectorAll('.ps-timeline__date')).map(row => squash(row.textContent));
+    expect(dates).toEqual([
+      '21 Jun 2023',
+      '2 Nov 2021',
+      '26 Feb 2021',
+      '15 Aug 2019',
+      '2 Aug 2017',
+      '14 Oct 2014',
+      '1 May 2014',
+      '19 Jan 2011',
+      '—',
+      '—',
+      '—'
+    ]);
+    const first = el.querySelector('.ps-timeline__label')!;
+    expect(squash(first.textContent)).toContain('Amendment #8');
+  });
+
+  it('folds every citation list behind a collapsed Sources count', async () => {
+    routeWholePage();
+
+    const el = await render();
+
+    const status = el.querySelector('.ps-status')!;
+    const fold = status.querySelector<HTMLDetailsElement>('details.ps-sources')!;
+    // Collapsed by default: the sentence is what the reader came for.
+    expect(fold.open).toBeFalse();
+    expect(squash(fold.querySelector('summary')?.textContent)).toBe('Sources (1)');
+    // The count is the number of chips behind the fold, not a hard-coded label.
+    expect(fold.querySelectorAll('.ps-cite').length).toBe(1);
+
+    // The same fold wherever a generated claim carries citations, because there is one template.
+    const timelineFold = el.querySelector('.ps-timeline__row--ai details.ps-sources')!;
+    expect(squash(timelineFold.querySelector('summary')?.textContent)).toBe('Sources (1)');
+    const lists = Array.from(el.querySelectorAll('.ps-cites'));
+    expect(lists.length).toBeGreaterThan(1);
+    expect(lists.every(list => !!list.closest('details.ps-sources'))).toBeTrue();
+  });
+
+  it('labels the condition card action Open', async () => {
+    routeWholePage();
+
+    const el = await render();
+
+    const cues = Array.from(el.querySelectorAll('.ps-card__cue')).map(cue => squash(cue.textContent));
+    expect(cues.length).toBe(MOCK_PROJECT_SUMMARY.sections!.conditions!.items.length);
+    expect(new Set(cues)).toEqual(new Set(['Open']));
+    expect(el.textContent).not.toContain('Tap for summary');
+  });
+
+  it('shows the one-line note and no sources for a section that generated nothing', async () => {
+    // `nations: null` is what the generator writes when no certificate or assessment report was
+    // readable. The section used to keep its badge and its citation chips: sources for a claim
+    // nobody made.
+    routeWholePage({
+      ...MOCK_PROJECT_SUMMARY,
+      sections: { ...MOCK_PROJECT_SUMMARY.sections, nations: null }
+    });
+
+    const el = await render();
+
+    const section = el.querySelector('[aria-labelledby="ps-nations-h"]')!;
+    expect(squash(section.querySelector('.ps-note')?.textContent))
+      .toBe('No nations were read from this project’s documents, so none are listed.');
+    expect(section.querySelectorAll('details.ps-sources').length).toBe(0);
+    expect(section.querySelectorAll('.ps-cite').length).toBe(0);
+    expect(section.querySelectorAll('.ps-card').length).toBe(0);
+    expect(section.textContent).not.toContain('AI-generated from the sources below');
+  });
+
+  it('drops a nation note with no name rather than render its sources under a blank', async () => {
+    routeWholePage({
+      ...MOCK_PROJECT_SUMMARY,
+      sections: {
+        ...MOCK_PROJECT_SUMMARY.sections,
+        nations: [{ name: '   ', organizationId: null, citations: [11] }]
+      }
+    });
+
+    const el = await render();
+
+    const section = el.querySelector('[aria-labelledby="ps-nations-h"]')!;
+    expect(section.querySelectorAll('.ps-unmatched').length).toBe(0);
+    expect(section.querySelectorAll('details.ps-sources').length).toBe(0);
+    expect(section.querySelector('.ps-note')).not.toBeNull();
   });
 
   it('renders an unmatched nation name as a plain cited row, not a card', async () => {
