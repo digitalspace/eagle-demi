@@ -181,6 +181,43 @@ test('mergeSection', async (t) => {
   await t.test('carries the source access forward', () => {
     assert.strictEqual(mergeSection(STORED, FRESH, 'conditions').sourceAccess, 'public');
   });
+
+  await t.test('replaces the section with the reason it came back empty', () => {
+    // A regenerated section that failed overwrites a good stored one. Storing that null without
+    // this run's reason leaves the record saying the section is empty and nothing saying why,
+    // and the run's own verdict line reports failed=none.
+    const failed = {
+      ...FRESH,
+      sections: { ...FRESH.sections, conditions: null },
+      sectionErrors: { conditions: 'not_json' }
+    };
+
+    const merged = mergeSection(STORED, failed, 'conditions');
+
+    assert.strictEqual(merged.sections.conditions, null);
+    assert.strictEqual(merged.sectionErrors.conditions, 'not_json');
+    assert.match(summaryLine(merged, true), /failed=conditions /);
+  });
+
+  await t.test('drops the stored reason when the section comes back', () => {
+    // The mirror case: an earlier failure's reason surviving a run that succeeded makes the record
+    // say a section that renders is a section that failed.
+    const stored = { ...STORED, sectionErrors: { conditions: 'not_json' } };
+
+    const merged = mergeSection(stored, FRESH, 'conditions');
+
+    assert.strictEqual(merged.sectionErrors.conditions, undefined);
+    assert.match(summaryLine(merged, true), /failed=none /);
+  });
+
+  await t.test('leaves the reasons of the sections nobody regenerated alone', () => {
+    const stored = { ...STORED, sectionErrors: { status: 'no_document', compliance: 'truncated' } };
+
+    const merged = mergeSection(stored, FRESH, 'conditions');
+
+    assert.deepStrictEqual(merged.sectionErrors,
+      { status: 'no_document', compliance: 'truncated' });
+  });
 });
 
 test('summaryLine', async (t) => {

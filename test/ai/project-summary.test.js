@@ -1142,6 +1142,32 @@ test('generateProjectSummary', async (t) => {
     assert.strictEqual(calls.length, 0);
   });
 
+  await t.test('builds no federal section from EAO advice about a decision statement', async () => {
+    // The title names a decision statement, so the federal pattern matches it. It is still the
+    // Executive Director's advice, and the advice guard is the only thing keeping provincial
+    // recommendations off the page as Canada's decision.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Fish habitat', oneLiner: 'Protect it.',
+        bullets: [], citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [{
+        id: 'docE', type: 'Decision Materials', datePosted: '2014-02-27',
+        displayName: 'Recommendations of the Executive Director on the Federal Decision Statement',
+        isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+      }],
+      chunks: { docE: [chunk(1, 'Protect it.', 'docE')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(record.sections.federal, null);
+    assert.strictEqual(record.sectionErrors.federal, 'no_document');
+    assert.strictEqual(calls.length, 0);
+  });
+
   await t.test('builds the federal section from a federal decision statement', async () => {
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';

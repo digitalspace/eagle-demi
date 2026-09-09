@@ -78,9 +78,10 @@ function parseArgs(argv) {
 /**
  * A one-section run folded into the record already stored.
  *
- * Only the named section and the citations it introduced move. `facts` come from the fresh run
- * because they are computed from the current document index and cost nothing; `usage` and the cost
- * describe THIS run, not the sum of every run the record has seen, so the number stays readable.
+ * Only the named section, the reason it is empty and the citations it introduced move. `facts`
+ * come from the fresh run because they are computed from the current document index and cost
+ * nothing; `usage` and the cost describe THIS run, not the sum of every run the record has seen,
+ * so the number stays readable.
  *
  * Citations are RENUMBERED, not appended: the fresh section's numbers index its own list, and
  * concatenating the two lists would leave every untouched section pointing at the wrong source.
@@ -130,6 +131,15 @@ function mergeSection(stored, fresh, section) {
   const sections = {};
   for (const [name, value] of Object.entries(kept)) sections[name] = renumber(name, value);
 
+  // The reason a section is null moves with the section it explains. Keeping the stored reasons
+  // for everything else and taking this run's for the named one is what makes the verdict line
+  // true after a one-section run: a fresh failure gets its reason, and a section that came back
+  // loses the reason from the run before, instead of reading as failed while it renders.
+  const sectionErrors = { ...stored.sectionErrors };
+  const freshError = (fresh.sectionErrors || {})[section];
+  if (freshError === undefined) delete sectionErrors[section];
+  else sectionErrors[section] = freshError;
+
   return {
     ...stored,
     generatedAt: fresh.generatedAt,
@@ -140,6 +150,7 @@ function mergeSection(stored, fresh, section) {
     estimatedCostCad: fresh.estimatedCostCad,
     facts: fresh.facts,
     sections,
+    sectionErrors,
     citations: entries
   };
 }
