@@ -668,6 +668,32 @@ svg.leaflet-zoom-animated:focus {
   color: var(--typography-color-secondary);
 }
 
+/* The fold the chips sit behind. Inside a card this is the flex item, and a flex item does not
+   shrink below its content unless it is told it may — without these three it hangs off the card. */
+.ps-sources {
+  align-self: stretch;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: var(--layout-margin-small);
+}
+
+/* `list-item` is the summary's own display, and it is what draws the disclosure triangle: set it
+   to inline-block and the marker goes with it, leaving a gold label that looks like nothing. */
+.ps-sources__summary {
+  display: list-item;
+  width: fit-content;
+  font: var(--typography-bold-label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--typography-color-link);
+  cursor: pointer;
+}
+
+.ps-sources__summary:focus-visible {
+  outline: 2px solid var(--surface-color-primary-default);
+  outline-offset: 2px;
+}
+
 /* Citation chips. Same contract as the AI Summary sources table: a number, the document it points
    at, and a leg that mints a presigned URL under the caller's own access. */
 .ps-cites {
@@ -675,11 +701,8 @@ svg.leaflet-zoom-animated:focus {
   display: flex;
   flex-wrap: wrap;
   gap: var(--layout-margin-xsmall);
-  margin: var(--layout-margin-small) 0 0;
+  margin: var(--layout-margin-xsmall) 0 0;
   padding: 0;
-  /* Inside a card the chip is wider than the column it sits in, and a flex item does not shrink
-     below its content unless it is told it may. Without these three it hangs off the card. */
-  align-self: stretch;
   max-width: 100%;
   min-width: 0;
 }

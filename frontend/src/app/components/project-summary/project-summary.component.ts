@@ -152,9 +152,10 @@ export class ProjectSummaryComponent implements OnInit {
   /**
    * The merged timeline.
    *
-   * Four sources, one list, oldest first: dated phase rows, the decision date, one row per
-   * amendment, and the model's extracted events. Every row here carries a date — Eagle's undated
-   * phase names go to `phaseSequence` rather than render as a row with an em dash for a date.
+   * Four sources, one list, newest first: dated phase rows, the decision date, one row per
+   * amendment, and the model's extracted events. Eagle's undated phase names go to `phaseSequence`
+   * rather than render as a row with an em dash for a date, but an extracted event can still reach
+   * here without one, and a row with no date cannot be placed on the axis — so it sinks to the end.
    */
   timeline = computed<TimelineRow[]>(() => {
     const f = this.facts();
@@ -188,7 +189,10 @@ export class ProjectSummaryComponent implements OnInit {
       dated.push({ key: `ai-${e.date}-${e.label}`, date: e.date, label: e.label, kind: 'ai', citations: e.citations });
     }
 
-    dated.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    dated.sort((a, b) => {
+      if (!a.date || !b.date) return a.date ? -1 : b.date ? 1 : 0;
+      return String(b.date).localeCompare(String(a.date));
+    });
     return dated;
   });
 
@@ -211,7 +215,8 @@ export class ProjectSummaryComponent implements OnInit {
    */
   nationRows = computed<{ note: NationNote; org: OrganizationRow | null; pending: boolean }[]>(() => {
     const orgs = this.service.organizations();
-    return (this.sections()?.nations || []).map(note => ({
+    // A nameless note would render as citation chips under a blank line: sources for nothing.
+    return (this.sections()?.nations || []).filter(note => !!note.name?.trim()).map(note => ({
       note,
       org: note.organizationId ? (orgs?.get(note.organizationId) || null) : null,
       pending: !!note.organizationId && !orgs

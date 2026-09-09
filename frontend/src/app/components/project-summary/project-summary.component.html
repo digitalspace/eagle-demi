@@ -3,21 +3,29 @@
   state, so a missing summary row costs the reader the AI blocks and nothing else.
 -->
 
-<!-- Cited sources under a generated claim. Same chip everywhere on the page. -->
+<!--
+  Cited sources under a generated claim. Same chip everywhere on the page, folded away until asked
+  for: the claim is what a reader came for, the documents behind it are the follow-up. Native
+  <details>, so the disclosure, the keyboard reach and the expanded state are the browser's.
+-->
 <ng-template #cites let-numbers>
-  @if (citations(numbers).length) {
-    <ul class="ps-cites">
-      @for (c of citations(numbers); track c.chunkId) {
-        <li>
-          <button type="button" class="ps-cite" (click)="openDocument(c.documentId)" [disabled]="downloadingId() === c.documentId">
-            <span class="ps-cite__n">[{{ c.n }}]</span>
-            <span class="ps-cite__doc">{{ c.documentName }}</span>
-            <span class="ps-cite__page">p.&nbsp;{{ c.pageNumber }}</span>
-            <span class="ps-cite__action">{{ downloadingId() === c.documentId ? 'Preparing…' : 'Open document' }}</span>
-          </button>
-        </li>
-      }
-    </ul>
+  @let cited = citations(numbers);
+  @if (cited.length) {
+    <details class="ps-sources">
+      <summary class="ps-sources__summary">Sources ({{ cited.length }})</summary>
+      <ul class="ps-cites">
+        @for (c of cited; track c.chunkId) {
+          <li>
+            <button type="button" class="ps-cite" (click)="openDocument(c.documentId)" [disabled]="downloadingId() === c.documentId">
+              <span class="ps-cite__n">[{{ c.n }}]</span>
+              <span class="ps-cite__doc">{{ c.documentName }}</span>
+              <span class="ps-cite__page">p.&nbsp;{{ c.pageNumber }}</span>
+              <span class="ps-cite__action">{{ downloadingId() === c.documentId ? 'Preparing…' : 'Open document' }}</span>
+            </button>
+          </li>
+        }
+      </ul>
+    </details>
   }
 </ng-template>
 
@@ -160,7 +168,7 @@
             <span class="micro-label ps-card__category">{{ item.category }}</span>
             <span class="ps-card__title">{{ item.title }}</span>
             <span class="ps-card__text">{{ item.oneLiner }}</span>
-            <span class="ps-card__cue" aria-hidden="true">Tap for summary</span>
+            <span class="ps-card__cue" aria-hidden="true">Open</span>
             <span class="visually-hidden">Open the summary of this condition</span>
           </button>
         }
@@ -181,9 +189,12 @@
   @if (amendmentRows().length) {
     <section class="ps-section" aria-labelledby="ps-amendments-h">
       <h2 id="ps-amendments-h" class="ps-section__title">Amendments</h2>
-      <p class="ps-badge-row">
-        <span class="pill pill--info">AI-generated from the sources below</span>
-      </p>
+      <!-- The rows are facts. The badge speaks for the sentences under them, so it waits for one. -->
+      @if (sections()?.amendments) {
+        <p class="ps-badge-row">
+          <span class="pill pill--info">AI-generated from the sources below</span>
+        </p>
+      }
       <ul class="ps-list">
         @for (a of amendmentRows(); track a.documentId) {
           <li class="ps-list__row">
@@ -214,7 +225,7 @@
               <span class="micro-label ps-card__category">{{ item.category }}</span>
               <span class="ps-card__title">{{ item.title }}</span>
               <span class="ps-card__text">{{ item.oneLiner }}</span>
-              <span class="ps-card__cue" aria-hidden="true">Tap for summary</span>
+              <span class="ps-card__cue" aria-hidden="true">Open</span>
               <span class="visually-hidden">Open the summary of this condition</span>
             </button>
           }
@@ -225,54 +236,63 @@
     </section>
   }
 
-  @if (sections()?.nations; as nations) {
+  @if (summary()) {
     <section class="ps-section" aria-labelledby="ps-nations-h">
       <h2 id="ps-nations-h" class="ps-section__title">First Nations consulted</h2>
-      <p class="ps-badge-row">
-        <span class="pill pill--info">AI-generated from the sources below</span>
-      </p>
-      <p class="ps-section__lede">
-        Names are read from the project’s own certificate and assessment documents. Addresses and
-        websites come from the registry’s organisation records, never from the model.
-      </p>
-
-      <div class="ps-cards">
-        <!-- The names are already known; only the address and website are still in flight. -->
-        @for (row of nationRows(); track row.note.name) {
-          @if (row.pending) {
-            <span class="skeleton" aria-hidden="true" style="height: 7rem;"></span>
-          }
-        }
-        @for (row of nationRows(); track row.note.name) {
-          @if (row.org; as org) {
-            <div class="ps-card">
-              <span class="ps-card__title">{{ org.name }}</span>
-              @if (address(org)) {
-                <span class="ps-card__text">{{ address(org) }}</span>
-              }
-              @if (org.website) {
-                <a class="ps-card__link" [href]="org.website" target="_blank" rel="noopener">
-                  Website<span class="visually-hidden"> for {{ org.name }} (opens in a new tab)</span>
-                </a>
-              }
-              <ng-container *ngTemplateOutlet="cites; context: { $implicit: row.note.citations }"></ng-container>
-            </div>
-          }
-        }
-      </div>
-
       <!--
-        A name the join could not match gets its name and its citation and no card: an address
-        guessed from a near-match would be a contact detail nobody checked.
+        Nothing generated below this heading unless a name was extracted. A section with no names
+        used to keep its badge and its citation chips, which reads as sources for a claim that was
+        never made.
       -->
-      @for (row of nationRows(); track row.note.name) {
-        @if (!row.org && !row.pending) {
-          <p class="ps-unmatched">
-            <span class="ps-unmatched__name">{{ row.note.name }}</span>
-            <span class="ps-unmatched__note">named in the documents; no organisation record matched</span>
-            <ng-container *ngTemplateOutlet="cites; context: { $implicit: row.note.citations }"></ng-container>
-          </p>
+      @if (nationRows().length) {
+        <p class="ps-badge-row">
+          <span class="pill pill--info">AI-generated from the sources below</span>
+        </p>
+        <p class="ps-section__lede">
+          Names are read from the project’s own certificate and assessment documents. Addresses and
+          websites come from the registry’s organisation records, never from the model.
+        </p>
+
+        <div class="ps-cards">
+          <!-- The names are already known; only the address and website are still in flight. -->
+          @for (row of nationRows(); track row.note.name) {
+            @if (row.pending) {
+              <span class="skeleton" aria-hidden="true" style="height: 7rem;"></span>
+            }
+          }
+          @for (row of nationRows(); track row.note.name) {
+            @if (row.org; as org) {
+              <div class="ps-card">
+                <span class="ps-card__title">{{ org.name }}</span>
+                @if (address(org)) {
+                  <span class="ps-card__text">{{ address(org) }}</span>
+                }
+                @if (org.website) {
+                  <a class="ps-card__link" [href]="org.website" target="_blank" rel="noopener">
+                    Website<span class="visually-hidden"> for {{ org.name }} (opens in a new tab)</span>
+                  </a>
+                }
+                <ng-container *ngTemplateOutlet="cites; context: { $implicit: row.note.citations }"></ng-container>
+              </div>
+            }
+          }
+        </div>
+
+        <!--
+          A name the join could not match gets its name and its citation and no card: an address
+          guessed from a near-match would be a contact detail nobody checked.
+        -->
+        @for (row of nationRows(); track row.note.name) {
+          @if (!row.org && !row.pending) {
+            <p class="ps-unmatched">
+              <span class="ps-unmatched__name">{{ row.note.name }}</span>
+              <span class="ps-unmatched__note">named in the documents; no organisation record matched</span>
+              <ng-container *ngTemplateOutlet="cites; context: { $implicit: row.note.citations }"></ng-container>
+            </p>
+          }
         }
+      } @else {
+        <p class="ps-note">No nations were read from this project’s documents, so none are listed.</p>
       }
     </section>
   }
