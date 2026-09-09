@@ -200,8 +200,11 @@ function isAssessmentReport(doc) {
   if (isType(doc, 'Assessment Report')) return true;
   const title = nameOf(doc);
   if (!ASSESSMENT_REPORT_TITLE.test(title)) return false;
-  if (SUBSIDIARY_TITLE.test(title) || PROPONENT_STUDY_TITLE.test(title)) return false;
-  return /^\s*assessment\s+report\b/i.test(title) || EAO_TITLE.test(title);
+  if (SUBSIDIARY_TITLE.test(title)) return false;
+  // The office naming itself outranks the study words: "EAO Assessment Report on the
+  // Environmental Management Plan" is the office's report, not a proponent's plan.
+  if (EAO_TITLE.test(title)) return true;
+  return /^\s*assessment\s+report\b/i.test(title) && !PROPONENT_STUDY_TITLE.test(title);
 }
 
 /** The application's own main volume, by the two names it is filed under. */
@@ -678,9 +681,8 @@ function dateSpellings(iso) {
       `${d} day of ${name}, ${year}`, `${d} day of ${name} ${year}`,
       `${ord} day of ${name}, ${year}`, `${ord} day of ${name} ${year}`
     );
-    for (const m of months) {
-      out.push(`${d}/${m}/${year}`, `${m}/${d}/${year}`, `${d}.${m}.${year}`, `${m}.${d}.${year}`);
-    }
+    // Slashes only: a dotted "10.1.2014" is a clause number far more often than a date here.
+    for (const m of months) out.push(`${d}/${m}/${year}`, `${m}/${d}/${year}`);
   }
   return out.map(s => s.toLowerCase());
 }
@@ -770,7 +772,7 @@ function keepGrounded(section, text, citations, chunks) {
  * 1, 2014") already delimit themselves and use plain `includes`.
  */
 function spellingMatches(cited, spelling) {
-  if (!/^[\d/.-]+$/.test(spelling)) return cited.includes(spelling);
+  if (!/^[\d/-]+$/.test(spelling)) return cited.includes(spelling);
   const escaped = spelling.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(^|[^0-9])${escaped}(?![0-9])`).test(cited);
 }

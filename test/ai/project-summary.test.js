@@ -1517,7 +1517,6 @@ test('groundedInCitations', async (t) => {
       'Issued October 14th, 2014.',
       'Dated this 14th day of October, 2014.',
       'Dated this 14 day of October, 2014.',
-      'Issued 14.10.2014.',
       'Issued 2014/10/14.'
     ]) {
       assert.strictEqual(
@@ -1525,8 +1524,28 @@ test('groundedInCitations', async (t) => {
     }
   });
 
-  await t.test('still refuses a dotted date the source never wrote', () => {
-    assert.strictEqual(groundedInCitations('Certificate issued 2014-10-11.', [1],
+  await t.test('spells the 11-13 days with th and 21-23 by their last digit', () => {
+    // 11th/12th/13th are the whole irregular case; 21st/22nd/23rd come from the %10 map. A source
+    // that dates itself "the 11th day of October" must still ground the claim it dates.
+    for (const [day, written] of [['11', '11th'], ['12', '12th'], ['13', '13th'],
+      ['21', '21st'], ['22', '22nd'], ['23', '23rd']]) {
+      assert.strictEqual(
+        groundedInCitations(`Order made 2014-10-${day}.`, [1],
+          [{ content: `Dated this ${written} day of October, 2014.` }]),
+        true, `a source writing "${written}" grounds October ${day}`);
+    }
+    assert.strictEqual(
+      groundedInCitations('Order made 2014-10-01.', [1],
+        [{ content: 'Dated this 11th day of October, 2014.' }]),
+      false, 'the 11th is not the 1st');
+  });
+
+  await t.test('does not read a dotted number as a date', () => {
+    // "10.1.2014" is a clause reference, not January 10. Registry documents write their dates in
+    // long form or with slashes.
+    assert.strictEqual(groundedInCitations('Issued 2014-01-10.', [1],
+      [{ content: 'See section 10.1.2014 of the plan.' }]), false);
+    assert.strictEqual(groundedInCitations('Certificate issued 2014-10-14.', [1],
       [{ content: 'Issued 14.10.2014.' }]), false);
   });
 });
@@ -1624,6 +1643,20 @@ test('key document pickers', async (t) => {
     assert.strictEqual(PICK.assessmentReport([eao]).id, 'docE');
   });
 
+  await t.test('keeps an EAO report whose subject is a plan or a study', () => {
+    // The office names its report after what it assessed, so the study words that disqualify a
+    // proponent's own filing must not disqualify the office's report on one.
+    const eao = { id: 'docP', datePosted: '2014-09-30',
+      displayName: 'EAO Assessment Report on the Environmental Management Plan' };
+    assert.strictEqual(PICK.assessmentReport([eao]).id, 'docP');
+  });
+
+  await t.test('does not read a proponent\'s study as the assessment report', () => {
+    const study = { id: 'docW', type: 'Application Materials', datePosted: '2013-05-01',
+      displayName: 'Assessment Report - Worker Accommodation Options Study' };
+    assert.strictEqual(PICK.assessmentReport([study]), null);
+  });
+
   await t.test('picks the application itself out of the documents filed under it', () => {
     // 378 Site C documents carry the type; on the type alone the application was "Appendix A".
     const documents = [
@@ -1635,6 +1668,17 @@ test('key document pickers', async (t) => {
         displayName: 'Application Information Requirements' }
     ];
     assert.strictEqual(PICK.application(documents).id, 'docEIS');
+  });
+
+  await t.test('needs the type AND a title that names an application', () => {
+    // Neither half is enough on its own: the type sweeps in 378 Site C documents, and a title can
+    // carry the word in any correspondence.
+    const supporting = { id: 'docT', type: 'Application Materials', datePosted: '2013-08-01',
+      displayName: 'Concordance Table' };
+    const letter = { id: 'docLtr', type: 'Letter', datePosted: '2013-09-01',
+      displayName: 'Letter regarding the application' };
+    assert.strictEqual(PICK.application([supporting]), null);
+    assert.strictEqual(PICK.application([letter]), null);
   });
 
   await t.test('links the assessment report the sections were written from', () => {
