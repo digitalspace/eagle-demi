@@ -25,6 +25,15 @@ const fixture = name => fs.readFileSync(path.join(FIXTURES, name), 'utf8');
 
 const TILBURY = 'Tilbury Marine Jetty Project';
 
+/** A one-page PDF with nothing on the page — what a statement filed as a scan reads like. */
+const BLANK_PDF = Buffer.from([
+  '%PDF-1.4',
+  '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj',
+  '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj',
+  '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj',
+  'trailer<</Root 1 0 R>>'
+].join('\n'), 'utf8');
+
 test('cearIdFromLink', async (t) => {
   await t.test('reads the CEAR id out of a catalog link', () => {
     assert.strictEqual(
@@ -87,6 +96,23 @@ test('parseProjectStatus', async (t) => {
   await t.test('answers nulls for a page that carries neither', () => {
     assert.deepStrictEqual(parseProjectStatus('<html><body>nothing</body></html>'),
       { status: null, title: null });
+  });
+
+  await t.test('decodes every entity the registry escapes', () => {
+    // A title is stored, shown and matched against /decision statement/i, so an entity left
+    // encoded is a title a reader sees raw and a pattern that stops matching.
+    const decoded = markup => parseProjectStatus(`<title>${markup}</title>`).title;
+    assert.strictEqual(decoded('Deep &amp; Wide'), 'Deep & Wide');
+    assert.strictEqual(decoded('&lt;Phase&gt;'), '<Phase>');
+    assert.strictEqual(decoded('&quot;Phase 2&quot;'), '"Phase 2"');
+    assert.strictEqual(decoded('Minister&apos;s'), "Minister's");
+    assert.strictEqual(decoded('Site C&mdash;Stage 2'), 'Site C—Stage 2');
+    assert.strictEqual(decoded('2014&ndash;2024'), '2014–2024');
+    assert.strictEqual(decoded('Tilbury&nbsp;Marine'), 'Tilbury Marine');
+    assert.strictEqual(decoded('Minister&#39;s'), "Minister's");
+    assert.strictEqual(decoded('Minister&#x27;s'), "Minister's");
+    // Not in the table: written through as it stands, never dropped or turned into "undefined".
+    assert.strictEqual(decoded('Caf&eacute; Project'), 'Caf&eacute; Project');
   });
 });
 
@@ -151,6 +177,16 @@ test('pickDecisionStatement', async (t) => {
     const picked = pickDecisionStatement([
       row('1', 'Decision Statement', '2014-10-14'),
       row('2', 'Updated Decision Statement', '2021-11-05')
+    ]);
+    assert.strictEqual(picked.docId, '2');
+  });
+
+  await t.test('prefers an updated statement filed the same day as the newest', () => {
+    // The equal-date case: an update filed the day a statement was issued supersedes it, so the
+    // tiebreak has to go to the update rather than to the plain row.
+    const picked = pickDecisionStatement([
+      row('1', 'Decision Statement', '2024-07-03'),
+      row('2', 'Updated Decision Statement', '2024-07-03')
     ]);
     assert.strictEqual(picked.docId, '2');
   });
@@ -334,7 +370,15 @@ test('fetchFederalSource', async (t) => {
 
     assert.strictEqual(stub.calls.length, MAX_REQUESTS);
     assert.strictEqual(source.documents.length, 5, 'the fallback list was still read');
-    assert.strictEqual(source.decision, null, 'the budget ran out before the document page');
+    assert.deepStrictEqual(source.decision, {
+      docId: '158078',
+      title: 'Decision Statement Issued under Section 54 of the ' +
+        'Canadian Environmental Assessment Act, 2012',
+      date: '2024-07-03',
+      pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      pages: [],
+      error: 'request_budget_spent'
+    }, 'the registry listed a decision; the budget is why the PDF was not read');
   });
 
   await t.test('caches what it read, so a rerun fetches nothing', async () => {
@@ -357,13 +401,67 @@ test('fetchFederalSource', async (t) => {
     assert.strictEqual(await fetchFederalSource({ name: '' }, stub), null);
   });
 
+  // A decision statement the registry LISTS and this code could not read. Each cause below returns
+  // the row with empty pages and names itself, because the caller stores "we could not read it"
+  // and "Canada issued no decision" as different things and can only tell them apart here.
+  const unread = async (routes, over = {}) => {
+    const source = await fetchFederalSource(
+      { name: TILBURY, CEAALink: '/050/evaluations/proj/80105' }, registry(routes));
+    assert.strictEqual(source.cearId, '80105', 'the rest of the read still stands');
+    assert.deepStrictEqual(source.decision, {
+      docId: '158078',
+      title: "Minister's Environmental Assessment Decision Statement",
+      date: '2024-07-03',
+      pdfUrl: null,
+      pages: [],
+      ...over
+    });
+    return source;
+  };
+
   await t.test('reports a decision statement with no PDF rather than inventing one', async () => {
     const routes = FULL();
     routes['document/158078'] = '<html><body><h2>Decision Statement</h2>HTML only</body></html>';
-    const source = await fetchFederalSource(
-      { name: TILBURY, CEAALink: '/050/evaluations/proj/80105' }, registry(routes));
-    assert.strictEqual(source.decision, null);
-    assert.strictEqual(source.cearId, '80105');
+    await unread(routes, { error: 'no_pdf_link' });
+  });
+
+  await t.test('names the status when the PDF itself cannot be fetched', async () => {
+    const routes = FULL();
+    delete routes['157936E.pdf'];
+    await unread(routes, {
+      title: 'Decision Statement Issued under Section 54 of the ' +
+        'Canadian Environmental Assessment Act, 2012',
+      pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      error: 'pdf_fetch_failed:404'
+    });
+  });
+
+  await t.test('names the missing extractor on a host without poppler', async () => {
+    // The bare Function host. No poppler means no text, which is not the same as no decision.
+    const realPath = process.env.PATH;
+    process.env.PATH = fs.mkdtempSync(path.join(tmpdir, 'no-poppler-'));
+    try {
+      await unread(FULL(), {
+        title: 'Decision Statement Issued under Section 54 of the ' +
+          'Canadian Environmental Assessment Act, 2012',
+        pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+        error: 'no_pdf_extractor'
+      });
+    } finally {
+      process.env.PATH = realPath;
+    }
+  });
+
+  await t.test('names a PDF that holds no text', async () => {
+    // A scanned statement filed as images: pages come back, every one of them blank.
+    const routes = FULL();
+    routes['157936E.pdf'] = BLANK_PDF;
+    await unread(routes, {
+      title: 'Decision Statement Issued under Section 54 of the ' +
+        'Canadian Environmental Assessment Act, 2012',
+      pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      error: 'no_text'
+    });
   });
 
   await t.test('throws when the registry answers an error', async () => {

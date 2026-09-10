@@ -1366,6 +1366,76 @@ test('generateProjectSummary', async (t) => {
     assert.strictEqual(record.sectionErrors.federal, 'no_federal_decision');
   });
 
+  // Every cause below is a decision statement the registry LISTS and this run could not read. The
+  // stored record must say so: `no_federal_decision` here would publish the claim that Canada
+  // issued no decision for a project whose statement is sitting on the registry.
+  for (const error of ['no_pdf_extractor', 'pdf_fetch_failed:404', 'no_text', 'no_pdf_link',
+    'request_budget_spent']) {
+    await t.test(`stores an unread decision (${error}) as unreadable`, async () => {
+      config.summaryEnabled = true;
+      config.projectSummaryProvider = 'ollama';
+      config.federalSource = 'iaac';
+      const calls = stubModel(t, '{"items":[]}');
+      const warned = [];
+      const noted = [];
+      t.mock.method(logger, 'warn', line => { warned.push(String(line)); });
+      t.mock.method(logger, 'info', line => { noted.push(String(line)); });
+      const unread = federalSource();
+      unread.decision = { ...unread.decision, pages: [], error };
+      stubFederalSource(t, unread);
+
+      const sources = fakeSources({ documents: [INSPECTION] });
+      const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+      assert.strictEqual(calls.length, 0, 'no pages, no model call');
+      assert.deepStrictEqual(record.sections.federal, {
+        source: 'iaac',
+        facts: {
+          status: 'Completed',
+          cearId: '80105',
+          projectUrl: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80105',
+          latest: { title: "Minister's Environmental Assessment Decision Statement",
+            date: '2024-07-03', docId: '158078' },
+          decision: {
+            docId: '158078',
+            title: 'Decision Statement',
+            date: '2024-07-03',
+            pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf'
+          }
+        },
+        items: [],
+        reason: 'federal_decision_unreadable'
+      });
+      assert.strictEqual(record.sectionErrors.federal, 'federal_decision_unreadable');
+      assert.ok(warned.some(line => line.includes('federal_decision_unreadable')),
+        `a document that could not be read is a warning: ${warned.join(' | ')}`);
+      assert.deepStrictEqual(noted.filter(line => line.includes('no_federal_decision')), [],
+        'and never reported as Canada having issued no decision');
+    });
+  }
+
+  await t.test('drops a blank registry page before the model sees it', async () => {
+    // A blank page is not a source: nothing can be cited to it and the grounding gate cannot check
+    // a claim against it, so the page numbers the citations carry have to skip it.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [1] }]
+    }));
+    const scanned = federalSource();
+    scanned.decision.pages = [{ page: 1, text: '   \n ' }, scanned.decision.pages[1]];
+    stubFederalSource(t, scanned);
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.deepStrictEqual(record.citations.map(c => [c.n, c.chunkId, c.pageNumber]),
+      [[1, 'iaac:158078:2', 2]], 'the first source is page 2; page 1 carried nothing');
+    assert.deepStrictEqual(record.sections.federal.items.map(i => i.title), ['Condition 3.1']);
+  });
+
   await t.test('stores no federal section when the registry cannot be read', async () => {
     config.summaryEnabled = true;
     config.projectSummaryProvider = 'ollama';

@@ -1391,18 +1391,20 @@ const NATIONS_SOURCE = { id: null, displayName: 'passages that name a First Nati
 /** A DEMI document id this is not, and cannot be mistaken for: `iaac:158078`. */
 const iaacId = (...parts) => ['iaac', ...parts].join(':');
 
+/** A blank page is not a source: nothing can cite it and the grounding gate cannot check it. */
+const readablePages = decision =>
+  ((decision && decision.pages) || []).filter(page => String(page.text || '').trim());
+
 /**
  * A decision statement's pages as chunks the rest of this file can already handle.
  *
  * The federal prompt, the citation gate and the grounding gate all read chunks, and none of them
  * cares where a chunk was stored — so the registry's PDF becomes pages, and pages become chunks,
- * and nothing else changes. A blank page is dropped: it is a source the model cannot cite and a
- * page number the grounding gate cannot use.
+ * and nothing else changes.
  */
 function federalChunksFrom(decision) {
   const documentId = iaacId(decision.docId);
-  return (decision.pages || [])
-    .filter(page => String(page.text || '').trim())
+  return readablePages(decision)
     .map(page => ({
       // `id` names the pseudo-chunk; `chunkId` is the key the citation registry reads. One value,
       // both names, because a chunk here is read by code written for the other kind.
@@ -1422,6 +1424,14 @@ function latestRegistryDocument(documents) {
     .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0];
   return newest ? { title: newest.title, date: newest.date || null, docId: newest.docId } : null;
 }
+
+/** What the page shows about the decision document itself, read or not. */
+const decisionFacts = decision => ({
+  docId: decision.docId,
+  title: decision.title,
+  date: decision.date || null,
+  pdfUrl: decision.pdfUrl || null
+});
 
 /**
  * The `federal` section as stored, whichever registry the decision came from.
@@ -1450,6 +1460,16 @@ function federalSection(origin, result, source) {
   };
   const { decision } = source;
   if (!decision) return { source: 'iaac', facts, items: [], reason: 'no_federal_decision' };
+  // A decision the registry lists but whose PDF yielded nothing. Storing `no_federal_decision` here
+  // would claim Canada issued no decision when the document is sitting on the registry unread.
+  if (readablePages(decision).length === 0) {
+    return {
+      source: 'iaac',
+      facts: { ...facts, decision: decisionFacts(decision) },
+      items: [],
+      reason: 'federal_decision_unreadable'
+    };
+  }
   if (!result || !result.value) return null;
 
   return {
@@ -1457,13 +1477,7 @@ function federalSection(origin, result, source) {
     sourceDocumentId: result.documentId,
     facts: {
       ...facts,
-      decision: {
-        docId: decision.docId,
-        title: decision.title,
-        date: decision.date || null,
-        pdfUrl: decision.pdfUrl,
-        pageCount: (decision.pages || []).length
-      }
+      decision: { ...decisionFacts(decision), pageCount: (decision.pages || []).length }
     },
     ...result.value
   };
@@ -1642,12 +1656,16 @@ async function generateProjectSummary(projectId, opts = {}) {
     if (federalSource) {
       federalOrigin = 'iaac';
       const { decision } = federalSource;
-      if (decision) {
+      if (decision && readablePages(decision).length) {
         federalDocument = { id: iaacId(decision.docId), displayName: decision.title };
         federalChunks = federalChunksFrom(decision);
         federalSpec = { absentReason: null, absentSource: null };
       } else {
-        federalSpec = { absentReason: 'no_federal_decision', absentSource: null };
+        // A listed decision whose PDF could not be read is not a project without a decision.
+        federalSpec = {
+          absentReason: decision ? 'federal_decision_unreadable' : 'no_federal_decision',
+          absentSource: null
+        };
       }
     }
   }
@@ -1874,9 +1892,6 @@ module.exports = {
   pickSource,
   isFrenchTitle,
   mergeTimelineBatches,
-  federalSection,
-  federalChunksFrom,
-  latestRegistryDocument,
   buildItems,
   buildNations,
   buildTimeline,

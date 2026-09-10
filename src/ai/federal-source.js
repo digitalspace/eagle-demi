@@ -281,7 +281,9 @@ const timerSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
  *
  * Throws on a failure that is about the registry rather than about the project — a non-OK response,
  * a page that does not parse. The caller turns that into a section that is null for a stated
- * reason; it must not turn into a summary generated from nothing.
+ * reason; it must not turn into a summary generated from nothing. Once the document list names a
+ * decision statement, `decision` carries that row whether or not its PDF could be read, with
+ * `decision.pages` empty and `decision.error` naming the cause.
  *
  * @param {object} project  a DEMI project row: `name`/`displayName` and, where Track has one,
  *   `CEAALink`
@@ -318,7 +320,11 @@ async function fetchFederalSource(project, opts = {}) {
 
     const res = await doFetch(url, { headers: { 'User-Agent': USER_AGENT } });
     if (!res || !res.ok) {
-      throw new Error(`GET ${url} -> ${res ? res.status : 'no response'}`);
+      const err = new Error(`GET ${url} -> ${res ? res.status : 'no response'}`);
+      // The status travels with the error: on the decision path the caller names it as a reason
+      // rather than losing the whole read.
+      err.status = res ? res.status : null;
+      throw err;
     }
     const body = Buffer.from(await res.arrayBuffer());
     cache.write(url, body);
@@ -379,32 +385,47 @@ async function fetchFederalSource(project, opts = {}) {
     return source;
   }
 
-  const docUrl = `${EVALUATIONS}/document/${row.docId}`;
-  const docHtml = await getText(docUrl);
-  const link = docHtml === null ? null : parsePdfLink(docHtml);
-  if (!link) {
-    logger.warn(`[federal-source] ${docUrl} offers no PDF; the decision statement cannot be read`);
+  // The registry DOES list a decision statement. Every failure below is therefore a document that
+  // could not be read, which is a different claim from Canada having issued no decision, so the row
+  // is returned either way and `decision.error` says which of the two the caller is looking at.
+  source.decision = {
+    docId: row.docId, title: row.title, date: row.date || null, pdfUrl: null, pages: []
+  };
+  const unreadable = (error) => {
+    source.decision.error = error;
+    logger.warn(`[federal-source] CEAR ${cearId} decision statement ${row.docId} ` +
+      `could not be read (${error})`, { cearId, docId: row.docId, reason: error });
     return source;
-  }
+  };
+  const fetchFailed = err => `pdf_fetch_failed:${err.status || 'no_response'}`;
 
-  const pdf = await get(link.pdfUrl);
-  if (pdf === null) return source;
+  const docUrl = `${EVALUATIONS}/document/${row.docId}`;
+  let docHtml;
+  try {
+    docHtml = await getText(docUrl);
+  } catch (err) {
+    return unreadable(fetchFailed(err));
+  }
+  if (docHtml === null) return unreadable('request_budget_spent');
+
+  const link = parsePdfLink(docHtml);
+  if (!link) return unreadable('no_pdf_link');
+  source.decision.pdfUrl = link.pdfUrl;
+  source.decision.title = link.title || row.title;
+
+  let pdf;
+  try {
+    pdf = await get(link.pdfUrl);
+  } catch (err) {
+    return unreadable(fetchFailed(err));
+  }
+  if (pdf === null) return unreadable('request_budget_spent');
 
   const pages = await pdfToPages(pdf);
-  if (!Array.isArray(pages)) {
-    logger.warn(`[federal-source] ${link.pdfUrl} yielded no text (${pages.error})`, {
-      cearId, docId: row.docId, reason: pages.error
-    });
-    return source;
-  }
+  if (!Array.isArray(pages)) return unreadable(pages.error);
+  if (!pages.some(page => String(page.text || '').trim())) return unreadable('no_text');
 
-  source.decision = {
-    docId: row.docId,
-    title: link.title || row.title,
-    date: row.date || null,
-    pdfUrl: link.pdfUrl,
-    pages
-  };
+  source.decision.pages = pages;
   logger.info(`[federal-source] CEAR ${cearId} decision statement ${row.docId}: ` +
     `${pages.length} pages`, { cearId, docId: row.docId, pages: pages.length, requests: spent });
   return source;
