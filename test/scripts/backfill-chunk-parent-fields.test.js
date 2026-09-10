@@ -119,7 +119,8 @@ function fakeChunks(opts = {}) {
   // nothing a test can see otherwise: the walk still runs, and still gives up on the sustained
   // throttle the budget was raised for.
   const state = {
-    patched: [], patchedIds: [], live: 0, read: [], pointReads: [], stamps: {}, budgets: []
+    patched: [], patchedIds: [], live: 0, read: [], pointReads: [], stamps: {}, budgets: [],
+    backoffCeilings: []
   };
   // What each document's chunks currently hold. Absent means "one chunk, all four null AND no
   // version" — the shape of every chunk written before the parent fields existed, which is the
@@ -141,11 +142,14 @@ function fakeChunks(opts = {}) {
       state.pointReads.push(String(id));
       return chunksOf(documentId).find(row => String(row.id) === String(id)) || null;
     },
-    async setFieldsForChunks(access, documentId, ids, fields, { stampedAt, maxAttempts } = {}) {
+    async setFieldsForChunks(
+      access, documentId, ids, fields, { stampedAt, maxAttempts, maxBackoffMs } = {}
+    ) {
       state.live++;
       state.patched.push(String(documentId));
       state.stamps[String(documentId)] = stampedAt;
       state.budgets.push(maxAttempts);
+      state.backoffCeilings.push(maxBackoffMs);
       // The ids the caller chose, which is the whole point of this entry point: the backfill knows
       // which rows disagree and must not patch the ones that do not.
       state.patchedIds.push(...ids.map(String));
@@ -1083,6 +1087,11 @@ test('every stamp is guarded on an instant, so a walk cannot overwrite a newer o
 
     assert.deepStrictEqual([...new Set(raised.chunks.state.budgets)], [20],
       'the operator raised the budget for a walk that keeps running out of it');
+
+    // The budget alone does not outlast a throttle: the request-path ceiling would clip a 45s hint
+    // back to 20s and spend an attempt resending into a partition Cosmos said has no budget.
+    assert.deepStrictEqual([...new Set(d.chunks.state.backoffCeilings)], [60000],
+      'the walk waits out a hint the request paths are not allowed to');
   });
 
   await t.test('chunks a newer walk already stamped are reported, not counted as patched',

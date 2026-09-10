@@ -415,16 +415,18 @@ const BULK_BACKOFF_JITTER_MS = 250;
  * Doubling rather than linear: a corpus walk against a serverless account stays throttled for
  * minutes, and 1s/2s/3s/4s spends every attempt inside the same overload. The 2026-09 chunk
  * backfill exhausted four linear attempts on 523,144 throttled operations and left 70 documents
- * part-stamped. Cosmos's own hint wins when it is larger, because it is the only figure that knows
- * when the partition will have budget again. The ceiling caps the exponential term ONLY: clipping a
- * 45s hint back to 20s resends into a partition Cosmos just said has no budget and burns an
- * attempt. Jitter keeps the concurrent walkers from resending in lockstep, which is what turns one
+ * part-stamped. Cosmos's own hint wins over the exponential guess when it is larger, because it is
+ * the only figure that knows when the partition will have budget again. The ceiling bounds BOTH:
+ * a request-path caller inherits the 20s default, so a 30s hint on three retries cannot spend 90s
+ * behind an APIM gateway that cuts the request off at 30s. An offline walk that can afford to sit
+ * out a longer throttle raises the ceiling with `opts.maxBackoffMs` — the chunk backfill asks for
+ * 60s. Jitter keeps the concurrent walkers from resending in lockstep, which is what turns one
  * throttle into a repeating one.
  */
-function bulkBackoffMs(attempt, hintMs) {
+function bulkBackoffMs(attempt, hintMs, maxBackoffMs = BULK_MAX_BACKOFF_MS) {
   const hint = Number.isFinite(hintMs) && hintMs > 0 ? hintMs : 0;
   const exponential = 1000 * 2 ** (attempt - 1);
-  return Math.max(Math.min(exponential, BULK_MAX_BACKOFF_MS), hint)
+  return Math.min(Math.max(exponential, hint), maxBackoffMs)
     + Math.round(Math.random() * BULK_BACKOFF_JITTER_MS);
 }
 
@@ -477,7 +479,8 @@ async function bulk(containerName, operations, opts = {}) {
  * only 56,317 landed, because the caller counted what it SENT. On serverless the usual cause is
  * 429 (throttling), which is retryable — so failures are retried with backoff rather than merely
  * counted. `opts.maxAttempts` raises or lowers the `BULK_MAX_ATTEMPTS` default for a caller that
- * knows its walk is long enough to sit through a sustained throttle.
+ * knows its walk is long enough to sit through a sustained throttle, and `opts.maxBackoffMs` raises
+ * the ceiling on a single wait for the same caller.
  *
  * `requestCharge` is the RU actually billed, summed across every attempt — retries included, since
  * on serverless a retried operation is paid for twice and a figure that hid that would understate
@@ -503,6 +506,7 @@ function operationId(op) {
 
 async function bulkVerified(containerName, operations, opts = {}) {
   const maxAttempts = opts.maxAttempts || BULK_MAX_ATTEMPTS;
+  const maxBackoffMs = opts.maxBackoffMs || BULK_MAX_BACKOFF_MS;
   // Seam for the retry tests. Without a Cosmos client `bulk()` returns [] rather than throwing,
   // so there is otherwise no way to exercise the one path that matters here.
   const doBulk = opts.bulkFn || ((ops) => bulk(containerName, ops));
@@ -532,7 +536,9 @@ async function bulkVerified(containerName, operations, opts = {}) {
       // retried. Recorded under `thrown` so the caller's error message still says what happened.
       statusCounts.thrown = (statusCounts.thrown || 0) + 1;
       lastThrown = err;
-      if (attempt < maxAttempts) await sleep(bulkBackoffMs(attempt, err && err.retryAfterInMs));
+      if (attempt < maxAttempts) {
+        await sleep(bulkBackoffMs(attempt, err && err.retryAfterInMs, maxBackoffMs));
+      }
       continue;
     }
 
@@ -562,7 +568,7 @@ async function bulkVerified(containerName, operations, opts = {}) {
 
     pending = retry;
     if (pending.length > 0 && attempt < maxAttempts) {
-      await sleep(bulkBackoffMs(attempt, retryAfterMs));
+      await sleep(bulkBackoffMs(attempt, retryAfterMs, maxBackoffMs));
     }
   }
 

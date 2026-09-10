@@ -344,25 +344,32 @@ test('bulkVerified sits out a sustained throttle', async (t) => {
     withinJitter(waits[0], 6000, 'the operation result hint must win over the first step');
   });
 
-  await t.test('a hint longer than the ceiling is waited out in full', async () => {
-    // The 20s ceiling bounds the exponential guess, not Cosmos's own answer. Clipping a 45s hint
-    // back to 20s resends into a partition the service just said has no budget: the attempt is
-    // spent, the operation is rejected again, and the walk is one attempt closer to giving up.
-    const { waits, sleepFn } = recorder();
-    let calls = 0;
+  await t.test('the ceiling clips a long hint for a request-path caller, not for a walk', async () => {
+    // The request paths share this default: three retries on an unclipped 30s hint is 90s behind an
+    // APIM gateway that gives the whole request 30s. An offline walk names its own ceiling instead,
+    // because clipping a 45s hint there resends into a partition the service just said has no
+    // budget, spending an attempt to be rejected again.
+    const hinted = () => {
+      let calls = 0;
+      return async (pending) => (++calls === 1
+        ? pending.map(() => ({ statusCode: 429, retryAfterMilliseconds: 45000 }))
+        : ok(pending));
+    };
+
+    const capped = recorder();
+    await bulkVerified('chunks', ops(2), { sleepFn: capped.sleepFn, bulkFn: hinted() });
+
+    assert.strictEqual(capped.waits.length, 1);
+    withinJitter(capped.waits[0], 20000, 'the default ceiling bounds the hint too');
+
+    const raised = recorder();
     await bulkVerified('chunks', ops(2), {
-      sleepFn,
-      bulkFn: async (pending) => {
-        calls++;
-        return calls === 1
-          ? pending.map(() => ({ statusCode: 429, retryAfterMilliseconds: 45000 }))
-          : ok(pending);
-      }
+      sleepFn: raised.sleepFn, bulkFn: hinted(), maxBackoffMs: 60000
     });
 
-    assert.strictEqual(waits.length, 1);
-    assert.ok(waits[0] >= 45000, `waited ${waits[0]}, the hint of 45000 was clipped`);
-    withinJitter(waits[0], 45000, 'the hint is the wait, plus jitter and nothing else');
+    assert.strictEqual(raised.waits.length, 1);
+    assert.ok(raised.waits[0] >= 45000, `waited ${raised.waits[0]}, the hint of 45000 was clipped`);
+    withinJitter(raised.waits[0], 45000, 'under its own ceiling the hint is the whole wait');
   });
 
   await t.test('per-operation 429s get four attempts by default, doubling', async () => {

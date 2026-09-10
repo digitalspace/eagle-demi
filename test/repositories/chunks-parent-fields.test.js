@@ -241,15 +241,18 @@ test('chunks.setParentFieldsForDocument', async (t) => {
 
     await chunks.setFieldsForChunks(
       systemAccess(), 'docA', ['docA::p1::c0'], chunks.parentFieldsOf(DOCUMENT),
-      { stampedAt: STAMPED_AT, maxAttempts: 12 });
+      { stampedAt: STAMPED_AT, maxAttempts: 12, maxBackoffMs: 60000 });
     await chunks.setFieldsForChunks(
       systemAccess(), 'docA', ['docA::p1::c0'], chunks.parentFieldsOf(DOCUMENT));
 
     assert.strictEqual(sent[0].opts.maxAttempts, 12, 'the budget the caller asked for');
-    // Absent, not `undefined`: the data layer's own default has to stay reachable for the request
-    // paths that share this write, which name no budget at all.
-    assert.ok(!('maxAttempts' in sent[1].opts),
-      'a caller that named no budget must not send a key that overrides the default');
+    assert.strictEqual(sent[0].opts.maxBackoffMs, 60000, 'and the wait ceiling that goes with it');
+    // The data layer's own defaults have to stay reachable for the request paths that share this
+    // write, which name neither.
+    assert.strictEqual(sent[1].opts.maxAttempts, undefined,
+      'a caller that named no budget must not override the default');
+    assert.strictEqual(sent[1].opts.maxBackoffMs, undefined,
+      'nor the ceiling that keeps those callers inside the gateway timeout');
   });
 
   await t.test('a document with no chunks writes nothing', async () => {

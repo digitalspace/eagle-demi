@@ -88,6 +88,14 @@ const DEFAULT_CONCURRENCY = 2;
  */
 const DEFAULT_MAX_ATTEMPTS = 12;
 
+/**
+ * Ceiling on a single wait for THIS walk, above the 20s the request paths hold `bulkVerified`
+ * to. A serverless partition under a sustained throttle answers with hints in the tens of
+ * seconds; clipping one back resends into a partition Cosmos just said has no budget and burns
+ * an attempt. Not an option: no operator has a reason to tune it separately from the budget.
+ */
+const BACKFILL_MAX_BACKOFF_MS = 60000;
+
 /** The bucket a row belongs to: its own partition key, or the null bucket. */
 function partitionOf(projectId) {
   return projectId === null || projectId === undefined ? NULL_PARTITION : String(projectId);
@@ -465,7 +473,10 @@ async function backfill(argv = [], opts = {}) {
       // flagged row's instant is its own flag token — see `stampedAtFor`.
       stamp: (acc, documentId, doc) => chunksRepo.setFieldsForChunks(
         acc, documentId, staleIds.get(String(documentId)), chunksRepo.parentFieldsOf(doc),
-        { stampedAt: stampedAtFor(doc, startedAt), maxAttempts: args.maxAttempts })
+        {
+          stampedAt: stampedAtFor(doc, startedAt), maxAttempts: args.maxAttempts,
+          maxBackoffMs: BACKFILL_MAX_BACKOFF_MS
+        })
     });
     summary.documentsReStamped += result.stamped;
     summary.patched += result.chunks;
