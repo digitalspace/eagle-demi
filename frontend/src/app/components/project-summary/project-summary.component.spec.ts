@@ -514,6 +514,32 @@ describe('ProjectSummaryComponent', () => {
     expect(download).toHaveBeenCalledWith(MOCK_PROJECT_SUMMARY.citations![0].documentId, '272');
   });
 
+  it('renders an IAAC citation with no PDF url as a non-link chip, never a bare href', async () => {
+    // The registry can list a document without ever finding a PDF for it. An anchor with
+    // href="" would still be focusable and would open a second copy of the current page.
+    const citationNoUrl = { ...IAAC_CITATION, url: undefined };
+    routeWholePage({
+      ...withIaacFederal(),
+      citations: [...MOCK_PROJECT_SUMMARY.citations!, citationNoUrl]
+    });
+
+    const el = await render();
+    el.querySelector<HTMLButtonElement>('[aria-labelledby="ps-federal-h"] .ps-card--action')!.click();
+    fixture.detectChanges();
+
+    const chip = el.querySelector('dialog .ps-cite')!;
+    expect(chip.tagName).toBe('SPAN');
+    expect(chip.querySelector('a')).toBeNull();
+    expect(chip.getAttribute('title')).toBe(IAAC_CITATION.documentName);
+    expect(squash(chip.textContent)).toContain('IAAC registry, p. 2');
+    expect(squash(chip.textContent)).toContain('Open PDF');
+
+    // A modal left open sits in the top layer and takes the focus every later spec asserts on.
+    el.querySelector('dialog')!.close();
+    await settle(2);
+    fixture.detectChanges();
+  });
+
   it('puts the registry fact row above the federal cards', async () => {
     routeWholePage(withIaacFederal());
 
@@ -587,6 +613,23 @@ describe('ProjectSummaryComponent', () => {
 
     expect(section.textContent).not.toContain('AI-generated from the sources below');
     expect(section.querySelectorAll('details.ps-sources').length).toBe(0);
+    expect(section.querySelectorAll('.ps-card--action').length).toBe(0);
+  });
+
+  it('renders the fact row and no badge when a federal section arrives with no items key', async () => {
+    // A registry-only payload from an older generator run: `items` was never written, not just
+    // set empty. The guard must read that the same way `items: []` reads, not throw building the
+    // page.
+    routeWholePage(withIaacFederal({ source: 'iaac', facts: IAAC_FACTS }));
+
+    const el = await render();
+
+    const section = el.querySelector('[aria-labelledby="ps-federal-h"]')!;
+    expect(squash(section.querySelector('.ps-federal')?.textContent)).toContain(
+      'Federal assessment: Decision Statement issued · Decision Statement issued under section 54 ' +
+      '(14 Oct 2014) · View on IAAC registry'
+    );
+    expect(section.textContent).not.toContain('AI-generated from the sources below');
     expect(section.querySelectorAll('.ps-card--action').length).toBe(0);
   });
 

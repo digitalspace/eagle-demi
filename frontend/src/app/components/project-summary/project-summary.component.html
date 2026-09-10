@@ -16,7 +16,7 @@
       <ul class="ps-cites">
         @for (c of cited; track c.chunkId) {
           <li>
-            @if (c.source === 'iaac') {
+            @if (c.source === 'iaac' && c.url) {
               <!-- Nothing in DEMI resolves `iaac:158078`, so this chip is a link to the registry's
                    own PDF and never reaches the document download. -->
               <a class="ps-cite" [href]="c.url" target="_blank" rel="noopener" [attr.title]="c.documentName">
@@ -24,6 +24,14 @@
                 <span class="ps-cite__doc">IAAC registry, p.&nbsp;{{ c.pageNumber }}</span>
                 <span class="ps-cite__action">Open PDF<span class="visually-hidden"> (opens in a new tab)</span></span>
               </a>
+            } @else if (c.source === 'iaac') {
+              <!-- The registry never gave us a PDF url for this one: not a link anywhere, since
+                   there is no DEMI document behind it to fall back to. -->
+              <span class="ps-cite" [attr.title]="c.documentName">
+                <span class="ps-cite__n">[{{ c.n }}]</span>
+                <span class="ps-cite__doc">IAAC registry, p.&nbsp;{{ c.pageNumber }}</span>
+                <span class="ps-cite__action">Open PDF</span>
+              </span>
             } @else {
               <button type="button" class="ps-cite" (click)="openDocument(c.documentId)" [disabled]="downloadingId() === c.documentId">
                 <span class="ps-cite__n">[{{ c.n }}]</span>
@@ -255,13 +263,15 @@
         @if (federal.reason === 'federal_decision_unreadable') {
           <p class="ps-note">Decision statement found on the IAAC registry but its text could not be read.</p>
         }
-        <!-- No items means no model claim was made here, so the badge and its sources stay away. -->
-        @if (federal.items.length) {
+        <!-- No items means no model claim was made here, so the badge and its sources stay away.
+             `items` is guarded (federalItems()): a federal section built from registry facts
+             alone can arrive without the key at all, not just an empty array. -->
+        @if (federalItems().length) {
           <p class="ps-badge-row">
             <span class="pill pill--info">AI-generated from the sources below</span>
           </p>
           <div class="ps-cards">
-            @for (item of federal.items; track item.n) {
+            @for (item of federalItems(); track item.n) {
               <button type="button" class="ps-card ps-card--action" (click)="showCondition(item, $event)">
                 <span class="micro-label ps-card__category">{{ item.category }}</span>
                 <span class="ps-card__title">{{ item.title }}</span>

@@ -252,6 +252,9 @@ export class ProjectSummaryComponent implements OnInit {
     return parts.join(' · ');
   });
 
+  /** Guarded: a federal section built from registry facts alone can arrive with no `items` key. */
+  federalItems = computed<ConditionItem[]>(() => this.sections()?.federal?.items || []);
+
   /** The PDF link's label. A decision whose text would not read is still a file worth offering. */
   federalPdfLabel = computed<string>(() => {
     const pages = this.federalFacts()?.decision?.pageCount;
