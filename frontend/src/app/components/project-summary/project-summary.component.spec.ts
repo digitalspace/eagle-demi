@@ -681,6 +681,30 @@ describe('ProjectSummaryComponent', () => {
     expect(section.querySelectorAll('.ps-federal a').length).toBe(1);
   });
 
+  it('says the decision lists no conditions, keeping the registry facts', async () => {
+    // A readable decision with nothing numbered in it. The fact row is the point: the status, the
+    // registry link and the decision document are what the reader came for.
+    routeWholePage(withIaacFederal({
+      source: 'iaac',
+      facts: IAAC_FACTS,
+      items: [],
+      reason: 'no_conditions'
+    }));
+
+    const el = await render();
+
+    const section = el.querySelector('[aria-labelledby="ps-federal-h"]')!;
+    const row = section.querySelector('.ps-federal')!;
+    expect(row).toBeTruthy();
+    expect(squash(row.textContent)).toContain('View on IAAC registry');
+    expect(squash(section.querySelector('.ps-note')?.textContent))
+      .toBe('The decision statement lists no conditions.');
+    // Nothing was claimed, so no badge, no sources and no condition cards.
+    expect(section.textContent).not.toContain('AI-generated from the sources below');
+    expect(section.querySelectorAll('details.ps-sources').length).toBe(0);
+    expect(section.querySelectorAll('.ps-card--action').length).toBe(0);
+  });
+
   it('offers the decision PDF when the registry held one its text would not read', async () => {
     routeWholePage(withIaacFederal({
       source: 'iaac',

@@ -1480,6 +1480,60 @@ test('generateProjectSummary', async (t) => {
     assert.strictEqual(record.sectionErrors.federal, 'no_federal_decision');
   });
 
+  await t.test('keeps the decision facts when it lists no conditions', async () => {
+    // A CEAA 2012 comprehensive-study decision carries no numbered conditions. The decision read
+    // fine and the model answered honestly, so the run has a citable outcome to store; a null
+    // section here loses the status, the CEAR link and the decision itself.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    const calls = stubModel(t, '{"items":[]}');
+    const warned = [];
+    t.mock.method(logger, 'warn', line => { warned.push(String(line)); });
+    stubFederalSource(t, federalSource());
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(calls.length, 1, 'the decision was readable, so it was read');
+    const federal = record.sections.federal;
+    assert.ok(federal, 'a readable decision with no conditions is not a null section');
+    assert.strictEqual(federal.source, 'iaac');
+    assert.strictEqual(federal.reason, 'no_conditions');
+    assert.deepStrictEqual(federal.items, []);
+    assert.deepStrictEqual(federal.facts.decision, {
+      docId: '158078',
+      title: 'Decision Statement',
+      date: '2024-07-03',
+      pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: 'pdf',
+      pageCount: 2
+    });
+    assert.strictEqual(federal.facts.cearId, '80105');
+    assert.strictEqual(federal.facts.status, 'Completed');
+    // The section stored what the registry says, so it is not a section that failed.
+    assert.ok(!('federal' in record.sectionErrors),
+      `no sectionErrors.federal: ${JSON.stringify(record.sectionErrors)}`);
+    assert.deepStrictEqual(warned.filter(line => line.includes('federal')), [],
+      'and nothing to investigate in the log');
+  });
+
+  await t.test('still fails the federal section when the reply was unusable', async () => {
+    // The other half of the rule: `empty` is an answer, a reply that would not parse is not.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, 'not json at all');
+    stubFederalSource(t, federalSource());
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(record.sections.federal, null);
+    assert.strictEqual(record.sectionErrors.federal, 'not_json');
+  });
+
   // Every cause below is a decision statement the registry LISTS and this run could not read. The
   // stored record must say so: `no_federal_decision` here would publish the claim that Canada
   // issued no decision for a project whose statement is sitting on the registry.

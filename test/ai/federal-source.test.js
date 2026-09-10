@@ -227,6 +227,52 @@ test('pickDecisionStatement', async (t) => {
     assert.strictEqual(picked.docId, '2');
   });
 
+  await t.test('ignores a transition notice that only mentions decision statements', () => {
+    // CEAR 80032. The 2024 notice is the newest row whose title says "Decision Statements", and it
+    // is a memo about a statute change; the statement itself is the 2016 row.
+    const picked = pickDecisionStatement(parseDocumentRows(fixture('docs-80032-key.html')));
+    assert.strictEqual(picked.docId, '115695');
+    assert.strictEqual(picked.date, '2016-09-27');
+  });
+
+  await t.test('ignores the news release filed the day the statement was issued', () => {
+    // CEAR 54754. Both rows carry the same date, so nothing but the title and the category tells
+    // the press release apart from the decision it announces.
+    const picked = pickDecisionStatement(parseDocumentRows(fixture('docs-54754-key.html')));
+    assert.strictEqual(picked.docId, '122619');
+  });
+
+  await t.test('leaves rows that are about a decision statement out', () => {
+    const news = (docId, title, date) => ({ docId, title, date, category: 'News Releases' });
+    const picked = pickDecisionStatement([
+      news('1', 'News Release - Environmental Assessment Decision Statement', '2024-07-18'),
+      row('2', 'Notice - Transition of Decision Statements under section 306', '2024-07-18'),
+      row('3', 'Media Advisory - Decision Statement', '2024-07-18'),
+      row('4', 'Backgrounder - Decision Statement', '2024-07-18'),
+      row('5', 'Environmental Assessment Decision Statement', '2016-09-27')
+    ]);
+    assert.strictEqual(picked.docId, '5');
+  });
+
+  await t.test('prefers the statement itself over a row that merely names one', () => {
+    // "Extension of Time Limit for the Issuance of a Decision Statement" is newer than the
+    // statement on CEAR 80032 and is not the decision.
+    const picked = pickDecisionStatement([
+      row('1', 'Extension of Time Limit for the Issuance of a Decision Statement', '2016-03-19'),
+      row('2', 'Environmental Assessment Decision Statement', '2015-11-02')
+    ]);
+    assert.strictEqual(picked.docId, '2');
+  });
+
+  await t.test('prefers an updated statement over the plain one it supersedes', () => {
+    const picked = pickDecisionStatement([
+      row('1', 'Environmental Assessment Decision Statement', '2014-10-14'),
+      row('2', 'Updated Decision Statement', '2021-11-05'),
+      row('3', 'Amended Decision Statement', '2018-06-01')
+    ]);
+    assert.strictEqual(picked.docId, '2');
+  });
+
   await t.test('leaves a superseded updated statement behind', () => {
     // An update filed against an older statement does not outrank a decision issued after it.
     const picked = pickDecisionStatement([

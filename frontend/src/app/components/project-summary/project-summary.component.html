@@ -268,6 +268,11 @@
         @if (federal.reason === 'federal_decision_unreadable') {
           <p class="ps-note">Decision statement found on the IAAC registry but its text could not be read.</p>
         }
+        <!-- The decision read and carries no numbered conditions, which the reader is owed in place
+             of an empty list: a comprehensive study under CEAA 2012 is decided that way. -->
+        @if (federal.reason === 'no_conditions') {
+          <p class="ps-note">The decision statement lists no conditions.</p>
+        }
         <!-- No items means no model claim was made here, so the badge and its sources stay away.
              `items` is guarded (federalItems()): a federal section built from registry facts
              alone can arrive without the key at all, not just an empty array. -->
