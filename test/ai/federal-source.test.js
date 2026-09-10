@@ -11,7 +11,8 @@ const path = require('node:path');
 
 const {
   cearIdFromLink, parseSearch, parseProjectStatus, parseDocumentRows, pickDecisionStatement,
-  parsePdfLink, pdfToPages, fetchFederalSource, MAX_REQUESTS, CRAWL_DELAY_MS, USER_AGENT
+  parsePdfLink, parseInlineContent, inlinePages, pdfToPages, fetchFederalSource, MAX_REQUESTS,
+  CRAWL_DELAY_MS, USER_AGENT
 } = require('../../src/ai/federal-source');
 
 /**
@@ -140,8 +141,14 @@ test('parseProjectStatus', async (t) => {
     assert.strictEqual(decoded('Tilbury&nbsp;Marine'), 'Tilbury Marine');
     assert.strictEqual(decoded('Minister&#39;s'), "Minister's");
     assert.strictEqual(decoded('Minister&#x27;s'), "Minister's");
+    // Accents come by name on this bilingual registry, and a Nation's name is not a place to
+    // lose one. Case is the letter's own: `&Eacute;` is not `&eacute;`.
+    assert.strictEqual(decoded('Caf&eacute; Project'), 'Café Project');
+    assert.strictEqual(decoded('Secw&eacute;pemc &amp; Stk&#39;eml&uacute;psemc'),
+      "Secwépemc & Stk'emlúpsemc");
+    assert.strictEqual(decoded('&Eacute;nergie Saguenay'), 'Énergie Saguenay');
     // Not in the table: written through as it stands, never dropped or turned into "undefined".
-    assert.strictEqual(decoded('Caf&eacute; Project'), 'Caf&eacute; Project');
+    assert.strictEqual(decoded('Phase 2&hellip;'), 'Phase 2&hellip;');
   });
 });
 
@@ -253,6 +260,70 @@ test('parsePdfLink', async (t) => {
   });
 });
 
+test('parseInlineContent', async (t) => {
+  await t.test('reads the decision the page prints instead of linking', () => {
+    const content = parseInlineContent(fixture('doc-121216.html'));
+
+    assert.strictEqual(content.title, 'Environmental Assessment Decision Statement ' +
+      'Ajax Mine Project, British Columbia');
+    assert.match(content.text, /^Environmental Assessment Decision Statement/);
+    assert.match(content.text, /The Honourable Catherine McKenna, Minister of Environment/);
+    // A list item is a paragraph of its own: the Minister's findings are the decision.
+    assert.match(content.text, /the Project is likely to result in significant adverse/);
+    // Registry markup is entity-escaped, and a Nation's name is not a place to lose accents.
+    assert.match(content.text, /Stk'emlúpsemc te Secwépemc Nation/);
+    assert.ok(content.text.split(/\n{2,}/).length >= 5,
+      `the paragraph breaks are what the pages are cut on: ${JSON.stringify(content.text)}`);
+  });
+
+  await t.test('keeps the template out of the decision', () => {
+    const text = parseInlineContent(fixture('doc-121216.html')).text;
+
+    // The registry menu carries its own `<h2>` ahead of the document's, the search form carries a
+    // placeholder, the stylesheet carries CSS, and the page footer carries a date. None of it is
+    // Canada's decision, and all of it would be quoted back as if it were.
+    for (const furniture of [/Registry/, /Search by keyword/, /overflow-wrap/,
+      /Report a problem/, /Date modified/]) {
+      assert.doesNotMatch(text, furniture);
+    }
+  });
+
+  await t.test('answers null for a page with no document heading', () => {
+    assert.strictEqual(parseInlineContent('<html><body><p>No heading here</p></body></html>'),
+      null);
+  });
+});
+
+test('inlinePages', async (t) => {
+  const paragraph = n => `${n} `.repeat(50).trim();
+
+  await t.test('numbers the pages it cuts from 1', () => {
+    const pages = inlinePages([paragraph(1), paragraph(2), paragraph(3)].join('\n\n'), 150);
+    assert.deepStrictEqual(pages.map(p => p.page), [1, 2, 3]);
+  });
+
+  await t.test('cuts at a paragraph boundary, never inside one', () => {
+    // A citation carries a page number and a quote. A cut inside a paragraph would produce a page
+    // that holds half a sentence, so the quote a reader checks would be on no page at all.
+    const text = [paragraph(1), paragraph(2), paragraph(3), paragraph(4)].join('\n\n');
+    const pages = inlinePages(text, 400);
+
+    assert.ok(pages.length > 1, 'four paragraphs do not fit on one 400-character page');
+    for (const page of pages) {
+      for (const part of page.text.split(/\n{2,}/)) {
+        assert.ok(text.includes(part), `a whole paragraph, not a piece of one: ${part}`);
+        assert.match(part, /^(\d) (?:\1 )*\1$/, `unbroken: ${part}`);
+      }
+    }
+    assert.strictEqual(pages.map(p => p.text).join('\n\n'), text, 'and nothing is dropped');
+  });
+
+  await t.test('gives a paragraph longer than a page its own page', () => {
+    const pages = inlinePages(paragraph(1), 50);
+    assert.deepStrictEqual(pages, [{ page: 1, text: paragraph(1) }]);
+  });
+});
+
 test('pdfToPages', async (t) => {
   await t.test('splits a PDF into numbered pages', { skip: needsPoppler }, async () => {
     const pages = await pdfToPages(TWO_PAGE_PDF);
@@ -353,6 +424,8 @@ test('fetchFederalSource', async (t) => {
           'Canadian Environmental Assessment Act, 2012',
         date: '2024-07-03',
         pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+        pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+        format: 'pdf',
         pages: 2
       });
 
@@ -405,6 +478,8 @@ test('fetchFederalSource', async (t) => {
         'Canadian Environmental Assessment Act, 2012',
       date: '2024-07-03',
       pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: 'pdf',
       pages: [],
       error: 'request_budget_spent'
     }, 'the registry listed a decision; the budget is why the PDF was not read');
@@ -443,15 +518,51 @@ test('fetchFederalSource', async (t) => {
       title: "Minister's Environmental Assessment Decision Statement",
       date: '2024-07-03',
       pdfUrl: null,
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: null,
       pages: [],
       ...over
     });
     return source;
   };
 
+  await t.test('reads a decision the registry prints on the page itself', async () => {
+    // The CEAA 2012 statements — Ajax Mine and three others in this corpus — have no PDF at all.
+    // The page is the statement, so the walk reads it and stops there: no file to fetch.
+    const routes = FULL();
+    routes['document/158078'] = fixture('doc-121216.html');
+    delete routes['157936E.pdf'];
+    const stub = registry(routes);
+    const source = await fetchFederalSource(
+      { name: TILBURY, CEAALink: '/050/evaluations/proj/80105' }, stub);
+
+    const { pages, ...decision } = source.decision;
+    assert.deepStrictEqual(decision, {
+      docId: '158078',
+      title: 'Environmental Assessment Decision Statement ' +
+        'Ajax Mine Project, British Columbia',
+      date: '2024-07-03',
+      pdfUrl: null,
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: 'html'
+    }, 'no file, so a citation points at the page that holds the text');
+    assert.deepStrictEqual(pages.map(p => p.page), [1]);
+    assert.match(pages[0].text, /The Honourable Catherine McKenna, Minister of Environment/);
+    assert.strictEqual(stub.calls.length, 3, 'the page was already fetched; nothing follows it');
+  });
+
   await t.test('reports a decision statement with no PDF rather than inventing one', async () => {
     const routes = FULL();
     routes['document/158078'] = '<html><body><h2>Decision Statement</h2>HTML only</body></html>';
+    await unread(routes, { error: 'no_pdf_link' });
+  });
+
+  await t.test('will not call a page too short to be a decision one', async () => {
+    // A page that rendered without its document still renders its heading and a line or two. That
+    // is not Canada's decision, and storing it as one would put the Minister's name on nothing.
+    const routes = FULL();
+    routes['document/158078'] = '<html><body><h2>Decision Statement</h2>' +
+      `<p>${'The Minister has decided. '.repeat(10)}</p></body></html>`;
     await unread(routes, { error: 'no_pdf_link' });
   });
 
@@ -462,6 +573,7 @@ test('fetchFederalSource', async (t) => {
       title: 'Decision Statement Issued under Section 54 of the ' +
         'Canadian Environmental Assessment Act, 2012',
       pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      format: 'pdf',
       error: 'pdf_fetch_failed:404'
     });
   });
@@ -474,6 +586,7 @@ test('fetchFederalSource', async (t) => {
       title: 'Decision Statement Issued under Section 54 of the ' +
         'Canadian Environmental Assessment Act, 2012',
       pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      format: 'pdf',
       error: 'no_pdf_extractor'
     }, { pdfToPages: async () => ({ error: 'no_pdf_extractor' }) });
   });
@@ -486,6 +599,7 @@ test('fetchFederalSource', async (t) => {
       title: 'Decision Statement Issued under Section 54 of the ' +
         'Canadian Environmental Assessment Act, 2012',
       pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      format: 'pdf',
       error: 'no_text'
     });
   });

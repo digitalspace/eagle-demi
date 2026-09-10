@@ -1414,7 +1414,8 @@ function federalChunksFrom(decision) {
       pageNumber: page.page,
       content: page.text,
       source: 'iaac',
-      url: decision.pdfUrl
+      // The file, or the registry page that prints the decision instead of linking a file.
+      url: decision.pdfUrl || decision.pageUrl || null
     }));
 }
 
