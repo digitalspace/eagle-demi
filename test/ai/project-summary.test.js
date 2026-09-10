@@ -1874,6 +1874,76 @@ test('generateProjectSummary', async (t) => {
     }
   });
 
+  await t.test('asks a truncated timeline batch again as two halves', async () => {
+    // Project 302: a batch sized to fit the PROMPT window still held more dated events than the
+    // 1500-token reply carries, so batch 1 came back a fragment and the whole section died. The
+    // same pages asked as two halves each get the budget to themselves.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryMaxChunks = 4;
+    const calls = stubModel(t, [
+      { content: '{"events": [{"date": "2014-10-14", "label": "Certificate iss',
+        doneReason: 'length' },
+      JSON.stringify({
+        events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+      }),
+      JSON.stringify({
+        events: [{ date: '2016-08-09', label: 'Certificate amended', citations: [1] }]
+      })
+    ]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'The certificate was issued on October 14, 2014.', 'docC'),
+          chunk(2, 'Conditions apply.', 'docC'),
+          chunk(3, 'The certificate was amended on August 9, 2016.', 'docC'),
+          chunk(4, 'End of document.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 3, 'the batch, then one call per half — not a strict retry');
+    assert.deepStrictEqual(calls.map(call => pagesIn(call).map(s => s.page)),
+      [[1, 2, 3, 4], [1, 2], [3, 4]], 'the halves carry the batch\'s pages, in page order');
+
+    assert.strictEqual(record.sectionErrors.timelineEvents, undefined,
+      'a batch that truncates is halved, not fatal');
+    assert.deepStrictEqual(record.sections.timelineEvents.map(e => [e.date, e.label]), [
+      ['2016-08-09', 'Certificate amended'],
+      ['2014-10-14', 'Certificate issued']
+    ], 'both halves contributed, newest first');
+    // Each half numbers its own sources from 1, so the second half's `[1]` is page 3.
+    assert.deepStrictEqual(
+      record.sections.timelineEvents.map(e => e.citations.map(n => record.citations[n - 1].chunkId)),
+      [['docC::p3::c0'], ['docC::p1::c0']],
+      'a half\'s local citation resolves to that half\'s first source');
+  });
+
+  await t.test('fails the timeline when a batch of one chunk still truncates', async () => {
+    // The floor of the halving: nothing left to split, so the budget is what has to move and the
+    // record says so rather than storing a fragment.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryMaxChunks = 1;
+    const cutOff = { content: '{"events": [{"date": "2014-10-14", "label": "Certificate iss',
+      doneReason: 'length' };
+    const calls = stubModel(t, [cutOff, cutOff, cutOff, cutOff]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: { docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 2, 'one chunk is not halved: the ask and its strict retry');
+    assert.strictEqual(record.sections.timelineEvents, null);
+    assert.ok(record.sectionErrors.timelineEvents.startsWith('truncated'),
+      `stored the truncation, got ${record.sectionErrors.timelineEvents}`);
+  });
+
   await t.test('reads the next document when the timeline\'s first source yields nothing', async () => {
     // Project 302 stored `no_grounded_content` for its timeline: the section was read from an
     // executive summary that produced one event the gates dropped, while the certificate sat

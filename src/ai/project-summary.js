@@ -654,6 +654,15 @@ const LIST_SHAPE_SECTIONS = ['conditions', 'federal', 'timelineEvents', 'nations
  */
 const CHUNK_BATCHED_SECTIONS = ['timelineEvents'];
 
+/**
+ * How many times a chunk-batched batch may be halved when its reply runs out of completion budget.
+ *
+ * Three levels is at most eight pieces from one batch: a batch sized to the PROMPT window can still
+ * hold more dated events than the reply budget carries, and the bound is what keeps a document that
+ * truncates everywhere from costing a call per chunk.
+ */
+const MAX_BATCH_HALVINGS = 3;
+
 const isListSection = name => LIST_SECTIONS.includes(name);
 const isChunkBatched = name => CHUNK_BATCHED_SECTIONS.includes(name);
 const isListShape = name => LIST_SHAPE_SECTIONS.includes(name);
@@ -1176,6 +1185,84 @@ async function runSection({ section, document, chunks, registry, projectName, in
   // because its third batch never parsed" send an operator to different places.
   const batchLabel = i => (batches.length > 1 ? ` (batch ${i + 1} of ${batches.length})` : '');
 
+  /**
+   * One piece of a batch asked, retried once when it is not JSON, and halved when it truncates.
+   *
+   * `piece` is the whole batch at `depth` 0 and half its parent below that; `index` stays the
+   * batch's, so a failure is still reported against the batch an operator can see.
+   *
+   * @returns {Promise<boolean>} False when the section is finished — `reason` says why.
+   */
+  const runPiece = async (piece, index, depth, user = userPrompt(document, piece)) => {
+    const ask = async (systemText) => {
+      const reply = await chatJson(systemText, user, maxTokens);
+      if (reply.usage) {
+        usage.prompt_tokens += Number(reply.usage.prompt_tokens) || 0;
+        usage.completion_tokens += Number(reply.usage.completion_tokens) || 0;
+      }
+      if (reply.model) model = reply.model;
+      if (reply.truncated) {
+        // Named apart from a malformed reply because the remedy is different: the model answered
+        // the question and ran out of budget, so the budget is what has to move. The console format
+        // drops metadata, so the numbers an operator acts on are in the message.
+        logger.warn(`[project-summary] ${section}: the reply stopped at the ${maxTokens}-token ` +
+          'completion budget, so what came back is a fragment', {
+          documentId, sources: piece.length, numPredict: maxTokens
+        });
+      }
+      return reply;
+    };
+
+    let reply = await ask(system);
+    let parsed = parseJson(reply.content);
+
+    // A truncated reply is not a malformed one, so the strict instruction cannot fix it: the pages
+    // hold more dated events than the completion budget carries. Halving asks the same pages in two
+    // smaller pieces, each with the whole budget to itself. Bounded, because a document that
+    // truncates everywhere would otherwise cost one call per chunk.
+    if (chunkBatched && reply.truncated && piece.length > 1 && depth < MAX_BATCH_HALVINGS) {
+      const half = Math.ceil(piece.length / 2);
+      logger.info(`[project-summary] ${section}: batch ${index + 1} of ${batches.length} stopped ` +
+        `at the ${maxTokens}-token completion budget; asking its ${piece.length} sources as ` +
+        `${half} + ${piece.length - half}`, {
+        documentId, batch: index + 1, sources: piece.length, halving: depth + 1
+      });
+      return await runPiece(piece.slice(0, half), index, depth + 1)
+        && await runPiece(piece.slice(half), index, depth + 1);
+    }
+
+    if (!parsed) {
+      logger.warn(`[project-summary] ${section}: reply did not parse as JSON; asking once more ` +
+        'with a stricter instruction', { documentId });
+      reply = await ask(systemPrompt(projectName, `${instruction} ${RETRY_INSTRUCTION}`, shape));
+      parsed = parseJson(reply.content);
+    }
+
+    if (!parsed) {
+      logger.warn(`[project-summary] ${section}: rejected a reply that was not JSON`, {
+        documentId, sources: piece.length, batch: index + 1, batches: batches.length
+      });
+      // The whole section, not just this batch: `mergeItemBatches` renumbers from 1, so a list
+      // missing the batch that failed reads exactly like a complete one.
+      reason = `${reply.truncated ? 'truncated' : 'not_json'}${batchLabel(index)}`;
+      return false;
+    }
+
+    const list = replyList(parsed);
+    if (list) {
+      sawList = true;
+      declared += list.length;
+    }
+
+    // Citations are numbered within the piece that produced them, so the registry is handed that
+    // piece's chunks — this is what keeps a batch-2 `[1]` off batch 1's first source.
+    // The grounding gate reads `chunks`, not the piece: a figure the model saw on one page is often
+    // printed again on a page it was not shown, and the claim is about the document either way.
+    values.push(
+      build(parsed, piece, n => registry.map(n, piece, nameOf(document)), section, chunks));
+    return true;
+  };
+
   for (const [index, batch] of batches.entries()) {
     const user = userPrompt(document, batch);
 
@@ -1193,62 +1280,13 @@ async function runSection({ section, document, chunks, registry, projectName, in
       break;
     }
 
-    const ask = async (systemText) => {
-      const reply = await chatJson(systemText, user, maxTokens);
-      if (reply.usage) {
-        usage.prompt_tokens += Number(reply.usage.prompt_tokens) || 0;
-        usage.completion_tokens += Number(reply.usage.completion_tokens) || 0;
-      }
-      if (reply.model) model = reply.model;
-      if (reply.truncated) {
-        // Named apart from a malformed reply because the remedy is different: the model answered
-        // the question and ran out of budget, so the budget is what has to move. The console format
-        // drops metadata, so the numbers an operator acts on are in the message.
-        logger.warn(`[project-summary] ${section}: the reply stopped at the ${maxTokens}-token ` +
-          'completion budget, so what came back is a fragment', {
-          documentId, sources: batch.length, numPredict: maxTokens
-        });
-      }
-      return reply;
-    };
-
-    let reply = await ask(system);
-    let parsed = parseJson(reply.content);
-
-    if (!parsed) {
-      logger.warn(`[project-summary] ${section}: reply did not parse as JSON; asking once more ` +
-        'with a stricter instruction', { documentId });
-      reply = await ask(systemPrompt(projectName, `${instruction} ${RETRY_INSTRUCTION}`, shape));
-      parsed = parseJson(reply.content);
-    }
-
-    if (!parsed) {
-      logger.warn(`[project-summary] ${section}: rejected a reply that was not JSON`, {
-        documentId, sources: batch.length, batch: index + 1, batches: batches.length
-      });
-      // The whole section, not just this batch: `mergeItemBatches` renumbers from 1, so a list
-      // missing the batch that failed reads exactly like a complete one.
-      reason = `${reply.truncated ? 'truncated' : 'not_json'}${batchLabel(index)}`;
-      break;
-    }
-
-    const list = replyList(parsed);
-    if (list) {
-      sawList = true;
-      declared += list.length;
-    }
-
-    // Citations are numbered within the batch that produced them, so the registry is handed that
-    // batch's chunks — this is what keeps a batch-2 `[1]` off batch 1's first source.
-    // The grounding gate reads `chunks`, not the batch: a figure the model saw on one page is often
-    // printed again on a page it was not shown, and the claim is about the document either way.
-    values.push(
-      build(parsed, batch, n => registry.map(n, batch, nameOf(document)), section, chunks));
+    if (!await runPiece(batch, index, 0, user)) break;
   }
 
+  // Counted on the values, not on `batches`: a halved batch produces one value per piece.
   const value = reason ? null
     : listSection ? mergeItemBatches(values)
-      : chunkBatched && batches.length > 1 ? mergeTimelineBatches(values)
+      : chunkBatched && values.length > 1 ? mergeTimelineBatches(values)
         : (values[0] || null);
   if (!reason && value === null) {
     // Three different faults wore one name. A list reply that carried no recognised key is a model
