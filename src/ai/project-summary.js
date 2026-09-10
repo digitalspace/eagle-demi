@@ -37,6 +37,9 @@ const { logger } = require('../utils/logger');
 // Required as a MODULE, not destructured: the three are the seam a test replaces to keep a
 // generator run off the network, and a destructured copy cannot be replaced.
 const summarizer = require('./summarize');
+// Same reason, and the same seam: a test replaces `iaac.fetchFederalSource` to keep the generator
+// off the IAAC registry.
+const iaac = require('./federal-source');
 const { PROMPT_VERSION, SHAPES, INSTRUCTIONS, RETRY_INSTRUCTION, systemPrompt } =
   require('./project-summary-prompts');
 const { levelOfRead } = require('../helpers/access-sql');
@@ -961,7 +964,11 @@ function citationRegistry() {
         chunkId: key,
         documentId: String(chunk.documentId || ''),
         pageNumber: chunk.pageNumber ?? 0,
-        documentName
+        documentName,
+        // A source that is not a DEMI document says so and carries the link a reader needs, because
+        // nothing in DEMI resolves `iaac:158078` and the page has no other way to reach the file.
+        ...(chunk.source ? { source: String(chunk.source) } : {}),
+        ...(chunk.url ? { url: String(chunk.url) } : {})
       });
       return n;
     },
@@ -1377,11 +1384,111 @@ function orderNationDocuments(documents) {
  */
 const NATIONS_SOURCE = { id: null, displayName: 'passages that name a First Nation' };
 
+// ---------------------------------------------------------------------------------------------
+// Federal
+// ---------------------------------------------------------------------------------------------
+
+/** A DEMI document id this is not, and cannot be mistaken for: `iaac:158078`. */
+const iaacId = (...parts) => ['iaac', ...parts].join(':');
+
+/** A blank page is not a source: nothing can cite it and the grounding gate cannot check it. */
+const readablePages = decision =>
+  ((decision && decision.pages) || []).filter(page => String(page.text || '').trim());
+
+/**
+ * A decision statement's pages as chunks the rest of this file can already handle.
+ *
+ * The federal prompt, the citation gate and the grounding gate all read chunks, and none of them
+ * cares where a chunk was stored — so the registry's PDF becomes pages, and pages become chunks,
+ * and nothing else changes.
+ */
+function federalChunksFrom(decision) {
+  const documentId = iaacId(decision.docId);
+  return readablePages(decision)
+    .map(page => ({
+      // `id` names the pseudo-chunk; `chunkId` is the key the citation registry reads. One value,
+      // both names, because a chunk here is read by code written for the other kind.
+      id: iaacId(decision.docId, page.page),
+      chunkId: iaacId(decision.docId, page.page),
+      documentId,
+      pageNumber: page.page,
+      content: page.text,
+      source: 'iaac',
+      url: decision.pdfUrl
+    }));
+}
+
+/** The newest thing the registry lists for a project, which is what a page with no decision links. */
+function latestRegistryDocument(documents) {
+  const newest = (documents || []).slice()
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0];
+  return newest ? { title: newest.title, date: newest.date || null, docId: newest.docId } : null;
+}
+
+/** What the page shows about the decision document itself, read or not. */
+const decisionFacts = decision => ({
+  docId: decision.docId,
+  title: decision.title,
+  date: decision.date || null,
+  pdfUrl: decision.pdfUrl || null
+});
+
+/**
+ * The `federal` section as stored, whichever registry the decision came from.
+ *
+ * `source` is the field a reader is owed: a DEMI-sourced item resolves to a document in this
+ * service and an IAAC-sourced one does not, and the two must not render as the same thing.
+ *
+ * A CEAR project with no decision statement is NOT a null section. Null means "nothing is known";
+ * here the registry was read and what it says is that Canada has issued no decision — which is a
+ * fact about the project, and the facts that go with it are what the page shows instead of items.
+ */
+function federalSection(origin, result, source) {
+  if (origin !== 'iaac') {
+    return result && result.value
+      ? { source: 'demi', sourceDocumentId: result.documentId, ...result.value }
+      : null;
+  }
+  // The registry could not be read at all; `sectionErrors.federal` says which failure it was.
+  if (!source) return null;
+
+  const facts = {
+    status: source.status || null,
+    cearId: source.cearId,
+    projectUrl: source.projectUrl,
+    latest: latestRegistryDocument(source.documents)
+  };
+  const { decision } = source;
+  if (!decision) return { source: 'iaac', facts, items: [], reason: 'no_federal_decision' };
+  // A decision the registry lists but whose PDF yielded nothing. Storing `no_federal_decision` here
+  // would claim Canada issued no decision when the document is sitting on the registry unread.
+  if (readablePages(decision).length === 0) {
+    return {
+      source: 'iaac',
+      facts: { ...facts, decision: decisionFacts(decision) },
+      items: [],
+      reason: 'federal_decision_unreadable'
+    };
+  }
+  if (!result || !result.value) return null;
+
+  return {
+    source: 'iaac',
+    sourceDocumentId: result.documentId,
+    facts: {
+      ...facts,
+      decision: { ...decisionFacts(decision), pageCount: (decision.pages || []).length }
+    },
+    ...result.value
+  };
+}
+
 /**
  * Reasons that describe what the registry holds rather than something that went wrong, so they are
  * logged at INFO. Everything else is a run that could have produced a section and did not.
  */
-const QUIET_REASONS = ['no_document', 'not_extracted', 'no_source', 'no_text', 'empty'];
+const QUIET_REASONS = ['no_document', 'not_extracted', 'no_source', 'no_text', 'empty',
+  'no_federal_decision'];
 
 /** Every section, so `--section` can name one and the runner can check the name is real. */
 const SECTIONS = ['status', 'conditions', 'amendments', 'timelineEvents', 'compliance',
@@ -1527,6 +1634,42 @@ async function generateProjectSummary(projectId, opts = {}) {
     if (hasExtractedText(document)) await prefetch('amendments', document);
   }
 
+  // THE FEDERAL DECISION IS USUALLY NOT IN DEMI. Five projects in the whole corpus have a Decision
+  // Statement filed here; every project that had a federal assessment has one on the public IAAC
+  // registry. So a null federal section was reporting DEMI's gaps as Canada's silence, and where
+  // DEMI holds the document nothing below runs — this is a fallback, not a replacement.
+  let federalOrigin = 'demi';
+  let federalDocument = federalDoc;
+  let federalChunks = null;
+  let federalSpec = { ...federalAbsent };
+  let federalSource = null;
+  if (wanted('federal') && !federalDoc && config.federalSource === 'iaac') {
+    try {
+      federalSource = await iaac.fetchFederalSource(project);
+    } catch (err) {
+      // The registry, not the project. A section generated from a half-read page would be worse
+      // than one that says it could not read the page.
+      logger.warn(`[project-summary] federal: the IAAC registry could not be read: ${err.message}`,
+        { projectId: String(projectId) });
+      federalSpec = { absentReason: 'federal_source_unavailable', absentSource: null };
+    }
+    if (federalSource) {
+      federalOrigin = 'iaac';
+      const { decision } = federalSource;
+      if (decision && readablePages(decision).length) {
+        federalDocument = { id: iaacId(decision.docId), displayName: decision.title };
+        federalChunks = federalChunksFrom(decision);
+        federalSpec = { absentReason: null, absentSource: null };
+      } else {
+        // A listed decision whose PDF could not be read is not a project without a decision.
+        federalSpec = {
+          absentReason: decision ? 'federal_decision_unreadable' : 'no_federal_decision',
+          absentSource: null
+        };
+      }
+    }
+  }
+
   // Nations come from the project's own passages, not from one document: Site C's certificate names
   // no First Nation, so a certificate-only source reported nothing on a project with 30 consulted
   // nations. The keyword search says WHICH documents name one — its rows carry an escaped snippet
@@ -1617,8 +1760,9 @@ async function generateProjectSummary(projectId, opts = {}) {
     build: buildItems
   });
 
-  const federal = await run('federal', federalDoc, {
-    ...federalAbsent,
+  const federal = await run('federal', federalDocument, {
+    ...federalSpec,
+    chunks: federalChunks,
     shape: SHAPES.conditions,
     instruction: INSTRUCTIONS.federal,
     build: buildItems
@@ -1718,9 +1862,7 @@ async function generateProjectSummary(projectId, opts = {}) {
         ? { sourceDocumentId: compliance.documentId, ...compliance.value }
         : null,
       nations,
-      federal: federal && federal.value
-        ? { sourceDocumentId: federal.documentId, ...federal.value }
-        : null
+      federal: federalSection(federalOrigin, federal, federalSource)
     },
     sectionErrors,
     sectionSources,

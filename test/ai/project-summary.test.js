@@ -9,6 +9,9 @@ const { Readable } = require('node:stream');
 
 const config = require('../../src/config');
 const summarizer = require('../../src/ai/summarize');
+// The seam that keeps the generator off the IAAC registry. Required as a module, because the
+// generator calls it as one.
+const iaac = require('../../src/ai/federal-source');
 const { logger } = require('../../src/utils/logger');
 const {
   generateProjectSummary, validCitations, groundedInCitations, normaliseNationName, joinNations,
@@ -180,8 +183,12 @@ test('generateProjectSummary', async (t) => {
     nationChunks: config.projectSummaryNationChunks,
     nationChunksPerDoc: config.projectSummaryNationChunksPerDoc,
     foundryEndpoint: config.foundryEndpoint,
-    foundryDeployment: config.foundryDeployment
+    foundryDeployment: config.foundryDeployment,
+    federalSource: config.federalSource
   };
+  // The IAAC registry is OFF unless a test turns it on with a stubbed adapter. Its default is
+  // `iaac`, and a test that left it there would reach the real registry over the network.
+  t.beforeEach(() => { config.federalSource = 'off'; });
   t.afterEach(() => {
     config.summaryEnabled = original.enabled;
     config.projectSummaryProvider = original.provider;
@@ -193,6 +200,7 @@ test('generateProjectSummary', async (t) => {
     config.projectSummaryNationChunksPerDoc = original.nationChunksPerDoc;
     config.foundryEndpoint = original.foundryEndpoint;
     config.foundryDeployment = original.foundryDeployment;
+    config.federalSource = original.federalSource;
   });
 
   await t.test('never calls the model for a section whose source document is missing', async () => {
@@ -1202,7 +1210,260 @@ test('generateProjectSummary', async (t) => {
     const record = await generateProjectSummary('272', { sources, section: 'federal' });
 
     assert.strictEqual(record.sections.federal.sourceDocumentId, 'docF');
+    assert.strictEqual(record.sections.federal.source, 'demi');
     assert.deepStrictEqual(record.sections.federal.items.map(i => i.title), ['Fish habitat']);
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // Federal decisions from the IAAC registry
+  //
+  // DEMI holds five Decision Statements in the whole corpus and every project that had a federal
+  // assessment has one on the public registry, so the fallback is the normal path and the DEMI one
+  // is the exception. Everything below stubs the adapter: what is under test here is the WIRING —
+  // which source wins, what the section stores, and what a failure stores instead.
+  // -------------------------------------------------------------------------------------------
+
+  /** A registry answer, with as much or as little of it as a test needs. */
+  const federalSource = (over = {}) => ({
+    status: 'Completed',
+    cearId: '80105',
+    projectUrl: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80105',
+    documents: [
+      { docId: '158078', title: "Minister's Environmental Assessment Decision Statement",
+        date: '2024-07-03', category: 'Additional Information' },
+      { docId: '129572', title: 'Notice of Commencement', date: '2015-07-10',
+        category: 'Additional Information' }
+    ],
+    decision: {
+      docId: '158078',
+      title: 'Decision Statement',
+      date: '2024-07-03',
+      pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      pages: [
+        { page: 1, text: 'Decision Statement issued under Section 54.' },
+        { page: 2, text: 'Condition 3.1 The Proponent shall protect fish habitat.' }
+      ]
+    },
+    ...over
+  });
+
+  /** Replaces the adapter and records what it was asked for. */
+  const stubFederalSource = (t2, answer) => {
+    const calls = [];
+    t2.mock.method(iaac, 'fetchFederalSource', async (project) => {
+      calls.push(project);
+      if (answer instanceof Error) throw answer;
+      return answer;
+    });
+    return calls;
+  };
+
+  await t.test('never asks the registry when DEMI holds the decision statement', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Fish habitat', oneLiner: 'Protect it.',
+        bullets: [], citations: [1] }]
+    }));
+    const asked = stubFederalSource(t, federalSource());
+
+    const sources = fakeSources({
+      documents: [{
+        id: 'docF', type: 'Decision Materials', datePosted: '2014-10-14',
+        displayName: 'Decision Statement issued under the Canadian Environmental Assessment Act',
+        isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+      }],
+      chunks: { docF: [chunk(1, 'Protect it.', 'docF')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.deepStrictEqual(asked, [], 'the registry is a fallback, not a second opinion');
+    assert.strictEqual(record.sections.federal.source, 'demi');
+    assert.strictEqual(record.sections.federal.sourceDocumentId, 'docF');
+    assert.strictEqual(record.sections.federal.facts, undefined);
+    assert.strictEqual(record.citations[0].source, undefined, 'a DEMI citation names no source');
+  });
+
+  await t.test('builds the federal section from the registry when DEMI holds none', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    // The figure is on page 2, which is the chunk the item cites: the grounding gate has to pass it
+    // through the pseudo-chunk exactly as it passes a DEMI one.
+    const calls = stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [2] }]
+    }));
+    stubFederalSource(t, federalSource());
+
+    // Only an inspection record in DEMI: no federal decision here at all.
+    const sources = fakeSources({
+      documents: [INSPECTION],
+      chunks: { docI: [chunk(1, 'No non-compliance.', 'docI')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(calls.length, 1, 'the registry pages were the model call\'s only sources');
+    const federal = record.sections.federal;
+    assert.strictEqual(federal.source, 'iaac');
+    assert.strictEqual(federal.sourceDocumentId, 'iaac:158078');
+    assert.deepStrictEqual(federal.items.map(i => i.title), ['Condition 3.1']);
+    assert.deepStrictEqual(federal.facts, {
+      status: 'Completed',
+      cearId: '80105',
+      projectUrl: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80105',
+      latest: { title: "Minister's Environmental Assessment Decision Statement",
+        date: '2024-07-03', docId: '158078' },
+      decision: {
+        docId: '158078',
+        title: 'Decision Statement',
+        date: '2024-07-03',
+        pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+        pageCount: 2
+      }
+    });
+
+    // The citation is what a reader follows, and nothing in DEMI resolves `iaac:158078`. So it
+    // carries the registry's own link and says which registry it came from.
+    assert.deepStrictEqual(record.citations, [{
+      n: 1,
+      chunkId: 'iaac:158078:2',
+      documentId: 'iaac:158078',
+      pageNumber: 2,
+      documentName: 'Decision Statement',
+      source: 'iaac',
+      url: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf'
+    }]);
+    assert.deepStrictEqual(federal.items[0].citations, [1]);
+  });
+
+  await t.test('stores the registry facts when Canada issued no decision', async () => {
+    // NOT a null section. The registry was read and what it says is that there is no federal
+    // decision — which is a fact about the project, and a different thing from knowing nothing.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    const calls = stubModel(t, '{"items":[]}');
+    stubFederalSource(t, federalSource({ decision: null }));
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(calls.length, 0, 'no sources, no model call');
+    assert.deepStrictEqual(record.sections.federal, {
+      source: 'iaac',
+      facts: {
+        status: 'Completed',
+        cearId: '80105',
+        projectUrl: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80105',
+        latest: { title: "Minister's Environmental Assessment Decision Statement",
+          date: '2024-07-03', docId: '158078' }
+      },
+      items: [],
+      reason: 'no_federal_decision'
+    });
+    assert.strictEqual(record.sectionErrors.federal, 'no_federal_decision');
+  });
+
+  // Every cause below is a decision statement the registry LISTS and this run could not read. The
+  // stored record must say so: `no_federal_decision` here would publish the claim that Canada
+  // issued no decision for a project whose statement is sitting on the registry.
+  for (const error of ['no_pdf_extractor', 'pdf_fetch_failed:404', 'no_text', 'no_pdf_link',
+    'request_budget_spent']) {
+    await t.test(`stores an unread decision (${error}) as unreadable`, async () => {
+      config.summaryEnabled = true;
+      config.projectSummaryProvider = 'ollama';
+      config.federalSource = 'iaac';
+      const calls = stubModel(t, '{"items":[]}');
+      const warned = [];
+      const noted = [];
+      t.mock.method(logger, 'warn', line => { warned.push(String(line)); });
+      t.mock.method(logger, 'info', line => { noted.push(String(line)); });
+      const unread = federalSource();
+      unread.decision = { ...unread.decision, pages: [], error };
+      stubFederalSource(t, unread);
+
+      const sources = fakeSources({ documents: [INSPECTION] });
+      const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+      assert.strictEqual(calls.length, 0, 'no pages, no model call');
+      assert.deepStrictEqual(record.sections.federal, {
+        source: 'iaac',
+        facts: {
+          status: 'Completed',
+          cearId: '80105',
+          projectUrl: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80105',
+          latest: { title: "Minister's Environmental Assessment Decision Statement",
+            date: '2024-07-03', docId: '158078' },
+          decision: {
+            docId: '158078',
+            title: 'Decision Statement',
+            date: '2024-07-03',
+            pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf'
+          }
+        },
+        items: [],
+        reason: 'federal_decision_unreadable'
+      });
+      assert.strictEqual(record.sectionErrors.federal, 'federal_decision_unreadable');
+      assert.ok(warned.some(line => line.includes('federal_decision_unreadable')),
+        `a document that could not be read is a warning: ${warned.join(' | ')}`);
+      assert.deepStrictEqual(noted.filter(line => line.includes('no_federal_decision')), [],
+        'and never reported as Canada having issued no decision');
+    });
+  }
+
+  await t.test('drops a blank registry page before the model sees it', async () => {
+    // A blank page is not a source: nothing can be cited to it and the grounding gate cannot check
+    // a claim against it, so the page numbers the citations carry have to skip it.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [1] }]
+    }));
+    const scanned = federalSource();
+    scanned.decision.pages = [{ page: 1, text: '   \n ' }, scanned.decision.pages[1]];
+    stubFederalSource(t, scanned);
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.deepStrictEqual(record.citations.map(c => [c.n, c.chunkId, c.pageNumber]),
+      [[1, 'iaac:158078:2', 2]], 'the first source is page 2; page 1 carried nothing');
+    assert.deepStrictEqual(record.sections.federal.items.map(i => i.title), ['Condition 3.1']);
+  });
+
+  await t.test('stores no federal section when the registry cannot be read', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    const calls = stubModel(t, '{"items":[]}');
+    stubFederalSource(t, new Error('GET https://iaac-aeic.gc.ca/... -> 503'));
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(calls.length, 0);
+    assert.strictEqual(record.sections.federal, null, 'a half-read registry generates nothing');
+    assert.strictEqual(record.sectionErrors.federal, 'federal_source_unavailable');
+  });
+
+  await t.test('FEDERAL_SOURCE=off leaves the section exactly as it was', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'off';
+    stubModel(t, '{"items":[]}');
+    const asked = stubFederalSource(t, federalSource());
+
+    const sources = fakeSources({ documents: [INSPECTION] });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.deepStrictEqual(asked, [], 'the kill switch is a kill switch');
+    assert.strictEqual(record.sections.federal, null);
+    assert.strictEqual(record.sectionErrors.federal, 'no_document');
   });
 
   await t.test('takes a reply the model wrapped in a code fence', async () => {
