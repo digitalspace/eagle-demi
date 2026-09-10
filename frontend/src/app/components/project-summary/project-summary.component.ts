@@ -1,10 +1,12 @@
-import { ChangeDetectionStrategy, Component, ElementRef, OnInit, computed, inject, signal, viewChild } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { ChangeDetectionStrategy, Component, ElementRef, LOCALE_ID, OnInit, computed, inject, signal, viewChild } from '@angular/core';
+import { CommonModule, formatDate } from '@angular/common';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { ProjectSummaryService } from '../../services/project-summary.service';
 import { RegistryStateService } from '../../services/registry-state.service';
 import {
   ConditionItem,
+  FederalDocumentRef,
+  FederalFacts,
   KEY_DOCUMENT_LABELS,
   KeyDocumentRole,
   LabelLine,
@@ -12,6 +14,7 @@ import {
   OrganizationRow,
   PhaseHistoryEntry,
   ProjectSummaryCitation,
+  SummaryDocumentRef,
   TimelineRow
 } from '../../models/project-summary.models';
 
@@ -49,6 +52,7 @@ export class ProjectSummaryComponent implements OnInit {
   service = inject(ProjectSummaryService);
   registry = inject(RegistryStateService);
   private route = inject(ActivatedRoute);
+  private locale = inject(LOCALE_ID);
 
   projectId = signal<string>('');
 
@@ -222,6 +226,59 @@ export class ProjectSummaryComponent implements OnInit {
       pending: !!note.organizationId && !orgs
     }));
   });
+
+  /**
+   * The registry facts behind a federal section Canada holds, and null for one DEMI holds.
+   *
+   * A DEMI-sourced section resolves to a document in this service and needs no registry line; an
+   * IAAC-sourced one resolves to nothing here, so the facts and the links are what the page shows.
+   */
+  federalFacts = computed<FederalFacts | null>(() => {
+    const federal = this.sections()?.federal;
+    return federal?.source === 'iaac' ? federal.facts || null : null;
+  });
+
+  /** The federal fact row as text; the two registry links render as their own elements beside it. */
+  federalLine = computed<string>(() => {
+    const f = this.federalFacts();
+    if (!f) return '';
+    const parts = [`Federal assessment: ${f.status || 'status not recorded'}`];
+    if (f.decision) {
+      parts.push(this.dated(f.decision));
+    } else {
+      parts.push('No federal decision statement yet');
+      if (f.latest) parts.push(`Latest: ${this.dated(f.latest)}`);
+    }
+    return parts.join(' · ');
+  });
+
+  /** Guarded: a federal section built from registry facts alone can arrive with no `items` key. */
+  federalItems = computed<ConditionItem[]>(() => this.sections()?.federal?.items || []);
+
+  /** The PDF link's label. A decision whose text would not read is still a file worth offering. */
+  federalPdfLabel = computed<string>(() => {
+    const pages = this.federalFacts()?.decision?.pageCount;
+    return pages ? `Decision statement (PDF, ${pages} pages)` : 'Decision statement (PDF)';
+  });
+
+  /** A registry row as "Title (14 Oct 2014)". Its date is scraped text, so an odd one renders raw. */
+  private dated(row: FederalDocumentRef): string {
+    if (!row.date) return row.title;
+    let day = row.date;
+    try {
+      day = formatDate(row.date, 'd MMM y', this.locale);
+    } catch {
+      // Not a date this locale can parse: the registry's own string is still worth showing.
+    }
+    return `${row.title} (${day})`;
+  }
+
+  /** The document a section is waiting on, when extraction is why it rendered nothing. */
+  notExtracted(section: string): SummaryDocumentRef | null {
+    const record = this.summary();
+    if (record?.sectionErrors?.[section] !== 'not_extracted') return null;
+    return record.sectionSources?.[section] || null;
+  }
 
   keyDocuments = computed(() =>
     (this.summary()?.facts?.keyDocuments || []).map(doc => ({

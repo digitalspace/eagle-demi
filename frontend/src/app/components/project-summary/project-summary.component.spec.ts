@@ -428,4 +428,283 @@ describe('ProjectSummaryComponent', () => {
     expect(cards.length).toBe(4);
     expect(cards[0].textContent).toContain('Rose Prairie');
   });
+
+  // Federal, read from the IAAC registry ---------------------------------------------------
+
+  /** A decision statement as the registry lists it: ids and a PDF, none of which DEMI resolves. */
+  const IAAC_FACTS = {
+    status: 'Decision Statement issued',
+    cearId: '80105',
+    projectUrl: 'https://iaac-aeic.gc.ca/050/evaluations/proj/80105',
+    latest: { title: 'Annual report on the implementation of conditions', date: '2024-07-03', docId: '164236' },
+    decision: {
+      docId: '157936',
+      title: 'Decision Statement issued under section 54',
+      date: '2014-10-14',
+      pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      pageCount: 12
+    }
+  };
+
+  const IAAC_CITATION = {
+    n: 13,
+    chunkId: 'iaac:157936:2',
+    documentId: 'iaac:157936',
+    pageNumber: 2,
+    documentName: 'Decision Statement issued under section 54',
+    source: 'iaac',
+    url: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf'
+  };
+
+  const IAAC_FEDERAL = {
+    source: 'iaac',
+    sourceDocumentId: 'iaac:157936',
+    facts: IAAC_FACTS,
+    items: [{
+      n: 1,
+      category: 'Fish and fish habitat',
+      title: 'Offsetting plan',
+      oneLiner: 'The proponent must offset residual effects on fish habitat.',
+      bullets: ['An offsetting plan is filed before construction begins.'],
+      citations: [13]
+    }]
+  };
+
+  /** The whole page with a federal section the registry supplied, plus its one extra citation. */
+  const withIaacFederal = (federal: unknown = IAAC_FEDERAL) => ({
+    ...MOCK_PROJECT_SUMMARY,
+    sections: { ...MOCK_PROJECT_SUMMARY.sections, federal },
+    citations: [...MOCK_PROJECT_SUMMARY.citations!, IAAC_CITATION]
+  });
+
+  it('links an IAAC citation to the registry PDF and leaves the DEMI chip on the document route', async () => {
+    routeWholePage(withIaacFederal());
+
+    const el = await render();
+    const registry = TestBed.inject(RegistryStateService);
+    const download = spyOn(registry, 'getDownloadUrl').and.resolveTo('https://demi.example/doc.pdf');
+    spyOn(window, 'open');
+
+    // The federal card's sources live in the dialog, which is where the registry chip renders.
+    el.querySelector<HTMLButtonElement>('[aria-labelledby="ps-federal-h"] .ps-card--action')!.click();
+    fixture.detectChanges();
+
+    const chip = el.querySelector<HTMLAnchorElement>('dialog .ps-cite')!;
+    expect(chip.tagName).toBe('A');
+    expect(chip.getAttribute('href')).toBe(IAAC_CITATION.url);
+    expect(chip.getAttribute('target')).toBe('_blank');
+    expect(chip.getAttribute('rel')).toBe('noopener');
+    expect(chip.getAttribute('title')).toBe(IAAC_CITATION.documentName);
+    expect(squash(chip.textContent)).toContain('IAAC registry, p. 2');
+    // `iaac:157936` resolves to nothing in DEMI, so the download must never be asked for it.
+    // The listener keeps the click from actually navigating the test runner to the registry.
+    chip.addEventListener('click', event => event.preventDefault(), { once: true });
+    chip.click();
+    expect(download).not.toHaveBeenCalled();
+
+    // A modal left open sits in the top layer and takes the focus every later spec asserts on.
+    el.querySelector('dialog')!.close();
+    await settle(2);
+    fixture.detectChanges();
+
+    // The DEMI chips on the same page are untouched: still buttons, still the document route.
+    const demiChip = el.querySelector<HTMLButtonElement>('.ps-status .ps-cite')!;
+    expect(demiChip.tagName).toBe('BUTTON');
+    demiChip.click();
+    expect(download).toHaveBeenCalledWith(MOCK_PROJECT_SUMMARY.citations![0].documentId, '272');
+  });
+
+  it('renders an IAAC citation with no PDF url as a non-link chip, never a bare href', async () => {
+    // The registry can list a document without ever finding a PDF for it. An anchor with
+    // href="" would still be focusable and would open a second copy of the current page.
+    const citationNoUrl = { ...IAAC_CITATION, url: undefined };
+    routeWholePage({
+      ...withIaacFederal(),
+      citations: [...MOCK_PROJECT_SUMMARY.citations!, citationNoUrl]
+    });
+
+    const el = await render();
+    el.querySelector<HTMLButtonElement>('[aria-labelledby="ps-federal-h"] .ps-card--action')!.click();
+    fixture.detectChanges();
+
+    const chip = el.querySelector('dialog .ps-cite')!;
+    expect(chip.tagName).toBe('SPAN');
+    expect(chip.querySelector('a')).toBeNull();
+    expect(chip.getAttribute('title')).toBe(IAAC_CITATION.documentName);
+    expect(squash(chip.textContent)).toContain('IAAC registry, p. 2');
+    expect(squash(chip.textContent)).toContain('Open PDF');
+
+    // A modal left open sits in the top layer and takes the focus every later spec asserts on.
+    el.querySelector('dialog')!.close();
+    await settle(2);
+    fixture.detectChanges();
+  });
+
+  it('puts the registry fact row above the federal cards', async () => {
+    routeWholePage(withIaacFederal());
+
+    const el = await render();
+
+    const section = el.querySelector('[aria-labelledby="ps-federal-h"]')!;
+    const row = section.querySelector('.ps-federal')!;
+    expect(squash(row.textContent)).toContain(
+      'Federal assessment: Decision Statement issued · Decision Statement issued under section 54 ' +
+      '(14 Oct 2014) · View on IAAC registry'
+    );
+
+    const links = row.querySelectorAll<HTMLAnchorElement>('a');
+    expect(links[0].getAttribute('href')).toBe(IAAC_FACTS.projectUrl);
+    expect(links[1].getAttribute('href')).toBe(IAAC_FACTS.decision.pdfUrl);
+    expect(squash(links[1].textContent)).toContain('Decision statement (PDF, 12 pages)');
+    expect(links[1].getAttribute('rel')).toBe('noopener');
+
+    // The facts read before anything generated from them.
+    expect(row.compareDocumentPosition(section.querySelector('.ps-cards')!))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(section.textContent).toContain('AI-generated from the sources below');
+  });
+
+  it('states that Canada has issued no decision, with no AI badge and no sources', async () => {
+    // The registry was read and answered: no decision statement. That is a fact about the project,
+    // not a section that failed, so the facts render and nothing generated does.
+    routeWholePage(withIaacFederal({
+      source: 'iaac',
+      facts: { ...IAAC_FACTS, decision: undefined },
+      items: [],
+      reason: 'no_federal_decision'
+    }));
+
+    const el = await render();
+
+    const section = el.querySelector('[aria-labelledby="ps-federal-h"]')!;
+    expect(squash(section.querySelector('.ps-federal')?.textContent)).toContain(
+      'Federal assessment: Decision Statement issued · No federal decision statement yet · ' +
+      'Latest: Annual report on the implementation of conditions (3 Jul 2024) · View on IAAC registry'
+    );
+    expect(section.textContent).not.toContain('AI-generated from the sources below');
+    expect(section.querySelectorAll('details.ps-sources').length).toBe(0);
+    expect(section.querySelectorAll('.ps-card--action').length).toBe(0);
+    // Only the registry link: with no decision there is no PDF to offer.
+    expect(section.querySelectorAll('.ps-federal a').length).toBe(1);
+  });
+
+  it('offers the decision PDF when the registry held one its text would not read', async () => {
+    routeWholePage(withIaacFederal({
+      source: 'iaac',
+      facts: { ...IAAC_FACTS, decision: { ...IAAC_FACTS.decision, pageCount: undefined } },
+      items: [],
+      reason: 'federal_decision_unreadable'
+    }));
+
+    const el = await render();
+
+    const section = el.querySelector('[aria-labelledby="ps-federal-h"]')!;
+    const row = section.querySelector('.ps-federal')!;
+    expect(squash(row.textContent)).toContain(
+      'Federal assessment: Decision Statement issued · Decision Statement issued under section 54 ' +
+      '(14 Oct 2014) · View on IAAC registry'
+    );
+    // The page count is what could not be read, so the link says PDF and stops there.
+    const pdf = row.querySelectorAll<HTMLAnchorElement>('a')[1];
+    expect(pdf.getAttribute('href')).toBe(IAAC_FACTS.decision.pdfUrl);
+    expect(squash(pdf.textContent)).toContain('Decision statement (PDF)');
+    expect(squash(section.querySelector('.ps-note')?.textContent))
+      .toBe('Decision statement found on the IAAC registry but its text could not be read.');
+
+    expect(section.textContent).not.toContain('AI-generated from the sources below');
+    expect(section.querySelectorAll('details.ps-sources').length).toBe(0);
+    expect(section.querySelectorAll('.ps-card--action').length).toBe(0);
+  });
+
+  it('renders the fact row and no badge when a federal section arrives with no items key', async () => {
+    // A registry-only payload from an older generator run: `items` was never written, not just
+    // set empty. The guard must read that the same way `items: []` reads, not throw building the
+    // page.
+    routeWholePage(withIaacFederal({ source: 'iaac', facts: IAAC_FACTS }));
+
+    const el = await render();
+
+    const section = el.querySelector('[aria-labelledby="ps-federal-h"]')!;
+    expect(squash(section.querySelector('.ps-federal')?.textContent)).toContain(
+      'Federal assessment: Decision Statement issued · Decision Statement issued under section 54 ' +
+      '(14 Oct 2014) · View on IAAC registry'
+    );
+    expect(section.textContent).not.toContain('AI-generated from the sources below');
+    expect(section.querySelectorAll('.ps-card--action').length).toBe(0);
+  });
+
+  it('keeps the no-federal-document note when the section is null', async () => {
+    // `federal: null` in the fixture: nothing was read at all, which is not the same as a registry
+    // that answered. The note stands, and nothing generated renders beside it.
+    routeWholePage();
+
+    const el = await render();
+
+    const section = el.querySelector('[aria-labelledby="ps-federal-h"]')!;
+    expect(squash(section.querySelector('.ps-note')?.textContent)).toBe(
+      'No federal decision document for this project is in the registry, so no federal conditions are shown.'
+    );
+    expect(section.querySelector('.ps-federal')).toBeNull();
+    expect(section.textContent).not.toContain('AI-generated from the sources below');
+    expect(section.querySelectorAll('.ps-card--action').length).toBe(0);
+  });
+
+  it('names the document a not-extracted section is waiting on', async () => {
+    routeWholePage({
+      ...MOCK_PROJECT_SUMMARY,
+      sections: { ...MOCK_PROJECT_SUMMARY.sections, nations: null },
+      sectionErrors: { nations: 'not_extracted' },
+      sectionSources: { nations: { documentId: 'mock-doc-app', displayName: 'Environmental Impact Statement' } }
+    });
+
+    const el = await render();
+    const registry = TestBed.inject(RegistryStateService);
+    const download = spyOn(registry, 'getDownloadUrl').and.resolveTo('https://demi.example/doc.pdf');
+    spyOn(window, 'open');
+
+    const note = el.querySelector('[aria-labelledby="ps-nations-h"] .ps-note')!;
+    expect(squash(note.textContent))
+      .toBe('Environmental Impact Statement is in the registry but not yet extracted.');
+    expect(note.textContent).not.toContain('no organisation record matched');
+
+    note.querySelector<HTMLButtonElement>('button')!.click();
+    expect(download).toHaveBeenCalledWith('mock-doc-app', '272');
+  });
+
+  it('keeps the generic empty-state line for any other reason', async () => {
+    // The source row is deliberately present: the line is chosen by the REASON, not by whether a
+    // document happens to be named, so "not yet extracted" cannot leak onto another reason.
+    routeWholePage({
+      ...MOCK_PROJECT_SUMMARY,
+      sections: { ...MOCK_PROJECT_SUMMARY.sections, nations: null },
+      sectionErrors: { nations: 'no_document' },
+      sectionSources: { nations: { documentId: 'mock-doc-app', displayName: 'Environmental Impact Statement' } }
+    });
+
+    const el = await render();
+
+    const note = el.querySelector('[aria-labelledby="ps-nations-h"] .ps-note')!;
+    expect(squash(note.textContent))
+      .toBe('No nations were read from this project’s documents, so none are listed.');
+    expect(note.querySelector('button')).toBeNull();
+  });
+
+  it('tags a French key document and leaves the rest unmarked', async () => {
+    const [certificate, ...rest] = MOCK_PROJECT_SUMMARY.facts!.keyDocuments!;
+    routeWholePage({
+      ...MOCK_PROJECT_SUMMARY,
+      facts: {
+        ...MOCK_PROJECT_SUMMARY.facts,
+        keyDocuments: [{ ...certificate, languageFlag: 'fr' }, ...rest]
+      }
+    });
+
+    const el = await render();
+
+    const titles = el.querySelectorAll('[aria-labelledby="ps-docs-h"] .ps-card__title');
+    expect(squash(titles[0].textContent))
+      .toBe('Environmental Assessment Certificate #E14-01 FR — French-language document');
+    expect(titles[0].querySelector('.pill')?.textContent).toContain('FR');
+    expect(titles[1].querySelector('.pill')).toBeNull();
+  });
 });
