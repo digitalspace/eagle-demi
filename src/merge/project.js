@@ -62,7 +62,7 @@ const EAGLE_ONLY_FIELDS = [
   'eaStatus', 'eacDecision', 'decisionDate', 'currentPhaseName', 'phaseHistory',
   'legislation', 'legislationYear', 'review180Start', 'review45Start',
   'reviewExtensions', 'reviewSuspensions', 'substitution', 'CEAAInvolvement',
-  'CEAALink', 'applicableRegulation', 'build', 'dateAdded',
+  'CEAALink', 'applicableRegulation', 'build', 'dateAdded', 'dateUpdated',
   'projectLead', 'projectLeadEmail', 'projectLeadPhone',
   'responsibleEPD', 'responsibleEPDEmail', 'responsibleEPDPhone',
   'complianceLead', 'execProjectDirector', 'eaoMember',

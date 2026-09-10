@@ -132,6 +132,30 @@ test('nosql project controller', async (t) => {
     assert.strictEqual(res.body.shortUrl, `${config.linkBaseUrl}/s/kq7bt2rm`);
   });
 
+  /**
+   * eagle-public prints this as "Last updated". It is Eagle's edit date, not `updatedAt` — DEMI's
+   * sync stamp moves on every re-merge, so a page drawn from it would claim an edit that never
+   * happened.
+   */
+  await t.test('an anonymous read carries Eagle\'s dateUpdated', async () => {
+    t.mock.method(projects, 'getById', async () => ({
+      id: '207',
+      name: 'Nicomen Wind Energy',
+      read: ['public'],
+      dateAdded: '2016-12-14T00:00:00.000Z',
+      dateUpdated: '2021-06-02T00:00:00.000Z',
+      updatedAt: '2026-07-30T00:00:00.000Z',
+      sources: { eagle: { dateUpdated: '2021-06-02T00:00:00.000Z' } }
+    }));
+
+    const res = mockRes();
+    await projectController.getProject({ params: { id: '207' }, query: {} }, res);
+
+    assert.strictEqual(res.body.dateUpdated, '2021-06-02T00:00:00.000Z');
+    assert.strictEqual(res.body.updatedAt, '2026-07-30T00:00:00.000Z', 'the sync stamp is its own field');
+    assert.strictEqual(res.body.sources, undefined, 'or this passes through the raw payload');
+  });
+
   await t.test('a project with no code carries no shortUrl at all', async () => {
     t.mock.method(projects, 'getById', async () => ({
       id: '207', name: 'Nicomen Wind Energy', read: ['public']
