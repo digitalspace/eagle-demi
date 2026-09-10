@@ -353,7 +353,7 @@ function timelineCandidates(pool) {
 const pickTimeline = pool => timelineCandidates(pool)[0] || null;
 
 /** The outcomes that earn the next candidate a turn: the model answered, and nothing survived. */
-const TIMELINE_FALLBACK_REASONS = ['no_list', 'no_grounded_content'];
+const TIMELINE_FALLBACK_REASONS = ['no_list', 'no_grounded_content', 'empty'];
 
 /** The ceiling on what one timeline costs. A fourth candidate is not worth a fourth document read. */
 const TIMELINE_MAX_RUNS = 3;

@@ -1815,6 +1815,36 @@ test('generateProjectSummary', async (t) => {
     `the fallback is logged, naming both documents: ${info.join(' | ')}`);
   });
 
+  await t.test('reads the next document when the timeline\'s first source declares zero events',
+    async () => {
+      // `empty` (the model saw the document and declared no events) is a different reason than
+      // `no_grounded_content` (the model declared events the gates then dropped), but both are an
+      // honest "not here" that the next candidate deserves a turn on.
+      config.summaryEnabled = true;
+      config.projectSummaryProvider = 'ollama';
+      const calls = stubModel(t, [
+        JSON.stringify({ events: [] }),
+        JSON.stringify({
+          events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+        })
+      ]);
+
+      const sources = fakeSources({
+        documents: [ASSESSMENT_REPORT, CERTIFICATE],
+        chunks: {
+          docAR: [chunk(1, 'The Tilbury Marine Jetty project overview.', 'docAR')],
+          docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
+        }
+      });
+      const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+      assert.strictEqual(calls.length, 2, 'the assessment report, then the certificate');
+      assert.deepStrictEqual(record.sections.timelineEvents,
+        [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+      assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docC',
+        'the source is the certificate the events were read from, not the report that answered empty');
+    });
+
   await t.test('stops the timeline at the first document that produces events', async () => {
     // The chain is a fallback, not a sweep: a second document read after a good answer is a second
     // minutes-long call, and its events would merge into a chronology already written.
