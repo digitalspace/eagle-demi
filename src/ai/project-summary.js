@@ -204,9 +204,12 @@ const EAO_TITLE = /\beao\b|environmental\s+assessment\s+office/i;
 /**
  * A French copy of a document the registry also files in English.
  *
- * Trailing `(?![a-z])` rather than `\b`: an accented ending ("résumé") has no word boundary after it.
+ * Matches French-language markers only, not English words that merely contain them ("French Creek",
+ * "Resume of Conditions"): "rapport" and "résumé" require a French phrase around them, and bare
+ * "french"/"fr" require the `(fr)`/`(français)` or trailing `- fr` marker form.
  */
-const FRENCH_TITLE = /\b(?:sommaire|r[ée]sum[ée]|rapport|version\s+fran[çc]aise|french)(?![a-z])/i;
+const FRENCH_TITLE =
+  /\b(sommaire|r[ée]sum[ée]\s+(?:ex[ée]cutif|des\s+conditions)|rapport\s+d['’]?[ée]valuation|version\s+fran[çc]aise|traduction\s+fran[çc]aise)\b|\((?:fr|fran[çc]ais)\)|[-–]\s*fr\b/i;
 
 const isFrenchTitle = doc => FRENCH_TITLE.test(nameOf(doc));
 

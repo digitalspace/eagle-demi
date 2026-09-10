@@ -12,7 +12,8 @@ const summarizer = require('../../src/ai/summarize');
 const { logger } = require('../../src/utils/logger');
 const {
   generateProjectSummary, validCitations, groundedInCitations, normaliseNationName, joinNations,
-  buildFacts, buildItems, buildTimeline, sanitisePromptName, pickSource, PRICED_AS, PICK
+  buildFacts, buildItems, buildTimeline, sanitisePromptName, pickSource, PRICED_AS, PICK,
+  isFrenchTitle
 } = require('../../src/ai/project-summary');
 
 /** The transport before any stub, for the test that has to reach a real socket. */
@@ -1916,6 +1917,20 @@ test('key document pickers', async (t) => {
     const englishEis = { id: 'docEIS-en', type: 'Application Materials', datePosted: '2013-01-25',
       displayName: 'Environmental Impact Statement' };
     assert.strictEqual(PICK.application([frenchEis, englishEis]).id, 'docEIS-en');
+  });
+
+  await t.test('does not flag English titles that merely contain "French" or "resume"', () => {
+    // "French Creek", "Frenchman River", and "Resume of Conditions" are English titles; the French
+    // check must key on French-language phrases and markers, not on these substrings.
+    assert.strictEqual(isFrenchTitle({ displayName: 'French Creek Water Project - Assessment Report' }), false);
+    assert.strictEqual(isFrenchTitle({ displayName: 'Resume of Conditions' }), false);
+    assert.strictEqual(isFrenchTitle({ displayName: 'Frenchman River Assessment Report' }), false);
+  });
+
+  await t.test('flags French-language titles and markers', () => {
+    assert.strictEqual(isFrenchTitle({ displayName: "Sommaire du rapport d'évaluation" }), true);
+    assert.strictEqual(isFrenchTitle({ displayName: 'Résumé exécutif' }), true);
+    assert.strictEqual(isFrenchTitle({ displayName: 'Assessment Report (FR)' }), true);
   });
 
   await t.test('links the French copy, flagged, when it is the only one filed', () => {
