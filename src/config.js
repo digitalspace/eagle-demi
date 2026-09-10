@@ -261,6 +261,12 @@ const config = {
   projectSummaryNationChunksPerDoc:
     parseInt(process.env.PROJECT_SUMMARY_NATION_CHUNKS_PER_DOC || '4', 10),
 
+  // Where the `federal` section's source document comes from when DEMI holds no Decision Statement
+  // of its own — five projects in the whole corpus do. `iaac` reads the federal decision from the
+  // public Impact Assessment Agency registry (src/ai/federal-source.js); `off` is the kill switch,
+  // and leaves the section exactly as it was before that adapter existed.
+  federalSource: process.env.FEDERAL_SOURCE || 'iaac',
+
   // Which deployment answers the generator. `foundry` is the deployed path (managed identity, the
   // same account the query-time summariser uses). `ollama` is a local model on the LAN, for
   // generating a record from a workstation without the Foundry private endpoint.

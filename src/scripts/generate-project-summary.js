@@ -36,6 +36,10 @@
  *   DEMI_TOKEN                a staff bearer token (or DEMI_API_KEY for the X-Api-Key header)
  *   SUMMARY_ENABLED=true      the same flag the query-time summariser reads
  *   PROJECT_SUMMARY_PROVIDER  `foundry` (default) or `ollama`
+ *   FEDERAL_SOURCE            `iaac` (default) reads a federal decision DEMI does not hold from
+ *                             the public IAAC registry; `off` is the kill switch. `iaac` needs
+ *                             `pdftotext` (poppler-utils) on PATH and outbound access to
+ *                             iaac-aeic.gc.ca.
  *
  * Cost is ALWAYS reported at the Foundry rates, whichever provider ran — see `pricedAs` on the
  * record. A local run is free in cash; the figure is what the same work would cost deployed.
