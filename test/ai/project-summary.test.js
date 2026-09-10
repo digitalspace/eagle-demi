@@ -18,6 +18,7 @@ const {
   buildFacts, buildItems, buildTimeline, sanitisePromptName, pickSource, PRICED_AS, PICK,
   isFrenchTitle
 } = require('../../src/ai/project-summary');
+const { INSTRUCTIONS } = require('../../src/ai/project-summary-prompts');
 
 /** The transport before any stub, for the test that has to reach a real socket. */
 const realHttpRequest = http.request;
@@ -1668,6 +1669,28 @@ test('generateProjectSummary', async (t) => {
     assert.deepStrictEqual(record.sections.nations.map(n => n.name), ['Saulteau First Nation']);
   });
 
+  await t.test('asks the timeline for milestones, with room for the reply', async () => {
+    // Project 302's assessment report dates hundreds of letters, meetings and comment periods, so
+    // an uncapped ask ran past the 1500-token default on every batch, even halved. The budget and
+    // the ask move together: either one alone still stops the list mid-item, and a stopped list
+    // parses as nothing.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: { docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')] }
+    });
+    await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls[0].body.options.num_predict, 4000);
+    assert.match(calls[0].body.messages[0].content, /at most 15 events/,
+      'the batch carries the capped instruction, not the open-ended one');
+  });
+
   await t.test('keeps a timeline event the source dates in long form', async () => {
     // The timeline shape forces an ISO date and the documents write "October 14, 2014", so a
     // literal comparison dropped every event Site C produced — a 100% failure that read on the
@@ -2713,6 +2736,15 @@ test('key document pickers', async (t) => {
 
     const roles = buildFacts([withoutText, withText], [withText]).keyDocuments;
     assert.strictEqual(roles.find(r => r.role === 'assessmentReport').documentId, 'docAR1');
+  });
+});
+
+test('timeline instruction', async (t) => {
+  await t.test('caps the list and rules out routine correspondence', () => {
+    assert.match(INSTRUCTIONS.timelineEvents, /at most 15 events/,
+      'the ask is capped, so the reply fits the completion budget');
+    assert.match(INSTRUCTIONS.timelineEvents, /[Ll]eave out[^.]*meetings/,
+      'meetings are named as something to leave out');
   });
 });
 
