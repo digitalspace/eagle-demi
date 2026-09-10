@@ -14,9 +14,10 @@
  * requests to the host are spaced by that delay and the run caches what it read: a rerun, or a
  * `--section federal` regeneration, refetches nothing.
  *
- * `fetch` and `sleep` are INJECTED. A test that reaches the registry is a test that fails when
- * Ottawa deploys, so nothing in `test/` touches the network and the fixtures are trimmed copies of
- * the real pages.
+ * `fetch`, `sleep` and the PDF extractor are INJECTED. A test that reaches the registry is a test
+ * that fails when Ottawa deploys, and a test that shells out to `pdftotext` is a test that fails
+ * on a runner without poppler, so nothing in `test/` touches the network or the binary and the
+ * fixtures are trimmed copies of the real pages.
  */
 
 const { execFile } = require('node:child_process');
@@ -290,11 +291,16 @@ const timerSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
  * @param {object} [opts]
  * @param {Function} [opts.fetch]  test seam; defaults to the global
  * @param {Function} [opts.sleep]  test seam; defaults to a timer
+ * @param {Function} [opts.pdfToPages]  test seam; defaults to this module's extractor
  * @returns {Promise<object|null>} the source, or null when the registry has no such project
  */
 async function fetchFederalSource(project, opts = {}) {
   const doFetch = opts.fetch || globalThis.fetch;
   const sleep = opts.sleep || timerSleep;
+  // Injected for the same reason as `fetch`: `pdftotext` is missing on a CI runner as well as
+  // on a Function host, so a test that shells out to it asserts what the runner has installed
+  // rather than what this walk does with the pages it gets back.
+  const extractPages = opts.pdfToPages || pdfToPages;
   const name = String((project && (project.name || project.displayName)) || '').trim();
 
   let spent = 0;
@@ -421,7 +427,7 @@ async function fetchFederalSource(project, opts = {}) {
   }
   if (pdf === null) return unreadable('request_budget_spent');
 
-  const pages = await pdfToPages(pdf);
+  const pages = await extractPages(pdf);
   if (!Array.isArray(pages)) return unreadable(pages.error);
   if (!pages.some(page => String(page.text || '').trim())) return unreadable('no_text');
 

@@ -4,6 +4,7 @@ process.env.NODE_ENV = 'test';
 
 const test = require('node:test');
 const assert = require('node:assert');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -25,6 +26,12 @@ const fixture = name => fs.readFileSync(path.join(FIXTURES, name), 'utf8');
 
 const TILBURY = 'Tilbury Marine Jetty Project';
 
+/** Whether poppler is installed here. It is not on a CI runner, and not on a Function host. */
+function hasPdftotext() {
+  return !spawnSync('pdftotext', ['-v']).error;
+}
+const needsPoppler = hasPdftotext() ? false : 'pdftotext is not installed on this host';
+
 /** A one-page PDF with nothing on the page — what a statement filed as a scan reads like. */
 const BLANK_PDF = Buffer.from([
   '%PDF-1.4',
@@ -33,6 +40,28 @@ const BLANK_PDF = Buffer.from([
   '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj',
   'trailer<</Root 1 0 R>>'
 ].join('\n'), 'utf8');
+
+/** The decision statement PDF the walk fetches: two pages, one line of text on each. */
+const TWO_PAGE_PDF = fs.readFileSync(path.join(FIXTURES, 'two-page.pdf'));
+
+/**
+ * The extractor as a stub, for every test about the WALK rather than about extraction.
+ *
+ * A runner without poppler answered `no_pdf_extractor` to all of them, which asserted what the
+ * host has installed instead of what the walk does with the pages it gets back. The text below is
+ * what `pdftotext -layout` reads out of these two fixtures; the gated tests over the real binary
+ * are what keep that claim honest.
+ */
+const stubPdfToPages = async (buffer) => {
+  if (buffer.equals(BLANK_PDF)) return [{ page: 1, text: '\n' }];
+  if (buffer.equals(TWO_PAGE_PDF)) {
+    return [
+      { page: 1, text: 'Decision Statement page one\n' },
+      { page: 2, text: 'Condition 3.1 page two\n' }
+    ];
+  }
+  return { error: 'pdf_extract_failed' };
+};
 
 test('cearIdFromLink', async (t) => {
   await t.test('reads the CEAR id out of a catalog link', () => {
@@ -225,10 +254,8 @@ test('parsePdfLink', async (t) => {
 });
 
 test('pdfToPages', async (t) => {
-  const pdf = () => fs.readFileSync(path.join(FIXTURES, 'two-page.pdf'));
-
-  await t.test('splits a PDF into numbered pages', async () => {
-    const pages = await pdfToPages(pdf());
+  await t.test('splits a PDF into numbered pages', { skip: needsPoppler }, async () => {
+    const pages = await pdfToPages(TWO_PAGE_PDF);
     assert.ok(Array.isArray(pages), `expected pages, got ${JSON.stringify(pages)}`);
     // Two pages, not three: poppler writes a form feed AFTER the last page as well.
     assert.strictEqual(pages.length, 2);
@@ -243,16 +270,17 @@ test('pdfToPages', async (t) => {
     const realPath = process.env.PATH;
     process.env.PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'no-poppler-'));
     try {
-      assert.deepStrictEqual(await pdfToPages(pdf()), { error: 'no_pdf_extractor' });
+      assert.deepStrictEqual(await pdfToPages(TWO_PAGE_PDF), { error: 'no_pdf_extractor' });
     } finally {
       process.env.PATH = realPath;
     }
   });
 
-  await t.test('answers `pdf_extract_failed` for something that is not a PDF', async () => {
-    assert.deepStrictEqual(await pdfToPages(Buffer.from('not a pdf')),
-      { error: 'pdf_extract_failed' });
-  });
+  await t.test('answers `pdf_extract_failed` for something that is not a PDF',
+    { skip: needsPoppler }, async () => {
+      assert.deepStrictEqual(await pdfToPages(Buffer.from('not a pdf')),
+        { error: 'pdf_extract_failed' });
+    });
 });
 
 test('fetchFederalSource', async (t) => {
@@ -294,7 +322,8 @@ test('fetchFederalSource', async (t) => {
           arrayBuffer: async () => (Buffer.isBuffer(body) ? body : Buffer.from(body, 'utf8'))
         };
       },
-      sleep: async ms => { sleeps.push(ms); }
+      sleep: async ms => { sleeps.push(ms); },
+      pdfToPages: stubPdfToPages
     };
     return stub;
   };
@@ -304,7 +333,7 @@ test('fetchFederalSource', async (t) => {
     'proj/80105': fixture('proj-80105.html'),
     'projDocs=80105&keyDocs=true': fixture('docs-80105-key.html'),
     'document/158078': fixture('doc-157936.html'),
-    '157936E.pdf': fs.readFileSync(path.join(FIXTURES, 'two-page.pdf'))
+    '157936E.pdf': TWO_PAGE_PDF
   });
 
   await t.test('walks the registry from a catalog link and returns the decision', async () => {
@@ -404,9 +433,10 @@ test('fetchFederalSource', async (t) => {
   // A decision statement the registry LISTS and this code could not read. Each cause below returns
   // the row with empty pages and names itself, because the caller stores "we could not read it"
   // and "Canada issued no decision" as different things and can only tell them apart here.
-  const unread = async (routes, over = {}) => {
+  const unread = async (routes, over = {}, opts = {}) => {
     const source = await fetchFederalSource(
-      { name: TILBURY, CEAALink: '/050/evaluations/proj/80105' }, registry(routes));
+      { name: TILBURY, CEAALink: '/050/evaluations/proj/80105' },
+      { ...registry(routes), ...opts });
     assert.strictEqual(source.cearId, '80105', 'the rest of the read still stands');
     assert.deepStrictEqual(source.decision, {
       docId: '158078',
@@ -438,18 +468,14 @@ test('fetchFederalSource', async (t) => {
 
   await t.test('names the missing extractor on a host without poppler', async () => {
     // The bare Function host. No poppler means no text, which is not the same as no decision.
-    const realPath = process.env.PATH;
-    process.env.PATH = fs.mkdtempSync(path.join(tmpdir, 'no-poppler-'));
-    try {
-      await unread(FULL(), {
-        title: 'Decision Statement Issued under Section 54 of the ' +
-          'Canadian Environmental Assessment Act, 2012',
-        pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
-        error: 'no_pdf_extractor'
-      });
-    } finally {
-      process.env.PATH = realPath;
-    }
+    // What the extractor answers is the unit test above; that the walk carries the answer through
+    // to the row instead of losing the read is this one.
+    await unread(FULL(), {
+      title: 'Decision Statement Issued under Section 54 of the ' +
+        'Canadian Environmental Assessment Act, 2012',
+      pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      error: 'no_pdf_extractor'
+    }, { pdfToPages: async () => ({ error: 'no_pdf_extractor' }) });
   });
 
   await t.test('names a PDF that holds no text', async () => {
