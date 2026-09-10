@@ -201,6 +201,24 @@ const PROPONENT_STUDY_TITLE =
 /** The office, however a title names it. */
 const EAO_TITLE = /\beao\b|environmental\s+assessment\s+office/i;
 
+/**
+ * A French copy of a document the registry also files in English.
+ *
+ * Matches French-language markers only, not English words that merely contain them ("French Creek",
+ * "Resume of Conditions"): "rapport" and "résumé" require a French phrase around them, and bare
+ * "french"/"fr" require the `(fr)`/`(français)` or trailing `- fr` marker form.
+ */
+const FRENCH_TITLE =
+  /\b(sommaire|r[ée]sum[ée]\s+(?:ex[ée]cutif|des\s+conditions)|rapport\s+d['’]?[ée]valuation|version\s+fran[çc]aise|traduction\s+fran[çc]aise)\b|\((?:fr|fran[çc]ais)\)|[-–]\s*fr\b/i;
+
+const isFrenchTitle = doc => FRENCH_TITLE.test(nameOf(doc));
+
+/** The English candidates, or every candidate when the registry holds only the French copy. */
+const preferEnglish = docs => {
+  const english = docs.filter(d => !isFrenchTitle(d));
+  return english.length ? english : docs;
+};
+
 const ASSESSMENT_REPORT_TITLE = /assessment\s+report/i;
 
 /**
@@ -271,12 +289,12 @@ const PICK = {
   amendedCertificate: docs => newest(docs.filter(d => nameMatches(d, /amended\s+certificate/i))),
   // No `preferOriginal` fallback: a registry holding only amendments' reports holds none of the
   // project's, and the role is dropped rather than filled with the nearest miss.
-  assessmentReport: docs => newest(docs.filter(isAssessmentReport)),
+  assessmentReport: docs => newest(preferEnglish(docs.filter(isAssessmentReport))),
   // Two tiers: the document that names itself the application wins over anything else the type
   // sweeps in, so a project whose EIS is filed beside a hundred supporting documents still links
   // the EIS.
   application: docs => {
-    const pool = docs.filter(isApplication);
+    const pool = preferEnglish(docs.filter(isApplication));
     return preferOriginal(pool.filter(d => nameMatches(d, APPLICATION_MAIN_TITLE)))
       || preferOriginal(pool);
   },
@@ -308,6 +326,27 @@ function docRef(doc) {
     : null;
 }
 
+/** What a `not_extracted` section names, so the page can still link the document it is waiting on. */
+const sourceRef = doc => ({ documentId: String(doc.id), displayName: nameOf(doc) });
+
+/**
+ * The document a section reads, and when there is none, which of the two reasons applies.
+ *
+ * A picker that finds nothing among the documents with text but something in the registry names a
+ * document waiting on extraction, not a registry that holds none. `documents` must already be the
+ * public list: `absentSource` is rendered.
+ */
+function pickSource(pick, extracted, documents) {
+  const document = pick(extracted);
+  if (document) return { document, absentReason: null, absentSource: null };
+  const pending = pick(documents);
+  return {
+    document: null,
+    absentReason: pending ? 'not_extracted' : 'no_document',
+    absentSource: pending ? sourceRef(pending) : null
+  };
+}
+
 /**
  * `facts` — computed from the documents index, never from the model.
  *
@@ -329,8 +368,11 @@ function buildFacts(documents, sourcePool = documents) {
         // report out of the documents that have extracted text, and a link naming a different one
         // beside prose drawn from this one is the page contradicting itself. A role no source
         // document fills still links whatever the registry holds for it.
-        const ref = docRef(pick(sourcePool) || pick(documents));
-        return ref ? { role, ...ref } : null;
+        const document = pick(sourcePool) || pick(documents);
+        const ref = docRef(document);
+        if (!ref) return null;
+        // Only when the registry offered nothing else: the page says which language it is linking.
+        return isFrenchTitle(document) ? { role, ...ref, languageFlag: 'fr' } : { role, ...ref };
       })
       .filter(Boolean)
   };
@@ -557,7 +599,14 @@ const SECTION_MAX_TOKENS = { conditions: 8000, federal: 8000, nations: 8000 };
  */
 const LIST_SHAPE_SECTIONS = ['conditions', 'federal', 'timelineEvents', 'nations'];
 
+/**
+ * The sections read over the WHOLE document in `projectSummaryMaxChunks` batches, rather than over
+ * its first chunks alone: a chronology has events on the last page, so a window loses them outright.
+ */
+const CHUNK_BATCHED_SECTIONS = ['timelineEvents'];
+
 const isListSection = name => LIST_SECTIONS.includes(name);
+const isChunkBatched = name => CHUNK_BATCHED_SECTIONS.includes(name);
 const isListShape = name => LIST_SHAPE_SECTIONS.includes(name);
 const maxTokensFor = name => SECTION_MAX_TOKENS[name] || config.projectSummaryMaxTokens;
 
@@ -599,6 +648,14 @@ function fitBatches(chunks, fixedChars, maxTokens) {
   if (batch.length) batches.push(batch);
 
   return batches;
+}
+
+/** `chunks` in consecutive runs of `size`, in the order they were read. */
+function sizedBatches(chunks, size) {
+  const step = Math.max(1, size);
+  const batches = [];
+  for (let i = 0; i < chunks.length; i += step) batches.push(chunks.slice(i, i + step));
+  return batches.length ? batches : [chunks];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -736,15 +793,34 @@ function claimTokens(text) {
 }
 
 /**
- * Is every figure and date in `text` present in the chunks it cites?
+ * Is every figure and date in `text` present in the document(s) it cites?
  *
  * The gate that catches a fluent invention. A hallucinated condition reads exactly like a real one
  * — same register, same structure, plausible citation — until you check whether its numbers are in
  * the source. Anything that fails is dropped whole; a claim with one wrong figure is not repaired
  * into a claim with none.
+ *
+ * `pool` is every chunk of the source document, where the caller has it. Without it the check is
+ * against the cited chunks alone.
  */
-function groundedInCitations(text, citations, chunks) {
-  return ungroundedToken(text, citations, chunks) === null;
+function groundedInCitations(text, citations, chunks, pool) {
+  return ungroundedToken(text, citations, chunks, pool) === null;
+}
+
+/**
+ * The chunks a claim is checked against: every chunk of the document(s) it cites, not only the ones
+ * the model was shown.
+ *
+ * A model sees a window of a long document and cites within it, while the figure it quotes is
+ * printed again on a page outside that window. Checked against the window alone the claim reads as
+ * an invention. Widened to the cited DOCUMENT and no further, so a claim still cannot be grounded
+ * on a document it never cited.
+ */
+function scopeToCitedDocuments(cited, pool) {
+  if (!Array.isArray(pool) || pool.length === 0) return cited;
+  const documentIds = new Set(cited.map(c => String((c && c.documentId) || '')));
+  const scoped = pool.filter(c => documentIds.has(String((c && c.documentId) || '')));
+  return scoped.length ? scoped : cited;
 }
 
 /**
@@ -755,12 +831,13 @@ function groundedInCitations(text, citations, chunks) {
  * the token that failed: "the section produced nothing" sends an operator nowhere, "it claimed
  * 2019-03-14 and the chunk it cites says 2019-04-14" sends them to the retrieval or the model.
  */
-function ungroundedToken(text, citations, chunks) {
+function ungroundedToken(text, citations, chunks, pool) {
   const tokens = claimTokens(text);
   if (tokens.length === 0) return null;
 
   const cited = normalise(
-    citations.map(n => (chunks[n - 1] && chunks[n - 1].content) || '').join('\n')
+    scopeToCitedDocuments(citations.map(n => chunks[n - 1]).filter(Boolean), pool)
+      .map(c => c.content || '').join('\n')
   ).toLowerCase();
 
   for (const token of tokens) {
@@ -782,8 +859,8 @@ const DROP_EXCERPT_MAX = 160;
  *
  * @returns {boolean} true when the claim is grounded and survives
  */
-function keepGrounded(section, text, citations, chunks) {
-  const token = ungroundedToken(text, citations, chunks);
+function keepGrounded(section, text, citations, chunks, pool) {
+  const token = ungroundedToken(text, citations, chunks, pool);
   if (token === null) return true;
   const where = section ? `${section}: ` : '';
   logger.warn(`[project-summary] ${where}dropped a claim whose "${token}" is in none of the ` +
@@ -906,24 +983,62 @@ function citationRegistry() {
 // ---------------------------------------------------------------------------------------------
 
 /**
+ * The generic words a nation's name may end with. TRAILING only: "Métis Nation British Columbia"
+ * carries one mid-name and is not the same organisation with it removed.
+ */
+const GENERIC_SUFFIX =
+  /(?:\s*\b(?:first\s+nations?|indian\s+bands?|tribal\s+councils?|nations?|bands?|tribes?))+\s*$/;
+
+/**
  * A nation's name reduced to what two spellings of it have in common.
  *
  * "Saulteau First Nations", "Saulteau First Nation" and "Saulteau Indian Band" are one organisation
- * written three ways, and the join has to survive that. The generic words are dropped LAST, after
- * punctuation, so "Nation(s)" inside a name is removed however it was punctuated.
+ * written three ways, and the join has to survive that — as it has to survive a registry that
+ * writes "Ka:'yu:'k't'h'" where the model writes "Kayukth", and a page that drops the diacritics.
  *
  * Deliberately conservative: it normalises spelling, never meaning. Two genuinely different nations
  * whose names differ only in a dropped word stay different, because the remaining words still
- * differ. Names it cannot match are reported unmatched, which is the input to an alias table.
+ * differ. Names it cannot match are reported unmatched, which is the input to `NATION_ALIASES`.
  */
 function normaliseNationName(name) {
   return String(name || '')
+    // Decomposed first, so "Stó:lō" and "Stolo" reduce to the same letters.
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+    // A parenthesised alias is a second name for the same nation, not part of this one.
+    .replace(/\([^)]*\)/g, ' ')
+    // REMOVED, not spaced: these punctuate inside a word ("Scia'new", "Ka:'yu:'k't'h'"), where the
+    // 7 stands for a glottal stop. Everything else separates words and becomes a space.
+    .replace(/['‘’`"“”:7]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\b(first\s+nations?|indian\s+band|nations?|band|tribal\s+council|the)\b/g, ' ')
     .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^the\s+/, '')
+    .replace(GENERIC_SUFFIX, '')
     .trim();
 }
+
+/**
+ * One nation written two ways that no spelling rule reduces to the other, normalised on both sides.
+ *
+ * Read for the Organization row as well as for the model's name, so it does not matter which side
+ * of the join uses the alias. Every other pair on the registry — Ka:'yu:'k't'h'/Che:k'tles7et'h',
+ * Stó:lō, Lake Cowichan — already matches on `normaliseNationName` alone and needs no entry here.
+ */
+const NATION_ALIASES = new Map([
+  ['beecher bay', 'scianew'],
+  ['sooke', 'tsou ke'],
+  ['tsouke', 'tsou ke'],
+  ['metis bc', 'metis nation british columbia'],
+  ['metis nation bc', 'metis nation british columbia']
+]);
+
+/** A normalised name reduced to the one form both spellings of a nation join on. */
+const canonicalNationName = key => NATION_ALIASES.get(key) || key;
+
+/** The key a name joins on: normalised, then resolved through the alias table. */
+const nationKey = name => canonicalNationName(normaliseNationName(name));
 
 /**
  * Model-extracted names joined to the Organization rows DEMI already holds.
@@ -938,12 +1053,12 @@ function normaliseNationName(name) {
 function joinNations(names, organizations) {
   const byName = new Map();
   for (const org of organizations || []) {
-    const key = normaliseNationName(org.name);
+    const key = nationKey(org.name);
     if (key && !byName.has(key)) byName.set(key, org);
   }
 
   return names.map(({ name, citations }) => {
-    const match = byName.get(normaliseNationName(name));
+    const match = byName.get(nationKey(name));
     return { name, organizationId: match ? String(match.id) : null, citations };
   });
 }
@@ -965,12 +1080,15 @@ async function runSection({ section, document, chunks, registry, projectName, in
   // Null for a section whose sources came from a search across documents rather than from one.
   const documentId = document.id ? String(document.id) : null;
 
-  const used = chunks.slice(0, config.projectSummaryMaxChunks);
-  const system = systemPrompt(projectName, instruction, shape);
+  const maxChunks = config.projectSummaryMaxChunks;
   const listSection = isListSection(section);
+  const chunkBatched = isChunkBatched(section);
+  // A chunk-batched section reads the whole document; every other one reads its first window.
+  const used = chunkBatched ? chunks : chunks.slice(0, maxChunks);
+  const system = systemPrompt(projectName, instruction, shape);
   const batches = listSection
     ? fitBatches(used, system.length + userPrompt(document, []).length, maxTokens)
-    : [used];
+    : chunkBatched ? sizedBatches(used, maxChunks) : [used];
 
   const usage = { prompt_tokens: 0, completion_tokens: 0 };
   const values = [];
@@ -1048,10 +1166,16 @@ async function runSection({ section, document, chunks, registry, projectName, in
 
     // Citations are numbered within the batch that produced them, so the registry is handed that
     // batch's chunks — this is what keeps a batch-2 `[1]` off batch 1's first source.
-    values.push(build(parsed, batch, n => registry.map(n, batch, nameOf(document)), section));
+    // The grounding gate reads `chunks`, not the batch: a figure the model saw on one page is often
+    // printed again on a page it was not shown, and the claim is about the document either way.
+    values.push(
+      build(parsed, batch, n => registry.map(n, batch, nameOf(document)), section, chunks));
   }
 
-  const value = reason ? null : (listSection ? mergeItemBatches(values) : (values[0] || null));
+  const value = reason ? null
+    : listSection ? mergeItemBatches(values)
+      : chunkBatched && batches.length > 1 ? mergeTimelineBatches(values)
+        : (values[0] || null);
   if (!reason && value === null) {
     // Three different faults wore one name. A list reply that carried no recognised key is a model
     // answering the wrong shape; a list that came back empty is an honest nothing; a list whose
@@ -1068,6 +1192,26 @@ async function runSection({ section, document, chunks, registry, projectName, in
   return { value, usage, model, documentId, reason };
 }
 
+/**
+ * The timeline batches as one timeline: one row per date and label, newest first.
+ *
+ * Two batches of one document report the same event whenever a chronology is restated, and the page
+ * sorts the rows against `facts`, so the merge orders them rather than leaving them in batch order.
+ */
+function mergeTimelineBatches(values) {
+  const seen = new Set();
+  const events = [];
+  for (const value of values) {
+    for (const event of value || []) {
+      const key = `${event.date} ${normalise(event.label).toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      events.push(event);
+    }
+  }
+  return events.length ? events.sort((a, b) => b.date.localeCompare(a.date)) : null;
+}
+
 /** The list batches as one list, renumbered end to end so `n` is contiguous across the section. */
 function mergeItemBatches(values) {
   const items = [];
@@ -1078,19 +1222,19 @@ function mergeItemBatches(values) {
 }
 
 /** `{sentence, citations}` — dropped whole if the sentence is ungrounded. */
-function buildSentence(parsed, chunks, toGlobal, section) {
+function buildSentence(parsed, chunks, toGlobal, section, pool) {
   if (!isStr(parsed.sentence)) return null;
   const local = validCitations(parsed.citations, chunks.length);
   if (local.length === 0) return null;
-  if (!keepGrounded(section, parsed.sentence, local, chunks)) return null;
+  if (!keepGrounded(section, parsed.sentence, local, chunks, pool)) return null;
   return { sentence: parsed.sentence.trim(), citations: toGlobal(local) };
 }
 
-function buildParagraph(parsed, chunks, toGlobal, section) {
+function buildParagraph(parsed, chunks, toGlobal, section, pool) {
   if (!isStr(parsed.paragraph)) return null;
   const local = validCitations(parsed.citations, chunks.length);
   if (local.length === 0) return null;
-  if (!keepGrounded(section, parsed.paragraph, local, chunks)) return null;
+  if (!keepGrounded(section, parsed.paragraph, local, chunks, pool)) return null;
   return { paragraph: parsed.paragraph.trim(), citations: toGlobal(local) };
 }
 
@@ -1102,7 +1246,7 @@ function buildParagraph(parsed, chunks, toGlobal, section) {
  * are all dropped is kept with an empty list — its title and one-liner were cited and checked in
  * their own right.
  */
-function buildItems(parsed, chunks, toGlobal, section) {
+function buildItems(parsed, chunks, toGlobal, section, pool) {
   const declared = listOf(parsed, 'items');
   if (!declared) return null;
 
@@ -1114,14 +1258,14 @@ function buildItems(parsed, chunks, toGlobal, section) {
 
     const local = validCitations(raw.citations, chunks.length);
     if (local.length === 0) continue;
-    if (!keepGrounded(section, `${raw.title} ${raw.oneLiner}`, local, chunks)) continue;
+    if (!keepGrounded(section, `${raw.title} ${raw.oneLiner}`, local, chunks, pool)) continue;
 
     items.push({
       n: items.length + 1,
       category: isStr(raw.category) ? raw.category.trim() : '',
       title: raw.title.trim(),
       oneLiner: raw.oneLiner.trim(),
-      bullets: (raw.bullets || []).filter(b => keepGrounded(section, b, local, chunks)),
+      bullets: (raw.bullets || []).filter(b => keepGrounded(section, b, local, chunks, pool)),
       citations: toGlobal(local)
     });
   }
@@ -1129,7 +1273,7 @@ function buildItems(parsed, chunks, toGlobal, section) {
   return items.length ? { items } : null;
 }
 
-function buildTimeline(parsed, chunks, toGlobal, section) {
+function buildTimeline(parsed, chunks, toGlobal, section, pool) {
   const declared = listOf(parsed, 'events');
   if (!declared) return null;
 
@@ -1143,7 +1287,7 @@ function buildTimeline(parsed, chunks, toGlobal, section) {
 
     const local = validCitations(raw.citations, chunks.length);
     if (local.length === 0) continue;
-    if (!keepGrounded(section, `${raw.date} ${raw.label}`, local, chunks)) continue;
+    if (!keepGrounded(section, `${raw.date} ${raw.label}`, local, chunks, pool)) continue;
 
     events.push({ date: raw.date.trim(), label: raw.label.trim(), citations: toGlobal(local) });
   }
@@ -1163,7 +1307,8 @@ function buildNations(parsed, chunks, toGlobal) {
     if (local.length === 0) continue;
 
     const name = raw.name.trim();
-    const key = normaliseNationName(name);
+    // The join key, so a reply naming one nation twice under two spellings lists it once.
+    const key = nationKey(name);
     if (!key || seen.has(key)) continue;
     seen.add(key);
     names.push({ name, citations: toGlobal(local) });
@@ -1236,7 +1381,7 @@ const NATIONS_SOURCE = { id: null, displayName: 'passages that name a First Nati
  * Reasons that describe what the registry holds rather than something that went wrong, so they are
  * logged at INFO. Everything else is a run that could have produced a section and did not.
  */
-const QUIET_REASONS = ['no_document', 'no_source', 'no_text', 'empty'];
+const QUIET_REASONS = ['no_document', 'not_extracted', 'no_source', 'no_text', 'empty'];
 
 /** Every section, so `--section` can name one and the runner can check the name is real. */
 const SECTIONS = ['status', 'conditions', 'amendments', 'timelineEvents', 'compliance',
@@ -1304,12 +1449,15 @@ async function generateProjectSummary(projectId, opts = {}) {
   // reason is what the 2026-09-09 Site C run stored for status, timelineEvents and compliance, and
   // it reads as "the model had nothing to say" where the cause was three unextracted documents.
   const sectionErrors = {};
+  // The document a `not_extracted` section is waiting on, so the page can link the file whose text
+  // is not there yet rather than say only that the section is missing.
+  const sectionSources = {};
   // Amendments are one call per document, so a single reason would name only the last failure.
   // Collected per reason, because the document ids are what an operator acts on.
   const amendmentErrors = new Map();
 
   /** Record why a section produced nothing, and say it once in the log. */
-  const record = (name, reason, documentId) => {
+  const record = (name, reason, documentId, absentSource) => {
     const at = documentId ? `, document ${documentId}` : '';
     const line = `[project-summary] ${name}: nothing generated (${reason}${at})`;
     const meta = { projectId: String(projectId), documentId: documentId ? String(documentId) : null };
@@ -1323,26 +1471,32 @@ async function generateProjectSummary(projectId, opts = {}) {
       return;
     }
     sectionErrors[name] = reason;
+    if (absentSource) sectionSources[name] = absentSource;
   };
 
   const wanted = name => !section || section === name;
 
   // Which document each section reads, decided before anything is fetched, and picked from the
-  // documents that HAVE text: a picked document with none spends the section for nothing.
-  //
+  // documents that HAVE text: a picked document with none spends the section for nothing. Each
+  // picker is run over the registry as well, so a section with no source can say which of the two
+  // states it is in — nothing filed, or filed and not extracted yet.
+  const source = pick => pickSource(pick, extracted, documents);
   // Status: the newest amendment with text if there is one, else the certificate. The sentence the
   // card carries is about where the project stands NOW, so the most recent decision wins.
-  const statusDoc = facts.amendments
-    .map(ref => extracted.find(d => String(d.id) === ref.documentId))
-    .find(Boolean) || PICK.certificate(extracted);
-  const scheduleB = PICK.scheduleB(extracted);
-  const federalDoc = PICK.federal(extracted);
-  const complianceDoc = PICK.newestInspection(extracted);
+  const pickStatus = pool => facts.amendments
+    .map(ref => pool.find(d => String(d.id) === ref.documentId))
+    .find(Boolean) || PICK.certificate(pool);
   // The project's regulatory chronology: the EAO's assessment report where there is one, else the
   // certificate, whose recitals date the application, the assessment and the decision. Amendments
   // are NOT read here — the page already puts `facts.amendments` and Track's phase rows on the same
   // timeline, so a model asked to re-derive them would only produce rows the page already has.
-  const timelineDoc = PICK.assessmentReport(extracted) || PICK.certificate(extracted);
+  const pickTimeline = pool => PICK.assessmentReport(pool) || PICK.certificate(pool);
+
+  const { document: statusDoc, ...statusAbsent } = source(pickStatus);
+  const { document: scheduleB, ...conditionsAbsent } = source(PICK.scheduleB);
+  const { document: federalDoc, ...federalAbsent } = source(PICK.federal);
+  const { document: complianceDoc, ...complianceAbsent } = source(PICK.newestInspection);
+  const { document: timelineDoc, ...timelineAbsent } = source(pickTimeline);
   const amendmentDocs = facts.amendments
     .map(ref => ({ ref, document: documents.find(d => String(d.id) === ref.documentId) }))
     .filter(a => a.document);
@@ -1379,18 +1533,22 @@ async function generateProjectSummary(projectId, opts = {}) {
   // and no chunk text — and the chunks themselves come from the per-document read every other
   // section uses, so what the model sees is text that can be cited and grounded.
   const nationsChunks = [];
+  // Nothing to summarise here is not a missing document: the search over the whole project found no
+  // passage that names a First Nation.
+  let nationsAbsent = { absentReason: 'no_source', absentSource: null };
   if (wanted('nations')) {
     const hits = await sources.chunkSearch({
       projectId: String(projectId), keywords: NATIONS_KEYWORDS
     });
-    const byId = new Map(extracted.map(d => [String(d.id), d]));
-    // A hit outside the public, extracted list is not a source, however well it ranked.
+    const byId = new Map(documents.map(d => [String(d.id), d]));
+    // A hit outside the public list is not a source, however well it ranked.
     const hitDocuments = orderNationDocuments(
       Array.from(new Set(hits.map(hit => String(hit.documentId || ''))), id => byId.get(id))
         .filter(Boolean));
+    const extractedHits = hitDocuments.filter(hasExtractedText);
 
     let contributed = 0;
-    for (const document of hitDocuments) {
+    for (const document of extractedHits) {
       if (nationsChunks.length >= config.projectSummaryNationChunks) break;
       await prefetch('nations', document);
       // Per document, so one long roster cannot spend the whole budget and leave the rest of the
@@ -1405,6 +1563,12 @@ async function generateProjectSummary(projectId, opts = {}) {
       }
       if (taken) contributed += 1;
     }
+    // The search named a document and its text is not in DEMI yet: a different state from a project
+    // whose documents name no nation, and one the page can link.
+    const pending = nationsChunks.length ? null : hitDocuments.find(d => !hasExtractedText(d));
+    if (pending) {
+      nationsAbsent = { absentReason: 'not_extracted', absentSource: sourceRef(pending) };
+    }
     logger.info('[project-summary] nations sources', {
       projectId: String(projectId), documents: hits.length, contributing: contributed,
       chunks: nationsChunks.length
@@ -1416,14 +1580,14 @@ async function generateProjectSummary(projectId, opts = {}) {
   const organizations = nationsChunks.length ? await sources.organizations() : [];
 
   /** One section end to end, with its usage folded into the record's totals. */
-  const run = async (name, document, { chunks, absentReason, ...spec }) => {
+  const run = async (name, document, { chunks, absentReason, absentSource, ...spec }) => {
     if (!wanted(name)) return null;
     const sourceChunks = chunks || (document ? chunksOf(document) : []);
     if (!document || sourceChunks.length === 0) {
       // No sources means no model call: a model handed nothing answers from its own knowledge, and
       // on a regulatory registry that answer is indistinguishable from a real one.
       record(name, absentReason || (document ? 'no_chunks' : 'no_document'),
-        document && document.id);
+        (absentSource && absentSource.documentId) || (document && document.id), absentSource);
       return null;
     }
     const result = await runSection({
@@ -1440,18 +1604,21 @@ async function generateProjectSummary(projectId, opts = {}) {
   };
 
   const status = await run('status', statusDoc, {
+    ...statusAbsent,
     shape: SHAPES.status,
     instruction: INSTRUCTIONS.status,
     build: buildSentence
   });
 
   const conditions = await run('conditions', scheduleB, {
+    ...conditionsAbsent,
     shape: SHAPES.conditions,
     instruction: INSTRUCTIONS.conditions,
     build: buildItems
   });
 
   const federal = await run('federal', federalDoc, {
+    ...federalAbsent,
     shape: SHAPES.conditions,
     instruction: INSTRUCTIONS.federal,
     build: buildItems
@@ -1459,21 +1626,21 @@ async function generateProjectSummary(projectId, opts = {}) {
 
   const nationsResult = await run('nations', NATIONS_SOURCE, {
     chunks: nationsChunks,
-    // Nothing to summarise here is not a missing document: the search over the whole project found
-    // no passage that names a First Nation.
-    absentReason: 'no_source',
+    ...nationsAbsent,
     shape: SHAPES.nations,
     instruction: INSTRUCTIONS.nations,
     build: buildNations
   });
 
   const compliance = await run('compliance', complianceDoc, {
+    ...complianceAbsent,
     shape: SHAPES.compliance,
     instruction: INSTRUCTIONS.compliance,
     build: buildParagraph
   });
 
   const timelineEvents = await run('timelineEvents', timelineDoc, {
+    ...timelineAbsent,
     shape: SHAPES.timeline,
     instruction: INSTRUCTIONS.timelineEvents,
     build: buildTimeline
@@ -1512,11 +1679,14 @@ async function generateProjectSummary(projectId, opts = {}) {
     ? joinNations(nationsResult.value, organizations)
     : null;
 
-  const unmatched = (nations || []).filter(n => !n.organizationId).map(n => n.name);
+  const unmatched = (nations || []).filter(n => !n.organizationId)
+    // The form the join actually compared, which is what a new `NATION_ALIASES` entry is keyed on.
+    .map(n => ({ name: n.name, normalised: nationKey(n.name) }));
   if (unmatched.length) {
-    // The input to an alias table. An unmatched name is not an error — it renders without a
+    // The input to the alias table. An unmatched name is not an error — it renders without a
     // contact card — but a growing list of them is the signal that the normalisation needs help.
-    logger.info('[project-summary] nation names with no Organization row', {
+    logger.info('[project-summary] nation names with no Organization row: ' +
+      unmatched.map(u => `${u.name} (${u.normalised})`).join('; '), {
       projectId: String(projectId), unmatched
     });
   }
@@ -1553,6 +1723,7 @@ async function generateProjectSummary(projectId, opts = {}) {
         : null
     },
     sectionErrors,
+    sectionSources,
     citations: registry.list()
   };
 }
@@ -1573,7 +1744,12 @@ module.exports = {
   groundedInCitations,
   claimTokens,
   normaliseNationName,
+  canonicalNationName,
+  NATION_ALIASES,
   joinNations,
+  pickSource,
+  isFrenchTitle,
+  mergeTimelineBatches,
   buildItems,
   buildNations,
   buildTimeline,
