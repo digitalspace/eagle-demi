@@ -670,16 +670,16 @@ const maxTokensFor = name => SECTION_MAX_TOKENS[name] || config.projectSummaryMa
  * scaffold (`fixedChars`) every batch repeats. A chunk too large for an empty batch is left alone
  * in one, where `contextOverflow` refuses it: nothing here splits a chunk.
  *
- * `projectSummaryBatchChunks` caps a batch on top of that, because fitting the PROMPT is only half
- * of it: a batch whose sources fill the window asks for a list that does not fit the completion
- * budget, and a list cut off mid-item parses as nothing.
+ * `cap` bounds a batch by count on top of that, because fitting the PROMPT is only half of it: a
+ * batch whose sources fill the window asks for a list that does not fit the completion budget, and
+ * a list cut off mid-item parses as nothing. A list section caps at `projectSummaryBatchChunks`; a
+ * chunk-batched one caps at `projectSummaryMaxChunks` (see `chunkBatches`).
  */
-function fitBatches(chunks, fixedChars, maxTokens) {
+function fitBatches(chunks, fixedChars, maxTokens, cap = config.projectSummaryBatchChunks) {
   // Only Ollama's window is fixed and silent about overrunning it; Foundry is one call, as before.
   if (config.projectSummaryProvider !== 'ollama') return [chunks];
 
   const budget = (config.projectSummaryOllamaCtx - maxTokens) * 4 - fixedChars;
-  const cap = config.projectSummaryBatchChunks;
   const batches = [];
   let batch = [];
   let size = 0;
@@ -697,6 +697,25 @@ function fitBatches(chunks, fixedChars, maxTokens) {
   if (batch.length) batches.push(batch);
 
   return batches;
+}
+
+/**
+ * `chunks` batched for a section that reads the WHOLE document rather than its first window.
+ *
+ * Sized to the window exactly as a list section's batches are, with `maxChunks` as the count cap
+ * instead of `projectSummaryBatchChunks`. A fixed-count split does not fit anything: on project
+ * 302's assessment report, 120 chunks of it came to 25,825 tokens over the window, so the first
+ * batch was refused as `context_overflow` and the section died — and `context_overflow` is not a
+ * timeline fallback reason, because a correctly sized batch does not produce it. A single chunk
+ * larger than the window is still an overflow; nothing here splits a chunk.
+ *
+ * Off Ollama there is no fixed window to measure against, so the count cap is the whole bound and
+ * the split is the fixed one it always was.
+ */
+function chunkBatches(chunks, fixedChars, maxTokens, maxChunks) {
+  return config.projectSummaryProvider === 'ollama'
+    ? fitBatches(chunks, fixedChars, maxTokens, maxChunks)
+    : sizedBatches(chunks, maxChunks);
 }
 
 /** `chunks` in consecutive runs of `size`, in the order they were read. */
@@ -1139,9 +1158,11 @@ async function runSection({ section, document, chunks, registry, projectName, in
   // A chunk-batched section reads the whole document; every other one reads its first window.
   const used = chunkBatched ? chunks : chunks.slice(0, maxChunks);
   const system = systemPrompt(projectName, instruction, shape);
+  // What every batch's prompt carries before its sources: the system half, and the user half's header.
+  const fixedChars = system.length + userPrompt(document, []).length;
   const batches = listSection
-    ? fitBatches(used, system.length + userPrompt(document, []).length, maxTokens)
-    : chunkBatched ? sizedBatches(used, maxChunks) : [used];
+    ? fitBatches(used, fixedChars, maxTokens)
+    : chunkBatched ? chunkBatches(used, fixedChars, maxTokens, maxChunks) : [used];
 
   const usage = { prompt_tokens: 0, completion_tokens: 0 };
   const values = [];
