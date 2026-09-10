@@ -331,11 +331,13 @@ async function setFieldsForDocument(access, documentId, fields, opts = {}) {
  * keep `setFieldsForDocument` — they know a value moved but not which chunks lag.
  *
  * @param {string[]} ids  chunk ids, all of `documentId`'s partition
- * @param {{stampedAt?: string}} [opts]  `stampedAt` is the instant this walk serves: it is written
- *   to `parentStampedAt` and guards every operation, so a chunk a newer walk already stamped comes
- *   back as `skippedNewer` instead of being overwritten. Absent: the patch is unconditional.
+ * @param {{stampedAt?: string, maxAttempts?: number}} [opts]  `stampedAt` is the instant this walk
+ *   serves: it is written to `parentStampedAt` and guards every operation, so a chunk a newer walk
+ *   already stamped comes back as `skippedNewer` instead of being overwritten. Absent: the patch is
+ *   unconditional. `maxAttempts` overrides the bulk retry budget, for a corpus walk long enough to
+ *   sit out a sustained throttle.
  */
-async function setFieldsForChunks(access, documentId, ids, fields, { stampedAt } = {}) {
+async function setFieldsForChunks(access, documentId, ids, fields, { stampedAt, maxAttempts } = {}) {
   const guarded = stampedAt !== undefined;
   const patchFields = guarded
     ? { ...fields, [STAMPED_AT_FIELD]: assertStampedAt(stampedAt) }
@@ -362,7 +364,7 @@ async function setFieldsForChunks(access, documentId, ids, fields, { stampedAt }
     partitionKey: pk,
     id: String(id),
     resourceBody
-  })));
+  })), maxAttempts === undefined ? {} : { maxAttempts });
 
   // A chunk a NEWER walk already stamped is not a failure: the value on it is at least as current
   // as this walk's. Unguarded writes carry no condition, so nothing is ever skipped there.

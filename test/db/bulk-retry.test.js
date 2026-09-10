@@ -287,3 +287,99 @@ test('bulk splits requests at the 100-operation ceiling', async (t) => {
     assert.deepStrictEqual(await bulk('chunks', ops(5), { containerFn: () => null }), []);
   });
 });
+
+/**
+ * A SUSTAINED throttle, not a transient one.
+ *
+ * Measured 2026-09 on the serverless test account: a full chunk-parent walk of ~1M PATCH operations
+ * came back {200: 1004569, 412: 12248, 429: 523144, thrown: 291} and left 70 documents part-stamped
+ * with 99,633 operations rejected. Four attempts of 1s/2s/3s spend the whole budget inside the same
+ * overload, so the budget, the doubling, the 20s ceiling and Cosmos's own hint are pinned here.
+ */
+test('bulkVerified sits out a sustained throttle', async (t) => {
+  // Records the wait instead of spending it: a full eight-attempt backoff is over a minute of real
+  // time, which no unit test can afford to sleep through.
+  const recorder = () => {
+    const waits = [];
+    return { waits, sleepFn: async (ms) => { waits.push(ms); } };
+  };
+  const withinJitter = (waited, floor, label) => assert.ok(
+    waited >= floor && waited <= floor + 250,
+    `${label}: waited ${waited}, expected ${floor} plus at most 250ms of jitter`
+  );
+
+  await t.test("a thrown 429 waits at least the SDK's retryAfterInMs", async () => {
+    // `retryAfterInMs` on the ErrorResponse is the only figure that knows when the partition has
+    // budget again; the first exponential step is 1s, which would resend into the same overload.
+    const { waits, sleepFn } = recorder();
+    let calls = 0;
+    const res = await bulkVerified('chunks', ops(2), {
+      sleepFn,
+      bulkFn: async (pending) => {
+        calls++;
+        if (calls === 1) throw Object.assign(RU(), { retryAfterInMs: 5000 });
+        return ok(pending);
+      }
+    });
+
+    assert.strictEqual(waits.length, 1);
+    withinJitter(waits[0], 5000, 'the server hint must win over the first step');
+    assert.strictEqual(res.succeeded, 2);
+  });
+
+  await t.test('a per-operation retry hint is honoured the same way', async () => {
+    const { waits, sleepFn } = recorder();
+    let calls = 0;
+    await bulkVerified('chunks', ops(2), {
+      sleepFn,
+      bulkFn: async (pending) => {
+        calls++;
+        return calls === 1
+          ? pending.map(() => ({ statusCode: 429, retryAfterMilliseconds: 6000 }))
+          : ok(pending);
+      }
+    });
+
+    assert.strictEqual(waits.length, 1);
+    withinJitter(waits[0], 6000, 'the operation result hint must win over the first step');
+  });
+
+  await t.test('per-operation 429s get eight attempts, doubling to a 20s ceiling', async () => {
+    const { waits, sleepFn } = recorder();
+    let calls = 0;
+    const res = await bulkVerified('chunks', ops(3), {
+      sleepFn,
+      bulkFn: async (pending) => { calls++; return pending.map(() => ({ statusCode: 429 })); }
+    });
+
+    assert.strictEqual(calls, 8, 'four attempts is the budget the corpus walk ran out of');
+    [1000, 2000, 4000, 8000, 16000, 20000, 20000].forEach((floor, i) =>
+      withinJitter(waits[i], floor, `wait ${i + 1}`));
+    assert.strictEqual(waits.length, 7, 'no wait after the last attempt');
+    assert.strictEqual(res.succeeded, 0);
+    assert.strictEqual(res.failed, 3);
+    assert.strictEqual(res.statusCounts[429], 24, 'every attempt is still counted, as before');
+    assert.deepStrictEqual(res.failedIds, ['c0', 'c1', 'c2']);
+  });
+
+  await t.test('a 412 is answered once and never retried, however long the 429s go on', async () => {
+    // A precondition that did not hold is Cosmos's answer, not a throttle. Widening the budget for
+    // 429 must not start paying eight requests for a decision already made.
+    const { sleepFn } = recorder();
+    const sent = [];
+    const res = await bulkVerified('chunks', ops(2), {
+      sleepFn,
+      bulkFn: async (pending) => {
+        sent.push(pending.map(o => o.id));
+        return pending.map(op => ({ statusCode: op.id === 'c0' ? 412 : 429 }));
+      }
+    });
+
+    assert.strictEqual(sent.length, 8, 'the 429 keeps its full budget');
+    assert.deepStrictEqual(sent[0], ['c0', 'c1']);
+    assert.ok(sent.slice(1).every(ids => ids.join() === 'c1'), 'the 412 must not be resent');
+    assert.strictEqual(res.statusCounts[412], 1, 'counted once, not once per attempt');
+    assert.deepStrictEqual(res.skippedIds, ['c0']);
+    assert.deepStrictEqual(res.failedIds, ['c1']);
+  });
+});

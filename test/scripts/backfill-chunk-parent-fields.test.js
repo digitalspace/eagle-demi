@@ -225,6 +225,16 @@ test('parseArgs', async (t) => {
     assert.throws(() => parseArgs(['--concurrency', 'lots']), /between 1 and 8/);
   });
 
+  await t.test('--max-attempts is unset by default and bounded when given', () => {
+    // Unset has to stay undefined: the bulk default is the one figure raised across every caller,
+    // and a number pinned here would freeze this walk at whatever it was on the day it was written.
+    assert.strictEqual(parseArgs([]).maxAttempts, undefined);
+    assert.strictEqual(parseArgs(['--max-attempts', '12']).maxAttempts, 12);
+    assert.throws(() => parseArgs(['--max-attempts', '0']), /between 1 and 20/);
+    assert.throws(() => parseArgs(['--max-attempts', '21']), /between 1 and 20/);
+    assert.throws(() => parseArgs(['--max-attempts', 'lots']), /between 1 and 20/);
+  });
+
   await t.test('an empty --project is refused', () => {
     // `''` is the no-project partition. Accepting it would scope the run to a handful of orphans
     // and report success.

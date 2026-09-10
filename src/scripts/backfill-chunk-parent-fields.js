@@ -17,8 +17,12 @@
  * **DRY RUN BY DEFAULT**. `--live` is the mutating flag.
  *
  *   node src/scripts/backfill-chunk-parent-fields.js [--live | --dry-run]
- *          [--project <id> | --pending] [--force] [--concurrency N]
+ *          [--project <id> | --pending] [--force] [--concurrency N] [--max-attempts N]
  *          [--state ./backfill-chunk-parent-fields.state.json]
+ *
+ * `--max-attempts N` (1-8 is the useful range, 1-20 accepted) raises the chunk-patch retry budget
+ * above the default. A corpus walk on a serverless account stays throttled for minutes at a time,
+ * and a batch that runs out of attempts leaves the document part-stamped.
  *
  * `--live --pending` repairs only the documents flagged `parentFieldsPending` — the writes whose
  * re-stamp could not be queued or was skipped (`controllers/nosql/document.js`). `--live --project
@@ -113,7 +117,7 @@ function stampedAtFor(doc, startedAt) {
 function parseArgs(argv) {
   const args = {
     live: false, project: null, pending: false, force: false,
-    concurrency: DEFAULT_CONCURRENCY, state: DEFAULT_STATE
+    concurrency: DEFAULT_CONCURRENCY, state: DEFAULT_STATE, maxAttempts: undefined
   };
   let explicitDryRun = false;
 
@@ -125,6 +129,7 @@ function parseArgs(argv) {
     else if (a === '--force') args.force = true;
     else if (a === '--project') args.project = String(argv[++i] || '');
     else if (a === '--concurrency') args.concurrency = parseInt(argv[++i], 10);
+    else if (a === '--max-attempts') args.maxAttempts = parseInt(argv[++i], 10);
     else if (a === '--state') args.state = String(argv[++i] || '');
     else throw new Error(`[backfill] unknown argument: ${a}`);
   }
@@ -143,6 +148,12 @@ function parseArgs(argv) {
   }
   if (!Number.isInteger(args.concurrency) || args.concurrency < 1 || args.concurrency > 8) {
     throw new Error(`[backfill] --concurrency must be between 1 and 8, got: ${args.concurrency}`);
+  }
+  // Unset leaves the bulk default in place. Rejected rather than clamped silently, because a typo
+  // that read as "1" would turn the retry off on the walk that needs it most.
+  if (args.maxAttempts !== undefined
+    && (!Number.isInteger(args.maxAttempts) || args.maxAttempts < 1 || args.maxAttempts > 20)) {
+    throw new Error(`[backfill] --max-attempts must be between 1 and 20, got: ${args.maxAttempts}`);
   }
   if (!args.state) throw new Error('[backfill] --state needs a path');
 
@@ -446,7 +457,7 @@ async function backfill(argv = [], opts = {}) {
       // flagged row's instant is its own flag token — see `stampedAtFor`.
       stamp: (acc, documentId, doc) => chunksRepo.setFieldsForChunks(
         acc, documentId, staleIds.get(String(documentId)), chunksRepo.parentFieldsOf(doc),
-        { stampedAt: stampedAtFor(doc, startedAt) })
+        { stampedAt: stampedAtFor(doc, startedAt), maxAttempts: args.maxAttempts })
     });
     summary.documentsReStamped += result.stamped;
     summary.patched += result.chunks;
