@@ -98,6 +98,8 @@ export type KeyDocumentRole =
 
 export interface KeyDocumentRef extends SummaryDocumentRef {
   role: KeyDocumentRole;
+  /** Set only when the registry held nothing else for the role, so the page says which language. */
+  languageFlag?: 'fr';
 }
 
 /** Fixed, human wording per role — the API sends the role only, so the label cannot drift. */
@@ -130,6 +132,10 @@ export interface ProjectSummaryCitation {
   documentId: string;
   pageNumber: number;
   documentName: string;
+  /** Absent means DEMI. `iaac` documents carry ids like `iaac:158078` that resolve nowhere here. */
+  source?: 'demi' | 'iaac';
+  /** The registry PDF, the only way to reach an `iaac` source. Set with `source: 'iaac'`. */
+  url?: string;
 }
 
 export interface StatusSection {
@@ -176,6 +182,42 @@ export interface NationNote {
   citations?: number[];
 }
 
+/** One row of the IAAC registry's document list. `docId` is a registry id, not a DEMI one. */
+export interface FederalDocumentRef {
+  title: string;
+  date: string | null;
+  docId: string;
+}
+
+export interface FederalDecisionRef extends FederalDocumentRef {
+  pdfUrl: string;
+  /** Absent when the PDF was found but could not be read, which is a reason of its own below. */
+  pageCount?: number;
+}
+
+/** What the federal registry says about the project, read at generation time, never from a model. */
+export interface FederalFacts {
+  status: string | null;
+  cearId: string;
+  projectUrl: string;
+  latest: FederalDocumentRef | null;
+  decision?: FederalDecisionRef;
+}
+
+/**
+ * The federal section, from either registry.
+ *
+ * A `demi` section resolves to a document in this service; an `iaac` one does not, and carries the
+ * registry facts and links instead. Either reason leaves `items` empty with the facts intact: the
+ * registry answered, and what it answered — no decision, or one whose text would not read — is
+ * itself worth showing, so the page states it rather than claiming nothing is known.
+ */
+export interface FederalSection extends ConditionsSection {
+  source?: 'demi' | 'iaac';
+  facts?: FederalFacts;
+  reason?: 'no_federal_decision' | 'federal_decision_unreadable';
+}
+
 export interface ProjectSummarySections {
   status?: StatusSection | null;
   conditions?: ConditionsSection | null;
@@ -183,7 +225,7 @@ export interface ProjectSummarySections {
   timelineEvents?: TimelineEventNote[] | null;
   compliance?: ComplianceSection | null;
   nations?: NationNote[] | null;
-  federal?: ConditionsSection | null;
+  federal?: FederalSection | null;
 }
 
 export interface ProjectSummaryRecord {
@@ -203,6 +245,10 @@ export interface ProjectSummaryRecord {
   facts?: ProjectSummaryFacts;
   sections?: ProjectSummarySections;
   citations?: ProjectSummaryCitation[];
+  /** Why a section is absent, by section name. `not_extracted` means the text is still queued. */
+  sectionErrors?: Record<string, string | undefined>;
+  /** The document a `not_extracted` section waits on, so the page can link the file regardless. */
+  sectionSources?: Record<string, SummaryDocumentRef | undefined>;
 }
 
 /** A `lists` row of kind Organization, companyType "Indigenous Group". Address is never modelled. */

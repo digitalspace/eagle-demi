@@ -431,6 +431,13 @@ svg.leaflet-zoom-animated:focus {
   margin: 0 0 var(--layout-margin-small);
 }
 
+/* The federal registry's facts: one line above anything generated, links inline with the text. */
+.ps-federal {
+  font: var(--typography-regular-small-body);
+  color: var(--typography-color-secondary);
+  margin: 0 0 var(--layout-margin-medium);
+}
+
 .ps-section__lede {
   font: var(--typography-regular-small-body);
   color: var(--typography-color-secondary);
@@ -726,6 +733,8 @@ svg.leaflet-zoom-animated:focus {
   color: var(--typography-color-primary);
   cursor: pointer;
   text-align: left;
+  /* A registry chip is an anchor rather than a button; the chip is the affordance, not an underline. */
+  text-decoration: none;
 }
 
 .ps-cite:hover {
