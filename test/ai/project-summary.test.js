@@ -12,7 +12,7 @@ const summarizer = require('../../src/ai/summarize');
 const { logger } = require('../../src/utils/logger');
 const {
   generateProjectSummary, validCitations, groundedInCitations, normaliseNationName, joinNations,
-  buildFacts, buildItems, buildTimeline, sanitisePromptName, PRICED_AS, PICK
+  buildFacts, buildItems, buildTimeline, sanitisePromptName, pickSource, PRICED_AS, PICK
 } = require('../../src/ai/project-summary');
 
 /** The transport before any stub, for the test that has to reach a real socket. */
@@ -174,6 +174,7 @@ test('generateProjectSummary', async (t) => {
     provider: config.projectSummaryProvider,
     ollamaCtx: config.projectSummaryOllamaCtx,
     ollamaUrl: config.ollamaUrl,
+    maxChunks: config.projectSummaryMaxChunks,
     batchChunks: config.projectSummaryBatchChunks,
     nationChunks: config.projectSummaryNationChunks,
     nationChunksPerDoc: config.projectSummaryNationChunksPerDoc,
@@ -185,6 +186,7 @@ test('generateProjectSummary', async (t) => {
     config.projectSummaryProvider = original.provider;
     config.projectSummaryOllamaCtx = original.ollamaCtx;
     config.ollamaUrl = original.ollamaUrl;
+    config.projectSummaryMaxChunks = original.maxChunks;
     config.projectSummaryBatchChunks = original.batchChunks;
     config.projectSummaryNationChunks = original.nationChunks;
     config.projectSummaryNationChunksPerDoc = original.nationChunksPerDoc;
@@ -1356,6 +1358,138 @@ test('generateProjectSummary', async (t) => {
       `and how many entries the reply carried: ${warned.join(' | ')}`);
   });
 
+  await t.test('names the document a section is waiting on extraction for', async () => {
+    // "No Schedule B" and "the Schedule B has no extracted text yet" are different states and only
+    // one of them is permanent. Told apart, the page can link the document and the operator knows
+    // the fix is an extraction run, not a registry that holds nothing.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, '{"items":[]}');
+    const noted = [];
+    const warned = [];
+    t.mock.method(logger, 'info', line => { noted.push(String(line)); });
+    t.mock.method(logger, 'warn', line => { warned.push(String(line)); });
+
+    const sources = fakeSources({
+      documents: [{ ...SCHEDULE_B, contentExtracted: false, contentPageCount: 0 }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(record.sections.conditions, null);
+    assert.strictEqual(record.sectionErrors.conditions, 'not_extracted');
+    assert.deepStrictEqual(record.sectionSources.conditions,
+      { documentId: 'docB', displayName: 'Schedule B - Table of Conditions' });
+    assert.strictEqual(calls.length, 0, 'a document with no text is never handed to the model');
+    assert.deepStrictEqual(sources.asked, [], 'and never even read');
+    assert.ok(noted.some(line => line.includes('not_extracted')),
+      `waiting on the extractor is reported quietly: ${noted.join(' | ')}`);
+    assert.deepStrictEqual(warned.filter(line => line.includes('not_extracted')), [],
+      'and never as a warning');
+  });
+
+  await t.test('names the document the nations search found but could not read', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, '{"nations":[]}');
+
+    const sources = fakeSources({
+      documents: [{ ...APPENDIX, contentExtracted: false, contentPageCount: 0 }],
+      chunkHits: [{ documentId: 'docX' }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'nations' });
+
+    assert.strictEqual(record.sections.nations, null);
+    assert.strictEqual(record.sectionErrors.nations, 'not_extracted');
+    assert.deepStrictEqual(record.sectionSources.nations,
+      { documentId: 'docX', displayName: 'Appendix 7D - First Nations Consultation' });
+    assert.strictEqual(calls.length, 0);
+  });
+
+  await t.test('never names a document the reader may not see as the one to extract', async () => {
+    // `sectionSources` is rendered, so it is picked from the same public list the rest of the
+    // record is built from: a narrower document's name would reach a reader who 404s on it.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    stubModel(t, '{"items":[]}');
+
+    const sources = fakeSources({
+      documents: [{ ...SCHEDULE_B, read: ['staff', 'idir'], contentExtracted: false,
+        contentPageCount: 0 }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'conditions' });
+
+    assert.strictEqual(record.sectionErrors.conditions, 'no_document',
+      'a document the reader cannot see is not a document the registry holds');
+    assert.deepStrictEqual(record.sectionSources, {});
+  });
+
+  await t.test('grounds a claim on the whole document, not only the pages the model saw', async () => {
+    // The model is shown a window of a long document and cites within it, while the date it quotes
+    // is printed on a page outside the window. Checked against the window alone, a true claim reads
+    // as an invention and the section stores a null.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryMaxChunks = 1;
+    const calls = stubModel(t, JSON.stringify({
+      sentence: 'The certificate was issued 2014-10-14.', citations: [1]
+    }));
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'The certificate is in effect.', 'docC'),
+          chunk(2, 'It was issued on October 14, 2014.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'status' });
+
+    assert.strictEqual(pagesIn(calls[0]).length, 1, 'the model still saw one page');
+    assert.strictEqual(record.sections.status.sentence, 'The certificate was issued 2014-10-14.');
+  });
+
+  await t.test('reads a long document for the timeline in batches and merges the events', async () => {
+    // A chronology runs to the last page of an assessment report, and the first window of it holds
+    // the application dates and nothing else. Batched, the whole document is read; the batches
+    // restate the same event, so the merge deduplicates and orders what comes back.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryMaxChunks = 2;
+    const calls = stubModel(t, [
+      JSON.stringify({
+        events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+      }),
+      JSON.stringify({
+        events: [
+          { date: '2014-10-14', label: 'Certificate  issued', citations: [1] },
+          { date: '2016-08-09', label: 'Certificate amended', citations: [2] }
+        ]
+      })
+    ]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'The certificate was issued on October 14, 2014.', 'docC'),
+          chunk(2, 'Conditions apply.', 'docC'),
+          chunk(3, 'The certificate was amended on August 9, 2016.', 'docC'),
+          chunk(4, 'End of document.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 2, 'one call per batch of chunks');
+    assert.deepStrictEqual(pagesIn(calls[1]).map(s => s.page), [3, 4],
+      'the second batch carries the pages the first one did not');
+    assert.deepStrictEqual(record.sections.timelineEvents, [
+      { date: '2016-08-09', label: 'Certificate amended', citations: [3] },
+      { date: '2014-10-14', label: 'Certificate issued', citations: [1] }
+    ], 'newest first, and the event both batches reported only once');
+  });
+
   await t.test('generates nothing while the feature is off', async () => {
     config.summaryEnabled = false;
     const calls = stubModel(t, '{}');
@@ -1768,6 +1902,41 @@ test('key document pickers', async (t) => {
     assert.strictEqual(PICK.application(documents).id, 'docIntro');
   });
 
+  await t.test('prefers the English copy of a key document over the French one', () => {
+    // EAO files a French copy of the report and the application. The French one is often the newer
+    // row, so picked by date the whole page is written from a document most readers cannot read.
+    const french = { id: 'docAR-fr', type: 'Assessment Report', datePosted: '2015-06-01',
+      displayName: 'Rapport d\'évaluation environnementale - Sommaire' };
+    const english = { id: 'docAR-en', type: 'Assessment Report', datePosted: '2014-01-15',
+      displayName: 'EAO Assessment Report - Site C Clean Energy Project' };
+    assert.strictEqual(PICK.assessmentReport([french, english]).id, 'docAR-en');
+
+    const frenchEis = { id: 'docEIS-fr', type: 'Application Materials', datePosted: '2013-06-01',
+      displayName: 'Environmental Impact Statement - Version française' };
+    const englishEis = { id: 'docEIS-en', type: 'Application Materials', datePosted: '2013-01-25',
+      displayName: 'Environmental Impact Statement' };
+    assert.strictEqual(PICK.application([frenchEis, englishEis]).id, 'docEIS-en');
+  });
+
+  await t.test('links the French copy, flagged, when it is the only one filed', () => {
+    // Dropping the role would leave the page with no report at all; linking it unflagged would
+    // offer a French document to a reader with no warning that it is one.
+    const french = { id: 'docAR-fr', type: 'Assessment Report', datePosted: '2015-06-01',
+      displayName: 'Rapport d\'évaluation environnementale - Sommaire' };
+    const report = buildFacts([french]).keyDocuments.find(r => r.role === 'assessmentReport');
+
+    assert.strictEqual(report.documentId, 'docAR-fr');
+    assert.strictEqual(report.languageFlag, 'fr');
+  });
+
+  await t.test('flags nothing when the linked document is the English one', () => {
+    const english = { id: 'docAR-en', type: 'Assessment Report', datePosted: '2014-01-15',
+      displayName: 'EAO Assessment Report - Site C Clean Energy Project' };
+    const report = buildFacts([english]).keyDocuments.find(r => r.role === 'assessmentReport');
+
+    assert.strictEqual('languageFlag' in report, false);
+  });
+
   await t.test('links the assessment report the sections were written from', () => {
     // The picker runs over the documents that HAVE text to choose a source and over the whole
     // registry for the link, so a newer unextracted report would name one document on the page
@@ -1821,11 +1990,81 @@ test('buildTimeline', async (t) => {
   });
 });
 
+test('pickSource', async (t) => {
+  const withText = { ...SCHEDULE_B };
+  const withoutText = { ...SCHEDULE_B, contentExtracted: false, contentPageCount: 0 };
+
+  await t.test('takes the document that has text', () => {
+    const picked = pickSource(PICK.scheduleB, [withText], [withText]);
+    assert.strictEqual(picked.document.id, 'docB');
+    assert.strictEqual(picked.absentReason, null);
+  });
+
+  await t.test('names the document waiting on the extractor', () => {
+    const picked = pickSource(PICK.scheduleB, [], [withoutText]);
+    assert.strictEqual(picked.document, null);
+    assert.strictEqual(picked.absentReason, 'not_extracted');
+    assert.deepStrictEqual(picked.absentSource,
+      { documentId: 'docB', displayName: 'Schedule B - Table of Conditions' });
+  });
+
+  await t.test('says no_document only when the registry holds none', () => {
+    const picked = pickSource(PICK.scheduleB, [], [CERTIFICATE]);
+    assert.strictEqual(picked.absentReason, 'no_document');
+    assert.strictEqual(picked.absentSource, null);
+  });
+});
+
 test('nation name join', async (t) => {
   const organizations = [
     { id: 'org-1', name: 'Saulteau First Nations' },
     { id: 'org-2', name: "Doig River First Nation" }
   ];
+
+  // The registry's own spellings, punctuation and all.
+  const rows = [
+    { id: 'org-k', name: "Ka:'yu:'k't'h'/Che:k'tles7et'h' First Nations" },
+    { id: 'org-s', name: "Scia'new First Nation" },
+    { id: 'org-t', name: "T'Sou-ke Nation" },
+    { id: 'org-l', name: 'Lake Cowichan First Nation' },
+    { id: 'org-m', name: 'Métis Nation British Columbia' },
+    { id: 'org-x', name: 'Stó:lō Nation' }
+  ];
+
+  await t.test('joins the names a document writes to the rows the registry holds', () => {
+    // Every one of these is a name a model read out of a consultation appendix beside a row that
+    // spells the same nation another way. Unjoined, each renders with no contact card.
+    const written = [
+      ['Kayukth Chektles7eth First Nation', 'org-k'],
+      ["Ka:yu:'k't'h'/Che:k'tles7et'h'", 'org-k'],
+      ['Beecher Bay First Nation', 'org-s'],
+      ['Sooke First Nation', 'org-t'],
+      ['Tsouke Nation', 'org-t'],
+      ['Lake Cowichan Band', 'org-l'],
+      ['Métis Nation BC', 'org-m'],
+      ['Sto:lo First Nation', 'org-x']
+    ];
+
+    for (const [name, id] of written) {
+      const joined = joinNations([{ name, citations: [1] }], rows);
+      assert.strictEqual(joined[0].organizationId, id, `"${name}" joins ${id}`);
+    }
+  });
+
+  await t.test('leaves a name no row and no alias covers unmatched', () => {
+    const joined = joinNations([{ name: 'Cowichan Tribes', citations: [1] }], rows);
+    assert.strictEqual(joined[0].organizationId, null,
+      'the alias table joins names, it does not guess at them');
+  });
+
+  await t.test('joins whichever side carries the diacritics', () => {
+    assert.strictEqual(
+      joinNations([{ name: 'Métis Nation British Columbia', citations: [1] }],
+        [{ id: 'org-m', name: 'Metis Nation British Columbia' }])[0].organizationId, 'org-m');
+    assert.strictEqual(
+      joinNations([{ name: 'Stolo Nation', citations: [1] }],
+        [{ id: 'org-x', name: 'Stó:lō Nation' }])[0].organizationId, 'org-x');
+  });
 
   await t.test('matches across the generic words a name is written with', () => {
     const joined = joinNations([{ name: 'Saulteau First Nation', citations: [1] }], organizations);
