@@ -231,6 +231,54 @@ paths:
               schema:
                 type: string
 
+  /api/gate:
+    post:
+      summary: Public site access curtain
+      description: >-
+        Unauthenticated: the caller is a visitor who holds nothing yet and the password in the body
+        is the only credential in play. Ported from eagle-api so eagle-public calls one API, with
+        the same three answers.
+
+        The password is an app setting (`ACCESS_GATE_PASSWORD`) compared in constant time. It is
+        never served — `/api/config/public` carries the boolean `ACCESS_GATE` only, which is all a
+        browser is told about the curtain.
+
+        404 means `ACCESS_GATE` is false, so the route's existence is not advertised on an
+        environment that runs ungated; a `true` flag with no password configured is a 503, never a
+        404, since that would misreport a misconfigured environment as ungated. A wrong password is
+        a 401 whatever its length.
+
+        NO PER-CALLER THROTTLE. APIM is Consumption, where `rate-limit-by-key` does not exist and
+        plain `rate-limit` counts per subscription, which the anonymous `/api` product has none of.
+        What bounds guessing is the password's own entropy, so it must stay long and random.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        '204':
+          description: Password matched. No body.
+        '401':
+          description: '`{ "error": "Invalid password" }` — wrong password, or none in the body.'
+        '404':
+          description: '`{ "message": "Not Found" }` — `ACCESS_GATE` is false. This environment runs no curtain.'
+        '503':
+          description: >-
+            Either `{ "error": "Public configuration is unavailable." }` — the `public` document
+            could not be read, so whether the curtain is drawn is unknown — or, with `ACCESS_GATE`
+            true and no password configured, `{ "error": "Gate misconfigured" }`. Neither is ever a
+            404: that would report an ungated environment.
+          headers:
+            Cache-Control:
+              description: Always `no-store`.
+              schema:
+                type: string
+
   /api/me:
     get:
       summary: Caller's own access
@@ -734,6 +782,74 @@ paths:
           description: Document successfully deleted.
         '401':
           description: Unauthorized.
+
+  /api/documents/{id}/download:
+    get:
+      summary: Presigned download for a document's bytes
+      description: >-
+        A short-lived presigned URL for the stored file. Unauthenticated callers get the public
+        tier rather than a 401, exactly as `GET /api/documents/{id}` does — the row's `read[]` is
+        the gate and it runs inside the controller, so an unpublished document is a 404 to a caller
+        who may not see it. A download of a document the public cannot see is audited as
+        `document.download`; every download is an analytics event.
+
+        TWO MODES, same visibility check. By default the URL is returned as JSON. With `redirect=1`,
+        or an `Accept` that starts with `text/html`, the caller is sent to the file with a 302
+        instead — that is what an `<a href>` needs, since a browser navigation cannot read the JSON
+        body. Only a 200 redirects: a 404 or 500 answers JSON in both modes.
+
+        The presigned URL carries the file name as `response-content-disposition`, so the browser
+        saves `Report.pdf` rather than the storage key.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: project
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Parent project id, the partition key. Avoids a cross-partition lookup.
+        - name: redirect
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['1']
+          description: >-
+            `1` answers 302 to the presigned URL instead of returning it as JSON. An
+            `Accept: text/html…` request redirects without it.
+      responses:
+        '200':
+          description: A presigned download URL. JSON mode.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+                  expiresIn: { type: integer, description: Seconds until the URL expires. }
+                  fileName: { type: string }
+                  displayName: { type: string, nullable: true }
+        '302':
+          description: Redirect mode. The presigned URL is the `Location`.
+          headers:
+            Location:
+              description: The presigned URL. Expires with the same TTL the JSON mode reports.
+              schema:
+                type: string
+            Cache-Control:
+              description: >-
+                Always `no-store`. The `Location` is itself the credential, so no cache or history
+                entry may replay this response.
+              schema:
+                type: string
+        '404':
+          description: No document with this id the caller may read, or it has no stored file.
+        '500':
+          description: '`{ "error": "Failed to generate download link." }` — the presign failed.'
 
   /api/documents/{id}/level:
     put:

@@ -655,6 +655,44 @@ test('the API app reads EDGE_SECRET through a Key Vault reference', () => {
     'the secret comes from OpenShift, like every other secret this script sources');
 });
 
+// The access curtain's password, same five-file shape as EDGE_SECRET above and the same reason for
+// a text-structural guard: `az bicep build` exits 0 with the app setting deleted, and the failure
+// is silent in the wrong direction — an empty ACCESS_GATE_PASSWORD makes POST /api/gate answer 404,
+// so an environment that means to be gated would serve the whole site to anyone who asked.
+test('the API app reads ACCESS_GATE_PASSWORD through a Key Vault reference', () => {
+  const setting = API_MODULE
+    .split(/^\s+\{$/m)
+    .find(b => /name: 'ACCESS_GATE_PASSWORD'/.test(b));
+  assert.ok(setting, 'no ACCESS_GATE_PASSWORD app setting declared at all — the curtain would 404');
+  assert.match(setting, /value: empty\(accessGateSecretUri\) \? '' : '@Microsoft\.KeyVault\(SecretUri=\$\{accessGateSecretUri\}\)'/,
+    'the setting must be a Key Vault reference bound to accessGateSecretUri, never the ' +
+    'password itself, and empty where no secret was written');
+  assert.doesNotMatch(API_MODULE, /value: accessGatePassword$/m,
+    'no app setting may carry the raw password value');
+
+  assert.match(MAIN, /^@secure\(\)\nparam accessGatePassword string = ''$/m,
+    'accessGatePassword must be @secure() in main.bicep, or it is readable in ARM deployment history');
+  assert.match(MAIN, /^\s+accessGatePassword: accessGatePassword$/m,
+    'and be passed into the vault module, or the secret is never written');
+  assert.match(MAIN, /^\s+accessGateSecretUri: keyVault\.outputs\.accessGateSecretUri$/m,
+    'main.bicep must pass the vault URI into the API module — without it the reference names nothing');
+
+  assert.match(KEY_VAULT, /var hasAccessGatePassword = !empty\(accessGatePassword\)/);
+  assert.match(KEY_VAULT, /resource accessGateSecret [^\n]+ = if \(hasAccessGatePassword\) \{/,
+    'an empty password must write no Key Vault secret — an ungated environment has none to write');
+  assert.match(KEY_VAULT, /^output accessGateSecretUri string = hasAccessGatePassword \? \w+!\.properties\.secretUri : ''$/m,
+    'and output its VERSIONLESS uri, so a rotation is a new secret version plus a restart');
+
+  for (const [label, params] of [['test', TEST_PARAMS], ['prod', PROD_PARAMS]]) {
+    assert.match(params, /^param accessGatePassword = readEnvironmentVariable\('ACCESS_GATE_PASSWORD', ''\)$/m,
+      `${label} must read the password from the environment — a literal would publish it, this ` +
+      'repository is public');
+  }
+
+  assert.match(DEPLOY, /os_secret demi-app-secrets ACCESS_GATE_PASSWORD/,
+    'the password comes from OpenShift, like every other secret this script sources');
+});
+
 // The gateway secret is what makes the app trust an APIM-asserted subscription, and both halves of
 // that trust are text-structural: a plain-value app setting would put the secret in the template
 // and in ARM history, and a global policy that sets the two headers without deleting the client's
