@@ -359,6 +359,46 @@ test('extraction state survives a re-seed', async (t) => {
   });
 });
 
+test('a raised pending re-stamp survives a re-seed', async (t) => {
+  // The flag says "this document's chunks never got their new parent fields". A Cosmos upsert
+  // REPLACES the row, so a transform that drops it retires the only record of a re-stamp nothing
+  // has done — `reconcile-eagle.js` counts the flag and `--pending` walks it.
+  const pending = {
+    id: EAGLE_DOC._id,
+    parentFieldsPending: true,
+    parentFieldsPendingAt: '2026-09-01T00:00:00.000Z'
+  };
+
+  await t.test('the flag and its token come through untouched', () => {
+    // The token VERBATIM, because a clear is guarded on it: re-minting it here would hand the
+    // in-flight re-stamp a value it cannot match, and its clear would come back a conflict while
+    // the flag stayed up over chunks that are already correct.
+    const out = transformDocument(EAGLE_DOC, '207', LIST, { ...OPTS, existing: pending });
+
+    assert.strictEqual(out.parentFieldsPending, true);
+    assert.strictEqual(out.parentFieldsPendingAt, '2026-09-01T00:00:00.000Z');
+  });
+
+  await t.test('a row with no flag raised is not written pending', () => {
+    // The other half: carried when raised, never invented. A row written pending with no drift
+    // behind it sends the repair over the whole corpus.
+    const out = transformDocument(EAGLE_DOC, '207', LIST, {
+      ...OPTS, existing: { ...pending, parentFieldsPending: false }
+    });
+
+    assert.strictEqual(out.parentFieldsPending, undefined);
+    assert.strictEqual(out.parentFieldsPendingAt, undefined,
+      'no debt, so no token — the pair is meaningless apart');
+  });
+
+  await t.test('a document DEMI has never held has no flag at all', () => {
+    const out = transformDocument(EAGLE_DOC, '207', LIST, OPTS);
+
+    assert.strictEqual(out.parentFieldsPending, undefined,
+      'a first write has no chunks yet, and the ingest that creates them stamps them itself');
+  });
+});
+
 test('isFeatured is carried onto the Cosmos row', async (t) => {
   await t.test('true only when upstream says exactly true', () => {
     assert.strictEqual(transformDocument({ ...EAGLE_DOC, isFeatured: true }, '207', LIST, OPTS)

@@ -8,6 +8,7 @@ const assert = require('node:assert');
 const {
   parseArgs, planPatch, backfillDisplayNameSort, exitCodeFor
 } = require('../../src/scripts/backfill-display-name-sort');
+const { NULL_PARTITION } = require('../../src/scripts/backfill-chunk-parent-fields');
 
 const NOW = '2026-09-02T00:00:00.000Z';
 
@@ -21,22 +22,39 @@ const NOW = '2026-09-02T00:00:00.000Z';
  * fixture — so a doc whose `projectId` has no project row is still enumerated. A double built the
  * other way (partitions from an injected project-id list) would pass every assertion below right
  * up until the "no project row" case, which is the point of that test.
+ *
+ * `displayNameRowsWithNoProject` is the repository's complement of that predicate, read
+ * cross-partition: the rows DISTINCT cannot return.
  */
 function fakeDocuments(docs, opts = {}) {
   const state = { listedPartitions: [] };
+  // NO `?? ''`. A JSON-null projectId and `''` are different partitions in Cosmos.
+  const hasProject = (doc) => doc.projectId !== null && doc.projectId !== undefined;
+  const inPartition = (doc, partition) => hasProject(doc) && String(doc.projectId) === partition;
   return {
     state,
     CONTAINER: 'documents',
     async listVisible(access, listOpts) {
-      const partition = String(listOpts.projectId ?? '');
+      const partition = String(listOpts.projectId);
       state.listedPartitions.push(partition);
-      return { items: docs.filter(d => String(d.projectId ?? '') === partition) };
+      return { items: docs.filter(d => inPartition(d, partition)) };
     },
-    async countVisible() {
-      return opts.count === undefined ? docs.length : opts.count;
+    async displayNameRowsWithNoProject() {
+      state.listedPartitions.push(NULL_PARTITION);
+      // PROJECTED, as the repository's SELECT is: the key, the name and the key derived from it.
+      return docs.filter(d => !hasProject(d)).map(d => ({
+        id: d.id, projectId: d.projectId,
+        displayName: d.displayName, displayNameSort: d.displayNameSort
+      }));
+    },
+    async countVisible(access, criteria = {}) {
+      if (opts.count !== undefined) return opts.count;
+      return criteria.hasProjectId === true ? docs.filter(hasProject).length : docs.length;
     },
     async listDistinctProjectIds() {
-      return [...new Set(docs.map(d => d.projectId ?? ''))];
+      // IS_DEFINED AND NOT NULL, the repository's predicate — a null-project row is in no
+      // partition, so this walk cannot reach it and must not be measured against it.
+      return [...new Set(docs.filter(hasProject).map(d => String(d.projectId)))];
     }
   };
 }
@@ -172,6 +190,62 @@ test('backfillDisplayNameSort', async (t) => {
     assert.strictEqual(summary.scanned, 4);
     assert.strictEqual(summary.expected, 6);
     assert.strictEqual(exitCodeFor(summary), 1, 'a partial run must not exit 0');
+  });
+
+  await t.test('a document with no projectId is walked as its own bucket and patched', async () => {
+    // It sits in no partition DISTINCT can return, so the walk that skipped it left it without a
+    // sort key for good — and a null key sorts it ahead of every named row, which is the fault
+    // this backfill exists to fix. Dropping it from `expected` as well hid that: every number
+    // agreed and the run exited 0.
+    const { summary, documents, writer } = await run(['--live'],
+      [...DOCS, { id: 'd5', projectId: null, displayName: 'No project' }]);
+
+    assert.ok(documents.state.listedPartitions.includes(NULL_PARTITION));
+    assert.strictEqual(summary.scanned, 5);
+    assert.strictEqual(summary.expected, 5, 'the bucket is walked, so it is counted');
+    assert.strictEqual(exitCodeFor(summary), 0);
+
+    const noProject = writer.state.operations.find(o => o.id === 'd5');
+    assert.deepStrictEqual(noProject.resourceBody.operations[0],
+      { op: 'set', path: '/displayNameSort', value: 'no project' });
+    assert.strictEqual(noProject.partitionKey, null,
+      'a JSON-null projectId is its own partition — `\'\'` addresses a row that is not there');
+  });
+
+  await t.test('a document with NO projectId property is patched on PartitionKey.None', async () => {
+    // The null bucket holds two different partitions. A row whose `projectId` is JSON null lives
+    // under the key `null`; a row with no `projectId` property at all lives under
+    // `PartitionKey.None` — `{}` on the wire, @azure/cosmos 4.10
+    // dist/commonjs/documents/PartitionKeyInternal.js:25-26, chosen for an operation whose own
+    // `partitionKey` is `undefined` (dist/commonjs/utils/batch.js:57-62). Sending `null` for the
+    // absent one addresses a row that is not there: a 404 counted as a rejected write, and the
+    // document keeps sorting ahead of every named row.
+    const docs = [
+      { id: 'd6', displayName: 'No project property' },
+      { id: 'd7', projectId: null, displayName: 'Null project' }
+    ];
+    const { summary, writer } = await run(['--live'], docs);
+
+    assert.strictEqual(summary.scanned, 2);
+    const absent = writer.state.operations.find(o => o.id === 'd6');
+    assert.ok('partitionKey' in absent, 'the key is sent, and undefined is what says None');
+    assert.strictEqual(absent.partitionKey, undefined);
+    assert.strictEqual(writer.state.operations.find(o => o.id === 'd7').partitionKey, null,
+      'a JSON-null projectId is still its own partition');
+  });
+
+  await t.test('a bucket the walk never reads leaves the run INCOMPLETE', async () => {
+    // The counterpart guard: `expected` counts every document, so a walk that stops enumerating
+    // the null bucket cannot report success by narrowing what it measures itself against.
+    const docs = [...DOCS, { id: 'd5', projectId: null, displayName: 'No project' }];
+    const documents = fakeDocuments(docs);
+    documents.displayNameRowsWithNoProject = async () => [];
+    const summary = await backfillDisplayNameSort(['--live'], {
+      documents, bulkVerified: fakeWriter().write, now: NOW
+    });
+
+    assert.strictEqual(summary.scanned, 4);
+    assert.strictEqual(exitCodeFor(summary), 1);
   });
 
   await t.test('a rejected write exits non-zero', async () => {

@@ -34,12 +34,19 @@ export class AppComponent {
       const next = this.keyOf(event.urlAfterRedirects);
       // Search state is global to the service, so each screen starts clean. Map arrivals may carry a
       // saved lasso from My account; `?q=` carries a handoff such as the map's Documents button.
+      // The map keeps its filters but renders no type picker, so the one filter it cannot show or
+      // undo still goes.
       if (next !== 'map') this.service.clearFilters();
+      else this.service.clearDocType();
       const q = new URL(event.urlAfterRedirects, location.origin).searchParams.get('q') ?? '';
-      if (q !== this.service.searchQuery()) {
-        this.service.searchQuery.set(q);
-        this.service.loadData();
-      }
+      const queryChanged = q !== this.service.searchQuery();
+      // The corpus in memory was narrowed by the type just dropped, so its rows, counts and
+      // dropped callout belong to a filter the picker no longer shows. Re-read them even
+      // when the words are unchanged. The query is applied first, so this load never carries the
+      // one being left behind.
+      const wasTypeFiltered = this.service.hasLoadedDocType();
+      if (queryChanged) this.service.searchQuery.set(q);
+      if (queryChanged || wasTypeFiltered) this.service.loadData();
       this.screenKey.set(next);
       this.accountOpen.set(false);
     });

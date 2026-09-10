@@ -54,7 +54,7 @@ const PARTITION_FIELD = {
  */
 function stubCosmos(t, rows, counts = {}) {
   const seen = [];
-  t.mock.method(cosmos, 'query', async (container, spec, options) => {
+  const run = (container, spec, options) => {
     seen.push({ container, spec, options });
     // A partition key is HONOURED, so a read aimed at a partition that does not exist answers
     // nothing — the case an unresolved project id produces, and the one a stub that always serves
@@ -65,7 +65,14 @@ function stubCosmos(t, rows, counts = {}) {
 
     if (/COUNT\(1\)/.test(spec.query)) return { items: [counts[container] ?? served.length] };
     return { items: served.slice() };
-  });
+  };
+
+  t.mock.method(cosmos, 'query', async (container, spec, options) => run(container, spec, options));
+  // A single-row lookup is its OWN entry point, not a `query` with a page size: it holds one
+  // iterator and drains it, because the SDK hands no continuation token back on the cross-partition
+  // path. Same spec, so the assertions below still read it out of `seen`.
+  t.mock.method(cosmos, 'queryFirst', async (container, spec, options = {}) =>
+    run(container, spec, options).items[0] ?? null);
   t.mock.method(cosmos, 'readItem', async (container, id) =>
     (rows[container] || []).find(r => String(r.id) === String(id)) || null);
   return seen;

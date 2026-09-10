@@ -12,8 +12,37 @@ const {
   parseArgs, verifyProjects, verifyItems, seed, ALL_STAGES, DEFAULT_STAGES
 } = require('../../src/scripts/seed-nosql');
 const { unwrapSearchResponse, fetchAllPages, PAGE_SIZE, EAGLE_API_BASE } = require('../../src/seed/sources');
+const chunksRepo = require('../../src/repositories/chunks');
+const documentsRepo = require('../../src/repositories/documents');
 const trackProjects = require('../../src/data/track_projects_enriched.json');
 const config = require('../../src/config');
+
+/**
+ * Chunks repository double. `parentFieldsChanged` and `reStampAfterWrite` are the REAL ones, so the
+ * seed's re-stamp decision and its two failure counters are tested against the repository's own
+ * rules; `stamp` is the helper's documented seam and is the only call Cosmos would serve.
+ *
+ * `rejectChunksOf` names documents whose patch comes back with a chunk operation REJECTED — a
+ * document that landed in part, which is a different unit from a document that threw.
+ */
+function fakeChunks(onStamp, rejectChunksOf = [], onStampedAt = () => {}) {
+  const rejected = new Set(rejectChunksOf);
+  return {
+    parentFieldsChanged: chunksRepo.parentFieldsChanged,
+    reStampAfterWrite(access, docs, failedIds, options) {
+      onStampedAt(options.stampedAt);
+      return chunksRepo.reStampAfterWrite(access, docs, failedIds, {
+        ...options,
+        stamp: async (_access, id, doc) => {
+          onStamp(id, doc);
+          return rejected.has(String(id))
+            ? { succeeded: 0, failed: 1, statusCounts: { 429: 1 }, requestCharge: 1, chunks: 1 }
+            : { succeeded: 1, failed: 0, statusCounts: { 200: 1 }, requestCharge: 1, chunks: 1 };
+        }
+      });
+    }
+  };
+}
 
 const NOW = '2026-07-30T00:00:00.000Z';
 
@@ -299,10 +328,16 @@ test('seed() end to end with stubbed sources', async (t) => {
   };
 
   const makeRepos = () => {
-    const written = { projects: [], documents: [], boundaries: [], links: [] };
+    const written = { projects: [], documents: [], boundaries: [], links: [], reStamped: [] };
     return {
       written,
       repos: {
+        // The REAL `parentFieldsChanged` and `reStampAfterWrite`: the seeder's decision to
+        // re-stamp, and the counters it reports, are only meaningful against what the repository
+        // actually does. Only the Cosmos write is faked, through the helper's `stamp` seam.
+        chunks: fakeChunks((id, doc) => {
+          written.reStamped.push({ id: String(id), doc });
+        }),
         projects: {
           upsert: async (p) => { written.projects.push(p); return p; },
           getById: async () => null
@@ -1343,44 +1378,80 @@ test('a re-seed carries extraction state forward', async (t) => {
     internalURL: `etl/x/${id}.pdf`, internalExt: '.pdf', read: ['public']
   });
 
-  const sources = {
+  // Which documents upstream serves, and which of them Cosmos already holds. Overridable so the
+  // rejected-write case below can drive a corpus big enough to split landed from failed.
+  const DEFAULT_CORPUS = { fetched: ['known', 'brandnew'], existing: ['known'] };
+
+  const sources = (corpus = DEFAULT_CORPUS) => ({
     EAGLE_API_BASE,
     loadTrackProjects: () => track,
     fetchEagleProjects: async () => [eagleProject(matchedGuid, 'Nicomen Wind')],
     streamEagleDocuments: async (onPage) => {
-      await onPage([eagleDoc('known'), eagleDoc('brandnew')], 2, 2);
-      return { count: 2, total: 2 };
+      const docs = corpus.fetched.map(eagleDoc);
+      await onPage(docs, docs.length, docs.length);
+      return { count: docs.length, total: docs.length };
     },
     fetchListLookup: async () => new Map(),
     fetchOrganizationLookup: async () => new Map(),
     fetchAllPages: async () => [],
     loadBoundaries: () => []
-  };
+  });
 
-  const run = async (cosmosReady) => {
+  const run = async (cosmosReady, existingOverrides = {}, opts = {}) => {
+    const corpus = opts.corpus || DEFAULT_CORPUS;
+    const rejected = new Set(opts.failIds || []);
     const written = [];
     const partitions = [];
+    const reStamped = [];
+    // Every clear the seed attempted, in order — the argument list is the contract: a clear
+    // guarded on the wrong token, or on nothing, is what would take a flag down over chunks this
+    // run never wrote.
+    const cleared = [];
+    // The instant each flush guarded its chunk patches on — what keeps a slow flush from putting
+    // stale values back over a re-stamp that landed while it ran.
+    const stampedAt = [];
     const repos = {
       projects: { upsert: async (p) => p },
       documents: {
+        // The REAL raise. A fake returning a constant would let a seed that re-uses the token
+        // already on the row pass, and that is the bug the strictly-greater rule exists for.
+        pendingRaiseOps: documentsRepo.pendingRaiseOps,
+        async setParentFieldsPending(id, projectId, pending, guard) {
+          cleared.push({ id: String(id), projectId, pending, guard });
+          return opts.clearOutcome || { status: 'cleared', pendingAt: null };
+        },
         extractionRowsForProject: async (_access, projectId) => {
           partitions.push(projectId);
-          return [{
-            id: 'known', contentExtracted: true, contentExtractedAt: '2026-08-01T00:00:00.000Z',
-            contentPageCount: 9, contentExtractionError: null
-          }];
+          // `projectId` rides this projection in the repository (it is one of the parent fields a
+          // chunk copies), and leaving it off here would read as a project move on every re-seed.
+          return corpus.existing.map(id => ({
+            id, projectId: String(projectId),
+            contentExtracted: true, contentExtractedAt: '2026-08-01T00:00:00.000Z',
+            contentPageCount: 9, contentExtractionError: null, ...existingOverrides
+          }));
         },
         bulkUpsertForProject: async (pid, docs) => {
           written.push(...docs);
-          return { succeeded: docs.length, failed: 0, statusCounts: { 201: docs.length } };
+          const failed = docs.filter(d => rejected.has(String(d.id)));
+          return {
+            succeeded: docs.length - failed.length,
+            failed: failed.length,
+            statusCounts: { 201: docs.length - failed.length },
+            // Part of `cosmos.bulkVerified`'s real return shape, and the only thing that tells the
+            // seed which rows it may re-stamp the chunks of.
+            failedIds: failed.map(d => String(d.id))
+          };
         }
       },
       boundaries: { bulkUpsertForType: async () => ({ succeeded: 0, failed: 0, statusCounts: {} }) },
-      links: { create: async (record) => record }
+      links: { create: async (record) => record },
+      chunks: fakeChunks((id, doc) => {
+        reStamped.push({ id: String(id), doc });
+      }, opts.rejectChunksOf, (instant) => stampedAt.push(instant))
     };
-    const summary = await seed(['--live', '--only', 'documents'],
-      { sources, repos, now: NOW, cosmosReady });
-    return { summary, written, partitions };
+    const argv = opts.live === false ? ['--only', 'documents'] : ['--live', '--only', 'documents'];
+    const summary = await seed(argv, { sources: sources(corpus), repos, now: NOW, cosmosReady });
+    return { summary, written, partitions, reStamped, cleared, stampedAt };
   };
 
   await t.test('an existing document keeps its extraction state, a new one does not', async () => {
@@ -1399,9 +1470,180 @@ test('a re-seed carries extraction state forward', async (t) => {
     assert.strictEqual(summary.stages.documents.preserved, 1);
   });
 
+  await t.test('a raised pending re-stamp flag survives a re-seed', async () => {
+    // The flag says "this document's chunks never got their new parent fields". The re-seed
+    // rebuilds the row and a Cosmos upsert REPLACES it, so dropping the flag here would retire the
+    // only record of a re-stamp nothing has done — the reconcile counts it and
+    // `backfill-chunk-parent-fields.js --pending` walks it.
+    const { written } = await run(true,
+      { parentFieldsPending: true, parentFieldsPendingAt: '2026-09-01T00:00:00.000Z' });
+
+    const known = written.find(d => d.id === 'known');
+    assert.strictEqual(known.parentFieldsPending, true);
+    assert.strictEqual(known.parentFieldsPendingAt, '2026-09-01T00:00:00.000Z',
+      'how long the drift has stood, and the reconcile reports it');
+
+    const fresh = written.find(d => d.id === 'brandnew');
+    assert.strictEqual(fresh.parentFieldsPending, undefined,
+      'a document DEMI has never held has no chunks to be waiting on');
+  });
+
+  await t.test('a document with no flag raised is not seeded as pending', async () => {
+    // The other half: carried when raised, never invented. A row written pending with no drift
+    // behind it sends the backfill over the whole corpus.
+    const cleared = await run(true, { parentFieldsPending: false, parentFieldsPendingAt: null });
+    assert.notStrictEqual(cleared.written.find(d => d.id === 'known').parentFieldsPending, true);
+
+    const untouched = await run(true);
+    assert.notStrictEqual(untouched.written.find(d => d.id === 'known').parentFieldsPending, true);
+  });
+
   await t.test('the partition is read once per project, not once per batch', async () => {
     const { partitions } = await run(true);
     assert.deepStrictEqual(partitions, ['207']);
+  });
+
+  await t.test('a re-seed that moves a List ref re-stamps that document\'s chunks', async () => {
+    // A chunk carries a COPY of its document's four List refs so a chunk search can filter on them
+    // without a join, and NOTHING else refreshes it. A re-seed that re-types a document and stops
+    // at the document row leaves every chunk of it answering the OLD type filter for the life of
+    // the chunk — under a 200 and a green indexer run.
+    const { reStamped, summary } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
+
+    assert.deepStrictEqual(reStamped.map(r => r.id), ['known'],
+      'only the document whose refs moved — a full-partition patch per document is the cost here');
+    assert.strictEqual(reStamped[0].doc.typeId, null,
+      'and it carries what the document now says, which here is nothing');
+    assert.strictEqual(summary.stages.documents.documentsReStamped, 1);
+  });
+
+  await t.test('a re-seed that moves nothing re-stamps nothing', async () => {
+    const { reStamped, summary } = await run(true);
+
+    assert.deepStrictEqual(reStamped, []);
+    assert.strictEqual(summary.stages.documents.documentsReStamped, 0);
+  });
+
+  await t.test('only the documents whose row write LANDED have their chunks re-stamped', async () => {
+    // Re-stamping on the strength of a rejected upsert writes a value into the chunks that no
+    // document row holds, so the chunk answers a filter its own document does not match.
+    const ids = Array.from({ length: 100 }, (_, i) => `doc${String(i).padStart(3, '0')}`);
+    const failIds = ids.filter((_, i) => i % 5 < 2);   // 40 of the 100
+
+    const { reStamped, summary } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+      { corpus: { fetched: ids, existing: ids }, failIds });
+
+    const stage = summary.stages.documents;
+    assert.strictEqual(stage.writeFailed, 40);
+    assert.strictEqual(stage.written, 60);
+    assert.strictEqual(stage.documentsReStamped, 60);
+    assert.strictEqual(stage.reStampSkipped, 40);
+    assert.deepStrictEqual(reStamped.map(r => r.id).sort(),
+      ids.filter(id => !failIds.includes(id)).sort());
+    for (const id of failIds) {
+      assert.ok(!reStamped.some(r => r.id === id),
+        `${id}'s row write was rejected but its chunks were re-stamped anyway`);
+    }
+  });
+
+  await t.test('a part-stamped document is one document and one chunk operation', async () => {
+    // The units the stage summary used to add together. `known`'s row landed and one of its chunk
+    // operations was rejected — one document to repair, and the operator reads both numbers to
+    // decide whether to run backfill-chunk-parent-fields.js over 1.1M rows.
+    const { summary } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+      { rejectChunksOf: ['known'] });
+
+    const stage = summary.stages.documents;
+    assert.strictEqual(stage.reStampFailedDocuments, 1);
+    assert.strictEqual(stage.reStampFailedChunks, 1);
+    assert.strictEqual(stage.documentsReStamped, 0, 'it did not land whole, so it is not stamped');
+  });
+
+  await t.test('a re-seed that moves a List ref writes the row already flagged', async () => {
+    // The flag rides the SAME upsert as the change. Re-stamping best-effort and flagging nothing
+    // made every loss on this path invisible — a run killed between the upsert and the patch, a
+    // patch that threw — because the reconcile reads the row, not this run's output.
+    const { written, summary } = await run(true, {
+      typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+      parentFieldsPending: true,
+      parentFieldsPendingAt: '2999-01-01T00:00:00.000Z'
+    });
+
+    const known = written.find(d => d.id === 'known');
+    assert.strictEqual(known.parentFieldsPending, true);
+    assert.strictEqual(known.parentFieldsPendingAt, '2999-01-01T00:00:00.001Z',
+      'strictly past the token the row held, or the older flag\'s clear takes this one down');
+    assert.strictEqual(summary.stages.documents.pendingRaised, 1);
+  });
+
+  await t.test('a re-seed that moves nothing raises no flag', async () => {
+    // The other half. A row written pending with no drift behind it sends the repair over the
+    // whole corpus.
+    const { written, summary } = await run(true);
+
+    assert.strictEqual(written.find(d => d.id === 'known').parentFieldsPending, undefined);
+    assert.strictEqual(summary.stages.documents.pendingRaised, 0);
+  });
+
+  await t.test('the flag is cleared on the token it was raised with', async () => {
+    const { written, cleared, summary } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
+
+    const known = written.find(d => d.id === 'known');
+    assert.deepStrictEqual(cleared, [{
+      id: 'known',
+      projectId: '207',
+      pending: false,
+      guard: { pendingAt: known.parentFieldsPendingAt }
+    }], 'unguarded, this clear would take down a flag a newer write raised for chunks it never saw');
+    assert.strictEqual(summary.stages.documents.pendingCleared, 1);
+  });
+
+  await t.test('the chunk patches are guarded on the token the flag was raised with', async () => {
+    // Unguarded, a re-seed is last-writer-wins: a flush that took minutes would put the values it
+    // read at the start back over a re-stamp that landed in between, with the flag already
+    // cleared, so nothing would report the drift.
+    const { written, stampedAt } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
+
+    const known = written.find(d => d.id === 'known');
+    assert.deepStrictEqual(stampedAt, [known.parentFieldsPendingAt]);
+  });
+
+  await t.test('a document whose chunks did not all land keeps its flag', async () => {
+    // `known`'s row landed and one of its chunk operations was rejected, so its chunks hold a mix
+    // of old and new values — the exact state `--pending` walks.
+    const { cleared, summary } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+      { rejectChunksOf: ['known'] });
+
+    const stage = summary.stages.documents;
+    assert.deepStrictEqual(cleared, []);
+    assert.deepStrictEqual(stage.pendingLeftRaised, ['known'],
+      'named as well as counted: a count cannot say which rows to repair');
+    assert.strictEqual(stage.pendingCleared, 0);
+  });
+
+  await t.test('a clear a newer write owns is counted as a conflict', async () => {
+    const { summary } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+      { clearOutcome: { status: 'conflict', pendingAt: '2026-09-01T00:00:00.000Z' } });
+
+    assert.strictEqual(summary.stages.documents.pendingConflicts, 1);
+    assert.strictEqual(summary.stages.documents.pendingCleared, 0,
+      'the newer write owns the flag now and its own re-stamp clears it');
+  });
+
+  await t.test('a row gone by the time the clear runs is counted as missing', async () => {
+    const { summary } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+      { clearOutcome: { status: 'missing', reason: 'patch' } });
+
+    assert.strictEqual(summary.stages.documents.pendingMissed, 1);
+  });
+
+  await t.test('a dry run counts the flags it would raise and writes none', async () => {
+    const { written, cleared, summary } = await run(true, { typeId: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+      { live: false });
+
+    assert.strictEqual(summary.stages.documents.pendingRaised, 1);
+    assert.deepStrictEqual(written, [], 'a dry run reports counts and touches nothing');
+    assert.deepStrictEqual(cleared, []);
   });
 
   await t.test('without Cosmos nothing is read and nothing is preserved', async () => {

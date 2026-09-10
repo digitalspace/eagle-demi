@@ -48,6 +48,28 @@ function storedProject(read = PUBLIC_ACL) {
   return { id: '207', eagleId: PROJECT_EAGLE_ID, name: 'Nicomen Wind Energy', read };
 }
 
+const DOCUMENT_EAGLE_ID = '58869abba4acd4014b81f55c';
+const TYPE_ID = '5cf00c03a266b7e1877504db';
+const MILESTONE_ID = '5cf00c03a266b7e1877504ef';
+
+/**
+ * A stored DEMI document row, as every chunk parent-field test reads it back: the ingest route
+ * before chunking, the re-stamp handler, and the write paths that move a parent field.
+ */
+function storedDocument(overrides = {}) {
+  return {
+    id: DOCUMENT_EAGLE_ID,
+    projectId: '207',
+    read: PUBLIC_ACL,
+    isPublished: true,
+    typeId: TYPE_ID,
+    milestoneId: MILESTONE_ID,
+    projectPhaseId: null,
+    documentAuthorTypeId: null,
+    ...overrides
+  };
+}
+
 /** The mirrored period a comment push reads its ceiling from — already project-constrained. */
 function storedPeriod(read = ['staff', 'idir', 'public']) {
   return { id: PERIOD_EAGLE_ID, projectId: '207', read };
@@ -231,11 +253,15 @@ module.exports = {
   ORG_EAGLE_ID,
   NOTIFICATION_EAGLE_ID,
   UPDATE_EAGLE_ID,
+  DOCUMENT_EAGLE_ID,
+  TYPE_ID,
+  MILESTONE_ID,
   PUBLIC_ACL,
   PRIVATE_ACL,
   MIRRORS,
   storedProject,
   storedPeriod,
+  storedDocument,
   eaglePeriod,
   eagleComment,
   eagleOrganization,

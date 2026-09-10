@@ -13,7 +13,8 @@ const FUNCTIONS = require.resolve('@azure/functions');
 /** Every app setting that registers a trigger. The ones not under test are cleared: a value left
  *  in the environment registers a second trigger and breaks the caller's counts. */
 const SCHEDULE_VARS = [
-  'RECONCILE_SCHEDULE', 'SYNC_TEAMS_SCHEDULE', 'BULK_CLEANUP_SCHEDULE', 'BULK_DOWNLOADS_QUEUE'
+  'RECONCILE_SCHEDULE', 'SYNC_TEAMS_SCHEDULE', 'BULK_CLEANUP_SCHEDULE', 'BULK_DOWNLOADS_QUEUE',
+  'CHUNK_RESTAMP_QUEUE'
 ];
 
 const setEnv = (name, value) => {

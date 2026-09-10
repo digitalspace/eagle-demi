@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient, withXhr } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { RegistryStateService, epicPublicDownloadUrl } from './registry-state.service';
+import { RegistryStateService, chunkFilterStateFrom, epicPublicDownloadUrl } from './registry-state.service';
 import { ConfigService } from './config.service';
 import { Project } from '../models/registry.models';
 
@@ -45,6 +45,18 @@ async function settleInitialLoad(service: RegistryStateService): Promise<void> {
   await service.authReady;
   await new Promise(resolve => setTimeout(resolve, 0));
   sharedFetchSpy.calls.reset();
+}
+
+// Forget what is in memory so the next loadData() goes back to the API. Every key, not just one:
+// each leg carries its own, and leaving any set skips that leg's request.
+function forgetCorpus(service: RegistryStateService): void {
+  Object.assign(service as unknown as Record<string, unknown>, {
+    loadedProjectQuery: null,
+    loadedDocumentQuery: null,
+    loadedDocumentDocType: null,
+    loadedChunkQuery: null,
+    loadedChunkDocType: null
+  });
 }
 
 describe('RegistryStateService', () => {
@@ -317,7 +329,7 @@ describe('RegistryStateService', () => {
   // backend rendered as a healthy demo full of fictional data. It must fail visibly.
   describe('loadData failure handling', () => {
     // The constructor's own load already cached the empty query; these specs exercise the fetch.
-    beforeEach(() => { (service as unknown as { loadedQuery: string | null }).loadedQuery = null; });
+    beforeEach(() => forgetCorpus(service));
 
     it('should surface an error and NOT substitute mock data when the API fails', async () => {
       sharedFetchSpy.and.rejectWith(new Error('network down'));
@@ -356,7 +368,13 @@ describe('RegistryStateService', () => {
   // document count read 0 and the document list emptied on every page but /search.
   describe('loadData cache guard', () => {
     it('refetches when a query is set but the chunks were cleared', async () => {
-      (service as unknown as { loadedQuery: string | null }).loadedQuery = 'mine';
+      Object.assign(service as unknown as Record<string, unknown>, {
+        loadedProjectQuery: 'mine',
+        loadedDocumentQuery: 'mine',
+        loadedDocumentDocType: '',
+        loadedChunkQuery: 'mine',
+        loadedChunkDocType: ''
+      });
       service.searchQuery.set('mine');
       service.projects.set([]);
       service.documents.set([]);
@@ -370,8 +388,606 @@ describe('RegistryStateService', () => {
     });
   });
 
+  describe('document type filter', () => {
+    beforeEach(() => forgetCorpus(service));
+
+    const urls = () => sharedFetchSpy.calls.all().map(call => String(call.args[0]));
+    const docUrl = () => urls().find(u => u.includes('dataset=Document&'));
+    const chunkUrl = () => urls().find(u => u.includes('dataset=DocumentChunk'));
+
+    it('narrows both the document and the passage read with and[type]', async () => {
+      // `and[type]`, NOT a bare `type=`: the endpoint reads filters only from the `and[...]`
+      // spelling and refuses a parameter it does not know with a 400, so the bare form is a
+      // rejected request rather than a narrower search.
+      service.searchQuery.set('caribou');
+      service.selectedDocType.set('5cf00c03a266b7e1877504ca');
+
+      await service.loadData();
+
+      expect(docUrl()).toContain('and%5Btype%5D=5cf00c03a266b7e1877504ca');
+      expect(chunkUrl()).toContain('and%5Btype%5D=5cf00c03a266b7e1877504ca');
+      // The project read has no document type to narrow by.
+      expect(urls().find(u => u.includes('dataset=Project'))).not.toContain('and%5Btype%5D');
+    });
+
+    it('sends every id a label carries as one comma-separated filter', async () => {
+      // One request, not one per id: the API reads `,` as a multi-select and ORs the terms.
+      service.searchQuery.set('caribou');
+      service.selectedDocType.set('id2002,id2018');
+
+      await service.loadData();
+
+      expect(docUrl()).toContain('and%5Btype%5D=id2002%2Cid2018');
+      expect(urls().filter(u => u.includes('dataset=Document&')).length).toBe(1);
+    });
+
+    it('sends no type at all when none is picked', async () => {
+      service.searchQuery.set('caribou');
+
+      await service.loadData();
+
+      expect(urls().some(u => u.includes('type'))).toBeFalse();
+    });
+
+    it('re-runs the search when only the type changed', async () => {
+      service.searchQuery.set('mine');
+      await service.loadData();
+      sharedFetchSpy.calls.reset();
+
+      // Same query, same corpus in memory: the cache guard holds.
+      await service.loadData();
+      expect(sharedFetchSpy).not.toHaveBeenCalled();
+
+      service.selectedDocType.set('5cf00c03a266b7e1877504ca');
+      await service.loadData();
+
+      expect(docUrl()).toContain('and%5Btype%5D=5cf00c03a266b7e1877504ca');
+    });
+
+    it('loads the options from the doctype list, one per label', async () => {
+      // The lookup carries a row per legislation, so the same type appears twice with an id each.
+      sharedFetchSpy.and.callFake((input: any) => Promise.resolve(
+        String(input).includes('dataset=List')
+          ? okResponse([{
+            searchResults: [
+              { _id: 'id2018', name: 'Certificate Package', legislation: 2018 },
+              { _id: 'idletter', name: 'Amendment Package', legislation: 2002 },
+              { _id: 'id2002', name: 'Certificate Package', legislation: 2002 },
+              { _id: 'idnameless', name: '', legislation: 2002 }
+            ],
+            count: 4
+          }])
+          : okResponse()));
+
+      await service.loadDocTypes();
+
+      expect(String(sharedFetchSpy.calls.mostRecent().args[0]))
+        .toContain('dataset=List&and%5Btype%5D=doctype');
+      expect(service.docTypeOptions()).toEqual([
+        { value: 'idletter', label: 'Amendment Package' },
+        { value: 'id2018,id2002', label: 'Certificate Package' }
+      ]);
+    });
+
+    /** The doctype lookup answers with `rows`; everything else gets the empty default. */
+    const docTypeAnswer = (rows: unknown[]) => (input: unknown) => Promise.resolve(
+      String(input).includes('dataset=List')
+        ? okResponse([{ searchResults: rows, count: rows.length }])
+        : okResponse());
+
+    it('reads the doctype lookup again after it answered with no types', async () => {
+      // A 200 carrying an empty List is a lookup that is not seeded yet, not an answer. Caching it
+      // hides the picker for the rest of the session however many screens the user opens.
+      sharedFetchSpy.and.callFake(docTypeAnswer([]));
+      await service.loadDocTypes();
+      expect(service.docTypeOptions()).toEqual([]);
+
+      sharedFetchSpy.and.callFake(docTypeAnswer([{ _id: 'id2018', name: 'Certificate Package' }]));
+      await service.loadDocTypes();
+
+      expect(service.docTypeOptions()).toEqual([{ value: 'id2018', label: 'Certificate Package' }]);
+    });
+
+    it('reads the doctype lookup once when it answered with types', async () => {
+      sharedFetchSpy.and.callFake(docTypeAnswer([{ _id: 'id2018', name: 'Certificate Package' }]));
+      await service.loadDocTypes();
+      sharedFetchSpy.calls.reset();
+
+      await service.loadDocTypes();
+
+      expect(urls().filter(u => u.includes('dataset=List')).length).toBe(0);
+      expect(service.docTypeOptions()).toEqual([{ value: 'id2018', label: 'Certificate Package' }]);
+    });
+
+    it('reuses the loaded project list when only the type changed', async () => {
+      // The project read carries no type, so re-issuing it on a type pick costs a 500-row request
+      // and a re-map for an answer already in memory.
+      sharedFetchSpy.and.callFake((input: any) => Promise.resolve(
+        String(input).includes('dataset=Project')
+          ? okResponse([{ searchResults: [{ _id: 'p1', id: 'p1', name: 'Site C' }], count: 1 }])
+          : okResponse()));
+      service.searchQuery.set('mine');
+      await service.loadData();
+      const loaded = service.projects();
+      sharedFetchSpy.calls.reset();
+
+      service.selectedDocType.set('id2018');
+      await service.loadData();
+
+      expect(urls().some(u => u.includes('dataset=Project'))).toBeFalse();
+      expect(docUrl()).toContain('and%5Btype%5D=id2018');
+      // The same array, not an equal one: a re-map would answer toEqual and fail this.
+      expect(service.projects()).toBe(loaded);
+    });
+
+    it('reads the projects again when the query changed', async () => {
+      service.searchQuery.set('mine');
+      service.selectedDocType.set('id2018');
+      await service.loadData();
+      sharedFetchSpy.calls.reset();
+
+      service.searchQuery.set('caribou');
+      await service.loadData();
+
+      expect(urls().find(u => u.includes('dataset=Project'))).toContain('keywords=caribou');
+    });
+
+    it('refetches after a failed search when the type is put back', async () => {
+      // The failed attempt must not leave the successful one before it as the cache key. It did:
+      // reverting the type hit the guard, which had already cleared the banner, leaving an empty
+      // list and no way to retry.
+      service.searchQuery.set('mine');
+      await service.loadData();
+
+      service.selectedDocType.set('id2018');
+      sharedFetchSpy.and.rejectWith(new Error('network down'));
+      await service.loadData();
+      expect(service.loadError()).toBeTruthy();
+
+      sharedFetchSpy.and.callFake(() => Promise.resolve(okResponse()));
+      sharedFetchSpy.calls.reset();
+      service.setDocType('');
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(docUrl()).toBeDefined();
+      expect(docUrl()).not.toContain('and%5Btype%5D');
+      expect(service.loadError()).toBeNull();
+    });
+
+    it('goes when the filters do, so a screen with no picker is not left narrowed', async () => {
+      // clearFilters runs on every route change. The map and the Projects scope render no picker,
+      // so a type surviving one would narrow their document counts invisibly.
+      service.searchQuery.set('mine');
+      service.selectedDocType.set('id2018');
+      await service.loadData();
+
+      service.clearFilters();
+
+      expect(service.selectedDocType()).toBe('');
+    });
+
+    it('fires no request of its own when the filters go', async () => {
+      // The route change clears the filters BEFORE it sets the new `?q=`, so a load from here reads
+      // the old query — for a screen that shows neither documents nor passages. Worse, when the two
+      // queries match, that read is not superseded and its answer lands on the new screen.
+      service.searchQuery.set('mine');
+      service.selectedDocType.set('id2018');
+      await service.loadData();
+      sharedFetchSpy.calls.reset();
+
+      service.clearFilters();
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(sharedFetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('leaves the next load a cache miss, so the screen that arrives reads unfiltered', async () => {
+      // Clearing without loading is only safe if the load the route does next still goes to the
+      // API. Same query as before on purpose: the type is the only cache key that changed.
+      service.searchQuery.set('mine');
+      service.selectedDocType.set('id2018');
+      await service.loadData();
+      sharedFetchSpy.calls.reset();
+
+      service.clearFilters();
+      await service.loadData();
+
+      expect(docUrl()).toBeDefined();
+      expect(docUrl()).not.toContain('and%5Btype%5D');
+    });
+
+    it('forgets the pick and the options at logout', async () => {
+      // The lookup is an authenticated read, so its answer belongs to the session that made it.
+      sharedFetchSpy.and.callFake((input: any) => Promise.resolve(
+        String(input).includes('dataset=List')
+          ? okResponse([{ searchResults: [{ _id: 'id2018', name: 'Certificate Package' }], count: 1 }])
+          : okResponse()));
+      await service.loadDocTypes();
+      service.selectedDocType.set('id2018');
+      expect(service.docTypeOptions().length).toBe(1);
+
+      service.clearAuthState();
+
+      expect(service.selectedDocType()).toBe('');
+      expect(service.docTypeOptions()).toEqual([]);
+
+      // The in-flight promise went too, so the next session reads the lookup itself.
+      sharedFetchSpy.calls.reset();
+      await service.loadDocTypes();
+      expect(urls().some(u => u.includes('dataset=List'))).toBeTrue();
+    });
+
+    // A lookup that is still in flight at logout. `release` hands it the answer AFTER the session
+    // has ended — the case the abort cannot cover, because a fetch already past the network
+    // resolves whatever the controller says.
+    const inFlightDocTypes = () => {
+      let release: (res: Response) => void = () => undefined;
+      let signal: AbortSignal | undefined;
+      sharedFetchSpy.and.callFake((input: any, init?: RequestInit) => {
+        if (!String(input).includes('dataset=List')) return Promise.resolve(okResponse());
+        signal = init?.signal ?? undefined;
+        return new Promise<Response>(resolve => { release = resolve; });
+      });
+      const lookup = service.loadDocTypes();
+      return {
+        lookup,
+        get signal() { return signal; },
+        answer: () => release(okResponse([{
+          searchResults: [{ _id: 'id2018', name: 'Certificate Package' }],
+          count: 1
+        }]))
+      };
+    };
+
+    it('cancels the doctype lookup in flight at logout', async () => {
+      const pending = inFlightDocTypes();
+
+      service.clearAuthState();
+
+      expect(pending.signal).toBeDefined();
+      expect(pending.signal!.aborted).toBeTrue();
+
+      pending.answer();
+      await pending.lookup;
+    });
+
+    it('throws away a doctype answer that lands after the logout', async () => {
+      const pending = inFlightDocTypes();
+
+      service.clearAuthState();
+      pending.answer();
+      await pending.lookup;
+
+      // The types were read under a session that no longer exists. Filling the picker now puts the
+      // last user's list in front of whoever is at the screen.
+      expect(service.docTypeOptions()).toEqual([]);
+    });
+
+    it('still fills the picker for the session that comes after the logout', async () => {
+      // The guard retires ONE session, not the service: the next login must get its own options.
+      service.clearAuthState();
+      sharedFetchSpy.and.callFake((input: any) => Promise.resolve(
+        String(input).includes('dataset=List')
+          ? okResponse([{ searchResults: [{ _id: 'id2018', name: 'Certificate Package' }], count: 1 }])
+          : okResponse()));
+
+      await service.loadDocTypes();
+
+      expect(service.docTypeOptions()).toEqual([{ value: 'id2018', label: 'Certificate Package' }]);
+    });
+
+    // `meta[0]` on the chunk read, exactly as the API emits it: `dropped.filter` for a filter the
+    // live chunks index could not apply, with `degraded.reasons` naming why — see the controller
+    // tests 'an unfinished backfill marks the page degraded, with a named reason' and the
+    // dropped-keys report. `degraded.unstampedChunks` is deliberately absent: the API is dropping
+    // that count and nothing here may depend on it.
+    const chunkAnswer = (meta?: Record<string, unknown>) => okResponse([{
+      searchResults: [],
+      count: 0,
+      meta: [{ searchResultsTotal: 0, ...(meta || {}) }]
+    }]);
+
+    const answerWith = (meta?: Record<string, unknown>) => sharedFetchSpy.and.callFake((input: any) =>
+      Promise.resolve(String(input).includes('dataset=DocumentChunk')
+        ? chunkAnswer(meta)
+        : okResponse()));
+
+    const unstamped = { degraded: { reasons: ['chunk-parent-fields-unstamped'] } };
+    const typeDropped = { dropped: { filter: ['type'], sort: [] } };
+
+    const searchFor = async (query: string, docType: string) => {
+      service.searchQuery.set(query);
+      service.selectedDocType.set(docType);
+      await service.loadData();
+    };
+
+    it('calls the passage filter dropped when the answer says the type never reached the chunks', async () => {
+      // The words match more documents than the query can be scoped to. The passages below are
+      // EVERY type, and the picker says otherwise.
+      answerWith(typeDropped);
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.chunkFilterState()).toBe('dropped');
+    });
+
+    it('separates the unstamped cause from the plain dropped one', async () => {
+      // Same outcome — no type clause on the chunks query — but this one is the passage index
+      // still being filled in, which resolves itself. The two get different words on screen.
+      answerWith({ ...unstamped, ...typeDropped });
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.chunkFilterState()).toBe('dropped-unstamped');
+    });
+
+    it('reads the unknown cause as the unstamped one', async () => {
+      // The stamp count could not be read rather than measured short. Both clear on their own, so
+      // a reader gets the same words: the passage index is still being filled in.
+      answerWith({ degraded: { reasons: ['chunk-parent-fields-unknown'] }, ...typeDropped });
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.chunkFilterState()).toBe('dropped-unstamped');
+    });
+
+    it('separates a missing column from a scope that is still being stamped', async () => {
+      // The live chunks index has no type column at all, so there is nothing to wait for: an
+      // operator has to apply the index definition. Telling this reader to come back later is a
+      // promise the deployment will not keep.
+      answerWith({ degraded: { reasons: ['chunk-parent-fields-missing'] }, ...typeDropped });
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.chunkFilterState()).toBe('dropped-missing');
+    });
+
+    it('lets the missing column win when the answer names both causes', async () => {
+      // The API reports more than one reason at a time. A page that picked the unstamped words
+      // here would say the wait is nearly over while the column is not there to fill.
+      answerWith({
+        degraded: { reasons: ['chunk-parent-fields-unstamped', 'chunk-parent-fields-missing'] },
+        ...typeDropped
+      });
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.chunkFilterState()).toBe('dropped-missing');
+    });
+
+    it('leaves the filter applied when a parent-fields reason comes without a dropped type', async () => {
+      // The API does not emit this pair, and on its own the reason says nothing about the filter.
+      // Reporting an unfiltered passage list here would accuse an answer that is fine.
+      answerWith(unstamped);
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.chunkFilterState()).toBe('applied');
+    });
+
+    it('leaves the filter applied when the degraded reason is an unrelated one', async () => {
+      // Only `dropped.filter` speaks to this filter. Any other reason the API reports says
+      // nothing about it.
+      answerWith({ degraded: { reasons: ['some-other-reason'] } });
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.chunkFilterState()).toBe('applied');
+    });
+
+    it('leaves the filter applied when some other key was the dropped one', async () => {
+      // A dropped `milestone` says nothing about the type filter this screen picked.
+      answerWith({ dropped: { filter: ['milestone'], sort: [] } });
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.chunkFilterState()).toBe('applied');
+    });
+
+    it('calls the filter applied when the answer carries no mark at all', async () => {
+      answerWith();
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.chunkFilterState()).toBe('applied');
+    });
+
+    it('reports nothing at all when no type is picked, since there is no filter to judge', async () => {
+      answerWith({ ...unstamped, ...typeDropped });
+      service.searchQuery.set('caribou');
+
+      await service.loadData();
+
+      expect(service.chunkFilterState()).toBeNull();
+    });
+
+    // Each state carries its own callout in content-search.component.html. Folding one reason into
+    // another's state would put the wrong words on screen with every spec above still green, so
+    // the mapping and the whole set of answers are pinned here.
+    it('gives each documented reason its own state, and answers nothing outside the four', () => {
+      const stateFor = (reason: string) =>
+        chunkFilterStateFrom({ ...typeDropped, degraded: { reasons: [reason] } });
+
+      expect(stateFor('chunk-parent-fields-unstamped')).toBe('dropped-unstamped');
+      expect(stateFor('chunk-parent-fields-unknown')).toBe('dropped-unstamped');
+      expect(stateFor('chunk-parent-fields-missing')).toBe('dropped-missing');
+
+      const answers = new Set([
+        chunkFilterStateFrom({}),
+        chunkFilterStateFrom(typeDropped),
+        stateFor('chunk-parent-fields-unstamped'),
+        stateFor('chunk-parent-fields-unknown'),
+        stateFor('chunk-parent-fields-missing')
+      ]);
+
+      expect([...answers].sort()).toEqual(['applied', 'dropped', 'dropped-missing', 'dropped-unstamped']);
+    });
+
+    it('clears the mark on the next load that comes back whole', async () => {
+      answerWith(typeDropped);
+      await searchFor('caribou', 'id2018');
+      expect(service.chunkFilterState()).toBe('dropped');
+
+      // A finished backfill, or the index PUT that adds the parent fields, answers the same request
+      // with no mark. Left as it was, the page would keep apologising for an answer that is fine.
+      answerWith();
+      service.searchQuery.set('moose');
+      await service.loadData();
+
+      expect(service.chunkFilterState()).toBe('applied');
+    });
+
+  });
+
+  // A passage leg that fails used to answer the same `null` as a search with no query at all, so
+  // the page cleared the passages and said nothing — a 502 under a type filter read as "nothing
+  // matched" while the document column carried on filling.
+  describe('passage leg failure', () => {
+    beforeEach(() => forgetCorpus(service));
+
+    const urls = () => sharedFetchSpy.calls.all().map(call => String(call.args[0]));
+    const chunkUrl = () => urls().find(u => u.includes('dataset=DocumentChunk'));
+    const projectUrls = () => urls().filter(u => u.includes('dataset=Project'));
+    const chunkUrls = () => urls().filter(u => u.includes('dataset=DocumentChunk'));
+    const docUrls = () => urls().filter(u => u.includes('dataset=Document&'));
+
+    const docRows = () => okResponse([{
+      searchResults: [{ _id: 'd1', displayName: 'Assessment Report.pdf', projectId: 'p1' }],
+      count: 1
+    }]);
+
+    // The chunk leg alone fails; every other read answers, which is the case the old null hid.
+    const chunkFailsWith = (status: number) => sharedFetchSpy.and.callFake((input: any) => {
+      const url = String(input);
+      if (url.includes('dataset=DocumentChunk')) return Promise.resolve(new Response('bad gateway', { status }));
+      if (url.includes('dataset=Document&')) return Promise.resolve(docRows());
+      return Promise.resolve(okResponse());
+    });
+
+    const allOk = () => sharedFetchSpy.and.callFake((input: any) =>
+      Promise.resolve(String(input).includes('dataset=Document&') ? docRows() : okResponse()));
+
+    const searchFor = async (query: string, docType: string) => {
+      service.searchQuery.set(query);
+      service.selectedDocType.set(docType);
+      await service.loadData();
+    };
+
+    it('reports the passage failure with its status and keeps the documents', async () => {
+      chunkFailsWith(502);
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.chunkLoadError()).toContain('502');
+      // Scoped to the passages: the document column answered, so the page-wide banner would
+      // wrongly tell the user the rows next to it are unreliable too.
+      expect(service.loadError()).toBeNull();
+      expect(service.documents()?.length).toBe(1);
+      // No count and no filter mark: both describe passages nobody has.
+      expect(service.chunkMatchCount()).toBeNull();
+      expect(service.chunkFilterState()).toBeNull();
+    });
+
+    it('refetches after the failure instead of answering from the cache', async () => {
+      // The failed load must NOT commit its query and type as the cache key. Committing them made
+      // the Retry control and a re-pick of the same type guarded no-ops, with nothing left to try.
+      chunkFailsWith(502);
+      await searchFor('caribou', 'id2018');
+      sharedFetchSpy.calls.reset();
+
+      allOk();
+      await service.loadData();
+
+      expect(chunkUrl()).toBeTruthy();
+      expect(service.chunkLoadError()).toBeNull();
+    });
+
+    it('retries the passages without re-reading the project list', async () => {
+      // The project leg answered and does not depend on the type, so a passage failure must not
+      // cost the user the ~370 kB `dataset=Project&pageSize=500` read a second time.
+      chunkFailsWith(502);
+      await searchFor('caribou', 'id2018');
+      expect(projectUrls().length).toBe(1);
+      // Not a fixed number: fetchWithRetry issues its own attempts against the 502.
+      const chunkReadsBeforeRetry = chunkUrls().length;
+
+      allOk();
+      await service.loadData();
+
+      expect(service.chunkLoadError()).toBeNull();
+      expect(projectUrls().length).toBe(1);
+      // The retry did do its job: the passages were read again.
+      expect(chunkUrls().length).toBeGreaterThan(chunkReadsBeforeRetry);
+    });
+
+    it('still knows the documents were read under a type', async () => {
+      // The rows and the count on screen ARE narrowed by the type, and the picker still shows it.
+      // One key for the whole load discarded that fact along with the passages, so a screen that
+      // renders no picker kept the narrowed rows under a filter it could not show or undo.
+      chunkFailsWith(502);
+
+      await searchFor('caribou', 'id2018');
+
+      expect(service.hasLoadedDocType()).toBeTrue();
+    });
+
+    it('retries the passages without re-reading the documents', async () => {
+      // Same reasoning as the project leg above: the document read answered, and the type has not
+      // changed, so Retry must not spend a second 500-row read on it.
+      chunkFailsWith(502);
+      await searchFor('caribou', 'id2018');
+      expect(docUrls().length).toBe(1);
+
+      allOk();
+      await service.loadData();
+
+      expect(service.chunkLoadError()).toBeNull();
+      expect(docUrls().length).toBe(1);
+      expect(service.documents()?.length).toBe(1);
+    });
+
+    it('re-reads the documents when the type changes after the failure', async () => {
+      // The other half of the pair: the documents leg is reusable, not frozen. A new type is a new
+      // document read, or the rows stay narrowed by the type the picker no longer shows.
+      chunkFailsWith(502);
+      await searchFor('caribou', 'id2018');
+      sharedFetchSpy.calls.reset();
+
+      allOk();
+      await searchFor('caribou', 'id2002');
+
+      expect(docUrls().length).toBe(1);
+      expect(docUrls()[0]).toContain('and%5Btype%5D=id2002');
+    });
+
+    it('refetches the passages when a type is picked after the failure', async () => {
+      chunkFailsWith(502);
+      await searchFor('caribou', 'id2018');
+      sharedFetchSpy.calls.reset();
+
+      allOk();
+      service.setDocType('id2002');
+      await service.loadData();
+
+      expect(chunkUrl()).toContain('and%5Btype%5D=id2002');
+      expect(service.chunkLoadError()).toBeNull();
+    });
+
+    it('leaves the no-query branch as it was: no passage leg, no error', async () => {
+      // Nothing failed here — there is simply nothing to search inside. This must not raise a
+      // callout on a page the user has not typed into.
+      allOk();
+
+      await searchFor('', '');
+
+      expect(chunkUrl()).toBeUndefined();
+      expect(service.documentChunks()).toEqual([]);
+      expect(service.chunkLoadError()).toBeNull();
+    });
+  });
+
   describe('eaCertificate', () => {
-    beforeEach(() => { (service as unknown as { loadedQuery: string | null }).loadedQuery = null; });
+    beforeEach(() => forgetCorpus(service));
 
     const withProjects = (rows: unknown[]) => (url: string) =>
       url.includes('dataset=Project')
@@ -448,7 +1064,7 @@ describe('RegistryStateService', () => {
 
   describe('document project ids', () => {
     // The constructor's own load already cached the empty query; these specs exercise the fetch.
-    beforeEach(() => { (service as unknown as { loadedQuery: string | null }).loadedQuery = null; });
+    beforeEach(() => forgetCorpus(service));
 
     const byDataset = (url: string) => {
       if (url.includes('dataset=Project')) {

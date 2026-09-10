@@ -326,10 +326,13 @@ test('access gate coverage', async (t) => {
     const controller = fs.readFileSync(path.join(CONTROLLER_DIR, 'nosql', 'document.js'), 'utf8');
     const emissions = jsonEmissions(controller);
     // Exact, not a floor: a floor passes when a site is DELETED and replaced by a wider one.
-    // 34, down from 38: the presigned-download handler now returns `{ status, body }` from
-    // resolveDownload — POST /bulk-downloads answers a one-document request from the same helper —
-    // so its four sites left the scan. The payload is asserted directly below instead.
-    assert.strictEqual(emissions.length, 34,
+    // 38: it was 38, then 34 when the presigned-download handler moved to returning
+    // `{ status, body }` from resolveDownload — POST /bulk-downloads answers a one-document request
+    // from the same helper — so its four sites left the scan. The payload is asserted directly
+    // below instead. +1 for the PUT /documents/:id refusal of a non-string parent field, then +3
+    // for the 404 (row deleted under edit), 409 (staff PUT write-race exhausted) and 503 (eagle
+    // push write-race exhausted) sites.
+    assert.strictEqual(emissions.length, 38,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
     const ROW_SOURCES = /\b(saved|updated|existing|doc|items)\b(?!\s*\.)/;

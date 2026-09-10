@@ -31,7 +31,9 @@ const { app } = require('@azure/functions');
 
 // Exported for test/reconcile-timer.test.js and test/sync-teams-timer.test.js — the host is the
 // only other caller of either.
-module.exports = { reconcileEagle, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads };
+module.exports = {
+  reconcileEagle, syncTrackTeams, bulkDownloadWorker, cleanupBulkDownloads, restampChunksWorker
+};
 
 // Drain buffered audit events before the worker goes away.
 //
@@ -106,6 +108,18 @@ if (process.env.BULK_DOWNLOADS_QUEUE) {
   });
 }
 
+// Chunk parent-field re-stamping, one document per message. Same guard again. With no queue name
+// the document controller SKIPS the re-stamp — it does not fall back to the inline walk, which is
+// a local-development opt-in (`CHUNK_RESTAMP_INLINE`) — and flags the document
+// `parentFieldsPending` for `backfill-chunk-parent-fields.js --pending`.
+if (process.env.CHUNK_RESTAMP_QUEUE) {
+  app.storageQueue('restampChunksWorker', {
+    queueName: '%CHUNK_RESTAMP_QUEUE%',
+    connection: 'AzureWebJobsStorage',
+    handler: restampChunksWorker
+  });
+}
+
 // Deletes zips past their retention window. Off unless the schedule is set, same guard again.
 if (process.env.BULK_CLEANUP_SCHEDULE) {
   app.timer('cleanupBulkDownloads', {
@@ -119,6 +133,11 @@ if (process.env.BULK_CLEANUP_SCHEDULE) {
 // many deliveries a message gets, and a copy of the number drifts silently.
 const MAX_DEQUEUE_COUNT = require('../host.json').extensions.queues.maxDequeueCount;
 
+// Which delivery this is. Both workers log the string their poison alert matches only on the last
+// one — an earlier failure still has a retry, and paging for it would be noise.
+const deliveryAttempt = (context) =>
+  Number((context && context.triggerMetadata && context.triggerMetadata.dequeueCount) || 1);
+
 /**
  * Unlike the timers this RETHROWS: a failed zip has a retry, and after `maxDequeueCount` the
  * message belongs in the poison queue where the alert can see it. Swallowing here would report
@@ -128,12 +147,19 @@ async function bulkDownloadWorker(message, context) {
   // `messageEncoding: "none"` (host.json) means the body arrives as the bare job id. The binding
   // hands over a string, or a Buffer if the host ever passes the body through undecoded.
   const jobId = Buffer.isBuffer(message) ? message.toString('utf8') : String(message);
-  // Which delivery this is. The worker logs the string the poison alert matches only on the last
-  // one — an earlier failure still has a retry, and paging for it would be noise.
-  const attempt = Number(
-    (context && context.triggerMetadata && context.triggerMetadata.dequeueCount) || 1
-  );
-  await require('../src/jobs/bulk-download').run(jobId, { attempt, maxAttempts: MAX_DEQUEUE_COUNT });
+  await require('../src/jobs/bulk-download')
+    .run(jobId, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
+}
+
+/**
+ * Throws on the LAST attempt only: until then the job re-queues the ids itself, because
+ * host.json's hour-long `visibilityTimeout` is the zip worker's and would hide this message for an
+ * hour per retry (src/jobs/restamp-chunks.js). The body carries ids only, so either path re-reads
+ * the document and stamps whatever it says now.
+ */
+async function restampChunksWorker(message, context) {
+  await require('../src/jobs/restamp-chunks')
+    .run(message, { attempt: deliveryAttempt(context), maxAttempts: MAX_DEQUEUE_COUNT });
 }
 
 /** Swallows the failure for the reason the reconcile does: the next run is the retry. */

@@ -1,12 +1,13 @@
 import { Component, OnInit, inject, signal, computed, effect, untracked, ChangeDetectionStrategy } from '@angular/core';
 import { RegistryStateService } from '../../services/registry-state.service';
+import { DocTypeSelectComponent } from '../doc-type-select/doc-type-select.component';
 import { Document } from '../../models/registry.models';
 import { readPrefs } from '../../shell/prefs';
 
 @Component({
   selector: 'app-index-search',
   standalone: true,
-  imports: [],
+  imports: [DocTypeSelectComponent],
   templateUrl: './index-search.component.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
@@ -82,6 +83,7 @@ export class IndexSearchComponent implements OnInit {
 
   ngOnInit() {
     this.service.activePage.set('search');
+    this.service.loadDocTypes();
   }
 
   onSearchInput(event: Event) {
@@ -104,6 +106,16 @@ export class IndexSearchComponent implements OnInit {
   applySuggestion(label: string) {
     this.service.searchQuery.set(label);
     this.service.loadData();
+  }
+
+  /**
+   * The type picker renders on the Documents tab only, so leaving that tab drops the type: the
+   * summary line counts documents on both tabs, and a filter with no control on screen narrows
+   * that count with nothing to say so.
+   */
+  setScope(id: 'projects' | 'documents') {
+    this.scope.set(id);
+    if (id !== 'documents') this.service.setDocType('');
   }
 
   onSortChange(event: Event) {

@@ -94,7 +94,7 @@ function driftOf(summary) {
 }
 
 /**
- * The line a log alert matches. `drift=0` is clean.
+ * The line a log alert matches. `drift=0 parentFieldsPending=0` is clean.
  *
  * A container the run did not sweep says `skipped` rather than zero — `comments` is behind
  * `--comments` and a zero there would read as "no drift" for a sweep that never happened.
@@ -113,6 +113,7 @@ function summaryLine(summary) {
     `unresolvedParent=${d.unresolvedParent.length} ` +
     counts('commentPeriods') + counts('lists') + counts('notifications') + counts('updates') +
     counts('comments') +
+    `parentFieldsPending=${summary.parentFieldsPending} ` +
     `drift=${summary.drift}`;
 }
 
@@ -314,6 +315,12 @@ async function reconcile(argv = [], deps = {}) {
   }
 
   summary.drift = driftOf(summary);
+  // Not push drift, so not folded into `drift`: these are documents whose CHUNKS never got their
+  // parent fields re-stamped (`controllers/nosql/document.js`, markParentFieldsPending). Reported
+  // on the same line because this run is the only thing that looks at the corpus nightly, and the
+  // repair is `backfill-chunk-parent-fields.js --live --pending`, which clears the flag on every
+  // document it verifies — as does `--live --project <id>`, the poison-queue repair.
+  summary.parentFieldsPending = await documentsRepo.countParentFieldsPending(access);
 
   return summary;
 }

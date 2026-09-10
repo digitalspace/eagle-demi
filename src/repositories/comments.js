@@ -34,8 +34,9 @@ async function getById(access, id, periodId) {
     partitionField: SCOPE_FIELD,
     criteria: [eq('id', String(id), '@id')]
   });
-  const { items } = await cosmos.query(CONTAINER, spec, { maxItemCount: 1 });
-  return items[0] || null;
+  // Pages are drained, not sampled: one page of a cross-partition lookup can come back empty while
+  // the row exists, and the caller reads that as "no such comment".
+  return await cosmos.queryFirst(CONTAINER, spec, {});
 }
 
 function criteriaFor(periodId) {

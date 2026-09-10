@@ -17,19 +17,24 @@
   <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--layout-margin-small); margin-top: var(--layout-margin-medium);">
     <div style="display: flex; border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); overflow: hidden;">
       @for (tab of scopeTabs; track tab.id) {
-        <button type="button" (click)="scope.set(tab.id)" [attr.aria-pressed]="scope() === tab.id"
+        <button type="button" (click)="setScope(tab.id)" [attr.aria-pressed]="scope() === tab.id"
                 [style.background]="scope() === tab.id ? 'var(--surface-color-primary-default)' : 'var(--surface-color-background-white)'"
                 [style.color]="scope() === tab.id ? 'var(--surface-color-background-white)' : 'var(--typography-color-primary)'"
                 style="border: none; padding: 0.4rem 0.9rem; font: var(--typography-bold-small-body); cursor: pointer;">{{ tab.label }}</button>
       }
     </div>
-    <label style="display: flex; align-items: center; gap: 0.35rem; font: var(--typography-regular-label); color: var(--typography-color-secondary); white-space: nowrap;">
-      Sort
-      <span style="position: relative; display: inline-flex; align-items: center;"><select [value]="sortBy()" (change)="onSortChange($event)" aria-label="Sort results" style="border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body); color: var(--typography-color-primary); padding: 0.3rem 1.7rem 0.3rem 0.55rem; background: var(--surface-color-background-white); -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer;">
-        <option value="relevance">Relevance</option>
-        <option value="name">Name A–Z</option>
-      </select><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="position: absolute; right: 0.55rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--typography-color-secondary);"><polyline points="6,9 12,15 18,9"></polyline></svg></span>
-    </label>
+    <div style="display: flex; align-items: center; gap: var(--layout-margin-medium); flex-wrap: wrap;">
+      @if (scope() === 'documents' && service.docTypeOptions().length) {
+        <app-doc-type-select ariaLabel="Filter documents by type" />
+      }
+      <label style="display: flex; align-items: center; gap: 0.35rem; font: var(--typography-regular-label); color: var(--typography-color-secondary); white-space: nowrap;">
+        Sort
+        <span style="position: relative; display: inline-flex; align-items: center;"><select [value]="sortBy()" (change)="onSortChange($event)" aria-label="Sort results" style="border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body); color: var(--typography-color-primary); padding: 0.3rem 1.7rem 0.3rem 0.55rem; background: var(--surface-color-background-white); -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer;">
+          <option value="relevance">Relevance</option>
+          <option value="name">Name A–Z</option>
+        </select><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="position: absolute; right: 0.55rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--typography-color-secondary);"><polyline points="6,9 12,15 18,9"></polyline></svg></span>
+      </label>
+    </div>
   </div>
 
   <p class="panel__lede" style="margin-top: var(--layout-margin-small);" [attr.aria-busy]="service.projectsLoading() ? 'true' : null">

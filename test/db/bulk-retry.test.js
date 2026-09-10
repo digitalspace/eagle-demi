@@ -85,15 +85,22 @@ test('bulkVerified retries a THROWN bulk failure', async (t) => {
   });
 
   await t.test('failedIds names the rows still unwritten, for Upsert and Patch shapes alike', async () => {
+    // `resourceBody` is the Upsert shape every caller in this repo builds — documents
+    // `bulkUpsertForProject`, chunks `upsertBatch` and `replaceForDocument` all use it. An earlier
+    // version of this fixture used `resource`, which nothing emits, so `failedIds` came back as a
+    // row of `undefined` in production while this stayed green. The seed and the List-id backfill
+    // both filter their chunk re-stamp on these ids, so undefined there re-stamps the chunks of
+    // documents whose row never landed.
     const mixed = [
-      { operationType: 'Upsert', partitionKey: 'p', resource: { id: 'u1' } },
-      { operationType: 'Patch', partitionKey: 'p', id: 'p1', resourceBody: {} }
+      { operationType: 'Upsert', partitionKey: 'p', resourceBody: { id: 'u1' } },
+      { operationType: 'Patch', partitionKey: 'p', id: 'p1', resourceBody: {} },
+      { operationType: 'Upsert', partitionKey: 'p', resource: { id: 'u2' } }
     ];
     const res = await bulkVerified('documents', mixed, {
       maxAttempts: 1,
       bulkFn: async (pending) => pending.map(() => ({ statusCode: 429 }))
     });
-    assert.deepStrictEqual(res.failedIds, ['u1', 'p1']);
+    assert.deepStrictEqual(res.failedIds, ['u1', 'p1', 'u2']);
   });
 
   await t.test('per-operation failures still retry exactly as before', async () => {
@@ -111,6 +118,57 @@ test('bulkVerified retries a THROWN bulk failure', async (t) => {
     assert.strictEqual(res.succeeded, 3);
     assert.strictEqual(res.failed, 0);
     assert.strictEqual(res.statusCounts.thrown, undefined, 'nothing threw, so nothing to record');
+  });
+});
+
+/**
+ * A bulk response SHORTER than the request.
+ *
+ * The SDK builds its result array by sparse index assignment from what the service answered
+ * (@azure/cosmos 4.10.0, dist/commonjs/client/Item/Items.js:504-506) and never reconciles it
+ * against the operations sent, so a truncated or empty response is structurally possible — and with
+ * `continueOnError: false` it is what a rejected batch produces. Iterating the RESPONSE dropped the
+ * tail: those operations were never counted, never retried and never named in `failedIds`, so the
+ * caller was told the batch landed.
+ */
+test('bulkVerified treats an unanswered operation as failed, not as written', async (t) => {
+  await t.test('a truncated response retries the tail rather than losing it', async () => {
+    let calls = 0;
+    const res = await bulkVerified('chunks', ops(5), {
+      ...fast,
+      bulkFn: async (pending) => {
+        calls++;
+        // Two of five answered on the first attempt; the rest simply are not there.
+        return calls === 1 ? ok(pending).slice(0, 2) : ok(pending);
+      }
+    });
+
+    assert.strictEqual(calls, 2, 'the unanswered tail must come back for another attempt');
+    assert.strictEqual(res.succeeded, 5);
+    assert.strictEqual(res.failed, 0);
+    assert.strictEqual(res.statusCounts.unanswered, 3, 'and the silence must still be visible');
+  });
+
+  await t.test('an empty response never reads as a clean batch', async () => {
+    const res = await bulkVerified('chunks', ops(3), {
+      maxAttempts: 1,
+      bulkFn: async () => []
+    });
+
+    assert.strictEqual(res.succeeded, 0);
+    assert.strictEqual(res.failed, 3);
+    assert.deepStrictEqual(res.failedIds, ['c0', 'c1', 'c2'],
+      'a caller acting on the subset that landed must be told nothing did');
+  });
+
+  await t.test('an unanswered operation is named in failedIds when the attempts run out', async () => {
+    const res = await bulkVerified('chunks', ops(4), {
+      maxAttempts: 1,
+      bulkFn: async (pending) => ok(pending).slice(0, 1)
+    });
+
+    assert.strictEqual(res.succeeded, 1);
+    assert.deepStrictEqual(res.failedIds, ['c1', 'c2', 'c3']);
   });
 });
 

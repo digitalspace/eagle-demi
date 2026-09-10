@@ -1,5 +1,6 @@
 import { Component, OnInit, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
 import { RegistryStateService } from '../../services/registry-state.service';
+import { DocTypeSelectComponent } from '../doc-type-select/doc-type-select.component';
 import { DocumentChunk } from '../../models/registry.models';
 
 /**
@@ -9,7 +10,7 @@ import { DocumentChunk } from '../../models/registry.models';
 @Component({
   selector: 'app-content-search',
   standalone: true,
-  imports: [],
+  imports: [DocTypeSelectComponent],
   templateUrl: './content-search.component.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrls: []
@@ -27,8 +28,12 @@ export class ContentSearchComponent implements OnInit {
     this.service.resultCountLabel(this.service.documentChunks()?.length, this.service.chunkMatchCount())
   );
 
+  // A failed passage leg also empties the list, and "No passages matched" would blame the query
+  // for a server error the callout above is already reporting.
   noResults = computed(() =>
-    !!this.service.debouncedSearchQuery().trim() && this.service.documentChunks()?.length === 0
+    !!this.service.debouncedSearchQuery().trim() &&
+    this.service.documentChunks()?.length === 0 &&
+    !this.service.chunkLoadError()
   );
 
   /** Sectors present in the loaded corpus — a query with no hits gets offered real ones. */
@@ -39,6 +44,7 @@ export class ContentSearchComponent implements OnInit {
   ngOnInit() {
     this.service.activePage.set('search');
     this.service.loadDbStats();
+    this.service.loadDocTypes();
   }
 
   onSearchInput(event: Event) {

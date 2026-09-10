@@ -66,6 +66,11 @@ param deployBulkDownloadPoisonAlert = true
 // so extra read buffers only fill and wait. Stays at 1 until the upload path is parallel.
 param bulkFetchConcurrency = 1
 
+// ── Chunk parent-field re-stamping ────────────────────────────────────────────────────────────
+// On here. This is the environment eagle-api pushes into, and it is where the inline walk timed
+// the 10-second push out on large documents and earned a duplicate push.
+param chunkRestampQueue = 'chunk-restamp'
+
 // ── TWO VALUES A HUMAN FILLS IN, both commented out because a wrong value is worse than none ──
 //
 // The browser origins allowed to call the API.

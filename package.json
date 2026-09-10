@@ -12,6 +12,7 @@
     "db:copy-blobs": "NODE_PATH=node_modules node -r dotenv/config src/scripts/copy-blobs-to-azure.js",
     "db:purge-extraction": "NODE_PATH=node_modules node -r dotenv/config src/scripts/purge-extraction.js",
     "db:backfill-eac-number": "NODE_PATH=node_modules node -r dotenv/config src/scripts/backfill-eac-number.js",
+    "db:backfill-chunk-parent-fields": "NODE_PATH=node_modules node -r dotenv/config src/scripts/backfill-chunk-parent-fields.js",
     "rbac:sync-teams": "NODE_PATH=node_modules node -r dotenv/config src/scripts/sync-track-teams.js",
     "ai:project-summary": "NODE_PATH=node_modules node -r dotenv/config src/scripts/generate-project-summary.js",
     "deploy:azure:frontend": "bash scripts/deploy-azure.sh frontend",

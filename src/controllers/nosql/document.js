@@ -18,6 +18,7 @@ const documents = require('../../repositories/documents');
 const projects = require('../../repositories/projects');
 const chunks = require('../../repositories/chunks');
 const { chunkMarkdown, createChunkAccumulator } = require('../../chunker');
+const restampChunks = require('../../jobs/restamp-chunks');
 const {
   resolveAccess, systemAccess, pageSizeFor, readForLevel, levelOfRead
 } = require('../../helpers/access-sql');
@@ -30,6 +31,7 @@ const { auditEvent, analyticsEvent } = require('../../utils/audit');
 const { transformDocument, seedAcl } = require('../../seed/transform');
 const { naturalSortKey } = require('../../helpers/natural-sort');
 const { redactForAccess, redactAllForAccess, refusedWriteKeys } = require('../../vis/redact');
+const config = require('../../config');
 
 // Presigned links carry no auth of their own — anyone holding the URL can fetch the object
 // until it expires, so keep the window short.
@@ -38,6 +40,9 @@ const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
 // Marks a request that arrived through the deprecated `published` alias. A symbol, so no request
 // body can set it.
 const LEGACY_PUBLISH = Symbol('legacy publish alias');
+
+// One line per worker, not per push — see propagateParentFields.
+let warnedNoRestampTarget = false;
 
 /**
  * Resolve a new document's ACL: admits at level 1 (docs/rbac-architecture.md §1, "Default on
@@ -49,6 +54,222 @@ function resolveDocumentAcl(parentProject) {
 
   // `published` is READ OFF the capped read[] — read[] is authoritative, isPublished mirrors it.
   return { published: read.includes('public'), read };
+}
+
+/**
+ * The outbox stamp for a document write that moves a chunk parent field. Returns the row to write
+ * — flagged — or null when nothing moved and the caller should write the row as it stands.
+ *
+ * The flag rides the SAME upsert as the change, before anything tries to re-stamp. That is what
+ * makes a lost re-stamp countable: raising it only when the enqueue failed left the other loss
+ * invisible, because a message that was accepted and then exhausted its retries into the poison
+ * queue never came back to raise anything. Now every write that owes a re-stamp is on the
+ * reconcile line from the moment it lands, and a landed patch is the only thing that takes it off.
+ */
+function stampParentFieldsPending(existing, row) {
+  if (!existing || !chunks.parentFieldsChanged(existing, row)) return null;
+  // The repository mints the token, so a raise here is guaranteed later than the one already on
+  // the row. Two raises inside the same millisecond would otherwise share a value, and the first
+  // re-stamp's clear would take the second one's flag down with it.
+  return { ...row, ...documents.pendingRaiseOps(existing.parentFieldsPendingAt) };
+}
+
+/**
+ * How many times a write that may owe a re-stamp rebuilds and re-sends after losing its etag race.
+ *
+ * The same bound as the repository's own raise, for the same reason: each loss means another
+ * writer landed, so the answer is a rebuild off the row that actually stored. A fourth loss is
+ * contention this request cannot win, and the caller is told to retry rather than handed a row
+ * built from a revision that is already gone.
+ */
+const PARENT_STAMP_WRITE_TRIES = 3;
+
+/**
+ * Write a row built from `existing`, but only while `existing` is still the stored revision.
+ *
+ * An unguarded upsert REPLACES the item from a snapshot, and two things went missing that way. A
+ * `parentFieldsPending` clear that landed after the read was resurrected, so the reconcile keeps
+ * offering a document whose chunks are already current. And a parent field another writer moved
+ * meanwhile was reverted with NO flag raised, because `stampParentFieldsPending` compares against
+ * the stale snapshot and sees nothing move — the chunks then answer the reverted value forever.
+ * The etag turns both into a 412 this rebuilds from.
+ *
+ * @param {object|null} existing the row the first build read, `null` when there is none
+ * @param {() => Promise<object|null>} reread fetches the stored row again after a lost race
+ * @param {(current: object|null) => object|null} build the row to write, from whatever is stored
+ *   now. `null` means the request cannot be applied to that row.
+ * @returns {Promise<{status: string, saved?: object, owed?: boolean, existing?: object|null}>}
+ *   `saved` with the row that landed, whether it owes a re-stamp, and the revision it was built
+ *   from; `conflict` when every try lost; `missing` when `build` refused the stored row.
+ */
+async function upsertGuarded(existing, reread, build) {
+  let current = existing;
+
+  for (let attempt = 1; attempt <= PARENT_STAMP_WRITE_TRIES; attempt++) {
+    const row = build(current);
+    if (!row) return { status: 'missing' };
+    // Recomputed per try, never carried over: the token has to be minted off the value the STORED
+    // row carries, or this raise repeats one that is already on the row and the other writer's
+    // clear takes this flag down with it.
+    const owed = stampParentFieldsPending(current, row);
+
+    try {
+      const saved = await documents.upsert(owed || row,
+        { etag: current ? current._etag : undefined });
+      return { status: 'saved', saved, owed: Boolean(owed), existing: current };
+    } catch (err) {
+      if (err.code !== 412) throw err;
+      logger.warn('[Document Controller] document write lost its etag race, rebuilding', {
+        documentId: row.id, projectId: row.projectId, attempt
+      });
+      // Not on the last try: there is nothing left to rebuild for, and this is a point read.
+      if (attempt < PARENT_STAMP_WRITE_TRIES) current = await reread();
+    }
+  }
+
+  return { status: 'conflict' };
+}
+
+/**
+ * Re-stamp the parent's filter metadata onto its chunks after a document write moved it. Call it
+ * only when `stampParentFieldsPending` said the write moved one — the flag is already on the row.
+ *
+ * A chunk carries a COPY of its document's `projectId` and List refs, and nothing else refreshes
+ * it: a re-typed document keeps answering the old type filter, and a document MOVED to another
+ * project keeps answering the old project's scope. The offline writers (`scripts/seed-nosql.js`,
+ * `scripts/backfill-document-list-ids.js`) call the repository directly, having no request to hang
+ * this off.
+ *
+ * Off the request, because the walk is proportional to the document and the push timeout is not
+ * (src/jobs/restamp-chunks.js). With neither the queue nor `CHUNK_RESTAMP_INLINE` set it is
+ * SKIPPED rather than run inline: stale chunks are repairable, a blocked document push is not.
+ *
+ * Best-effort throughout — the document write is authoritative and has landed, and unlike the ACL
+ * patch beside it this is no visibility boundary: a stale copy makes a filter MISS.
+ */
+async function propagateParentFields(saved) {
+  if (!restampChunks.enabled()) {
+    // `func start` with no storage account, and the test suite, ask for the walk explicitly.
+    if (config.chunkRestampInline) return patchParentFieldsInline(saved);
+    // Once per worker: this fires on every write that moves a field. The row's own flag is per
+    // document and is what makes the skip countable.
+    if (!warnedNoRestampTarget) {
+      warnedNoRestampTarget = true;
+      logger.warn(
+        '[Document Controller] no CHUNK_RESTAMP_QUEUE and no CHUNK_RESTAMP_INLINE, chunk ' +
+        'parent fields left stale — repair with scripts/backfill-chunk-parent-fields.js --pending',
+        { documentId: saved.id }
+      );
+    }
+    return;
+  }
+
+  try {
+    await restampChunks.enqueue({ documentId: saved.id, projectId: saved.projectId });
+  } catch (err) {
+    // Only a log: the row went in flagged, so the reconcile and `--pending` already see this one.
+    logger.error('[Document Controller] chunk parent-field restamp could not be queued', {
+      documentId: saved.id, error: err.message
+    });
+  }
+}
+
+/** The pre-queue path, on the request, for a local run that opts in. Swallows, as it always did. */
+async function patchParentFieldsInline(saved) {
+  try {
+    // Guarded on the same token the queue handler uses, so the two walks cannot undo each other.
+    const result = await chunks.setParentFieldsForDocument(systemAccess(), saved.id, saved,
+      typeof saved.parentFieldsPendingAt === 'string'
+        ? { stampedAt: saved.parentFieldsPendingAt }
+        : {});
+    if (result.failed > 0) {
+      // The flag stays raised, same as a partly failed queue run.
+      logger.error('[Document Controller] chunk parent-field patch partially failed', {
+        documentId: saved.id, ...result
+      });
+      return;
+    }
+    // Landed, so clear it here for the same reason the handler does.
+    await restampChunks.clearPending(saved);
+  } catch (err) {
+    logger.error('[Document Controller] chunk parent-field patch failed', {
+      documentId: saved.id, error: err.message
+    });
+  }
+}
+
+/**
+ * Whether the parent fields moved while an ingest was running, and the re-stamp that owes for it.
+ *
+ * An ingest reads the document once, at the start, and stamps every chunk it writes from that
+ * snapshot — a 63 MB stream is minutes of batches. A re-type landing halfway through raises its own
+ * flag and sends its own re-stamp, but that walk only reaches the chunks that exist when it runs:
+ * the batches still to come are written from the snapshot, with the old values, and the walk then
+ * CLEARS the flag. The drift outlives the only thing that was watching for it.
+ *
+ * So the row is read again once the last batch has landed and compared against the snapshot the
+ * chunks were stamped from. A change raises the flag anew — a fresh token, later than the
+ * mid-stream write's, so the earlier walk's clear cannot take this one down — and sends a re-stamp
+ * that now walks the complete set.
+ *
+ * Best-effort, like `propagateParentFields`: the chunks are written and the document is marked
+ * extracted by the time this runs, so a failure here is a log line rather than a 500 that would
+ * have the extraction host re-ingest a document that landed. The drift stays repairable by
+ * `scripts/backfill-chunk-parent-fields.js --live`.
+ *
+ * Comparing the two ends is not enough on the streaming path, which re-reads the row every 25
+ * batches and stamps the batches after it from what that read returned. A value that moved and
+ * moved back matches the snapshot again by the time this runs, while the batches in between
+ * carry the middle value — so the stream latches "a value moved at some point" and passes it, and
+ * a latched ingest raises even though the two ends agree.
+ *
+ * @param {object} snapshot the document row the ingest stamped its FIRST batch from
+ * @param {{moved?: boolean}} [opts] `moved` is the stream's latch: the values it stamped from
+ *   changed at least once mid-ingest, whatever the row holds now
+ */
+async function reStampParentFieldDrift(snapshot, { moved = false } = {}) {
+  try {
+    const current = await documents.getById(systemAccess(), snapshot.id, snapshot.projectId);
+    if (!current || (!moved && !chunks.parentFieldsChanged(snapshot, current))) return null;
+
+    // Throws only when three raises in a row lost to another writer; the outer catch takes it,
+    // because the chunks have landed and a 500 here would have the host re-ingest a document that
+    // is already in. The row keeps whichever raised flag won, so the drift is still on the line.
+    const raised = await documents.setParentFieldsPending(current.id, current.projectId, true);
+    if (raised.status !== 'raised') return null;
+
+    logger.info('[Document Controller] parent fields moved during ingest, re-stamp owed', {
+      documentId: current.id, projectId: current.projectId, pendingAt: raised.pendingAt
+    });
+    const flagged = {
+      ...current,
+      parentFieldsPending: true,
+      parentFieldsPendingAt: raised.pendingAt
+    };
+    await propagateParentFields(flagged);
+    return flagged;
+  } catch (err) {
+    logger.error('[Document Controller] parent-field drift check after ingest failed', {
+      documentId: snapshot.id, error: err.message
+    });
+    return null;
+  }
+}
+
+/**
+ * The parent fields whose value is not a List id string or null.
+ *
+ * A TYPE CHECK, because the document row and its chunk copy are written by two different rules.
+ * `chunks.parentFieldsOf` String-coerces (the index column is `Edm.String`, and an ObjectId that
+ * reaches it unstringified indexes as null), while `updateDocument` stores the raw body value. Send
+ * `{"typeId": 12}` and the row holds the number 12 while every chunk holds "12" — so
+ * `parentFieldsChanged` sees no further movement, and a filter on the document row and the same
+ * filter on its passages disagree forever. Refused at the door instead: these are List ObjectId
+ * refs, so a string or `null` is the whole value space.
+ */
+function badParentFieldTypes(changes) {
+  return chunks.CHUNK_PARENT_FIELDS.filter(field => Object.hasOwn(changes, field) &&
+    changes[field] !== null && typeof changes[field] !== 'string');
 }
 
 exports.getDocuments = async (req, res) => {
@@ -330,31 +551,62 @@ exports.updateDocument = async (req, res) => {
       });
     }
 
-    const saved = await documents.upsert({
-      ...existing,
+    const badTypes = badParentFieldTypes(changes);
+    if (badTypes.length) {
+      return res.status(400).json({
+        error: `Fields must be a List id string or null: ${badTypes.join(', ')}`
+      });
+    }
+
+    // Built per try, not once: a lost etag race means the stored row moved, and merging the same
+    // changes onto the revision that landed is what keeps the other writer's values instead of
+    // reverting them. The write itself is refused unless the row is still what this built from.
+    const buildRow = (current) => current && ({
+      ...current,
       ...changes,
-      id: existing.id,
-      projectId: existing.projectId,
-      read: existing.read,
-      isPublished: existing.isPublished,
+      id: current.id,
+      projectId: current.projectId,
+      read: current.read,
+      isPublished: current.isPublished,
       // Recomputed from the MERGED name, so a rename moves the sort key with it and a row that
       // predates the key gains one on its next edit.
-      displayNameSort: naturalSortKey(changes.displayName ?? existing.displayName),
+      displayNameSort: naturalSortKey(changes.displayName ?? current.displayName),
       updatedAt: new Date().toISOString()
     });
+
+    // A staff edit can re-type a document too — the four List refs are catalogued at level 4, so
+    // they are writable here — and its chunks carry the old values until the re-stamp lands.
+    const written = await upsertGuarded(
+      existing,
+      () => documents.getById(access, req.params.id, req.query.project),
+      buildRow);
+    if (written.status === 'missing') {
+      // Deleted between the read and the write, so there is no row left to edit.
+      return res.status(404).json({ error: 'Document not found' });
+    }
+    if (written.status === 'conflict') {
+      return res.status(409).json({
+        error: 'The document changed while this edit was being applied. Re-read it and retry.'
+      });
+    }
+    // The revision the write actually landed against, which a retry makes a different row from the
+    // one read at the top.
+    const { saved, owed, existing: from } = written;
 
     // Field names only — see the same call in project.js for why the values do not go in.
     auditEvent(req, {
       action: 'document.update',
       targetType: 'document',
-      targetId: existing.id,
-      projectId: existing.projectId,
+      targetId: from.id,
+      projectId: from.projectId,
       detail: {
         fields: Object.keys(changes),
-        isPublishedFrom: existing.isPublished,
+        isPublishedFrom: from.isPublished,
         isPublishedTo: saved.isPublished
       }
     });
+
+    if (owed) await propagateParentFields(saved);
 
     return res.json(redactForAccess('documents', saved, access));
   } catch (err) {
@@ -553,28 +805,51 @@ exports.upsertFromEagle = async (req, res) => {
     }
 
     const existing = await documents.getById(systemAccess(), eagleId);
-    const row = transformDocument(
-      doc, parent.id, listLookupFrom(doc, req.body.labels),
-      { existing, projectRead: parent.kind === 'notification' ? undefined : parent.read }
-    );
-    // The cascade restores a narrowed ACL from `ownRead` (documents.setAclForProject), so the
-    // push must carry the unconstrained Eagle ACL. A re-seed drops it deliberately; this does not.
-    row.ownRead = seedAcl(doc.read);
-    // Eagle no longer holds this record. It is a fact about the row, not an ACL: `read` below is
-    // what hides it, this is what says why, and it is what stops a cascade widening it again.
-    row.isDeleted = doc.isDeleted === true;
-    if (row.isDeleted) {
-      row.read = documents.constrainToProject(row.read, documents.DELETED_CEILING);
-      row.isPublished = row.read.includes('public');
+    // Built from whatever is STORED at the moment of the write: extraction state and the pending
+    // flag are carried off the row, so building once and replacing the item resurrected a clear
+    // that landed meanwhile and reverted a parent field another writer had just moved.
+    const buildRow = (current) => {
+      const row = transformDocument(
+        doc, parent.id, listLookupFrom(doc, req.body.labels),
+        { existing: current, projectRead: parent.kind === 'notification' ? undefined : parent.read }
+      );
+      // The cascade restores a narrowed ACL from `ownRead` (documents.setAclForProject), so the
+      // push must carry the unconstrained Eagle ACL. A re-seed drops it deliberately; this does not.
+      row.ownRead = seedAcl(doc.read);
+      // Eagle no longer holds this record. It is a fact about the row, not an ACL: `read` below is
+      // what hides it, this is what says why, and it is what stops a cascade widening it again.
+      row.isDeleted = doc.isDeleted === true;
+      if (row.isDeleted) {
+        row.read = documents.constrainToProject(row.read, documents.DELETED_CEILING);
+        row.isPublished = row.read.includes('public');
+      }
+      return row;
+    };
+
+    // `transformDocument` re-resolves all four List refs from the push, so this is the path that
+    // moves them in practice: a re-typed document in eagle-api arrives here and nowhere else.
+    const written = await upsertGuarded(
+      existing,
+      () => documents.getById(systemAccess(), eagleId),
+      buildRow);
+    if (written.status === 'conflict') {
+      // A 5xx rather than a 409, because that is the only answer eagle-api's push client sends
+      // again: it retries a 500-and-up and gives up on everything below (api/helpers/pushClient.js).
+      // Nothing is wrong with the push, it just kept losing to another writer.
+      logger.warn('[Document Controller] eagle document push lost its etag race, asking for a retry',
+        { eagleId, projectId: parent.id });
+      return res.status(503).json({
+        error: 'The document is being written by another request. Push it again.'
+      });
     }
-    const saved = await documents.upsert(row);
+    const { saved, owed, existing: from } = written;
 
     // A document that moved project lands in a NEW partition and Cosmos leaves the old row behind,
     // still listable under the old project's ACL. The index key is the same id, so the next
     // indexer pass replaces that entry — only the stale Cosmos row needs removing. Chunks are
     // partitioned by documentId and do not move.
-    if (existing && String(existing.projectId) !== saved.projectId) {
-      await documents.deleteById(existing.id, existing.projectId);
+    if (from && String(from.projectId) !== saved.projectId) {
+      await documents.deleteById(from.id, from.projectId);
     }
 
     auditEvent(req, {
@@ -584,7 +859,7 @@ exports.upsertFromEagle = async (req, res) => {
       projectId: saved.projectId,
       detail: {
         eagleId,
-        isPublishedFrom: existing ? existing.isPublished : null,
+        isPublishedFrom: from ? from.isPublished : null,
         isPublishedTo: saved.isPublished,
         // The action stays `document.push` — `document.delete` is the purge below, a different
         // thing — so the flag is what separates a delete push from an ordinary one.
@@ -600,11 +875,13 @@ exports.upsertFromEagle = async (req, res) => {
     // The LEVEL, not `isPublished`: a delete push narrows an idir document from 3 to 2 without
     // touching `isPublished`, and comparing the flags alone would leave that row idir-readable in
     // the index until something else moved it.
-    if (existing && levelOfRead(saved.read) !== levelOfRead(existing.read)) {
+    if (from && levelOfRead(saved.read) !== levelOfRead(from.read)) {
       await aiSearch.writeAcls(aiSearch.indexes().documents, [
         { id: saved.id, read: saved.read, isPublished: saved.isPublished }
       ]);
     }
+
+    if (owed) await propagateParentFields(saved);
 
     return res.json({
       id: saved.id, projectId: saved.projectId,
@@ -703,6 +980,31 @@ function sanitizeExtraction(raw) {
 const STREAM_BATCH_CHUNKS = 200;
 
 /**
+ * How many flushed batches a stream stamps from one read of the document row.
+ *
+ * Re-reading per batch would be one point read per 200 chunks — cheap each, but a 6k-chunk document
+ * pays 30 of them for a field that moves on almost no ingest. 25 batches is 5,000 chunks between
+ * reads, which bounds how much of a long stream can carry values an edit already replaced without
+ * putting a read on the hot path. It is a NARROWING, not the guarantee: the guarantee is the
+ * end-of-ingest check (`reStampParentFieldDrift`), which is what a re-stamp is owed from.
+ */
+const PARENT_FIELD_REFRESH_BATCHES = 25;
+
+/**
+ * How new the parent values a NEW chunk is born with are, so a walk running behind this ingest
+ * cannot overwrite them with the values it set out with.
+ *
+ * A chunk written without the token is older than every walk (`chunks.stampCondition`), which is
+ * exactly the row a stale re-stamp overwrites. The row's own pending token where there is one —
+ * the values came off that row, so a walk serving that token has nothing to add — and the instant
+ * the ingest started otherwise.
+ */
+function parentStampedAt(document, startedAt) {
+  const token = document && document.parentFieldsPendingAt;
+  return typeof token === 'string' ? token : startedAt;
+}
+
+/**
  * Ingest extracted text as an NDJSON stream: POST /documents/:id/chunks
  * with `Content-Type: application/x-ndjson`.
  *
@@ -732,9 +1034,17 @@ async function ingestChunksStreaming(req, res, doc) {
   const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : readForLevel(2);
   const acc = createChunkAccumulator();
   const keepIds = [];
+  const startedAt = new Date().toISOString();
   let provenance = null;
   let batch = [];
   let seenHeader = false;
+  // The values stamped onto the chunks, from the freshest read of the row this stream has done,
+  // carrying the token that says how new they are.
+  let parentFields = chunks.parentStampFieldsOf(doc, parentStampedAt(doc, startedAt));
+  // Whether those values ever changed mid-stream. A move and a move back leaves the batches
+  // between them wrong while both ends agree, so the end-of-ingest comparison cannot see it.
+  let parentFieldsMoved = false;
+  let flushed = 0;
 
   // Flushes INSIDE the loop, not after it. One markdown block can be megabytes — measured on this
   // corpus, a 30 MB document with only 5 blank lines splits into ~6 blocks of ~5 MB, and each one
@@ -749,7 +1059,9 @@ async function ingestChunksStreaming(req, res, doc) {
       batch.push({
         id,
         documentId: String(doc.id),
-        projectId: String(doc.projectId),
+        // The parent's filter columns, `projectId` among them, repeated on the chunk — see
+        // chunks.CHUNK_PARENT_FIELDS.
+        ...parentFields,
         pageNumber,
         chunkIndex,
         content,
@@ -775,7 +1087,27 @@ async function ingestChunksStreaming(req, res, doc) {
       return `chunk write incomplete: ${result.failed} of ${sending.length} failed ` +
         `(${JSON.stringify(result.statusCounts)})`;
     }
+    flushed++;
+    if (flushed % PARENT_FIELD_REFRESH_BATCHES === 0) await refreshParentFields();
     return null;
+  };
+
+  // Swallows: the stamp it refreshes is a best-effort narrowing, and a read that failed must not
+  // fail an ingest whose chunks are landing. The batches keep the values they have, and the
+  // end-of-ingest check still sees the drift.
+  const refreshParentFields = async () => {
+    try {
+      const current = await documents.getById(systemAccess(), doc.id, doc.projectId);
+      if (!current) return;
+      // Against what this stream has been STAMPING, not against the snapshot: that is what makes
+      // a move and a move back two latched changes rather than none.
+      if (chunks.parentFieldsChanged(parentFields, current)) parentFieldsMoved = true;
+      parentFields = chunks.parentStampFieldsOf(current, parentStampedAt(current, startedAt));
+    } catch (err) {
+      logger.warn('[Document Controller] parent fields could not be refreshed mid-ingest', {
+        documentId: doc.id, error: err.message
+      });
+    }
   };
 
   const fail = async (status, message) => {
@@ -854,6 +1186,10 @@ async function ingestChunksStreaming(req, res, doc) {
     extractionMethod: 'docling',
     ...(provenance ? { extraction: provenance } : {})
   });
+
+  // Minutes of batches were stamped from `doc` and from the mid-stream refreshes; this is where
+  // anything that moved meanwhile is put back on the reconcile line.
+  await reStampParentFieldDrift(doc, { moved: parentFieldsMoved });
 
   // One row per document, never per chunk: a full corpus re-extraction is ~60k documents against
   // ~1.13M chunks, and the audit question is "who replaced this document's content", not "which
@@ -947,11 +1283,15 @@ exports.ingestChunks = async (req, res) => {
     }
 
     const read = Array.isArray(doc.read) && doc.read.length > 0 ? doc.read : readForLevel(2);
+    const startedAt = new Date().toISOString();
+    const parentFields = chunks.parentStampFieldsOf(doc, parentStampedAt(doc, startedAt));
 
     const items = chunkMarkdown(markdown).map(({ pageNumber, chunkIndex, content }) => ({
       id: chunks.chunkId(doc.id, pageNumber, chunkIndex),
       documentId: String(doc.id),
-      projectId: String(doc.projectId),
+      // The parent's filter columns, `projectId` among them, repeated on the chunk — see
+      // chunks.CHUNK_PARENT_FIELDS — with the stamp that says how new they are.
+      ...parentFields,
       pageNumber,
       chunkIndex,
       content,
@@ -990,6 +1330,10 @@ exports.ingestChunks = async (req, res) => {
       extractionMethod: 'docling',
       ...(provenance ? { extraction: provenance } : {})
     });
+
+    // The chunks above were stamped from `doc`, read at the top of the request. A 63 MB markdown
+    // takes long enough to chunk and write that a re-type can land in between.
+    await reStampParentFieldDrift(doc);
 
     auditEvent(req, {
       action: 'document.ingest',

@@ -19,6 +19,9 @@
 
 const { randomUUID } = require('crypto');
 const { logger } = require('../utils/logger');
+// The same renderer the ACL clause uses, so a scope and the ACL it rides beside cannot disagree
+// about how an id list is written.
+const { inClause, quote } = require('../helpers/access-odata');
 
 const API_VERSION = '2024-07-01';
 
@@ -118,33 +121,27 @@ const MAX_PAGE_ROWS = 500;
  * How many document ids a chunk query may be scoped to before the filter is treated as
  * inexpressible.
  *
- * DERIVED FROM `MAX_PAGE_ROWS`, NOT CHOSEN, because it cannot exceed what one request yields and a
- * second number here can silently stop agreeing with the first. It did: this was set to 20,000 on
- * the reasoning that `search.in` handles large lists and a POST body has room. True, and irrelevant
- * — `runSearch` clamps `top` to `MAX_PAGE_ROWS`, so the resolver could never return more than 500
- * ids no matter what this said. A filter matching 501 to 20,000 documents was then truncated to an
- * arbitrary 500-id prefix and reported to the caller as APPLIED: measured on the branch's own
- * figure, a `type` filter matching 2,911 documents scoped the chunk query to 500 of them, 17.2%
- * coverage, with `meta.dropped` absent. Exactly what the docblock below forbids.
- *
- * `SERVICE_MAX_TOP - 1`, not `MAX_PAGE_ROWS - 1`, so the whole thing is ONE service request.
- * `runSearch` fills anything over `SERVICE_MAX_TOP` with a second request, so a cap of 499 meant
- * asking for 500 rows across two calls and — on every filter measured on prod, since all of them
- * are over the cap — throwing all 500 away to conclude "too many". Two calls to learn a number the
- * first one already carried in `@odata.count`. At 249 the answer arrives in one call either way,
- * and nothing real is lost: no corpus-wide filter fits under 499 either, and the project-scoped
- * sets this actually serves are a handful of documents.
- *
- * WHAT THIS COSTS, stated plainly because it is the honest limit of the two-query design: measured
- * against prod, the narrowest document-type filter in the corpus matches 2,911 documents,
- * `projectPhase` 1,425, `milestone` 36,471. Every one of them is over this cap, so today the
- * resolver reports the filter as inexpressible rather than applying it. That is a real improvement
- * — a silently unfiltered answer becomes an explicitly unfiltered one the caller can see — but it
- * is NOT parity with prod. Reaching parity needs either paging this query (about six sequential
- * service calls for `type`, on a Basic 1-SU service, on every debounced keystroke) or denormalising
- * document metadata onto 1,128,733 chunk rows. Both are decisions, not follow-ups.
+ * Only the document-only keys a chunk carries no copy of are resolved this way — dates,
+ * `isFeatured`, `legislation`, `documentSource`. DERIVED, not chosen: `SERVICE_MAX_TOP - 1` keeps
+ * the whole resolution inside one service request, and a hand-picked number silently stops agreeing
+ * with what one request can return. Over the cap the key stays dropped rather than being applied to
+ * an arbitrary prefix. See wiki Search-Query-Construction#chunk-filters-answer-on-the-chunks-own-copy.
  */
 const DOCUMENT_SCOPE_CAP = SERVICE_MAX_TOP - 1;
+
+/**
+ * How long an answer about the LIVE index is trusted before it is asked again. Bounded rather than
+ * read at startup: the index is widened by an operator PUT no app release is involved in, so a
+ * process that cached "the field is not there" would drop the filter until somebody restarted it.
+ */
+const LIVE_SCHEMA_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * How long "the question could not be answered" is held instead — a 403 or a timeout is not a fact
+ * about the index and clears in seconds. Cached at all so a failing service gets one probe per
+ * burst of keystrokes rather than one per keystroke.
+ */
+const UNKNOWN_STATUS_TTL_MS = 30 * 1000;
 
 let tokenCache = null;
 let credential = null;
@@ -844,6 +841,328 @@ async function probeIndexSchema({ indexName, select, orderby } = {}) {
 }
 
 /**
+ * Whether the LIVE index can evaluate this `$filter` over `property`, asked by sending it.
+ *
+ * Only a 400 naming `property` is the answer "no" — every other failure throws, so the caller
+ * answers "unknown" rather than dropping a working filter over a blip. Asked with a `top: 0` search
+ * because reading the index definition needs Search Service Contributor, which this identity lacks.
+ */
+async function filterAnswerable(indexName, property, filter) {
+  try {
+    await request(`/indexes/${indexName}/docs/search?api-version=${API_VERSION}`,
+      { search: '*', top: 0, count: false, filter });
+    return true;
+  } catch (err) {
+    if (err.status === 400 && blamedPropertyFrom(err) === property) return false;
+    throw err;
+  }
+}
+
+/**
+ * The property a 400 blames, in the two spellings the service uses for one fact: `Could not find a
+ * property named 'typeId'` for a field the index lacks, `The field 'typeId' in the filter clause is
+ * not filterable` for one it carries unfilterable. Both mean "this filter cannot be sent".
+ */
+function blamedPropertyFrom(err) {
+  const named = missingPropertyFrom(err);
+  if (named) return named;
+  const match = /The field '([^']+)' in the filter clause is not filterable/
+    .exec((err && err.message) || '');
+  return match ? match[1] : null;
+}
+
+/** How many rows of an index match a filter, in one `$count`-only request. */
+async function countMatching(indexName, filter) {
+  const data = await request(`/indexes/${indexName}/docs/search?api-version=${API_VERSION}`,
+    { search: '*', top: 0, count: true, filter });
+  const count = data['@odata.count'];
+  return Number.isFinite(count) ? count : null;
+}
+
+/** Shared by the schema answer and the coverage probe, so one TTL governs both. */
+let chunkParentFieldCache = null;
+
+/**
+ * What the LIVE `chunks` index can do with the parent-field filters, cached for
+ * `LIVE_SCHEMA_TTL_MS`. Asked of the service, never of the packaged `chunks.json`: the index is
+ * applied by a separate operator step, so between an app release and the index PUT the two
+ * disagree and the clause is a 400. See wiki Search-Query-Construction#chunk-filters-answer-on-the-chunks-own-copy.
+ *
+ * `fields` and `version` are passed in so this module keeps knowing nothing about the repositories;
+ * `opts` is the `{now, ttlMs}` test seam.
+ *
+ * @returns {Promise<{known: boolean, available: string[], missing: string[], unknown: string[],
+ *   unstamped: ?number}>} per field, not all-or-nothing: filter only on `available`. `known: false`
+ *   marks a partial answer. `unstamped` is `null` for "cannot say", never 0.
+ */
+function chunkParentFieldStatus(fields, version, opts = {}) {
+  const now = opts.now || Date.now();
+  const ttlMs = opts.ttlMs === undefined ? LIVE_SCHEMA_TTL_MS : opts.ttlMs;
+  // The PROMISE is cached, not its value: Deep Search fires on a debounced keystroke, so a cold
+  // cache is hit by a burst and a cached value would send one probe per request in flight.
+  if (chunkParentFieldCache && now - chunkParentFieldCache.at < chunkParentFieldCache.ttl) {
+    return chunkParentFieldCache.promise;
+  }
+  const entry = { at: now, ttl: ttlMs, promise: null };
+  // An "unknown" is a hiccup, not a schema fact, and clears in seconds — held for the schema TTL
+  // it would make ten minutes of requests guess from one blip.
+  entry.promise = readChunkParentFieldStatus(fields, version)
+    .then((status) => {
+      if (!status.known) entry.ttl = Math.min(ttlMs, UNKNOWN_STATUS_TTL_MS);
+      return status;
+    })
+    // A REJECTION IS THE SAME UNKNOWN, and without this it is the worst one there is: a cached
+    // rejected promise rethrows to every caller that touches it for the full schema TTL, so one
+    // failed probe 502s the Deep Search tab for ten minutes. Resolved instead, on the short TTL,
+    // which is what makes it a withheld filter rather than a dead tab.
+    .catch((err) => {
+      logger.warn(`[ai-search] the live chunk parent-field probe could not run: ${err.message}`);
+      entry.ttl = Math.min(ttlMs, UNKNOWN_STATUS_TTL_MS);
+      // `fields` deliberately not spread: it is a plausible source of the throw being handled, and
+      // a recovery that rethrows is no recovery.
+      return {
+        known: false,
+        available: [],
+        missing: [],
+        unknown: Array.isArray(fields) ? [...fields] : [],
+        unstamped: null
+      };
+    });
+  chunkParentFieldCache = entry;
+  return entry.promise;
+}
+
+async function readChunkParentFieldStatus(fields, version) {
+  const { configured, index } = config();
+  if (!configured) {
+    warnUnconfigured();
+    return { known: false, available: [], missing: [], unknown: [...fields], unstamped: null };
+  }
+
+  // One probe per field, not one over all four: the service names ONE offending field per 400, so
+  // a combined probe reports the first and drops three filters the index answers perfectly well.
+  // Issued together — they are independent reads, and in series they sat in front of every
+  // filtered Deep Search.
+  const probes = await Promise.allSettled(
+    fields.map(field => filterAnswerable(index, field, `${field} eq 'probe'`)));
+
+  const available = [];
+  const missing = [];
+  const unknown = [];
+  probes.forEach((probe, i) => {
+    if (probe.status !== 'rejected') {
+      (probe.value ? available : missing).push(fields[i]);
+      return;
+    }
+    // Undecided, not absent: the reader filters on `available` only, so one field's hiccup costs
+    // one filter rather than all four.
+    logger.warn(`[ai-search] could not read the live ${fields[i]} filter schema: ` +
+      `${probe.reason.message}`);
+    unknown.push(fields[i]);
+  });
+
+  if (missing.length) {
+    logger.error(
+      `[ai-search] the ${index} index cannot filter on ${missing.join(', ')} — those filter ` +
+      'keys are being dropped and reported to the caller. Apply the index definition and run ' +
+      'the chunk parent-field backfill.',
+      { index, missing }
+    );
+  }
+
+  // A partial schema answer is not worth a count request: the mark it feeds is advisory, the
+  // dropped filters are not.
+  if (unknown.length) return { known: false, available, missing, unknown, unstamped: null };
+
+  try {
+    // Not asked when the index carries none of the fields: no facet filter can be emitted then, so
+    // the count could not change any answer.
+    const unstamped = available.length ? await staleChunkCount({ version }) : null;
+    return { known: true, available, missing, unknown: [], unstamped };
+  } catch (err) {
+    // Only the backfill mark went unanswered — expressibility is settled, so all four fields stay
+    // usable and `known: false` says the answer is partial.
+    logger.warn(`[ai-search] could not count unstamped chunks: ${err.message}`);
+    return { known: false, available, missing, unknown: [], unstamped: null };
+  }
+}
+
+/** The "never stamped, or stamped under an older list" predicate. One spelling, two readers. */
+function staleStampClause(version) {
+  return `parentFieldsVersion lt ${version} or parentFieldsVersion eq null`;
+}
+
+/**
+ * Clauses joined with `and`, each bracketed once there is more than one: `or` binds looser than
+ * `and`, so an unbracketed stamp clause beside an ACL would match rows the caller cannot see.
+ */
+function allOf(clauses) {
+  return clauses.length === 1 ? clauses[0] : clauses.map(clause => `(${clause})`).join(' and ');
+}
+
+/**
+ * How many chunks still carry an older parent-field stamp than the code writes — over the whole
+ * index, or under one caller's own predicate (`aclFilter`, `projectIds`) when it is passed.
+ *
+ * Read off the STAMP, never off the four values: a document with no List refs legitimately stamps
+ * four nulls, so a count of those never reaches zero and the mark it gates never clears. `null` is
+ * "cannot say", never 0 — an index carrying no stamp column cannot tell, and neither can a version
+ * that is not a number. See wiki Search-Query-Construction#deep-search-can-be-degraded-three-ways.
+ *
+ * @returns {Promise<?number>}
+ */
+async function staleChunkCount({ version, aclFilter = null, projectIds = [] } = {}) {
+  const { configured, index } = config();
+  if (!configured) {
+    warnUnconfigured();
+    return null;
+  }
+  if (!Number.isFinite(version)) {
+    logger.warn('[ai-search] no chunk parent-field version was supplied — the backfill probe ' +
+      'cannot say whether the stamp is current', { index });
+    return null;
+  }
+
+  const clauses = [staleStampClause(version)];
+  if (aclFilter) clauses.push(aclFilter);
+  if (projectIds.length) clauses.push(inClause('projectId', projectIds));
+  const filter = allOf(clauses);
+
+  try {
+    return await countMatching(index, filter);
+  } catch (err) {
+    if (err.status === 400 && blamedPropertyFrom(err) === 'parentFieldsVersion') {
+      logger.warn(`[ai-search] the ${index} index carries no parentFieldsVersion — whether ` +
+        'the chunk parent-field backfill has finished is unknown, not done.', { index });
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * The index rows a stamp has never reached, `{id, chunkId, documentId}` each.
+ *
+ * `id` is the index KEY, read back rather than re-derived — the indexer mints it with a .NET
+ * base64 variant (`deleteDocuments`) — and `chunkId` is the Cosmos row's own id. Both are needed
+ * because the caller has to tell a chunk that is merely unstamped from one whose Cosmos row is
+ * GONE: the indexer has no deletion detection, so a deleted chunk keeps its index row forever, no
+ * stamp can ever reach it, and the unstamped count it is part of never reaches zero.
+ *
+ * `projectId` matches on PRESENCE: `null` asks for the rows whose projectId is null, absent asks
+ * across every project.
+ *
+ * BOUNDED. `maxRows` caps the paging and `complete` says whether the answer is the whole set, so a
+ * caller acts on a truncated page knowing it is one.
+ *
+ * @returns {Promise<?{rows: Array, total: number, complete: boolean}>} `null` for "cannot say" —
+ *          search unconfigured, no version to compare, or an index with no stamp column.
+ */
+async function listStaleChunkIds({ version, projectId, maxRows = 2000 } = {}) {
+  const { configured, index } = config();
+  if (!configured) {
+    warnUnconfigured();
+    return null;
+  }
+  if (!Number.isFinite(version)) {
+    logger.warn('[ai-search] no chunk parent-field version was supplied — the unstamped rows ' +
+      'cannot be listed', { index });
+    return null;
+  }
+
+  const clauses = [staleStampClause(version)];
+  if (projectId !== undefined) {
+    clauses.push(projectId === null ? 'projectId eq null' : `projectId eq ${quote(projectId)}`);
+  }
+  const filter = allOf(clauses);
+
+  const rows = [];
+  let total = 0;
+  try {
+    while (rows.length < maxRows) {
+      const want = Math.min(MAX_PAGE_ROWS, maxRows - rows.length);
+      const { value, count } = await runSearch(index, {
+        matchAll: true,
+        filter,
+        select: 'id,chunkId,documentId',
+        top: want,
+        skip: rows.length
+      });
+      const page = value || [];
+      total = Number.isFinite(count) ? count : rows.length + page.length;
+      rows.push(...page);
+      // A SHORT page ends it, never the count: `@odata.count` is the index-wide total, and the
+      // rows run out first whenever `$skip` reaches its own ceiling.
+      if (page.length < want) break;
+    }
+  } catch (err) {
+    if (err.status === 400 && blamedPropertyFrom(err) === 'parentFieldsVersion') {
+      logger.warn(`[ai-search] the ${index} index carries no parentFieldsVersion — which of its ` +
+        'rows are unstamped is unknown, not none.', { index });
+      return null;
+    }
+    throw err;
+  }
+
+  return { rows, total, complete: rows.length >= total };
+}
+
+/**
+ * The ids of the documents matching a filter, for scoping a CHUNK query to them.
+ *
+ * ONLY the document-only keys reach this now — `datePostedStart`/`datePostedEnd`, `isFeatured`,
+ * `legislation`, `documentSource`. The four facets that used to dominate it (`type`, `milestone`,
+ * `projectPhase`, `documentAuthorType`) are copied onto every chunk and filter directly, which is
+ * what removed the cap from the cases that mattered. Everything below is the residue: a chunk row
+ * carries no date and no legislation, so a filter on one can only be answered by resolving the
+ * documents first and scoping the chunks to them.
+ *
+ * BOUNDED, AND THE BOUND IS REPORTED. `search.in` takes a large list but not an unlimited one. So
+ * this returns the total as well as the ids, and a caller whose match set exceeds `cap` must treat
+ * the filter as INEXPRESSIBLE — answer with the key still named in `meta.dropped` — rather than
+ * scope to an arbitrary prefix of it. A truncated scope would silently answer "these are the chunks
+ * matching your filter" about a subset nobody chose, which is worse than saying it did not apply.
+ *
+ * `matchAll` with no keywords: the caller's terms belong to the CHUNK query, not this one. A
+ * document whose text mentions the term is found by the chunk search; this query exists only to
+ * answer "which documents carry this metadata".
+ *
+ * ONE SERVICE CALL, because `cap + 1` is exactly `SERVICE_MAX_TOP`. So a filtered chunk page costs
+ * two round trips, not three.
+ */
+async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
+  const { configured, documentsIndex } = config();
+  if (!configured) {
+    warnUnconfigured();
+    throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
+  }
+
+  // `cap + 1` is not an off-by-one: it is how the caller learns it was over the cap without a
+  // second round trip. `@odata.count` is authoritative, but asking for one more than we can use
+  // means a service that ever stopped returning a count still cannot look like a full match set.
+  const { value, count } = await runSearch(documentsIndex, {
+    matchAll: true,
+    filter,
+    select: 'id',
+    top: Math.min(cap + 1, MAX_PAGE_ROWS)
+  });
+
+  const rows = value || [];
+  // One comparison, not two: an `ids.length <= cap` clause beside this looks like it covers the
+  // no-count path, and does not — the fallback here already makes `total` the page length there,
+  // so the extra clause can never change the answer. A guard nothing can trip reads as protection
+  // that is not there.
+  const total = Number.isFinite(count) ? count : rows.length;
+  const withinCap = total <= cap;
+  // NO PREFIX. A partial scope answers "the chunks matching your filter" about a subset nobody
+  // chose, and the caller cannot tell it from a complete answer; the empty list forces the caller
+  // to report the filter as inexpressible instead. Read off the rows only once the cap is settled:
+  // over the cap the list is discarded, and every filter measured on prod is over the cap.
+  const ids = withinCap ? rows.map(row => String(row.id)).filter(Boolean) : [];
+  return { ids, total, withinCap };
+}
+
+/**
  * Turn one hit's highlight into safe display markup.
  *
  * Escape first, mark second — never the other way round. Falls back to an empty string rather
@@ -1115,7 +1434,7 @@ async function searchDocuments(opts = {}) {
       // string. The empty query that would 400 here cannot be reached — the projects leg
       // short-circuits on an empty tokenisation, so `projectIds` is empty and this never runs.
       const directQuery = buildQuery(tokenize(opts.keywords), opts.fuzzy === true, true);
-      const scope = `search.in(projectId, ${quoteList(projectIds)}, ',') and ` +
+      const scope = `${inClause('projectId', projectIds)} and ` +
         `not search.ismatch('${directQuery.replace(/'/g, "''")}', '${searchFields}', 'full', 'any')`;
       const byProject = await runSearch(documentsIndex, {
         matchAll: true,
@@ -1276,15 +1595,74 @@ async function writeAcls(index, rows) {
   return merged;
 }
 
+/**
+ * Remove chunk rows from the chunks index by key.
+ *
+ * The bulk twin of `deleteFromIndex`, for the rows no document owns any more: the indexer's `_ts`
+ * high-water mark cannot see a delete, so an orphaned chunk stays searchable until something says
+ * so explicitly. `deleteChunksForDocument` covers the case where the parent is known; this one
+ * takes keys a caller has already worked out.
+ *
+ * Keys are the index's own `id`, READ BACK from a search rather than re-derived — the indexer mints
+ * them with a .NET base64 variant, and re-implementing that here would delete nothing while
+ * reporting success.
+ *
+ * Batched at the service's own cap, like `writeAcls`, and best-effort the same way: a batch the
+ * service refused is reported back rather than thrown, so a purge can name what is still findable
+ * instead of failing whole. A 404 is not a failure here — the row is already gone, which is the
+ * result the caller asked for.
+ *
+ * @param {string[]} ids  index keys
+ * @returns {Promise<string[]>} the ids that are still indexed as far as this call can tell
+ */
+async function deleteDocuments(ids) {
+  const { configured, index } = config();
+  const keys = (Array.isArray(ids) ? ids : []).map(String).filter(Boolean);
+  if (keys.length === 0) return [];
+  if (!configured) {
+    warnUnconfigured();
+    // Nothing was removed, so nothing may be reported as removed.
+    return keys;
+  }
+
+  const failed = [];
+
+  for (let start = 0; start < keys.length; start += INDEX_BATCH_ROWS) {
+    const batch = keys.slice(start, start + INDEX_BATCH_ROWS);
+    try {
+      const result = await request(`/indexes/${index}/docs/index?api-version=${API_VERSION}`, {
+        value: batch.map(key => ({ '@search.action': 'delete', id: key }))
+      });
+
+      // A 207 is an `ok` response carrying per-row verdicts, so the status of the request says
+      // nothing about the rows.
+      const rejected = (result.value || [])
+        .filter(row => row && row.status === false && row.statusCode !== 404)
+        .map(row => String(row.key));
+      failed.push(...rejected);
+
+      if (rejected.length > 0) {
+        logger.error(
+          `[ai-search] could not delete ${rejected.length} of ${batch.length} rows from ${index}. ` +
+          'They stay searchable until this is retried.'
+        );
+      }
+    } catch (err) {
+      logger.error(
+        `[ai-search] delete of ${batch.length} rows from ${index} failed (${err.message}). ` +
+        'They stay searchable until this is retried.'
+      );
+      failed.push(...batch);
+    }
+  }
+
+  return failed;
+}
+
 /** The index names, so callers name them once and never hardcode a string. */
 function indexes() {
   const { index, projectsIndex, documentsIndex } = config();
   return { chunks: index, projects: projectsIndex, documents: documentsIndex };
-}
-
-/** OData list literal, with quotes doubled — the same escaping access-odata.js applies. */
-function quoteList(values) {
-  return `'${values.map(v => String(v).replace(/'/g, "''")).join(',')}'`;
 }
 
 /**
@@ -1371,65 +1749,6 @@ async function deleteChunksForDocument(documentId, opts = {}) {
 }
 
 
-/**
- * The ids of the documents matching a filter, for scoping a CHUNK query to them.
- *
- * The `chunks` index carries seven fields and none of them is document metadata, so a filter on
- * `type`, `milestone`, `datePosted` or the rest cannot be evaluated against a chunk at all. The
- * alternative to this function is denormalising that metadata onto 1,128,733 chunk rows and
- * re-stamping it on every document edit — the eagle-search machinery DEMI deliberately did not
- * port. Two queries instead: resolve the documents, then scope the chunks to them.
- *
- * BOUNDED, AND THE BOUND IS REPORTED. `search.in` takes a large list but not an unlimited one, and
- * a filter like `and[type]=Letter` matches over twelve thousand documents. So this returns the
- * total as well as the ids, and a caller whose match set exceeds `cap` must treat the filter as
- * INEXPRESSIBLE — answer with the key still named in `meta.dropped` — rather than scope to an
- * arbitrary prefix of it. A truncated scope would silently answer "these are the chunks matching
- * your filter" about a subset nobody chose, which is worse than saying the filter did not apply.
- *
- * `matchAll` with no keywords: the caller's terms belong to the CHUNK query, not this one. A
- * document whose text mentions the term is found by the chunk search; this query exists only to
- * answer "which documents carry this metadata".
- *
- * ONE SERVICE CALL, because `cap + 1` is exactly `SERVICE_MAX_TOP`. So a filtered chunk page costs
- * two round trips, not three. Raising the cap past this point buys nothing today and costs another
- * call per 250 ids — see the constant.
- */
-async function documentIdsMatching(filter, cap = DOCUMENT_SCOPE_CAP) {
-  const { configured, documentsIndex } = config();
-  if (!configured) {
-    warnUnconfigured();
-    throw new Error('[ai-search] SEARCH_ENDPOINT is not set — the search did not run');
-  }
-
-  // `cap + 1` is not an off-by-one: it is how the caller learns it was over the cap without a
-  // second round trip. `@odata.count` is authoritative, but asking for one more than we can use
-  // means a service that ever stopped returning a count still cannot look like a full match set.
-  const { value, count } = await runSearch(documentsIndex, {
-    matchAll: true,
-    filter,
-    select: 'id',
-    top: Math.min(cap + 1, MAX_PAGE_ROWS)
-  });
-
-  const ids = (value || []).map(row => String(row.id)).filter(Boolean);
-  // `cap` is `MAX_PAGE_ROWS - 1`, so asking for `cap + 1` is a request one page CAN answer — which
-  // is what makes the row count a sufficient signal on its own when `@odata.count` is missing. The
-  // earlier version set the cap above what one page returns, so a filter matching 501 to 20,000
-  // documents came back as an arbitrary 500-id prefix and was reported to the caller as applied.
-  //
-  // One comparison, not two: an `ids.length <= cap` clause beside this looks like it covers the
-  // no-count path, and does not — the fallback below already makes `total` the page length there,
-  // so the extra clause can never change the answer. A guard nothing can trip reads as protection
-  // that is not there.
-  const total = Number.isFinite(count) ? count : ids.length;
-  const withinCap = total <= cap;
-  // NO PREFIX. A partial scope answers "the chunks matching your filter" about a subset nobody
-  // chose, and the caller cannot tell it from a complete answer; the empty list forces the caller
-  // to report the filter as inexpressible instead.
-  return { ids: withinCap ? ids : [], total, withinCap };
-}
-
 module.exports = {
   DOCUMENT_SELECT,
   PROJECT_SELECT,
@@ -1446,9 +1765,19 @@ module.exports = {
   searchDocuments,
   documentIdsMatching,
   DOCUMENT_SCOPE_CAP,
-  quoteList,
+  chunkParentFieldStatus,
+  // The scoped twin of the count inside `chunkParentFieldStatus`: one place builds the stamp
+  // clause, so a controller cannot count a different population than the probe it gates on.
+  staleChunkCount,
+  // The row-level twin of that count, for the orphan purge in `backfill-chunk-parent-fields.js`:
+  // a row the stamp cannot reach is one whose Cosmos chunk is gone, and only the index keys read
+  // back here can delete it.
+  listStaleChunkIds,
+  LIVE_SCHEMA_TTL_MS,
+  UNKNOWN_STATUS_TTL_MS,
   deleteChunksForDocument,
   deleteFromIndex,
+  deleteDocuments,
   writeAcls,
   indexes,
   // The controller refuses a larger page rather than letting this layer clamp one, so the limit

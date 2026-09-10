@@ -13,6 +13,11 @@
       <button type="button" (click)="clearQuery()" aria-label="Clear search" style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; font: var(--typography-bold-small-body); color: var(--typography-color-secondary); padding: 0.2rem 0.4rem;">✕</button>
     }
   </div>
+  @if (service.docTypeOptions().length) {
+    <div style="display: flex; align-items: center; gap: var(--layout-margin-medium); flex-wrap: wrap; margin-top: var(--layout-margin-small);">
+      <app-doc-type-select ariaLabel="Filter passages by document type" />
+    </div>
+  }
   <p class="panel__lede" style="margin-top: var(--layout-margin-small);">Every word you type has to appear in the same passage, so keywords retrieve where a sentence will not.</p>
   <div style="display: flex; gap: var(--layout-margin-large); margin-top: var(--layout-margin-medium); flex-wrap: wrap;" [attr.aria-busy]="service.dbStats() ? null : 'true'">
     <div>
@@ -48,9 +53,35 @@
   </div>
 </section>
 
+@if (service.chunkFilterState() === 'dropped-missing') {
+  <div class="callout callout--warning" role="status">
+    <p>The passage index does not yet support filtering by document type, so the document type filter was not applied to the passages below. They come from documents of every type. The document results are still filtered.</p>
+  </div>
+}
+
+@if (service.chunkFilterState() === 'dropped-unstamped') {
+  <div class="callout callout--warning" role="status">
+    <p>The passage index for this scope is still being filled in, so the document type filter was not applied to the passages below. They come from documents of every type. The document results are still filtered.</p>
+  </div>
+}
+
+@if (service.chunkFilterState() === 'dropped') {
+  <div class="callout callout--warning" role="status">
+    <p>The document type filter was not applied to the passages below, so they come from documents of every type. The document results are still filtered.</p>
+  </div>
+}
+
 @if (service.loadError()) {
   <section class="panel panel--padded">
     <div class="callout callout--warning">{{ service.loadError() }}</div>
+  </section>
+}
+
+@if (service.chunkLoadError(); as chunkError) {
+  <section class="panel panel--padded">
+    <div class="callout callout--warning" role="alert">
+      <p>{{ chunkError }} <button type="button" (click)="service.loadData()">Retry</button></p>
+    </div>
   </section>
 }
 

@@ -55,6 +55,7 @@
 
 const documents = require('../repositories/documents');
 const projects = require('../repositories/projects');
+const chunks = require('../repositories/chunks');
 const cosmos = require('../db/cosmos-nosql');
 const sources = require('../seed/sources');
 const { resolveListLabel, listRefId } = require('../seed/transform');
@@ -135,13 +136,14 @@ function planPatch(doc, fields, now) {
 
 /**
  * @param {string[]} argv
- * @param {object} [opts]  test seam: {documents, sources, bulkVerified, now}
+ * @param {object} [opts]  test seam: {documents, sources, chunks, bulkVerified, now}
  */
 async function backfill(argv = [], opts = {}) {
   const args = parseArgs(argv);
   const documentsRepo = opts.documents || documents;
   const projectsRepo = opts.projects || projects;
   const src = opts.sources || sources;
+  const chunksRepo = opts.chunks || chunks;
   // documentsRepo, not the module: a caller who injects a repository seam and not a write seam
   // would otherwise read from the injected container and write to the real one.
   const write = opts.bulkVerified ||
@@ -161,6 +163,25 @@ async function backfill(argv = [], opts = {}) {
     planned: 0,
     patched: 0,
     failed: 0,
+    // The chunk half of the same fix — see `reStamp` below. Documents, then chunk OPERATIONS: one
+    // document is ~19 of them, so the two cannot share a counter and still be read.
+    documentsReStamped: 0,
+    reStampFailedDocuments: 0,
+    reStampFailedChunks: 0,
+    // Documents whose row write was rejected, so their chunks were deliberately left alone. A
+    // re-run patches the row and stamps the chunks together.
+    reStampSkipped: 0,
+    // The outbox half. `pendingRaised` counts the rows patched with the flag — in a dry run, the
+    // rows that would be. The other three are what became of those flags: cleared on a re-stamp
+    // that landed whole, `conflict` where a newer write owns the flag now, `missing` where the row
+    // was gone by the time the clear ran.
+    pendingRaised: 0,
+    pendingCleared: 0,
+    pendingConflicts: 0,
+    pendingMissed: 0,
+    // Documents left flagged because their re-stamp did not land, named as well as counted — a
+    // count cannot say which rows to repair. Capped, since a systematic fault flags every row.
+    pendingLeftRaised: [],
     statusCounts: {},
     requestCharge: 0
   };
@@ -182,10 +203,74 @@ async function backfill(argv = [], opts = {}) {
   // PASS B: page Cosmos and patch. Grouped by partition because a bulk request cannot span
   // partition keys, and flushed at `--batch` so one busy project does not accumulate unboundedly.
   const pending = new Map();
+  // THE CHUNK HALF OF THE SAME FIX, per partition and flushed with it. Every chunk carries a copy
+  // of its document's four List refs (`chunks.CHUNK_PARENT_FIELDS`) so a chunk search can filter on
+  // them without a join, and nothing else refreshes that copy. Writing the ids onto the document
+  // and stopping there fixes the Document tab and leaves Deep Search filtering on what the chunk
+  // was stamped with at ingest — which for these rows is four nulls, so the filter matches none of
+  // them under a 200.
+  //
+  // Only the documents whose parent fields actually MOVED, and only after their row write has
+  // landed: a re-stamp on the strength of a rejected write would put a value in the chunks that no
+  // document holds.
+  const pendingReStamp = new Map();
+  // partition -> the newest pending token minted for it, the instant its chunk patches are guarded
+  // on. Kept beside `pendingReStamp` and dropped with it.
+  const pendingStampedAt = new Map();
+  let reStampErrorsLogged = 0;
+  const reStamp = async (projectId, failedIds = []) => {
+    const docs = pendingReStamp.get(projectId) || [];
+    const stampedAt = pendingStampedAt.get(projectId);
+    pendingReStamp.delete(projectId);
+    pendingStampedAt.delete(projectId);
+    // `failedIds` are the ids Cosmos rejected, so the sentence above is enforced rather than
+    // merely intended. The loop itself is `chunks.reStampAfterWrite` — the seed and the chunk
+    // backfill re-stamp through the same one.
+    const result = await chunksRepo.reStampAfterWrite(access, docs, failedIds, {
+      // Newer-only: a chunk a later walk already stamped keeps what it has and comes back as
+      // `skippedNewer`, so a slow partition cannot put stale values back.
+      stampedAt,
+      // Fires once per DOCUMENT, so this cap counts documents rather than going quiet after the
+      // first document whose chunks all failed. console here, not the logger: this script is run
+      // by hand on the devbox and its output IS the report.
+      onError: (doc, err) => {
+        if (++reStampErrorsLogged <= chunks.MAX_LOGGED_RESTAMP_ERRORS) {
+          console.error(`[backfill] chunk re-stamp failed for ${doc.id}: ${err.message}`);
+        }
+      }
+    });
+    summary.documentsReStamped += result.stamped;
+    summary.reStampFailedDocuments += result.failedDocuments;
+    summary.reStampFailedChunks += result.failedChunks;
+    summary.reStampSkipped += result.skipped;
+
+    // THE CLEAR, and only for the documents whose chunks all landed. Guarded on the token this
+    // partition's patch minted rather than written unconditionally: an Eagle push or an API edit
+    // that landed while the re-stamp ran raised the flag for chunks this run never saw, and
+    // clearing that one would hide the drift from the reconcile for good. A mismatch comes back as
+    // `conflict` and the newer write's own re-stamp owns the flag from then on.
+    const stamped = new Map(docs.map(d => [String(d.id), d]));
+    for (const id of result.stampedDocumentIds) {
+      // The row's own projectId, never the bucket name: `setParentFieldsPending` partitions on it,
+      // and a JSON null has no partition to pin.
+      const doc = stamped.get(String(id));
+      const outcome = await documentsRepo.setParentFieldsPending(
+        doc.id, doc.projectId, false, { pendingAt: doc.parentFieldsPendingAt });
+      if (outcome.status === 'cleared') summary.pendingCleared++;
+      else if (outcome.status === 'conflict') summary.pendingConflicts++;
+      else summary.pendingMissed++;
+    }
+    // Left raised deliberately: their chunks hold a mix of old and new values, which is the state
+    // the repair exists for.
+    summary.pendingLeftRaised.push(...result.failedDocumentIds);
+  };
   const flush = async (projectId) => {
     const operations = pending.get(projectId) || [];
     pending.delete(projectId);
-    if (operations.length === 0) return;
+    if (operations.length === 0) {
+      await reStamp(projectId);
+      return;
+    }
     const result = await write(operations);
     summary.patched += result.succeeded || 0;
     summary.failed += result.failed || 0;
@@ -193,6 +278,7 @@ async function backfill(argv = [], opts = {}) {
     for (const [status, n] of Object.entries(result.statusCounts || {})) {
       summary.statusCounts[status] = (summary.statusCounts[status] || 0) + n;
     }
+    await reStamp(projectId, result.failedIds || []);
   };
 
   // ONE QUERY PER PARTITION, not one paged query over all of them. MEASURED 2026-08-22 against
@@ -229,9 +315,39 @@ async function backfill(argv = [], opts = {}) {
       const ops = planPatch(doc, fields, now);
       if (!ops) { summary.current++; continue; }
       summary.planned++;
+      const merged = { ...doc, ...fields };
+      const moved = chunksRepo.parentFieldsChanged(doc, merged);
+      // Counted before the write, so a dry run reports how many rows this run would put on the
+      // reconcile line without writing one of them.
+      if (moved) summary.pendingRaised++;
       if (!args.live) continue;
 
       const pk = String(doc.projectId);
+      if (moved) {
+        // THE OUTBOX STAMP, in the SAME patch as the ids that moved, exactly as the API write path
+        // does it (`controllers/nosql/document.js stampParentFieldsPending`): re-stamping
+        // best-effort and flagging nothing left a run killed between the two writes invisible to
+        // the reconcile, which reads the row and not this run's output. The token is minted past
+        // whatever the row held, so the clear can only take down THIS run's flag. Two operations
+        // onto a patch of at most six, well inside the ten Cosmos allows per item.
+        // No etag guard, which `pendingRaiseOps` asks of its callers: this is offline maintenance
+        // against a corpus nothing else writes, and the reconcile line raises again what it missed.
+        const raise = documentsRepo.pendingRaiseOps(doc.parentFieldsPendingAt);
+        ops.push(
+          { op: 'set', path: '/parentFieldsPending', value: raise.parentFieldsPending },
+          { op: 'set', path: '/parentFieldsPendingAt', value: raise.parentFieldsPendingAt }
+        );
+        merged.parentFieldsPendingAt = raise.parentFieldsPendingAt;
+        const restamps = pendingReStamp.get(pk) || [];
+        restamps.push(merged);
+        pendingReStamp.set(pk, restamps);
+        // The newest flag token this partition minted, which is what its chunk patches are guarded
+        // on: a chunk stamped with it is at least as current as every flag in the batch.
+        const newest = pendingStampedAt.get(pk);
+        if (!newest || merged.parentFieldsPendingAt > newest) {
+          pendingStampedAt.set(pk, merged.parentFieldsPendingAt);
+        }
+      }
       const group = pending.get(pk) || [];
       group.push({ operationType: 'Patch', partitionKey: pk, id: String(doc.id), resourceBody: { operations: ops } });
       pending.set(pk, group);
@@ -263,8 +379,37 @@ async function backfill(argv = [], opts = {}) {
   console.log(
     `[backfill] ${summary.planned} of ${summary.scanned} documents need ${BACKFILLED.join(', ')}; ` +
     `${summary.patched} patched, ${summary.failed} failed, ` +
+    `${summary.documentsReStamped} documents had their chunks re-stamped, ` +
     `${summary.requestCharge.toFixed(0)} RU${suffix}`
   );
+  if (summary.reStampFailedDocuments || summary.reStampFailedChunks) {
+    console.error(
+      `[backfill] ${summary.reStampFailedDocuments} documents were not fully re-stamped ` +
+      `(${summary.reStampFailedChunks} chunk operations rejected; a document whose patch threw ` +
+      'reports none) — those chunks still answer the old filter. Run ' +
+      'backfill-chunk-parent-fields.js --live to repair.'
+    );
+  }
+  if (summary.reStampSkipped) {
+    console.error(
+      `[backfill] ${summary.reStampSkipped} documents had their chunk re-stamp SKIPPED because ` +
+      'the row write was rejected. Re-run this script; the rows and their chunks land together.'
+    );
+  }
+  if (summary.pendingRaised) {
+    console.log(
+      `[backfill] ${summary.pendingRaised} documents were flagged parentFieldsPending; ` +
+      `${summary.pendingCleared} cleared after their chunks landed, ` +
+      `${summary.pendingConflicts} left to a newer write, ${summary.pendingMissed} row gone`
+    );
+  }
+  if (summary.pendingLeftRaised.length) {
+    console.error(
+      `[backfill] ${summary.pendingLeftRaised.length} documents are still flagged ` +
+      `parentFieldsPending (${summary.pendingLeftRaised.slice(0, 20).join(', ')}). They stay on ` +
+      'the reconcile line until backfill-chunk-parent-fields.js --pending --live takes them off.'
+    );
+  }
   if (summary.failed) {
     console.error(`[backfill] statuses: ${JSON.stringify(summary.statusCounts)}`);
   }

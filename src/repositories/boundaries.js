@@ -90,8 +90,9 @@ async function getById(access, id, type) {
     partitionField: SCOPE_FIELD,
     criteria: [eq('id', String(id), '@id')]
   });
-  const { items } = await cosmos.query(CONTAINER, spec, { maxItemCount: 1 });
-  return items[0] || null;
+  // Pages are drained, not sampled: one page of a cross-partition lookup can come back empty while
+  // the row exists, and the caller reads that as "no such boundary".
+  return await cosmos.queryFirst(CONTAINER, spec, {});
 }
 
 /**
@@ -111,11 +112,11 @@ async function getByName(access, name, type) {
 
   const spec = selectWhere({ access, partitionField: SCOPE_FIELD, criteria });
 
-  const options = { maxItemCount: 1 };
-  if (scoped) options.partitionKey = String(type);
+  // `queryFirst` fixes the page size at 1 itself and drains: unscoped this is cross-partition, and
+  // one page of that can come back empty while the boundary exists.
+  const options = scoped ? { partitionKey: String(type) } : {};
 
-  const { items } = await cosmos.query(CONTAINER, spec, options);
-  return items[0] || null;
+  return await cosmos.queryFirst(CONTAINER, spec, options);
 }
 
 /**

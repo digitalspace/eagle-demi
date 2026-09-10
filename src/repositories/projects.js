@@ -113,8 +113,11 @@ async function getByEagleId(access, eagleId) {
     criteria: [eq('eagleId', String(eagleId), '@eagleId')]
   });
 
-  const { items } = await cosmos.query(CONTAINER, spec, { maxItemCount: 1 });
-  return items[0] || null;
+  // `queryFirst`, not a single page: one page of a cross-partition lookup legitimately comes back
+  // empty while the row exists, because Cosmos answers with whatever the partitions it reached
+  // within the page budget held. Reading only that page reports a live project as absent, and the
+  // seeder then creates a duplicate.
+  return await cosmos.queryFirst(CONTAINER, spec, {});
 }
 
 /**
