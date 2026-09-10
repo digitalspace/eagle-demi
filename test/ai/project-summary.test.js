@@ -1772,6 +1772,60 @@ test('generateProjectSummary', async (t) => {
     ], 'newest first, and the event both batches reported only once');
   });
 
+  await t.test('sizes the timeline batches to the window, not to a fixed chunk count', async () => {
+    // Project 302: split into fixed runs of `projectSummaryMaxChunks`, batch 1 of the assessment
+    // report alone came 25,825 tokens over the window. `context_overflow` is not a timeline
+    // fallback reason, so the section died there rather than moving on. Batches sized the way a
+    // list section's are fit, and the whole document is still read.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    // Room for the 1500-token reply and about 8500 tokens of prompt.
+    config.projectSummaryOllamaCtx = 10000;
+    // Far more chunks than this document has, so the count cap cannot be what splits it.
+    config.projectSummaryMaxChunks = 120;
+    const calls = stubModel(t, JSON.stringify({
+      events: [
+        { date: '2014-10-14', label: 'Certificate issued', citations: [1] },
+        { date: '2016-08-09', label: 'Certificate amended', citations: [1] }
+      ]
+    }));
+
+    // Twelve pages of roughly 1200 tokens: any one of them fits the window, all twelve do not.
+    const chunks = Array.from({ length: 12 }, (_, i) => chunk(
+      i + 1,
+      `Page ${i + 1}. The certificate was issued on October 14, 2014 and amended on August 9, ` +
+      `2016. ${'The proponent must monitor water quality. '.repeat(110)}`,
+      'docAR'));
+    const sources = fakeSources({ documents: [ASSESSMENT_REPORT], chunks: { docAR: chunks } });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(record.sectionErrors.timelineEvents, undefined,
+      'a document larger than the window is batched, not refused');
+
+    const oversized = calls.filter(call => {
+      const [system, user] = call.body.messages.map(m => m.content);
+      return Math.ceil((system.length + user.length) / 4) + call.body.options.num_predict >
+        config.projectSummaryOllamaCtx;
+    });
+    assert.deepStrictEqual(oversized.map(call => call.body.messages[1].content.length), [],
+      'no batch asks for more than the context window holds');
+
+    const batches = calls.map(pagesIn);
+    assert.ok(batches.length > 1 && batches.every(b => b.length < config.projectSummaryMaxChunks),
+      `split by the window, under the count cap, got ${batches.map(b => b.length).join('+')}`);
+    assert.deepStrictEqual(batches.flatMap(b => b.map(s => s.page)), chunks.map(c => c.pageNumber),
+      'every page is sent once, in page order');
+
+    assert.deepStrictEqual(record.sections.timelineEvents.map(e => [e.date, e.label]), [
+      ['2016-08-09', 'Certificate amended'],
+      ['2014-10-14', 'Certificate issued']
+    ], 'the events the batches reported are merged into one list, newest first');
+    for (const event of record.sections.timelineEvents) {
+      assert.ok(event.citations.length && event.citations.every(n => record.citations[n - 1]),
+        'every merged event still cites a source the record carries');
+    }
+  });
+
   await t.test('reads the next document when the timeline\'s first source yields nothing', async () => {
     // Project 302 stored `no_grounded_content` for its timeline: the section was read from an
     // executive summary that produced one event the gates dropped, while the certificate sat
