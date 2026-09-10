@@ -635,10 +635,13 @@ const LIST_SECTIONS = ['conditions', 'federal'];
  *
  * Site C's Schedule B holds around 77 conditions with bullets and its consultation records name
  * around 30 nations; at the 1500-token default both stop mid-item, and a list cut off mid-item
- * parses as nothing. Kept apart from `LIST_SECTIONS` because a budget and a batching strategy are
- * different decisions: nations needs the budget and must not be batched.
+ * parses as nothing. A timeline is smaller once the instruction asks for milestones alone, so 4000
+ * covers 15 events with room to spare. Kept apart from `LIST_SECTIONS` because a budget and a
+ * batching strategy are different decisions: nations needs the budget and must not be batched.
  */
-const SECTION_MAX_TOKENS = { conditions: 8000, federal: 8000, nations: 8000 };
+const SECTION_MAX_TOKENS = {
+  conditions: 8000, federal: 8000, nations: 8000, timelineEvents: 4000
+};
 
 /**
  * The sections whose reply is a LIST at all, batched or not.
