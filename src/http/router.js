@@ -23,6 +23,14 @@ const routes = require('./routes');
 const BODY_LIMIT = 10 * 1024 * 1024;
 
 /**
+ * The fetch spec's null-body statuses. The Functions worker feeds what dispatch() returns straight
+ * into `new Response(body, ...)`, and undici rejects ANY body for these — including the empty
+ * string `res.send('')` leaves behind — with `Invalid response status code`, which the host then
+ * serves as an empty 500. So the body is dropped here, once, for every route that answers one.
+ */
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
+/**
  * Helmet's default header set, frozen at the values it emitted with `contentSecurityPolicy: false`.
  * CSP stays OFF: `src/controllers/nosql/link.js` serves HTML that was written for its absence.
  */
@@ -310,10 +318,14 @@ async function dispatch(request, context) {
       }
     }
 
+    // After logRequest, so the access log still reports the byte count the handler produced.
+    const nullBody = NULL_BODY_STATUSES.has(res.statusCode);
+    if (nullBody) delete res.headers['content-length'];
+
     return {
       status: res.statusCode,
       headers: res.headers,
-      body: request.method === 'HEAD' ? undefined : res.body
+      body: nullBody || request.method === 'HEAD' ? undefined : res.body
     };
   });
 }
