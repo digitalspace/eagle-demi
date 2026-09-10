@@ -208,11 +208,12 @@ const EAO_TITLE = /\beao\b|environmental\s+assessment\s+office/i;
  * A French copy of a document the registry also files in English.
  *
  * Matches French-language markers only, not English words that merely contain them ("French Creek",
- * "Resume of Conditions"): "rapport" and "résumé" require a French phrase around them, and bare
- * "french"/"fr" require the `(fr)`/`(français)` or trailing `- fr` marker form.
+ * "Frenchman River", "Resume of Conditions"): "rapport" and "résumé" require a French phrase around
+ * them, and bare "french"/"fr" require a marker form the registry actually types — `(french)`,
+ * `(fr)`, `(français)`, "French version", or a trailing `- fr` / `- French`.
  */
 const FRENCH_TITLE =
-  /\b(sommaire|r[ée]sum[ée]\s+(?:ex[ée]cutif|des\s+conditions)|rapport\s+d['’]?[ée]valuation|version\s+fran[çc]aise|traduction\s+fran[çc]aise)\b|\((?:fr|fran[çc]ais)\)|[-–]\s*fr\b/i;
+  /\b(sommaire|r[ée]sum[ée]\s+(?:ex[ée]cutif|des\s+conditions)|rapport\s+d['’]?[ée]valuation|version\s+fran[çc]aise|traduction\s+fran[çc]aise|french\s+version)\b|\((?:fr|french|fran[çc]ais)\)|[-–]\s*(?:fr|french)\b/i;
 
 const isFrenchTitle = doc => FRENCH_TITLE.test(nameOf(doc));
 
@@ -246,6 +247,8 @@ function isAssessmentReport(doc) {
   if (EAO_TITLE.test(title)) return true;
   return /^\s*assessment\s+report\b/i.test(title) && !PROPONENT_STUDY_TITLE.test(title);
 }
+
+const assessmentReports = docs => docs.filter(isAssessmentReport);
 
 /**
  * Names ITSELF the application, rather than mentioning one it is filed about — so the name leads,
@@ -292,7 +295,11 @@ const PICK = {
   amendedCertificate: docs => newest(docs.filter(d => nameMatches(d, /amended\s+certificate/i))),
   // No `preferOriginal` fallback: a registry holding only amendments' reports holds none of the
   // project's, and the role is dropped rather than filled with the nearest miss.
-  assessmentReport: docs => newest(preferEnglish(docs.filter(isAssessmentReport))),
+  assessmentReport: docs => newest(preferEnglish(assessmentReports(docs))),
+  // The two copies apart, because the timeline chain reads them at opposite ends of its candidate
+  // list: the English report first, the French one only after everything else produced nothing.
+  englishAssessmentReport: docs => newest(assessmentReports(docs).filter(d => !isFrenchTitle(d))),
+  frenchAssessmentReport: docs => newest(assessmentReports(docs).filter(isFrenchTitle)),
   // Two tiers: the document that names itself the application wins over anything else the type
   // sweeps in, so a project whose EIS is filed beside a hundred supporting documents still links
   // the EIS.
@@ -311,6 +318,45 @@ const PICK = {
   // DEMI, and a section invented for a project without one is exactly the claim this must not make.
   federal: docs => newest(docs.filter(d => isFederalDecision(d) && !nameMatches(d, EAO_ADVICE)))
 };
+
+/**
+ * The documents that can carry the project's regulatory chronology, best first.
+ *
+ * The EAO's English assessment report where there is one, then the certificate, whose recitals date
+ * the application, the assessment and the decision, then Schedule A, which lists the same decision
+ * dates. The French copy of the report is tried last rather than never: it is the chronology when
+ * the registry filed no English one, and it is a translated summary when it filed both. Tilbury's
+ * newest assessment report is "Assessment Report - Executive Summary (French)", and reading it
+ * first produced one ungrounded event and stored `no_grounded_content` beside a certificate full of
+ * dates.
+ *
+ * Amendments are NOT read here — the page already puts `facts.amendments` and Track's phase rows on
+ * the same timeline, so a model asked to re-derive them would only produce rows the page has.
+ */
+const TIMELINE_PICKS = [
+  PICK.englishAssessmentReport, PICK.certificate, PICK.scheduleA, PICK.frenchAssessmentReport
+];
+
+/** The candidates `pool` actually holds, in order, each document once. */
+function timelineCandidates(pool) {
+  const seen = new Set();
+  return TIMELINE_PICKS.map(pick => pick(pool)).filter(doc => {
+    if (!doc) return false;
+    const id = String(doc.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+/** The best candidate, which is what a run with none of them says it was waiting on. */
+const pickTimeline = pool => timelineCandidates(pool)[0] || null;
+
+/** The outcomes that earn the next candidate a turn: the model answered, and nothing survived. */
+const TIMELINE_FALLBACK_REASONS = ['no_list', 'no_grounded_content'];
+
+/** The ceiling on what one timeline costs. A fourth candidate is not worth a fourth document read. */
+const TIMELINE_MAX_RUNS = 3;
 
 /** The `role` values `facts.keyDocuments` carries, and the picker behind each. */
 const KEY_DOCUMENT_ROLES = [
@@ -1593,17 +1639,14 @@ async function generateProjectSummary(projectId, opts = {}) {
   const pickStatus = pool => facts.amendments
     .map(ref => pool.find(d => String(d.id) === ref.documentId))
     .find(Boolean) || PICK.certificate(pool);
-  // The project's regulatory chronology: the EAO's assessment report where there is one, else the
-  // certificate, whose recitals date the application, the assessment and the decision. Amendments
-  // are NOT read here — the page already puts `facts.amendments` and Track's phase rows on the same
-  // timeline, so a model asked to re-derive them would only produce rows the page already has.
-  const pickTimeline = pool => PICK.assessmentReport(pool) || PICK.certificate(pool);
-
   const { document: statusDoc, ...statusAbsent } = source(pickStatus);
   const { document: scheduleB, ...conditionsAbsent } = source(PICK.scheduleB);
   const { document: federalDoc, ...federalAbsent } = source(PICK.federal);
   const { document: complianceDoc, ...complianceAbsent } = source(PICK.newestInspection);
   const { document: timelineDoc, ...timelineAbsent } = source(pickTimeline);
+  // Every document the timeline may read, best first. Which of them it actually runs is decided
+  // after the reads, because a candidate whose chunk read comes back empty costs no model call.
+  const timelineDocs = timelineCandidates(extracted);
   const amendmentDocs = facts.amendments
     .map(ref => ({ ref, document: documents.find(d => String(d.id) === ref.documentId) }))
     .filter(a => a.document);
@@ -1629,7 +1672,7 @@ async function generateProjectSummary(projectId, opts = {}) {
   await prefetch('conditions', scheduleB);
   await prefetch('federal', federalDoc);
   await prefetch('compliance', complianceDoc);
-  await prefetch('timelineEvents', timelineDoc);
+  for (const document of timelineDocs) await prefetch('timelineEvents', document);
   for (const { document } of amendmentDocs) {
     if (hasExtractedText(document)) await prefetch('amendments', document);
   }
@@ -1723,13 +1766,14 @@ async function generateProjectSummary(projectId, opts = {}) {
   const organizations = nationsChunks.length ? await sources.organizations() : [];
 
   /** One section end to end, with its usage folded into the record's totals. */
-  const run = async (name, document, { chunks, absentReason, absentSource, ...spec }) => {
+  const run = async (name, document,
+    { chunks, absentReason, absentSource, report = record, ...spec }) => {
     if (!wanted(name)) return null;
     const sourceChunks = chunks || (document ? chunksOf(document) : []);
     if (!document || sourceChunks.length === 0) {
       // No sources means no model call: a model handed nothing answers from its own knowledge, and
       // on a regulatory registry that answer is indistinguishable from a real one.
-      record(name, absentReason || (document ? 'no_chunks' : 'no_document'),
+      report(name, absentReason || (document ? 'no_chunks' : 'no_document'),
         (absentSource && absentSource.documentId) || (document && document.id), absentSource);
       return null;
     }
@@ -1737,7 +1781,7 @@ async function generateProjectSummary(projectId, opts = {}) {
       section: name, document, chunks: sourceChunks, registry, projectName,
       maxTokens: maxTokensFor(name), ...spec
     });
-    if (result.reason) record(name, result.reason, result.documentId);
+    if (result.reason) report(name, result.reason, result.documentId);
     if (result.usage) {
       usage.prompt_tokens += Number(result.usage.prompt_tokens) || 0;
       usage.completion_tokens += Number(result.usage.completion_tokens) || 0;
@@ -1783,12 +1827,41 @@ async function generateProjectSummary(projectId, opts = {}) {
     build: buildParagraph
   });
 
-  const timelineEvents = await run('timelineEvents', timelineDoc, {
-    ...timelineAbsent,
+  // The chronology, down the candidate list. A document whose reply the citation and grounding
+  // gates emptied is not this project's chronology, and the next candidate is usually the one that
+  // holds it; only the last outcome is the section's, so a fallback that works stores no error.
+  const timelineSpec = {
     shape: SHAPES.timeline,
     instruction: INSTRUCTIONS.timelineEvents,
     build: buildTimeline
-  });
+  };
+  const timelineTried = timelineDocs
+    .filter(document => chunksOf(document).length)
+    .slice(0, TIMELINE_MAX_RUNS);
+  let timelineEvents = null;
+  if (wanted('timelineEvents')) {
+    if (!timelineTried.length) {
+      // Nothing readable: `timelineAbsent` says whether the registry holds a candidate at all.
+      timelineEvents = await run('timelineEvents', timelineDoc, { ...timelineAbsent, ...timelineSpec });
+    } else {
+      for (const [index, document] of timelineTried.entries()) {
+        if (index > 0) {
+          logger.info('[project-summary] timelineEvents: no events from ' +
+            `"${nameOf(timelineTried[index - 1])}"; reading "${nameOf(document)}" instead`, {
+            projectId: String(projectId), documentId: String(document.id)
+          });
+        }
+        timelineEvents = await run('timelineEvents', document,
+          { ...timelineSpec, report: () => {} });
+        // What the events were read from, or on total failure the last document tried.
+        sectionSources.timelineEvents = sourceRef(document);
+        if (!TIMELINE_FALLBACK_REASONS.includes(timelineEvents.reason)) break;
+      }
+      if (timelineEvents.reason) {
+        record('timelineEvents', timelineEvents.reason, timelineEvents.documentId);
+      }
+    }
+  }
 
   // One call per amendment. Each is its own document, and a single call over all eight would let a
   // sentence about one amendment cite another's chunks.
