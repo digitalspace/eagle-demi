@@ -1586,6 +1586,21 @@ function federalSection(origin, result, source) {
       reason: 'federal_decision_unreadable'
     };
   }
+  // The decision read, and it lists no numbered conditions — a CEAA 2012 comprehensive study is
+  // decided that way. That is an outcome, not a failed section: returning null here would drop the
+  // status, the CEAR link and the decision document a reader can open.
+  if (result && !result.value && result.reason === 'empty') {
+    return {
+      source: 'iaac',
+      sourceDocumentId: result.documentId,
+      facts: {
+        ...facts,
+        decision: { ...decisionFacts(decision), pageCount: (decision.pages || []).length }
+      },
+      items: [],
+      reason: 'no_conditions'
+    };
+  }
   if (!result || !result.value) return null;
 
   return {
@@ -1874,8 +1889,22 @@ async function generateProjectSummary(projectId, opts = {}) {
     build: buildItems
   });
 
+  // An `empty` reply from a decision that READ is the decision saying it carries no conditions, and
+  // `federalSection` stores that outcome. The section is there, so it is not one to investigate:
+  // it is logged and left out of `sectionErrors`, which is what the run is judged on.
+  const federalReport = (name, reason, documentId, absentSource) => {
+    if (reason === 'empty' && federalChunks && federalChunks.length) {
+      logger.info('[project-summary] federal: the decision lists no conditions', {
+        projectId: String(projectId), documentId: documentId ? String(documentId) : null
+      });
+      return;
+    }
+    record(name, reason, documentId, absentSource);
+  };
+
   const federal = await run('federal', federalDocument, {
     ...federalSpec,
+    report: federalReport,
     chunks: federalChunks,
     shape: SHAPES.conditions,
     instruction: INSTRUCTIONS.federal,

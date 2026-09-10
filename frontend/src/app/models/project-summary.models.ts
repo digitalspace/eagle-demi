@@ -216,13 +216,14 @@ export interface FederalFacts {
  *
  * A `demi` section resolves to a document in this service; an `iaac` one does not, and carries the
  * registry facts and links instead. Either reason leaves `items` empty with the facts intact: the
- * registry answered, and what it answered — no decision, or one whose text would not read — is
- * itself worth showing, so the page states it rather than claiming nothing is known.
+ * registry answered, and what it answered — no decision, one whose text would not read, or one
+ * that carries no conditions — is itself worth showing, so the page states it rather than claiming
+ * nothing is known.
  */
 export interface FederalSection extends ConditionsSection {
   source?: 'demi' | 'iaac';
   facts?: FederalFacts;
-  reason?: 'no_federal_decision' | 'federal_decision_unreadable';
+  reason?: 'no_federal_decision' | 'federal_decision_unreadable' | 'no_conditions';
 }
 
 export interface ProjectSummarySections {

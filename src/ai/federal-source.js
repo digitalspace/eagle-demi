@@ -176,6 +176,21 @@ function parseDocumentRows(html) {
 
 const DECISION_STATEMENT = /decision statement/i;
 const UPDATED = /\bupdated\b/i;
+/**
+ * A row filed ABOUT a decision statement rather than being one: the press release announcing it,
+ * the notice that a statute moved it, the media advisory. The registry files these under the same
+ * project with the same words in the title, and often on the same day.
+ */
+const ABOUT_A_DECISION = /\b(?:notice|news release|media|backgrounder|transition)\b/i;
+const NEWS_CATEGORY = /news release/i;
+/**
+ * The decision statement itself, however the registry qualifies it — "Environmental Assessment
+ * Decision Statement", "Minister's ... Decision Statement", "Updated Decision Statement". The
+ * qualifiers lead; anything before them ("Extension of Time Limit for the Issuance of a Decision
+ * Statement") is a document about the statement.
+ */
+const IS_THE_STATEMENT =
+  /^(?:(?:minister(?:'|\u2019)s|updated|amended|revised|environmental assessment|impact assessment)\s+)*decision statement\b/i;
 
 /** A row's date as a sortable string. An undated row sorts oldest, never newest. */
 const rowDate = row => String((row && row.date) || '');
@@ -183,13 +198,24 @@ const rowDate = row => String((row && row.date) || '');
 /**
  * The decision statement to summarise, or null.
  *
- * Newest wins. "Updated Decision Statement" is preferred ONLY when it is at least as new as the
- * plain one — Site C's updated statement supersedes the 2014 original, but a registry that files an
- * amendment to an old statement after issuing a newer one would otherwise have the superseded
- * document read as current.
+ * Rows that only mention a decision statement are dropped first: on CEAR 80032 the newest such row
+ * is a 2024 transition notice and on CEAR 54754 it is the news release filed the same day as the
+ * decision, and both were read as the decision itself. What is left is preferred in two tiers — the
+ * statement under its own name over a document named after it — so a time-limit extension cannot
+ * outrank the statement it postponed.
+ *
+ * Within a tier, newest wins. "Updated Decision Statement" is preferred ONLY when it is at least as
+ * new as the plain one — Site C's updated statement supersedes the 2014 original, but a registry
+ * that files an amendment to an old statement after issuing a newer one would otherwise have the
+ * superseded document read as current.
  */
 function pickDecisionStatement(rows) {
-  const matching = (rows || []).filter(r => r && DECISION_STATEMENT.test(String(r.title || '')));
+  const candidates = (rows || []).filter(r => r
+    && DECISION_STATEMENT.test(String(r.title || ''))
+    && !ABOUT_A_DECISION.test(String(r.title || ''))
+    && !NEWS_CATEGORY.test(String(r.category || '')));
+  const named = candidates.filter(r => IS_THE_STATEMENT.test(String(r.title)));
+  const matching = named.length ? named : candidates;
   if (matching.length === 0) return null;
 
   const newest = matching.slice().sort((a, b) => rowDate(b).localeCompare(rowDate(a)))[0];
