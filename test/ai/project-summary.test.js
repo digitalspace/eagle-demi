@@ -47,6 +47,22 @@ const AMENDMENT = {
   datePosted: '2016-05-01', isPublished: true, read: PUBLIC_READ, ...EXTRACTED
 };
 
+const SCHEDULE_A = {
+  id: 'docSA', type: 'Certificate Package', displayName: 'Schedule A - Certificate',
+  datePosted: '2014-10-14', isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+};
+const ASSESSMENT_REPORT = {
+  id: 'docAR', type: 'Assessment Report',
+  displayName: 'EAO Assessment Report - Tilbury Marine Jetty', datePosted: '2014-09-30',
+  isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+};
+/** The newest report row on project 302, and a document most readers cannot read. */
+const FRENCH_ASSESSMENT_REPORT = {
+  id: 'docAR-fr', type: 'Assessment Report',
+  displayName: 'Assessment Report - Executive Summary (French) – Tilbury Marine Jetty',
+  datePosted: '2024-03-11', isPublished: true, read: PUBLIC_READ, ...EXTRACTED
+};
+
 /** Where a project actually writes nation names: a consultation appendix, not the certificate. */
 const APPENDIX = {
   id: 'docX', type: 'Plan', displayName: 'Appendix 7D - First Nations Consultation',
@@ -166,6 +182,10 @@ function stubFoundry(t, replies) {
   });
   return calls;
 }
+
+/** The document each prompt was built from, in the order the calls were made. */
+const sourcesNamed = calls => calls.map(call =>
+  (call.body.messages[1].content.match(/^Sources from "([^"]+)"/) || [])[1]);
 
 /** The `(page N)` numbers a prompt carried, in the order it numbered them. */
 const pagesIn = call => Array.from(
@@ -1752,6 +1772,139 @@ test('generateProjectSummary', async (t) => {
     ], 'newest first, and the event both batches reported only once');
   });
 
+  await t.test('reads the next document when the timeline\'s first source yields nothing', async () => {
+    // Project 302 stored `no_grounded_content` for its timeline: the section was read from an
+    // executive summary that produced one event the gates dropped, while the certificate sat
+    // extracted and full of dates. One emptied reply is not the project having no chronology.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, [
+      JSON.stringify({
+        events: [{ date: '2019-03-14', label: 'Certificate amended', citations: [1] }]
+      }),
+      JSON.stringify({
+        events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+      })
+    ]);
+    const info = [];
+    t.mock.method(logger, 'info', line => { info.push(String(line)); });
+
+    const sources = fakeSources({
+      documents: [ASSESSMENT_REPORT, CERTIFICATE],
+      chunks: {
+        docAR: [chunk(1, 'Amended in 2019. Issued on October 14, 2014.', 'docAR')],
+        docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 2, 'the assessment report, then the certificate');
+    assert.deepStrictEqual(sourcesNamed(calls), [
+      'EAO Assessment Report - Tilbury Marine Jetty',
+      'Environmental Assessment Certificate #E14-02'
+    ]);
+    assert.deepStrictEqual(record.sections.timelineEvents,
+      [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+    assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docC',
+      'the source is the document the events were read from, not the one that failed');
+    assert.strictEqual(record.sectionErrors.timelineEvents, undefined,
+      'a fallback that worked stores no error');
+    assert.ok(info.some(line => line.includes('timelineEvents') &&
+      line.includes('EAO Assessment Report - Tilbury Marine Jetty') &&
+      line.includes('Environmental Assessment Certificate #E14-02')),
+    `the fallback is logged, naming both documents: ${info.join(' | ')}`);
+  });
+
+  await t.test('reads the next document when the timeline\'s first source declares zero events',
+    async () => {
+      // `empty` (the model saw the document and declared no events) is a different reason than
+      // `no_grounded_content` (the model declared events the gates then dropped), but both are an
+      // honest "not here" that the next candidate deserves a turn on.
+      config.summaryEnabled = true;
+      config.projectSummaryProvider = 'ollama';
+      const calls = stubModel(t, [
+        JSON.stringify({ events: [] }),
+        JSON.stringify({
+          events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+        })
+      ]);
+
+      const sources = fakeSources({
+        documents: [ASSESSMENT_REPORT, CERTIFICATE],
+        chunks: {
+          docAR: [chunk(1, 'The Tilbury Marine Jetty project overview.', 'docAR')],
+          docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
+        }
+      });
+      const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+      assert.strictEqual(calls.length, 2, 'the assessment report, then the certificate');
+      assert.deepStrictEqual(record.sections.timelineEvents,
+        [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+      assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docC',
+        'the source is the certificate the events were read from, not the report that answered empty');
+    });
+
+  await t.test('stops the timeline at the first document that produces events', async () => {
+    // The chain is a fallback, not a sweep: a second document read after a good answer is a second
+    // minutes-long call, and its events would merge into a chronology already written.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+    }));
+
+    const sources = fakeSources({
+      documents: [ASSESSMENT_REPORT, CERTIFICATE],
+      chunks: {
+        docAR: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docAR')],
+        docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 1, 'one call: the first candidate answered');
+    assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docAR');
+    assert.deepStrictEqual(record.sections.timelineEvents,
+      [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+  });
+
+  await t.test('stops the timeline chain at three documents and keeps the last reason', async () => {
+    // Four candidates are filed and the French copy of the report is the last of them. The cap is
+    // what keeps a project whose documents hold no chronology from spending four full reads to
+    // find that out.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const ungrounded = JSON.stringify({
+      events: [{ date: '2019-03-14', label: 'Certificate amended', citations: [1] }]
+    });
+    const calls = stubModel(t, [ungrounded, ungrounded, JSON.stringify({ timeline: [] })]);
+
+    const text = 'Amended in 2019. Issued on October 14, 2014.';
+    const sources = fakeSources({
+      documents: [ASSESSMENT_REPORT, FRENCH_ASSESSMENT_REPORT, CERTIFICATE, SCHEDULE_A],
+      chunks: {
+        docAR: [chunk(1, text, 'docAR')],
+        'docAR-fr': [chunk(1, text, 'docAR-fr')],
+        docC: [chunk(1, text, 'docC')],
+        docSA: [chunk(1, text, 'docSA')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 3, 'three model runs, whatever the registry holds');
+    assert.deepStrictEqual(sourcesNamed(calls), [
+      'EAO Assessment Report - Tilbury Marine Jetty',
+      'Environmental Assessment Certificate #E14-02',
+      'Schedule A - Certificate'
+    ], 'the English report, the certificate, Schedule A; the French copy is last and never read');
+    assert.strictEqual(record.sections.timelineEvents, null);
+    assert.strictEqual(record.sectionErrors.timelineEvents, 'no_list',
+      'the reason stored is the last candidate\'s, not the first\'s');
+    assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docSA',
+      'and the source is the last document tried');
+  });
+
   await t.test('generates nothing while the feature is off', async () => {
     config.summaryEnabled = false;
     const calls = stubModel(t, '{}');
@@ -2192,6 +2345,42 @@ test('key document pickers', async (t) => {
     assert.strictEqual(isFrenchTitle({ displayName: "Sommaire du rapport d'évaluation" }), true);
     assert.strictEqual(isFrenchTitle({ displayName: 'Résumé exécutif' }), true);
     assert.strictEqual(isFrenchTitle({ displayName: 'Assessment Report (FR)' }), true);
+  });
+
+  await t.test('flags the English-marker forms the registry files a French copy under', () => {
+    // Tilbury Marine Jetty's French documents are titled in English: "(French)", a trailing
+    // "- French", and "French version". Missed, the newest of them won the assessment report role
+    // and the timeline was read from a translated executive summary.
+    assert.strictEqual(isFrenchTitle({
+      displayName: 'Assessment Report - Executive Summary (French) – Tilbury Marine Jetty' }), true);
+    assert.strictEqual(isFrenchTitle({
+      displayName: 'Tilbury Marine Jetty - Assessment Report Executive Summary – French' }), true);
+    assert.strictEqual(isFrenchTitle({
+      displayName: 'Executive Summary for the Tilbury Marine Jetty Assessment Report - French version'
+    }), true);
+    // The English titles the narrower pattern was written to protect stay English.
+    assert.strictEqual(
+      isFrenchTitle({ displayName: 'French Creek Water Project - Assessment Report' }), false);
+    assert.strictEqual(
+      isFrenchTitle({ displayName: 'Frenchman River Assessment Report' }), false);
+  });
+
+  await t.test('links the English report over a newer French one titled in English', () => {
+    // What project 302 actually stored: the French executive summary is the newest row, so the
+    // assessmentReport link named it, unflagged, beside prose written from another document.
+    const french = { id: 'docAR-fr', type: 'Assessment Report', datePosted: '2024-03-11',
+      displayName: 'Assessment Report - Executive Summary (French) – Tilbury Marine Jetty' };
+    const english = { id: 'docAR-en', type: 'Assessment Report', datePosted: '2023-11-02',
+      displayName: 'Assessment Report - Tilbury Marine Jetty' };
+
+    assert.strictEqual(PICK.assessmentReport([french, english]).id, 'docAR-en');
+    const both = buildFacts([french, english]).keyDocuments.find(r => r.role === 'assessmentReport');
+    assert.strictEqual(both.documentId, 'docAR-en');
+    assert.strictEqual('languageFlag' in both, false);
+
+    const only = buildFacts([french]).keyDocuments.find(r => r.role === 'assessmentReport');
+    assert.strictEqual(only.documentId, 'docAR-fr');
+    assert.strictEqual(only.languageFlag, 'fr');
   });
 
   await t.test('links the French copy, flagged, when it is the only one filed', () => {
