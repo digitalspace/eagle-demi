@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
-  parseArgs, backfill, exitCodeFor, DEFAULT_CONCURRENCY, NULL_PARTITION
+  parseArgs, backfill, exitCodeFor, DEFAULT_CONCURRENCY, DEFAULT_MAX_ATTEMPTS, NULL_PARTITION
 } = require('../../src/scripts/backfill-chunk-parent-fields');
 const chunks = require('../../src/repositories/chunks');
 const { PARENT_PENDING_FIELDS } = require('../../src/repositories/documents');
@@ -115,7 +115,12 @@ function fakeDocuments(docs, opts = {}) {
 function fakeChunks(opts = {}) {
   // `stamps` is `documentId -> the instant the patch was guarded on`. Recorded because that guard
   // is the only thing standing between a corpus walk and the newer re-stamp it would overwrite.
-  const state = { patched: [], patchedIds: [], live: 0, read: [], pointReads: [], stamps: {} };
+  // `budgets` is the retry budget each patch was given, recorded because a dropped one changes
+  // nothing a test can see otherwise: the walk still runs, and still gives up on the sustained
+  // throttle the budget was raised for.
+  const state = {
+    patched: [], patchedIds: [], live: 0, read: [], pointReads: [], stamps: {}, budgets: []
+  };
   // What each document's chunks currently hold. Absent means "one chunk, all four null AND no
   // version" — the shape of every chunk written before the parent fields existed, which is the
   // corpus this backfill exists for.
@@ -136,10 +141,11 @@ function fakeChunks(opts = {}) {
       state.pointReads.push(String(id));
       return chunksOf(documentId).find(row => String(row.id) === String(id)) || null;
     },
-    async setFieldsForChunks(access, documentId, ids, fields, { stampedAt } = {}) {
+    async setFieldsForChunks(access, documentId, ids, fields, { stampedAt, maxAttempts } = {}) {
       state.live++;
       state.patched.push(String(documentId));
       state.stamps[String(documentId)] = stampedAt;
+      state.budgets.push(maxAttempts);
       // The ids the caller chose, which is the whole point of this entry point: the backfill knows
       // which rows disagree and must not patch the ones that do not.
       state.patchedIds.push(...ids.map(String));
@@ -225,10 +231,10 @@ test('parseArgs', async (t) => {
     assert.throws(() => parseArgs(['--concurrency', 'lots']), /between 1 and 8/);
   });
 
-  await t.test('--max-attempts is unset by default and bounded when given', () => {
-    // Unset has to stay undefined: the bulk default is the one figure raised across every caller,
-    // and a number pinned here would freeze this walk at whatever it was on the day it was written.
-    assert.strictEqual(parseArgs([]).maxAttempts, undefined);
+  await t.test('--max-attempts defaults to this walk\'s own budget and is bounded when given', () => {
+    // Not the shared bulk default: that one is sized for the request path, where a long retry is a
+    // gateway timeout. This walk is offline and needs to outlast a throttle that runs for minutes.
+    assert.strictEqual(parseArgs([]).maxAttempts, DEFAULT_MAX_ATTEMPTS);
     assert.strictEqual(parseArgs(['--max-attempts', '12']).maxAttempts, 12);
     assert.throws(() => parseArgs(['--max-attempts', '0']), /between 1 and 20/);
     assert.throws(() => parseArgs(['--max-attempts', '21']), /between 1 and 20/);
@@ -1060,6 +1066,23 @@ test('every stamp is guarded on an instant, so a walk cannot overwrite a newer o
     await backfill(['--live', '--state', stateFile()], { ...d, now: START });
 
     assert.deepStrictEqual(d.chunks.state.stamps, { d1: PENDING_AT, d2: START });
+  });
+
+  await t.test('the retry budget reaches the chunk patch, default and raised', async () => {
+    // The whole point of `--max-attempts`. A budget parsed and then dropped on the way to the patch
+    // looks exactly like one that arrived: the walk runs, and gives up on the same throttle.
+    const d = deps();
+    await backfill(['--live', '--state', stateFile()], d);
+
+    assert.ok(d.chunks.state.budgets.length > 0, 'the walk patched nothing, so nothing was proven');
+    assert.deepStrictEqual([...new Set(d.chunks.state.budgets)], [DEFAULT_MAX_ATTEMPTS],
+      'every patch runs on this walk\'s budget, not the request-path default');
+
+    const raised = deps();
+    await backfill(['--live', '--max-attempts', '20', '--state', stateFile()], raised);
+
+    assert.deepStrictEqual([...new Set(raised.chunks.state.budgets)], [20],
+      'the operator raised the budget for a walk that keeps running out of it');
   });
 
   await t.test('chunks a newer walk already stamped are reported, not counted as patched',

@@ -36,8 +36,10 @@ function stubPatch(t, ids) {
     return { items: ids, continuationToken: null };
   });
   sent.queries = () => queries;
-  t.mock.method(cosmos, 'bulkVerified', async (container, operations) => {
-    sent.push({ container, operations });
+  // `opts` is captured, not discarded: the retry budget a caller names rides there and nothing else
+  // observes it, so a double that dropped it would agree with a repository that dropped it too.
+  t.mock.method(cosmos, 'bulkVerified', async (container, operations, opts = {}) => {
+    sent.push({ container, operations, opts });
     return {
       succeeded: operations.length, failed: 0, statusCounts: {}, requestCharge: 1,
       failedIds: [], skippedIds: []
@@ -230,6 +232,24 @@ test('chunks.setParentFieldsForDocument', async (t) => {
     assert.strictEqual(result.chunks, 1);
     assert.deepStrictEqual(sent[0].operations.map(op => op.id), ['docA::p1::c1']);
     assert.strictEqual(sent.queries(), 0, 'the caller supplied the ids, so nothing is re-read');
+  });
+
+  await t.test('setFieldsForChunks passes the caller\'s retry budget to the bulk write', async () => {
+    // Where the backfill's `--max-attempts` lands. Dropping it costs nothing visible here and the
+    // whole walk on a sustained throttle, which is the case the budget exists for.
+    const sent = stubPatch(t, ['docA::p1::c0']);
+
+    await chunks.setFieldsForChunks(
+      systemAccess(), 'docA', ['docA::p1::c0'], chunks.parentFieldsOf(DOCUMENT),
+      { stampedAt: STAMPED_AT, maxAttempts: 12 });
+    await chunks.setFieldsForChunks(
+      systemAccess(), 'docA', ['docA::p1::c0'], chunks.parentFieldsOf(DOCUMENT));
+
+    assert.strictEqual(sent[0].opts.maxAttempts, 12, 'the budget the caller asked for');
+    // Absent, not `undefined`: the data layer's own default has to stay reachable for the request
+    // paths that share this write, which name no budget at all.
+    assert.ok(!('maxAttempts' in sent[1].opts),
+      'a caller that named no budget must not send a key that overrides the default');
   });
 
   await t.test('a document with no chunks writes nothing', async () => {

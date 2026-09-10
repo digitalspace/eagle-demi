@@ -396,7 +396,16 @@ const BULK_MAX_OPERATIONS = 100;
  * is the one the caller asked not to overwrite, so repeating the request repeats the rejection.
  */
 const PRECONDITION_FAILED = 412;
-const BULK_MAX_ATTEMPTS = 8;
+
+/**
+ * The default retry budget, kept small because most callers are on the REQUEST path: the streaming
+ * ingest upsert and the publish/unpublish ACL cascade both reach `bulkVerified` inside an `/api`
+ * request, which APIM cuts off at 30s. With the doubling below, four attempts spend at most about
+ * 7s of waiting; eight would spend 72s and turn a throttle into a gateway timeout. An offline walk
+ * that can afford to sit through a sustained throttle asks for a longer budget with
+ * `opts.maxAttempts`.
+ */
+const BULK_MAX_ATTEMPTS = 4;
 const BULK_MAX_BACKOFF_MS = 20000;
 const BULK_BACKOFF_JITTER_MS = 250;
 
@@ -407,13 +416,15 @@ const BULK_BACKOFF_JITTER_MS = 250;
  * minutes, and 1s/2s/3s/4s spends every attempt inside the same overload. The 2026-09 chunk
  * backfill exhausted four linear attempts on 523,144 throttled operations and left 70 documents
  * part-stamped. Cosmos's own hint wins when it is larger, because it is the only figure that knows
- * when the partition will have budget again. Jitter keeps the concurrent walkers from resending in
- * lockstep, which is what turns one throttle into a repeating one.
+ * when the partition will have budget again. The ceiling caps the exponential term ONLY: clipping a
+ * 45s hint back to 20s resends into a partition Cosmos just said has no budget and burns an
+ * attempt. Jitter keeps the concurrent walkers from resending in lockstep, which is what turns one
+ * throttle into a repeating one.
  */
 function bulkBackoffMs(attempt, hintMs) {
   const hint = Number.isFinite(hintMs) && hintMs > 0 ? hintMs : 0;
   const exponential = 1000 * 2 ** (attempt - 1);
-  return Math.min(Math.max(exponential, hint), BULK_MAX_BACKOFF_MS)
+  return Math.max(Math.min(exponential, BULK_MAX_BACKOFF_MS), hint)
     + Math.round(Math.random() * BULK_BACKOFF_JITTER_MS);
 }
 

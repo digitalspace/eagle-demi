@@ -297,8 +297,8 @@ test('bulk splits requests at the 100-operation ceiling', async (t) => {
  * overload, so the budget, the doubling, the 20s ceiling and Cosmos's own hint are pinned here.
  */
 test('bulkVerified sits out a sustained throttle', async (t) => {
-  // Records the wait instead of spending it: a full eight-attempt backoff is over a minute of real
-  // time, which no unit test can afford to sleep through.
+  // Records the wait instead of spending it: even the four-attempt default is seconds of real time,
+  // and a raised budget is over a minute, which no unit test can afford to sleep through.
   const recorder = () => {
     const waits = [];
     return { waits, sleepFn: async (ms) => { waits.push(ms); } };
@@ -344,7 +344,31 @@ test('bulkVerified sits out a sustained throttle', async (t) => {
     withinJitter(waits[0], 6000, 'the operation result hint must win over the first step');
   });
 
-  await t.test('per-operation 429s get eight attempts, doubling to a 20s ceiling', async () => {
+  await t.test('a hint longer than the ceiling is waited out in full', async () => {
+    // The 20s ceiling bounds the exponential guess, not Cosmos's own answer. Clipping a 45s hint
+    // back to 20s resends into a partition the service just said has no budget: the attempt is
+    // spent, the operation is rejected again, and the walk is one attempt closer to giving up.
+    const { waits, sleepFn } = recorder();
+    let calls = 0;
+    await bulkVerified('chunks', ops(2), {
+      sleepFn,
+      bulkFn: async (pending) => {
+        calls++;
+        return calls === 1
+          ? pending.map(() => ({ statusCode: 429, retryAfterMilliseconds: 45000 }))
+          : ok(pending);
+      }
+    });
+
+    assert.strictEqual(waits.length, 1);
+    assert.ok(waits[0] >= 45000, `waited ${waits[0]}, the hint of 45000 was clipped`);
+    withinJitter(waits[0], 45000, 'the hint is the wait, plus jitter and nothing else');
+  });
+
+  await t.test('per-operation 429s get four attempts by default, doubling', async () => {
+    // Four, not more: this is the budget an ingest upsert and the ACL cascade inherit inside an
+    // `/api` request that APIM cuts off at 30s. 1s+2s+4s is about 7s of waiting; the offline walks
+    // that need to outlast a longer throttle ask for a bigger budget through `maxAttempts`.
     const { waits, sleepFn } = recorder();
     let calls = 0;
     const res = await bulkVerified('chunks', ops(3), {
@@ -352,19 +376,20 @@ test('bulkVerified sits out a sustained throttle', async (t) => {
       bulkFn: async (pending) => { calls++; return pending.map(() => ({ statusCode: 429 })); }
     });
 
-    assert.strictEqual(calls, 8, 'four attempts is the budget the corpus walk ran out of');
-    [1000, 2000, 4000, 8000, 16000, 20000, 20000].forEach((floor, i) =>
-      withinJitter(waits[i], floor, `wait ${i + 1}`));
-    assert.strictEqual(waits.length, 7, 'no wait after the last attempt');
+    assert.strictEqual(calls, 4, 'four attempts is the shared default');
+    assert.ok(waits.reduce((a, b) => a + b, 0) < 10000,
+      'a request-path caller cannot block for longer than the gateway will wait');
+    [1000, 2000, 4000].forEach((floor, i) => withinJitter(waits[i], floor, `wait ${i + 1}`));
+    assert.strictEqual(waits.length, 3, 'no wait after the last attempt');
     assert.strictEqual(res.succeeded, 0);
     assert.strictEqual(res.failed, 3);
-    assert.strictEqual(res.statusCounts[429], 24, 'every attempt is still counted, as before');
+    assert.strictEqual(res.statusCounts[429], 12, 'every attempt is still counted, as before');
     assert.deepStrictEqual(res.failedIds, ['c0', 'c1', 'c2']);
   });
 
   await t.test('a 412 is answered once and never retried, however long the 429s go on', async () => {
     // A precondition that did not hold is Cosmos's answer, not a throttle. Widening the budget for
-    // 429 must not start paying eight requests for a decision already made.
+    // 429 must not start paying a request per attempt for a decision already made.
     const { sleepFn } = recorder();
     const sent = [];
     const res = await bulkVerified('chunks', ops(2), {
@@ -375,7 +400,7 @@ test('bulkVerified sits out a sustained throttle', async (t) => {
       }
     });
 
-    assert.strictEqual(sent.length, 8, 'the 429 keeps its full budget');
+    assert.strictEqual(sent.length, 4, 'the 429 keeps its full budget');
     assert.deepStrictEqual(sent[0], ['c0', 'c1']);
     assert.ok(sent.slice(1).every(ids => ids.join() === 'c1'), 'the 412 must not be resent');
     assert.strictEqual(res.statusCounts[412], 1, 'counted once, not once per attempt');

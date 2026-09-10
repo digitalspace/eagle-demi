@@ -20,9 +20,10 @@
  *          [--project <id> | --pending] [--force] [--concurrency N] [--max-attempts N]
  *          [--state ./backfill-chunk-parent-fields.state.json]
  *
- * `--max-attempts N` (1-8 is the useful range, 1-20 accepted) raises the chunk-patch retry budget
- * above the default. A corpus walk on a serverless account stays throttled for minutes at a time,
- * and a batch that runs out of attempts leaves the document part-stamped.
+ * `--max-attempts N` (1-20 accepted) sets the chunk-patch retry budget. This walk defaults to 12,
+ * well above the shared bulk default, which is sized for the request path: a corpus walk on a
+ * serverless account stays throttled for minutes at a time, and a batch that runs out of attempts
+ * leaves the document part-stamped. Nothing here is inside a request, so the wait is free.
  *
  * `--live --pending` repairs only the documents flagged `parentFieldsPending` — the writes whose
  * re-stamp could not be queued or was skipped (`controllers/nosql/document.js`). `--live --project
@@ -79,6 +80,14 @@ const ORPHAN_SKIP_REASON =
  */
 const DEFAULT_CONCURRENCY = 2;
 
+/**
+ * Chunk-patch retry budget for THIS walk, three times the shared bulk default. The shared one is
+ * held down by the request paths that share `bulkVerified` — an ingest upsert cannot block for a
+ * minute — while nothing here is inside a request: the 2026-09 walk lost 70 documents to a
+ * throttle that outlasted its budget, and the only cost of a longer one is wall clock.
+ */
+const DEFAULT_MAX_ATTEMPTS = 12;
+
 /** The bucket a row belongs to: its own partition key, or the null bucket. */
 function partitionOf(projectId) {
   return projectId === null || projectId === undefined ? NULL_PARTITION : String(projectId);
@@ -117,7 +126,7 @@ function stampedAtFor(doc, startedAt) {
 function parseArgs(argv) {
   const args = {
     live: false, project: null, pending: false, force: false,
-    concurrency: DEFAULT_CONCURRENCY, state: DEFAULT_STATE, maxAttempts: undefined
+    concurrency: DEFAULT_CONCURRENCY, state: DEFAULT_STATE, maxAttempts: DEFAULT_MAX_ATTEMPTS
   };
   let explicitDryRun = false;
 
@@ -149,10 +158,9 @@ function parseArgs(argv) {
   if (!Number.isInteger(args.concurrency) || args.concurrency < 1 || args.concurrency > 8) {
     throw new Error(`[backfill] --concurrency must be between 1 and 8, got: ${args.concurrency}`);
   }
-  // Unset leaves the bulk default in place. Rejected rather than clamped silently, because a typo
-  // that read as "1" would turn the retry off on the walk that needs it most.
-  if (args.maxAttempts !== undefined
-    && (!Number.isInteger(args.maxAttempts) || args.maxAttempts < 1 || args.maxAttempts > 20)) {
+  // Rejected rather than clamped silently, because a typo that read as "1" would turn the retry
+  // off on the walk that needs it most.
+  if (!Number.isInteger(args.maxAttempts) || args.maxAttempts < 1 || args.maxAttempts > 20) {
     throw new Error(`[backfill] --max-attempts must be between 1 and 20, got: ${args.maxAttempts}`);
   }
   if (!args.state) throw new Error('[backfill] --state needs a path');
@@ -619,7 +627,7 @@ module.exports = {
   // The bucket naming, shared with `backfill-display-name-sort.js`: two walks that disagreed on
   // which partition a null `projectId` belongs to would each report covering rows the other read.
   partitionOf, projectIdOf,
-  DEFAULT_CONCURRENCY, DEFAULT_STATE, NULL_PARTITION
+  DEFAULT_CONCURRENCY, DEFAULT_MAX_ATTEMPTS, DEFAULT_STATE, NULL_PARTITION
 };
 
 if (require.main === module) {
