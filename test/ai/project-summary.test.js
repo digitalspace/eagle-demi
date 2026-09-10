@@ -1922,6 +1922,38 @@ test('generateProjectSummary', async (t) => {
       'a half\'s local citation resolves to that half\'s first source');
   });
 
+  await t.test('stops halving a truncated timeline batch at the depth bound', async () => {
+    // A document that truncates at every size would cost one call per chunk if the halving ran to
+    // the floor. `MAX_BATCH_HALVINGS` stops it at eight pieces of the batch; the first piece to
+    // reach that depth fails the section, so the descent is what the call count shows.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.projectSummaryMaxChunks = 16;
+    // One reply for every call: whatever it is asked, the model runs out of completion budget.
+    const calls = stubModel(t, {
+      content: '{"events": [{"date": "2014-10-14", "label": "Certificate iss',
+      doneReason: 'length'
+    });
+
+    const chunks = Array.from({ length: 16 }, (_, i) => chunk(
+      i + 1, `Page ${i + 1}. The certificate was issued on October 14, 2014.`, 'docC'));
+    const sources = fakeSources({ documents: [CERTIFICATE], chunks: { docC: chunks } });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 5, 'three halvings, then the strict retry at the bound');
+    assert.deepStrictEqual(calls.map(call => pagesIn(call).map(s => s.page)), [
+      chunks.map(c => c.pageNumber),
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      [1, 2, 3, 4],
+      [1, 2],
+      [1, 2]
+    ], 'the batch, its half, quarter and eighth — then that eighth asked again, not split further');
+
+    assert.strictEqual(record.sections.timelineEvents, null);
+    assert.ok(record.sectionErrors.timelineEvents.startsWith('truncated'),
+      `stored the truncation, got ${record.sectionErrors.timelineEvents}`);
+  });
+
   await t.test('fails the timeline when a batch of one chunk still truncates', async () => {
     // The floor of the halving: nothing left to split, so the budget is what has to move and the
     // record says so rather than storing a fragment.
