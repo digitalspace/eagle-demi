@@ -968,7 +968,8 @@ function citationRegistry() {
         // A source that is not a DEMI document says so and carries the link a reader needs, because
         // nothing in DEMI resolves `iaac:158078` and the page has no other way to reach the file.
         ...(chunk.source ? { source: String(chunk.source) } : {}),
-        ...(chunk.url ? { url: String(chunk.url) } : {})
+        ...(chunk.url ? { url: String(chunk.url) } : {}),
+        ...(chunk.format ? { format: String(chunk.format) } : {})
       });
       return n;
     },
@@ -1415,7 +1416,9 @@ function federalChunksFrom(decision) {
       content: page.text,
       source: 'iaac',
       // The file, or the registry page that prints the decision instead of linking a file.
-      url: decision.pdfUrl || decision.pageUrl || null
+      url: decision.pdfUrl || decision.pageUrl || null,
+      // Which of the two `url` is, so the chip labels the link it actually opens.
+      format: decision.format || (decision.pdfUrl ? 'pdf' : null)
     }));
 }
 
@@ -1431,7 +1434,11 @@ const decisionFacts = decision => ({
   docId: decision.docId,
   title: decision.title,
   date: decision.date || null,
-  pdfUrl: decision.pdfUrl || null
+  pdfUrl: decision.pdfUrl || null,
+  // An older statement was never filed as a file: the registry prints it on the document page, so
+  // the page is the only link there is and `format` says which of the two the reader is offered.
+  pageUrl: decision.pageUrl || null,
+  format: decision.format || null
 });
 
 /**

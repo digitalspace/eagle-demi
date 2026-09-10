@@ -442,6 +442,8 @@ describe('ProjectSummaryComponent', () => {
       title: 'Decision Statement issued under section 54',
       date: '2014-10-14',
       pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/157936',
+      format: 'pdf',
       pageCount: 12
     }
   };
@@ -540,6 +542,33 @@ describe('ProjectSummaryComponent', () => {
     fixture.detectChanges();
   });
 
+  it('labels a citation for a registry page as a page, not a PDF', async () => {
+    // An older decision was never filed as a file: the registry prints it on the document page.
+    // "Open PDF" on that chip promises a file the link does not lead to.
+    const htmlCitation = {
+      ...IAAC_CITATION,
+      url: 'https://iaac-aeic.gc.ca/050/evaluations/document/157936',
+      format: 'html'
+    };
+    routeWholePage({
+      ...withIaacFederal(),
+      citations: [...MOCK_PROJECT_SUMMARY.citations!, htmlCitation]
+    });
+
+    const el = await render();
+    el.querySelector<HTMLButtonElement>('[aria-labelledby="ps-federal-h"] .ps-card--action')!.click();
+    fixture.detectChanges();
+
+    const chip = el.querySelector('dialog .ps-cite')!;
+    expect(squash(chip.textContent)).toContain('Open registry page');
+    expect(squash(chip.textContent)).not.toContain('Open PDF');
+
+    // A modal left open sits in the top layer and takes the focus every later spec asserts on.
+    el.querySelector('dialog')!.close();
+    await settle(2);
+    fixture.detectChanges();
+  });
+
   it('puts the registry fact row above the federal cards', async () => {
     routeWholePage(withIaacFederal());
 
@@ -562,6 +591,48 @@ describe('ProjectSummaryComponent', () => {
     expect(row.compareDocumentPosition(section.querySelector('.ps-cards')!))
       .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(section.textContent).toContain('AI-generated from the sources below');
+  });
+
+  it('links the registry page for a decision that was never filed as a PDF', async () => {
+    // An older CEAA 2012 statement: the registry prints it on the document page, so the page is
+    // the link and the label must not promise a file that does not exist.
+    routeWholePage(withIaacFederal({
+      ...IAAC_FEDERAL,
+      facts: {
+        ...IAAC_FACTS,
+        decision: { ...IAAC_FACTS.decision, pdfUrl: null, format: 'html' }
+      }
+    }));
+
+    const el = await render();
+
+    const row = el.querySelector('[aria-labelledby="ps-federal-h"] .ps-federal')!;
+    const links = row.querySelectorAll<HTMLAnchorElement>('a');
+    expect(links.length).toBe(2);
+    expect(links[1].getAttribute('href')).toBe(IAAC_FACTS.decision.pageUrl);
+    // The separator has to survive the anchor/span branch: the row is one sentence of facts.
+    expect(squash(row.textContent)).toContain('· Decision statement (registry page)');
+    expect(squash(links[1].textContent)).toContain('Decision statement (registry page)');
+    expect(squash(row.textContent)).not.toContain('PDF');
+  });
+
+  it('names the decision without a link when the registry offers neither file nor page', async () => {
+    routeWholePage(withIaacFederal({
+      ...IAAC_FEDERAL,
+      facts: {
+        ...IAAC_FACTS,
+        decision: { ...IAAC_FACTS.decision, pdfUrl: null, pageUrl: null, pageCount: undefined }
+      }
+    }));
+
+    const el = await render();
+
+    const row = el.querySelector('[aria-labelledby="ps-federal-h"] .ps-federal')!;
+    // Only the project link: an anchor with an empty href would send the reader to this page.
+    const links = row.querySelectorAll<HTMLAnchorElement>('a');
+    expect(links.length).toBe(1);
+    expect(links[0].getAttribute('href')).toBe(IAAC_FACTS.projectUrl);
+    expect(squash(row.textContent)).toContain('· Decision statement (PDF)');
   });
 
   it('states that Canada has issued no decision, with no AI badge and no sources', async () => {
