@@ -264,7 +264,8 @@ export class ProjectSummaryComponent implements OnInit {
   /** The link's label. A decision whose text would not read is still a file worth offering. */
   federalDecisionLabel = computed<string>(() => {
     const decision = this.federalFacts()?.decision;
-    if (decision?.format === 'html') return 'Decision statement (registry page)';
+    const isPdf = !!decision?.pdfUrl || decision?.format === 'pdf';
+    if (!isPdf) return 'Decision statement (registry page)';
     const pages = decision?.pageCount;
     return pages ? `Decision statement (PDF, ${pages} pages)` : 'Decision statement (PDF)';
   });

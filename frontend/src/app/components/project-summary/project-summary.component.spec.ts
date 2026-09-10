@@ -616,6 +616,28 @@ describe('ProjectSummaryComponent', () => {
     expect(squash(row.textContent)).not.toContain('PDF');
   });
 
+  it('links the registry page when the registry page had no PDF link', async () => {
+    // A decision with format left null (no PDF and no HTML flag from the scrape): the label
+    // must still fall back to the page link's own wording, not a PDF promise.
+    const pageUrl = 'https://iaac-aeic.gc.ca/050/evaluations/document/158078';
+    routeWholePage(withIaacFederal({
+      ...IAAC_FEDERAL,
+      facts: {
+        ...IAAC_FACTS,
+        decision: { ...IAAC_FACTS.decision, pdfUrl: null, pageUrl, format: null }
+      }
+    }));
+
+    const el = await render();
+
+    const row = el.querySelector('[aria-labelledby="ps-federal-h"] .ps-federal')!;
+    const links = row.querySelectorAll<HTMLAnchorElement>('a');
+    const pageLink = links[links.length - 1];
+    expect(pageLink.getAttribute('href')).toBe(pageUrl);
+    expect(squash(pageLink.textContent)).toContain('registry page');
+    expect(squash(pageLink.textContent)).not.toContain('PDF');
+  });
+
   it('names the decision without a link when the registry offers neither file nor page', async () => {
     routeWholePage(withIaacFederal({
       ...IAAC_FEDERAL,
