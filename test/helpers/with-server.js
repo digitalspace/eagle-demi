@@ -24,7 +24,9 @@ async function withServer(fn) {
       body: init.body === undefined ? undefined : { string: init.body }
     });
     const res = await dispatch(request, { error: () => {} });
-    return new Response(res.body || null, { status: res.status, headers: res.headers });
+    // The body goes in exactly as the Functions worker passes it: `res.body || null` would launder
+    // an empty-string body into null and hide the null-body-status bug the worker throws on.
+    return new Response(res.body, { status: res.status, headers: res.headers });
   });
 }
 
