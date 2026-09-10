@@ -1578,7 +1578,7 @@ function federalSection(origin, result, source) {
  * logged at INFO. Everything else is a run that could have produced a section and did not.
  */
 const QUIET_REASONS = ['no_document', 'not_extracted', 'no_source', 'no_text', 'empty',
-  'no_federal_decision', 'no_conditions'];
+  'no_federal_decision'];
 
 /** Every section, so `--section` can name one and the runner can check the name is real. */
 const SECTIONS = ['status', 'conditions', 'amendments', 'timelineEvents', 'compliance',
@@ -1851,14 +1851,14 @@ async function generateProjectSummary(projectId, opts = {}) {
   // An `empty` reply from a decision that READ is the decision saying it carries no conditions, and
   // `federalSection` stores that outcome. The section is there, so it is not one to investigate:
   // it is logged and left out of `sectionErrors`, which is what the run is judged on.
-  const federalReport = (name, reason, documentId) => {
+  const federalReport = (name, reason, documentId, absentSource) => {
     if (reason === 'empty' && federalChunks && federalChunks.length) {
       logger.info('[project-summary] federal: the decision lists no conditions', {
         projectId: String(projectId), documentId: documentId ? String(documentId) : null
       });
       return;
     }
-    record(name, reason, documentId);
+    record(name, reason, documentId, absentSource);
   };
 
   const federal = await run('federal', federalDocument, {

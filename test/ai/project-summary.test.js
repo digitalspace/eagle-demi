@@ -1534,6 +1534,32 @@ test('generateProjectSummary', async (t) => {
     assert.strictEqual(record.sectionErrors.federal, 'not_json');
   });
 
+  await t.test('names the DEMI decision statement the federal section waits on', async () => {
+    // The registry answered with nothing and DEMI holds the statement with no text yet. Those are
+    // different states from "Canada issued no decision", and only this one links a document.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    const calls = stubModel(t, '{"items":[]}');
+    stubFederalSource(t, null);
+
+    const sources = fakeSources({
+      documents: [{
+        id: 'docF', type: 'Decision Materials', datePosted: '2014-10-14',
+        displayName: 'Decision Statement issued under the Canadian Environmental Assessment Act',
+        isPublished: true, read: PUBLIC_READ, contentExtracted: false, contentPageCount: 0
+      }]
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    assert.strictEqual(record.sectionErrors.federal, 'not_extracted');
+    assert.deepStrictEqual(record.sectionSources.federal, {
+      documentId: 'docF',
+      displayName: 'Decision Statement issued under the Canadian Environmental Assessment Act'
+    });
+    assert.strictEqual(calls.length, 0, 'a document with no text is never handed to the model');
+  });
+
   // Every cause below is a decision statement the registry LISTS and this run could not read. The
   // stored record must say so: `no_federal_decision` here would publish the claim that Canada
   // issued no decision for a project whose statement is sitting on the registry.
