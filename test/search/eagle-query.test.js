@@ -18,6 +18,7 @@ const path = require('node:path');
 const eagleQuery = require('../../src/search/eagle-query');
 const { filterFor } = require('../../src/helpers/access-odata');
 const { resolveAccess } = require('../../src/helpers/access-sql');
+const chunksRepo = require('../../src/repositories/chunks');
 const { catalogFor } = require('../../src/vis/catalog');
 
 const anonymous = () => resolveAccess({ header: () => null });
@@ -726,3 +727,37 @@ function reloadWithoutField(t, index, field) {
   t.after(() => { require.cache[MODULE] = cached; });
   return require(MODULE);
 }
+
+/**
+ * The document facets are ONE table shared by `Document` and `DocumentChunk`, because a chunk
+ * carries a copy of its parent document's four ids under the same field names.
+ */
+test('the document facets cannot drift between the two datasets or the write side', () => {
+  const { DOCUMENT_FACETS, ALIASES } = eagleQuery;
+
+  for (const [wireKey, field] of Object.entries(DOCUMENT_FACETS)) {
+    assert.strictEqual(ALIASES.Document[wireKey], field,
+      `Document.${wireKey} must resolve to '${field}'`);
+    assert.strictEqual(ALIASES.DocumentChunk[wireKey], field,
+      `DocumentChunk.${wireKey} must resolve to the same field as Document, or a saved filter URL ` +
+      'means one thing on documents and another on passages');
+  }
+
+  // The write side, so a facet added here without the chunk stamp fails rather than emitting a
+  // filter against a chunk field nothing ever fills. Held against the List refs, not
+  // CHUNK_PARENT_FIELDS: `projectId` is stamped on every chunk too, but it is scoped through
+  // `project`/`projectIdsFrom` rather than faceted, so it belongs to neither side of this pair.
+  assert.deepStrictEqual(
+    Object.values(DOCUMENT_FACETS).slice().sort(),
+    chunksRepo.CHUNK_PARENT_LIST_REFS.slice().sort(),
+    'every facet must be a List ref the chunk build stamps onto each chunk');
+
+  // And the index really declares them filterable — the gate `buildFilter` reads.
+  const chunkFields = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'azure', 'search', 'indexes', 'chunks.json'), 'utf8')).fields;
+  for (const field of Object.values(DOCUMENT_FACETS)) {
+    const def = chunkFields.find(f => f.name === field);
+    assert.ok(def, `chunks.json declares no '${field}'`);
+    assert.strictEqual(def.filterable, true, `chunks.json '${field}' is not filterable`);
+  }
+});

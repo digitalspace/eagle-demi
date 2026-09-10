@@ -171,6 +171,83 @@ async function query(containerName, spec, options = {}) {
 }
 
 /**
+ * How many pages a single-row lookup drains before it gives up.
+ *
+ * A cross-partition lookup visits partitions until it runs out of RU budget for the page, so the
+ * bound is a fault stop, not a result limit: 50 pages is far past any id lookup that is going to
+ * succeed, and it keeps a query with a predicate that matches nothing from walking all 357
+ * partitions one page at a time.
+ */
+const LOOKUP_MAX_PAGES = 50;
+
+/**
+ * `err.code` on the error `queryFirst` throws when it runs out of pages.
+ *
+ * Callers read `null` from a lookup as "the row is not there" and act destructively on it — the
+ * re-stamp drops its message, the seeder writes a duplicate. A drain that stopped early is not that
+ * answer, so it must not wear its shape.
+ */
+const LOOKUP_BOUND_CODE = 'COSMOS_LOOKUP_BOUND';
+
+/**
+ * First row of a lookup that expects at most one, draining pages until it is found.
+ *
+ * A single page of a cross-partition query can legally come back EMPTY while the row exists:
+ * Cosmos answers with whatever the partitions it reached within the page's RU budget held, and the
+ * iterator still has more results. Reading one page and stopping — `query(..., {maxItemCount: 1})`
+ * — reports an existing document as gone.
+ *
+ * ONE iterator, drained with repeated `fetchNext()`, which is the only drain the SDK supports on
+ * every path (@azure/cosmos 4.10.0, and the loop its own `fetchNext` docstring shows at
+ * dist/commonjs/queryIterator.js:212). Resuming a NEW iterator from `response.continuationToken`,
+ * which is what this used to do through `query()`, is broken for exactly the cross-partition case
+ * this function exists for: a query the gateway rejects switches to `PipelinedQueryExecutionContext`
+ * (queryIterator.js:241-242), whose `LegacyFetchImplementation` never sets `x-ms-continuation`
+ * (dist/commonjs/queryExecutionContext/LegacyFetchImplementation.js:15-53) and whose `mergeHeaders`
+ * does not copy it either (dist/commonjs/queryExecutionContext/headerUtils.js:39-77). So
+ * `FeedResponse.continuationToken` — a raw read of that header (request/FeedResponse.js:19-21) —
+ * came back undefined and the drain stopped at page one; and had a token been there, feeding it
+ * back would have THROWN "Continuation tokens are supported when enableQueryControl is set true"
+ * (queryExecutionContext/parallelQueryExecutionContextBase.js:85-91).
+ *
+ * Returns null only when the iterator is genuinely exhausted. Hitting the page bound THROWS, with
+ * `code === LOOKUP_BOUND_CODE`: at that point nothing is known about the row, and a caller told
+ * "absent" would act on a guess.
+ *
+ * @param {object} [options] as `query`, minus `maxItemCount` — the page size is fixed at 1
+ * @returns {Promise<object|null>}
+ * @throws {Error} `code === LOOKUP_BOUND_CODE` when the drain runs out of pages
+ */
+async function queryFirst(containerName, spec, options = {}) {
+  assertQuerySpec(spec, containerName);
+
+  const container = getContainer(containerName);
+  if (!container) return null;
+
+  const feedOptions = { maxItemCount: 1 };
+  if (options.partitionKey !== undefined) feedOptions.partitionKey = options.partitionKey;
+  if (options.continuationToken) feedOptions.continuationToken = options.continuationToken;
+
+  const iterator = container.items.query(spec, feedOptions);
+
+  for (let page = 0; page < LOOKUP_MAX_PAGES && iterator.hasMoreResults(); page++) {
+    const response = await iterator.fetchNext();
+    const items = response.resources || [];
+    if (items.length > 0) return stripInternals(items[0]);
+  }
+
+  if (!iterator.hasMoreResults()) return null;
+
+  logger.warn('[Cosmos] lookup ran out of pages before the iterator ran out of partitions.', {
+    container: containerName, pages: LOOKUP_MAX_PAGES
+  });
+  throw Object.assign(
+    new Error(`[Cosmos] lookup in "${containerName}" reached the ${LOOKUP_MAX_PAGES}-page bound ` +
+      'with the iterator still holding results; "not found" would be a guess'),
+    { code: LOOKUP_BOUND_CODE });
+}
+
+/**
  * How far Cosmos has got rebuilding a container's index, as a percentage.
  *
  * A query against a partially built index answers short rather than erroring, so every cutover
@@ -229,11 +306,18 @@ async function create(containerName, item) {
 /**
  * Whole-item write. Cosmos upsert REPLACES the item — it does not merge like Mongo's $set.
  * Use patch() for partial updates, or a field written by one path will be erased by another.
+ *
+ * `etag` is the same optimistic guard `replace` takes: the write lands only while the item is still
+ * the revision the caller read, and a mismatch throws 412. It is the ONLY concurrency control an
+ * upsert can have — a whole-item write has no stored value left to test a `condition` against.
+ *
+ * @param {{etag?: string}} [options]
  */
-async function upsert(containerName, item) {
+async function upsert(containerName, item, { etag } = {}) {
   const container = getContainer(containerName);
   if (!container) return null;
-  const { resource } = await container.items.upsert(item);
+  const options = etag ? { accessCondition: { type: 'IfMatch', condition: etag } } : {};
+  const { resource } = await container.items.upsert(item, options);
   return resource;
 }
 
@@ -260,10 +344,16 @@ const PATCH_MAX_OPERATIONS = 10;
  * server in the same operation: false means the patch is not applied and the call throws 412. That
  * is what makes a counter a test-and-set rather than a read-then-write two callers can interleave.
  *
+ * `etag` is the other guard, and they are independent: `condition` asks whether the stored VALUES
+ * still allow the write, `etag` asks whether the item is still the revision the caller read. A
+ * clear-a-flag patch has no value to test — only "nobody wrote since I looked" — so it needs this
+ * one. Mismatch throws 412, same as a failed condition.
+ *
  * @param {Array<{op: string, path: string, value: any}>} operations
  * @param {string} [condition]
+ * @param {string} [etag] the `_etag` of the item the caller read
  */
-async function patch(containerName, id, partitionKey, operations, condition) {
+async function patch(containerName, id, partitionKey, operations, condition, etag) {
   if (!Array.isArray(operations) || operations.length === 0) {
     throw new TypeError('[Cosmos] patch() requires a non-empty operations array.');
   }
@@ -275,7 +365,8 @@ async function patch(containerName, id, partitionKey, operations, condition) {
   const container = getContainer(containerName);
   if (!container) return null;
   const body = condition ? { operations, condition } : operations;
-  const { resource } = await container.item(String(id), partitionKey).patch(body);
+  const options = etag ? { accessCondition: { type: 'IfMatch', condition: etag } } : {};
+  const { resource } = await container.item(String(id), partitionKey).patch(body, options);
   return resource;
 }
 
@@ -300,10 +391,26 @@ async function remove(containerName, id, partitionKey) {
 const BULK_MAX_OPERATIONS = 100;
 
 /**
+ * Cosmos's answer to a write whose precondition — an `IfMatch` etag, or a Patch operation's SQL
+ * `condition` — did not hold. It is a terminal ANSWER, not a transport fault: the row on the server
+ * is the one the caller asked not to overwrite, so repeating the request repeats the rejection.
+ */
+const PRECONDITION_FAILED = 412;
+
+/**
  * Bulk write. All operations must target the SAME partition key value.
  *
  * Splits into 100-operation requests and concatenates the responses, so the return value has one
  * entry per input operation in input order regardless of how it was chunked.
+ *
+ * Operation objects are forwarded to the SDK verbatim, so a Patch operation may carry a guarded
+ * body — `resourceBody: {operations, condition}` — exactly as `patch()` above does for a single
+ * item. @azure/cosmos 4.10 types `PatchOperationInput.resourceBody` as `PatchRequestBody`, which is
+ * `{operations, condition?}` (`utils/batch.d.ts:103-110`, `utils/patch.d.ts:18-21`), and the
+ * executor puts the prepared operations straight in the request body without rewriting the patch
+ * spec (`client/Item/Items.js:605` `body: batch.operations`, via `utils/batch.js:73-77`, which only
+ * stringifies `partitionKey`). A rejected condition comes back as a per-operation 412, which
+ * `bulkVerified` reports apart from a failure.
  */
 async function bulk(containerName, operations, opts = {}) {
   // Seam for the chunking tests, mirroring `bulkVerified`'s `bulkFn` rather than inventing a second
@@ -335,9 +442,23 @@ async function bulk(containerName, operations, opts = {}) {
  * the bill exactly when it matters. This is the only write path for chunks, so it is the one place
  * the number can be collected once for ingest, seeds and deletes alike.
  *
+ * A 412 is the exception to the retry: a precondition that did not hold is Cosmos's ANSWER, so it
+ * is recorded once, never retried, and reported in `skippedIds` rather than `failedIds`. Retrying
+ * it would pay `maxAttempts` requests for a decision already made and then hand the caller a
+ * guarded write it declined as a lost one.
+ *
  * @returns {{succeeded: number, failed: number, statusCounts: object, requestCharge: number,
- *            failedIds: string[]}}
+ *            failedIds: string[], skippedIds: string[]}}
  */
+/**
+ * The id an operation names. `resourceBody.id` covers Upsert/Create, which carry no top-level `id`
+ * — without it every failed upsert reports `undefined` and a caller filtering on this drops the
+ * whole batch.
+ */
+function operationId(op) {
+  return op.id ?? (op.resourceBody && op.resourceBody.id) ?? (op.resource && op.resource.id);
+}
+
 async function bulkVerified(containerName, operations, opts = {}) {
   const maxAttempts = opts.maxAttempts || 4;
   // Seam for the retry tests. Without a Cosmos client `bulk()` returns [] rather than throwing,
@@ -347,6 +468,7 @@ async function bulkVerified(containerName, operations, opts = {}) {
   let pending = operations;
   let succeeded = 0;
   let requestCharge = 0;
+  const skipped = [];
   let lastThrown = null;
 
   for (let attempt = 1; attempt <= maxAttempts && pending.length > 0; attempt++) {
@@ -371,14 +493,22 @@ async function bulkVerified(containerName, operations, opts = {}) {
     }
 
     const retry = [];
-    results.forEach((r, i) => {
+    // Driven by what was SENT, not by what came back. A response shorter than the request — an
+    // empty array, or a truncated one — otherwise dropped its tail silently: those operations were
+    // never counted, never retried and never named in `failedIds`, so the caller was told the batch
+    // landed. No status is an unanswered operation, which is a failure until Cosmos says otherwise.
+    const answered = Array.isArray(results) ? results : [];
+    pending.forEach((op, i) => {
+      const r = answered[i];
       const code = r && r.statusCode;
-      statusCounts[code] = (statusCounts[code] || 0) + 1;
+      const bucket = i < answered.length ? code : 'unanswered';
+      statusCounts[bucket] = (statusCounts[bucket] || 0) + 1;
       // Charged whatever the status: a rejected operation still costs RU, and a 429 costs it again
       // on the retry below.
       requestCharge += (r && Number(r.requestCharge)) || 0;
       if (code >= 200 && code < 300) succeeded++;
-      else retry.push(pending[i]);
+      else if (code === PRECONDITION_FAILED) skipped.push(op);
+      else retry.push(op);
     });
 
     pending = retry;
@@ -395,10 +525,12 @@ async function bulkVerified(containerName, operations, opts = {}) {
     throw lastThrown;
   }
 
-  // The ids still unwritten, so a caller can act on the subset that DID land.
+  // The ids still unwritten, so a caller can act on the subset that DID land. `skippedIds` are the
+  // ones Cosmos declined on their own precondition: they are neither written nor lost, and a caller
+  // that lumped them in with `failedIds` would send a repair after rows that are already current.
   return {
     succeeded, failed: pending.length, statusCounts, requestCharge,
-    failedIds: pending.map(op => op.id ?? (op.resource && op.resource.id))
+    failedIds: pending.map(operationId), skippedIds: skipped.map(operationId)
   };
 }
 
@@ -418,11 +550,14 @@ module.exports = {
   stripInternals,
   BULK_MAX_OPERATIONS,
   PATCH_MAX_OPERATIONS,
+  LOOKUP_MAX_PAGES,
+  LOOKUP_BOUND_CODE,
   initCosmosClient,
   getDatabase,
   getContainer,
   assertQuerySpec,
   query,
+  queryFirst,
   indexProgress,
   queryValue,
   readItem,

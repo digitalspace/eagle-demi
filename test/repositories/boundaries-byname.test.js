@@ -11,6 +11,10 @@ const { TIER, systemAccess } = require('../../src/helpers/access-sql');
 
 // The frontend calls /boundaries/<name> with NO type. Requiring the partition key turned `type`
 // into the string "undefined", which matches nothing and 404s every lookup.
+//
+// The unscoped call is cross-partition, so it goes through `queryFirst`: one page of a
+// cross-partition query can come back empty while the boundary exists, and `items[0]` off that page
+// answered 404 for a boundary that was there.
 
 const ANON = { tier: TIER.PUBLIC, roles: ['public'], projectScope: null, teams: [] };
 
@@ -19,9 +23,9 @@ test('getByName works with and without a type', async (t) => {
 
   await t.test('no type -> cross-partition query on name only', async () => {
     let spec, options;
-    t.mock.method(cosmos, 'query', async (c, s, o) => {
+    t.mock.method(cosmos, 'queryFirst', async (c, s, o) => {
       spec = s; options = o;
-      return { items: [{ id: 'b1', name: 'Bulkley-Nechako' }] };
+      return { id: 'b1', name: 'Bulkley-Nechako' };
     });
 
     const r = await boundaries.getByName(ANON, 'Bulkley-Nechako');
@@ -34,9 +38,9 @@ test('getByName works with and without a type', async (t) => {
 
   await t.test('with a type -> single-partition query', async () => {
     let spec, options;
-    t.mock.method(cosmos, 'query', async (c, s, o) => {
+    t.mock.method(cosmos, 'queryFirst', async (c, s, o) => {
       spec = s; options = o;
-      return { items: [{ id: 'b1' }] };
+      return { id: 'b1' };
     });
 
     await boundaries.getByName(ANON, 'Bulkley-Nechako', 'Regional District');
@@ -47,13 +51,13 @@ test('getByName works with and without a type', async (t) => {
 
   await t.test('an empty-string type is treated as absent', async () => {
     let options;
-    t.mock.method(cosmos, 'query', async (c, s, o) => { options = o; return { items: [] }; });
+    t.mock.method(cosmos, 'queryFirst', async (c, s, o) => { options = o; return null; });
     await boundaries.getByName(ANON, 'X', '');
     assert.ok(!('partitionKey' in options));
   });
 
   await t.test('no match returns null rather than undefined', async () => {
-    t.mock.method(cosmos, 'query', async () => ({ items: [] }));
+    t.mock.method(cosmos, 'queryFirst', async () => null);
     assert.strictEqual(await boundaries.getByName(ANON, 'nope'), null);
   });
 });

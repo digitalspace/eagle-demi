@@ -22,9 +22,16 @@
  *
  * Sealed (level-0) rows are not scanned: systemAccess() carries the sealed exclusion the same as
  * every other ladder read. That's fine — a sealed row never appears in a sortable result either.
+ *
+ * The walk covers every partition the document rows name, plus one bucket for the rows whose
+ * `projectId` is JSON null or absent — read cross-partition, counted in `expected`, and each
+ * patched on the key its own row carries.
  */
 
 const documents = require('../repositories/documents');
+// The bucket naming for documents that address no partition key, defined once by the sibling
+// backfill: two walks with their own idea of it would each report covering rows the other read.
+const { NULL_PARTITION } = require('./backfill-chunk-parent-fields');
 const cosmos = require('../db/cosmos-nosql');
 const { systemAccess } = require('../helpers/access-sql');
 const { naturalSortKey } = require('../helpers/natural-sort');
@@ -103,14 +110,27 @@ async function backfillDisplayNameSort(argv = [], deps = {}) {
   //
   // Enumerated from `documents`, NOT `projects`: an Eagle-only project has documents but no
   // `projects` row, so walking project ids would leave its partition never scanned.
-  const partitions = (await documentsRepo.listDistinctProjectIds(access)).map(v => String(v ?? ''));
+  //
+  // Plus one bucket for the documents whose `projectId` is JSON null or absent: DISTINCT cannot
+  // return them, they address no partition key, and left out they never get a `displayNameSort` at
+  // all — which sorts every one of them ahead of the named rows, the exact fault this backfill
+  // exists to fix. They are read cross-partition, the way the chunk backfill reads them.
+  const partitions = [
+    ...(await documentsRepo.listDistinctProjectIds(access)).map(String),
+    NULL_PARTITION
+  ];
+  // EVERY document, the null bucket included, because the walk now reaches it: counting a
+  // population narrower than the walk would let a run that never read the bucket still report
+  // full coverage.
   summary.expected = await documentsRepo.countVisible(access, {});
 
   for (const partition of partitions) {
-    const page = await documentsRepo.listVisible(access, { projectId: partition });
+    const items = partition === NULL_PARTITION
+      ? await documentsRepo.displayNameRowsWithNoProject(access)
+      : (await documentsRepo.listVisible(access, { projectId: partition })).items;
     let pending = [];
 
-    for (const doc of page.items) {
+    for (const doc of items) {
       summary.scanned++;
       const ops = planPatch(doc, now);
       if (!ops) { summary.current++; continue; }
@@ -119,7 +139,11 @@ async function backfillDisplayNameSort(argv = [], deps = {}) {
 
       pending.push({
         operationType: 'Patch',
-        partitionKey: String(doc.projectId ?? ''),
+        // The row's OWN key, passed through untouched: three different partitions arrive in this
+        // bucket. A JSON-null `projectId` is the key `null`, a row with NO `projectId` property is
+        // `PartitionKey.None`, and neither is `''` — mapping the absent one to null patches a row
+        // that is not there and the 404 lands in `failed`.
+        partitionKey: doc.projectId,
         id: String(doc.id),
         resourceBody: { operations: ops }
       });

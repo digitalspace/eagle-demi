@@ -37,6 +37,26 @@ const DATASET_INDEX = {
 };
 
 /**
+ * The four filter-panel facets, and the index field each one lands on. ONE table, spread into both
+ * `Document` and `DocumentChunk` below, because a chunk carries a COPY of these four ids from its
+ * parent document (`repositories/chunks.js` CHUNK_PARENT_FIELDS, stamped at ingest and re-stamped
+ * whenever the document's values move) under the SAME field names. Two hand-written copies would
+ * let one dataset be renamed without the other, and a saved filter URL would then mean one thing on
+ * documents and another on passages.
+ *
+ * List ObjectIds, never labels. Copied from eagle-search's own map rather than invented — a flip
+ * changes what a saved filter URL means. `test/search/eagle-query.test.js` pins the values against
+ * `CHUNK_PARENT_FIELDS`, so a facet added here without the write side fails rather than filtering
+ * on a chunk field nothing fills.
+ */
+const DOCUMENT_FACETS = Object.freeze({
+  type: 'typeId',
+  milestone: 'milestoneId',
+  projectPhase: 'projectPhaseId',
+  documentAuthorType: 'documentAuthorTypeId'
+});
+
+/**
  * Wire key → index field, per dataset.
  *
  * `_id` lands on whichever field holds the EAGLE id — `legacyEagleId` for a project, the row key
@@ -63,17 +83,18 @@ const ALIASES = {
   Document: {
     _id: 'id',
     project: 'projectId',
-    // The four document facets send List ObjectIds, never labels. Copied from eagle-search's own
-    // map rather than invented — a flip changes what a saved filter URL means.
-    type: 'typeId',
-    milestone: 'milestoneId',
-    projectPhase: 'projectPhaseId',
-    documentAuthorType: 'documentAuthorTypeId'
+    ...DOCUMENT_FACETS
   },
   DocumentChunk: {
     _id: 'chunkId',
     project: 'projectId',
-    document: 'documentId'
+    document: 'documentId',
+    // Answered by the chunk's OWN copy of its parent's ids, so the filter is one clause on one
+    // index. It used to be resolved by querying `documents` first and scoping the chunk query to
+    // the ids that came back, which is bounded by what one request returns: every filter measured
+    // on prod (`type` 2,911 documents, `projectPhase` 1,425, `milestone` 36,471) was over that
+    // bound and came back reported as inexpressible.
+    ...DOCUMENT_FACETS
   }
 };
 
@@ -355,10 +376,14 @@ function withProjectIds(query, demiIds) {
  * @param {string} dataset  Project | Document | DocumentChunk
  * @param {{filter: string|null, empty: boolean}} acl  from helpers/access-odata.filterFor()
  * @param {object} access  from helpers/access-sql.resolveAccess(); absent reads as anonymous
+ * @param {object} [opts]   `{unexpressible: [key]}` — keys this REQUEST has learned the live index
+ *                          cannot answer, whatever the committed definition says. Dropped here
+ *                          rather than deleted from `query` by the caller, so they land in
+ *                          `dropped` and the caller can still try to answer them another way.
  * @returns {{filter: string|undefined, dropped: string[]}} filter undefined = unrestricted, which
  *          is reachable ONLY for a privileged caller whose ACL clause is legitimately null.
  */
-function buildFilter(query, dataset, acl, access) {
+function buildFilter(query, dataset, acl, access, opts = {}) {
   if (!acl || typeof acl.empty !== 'boolean') {
     throw new TypeError('[eagle-query] buildFilter requires the access filter from filterFor()');
   }
@@ -369,6 +394,7 @@ function buildFilter(query, dataset, acl, access) {
 
   const fields = fieldsFor(dataset);
   const aliases = ALIASES[dataset] || {};
+  const unexpressible = new Set(opts.unexpressible || []);
   const groups = [];
   const dropped = [];
 
@@ -383,8 +409,10 @@ function buildFilter(query, dataset, acl, access) {
     const edge = /(Start|End)$/.exec(key)?.[1];
     const base = edge ? key.slice(0, -edge.length) : key;
 
-    // Before the field lookup, because this key DOES resolve to a field — see UNMAPPED_KEYS.
-    if ((UNMAPPED_KEYS[dataset] || EMPTY_SET).has(base)) {
+    // Before the field lookup, because both of these keys DO resolve to a field — see
+    // UNMAPPED_KEYS, and `opts.unexpressible` for a field the LIVE index turns out not to carry
+    // however the committed definition reads.
+    if ((UNMAPPED_KEYS[dataset] || EMPTY_SET).has(base) || unexpressible.has(base)) {
       dropped.push(key);
       continue;
     }
@@ -651,6 +679,8 @@ module.exports = {
   // Exported for the ratchet tests: an alias or a default sort naming a restricted field would
   // filter and order over something the caller cannot see.
   ALIASES,
+  // Exported so the drift test can hold it against `repositories/chunks.js` CHUNK_PARENT_FIELDS.
+  DOCUMENT_FACETS,
   SORT_KEYS,
   DEFAULT_ORDER,
   KNOWN_PARAMS,

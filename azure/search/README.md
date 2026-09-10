@@ -217,6 +217,86 @@ order takes the live search down for anonymous callers.
 Adding a field is an update, not a rebuild — existing documents keep their values and the new field
 reads `null` until the indexer has run over them again.
 
+`typeId`, `milestoneId`, `projectPhaseId` and `documentAuthorTypeId` were added to **`chunks`** on
+2026-09-09, and they are a different kind of field from everything above: they are a COPY of the
+parent document's columns, repeated on all ~1.1M chunks so a chunk query can filter on them without
+first resolving the matching documents. `src/repositories/chunks.js` owns the list
+(`CHUNK_PARENT_FIELDS`) and every writer reads it from there. The ingest paths stamp them on new
+chunks and a document write re-stamps the old ones — the re-stamp runs on a storage queue
+(`CHUNK_RESTAMP_QUEUE`, `src/jobs/restamp-chunks.js`), not on the request that caused it, because
+the walk is proportional to the document and the push that triggers it is not. Both test and prod
+name the queue. Without it the write logs one warning, flags the document row
+`parentFieldsPending: true` and skips the re-stamp rather than walking the chunks on the request —
+`CHUNK_RESTAMP_INLINE=1` asks for the inline walk, and it is for `func start` on a box with no
+storage account. The same flag is written when the enqueue itself fails, so a lost re-stamp is a
+countable row rather than a silent one: the nightly reconcile reports `parentFieldsPending=N` on the
+line `demi-reconcile-drift-<env>` reads, and
+`backfill-chunk-parent-fields.js --live --pending` walks exactly those documents and clears the flag
+on the ones it verifies. A `--live --project <id>` run — the repair the poison alert names — clears
+it too, on every document in that project whose chunks it proved to agree. A failed re-stamp is retried on a short delay the handler
+sets itself (30 s, doubling), because the app-wide one-hour `visibilityTimeout` in `host.json` is
+sized for a zip; the last of the three deliveries logs `[chunk restamp] job failed` and poisons the
+message. So the only one-off
+is `src/scripts/backfill-chunk-parent-fields.js` — its header carries the run instructions. No indexer
+reset: the backfill's Cosmos PATCH moves `_ts` on every row it touches, which is what the PT5M
+schedule already watches. The data-source PUT still has to come first, or that re-pull happens
+under a `SELECT` with no such column and the high-water mark advances past it.
+
+`projectId` is one of these fields too, and not only for filtering: it is what every chunk read
+scopes access on, so a document moved from one project to another leaves its chunks answering the
+old project's roles until they are re-stamped (chunks are partitioned by `documentId` and do not
+move with the row). It needed no index or data-source change — both already carried it — and no
+version bump: every ingest path has always written it, so a wrong value is caught by the ordinary
+value comparison.
+
+Every writer also stamps `parentFieldsVersion` (`Edm.Int32`, filterable, retrievable, not facetable
+or sortable), holding `CHUNK_PARENT_FIELDS_VERSION` from the same module. It is the only thing that
+says a chunk was ever visited. The List-ref values cannot say it: a document with no List refs at
+all correctly stamps four nulls, and there are many, so "all four are null" stays true of finished
+chunks forever.
+
+**Adding a parent field later is five edits, and the fifth is the one that gets forgotten:**
+
+1. the name into `CHUNK_PARENT_FIELDS` (`src/repositories/chunks.js`)
+2. a field on `azure/search/indexes/chunks.json` — a widening index PUT
+3. a column on the `SELECT` in `azure/search/datasources/demi-chunks-ds.json` — a data-source PUT
+4. an entry in `src/vis/catalog/chunks.js`
+5. **bump `CHUNK_PARENT_FIELDS_VERSION`** — unless chunks written before the change cannot hold a
+   wrong value for the new field, which is only true of a field every ingest path already writes
+
+The backfill then re-stamps every chunk below the current version, because `chunkMatchesParent`
+counts an old version as a mismatch however right the values look. Skip the bump and the backfill
+skips the whole corpus instead: the old fields already agree, so every document reports "already
+correct", the new column stays null on all ~1.1M rows, and the run is green throughout.
+`test/azure/search-datasource-columns.test.js` pins steps 1-3 against the two committed JSON files.
+
+**The order across a release, and it is not the obvious one.** Both PUTs go in BEFORE the merge to
+`main`, because the merge deploys the app:
+
+1. index PUT — `apply-search-definitions.js --live --only chunks`
+2. data-source PUT — `put-search-datasources.js`
+3. merge to `main` (CI deploys the API, and every chunk written from then on carries the field)
+4. `backfill-chunk-parent-fields.js --live`
+
+If the app shipped first, the chunks it wrote in between are right in Cosmos and null in the index:
+the indexer re-pulled them under the old `SELECT` and moved its high-water mark past them. The
+ordinary backfill cannot repair those — it skips a chunk whose Cosmos copy already matches its
+document — so run it once with `--force`, which re-patches regardless and moves `_ts` on every row.
+
+**`src/scripts/backfill-document-list-ids.js` must have run to completion first.** The chunk
+backfill copies what the document row holds; a row seeded before that script kept only the List
+LABEL, so its four ids are null and the chunk backfill would stamp nulls and report success. Check
+that the List-id backfill's summary reads `planned: 0` before starting the chunk one. Between the
+two, the API answers a parent-field filter over half-stamped chunks — the response carries
+`meta[0].degraded.reasons` including `chunk-parent-fields-unstamped` for exactly that window, so a
+UI can say the filter was partially applied rather than present a short answer as a complete one.
+The signal clears once no chunk sits below `CHUNK_PARENT_FIELDS_VERSION` — counted on
+`parentFieldsVersion`, never on the values. Counting chunks whose List refs are all null
+never reaches zero, because a document with no List refs stamps exactly that and stays correct.
+The count is taken under the caller's own ACL clause and project scope, so a backfill running
+project by project marks the projects it has not reached rather than every page in the corpus; the
+index-wide number is used only to skip the question when nothing anywhere is behind.
+
 ## Restoring one
 
 Public network access is `Disabled` and local auth is off, so this only works from inside the VNet,

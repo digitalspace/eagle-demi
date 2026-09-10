@@ -95,9 +95,36 @@ paths:
           in: query
           required: false
           description: >-
-            Narrows dataset=ProjectNotification, with `and[region]`, `and[pcp]` and
+            Document type, as a List ObjectId — never a label. Applies to Document and to
+            DocumentChunk, which filters on the copy of the id each chunk carries from its parent
+            document. Several ids comma-separated are a multi-select and are ORed.
+            Also narrows dataset=ProjectNotification, with `and[region]`, `and[pcp]` and
             `and[decision]`. A key the dataset does not consume is reported under
             `meta[0].dropped.filter` rather than ignored.
+          schema:
+            type: string
+        - name: and[milestone]
+          in: query
+          required: false
+          description: >-
+            Milestone List ObjectId. Applies to Document and DocumentChunk, on the same terms as
+            `and[type]`.
+          schema:
+            type: string
+        - name: and[projectPhase]
+          in: query
+          required: false
+          description: >-
+            Project phase List ObjectId. Applies to Document and DocumentChunk, on the same terms
+            as `and[type]`.
+          schema:
+            type: string
+        - name: and[documentAuthorType]
+          in: query
+          required: false
+          description: >-
+            Author type List ObjectId. Applies to Document and DocumentChunk, on the same terms as
+            `and[type]`.
           schema:
             type: string
         - name: sortBy
@@ -115,7 +142,25 @@ paths:
             One-element array of search results, the measured total and metadata. A field the live
             index could not answer is dropped from the query and named under
             `meta[0].degraded.missing`, so the page is served with that column missing rather than
-            failed — except for the visibility fields, which stay a 502.
+            failed — except for the visibility fields, which stay a 502. On DocumentChunk,
+            `meta[0].degraded.reasons` may also carry any of `chunk-parent-fields-unstamped`,
+            `chunk-parent-fields-unknown` and `chunk-parent-fields-missing`, more than one at a
+            time. All three mean the document-facet filter was NOT applied: the key is named in
+            `meta[0].dropped.filter`, the chunk query carries no clause for it, and the results are
+            unfiltered on that facet.
+            `chunk-parent-fields-unstamped` is the measured case — some chunks the caller can see
+            have not been stamped with their parent's ids at the current revision, so a clause over
+            those columns would answer zero rows rather than fewer.
+            `chunk-parent-fields-unknown` is the unanswered one — a live-index probe or the stamp
+            count could not be read, so the filter is withheld on a question rather than on an
+            answer, and it clears as soon as the service replies.
+            `chunk-parent-fields-missing` is the settled one — the live chunks index does not carry
+            that column at all, which is a deployment whose index definition has not been applied
+            yet. It does not clear by waiting. No reason carries a count: how many rows an index
+            holds is not answered under the caller's own access predicate, so it is not answered at
+            all. A facet key the live chunks index cannot filter on is resolved through the
+            documents index instead, and is named in `meta[0].dropped.filter`, with a reason
+            attached, only when that resolution is over the document cap.
         '400':
           description: Unknown dataset, unsupported query parameter, or dataset=Comment with no period.
         '502':
@@ -762,9 +807,19 @@ paths:
         '200':
           description: Document successfully updated.
         '400':
-          description: Body contains a field the caller cannot see, or a vis key.
+          description: >-
+            Body contains a field the caller cannot see, or a vis key. Also
+            `Fields must be a List id string or null: <fields>` when `typeId`, `milestoneId`,
+            `projectPhaseId`, `documentAuthorTypeId` or `projectId` is sent as anything but a
+            string or null — every chunk of the document carries a copy of those, written as a
+            string, so a number here would leave the document row and its chunks disagreeing.
         '401':
           description: Unauthorized.
+        '404':
+          description: Document deleted during the edit.
+        '409':
+          description: >-
+            The document changed three times while the write was retried. Send the edit again.
     delete:
       summary: Delete document
       description: Delete a document and its parsed chunks.
@@ -1423,6 +1478,9 @@ paths:
             higher.
         '404':
           description: The parent named by `doc.project` is in neither `projects` nor `notifications`.
+        '503':
+          description: >-
+            The document changed repeatedly while the push was retried. The caller retries.
 
   /api/eagle/updates/{eagleId}:
     put:
@@ -2845,6 +2903,24 @@ components:
           type: string
         orcsClassification:
           type: string
+        typeId:
+          type: string
+          nullable: true
+          description: >-
+            Document type, as a List ObjectId. String or null only — every chunk of the document
+            carries a copy of this value as a string, so any other type is refused with a 400.
+        milestoneId:
+          type: string
+          nullable: true
+          description: Milestone List ObjectId. String or null only, as for `typeId`.
+        projectPhaseId:
+          type: string
+          nullable: true
+          description: Project phase List ObjectId. String or null only, as for `typeId`.
+        documentAuthorTypeId:
+          type: string
+          nullable: true
+          description: Author type List ObjectId. String or null only, as for `typeId`.
 
     GeoPoint:
       type: object

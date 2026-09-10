@@ -8,7 +8,7 @@
   },
   "container": {
     "name": "chunks",
-    "query": "SELECT c.id, c.documentId, c.projectId, c.pageNumber, c.content, c.read, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
+    "query": "SELECT c.id, c.documentId, c.projectId, c.pageNumber, c.content, c.read, c.typeId, c.milestoneId, c.projectPhaseId, c.documentAuthorTypeId, c.parentFieldsVersion, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
   },
   "dataChangeDetectionPolicy": {
     "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",

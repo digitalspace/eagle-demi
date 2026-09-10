@@ -127,6 +127,20 @@ const fakeCosmosQuery = (stored) => async (_container, spec) => {
   return { items: id ? visible.filter(row => row.id === id.value) : visible };
 };
 
+/**
+ * Both read entry points off the same fake.
+ *
+ * A single-row lookup goes through `queryFirst`, not through `query` with a page size: it holds one
+ * iterator and drains it, because the SDK hands no continuation token back on the cross-partition
+ * path. It emits the SAME spec, which is what these assertions are about.
+ */
+function stubCosmosReads(t, stored) {
+  const answer = fakeCosmosQuery(stored);
+  t.mock.method(cosmos, 'query', answer);
+  t.mock.method(cosmos, 'queryFirst', async (container, spec) =>
+    (await answer(container, spec)).items[0] ?? null);
+}
+
 /** The same idea for AI Search: the OData twin of the clause above. */
 const fakeIndex = (stored) => async ({ filter }) => {
   const items = /not read\/any\(r: r eq 'compliance'\)/.test(filter || '')
@@ -194,7 +208,7 @@ test('the sealed compartment routes', async (t) => {
 
     await t.test(`a sealed row is never returned to the ladder (${who})`, async () => {
       // Driven through the REAL repository and controllers, so the emitted SQL is what decides.
-      t.mock.method(cosmos, 'query', fakeCosmosQuery([PUBLIC_ROW, SEALED_ROW]));
+      stubCosmosReads(t, [PUBLIC_ROW, SEALED_ROW]);
 
       const listed = mockRes();
       await documentController.getDocuments(
@@ -242,7 +256,7 @@ test('the sealed compartment routes', async (t) => {
 
   await t.test('the compartment route reads the row the ladder refused', async () => {
     // The other half of the invariant: refusing the holder everywhere would seal the record shut.
-    t.mock.method(cosmos, 'query', fakeCosmosQuery([PUBLIC_ROW, SEALED_ROW]));
+    stubCosmosReads(t, [PUBLIC_ROW, SEALED_ROW]);
 
     const res = mockRes();
     await sealedController.getSealed(
@@ -257,7 +271,7 @@ test('the sealed compartment routes', async (t) => {
   });
 
   await t.test('the compartment route downloads the row the ladder refused', async () => {
-    t.mock.method(cosmos, 'query', fakeCosmosQuery([PUBLIC_ROW, SEALED_ROW]));
+    stubCosmosReads(t, [PUBLIC_ROW, SEALED_ROW]);
     t.mock.method(storage, 'getDownloadUrl', async (key, opts) => {
       assert.strictEqual(key, SEALED_ROW.s3Key);
       assert.strictEqual(opts.fileName, 'warrant.pdf');
@@ -280,7 +294,7 @@ test('the sealed compartment routes', async (t) => {
   });
 
   await t.test('a public row is not the download route\'s to serve', async () => {
-    t.mock.method(cosmos, 'query', fakeCosmosQuery([PUBLIC_ROW, SEALED_ROW]));
+    stubCosmosReads(t, [PUBLIC_ROW, SEALED_ROW]);
     t.mock.method(storage, 'getDownloadUrl',
       async () => assert.fail('a row outside the compartment must never be presigned here'));
 

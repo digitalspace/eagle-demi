@@ -86,6 +86,30 @@ function carriedExtraction(existing) {
 }
 
 /**
+ * The pending-re-stamp flag, carried forward exactly like the extraction state beside it.
+ *
+ * A Cosmos upsert REPLACES the row and this transform builds it from upstream, so without this a
+ * re-seed (or any Eagle push) clears DEMI's own "the chunks never got their new values" flag while
+ * the chunks still hold the old ones — and a missed re-stamp is invisible again, because every
+ * read still answers 200. Carried only when raised: `false` and absent mean the same thing, and
+ * the handler clears the flag when a patch lands.
+ *
+ * BOTH fields, and the token VERBATIM. The token is what a clear is guarded on, so a re-seed that
+ * kept the flag and re-minted the token would hand the in-flight re-stamp a value it cannot match:
+ * its clear comes back `conflict` and the flag stays up on chunks that are already correct. A
+ * re-seed that does not move the parent fields owes nothing here — it is passing the debt through,
+ * not taking it on. The seed mints a fresh token only where it MOVED them (`scripts/seed-nosql.js`
+ * flush), which is a new debt and needs a token of its own.
+ */
+function carriedPending(existing) {
+  if (!existing || existing.parentFieldsPending !== true) return {};
+  return {
+    parentFieldsPending: true,
+    parentFieldsPendingAt: existing.parentFieldsPendingAt || null
+  };
+}
+
+/**
  * An Eagle document -> the DEMI `documents` model.
  *
  * @param {object}   doc              a record from eagle-api's Document search
@@ -93,8 +117,8 @@ function carriedExtraction(existing) {
  * @param {Map}      listLookup       List `_id` -> name
  * @param {object}   [opts]
  * @param {string}   [opts.now]       ISO timestamp, injected for deterministic tests
- * @param {object}   [opts.existing]  the row already in Cosmos, if any — its extraction state is
- *                                    carried onto the result
+ * @param {object}   [opts.existing]  the row already in Cosmos, if any — its extraction state and
+ *                                    a raised pending-re-stamp flag are carried onto the result
  * @param {string[]} [opts.projectRead] the parent project's ACL, which this one is narrowed against
  */
 function transformDocument(doc, projectId, listLookup, opts = {}) {
@@ -169,6 +193,7 @@ function transformDocument(doc, projectId, listLookup, opts = {}) {
     contentPageCount: 0,
     contentExtractionError: null,
     ...carriedExtraction(opts.existing),
+    ...carriedPending(opts.existing),
 
     updatedAt: opts.now || new Date().toISOString()
   };

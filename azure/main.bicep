@@ -266,6 +266,12 @@ param bulkDownloadsQueue string = ''
 @description('NCRONTAB schedule for the zip cleanup timer, e.g. `0 30 3 * * *`. Empty runs it never.')
 param bulkCleanupSchedule string = ''
 
+// Chunk parent-field re-stamping. Off by default like the switches above, and off means SKIPPED:
+// the inline walk it replaced is a local-development opt-in (CHUNK_RESTAMP_INLINE), not a fallback
+// a deployed environment can arrive at by losing a setting.
+@description('Storage queue the chunk parent-field re-stamp worker triggers on, e.g. `chunk-restamp`. Empty skips the re-stamp and flags the document `parentFieldsPending` — it does NOT patch inline; repair with backfill-chunk-parent-fields.js --pending.')
+param chunkRestampQueue string = ''
+
 @description('Deploy the log alert that fires when a bulk job fails.')
 param deployBulkDownloadPoisonAlert bool = false
 
@@ -498,6 +504,7 @@ module observability './modules/observability.bicep' = {
     contactEmails: contactEmails
     deployReconcileDriftAlert: deployReconcileDriftAlert
     deployBulkDownloadPoisonAlert: deployBulkDownloadPoisonAlert
+    chunkRestampQueue: chunkRestampQueue
   }
 }
 
@@ -562,6 +569,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     syncTeamsSchedule: syncTeamsSchedule
     bulkDownloadsQueue: bulkDownloadsQueue
     bulkCleanupSchedule: bulkCleanupSchedule
+    chunkRestampQueue: chunkRestampQueue
     bulkMaxDocuments: bulkMaxDocuments
     bulkAnonMaxDocuments: bulkAnonMaxDocuments
     bulkMaxBytes: bulkMaxBytes

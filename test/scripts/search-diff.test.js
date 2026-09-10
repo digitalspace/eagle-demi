@@ -19,6 +19,7 @@ const {
   baselineOf,
   specKey,
   EXPECTED_DIVERGENCE,
+  UNSTAMPED,
 } = require('../../src/scripts/search-diff');
 
 // No network anywhere in this file. The transport fails loudly — a 401 or a DNS error is visible in
@@ -26,10 +27,14 @@ const {
 // that moved. Only the pure half is worth pinning, and it is the half the exit code comes from.
 
 /** A response as `get()` builds one, from the row shapes both services actually returned today. */
-const respond = (rows, total, status = 200) => ({
+const respond = (rows, total, status = 200, meta = {}) => ({
   status,
-  payload: [{ searchResults: rows, count: total, meta: [{ searchResultsTotal: total }] }]
+  payload: [{ searchResults: rows, count: total, meta: [{ searchResultsTotal: total, ...meta }] }]
 });
+
+/** The case in the shipped matrix that filters chunks on `key`. */
+const chunkCase = key =>
+  CASES.find(c => c.dataset === 'DocumentChunk' && c.filter && c.filter.startsWith(`${key}=`));
 
 test('parseArgs takes the documented flags and refuses the rest', () => {
   assert.deepStrictEqual(parseArgs([]), { case: 0, json: false, delayMs: 250, pageSize: 10, user: '' });
@@ -80,6 +85,22 @@ test('the shipped matrix still covers every dimension it claims to', () => {
   assert.ok(CASES.some(c => c.sortBy === '-datePosted'));
   assert.ok(CASES.some(c => c.sortBy === '+displayName'));
   assert.deepStrictEqual(PAGES, [0, 1, 2]);
+});
+
+test('the matrix measures the two chunk facets it used to leave out', () => {
+  // They were excluded because demi narrows where eagle does not, which left the parity intent
+  // (eagle-query.js spreads DOCUMENT_FACETS into ALIASES.DocumentChunk) asserted in a comment and
+  // nowhere else. An id is required to be a real List ObjectId: a value matching nothing would make
+  // its case pass by comparing two empty pages.
+  for (const key of ['projectPhase', 'documentAuthorType']) {
+    const kase = chunkCase(key);
+    assert.ok(kase, `no DocumentChunk case filters on ${key}`);
+    assert.match(kase.filter, new RegExp(`^${key}=[0-9a-f]{24}$`), kase.filter);
+    assert.ok(kase.keywords, 'a keywordless chunk search returns nothing on either side');
+    // Without `mustNarrow` neither case can fail: eagle applies no chunk facet filter, so demi
+    // dropping the key makes the two AGREE and the only graded signal disappears.
+    assert.ok(Number.isFinite(kase.mustNarrow), `${key} declares no reference to narrow against`);
+  }
 });
 
 test('buildUrl repeats sortBy when a case carries two, the way the client does', () => {
@@ -335,7 +356,7 @@ test('a case-scoped acceptance does not silence its siblings', () => {
 
   const broad = compareCase(...ignored(), {
     ...sides,
-    kase: { accept: { selective: 'over DOCUMENT_SCOPE_CAP, reported in meta.dropped' } }
+    kase: { accept: { selective: 'a written reason this one case may differ' } }
   });
   assert.strictEqual(broad.pass, true, JSON.stringify(broad.diffs));
   assert.strictEqual(broad.accepted.length, 1);
@@ -360,6 +381,139 @@ test('a dataset-wide acceptance still applies to every case of it', () => {
     });
   assert.strictEqual(verdict.pass, true, JSON.stringify(verdict.diffs));
   assert.match(verdict.accepted[0].reason, /sortable:false/);
+});
+
+// demi narrowed a chunk filter to 12 rows where eagle answered its whole 418,190-row corpus: the
+// over-narrow shape the chunk backfill produces, with identical row keys so only `selective` is in
+// play. `mark` is what demi says about its own state in `meta[0]`.
+const overNarrow = (mark = {}) => [
+  respond([{ _id: 'a' }], 12, 200, mark),
+  respond([{ _id: 'b' }], 418190)
+];
+const chunkBases = kase => ({
+  dataset: 'DocumentChunk', kase, pageSize: 10,
+  demi: { total: 399872, ids: ['a'] },
+  eagle: { total: 418190, ids: ['b'] }
+});
+
+test('an over-narrow chunk filter is accepted while demi reports the backfill unfinished', () => {
+  const verdict = compareCase(
+    ...overNarrow({ degraded: { reasons: [UNSTAMPED] } }), chunkBases(chunkCase('type')));
+  assert.strictEqual(verdict.pass, true, JSON.stringify(verdict.diffs));
+  assert.strictEqual(verdict.accepted.length, 1);
+  assert.strictEqual(verdict.accepted[0].field, 'selective');
+  // The acceptance has to say WHY it fired, not just that it did — a reader has to be able to tell
+  // this apart from a decision that stands forever.
+  assert.match(verdict.accepted[0].reason, new RegExp(UNSTAMPED));
+});
+
+test('the same over-narrow filter FAILS once demi stops reporting the backfill', () => {
+  // THE LOAD-BEARING ONE. Same divergence, same case, no mark on the answer: with the backfill
+  // finished an unstamped-chunk excuse is gone and over-narrowing is a defect. If this passes, the
+  // acceptance above is unconditional in practice and the case is muted for good.
+  const verdict = compareCase(...overNarrow(), chunkBases(chunkCase('type')));
+  assert.strictEqual(verdict.pass, false, JSON.stringify(verdict.accepted));
+  assert.deepStrictEqual(verdict.accepted, []);
+  assert.ok(verdict.diffs.some(d => d.field === 'selective'));
+});
+
+test('the mark and the dropped key arrive together, and the mark is what excuses them', () => {
+  // THE STATE THE MARK ACTUALLY NAMES. demi withholds a facet over an unstamped column and answers
+  // it through the documents index; corpus-wide that recovery is over the scope cap, so the key is
+  // reported dropped AND the page is marked. Refusing the acceptance whenever `dropped.filter`
+  // names the key makes it unreachable in exactly the window it was written for.
+  const verdict = compareCase(
+    ...overNarrow({ degraded: { reasons: [UNSTAMPED] }, dropped: { filter: ['type'], sort: [] } }),
+    chunkBases(chunkCase('type')));
+  assert.strictEqual(verdict.pass, true, JSON.stringify(verdict.diffs));
+  assert.strictEqual(verdict.accepted.length, 1);
+});
+
+test('a dropped filter with no mark behind it is a finding, backfill or not', () => {
+  // The other half. A key demi never applied and cannot blame the backfill for is the failure this
+  // matrix exists to catch — the answer is too WIDE and nothing in it says why.
+  const verdict = compareCase(
+    ...overNarrow({ dropped: { filter: ['type'], sort: [] } }), chunkBases(chunkCase('type')));
+  assert.strictEqual(verdict.pass, false, JSON.stringify(verdict.accepted));
+  assert.deepStrictEqual(verdict.accepted, []);
+  assert.ok(verdict.diffs.some(d => d.field === 'selective'));
+});
+
+// The two facets eagle never applies to chunks. Measured against demi test on 2026-09-10:
+// `keywords=water` answers 395,187 passages, and the same query with `and[projectPhase]` answers
+// 395,187 again with `dropped.filter: ["projectPhase"]` — the key thrown away, no mark behind it.
+const facetBases = kase => ({
+  dataset: 'DocumentChunk', kase, pageSize: 10,
+  demi: { total: 395187, ids: ['a'] },
+  eagle: { total: 418190, ids: ['b'] }
+});
+
+test('a chunk facet demi stopped narrowing is a finding, even though eagle agrees', () => {
+  // THE ONE THE CONSTANT-STRING ACCEPTANCE COULD NOT CATCH. eagle applies no such filter, so demi
+  // dropping it makes the two AGREE — `selective` never fires, and the case that exists to catch a
+  // stamping regression passed in silence. Graded against demi's own unfiltered answer instead.
+  const verdict = compareCase(
+    respond([{ _id: 'a' }], 395187, 200, { dropped: { filter: ['projectPhase'], sort: [] } }),
+    respond([{ _id: 'b' }], 418190),
+    facetBases(chunkCase('projectPhase')));
+  assert.strictEqual(verdict.pass, false, JSON.stringify(verdict.diffs));
+  assert.deepStrictEqual(verdict.accepted, []);
+  // The dropped key is reported with it: "the filter matched everything" and "the service threw the
+  // filter away" are different failures and send a reader to different code.
+  assert.deepStrictEqual(verdict.diffs.find(d => d.field === 'narrowed'),
+    { field: 'narrowed', demi: 395187, baseline: 395187, dropped: ['projectPhase'] });
+});
+
+test('demi narrowing a chunk facet eagle ignores is accepted, with its reference printed', () => {
+  const kase = chunkCase('documentAuthorType');
+  const verdict = compareCase(
+    respond([{ _id: 'a' }], 210418), respond([{ _id: 'b' }], 418190), facetBases(kase));
+  assert.strictEqual(verdict.pass, true, JSON.stringify(verdict.diffs));
+  assert.strictEqual(verdict.accepted.length, 1);
+  assert.strictEqual(verdict.accepted[0].field, 'selective');
+  // A passage total read against a DOCUMENT count: both numbers printed, neither compared with the
+  // other, because 210,418 passages under 1,518 documents is not a contradiction.
+  assert.match(verdict.accepted[0].reason, /210418 passages/);
+  assert.match(verdict.accepted[0].reason, new RegExp(`${kase.mustNarrow} of 2,624`));
+});
+
+test('the chunk facet acceptance excuses one direction only', () => {
+  // demi answering its whole corpus while EAGLE narrows is the same case failing the other way, and
+  // the constant string excused it in the same words it excused the correct answer with.
+  const verdict = compareCase(
+    respond([{ _id: 'a' }], 395187), respond([{ _id: 'b' }], 12000),
+    facetBases(chunkCase('projectPhase')));
+  assert.strictEqual(verdict.pass, false, JSON.stringify(verdict.accepted));
+  assert.deepStrictEqual(verdict.accepted, []);
+  assert.ok(verdict.diffs.some(d => d.field === 'selective'));
+  assert.ok(verdict.diffs.some(d => d.field === 'narrowed'));
+});
+
+test('a chunk facet answer with no total has not been shown to narrow', () => {
+  // Same rule as the empty-page excuse: unknown is not expected. A 200 carrying rows but no total
+  // leaves the narrowing unmeasured, and unmeasured must not read as fine.
+  const verdict = compareCase(
+    { status: 200, payload: [{ searchResults: [{ _id: 'a' }] }] },
+    respond([{ _id: 'b' }], 418190),
+    facetBases(chunkCase('projectPhase')));
+  assert.strictEqual(verdict.pass, false);
+  assert.strictEqual(verdict.diffs.find(d => d.field === 'narrowed').demi, null);
+});
+
+test('every acceptance a case declares produces a written reason', () => {
+  // Same invariant as the dataset table below, one scope down, and it covers the conditional form:
+  // an acceptance that fires without saying why is indistinguishable from an oversight.
+  const answer = { degradedReasons: [UNSTAMPED], droppedFilter: [], total: 210418 };
+  // The disagreement each acceptance is written for: demi's answer moved, eagle's did not. A
+  // conditional acceptance may read it, so it has to be supplied or the acceptance never fires.
+  const diff = { field: 'selective', demi: true, eagle: false };
+  for (const kase of CASES.filter(c => c.accept)) {
+    for (const [field, accept] of Object.entries(kase.accept)) {
+      const reason = typeof accept === 'function' ? accept(answer, { kase, diff }) : accept;
+      assert.ok(typeof reason === 'string' && reason.length > 40,
+        `${kase.dataset} ${kase.filter} accepts ${field} with no real reason`);
+    }
+  }
 });
 
 test('every declared divergence carries a reason', () => {

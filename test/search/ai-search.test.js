@@ -1342,13 +1342,17 @@ test('the service page cap stays inside the page-assembly cap', () => {
 });
 
 /**
- * `documentIdsMatching` — the resolver behind chunk-metadata filters.
+ * `documentIdsMatching` — the resolver behind the chunk filters no chunk row can answer.
  *
- * It had no test at all. Every reference to it in `test/` was a `t.mock.method` stub, so the five
+ * It had no test at all. Every reference to it in `test/` was a `t.mock.method` stub, so the
  * controller tests that look like cap coverage were asserting the CONTROLLER's handling of a
  * hand-supplied `{ids, total, withinCap}` and exercising none of the code that decides it. Deleting
- * the over-cap guard outright left the whole 1,042-test suite green, and a cap set above what one
- * request can return truncated every real filter to a 500-id prefix and reported it as applied.
+ * the over-cap guard outright left the whole suite green, and a cap set above what one request can
+ * return truncated every real filter to a 500-id prefix and reported it as applied.
+ *
+ * STILL LIVE: the document-only keys (`datePosted*`, `isFeatured`, `legislation`,
+ * `documentSource`) come here on every request that sends one, and so does a facet the live chunks
+ * index has not been widened for yet.
  *
  * These stub `fetch`, not the function.
  */
@@ -1392,6 +1396,24 @@ test('ai-search document id resolution', async (t) => {
     const res = await aiSearch.documentIdsMatching("type eq 'x'");
     assert.strictEqual(res.withinCap, false);
     assert.deepStrictEqual(res.ids, []);
+  });
+
+  await t.test('an over-cap page is not walked to find that out', async (tt) => {
+    // The cap decision is a comparison against `@odata.count`, and every filter measured on prod
+    // is over the cap — so the common path used to build a 250-id array, then discard it. The ids
+    // are read here through getters, which is the only way to assert that they were not read.
+    let reads = 0;
+    captureFetch(tt, () => ({
+      json: {
+        value: Array.from({ length: 250 }, (_, i) => ({ get id() { reads += 1; return `d${i}`; } })),
+        '@odata.count': 2911
+      }
+    }));
+
+    const res = await aiSearch.documentIdsMatching("type eq 'x'");
+
+    assert.strictEqual(res.withinCap, false);
+    assert.strictEqual(reads, 0, 'the page was read to build a list the cap test then threw away');
   });
 
   await t.test('the cap cannot exceed what one request returns', () => {
@@ -1490,6 +1512,74 @@ test('writeAcls', async (t) => {
   await t.test('no rows means no request', async (tt) => {
     const calls = captureFetch(tt, () => ({ json: { value: [] } }));
     assert.strictEqual(await aiSearch.writeAcls('documents', []), 0);
+    assert.strictEqual(calls.length, 0);
+  });
+});
+
+/**
+ * `deleteDocuments` — bulk key deletes on the chunks index, for rows whose parent is gone.
+ *
+ * The indexer is a `_ts` high-water mark and cannot see a delete, so a chunk nothing owns any more
+ * stays searchable until something removes it by key. What comes back is what is STILL THERE: a
+ * purge that reports success for a row the service refused is worse than one that reports nothing.
+ */
+test('deleteDocuments', async (t) => {
+  await t.test('it deletes by key on the chunks index', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [{ key: 'c1', status: true }] } }));
+
+    const failed = await aiSearch.deleteDocuments(['c1']);
+
+    assert.deepStrictEqual(failed, []);
+    assert.strictEqual(calls.length, 1);
+    assert.match(calls[0].url, /\/docs\/index/);
+    assert.deepStrictEqual(calls[0].body.value, [{ '@search.action': 'delete', id: 'c1' }]);
+  });
+
+  await t.test('1,500 keys go as 1,000 + 500 — the service caps one batch at 1,000', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.deleteDocuments(Array.from({ length: 1500 }, (_, i) => `c${i}`));
+
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(calls[0].body.value.length, 1000);
+    assert.strictEqual(calls[1].body.value.length, 500);
+    assert.strictEqual(calls[1].body.value[0].id, 'c1000', 'the second batch continues, not repeats');
+  });
+
+  await t.test('a per-row refusal comes back as an id, not as a throw', async (tt) => {
+    // A 207 is an `ok` response carrying per-row verdicts. The caller purges thousands of rows and
+    // has to know WHICH ones are still findable; a throw would lose the ones that did land.
+    captureFetch(tt, () => ({
+      json: {
+        value: [
+          { key: 'a', status: true },
+          { key: 'b', status: false, statusCode: 503, errorMessage: 'service busy' }
+        ]
+      }
+    }));
+
+    assert.deepStrictEqual(await aiSearch.deleteDocuments(['a', 'b']), ['b']);
+  });
+
+  await t.test('a row that is already gone is not a failure', async (tt) => {
+    // The caller wants the row not to be in the index. A 404 says it is not.
+    captureFetch(tt, () => ({
+      json: { value: [{ key: 'a', status: false, statusCode: 404 }] }
+    }));
+
+    assert.deepStrictEqual(await aiSearch.deleteDocuments(['a']), []);
+  });
+
+  await t.test('a transport failure names the whole batch', async (tt) => {
+    // Nothing is known to have been removed, so nothing may be reported as removed.
+    captureFetch(tt, () => ({ throws: new Error('boom') }));
+
+    assert.deepStrictEqual(await aiSearch.deleteDocuments(['a', 'b']), ['a', 'b']);
+  });
+
+  await t.test('no keys means no request', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+    assert.deepStrictEqual(await aiSearch.deleteDocuments([]), []);
     assert.strictEqual(calls.length, 0);
   });
 });
@@ -1743,4 +1833,392 @@ test('the schema probe', async (t) => {
         aiSearch.probeIndexSchema({ indexName: 'documents', select: aiSearch.DOCUMENT_SELECT }),
         /HTTP 403/);
     });
+});
+
+// EXPRESSIBILITY IS A FACT ABOUT THE SERVICE. The packaged `azure/search/indexes/chunks.json` says
+// what the index SHOULD carry; nothing on the deploy path applies it, so between an app release and
+// the index PUT the two disagree and every emitted `typeId eq …` is a 400 the controller answers as
+// The count behind that mark, asked for one caller's scope. The controller used to build this
+// clause itself, which is two places that had to agree about a field only this module knows.
+test('the scoped stale-chunk count', async (t) => {
+  const VERSION = 3;
+
+  await t.test('counts the stamp clause, the ACL and the project scope together', async (tt) => {
+    // BRACKETED, and that is the whole reason this is one function. `or` binds looser than `and`,
+    // so `parentFieldsVersion lt 3 or parentFieldsVersion eq null and <acl>` counts every chunk
+    // below the revision REGARDLESS of who may see it — a count over rows the caller cannot read.
+    const calls = captureFetch(tt, () => ({ json: { '@odata.count': 12 } }));
+
+    const count = await aiSearch.staleChunkCount(
+      { version: VERSION, aclFilter: ANONYMOUS_ACL, projectIds: ['207', '208'] });
+
+    assert.strictEqual(count, 12);
+    assert.strictEqual(calls.length, 1, 'one $count request, no page of rows');
+    assert.strictEqual(calls[0].body.top, 0);
+    assert.strictEqual(calls[0].body.count, true);
+    assert.strictEqual(calls[0].body.search, '*',
+      'the caller\'s keywords are not the population — a stale chunk they did not match is still ' +
+      'a row the facet filter skipped');
+    assert.strictEqual(
+      calls[0].body.filter,
+      `(parentFieldsVersion lt ${VERSION} or parentFieldsVersion eq null) and (${ANONYMOUS_ACL})` +
+      " and (search.in(projectId, '207,208', ','))");
+  });
+
+  await t.test('an unscoped count is the bare stamp clause', async (tt) => {
+    // The index-wide superset `chunkParentFieldStatus` reports and the controller short-circuits
+    // on. Nothing invents a project or an ACL the caller did not pass.
+    const calls = captureFetch(tt, () => ({ json: { '@odata.count': 4210 } }));
+
+    assert.strictEqual(await aiSearch.staleChunkCount({ version: VERSION }), 4210);
+    assert.strictEqual(calls[0].body.filter,
+      `parentFieldsVersion lt ${VERSION} or parentFieldsVersion eq null`);
+  });
+
+  await t.test('an index with no stamp field answers null, not zero', async (tt) => {
+    // Same refusal the index-wide count makes: "0 stale" off an index that cannot tell clears the
+    // mark for good, and nothing in the response says the question went unanswered.
+    captureFetch(tt, () => ({
+      ok: false,
+      status: 400,
+      json: { error: { message:
+        "Invalid expression: Could not find a property named 'parentFieldsVersion' on type " +
+        "'search.document'." } }
+    }));
+
+    assert.strictEqual(
+      await aiSearch.staleChunkCount({ version: VERSION, aclFilter: ANONYMOUS_ACL }), null);
+  });
+
+  await t.test('no version asks nothing and answers null', async (tt) => {
+    // `lt undefined` is a 400 about the clause rather than about the field, which reads as a
+    // service fault to everything downstream.
+    const calls = captureFetch(tt, () => ({ json: { '@odata.count': 0 } }));
+
+    assert.strictEqual(await aiSearch.staleChunkCount({ aclFilter: ANONYMOUS_ACL }), null);
+    assert.strictEqual(calls.length, 0);
+  });
+
+  await t.test('a failure that is not the missing stamp field is raised', async (tt) => {
+    // A 403 or a timeout is not an answer about the backfill, and swallowing it as null here would
+    // hide the difference between "nothing is behind" and "the service is refusing us" from the
+    // caller that decides how long to cache it.
+    captureFetch(tt, () => ({ ok: false, status: 403, json: { error: { message: 'Forbidden.' } } }));
+
+    await assert.rejects(() => aiSearch.staleChunkCount({ version: VERSION }));
+  });
+});
+
+// The rows behind that count, for the orphan purge: a chunk deleted from Cosmos keeps its index
+// row forever (the indexer has no deletion detection), so no stamp can ever reach it.
+test('listing the unstamped chunk rows', async (t) => {
+  const VERSION = 3;
+
+  await t.test('asks for the index key and the Cosmos id, scoped to one project', async (tt) => {
+    const calls = captureFetch(tt, () => ({
+      json: { '@odata.count': 1, value: [{ id: 'a2V5', chunkId: 'd1::p1::c0', documentId: 'd1' }] }
+    }));
+
+    const stale = await aiSearch.listStaleChunkIds({ version: VERSION, projectId: '207' });
+
+    assert.deepStrictEqual(stale.rows, [{ id: 'a2V5', chunkId: 'd1::p1::c0', documentId: 'd1' }]);
+    assert.strictEqual(stale.total, 1);
+    assert.strictEqual(stale.complete, true);
+    assert.strictEqual(calls[0].body.filter,
+      `(parentFieldsVersion lt ${VERSION} or parentFieldsVersion eq null) and (projectId eq '207')`);
+    // The KEY, never re-derived: the indexer mints it with a .NET base64 variant, so a purge that
+    // computed it would delete nothing and report success.
+    assert.strictEqual(calls[0].body.select, 'id,chunkId,documentId');
+  });
+
+  await t.test('a null projectId asks for the null rows, not for every row', async (tt) => {
+    // Presence, not truthiness. Those rows are the ones no per-partition walk can reach, and
+    // folding them into "no scope at all" would purge across the whole index.
+    const calls = captureFetch(tt, () => ({ json: { '@odata.count': 0, value: [] } }));
+
+    await aiSearch.listStaleChunkIds({ version: VERSION, projectId: null });
+
+    assert.strictEqual(calls[0].body.filter,
+      `(parentFieldsVersion lt ${VERSION} or parentFieldsVersion eq null) and (projectId eq null)`);
+  });
+
+  await t.test('paging stops at maxRows and says the answer is partial', async (tt) => {
+    // Bounded on purpose: right after a patch every row of the partition still reads as unstamped,
+    // and draining that is a page loop against a 1-SU service.
+    const calls = captureFetch(tt, () => ({
+      json: {
+        '@odata.count': 900,
+        value: Array.from({ length: 250 }, (_, i) => ({ id: `k${i}`, chunkId: `c${i}`, documentId: 'd1' }))
+      }
+    }));
+
+    const stale = await aiSearch.listStaleChunkIds({ version: VERSION, maxRows: 500 });
+
+    assert.strictEqual(stale.rows.length, 500);
+    assert.strictEqual(stale.total, 900);
+    assert.strictEqual(stale.complete, false, 'a truncated page must not read as the whole set');
+    assert.ok(calls.every(c => c.body.top <= 500));
+  });
+
+  await t.test('an index with no stamp field answers null, not an empty list', async (tt) => {
+    // "Nothing is orphaned" off an index that cannot tell would be a purge of nothing reported as
+    // a clean partition.
+    captureFetch(tt, () => ({
+      ok: false,
+      status: 400,
+      json: { error: { message:
+        "Invalid expression: Could not find a property named 'parentFieldsVersion' on type " +
+        "'search.document'." } }
+    }));
+
+    assert.strictEqual(await aiSearch.listStaleChunkIds({ version: VERSION }), null);
+  });
+
+  await t.test('no version asks nothing and answers null', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    assert.strictEqual(await aiSearch.listStaleChunkIds({}), null);
+    assert.strictEqual(calls.length, 0);
+  });
+});
+
+// a 502 over the whole tab.
+test('the live chunk parent-field status', async (t) => {
+  const FIELDS = ['typeId', 'milestoneId', 'projectPhaseId', 'documentAuthorTypeId'];
+  const VERSION = 3;
+  // The cache is module state shared by every case here, so each one asks at a time a TTL past the
+  // last — otherwise a later case reads the earlier one's answer and asserts nothing.
+  const TTL = aiSearch.LIVE_SCHEMA_TTL_MS;
+  const missingField = field => ({
+    ok: false,
+    status: 400,
+    json: { error: { message:
+      `Invalid expression: Could not find a property named '${field}' on type 'search.document'.` } }
+  });
+
+  await t.test('one filter probe per field, then one stamp count', async (tt) => {
+    const calls = captureFetch(tt,
+      (i) => (i < FIELDS.length ? { json: {} } : { json: { '@odata.count': 0 } }));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: TTL });
+
+    assert.deepStrictEqual(status,
+      { known: true, available: FIELDS, missing: [], unknown: [], unstamped: 0 });
+    assert.strictEqual(calls.length, FIELDS.length + 1);
+    assert.deepStrictEqual(calls[0].body, {
+      search: '*', top: 0, count: false, filter: "typeId eq 'probe'"
+    }, 'the probe must cost one empty page, not a page of chunks');
+    // THE STAMP, NEVER THE VALUES. "All four ids are null" is true forever of every chunk of every
+    // document that carries no List refs — a permanent population on prod — so a count of those
+    // can never reach zero and the degraded mark it gates could never clear.
+    assert.strictEqual(calls[FIELDS.length].body.filter,
+      'parentFieldsVersion lt 3 or parentFieldsVersion eq null');
+    assert.strictEqual(calls[FIELDS.length].body.count, true);
+  });
+
+  await t.test('a field the live index does not carry comes back as missing', async (tt) => {
+    captureFetch(tt, (i) => (i === 0 ? missingField('typeId') : { json: { '@odata.count': 0 } }));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: 2 * TTL });
+
+    assert.deepStrictEqual(status.missing, ['typeId']);
+    assert.deepStrictEqual(status.available, FIELDS.slice(1));
+    assert.strictEqual(status.known, true, 'a narrow index is an ANSWER, not an unknown');
+  });
+
+  await t.test('a field the index carries but cannot filter on is missing too', async (tt) => {
+    // The other spelling of the same fact. A field declared `filterable: false` answers a 400 that
+    // names it without the words "could not find" — read as anything else, the app would go on
+    // emitting a clause the service refuses, which is the 502 over the whole tab.
+    captureFetch(tt, (i) => (i === 1 ? {
+      ok: false,
+      status: 400,
+      json: { error: { message:
+        "Invalid expression: The field 'milestoneId' in the filter clause is not filterable." } }
+    } : { json: { '@odata.count': 0 } }));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: 3 * TTL });
+
+    assert.deepStrictEqual(status.missing, ['milestoneId']);
+    assert.strictEqual(status.known, true);
+  });
+
+  await t.test('an unfinished backfill is counted off the stamp', async (tt) => {
+    captureFetch(tt, (i) => (i < FIELDS.length ? { json: {} } : { json: { '@odata.count': 4210 } }));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: 4 * TTL });
+    assert.strictEqual(status.unstamped, 4210);
+  });
+
+  await t.test('an index with no stamp field answers UNKNOWN, not zero', async (tt) => {
+    // The index PUT that adds `parentFieldsVersion` is an operator step of its own, so an index
+    // carrying the four fields and not the stamp is a real deploy state. Answering 0 there reports
+    // the backfill as finished off an index that cannot tell, and the mark never appears at all.
+    captureFetch(tt, (i) => (i < FIELDS.length ? { json: {} } : missingField('parentFieldsVersion')));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: 5 * TTL });
+
+    assert.strictEqual(status.unstamped, null, 'unknown is not zero');
+    assert.strictEqual(status.known, true, 'and the FIELDS are still known — only the count is not');
+    assert.deepStrictEqual(status.missing, []);
+  });
+
+  await t.test('a 400 about something else answers "unknown", never a drop', async (tt) => {
+    // ONLY a 400 naming the probed property means "this index cannot filter on it". A 400 about a
+    // malformed clause, a quota, or another field entirely says nothing about the schema, and
+    // reading it as "the field is missing" drops a working filter for ten minutes.
+    captureFetch(tt, () => ({
+      ok: false,
+      status: 400,
+      json: { error: { message: 'The request is invalid. Details: parameters : Invalid JSON.' } }
+    }));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: 6 * TTL });
+    assert.deepStrictEqual(status,
+      { known: false, available: [], missing: [], unknown: FIELDS, unstamped: null });
+  });
+
+  await t.test('a failure that is not a 400 answers "unknown" too', async (tt) => {
+    // A 403 or a timeout must not be read as "the index cannot answer this": dropping the key on
+    // that would report a working filter as inexpressible every time the service hiccupped.
+    captureFetch(tt, () => ({ ok: false, status: 403, json: { error: { message: 'Forbidden.' } } }));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: 7 * TTL });
+    assert.deepStrictEqual(status,
+      { known: false, available: [], missing: [], unknown: FIELDS, unstamped: null });
+  });
+
+  await t.test('the answer is cached, and re-read once the TTL is past', async (tt) => {
+    const calls = captureFetch(tt,
+      (i) => (i % (FIELDS.length + 1) < FIELDS.length ? { json: {} } : { json: { '@odata.count': 0 } }));
+
+    const t0 = 8 * TTL;
+    await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: t0 });
+    const perRead = calls.length;
+
+    await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: t0 + TTL - 1 });
+    assert.strictEqual(calls.length, perRead,
+      'the frontend searches on a debounced keystroke — a probe per request is one per keypress');
+
+    // AND IT EXPIRES. The index is widened by a PUT no app release is involved in, so a process
+    // that cached "the field is not there" forever would keep dropping the filter until somebody
+    // restarted the Function.
+    await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: t0 + TTL });
+    assert.strictEqual(calls.length, perRead * 2);
+  });
+
+  await t.test('an UNKNOWN is held for seconds, not for the schema TTL', async (tt) => {
+    // An unknown is not a fact about the index — it is a hiccup, and it clears on its own. Held
+    // for the full ten minutes, one 403 makes every request in that window answer from it.
+    let failing = true;
+    const calls = captureFetch(tt, () => (failing
+      ? { ok: false, status: 403, json: { error: { message: 'Forbidden.' } } }
+      : { json: { '@odata.count': 0 } }));
+
+    const t0 = 10 * TTL;
+    const first = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: t0 });
+    assert.strictEqual(first.known, false);
+    const afterFailure = calls.length;
+
+    await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: t0 + 1 });
+    assert.strictEqual(calls.length, afterFailure,
+      'a service that is failing still gets one probe per burst, not one per keystroke');
+
+    failing = false;
+    const recovered = await aiSearch.chunkParentFieldStatus(
+      FIELDS, VERSION, { now: t0 + aiSearch.UNKNOWN_STATUS_TTL_MS });
+    assert.strictEqual(recovered.known, true,
+      'the probe must be re-asked long before the schema TTL is up');
+    assert.ok(aiSearch.UNKNOWN_STATUS_TTL_MS <= 30 * 1000,
+      `an unknown must not be held longer than 30s, got ${aiSearch.UNKNOWN_STATUS_TTL_MS}ms`);
+  });
+
+  await t.test('no version to compare against is unknown, and asks nothing', async (tt) => {
+    // The write side owns the revision number. Interpolating an undefined one into OData asks the
+    // service `parentFieldsVersion lt undefined`, whose 400 is about the clause rather than the
+    // field and would read as a service fault.
+    const calls = captureFetch(tt, () => ({ json: {} }));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, undefined, { now: 12 * TTL });
+
+    assert.strictEqual(status.unstamped, null);
+    assert.strictEqual(calls.length, FIELDS.length, 'no count request is issued');
+  });
+
+  await t.test('a probe that dies partway keeps the fields it already decided', async (tt) => {
+    // The reader drops every field this does not vouch for, so throwing away two settled answers
+    // because the third field's probe hit a 403 drops two working filters for the length of the
+    // hiccup — the fail-closed reader turns a discarded answer into a lost filter.
+    captureFetch(tt, (i) => (i < 2
+      ? { json: {} }
+      : { ok: false, status: 403, json: { error: { message: 'Forbidden.' } } }));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: 13 * TTL });
+
+    assert.deepStrictEqual(status.available, FIELDS.slice(0, 2));
+    assert.deepStrictEqual(status.unknown, FIELDS.slice(2));
+    assert.strictEqual(status.known, false, 'a partial answer is not a complete one');
+    assert.strictEqual(status.unstamped, null, 'the count was never reached');
+  });
+
+  await t.test('a count that fails leaves every field usable', async (tt) => {
+    // The other end of the same rule. Every probe answered, so expressibility IS settled; only the
+    // backfill mark went unanswered, and marking all four inexpressible over that would drop four
+    // working filters to avoid showing one advisory banner.
+    captureFetch(tt, (i) => (i < FIELDS.length
+      ? { json: {} }
+      : { ok: false, status: 403, json: { error: { message: 'Forbidden.' } } }));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: 14 * TTL });
+
+    assert.deepStrictEqual(status.available, FIELDS);
+    assert.deepStrictEqual(status.unknown, []);
+    assert.strictEqual(status.unstamped, null);
+  });
+
+  await t.test('one field failing costs nothing to the fields after it', async (tt) => {
+    // The probes are independent reads and are issued together. Asked in series, a 403 on the
+    // second field left the third and fourth unasked, so one hiccup dropped three filters — and
+    // put four sequential round trips in front of every filtered Deep Search.
+    captureFetch(tt, (i) => (i === 1
+      ? { ok: false, status: 403, json: { error: { message: 'Forbidden.' } } }
+      : { json: {} }));
+
+    const status = await aiSearch.chunkParentFieldStatus(FIELDS, VERSION, { now: 15 * TTL });
+
+    assert.deepStrictEqual(status.unknown, ['milestoneId'], 'only the field that failed');
+    assert.deepStrictEqual(status.available,
+      ['typeId', 'projectPhaseId', 'documentAuthorTypeId'],
+      'the fields after the failure were still asked');
+    assert.strictEqual(status.known, false, 'a partial answer is not a complete one');
+  });
+
+  await t.test('a probe that REJECTS is an unknown, not a ten-minute outage', async (tt) => {
+    // THE CACHED REJECTION. The promise is memoised, not its value, so a rejected one is handed to
+    // every caller that touches the entry — and it is awaited by every filtered Deep Search there
+    // is. Held under the schema TTL it rethrows for ten minutes, and this route answers a throw
+    // with 502: one bad probe takes the whole tab down until the TTL runs out.
+    //
+    // Reached here through the argument the reader itself supplies, which is the one throw ahead of
+    // the internal try/catch: everything inside is already caught per field. The mechanism under
+    // test is the memoisation, not this particular trigger.
+    let status;
+    await assert.doesNotReject(async () => {
+      status = await aiSearch.chunkParentFieldStatus(null, VERSION, { now: 16 * TTL });
+    }, 'a probe that threw must not be rethrown at the reader');
+    assert.strictEqual(status.known, false, 'and it answers "not known", never a partial truth');
+    assert.deepStrictEqual(status.available, [],
+      'nothing may be reported filterable off a probe that did not run');
+
+    // And it clears in seconds. The recovery is what proves the entry was demoted to the short TTL
+    // rather than pinned: the same reader, with a working argument, one unknown-TTL later.
+    const calls = captureFetch(tt,
+      (i) => (i < FIELDS.length ? { json: {} } : { json: { '@odata.count': 0 } }));
+    const recovered = await aiSearch.chunkParentFieldStatus(
+      FIELDS, VERSION, { now: 16 * TTL + aiSearch.UNKNOWN_STATUS_TTL_MS });
+
+    assert.strictEqual(recovered.known, true,
+      'a rejected probe must be re-asked long before the schema TTL is up');
+    assert.strictEqual(calls.length, FIELDS.length + 1, 'the service was actually re-probed');
+  });
 });

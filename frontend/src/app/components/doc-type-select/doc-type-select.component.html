@@ -1,0 +1,11 @@
+<label style="display: flex; align-items: center; gap: 0.35rem; font: var(--typography-regular-label); color: var(--typography-color-secondary); white-space: nowrap;">
+  Type
+  <span style="position: relative; display: inline-flex; align-items: center;"><select [value]="service.selectedDocType()" (change)="onDocTypeChange($event)" [attr.aria-label]="ariaLabel()" style="border: var(--layout-border-width-small) solid var(--surface-color-border-default); border-radius: var(--layout-border-radius-small); font: var(--typography-regular-small-body); color: var(--typography-color-primary); padding: 0.3rem 1.7rem 0.3rem 0.55rem; background: var(--surface-color-background-white); -webkit-appearance: none; -moz-appearance: none; appearance: none; cursor: pointer; max-width: 16rem;">
+    <!-- `selected` as well as the select's own `[value]`: the options are an @for, so on the
+         first render the value binding runs before any option exists to carry it. -->
+    <option value="" [selected]="!service.selectedDocType()">All types</option>
+    @for (opt of service.docTypeOptions(); track opt.value) {
+      <option [value]="opt.value" [selected]="opt.value === service.selectedDocType()">{{ opt.label }}</option>
+    }
+  </select><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true" style="position: absolute; right: 0.55rem; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--typography-color-secondary);"><polyline points="6,9 12,15 18,9"></polyline></svg></span>
+</label>

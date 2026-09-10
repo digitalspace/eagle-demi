@@ -28,6 +28,9 @@ param deployReconcileDriftAlert bool = false
 @description('Alert when a bulk download job fails. Off by default, like the drift alert: an environment with no BULK_DOWNLOADS_QUEUE never writes the line this rule reads.')
 param deployBulkDownloadPoisonAlert bool = false
 
+@description('Storage queue the chunk parent-field re-stamp worker triggers on. Gates the poison alert below directly rather than through its own bool: an environment with no queue name never writes the line the alert reads.')
+param chunkRestampQueue string = ''
+
 @description('Who to tell when ingestion approaches the daily cap. Also reused by audit-logs.bicep, which cannot own the action group itself: main.bicep deploys this module first, so a shared group has to live on this side of the dependency.')
 param contactEmails array = [
   'Daniel.T.Truong@gov.bc.ca'
@@ -172,7 +175,8 @@ resource quotaAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
 // push cannot tell DEMI a row is gone — this rule is the only thing that notices, and it notices
 // only because src/scripts/reconcile-eagle.js writes one machine-readable line per run.
 //
-// The line is `[reconcile] projects: … documents: … drift=N`, and `drift=0` is clean. Nothing
+// The line is `[reconcile] projects: … documents: … parentFieldsPending=N drift=N`, and zero in
+// both is clean — the second counts documents whose chunks never got their parent fields. Nothing
 // alerts when the run does not happen at all: a nightly job that stops writing is a silent alert,
 // which is the accepted ceiling here rather than a second rule counting absences.
 resource reconcileDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (deployReconcileDriftAlert) {
@@ -199,7 +203,7 @@ resource reconcileDriftAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15'
           // `AppTraces` (workspace-based App Insights has no `traces` table) and `contains` (`has`
           // tokenises on brackets), both as in audit-logs.bicep. Every night writes this line, so
           // the count comes from `drift=` in the message rather than from the number of rows.
-          query: 'AppTraces | where Message contains "[reconcile] projects" | extend drift = toint(extract("drift=([0-9]+)", 1, Message)) | where drift > 0'
+          query: 'AppTraces | where Message contains "[reconcile] projects" | extend drift = toint(extract("drift=([0-9]+)", 1, Message)), pending = toint(extract("parentFieldsPending=([0-9]+)", 1, Message)) | where drift > 0 or pending > 0'
           timeAggregation: 'Count'
           operator: 'GreaterThan'
           threshold: 0
@@ -241,6 +245,50 @@ resource bulkDownloadPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06
         {
           // `AppTraces`, not `traces`, and `contains`, not `has` — see reconcileDriftAlert above.
           query: 'AppTraces | where Message contains "[bulk] job failed"'
+          timeAggregation: 'Count'
+          // One line, one dead job.
+          operator: 'GreaterThanOrEqual'
+          threshold: 1
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [ alertGroup.id ]
+    }
+  }
+}
+
+// A chunk re-stamp that died. Same shape as bulkDownloadPoisonAlert above, including why it reads
+// the log rather than the `${chunkRestampQueue}-poison` queue: per-queue length is not a metric
+// the storage account emits. `src/jobs/restamp-chunks.js` writes `[chunk restamp] job failed` once,
+// on the attempt that runs out of retries — its own retries log a different line, and the
+// redeliveries that spend the message into the poison queue log none — so one line is one document
+// whose chunks are stale.
+resource chunkRestampPoisonAlert 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = if (!empty(chunkRestampQueue)) {
+  name: 'demi-chunk-restamp-failed-${environmentName}'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    displayName: 'DEMI chunk re-stamp job failed'
+    description: 'A chunk parent-field re-stamp job failed after its retries. The document\'s chunks are stale; the repair is src/scripts/backfill-chunk-parent-fields.js --live --project <id>, which re-stamps that project and clears the pending flag on the documents it verifies.'
+    // Warning: one document's chunks are stale, not a service outage.
+    severity: 2
+    enabled: true
+    scopes: [ workspace.id ]
+    evaluationFrequency: 'PT15M'
+    // Same length as the frequency — no overlap, so one failure is not counted twice.
+    windowSize: 'PT15M'
+    criteria: {
+      allOf: [
+        {
+          // `AppTraces`, not `traces`, and `contains`, not `has` — see reconcileDriftAlert above.
+          query: 'AppTraces | where Message contains "[chunk restamp] job failed"'
           timeAggregation: 'Count'
           // One line, one dead job.
           operator: 'GreaterThanOrEqual'

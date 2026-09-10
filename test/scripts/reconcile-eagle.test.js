@@ -130,7 +130,11 @@ function makeDeps(over = {}, counts = {}) {
     },
     documents: {
       listSeededIds: async (access) => { assertSystem(access); return DOCUMENT_ROWS; },
-      countSeededIds: async () => counts.documents ?? DOCUMENT_ROWS.length
+      countSeededIds: async () => counts.documents ?? DOCUMENT_ROWS.length,
+      countParentFieldsPending: async (access) => {
+        assertSystem(access);
+        return counts.parentFieldsPending ?? 0;
+      }
     },
     commentPeriods: {
       listByProject: async (projectId, access) => {
@@ -563,26 +567,36 @@ test('summaryLine is the alert contract', async (t) => {
       'lists: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'notifications: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'updates: unpublishedOrDeleted=0 eagleOnly=0 ' +
-      'comments: skipped drift=5');
+      'comments: skipped parentFieldsPending=0 drift=5');
   });
 
   // A container the run did not sweep must not read as a clean one: `comments` costs an eagle-api
   // round trip per period, so it is off unless asked for, and zeros there would say "no drift".
   await t.test('a container the run skipped says so instead of reporting zero', async () => {
-    assert.match(summaryLine(await reconcile([], makeDeps())), /comments: skipped drift=/);
+    assert.match(summaryLine(await reconcile([], makeDeps())), /comments: skipped parentFieldsPending=0 drift=/);
     assert.match(summaryLine(await reconcile(['--comments'], makeDeps())),
-      /comments: unpublishedOrDeleted=1 eagleOnly=0 drift=6/);
+      /comments: unpublishedOrDeleted=1 eagleOnly=0 parentFieldsPending=0 drift=6/);
+  });
+
+  await t.test('documents whose chunks never got re-stamped reach the alert line', async () => {
+    // A lost re-stamp is not push drift, so it is its own number — but it has to be ON the line the
+    // nightly alert reads, or nothing ever looks at it. `demi-reconcile-drift-<env>` extracts both.
+    const summary = await reconcile([], makeDeps({}, { parentFieldsPending: 12 }));
+
+    assert.strictEqual(summary.parentFieldsPending, 12);
+    assert.match(summaryLine(summary), /parentFieldsPending=12/);
+    assert.strictEqual(summary.drift, 5, 'it must not be folded into the push drift total');
   });
 
   await t.test('a clean run says drift=0', () => {
     assert.strictEqual(
       summaryLine({ projects: { unpublishedOrDeleted: [], eagleOnly: [] },
         documents: { unpublishedOrDeleted: [], eagleOnly: [], unresolvedParent: [] },
-        drift: 0 }),
+        drift: 0, parentFieldsPending: 0 }),
       '[reconcile] projects: unpublishedOrDeleted=0 eagleOnly=0 ' +
       'documents: unpublishedOrDeleted=0 eagleOnly=0 unresolvedParent=0 ' +
       'commentPeriods: skipped lists: skipped notifications: skipped updates: skipped ' +
-      'comments: skipped drift=0');
+      'comments: skipped parentFieldsPending=0 drift=0');
   });
 
   // The alert rule reads `drift=` out of this line with a regex (azure/modules/observability.bicep).

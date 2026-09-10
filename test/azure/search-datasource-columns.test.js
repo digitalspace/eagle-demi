@@ -39,6 +39,93 @@ for (const [idx, ds] of PAIRS) {
   });
 }
 
+// The chunks pair is not in PAIRS above: `chunkId` is filled by a field MAPPING on the indexer
+// (`id` -> `chunkId`), not by the query, so the generic both-directions check cannot hold for it.
+// The parent fields it repeats off the document are pinned by name instead — three files that never
+// see each other, and the code is the one that decides what a chunk carries.
+test('the chunk parent fields are declared, projected and named in one place', () => {
+  const { CHUNK_PARENT_FIELDS, CHUNK_PARENT_LIST_REFS } = require('../../src/repositories/chunks');
+  const chunkIndex = require('../../azure/search/indexes/chunks.json');
+  const chunkDatasource = require('../../azure/search/datasources/demi-chunks-ds.json');
+  const documentFields = new Map(index.fields.map(f => [f.name, f]));
+  const projected = projectedColumns(chunkDatasource.container.query);
+
+  assert.ok(CHUNK_PARENT_FIELDS.length > 0, 'the list is empty, so this passes vacuously');
+
+  for (const name of CHUNK_PARENT_FIELDS) {
+    const field = chunkIndex.fields.find(f => f.name === name);
+    assert.ok(field, `${name} is repeated onto chunks but not declared by the chunks index`);
+    // A field the index declares and the query does not project is indexed as null on every row,
+    // under a 200 from every PUT and a green indexer run.
+    assert.strictEqual(projected.get(name), name,
+      `${name} is declared by the chunks index but not selected by ${chunkDatasource.name}`);
+
+    // The point of the copy is filtering a chunk query directly. Searchable would be a rebuild of
+    // 1.1M rows and would make an ObjectId match a keyword query.
+    assert.strictEqual(field.type, 'Edm.String');
+    assert.strictEqual(field.filterable, true);
+    assert.strictEqual(field.searchable, false);
+    // FACETABLE only on the List refs, which are what the filter panel counts. `projectId` is the
+    // access-scope column and was never faceted — and a field's facetability cannot be changed by a
+    // PUT, so asserting it here would demand a rebuild of the whole index.
+    if (CHUNK_PARENT_LIST_REFS.includes(name)) assert.strictEqual(field.facetable, true);
+
+    // Same name and same type as the column on the parent, or the two filters disagree about what
+    // the value even is.
+    const parent = documentFields.get(name);
+    assert.ok(parent, `${name} is not a field of the documents index it is copied from`);
+    assert.strictEqual(field.type, parent.type);
+  }
+});
+
+// The stamp that says a chunk WAS stamped, pinned across the same three files. The loop above
+// cannot cover it: it has no counterpart on the documents index and it is a number, not a List id.
+//
+// Missing from the query is the whole point of the failure it guards. `chunks-indexer` would pull
+// every re-stamped row, find no such column, and index the field as null on all 1.1M — under a 200
+// from the data-source PUT and a green indexer run — so the completeness probe would count the
+// entire corpus as never stamped and the degraded banner would stay up permanently.
+test('the chunk parent-fields version is declared, projected and filterable', () => {
+  const { CHUNK_PARENT_FIELDS_VERSION } = require('../../src/repositories/chunks');
+  const chunkIndex = require('../../azure/search/indexes/chunks.json');
+  const chunkDatasource = require('../../azure/search/datasources/demi-chunks-ds.json');
+
+  assert.strictEqual(typeof CHUNK_PARENT_FIELDS_VERSION, 'number');
+  assert.ok(Number.isInteger(CHUNK_PARENT_FIELDS_VERSION) && CHUNK_PARENT_FIELDS_VERSION >= 1,
+    'the version is an Edm.Int32 written on every chunk, so it has to be a positive integer');
+
+  const field = chunkIndex.fields.find(f => f.name === 'parentFieldsVersion');
+  assert.ok(field, 'parentFieldsVersion is stamped on every chunk but not declared by the index');
+  assert.strictEqual(projectedColumns(chunkDatasource.container.query).get('parentFieldsVersion'),
+    'parentFieldsVersion',
+    `parentFieldsVersion is declared by the chunks index but not selected by ${chunkDatasource.name}`);
+
+  // The probe compares it with `lt` against a number, so Edm.String would make that filter a
+  // string comparison and "10" would sort below "2".
+  assert.strictEqual(field.type, 'Edm.Int32');
+  assert.strictEqual(field.filterable, true);
+  assert.strictEqual(field.retrievable, true);
+  // Nothing groups or orders by a schema revision, and both cost index size on 1.1M rows.
+  assert.strictEqual(field.facetable, false);
+  assert.strictEqual(field.sortable, false);
+  assert.strictEqual(field.searchable, false);
+});
+
+// The other direction for the one chunk field that must NOT reach the index. `parentStampedAt`
+// orders concurrent re-stamp walks and answers no query; adding it to the data source would pull
+// every one of the 1.1M rows through the indexer for a column nothing filters on, and declaring it
+// on the index is a PUT plus a full pass. It has to be selected back out of both.
+test('the chunk re-stamp token is neither projected nor indexed', () => {
+  const { STAMPED_AT_FIELD } = require('../../src/repositories/chunks');
+  const chunkIndex = require('../../azure/search/indexes/chunks.json');
+  const chunkDatasource = require('../../azure/search/datasources/demi-chunks-ds.json');
+
+  assert.ok(!projectedColumns(chunkDatasource.container.query).has(STAMPED_AT_FIELD),
+    `${STAMPED_AT_FIELD} is a write-ordering guard, not a column ${chunkDatasource.name} selects`);
+  assert.strictEqual(chunkIndex.fields.find(f => f.name === STAMPED_AT_FIELD), undefined,
+    `${STAMPED_AT_FIELD} is declared by the chunks index, which nothing writes to it`);
+});
+
 // `vis` is the only column the projects query computes rather than reads: the container stores an
 // object, the index has no map type, and an indexer given the bare object writes null — every dial
 // then falls back to defaultVis with the whole suite green.

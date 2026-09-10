@@ -240,6 +240,10 @@ param bulkMaxJobAgeMs int = 7200000
 @description('NCRONTAB schedule for the zip cleanup timer, e.g. `0 30 3 * * *`. Empty registers no timer.')
 param bulkCleanupSchedule string = ''
 
+// ── Chunk parent-field re-stamping ───────────────────────────────────────────
+@description('Storage queue the chunk parent-field re-stamp worker triggers on. Empty registers no worker, and the document write then skips the re-stamp.')
+param chunkRestampQueue string = ''
+
 // Feature on means cleanup on: a queue with no sweep fills the container with zips nothing
 // deletes. An explicit schedule still wins, so an environment can move the hour.
 var cleanupSchedule = empty(bulkCleanupSchedule) && !empty(bulkDownloadsQueue)
@@ -287,7 +291,9 @@ resource deployContainer 'Microsoft.Storage/storageAccounts/blobServices/contain
   name: 'deployment'
 }
 
-resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue)) {
+// Shared by every queue below, so its condition is the OR of theirs — an environment that runs
+// only one of the two features still needs the service.
+resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = if (!empty(bulkDownloadsQueue) || !empty(chunkRestampQueue)) {
   parent: apiStorage
   name: 'default'
 }
@@ -305,6 +311,21 @@ resource bulkDownloadsQueueResource 'Microsoft.Storage/storageAccounts/queueServ
 resource bulkDownloadsPoison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(bulkDownloadsQueue)) {
   parent: queueService
   name: '${bulkDownloadsQueue}-poison'
+}
+
+// Documents whose chunks need their parent fields re-stamped. One document per message, ids only.
+// Named from the param for the reason the bulk queue is: a queue under a name the worker does not
+// trigger on is a feature that silently does nothing.
+resource chunkRestampQueueResource 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(chunkRestampQueue)) {
+  parent: queueService
+  name: chunkRestampQueue
+}
+
+// Declared rather than left to the runtime, same as above: a message that has burned its
+// `maxDequeueCount` is a document whose chunks are stale, and the queue has to exist to be watched.
+resource chunkRestampPoison 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-01' = if (!empty(chunkRestampQueue)) {
+  parent: queueService
+  name: '${chunkRestampQueue}-poison'
 }
 
 resource blobDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -549,6 +570,13 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'BULK_DOWNLOADS_QUEUE'
           value: bulkDownloadsQueue
+        }
+        // Chunk parent-field re-stamping. Empty means the re-stamp is SKIPPED and the document is
+        // flagged `parentFieldsPending` instead; only CHUNK_RESTAMP_INLINE runs the walk on the
+        // request, and that is a local-development opt-in.
+        {
+          name: 'CHUNK_RESTAMP_QUEUE'
+          value: chunkRestampQueue
         }
         {
           name: 'BULK_MAX_DOCUMENTS'

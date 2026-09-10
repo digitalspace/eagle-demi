@@ -320,10 +320,21 @@ test('chunks catalog covers the chunker output', async (t) => {
   });
 
   await t.test('the ingest-written fields are catalogued', () => {
-    // Both ingest paths in controllers/nosql/document.js add these five to the chunker's output.
-    for (const key of ['id', 'documentId', 'projectId', 'read', 'extractedAt']) {
+    // Both ingest paths in controllers/nosql/document.js add these five to the chunker's output,
+    // plus the parent document's filter columns — the list itself, so a field added there is
+    // classified here or this fails.
+    const { CHUNK_PARENT_FIELDS, STAMPED_AT_FIELD } = require('../../src/repositories/chunks');
+    for (const key of ['id', 'documentId', 'projectId', 'read', 'extractedAt',
+      ...CHUNK_PARENT_FIELDS, 'parentFieldsVersion', STAMPED_AT_FIELD]) {
       assert.ok(key in chunkCatalog, `${key} is not catalogued`);
     }
+  });
+
+  await t.test('the re-stamp token never leaves the boundary', () => {
+    // `parentStampFieldsOf` puts it on every chunk an ingest builds. It orders concurrent walks
+    // and answers no question a caller has, so a dial that could publish it is a mistake.
+    const { STAMPED_AT_FIELD } = require('../../src/repositories/chunks');
+    assert.strictEqual(chunkCatalog[STAMPED_AT_FIELD].maxVis, 0);
   });
 
   await t.test('content, read and the dial map can never be seen', () => {

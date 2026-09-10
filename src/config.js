@@ -173,6 +173,17 @@ const config = {
   bulkDownloadsQueue:   process.env.BULK_DOWNLOADS_QUEUE || '',
   bulkCleanupSchedule:  process.env.BULK_CLEANUP_SCHEDULE || '',
 
+  // Queue the chunk parent-field re-stamp runs on (src/jobs/restamp-chunks.js). Empty is the
+  // same "off" as above — and off here means the re-stamp is SKIPPED, not done inline, unless the
+  // opt-in below says otherwise.
+  chunkRestampQueue:    process.env.CHUNK_RESTAMP_QUEUE || '',
+  // Walk the chunks on the request instead, for `func start` with no storage account behind it.
+  // An opt-in rather than the fallback: a deployed environment that lost its queue name would
+  // otherwise put a multi-minute walk back inside eagle-api's 10-second push and block the
+  // document write itself. Skipping leaves the chunks stale and flags the row, which
+  // `backfill-chunk-parent-fields.js --live --project <id>` repairs, clearing the flag as it goes.
+  chunkRestampInline:   process.env.CHUNK_RESTAMP_INLINE === '1',
+
   uploadDir:             process.env.UPLOAD_DIRECTORY || '/tmp',
 
   logLevel:              process.env.LOG_LEVEL || 'info',

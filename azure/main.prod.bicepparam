@@ -163,6 +163,13 @@ param bulkDownloadsQueue = ''
 param bulkCleanupSchedule = ''
 param deployBulkDownloadPoisonAlert = false
 
+// ── Chunk parent-field re-stamping ────────────────────────────────────────────────────────────
+// ON, unlike the switch above, because there is nothing to fall back to: re-stamping is new here,
+// and with no queue name the document write skips it and leaves chunks answering the filters of a
+// type the document no longer has. Infrastructure deploys before the code that reads it, so the
+// queue exists by the time the first message is sent.
+param chunkRestampQueue = 'chunk-restamp'
+
 // ── Cost ──────────────────────────────────────────────────────────────────────────────────────
 // account and no second search service, but does carry a plan, Cosmos and the private endpoints.
 param budgetAmount = 400

@@ -40,6 +40,12 @@ function captureQuery(t) {
     record(container, spec, options);
     return 1;
   });
+  // A single-row lookup emits the same spec through its own entry point, so it is recorded here
+  // too — otherwise the ACL predicate on an id lookup would be asserted against nothing.
+  t.mock.method(cosmos, 'queryFirst', async (container, spec, options = {}) => {
+    record(container, spec, options);
+    return null;
+  });
   return calls;
 }
 
@@ -466,7 +472,32 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     assert.ok(calls.every(c => c.options.maxItemCount === undefined));
   });
 
-  await t.test('extractionRowsForProject pins the partition and selects only the state', async () => {
+  await t.test('parentFieldRowsWithNoProject reads the rows no partition key addresses', async () => {
+    // The complement of `listDistinctProjectIds`, which cannot enumerate a JSON-null projectId at
+    // all. Without this read those documents' chunks stay unstamped forever, and the unscoped
+    // stale-chunk count the facets are gated on never reaches zero.
+    const calls = paged(t, [{ items: [{ id: 'd6' }], continuationToken: undefined }]);
+
+    const rows = await documents.parentFieldRowsWithNoProject(SYSTEM);
+
+    assert.deepStrictEqual(rows.map(r => r.id), ['d6']);
+    assert.match(calls[0].spec.query, /NOT \(IS_DEFINED\(c\.projectId\) AND NOT IS_NULL\(c\.projectId\)\)/,
+      'the exact complement of the hasProjectId predicate the partition walk uses');
+    assert.strictEqual(calls[0].options.partitionKey, undefined,
+      'there is no partition key to pin these rows to — that is what makes them unreachable');
+    // A cross-partition ORDER BY takes the SDK's query-plan path, which never copies
+    // `x-ms-continuation`, so the walk would silently stop at the first page.
+    assert.doesNotMatch(calls[0].spec.query, /ORDER BY/);
+    // The pending pair rides along with the parent fields: the same walk clears the flag, and the
+    // token it is guarded on has to come from the row this comparison was made from.
+    assert.strictEqual(calls[0].spec.query.split(' FROM ')[0].replace('SELECT ', ''),
+      ['c.id', 'c._etag',
+        ...chunks.CHUNK_PARENT_FIELDS.map(f => `c.${f}`),
+        ...documents.PARENT_PENDING_FIELDS.map(f => `c.${f}`)].join(', '));
+  });
+
+  await t.test('extractionRowsForProject pins the partition and selects only what the seeder needs',
+    async () => {
     const calls = paged(t, [{ items: [], continuationToken: undefined }]);
     await documents.extractionRowsForProject(SYSTEM, 207);
 
@@ -474,9 +505,19 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
     assert.strictEqual(options.partitionKey, '207',
       'a cross-partition drain per project would scan the whole container');
     assert.match(spec.query, /c\.projectId = @projectId/);
-    // Exactly id + the four extraction fields: a wider projection reads 60k whole documents back.
+    // Exactly id + _etag + the four extraction fields + the four parent fields + the pending pair:
+    // a wider projection reads 60k whole documents back. The parent fields ride along because the
+    // seeder has to know whether a re-seed MOVED one, which is what decides if the document's
+    // chunks need re-stamping; the pending pair rides along because a re-seed has to carry a
+    // raised flag forward rather than clear a re-stamp nothing has done; `_etag` rides along so a
+    // caller clearing that flag can do it conditionally.
     assert.strictEqual(spec.query.split(' FROM ')[0].replace('SELECT ', ''),
-      ['c.id', ...documents.EXTRACTION_FIELDS.map(f => `c.${f}`)].join(', '));
+      ['c.id', 'c._etag', ...[...documents.EXTRACTION_FIELDS, ...chunks.CHUNK_PARENT_FIELDS,
+        ...documents.PARENT_PENDING_FIELDS].map(f => `c.${f}`)].join(', '));
+    for (const field of documents.PARENT_PENDING_FIELDS) {
+      assert.match(spec.query, new RegExp(`c\\.${field}\\b`),
+        `${field} is not read, so the seed cannot carry it and every re-seed clears it`);
+    }
     assert.ok(spec.parameters.some(p => p.name === '@projectId' && p.value === '207'));
   });
 
@@ -571,5 +612,153 @@ test('fetchAll and the reconcile/extraction reads it backs', async (t) => {
       'cross-partition DISTINCT rejects a sort, same continuation-token drop as listSeededIds');
     assert.strictEqual(options.partitionKey, undefined, 'every partition, not one');
     assert.deepStrictEqual(ids, ['207', '', '208']);
+    // A JSON-null projectId is in NO partition — a query pinned to it reads nothing. Enumerating
+    // one anyway is what made backfill-chunk-parent-fields walk `''` and report success.
+    assert.match(spec.query, /IS_DEFINED\(c\.projectId\) AND NOT IS_NULL\(c\.projectId\)/);
+  });
+
+  await t.test('countVisible can be held to the same predicate the partition walk uses',
+    async () => {
+      // The coverage check compares a count against a per-partition walk. Counting rows the walk
+      // cannot reach makes a complete run report itself incomplete.
+      const calls = captureQuery(t);
+      await documents.countVisible(SYSTEM, { hasProjectId: true });
+
+      assert.match(calls[0].spec.query, /^SELECT VALUE COUNT\(1\) FROM c/);
+      assert.match(calls[0].spec.query, /IS_DEFINED\(c\.projectId\) AND NOT IS_NULL\(c\.projectId\)/);
+    });
+
+  await t.test('the pending-restamp reads share one predicate', async () => {
+    // The list and its count must not drift: the count is what the nightly alert fires on and the
+    // list is what the repair walks.
+    const calls = captureQuery(t);
+    await documents.listParentFieldsPending(SYSTEM);
+    await documents.countParentFieldsPending(SYSTEM);
+
+    assert.match(calls[0].spec.query, /^SELECT c\.id, c\.projectId FROM c WHERE /);
+    assert.match(calls[1].spec.query, /^SELECT VALUE COUNT\(1\) FROM c/);
+    for (const call of calls) {
+      assert.match(call.spec.query, /c\.parentFieldsPending = @pending/);
+      assert.ok(call.spec.parameters.some(p => p.name === '@pending' && p.value === true));
+      assert.strictEqual(call.options.partitionKey, undefined,
+        'the flag says nothing about which partition the document is in');
+    }
+  });
+});
+
+/**
+ * Every lookup that expects at most one row and cannot pin a partition.
+ *
+ * `query(..., { maxItemCount: 1 })` then `items[0]` reads ONE page, and a page of a cross-partition
+ * query legitimately comes back empty while the row exists — Cosmos answers with whatever the
+ * partitions it reached within the page budget held. Each of these reported an existing row as
+ * absent, and the callers act on that: the seeder writes a duplicate project, `/boundaries/<name>`
+ * 404s a boundary that is there.
+ */
+test('single-row cross-partition lookups drain rather than sample', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  const lists = require('../../src/repositories/lists');
+  const comments = require('../../src/repositories/comments');
+  const commentPeriods = require('../../src/repositories/comment-periods');
+  const boundaries = require('../../src/repositories/boundaries');
+
+  /** Fail on any `query`, so a lookup that still samples one page is caught by the call itself. */
+  function onlyQueryFirst(t_, row = null) {
+    const calls = [];
+    t_.mock.method(cosmos, 'query', async (container, spec, options) => {
+      assert.fail(`${container} sampled one page instead of draining: ${JSON.stringify(options)}`);
+    });
+    t_.mock.method(cosmos, 'queryFirst', async (container, spec, options = {}) => {
+      cosmos.assertQuerySpec(spec, container);
+      calls.push({ container, spec, options });
+      return row;
+    });
+    return calls;
+  }
+
+  const LOOKUPS = [
+    ['projects.getByEagleId', (a) => projects.getByEagleId(a, '5d0d212c7d50161b92a80eed'), 'projects'],
+    ['lists.getById', (a) => lists.getById(a, 'l1'), 'lists'],
+    ['comments.getById', (a) => comments.getById(a, 'c1'), 'comments'],
+    ['commentPeriods.getById', (a) => commentPeriods.getById(a, 'cp1'), 'commentPeriods'],
+    ['boundaries.getById', (a) => boundaries.getById(a, 'b1'), 'boundaries'],
+    ['boundaries.getByName', (a) => boundaries.getByName(a, 'Bulkley-Nechako'), 'boundaries']
+  ];
+
+  for (const [name, call, container] of LOOKUPS) {
+    await t.test(`${name} goes through queryFirst`, async () => {
+      const calls = onlyQueryFirst(t);
+
+      assert.strictEqual(await call(PUBLIC), null, 'nothing found is still null, not undefined');
+      assert.strictEqual(calls.length, 1);
+      assert.strictEqual(calls[0].container, container);
+      assert.strictEqual(calls[0].options.maxItemCount, undefined,
+        "the page size is queryFirst's to set, and it is not a result limit");
+      assert.match(calls[0].spec.query, /c\.read/, 'the ACL predicate still runs in the query');
+    });
+  }
+
+  await t.test('a found row comes back whole', async () => {
+    onlyQueryFirst(t, { id: 'p1', eagleId: '5d0d212c7d50161b92a80eed' });
+
+    assert.deepStrictEqual(await projects.getByEagleId(PUBLIC, '5d0d212c7d50161b92a80eed'),
+      { id: 'p1', eagleId: '5d0d212c7d50161b92a80eed' });
+  });
+
+  await t.test('a typed boundary stays pinned to its partition', async () => {
+    // The drain is for the unscoped call. Naming the type is still a single-partition query, and
+    // losing that would fan a 281-row lookup across every partition.
+    const calls = onlyQueryFirst(t);
+
+    await boundaries.getByName(PUBLIC, 'Bulkley-Nechako', 'Regional District');
+
+    assert.strictEqual(calls[0].options.partitionKey, 'Regional District');
+  });
+});
+
+/**
+ * `partitionKeyFor` and the JSON-null partition.
+ *
+ * Cosmos serialises a null partition key as `[null]` and addresses it like any other value
+ * (@azure/cosmos 4.10.0, dist/commonjs/documents/PartitionKeyInternal.js:19-25). Folding it into
+ * "unknown" sent every read of those documents cross-partition — a scan, on the one bucket whose
+ * rows nothing else reaches.
+ */
+test('a null projectId is a partition, not an absent one', async (t) => {
+  t.afterEach(() => t.mock.restoreAll());
+
+  await t.test('listVisible and countVisible pin to it', async () => {
+    const calls = captureQuery(t);
+
+    await documents.listVisible(systemAccess(), { projectId: null });
+    await documents.countVisible(systemAccess(), { projectId: null });
+
+    for (const call of calls) {
+      assert.strictEqual(call.options.partitionKey, null,
+        'undefined would fan this out across all 357 partitions');
+    }
+  });
+
+  await t.test('no projectId at all still means unknown', async () => {
+    const calls = captureQuery(t);
+
+    await documents.listVisible(systemAccess(), {});
+
+    assert.strictEqual(calls[0].options.partitionKey, undefined);
+  });
+
+  await t.test('getById point-reads it instead of draining cross-partition', async () => {
+    const reads = [];
+    t.mock.method(cosmos, 'readItem', async (container, id, partitionKey) => {
+      reads.push({ id, partitionKey });
+      return { id, projectId: null, read: ['public'] };
+    });
+    t.mock.method(cosmos, 'queryFirst', async () => assert.fail('null is a known partition'));
+
+    const doc = await documents.getById(PUBLIC, 'd9', null);
+
+    assert.deepStrictEqual(reads, [{ id: 'd9', partitionKey: null }]);
+    assert.strictEqual(doc.id, 'd9');
   });
 });

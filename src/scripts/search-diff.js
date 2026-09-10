@@ -34,9 +34,9 @@
  * therefore reported 42 DIFFs out of 42 on every run, which is why it was never used to gate
  * anything. An oracle that cannot go green cannot fail informatively either.
  *
- * What it still WILL report today, by design: `DocumentChunk` document-metadata filters are
- * `IGNORED` on demi and `applied` on eagle, because `chunks.json` carries no metadata to filter on;
- * and demi's document paging repeats rows on project-name
+ * What it still WILL report today, by design: `DocumentChunk` document-metadata filters narrow on
+ * demi and not on eagle, now that every chunk carries its parent's facet ids — accepted per case,
+ * with the reason printed beside the totals; and demi's document paging repeats rows on project-name
  * keyword queries. `proponent` on Project used to be an open defect (index held a NAME where
  * eagle-public sent an ObjectId); it is now fixed by aliasing `and[proponent]=<ObjectId>` to the
  * `proponentId` index field (`src/search/eagle-query.js` ALIASES.Project). Remaining defects going
@@ -75,6 +75,72 @@ const RPROXY_HOST = /(^|\/\/)test\.projects\.eao\.gov\.bc\.ca(\/|$)/;
 const MILESTONE = '5cf00c03a266b7e1877504e9';
 
 /**
+ * The other two document facets, read off prod List rows the same way — `Application Review` (2002)
+ * and `Proponent / Certificate Holder` (2002), `GET /api/public/search?dataset=List` on 2026-09-10.
+ * Both narrow the prod Document corpus for `keywords=water`: 2,624 rows to 1,623 and to 1,518. An id
+ * that matched nothing would make its case pass by comparing two empty pages.
+ */
+const PROJECT_PHASE = '5d3f6c7eda7a38421829602f';
+const DOCUMENT_AUTHOR_TYPE = '5cf00c03a266b7e1877504dc';
+
+/** demi's own mark for "the chunk backfill has not finished" (`meta[0].degraded.reasons`). */
+const UNSTAMPED = 'chunk-parent-fields-unstamped';
+
+/**
+ * An acceptance that expires with the state that justifies it: a chunk facet divergence is excused
+ * only while demi's OWN answer reports the backfill unfinished. The mark going away re-opens the
+ * case by itself — a blanket `accept` string here would outlive the backfill and hide the defect it
+ * was hiding for.
+ *
+ * The mark and the drop ARRIVE TOGETHER, which is why this reads only the mark. demi withholds a
+ * facet whose column the backfill has not filled — an unstamped chunk holds null there and would
+ * match nothing — and answers it through the documents index instead; the mark is raised only when
+ * that recovery is over the scope cap as well, and over the cap the key stays in
+ * `meta.dropped.filter`. So the state this excuses is demi answering too WIDE, corpus-wide, for the
+ * length of a backfill run. A drop with no mark is not excused: that is demi dropping a filter for
+ * a reason the backfill does not explain.
+ */
+const whileUnstamped = key => answer => {
+  if (!answer || !answer.degradedReasons.includes(UNSTAMPED)) return undefined;
+  return `accepted only while demi answers with degraded.reasons=[${UNSTAMPED}]: demi withholds `
+    + `${key} on chunks while this scope is mid-backfill and answers it through the documents `
+    + 'index, which corpus-wide is over the scope cap, so the filter is reported dropped and the '
+    + 'answer is unfiltered. The acceptance goes away with the mark.';
+};
+
+/** The key half of a case's `key=value` filter, the half that names a field on both wires. */
+function filterKey(kase) {
+  if (!kase || !kase.filter) return null;
+  const eq = kase.filter.indexOf('=');
+  return eq === -1 ? kase.filter : kase.filter.slice(0, eq);
+}
+
+/**
+ * Why demi narrowing a chunk query on this facet is DECIDED rather than a defect: eagle answers the
+ * chunk dataset without ever applying these two keys (418,190 rows either way, measured on prod), so
+ * its answer is not an oracle for them. `eagle-query.js` spreads `DOCUMENT_FACETS` into
+ * `ALIASES.DocumentChunk` precisely so the two datasets narrow alike.
+ *
+ * IT ACCEPTS ONE DIRECTION, and that is the repair. As a constant string it excused both outcomes:
+ * demi narrowing, and demi failing to narrow. Only the first is what this parity claims. The second
+ * is graded by `mustNarrow` on the case instead, because it is not a divergence at all — eagle
+ * applies no such filter, so demi dropping its own narrowing makes the two AGREE.
+ *
+ * THE NUMBER IS A REFERENCE, NOT A BOUND: a chunk total counts PASSAGES (`controllers/search.js`
+ * marks it `countsPassages: true`; `keywords=water` alone is 395,187 of them, measured 2026-09-10)
+ * while `mustNarrow` holds demi's own DOCUMENT count, so comparing the two would reject every
+ * correct answer. It is printed so a reader can size the chunk total against something measured.
+ */
+const chunkFacetParity = (answer, { kase, diff } = {}) => {
+  if (!answer || !diff || diff.demi !== true || diff.eagle !== false) return undefined;
+  return `eagle applies no ${filterKey(kase)} filter to chunks — 418,190 rows either way — so `
+    + `eagle's answer is not the reference here. demi narrows on purpose (ALIASES.DocumentChunk `
+    + `spreads DOCUMENT_FACETS), and its ${answer.total} passages are read against demi's own `
+    + `Document count for this filter: ${kase.mustNarrow} of 2,624 for keywords=water on prod, `
+    + '2026-09-10.';
+};
+
+/**
  * The case matrix — dataset x keywords x filter x sortBy, expanded over `PAGES` below.
  *
  * One spec per line, and one line is all a new case takes. Deliberately NOT the full cross product:
@@ -101,47 +167,46 @@ const CASES = [
   { dataset: 'Document', keywords: 'water', sortBy: '-datePosted' },
   { dataset: 'Document', keywords: 'water', sortBy: '+displayName' },
   { dataset: 'DocumentChunk', keywords: 'water' },
+  // The BROAD filter, kept because breadth is what used to break it: `milestone` matches 36,471
+  // documents, and while the chunk filter was resolved by first querying `documents` for matching
+  // ids that set was far over what one request returns, so demi answered unfiltered and named the
+  // key in `meta.dropped`. `milestoneId` is a field of the chunk itself now, so the size of the
+  // match set decides nothing and this case must NARROW like the one below.
   {
-    dataset: 'DocumentChunk',
-    keywords: 'water',
-    filter: `milestone=${MILESTONE}`,
-    // ON THE CASE, not the dataset. `milestone` matches 36,471 documents — far over
-    // `ai-search.js` DOCUMENT_SCOPE_CAP — so demi reports the key in `meta.dropped` instead of
-    // scoping the chunk query to an arbitrary prefix of that match set. That is the designed
-    // bound, not a defect. The narrow case below shares this dataset and this field and MUST
-    // still fail if scoping breaks, which is exactly what a dataset-wide entry would prevent.
-    accept: {
-      selective:
-        'the chunk scope resolves through the documents index and is bounded at ' +
-        'DOCUMENT_SCOPE_CAP; `milestone` matches 36,471 documents, over the cap, so demi answers ' +
-        'unfiltered and names the key in meta.dropped where eagle narrows'
-    }
+    dataset: 'DocumentChunk', keywords: 'water', filter: `milestone=${MILESTONE}`,
+    accept: { selective: whileUnstamped('milestone') }
   },
   { dataset: 'DocumentChunk', keywords: 'fish habitat', sortBy: '-datePosted' },
-  // AN OPEN GAP, DELIBERATELY LEFT FAILING — not a case that is expected to pass.
-  //
-  // `type` matches 2,911 documents against a DOCUMENT_SCOPE_CAP of 499, so demi reports the filter
-  // in `meta.dropped` rather than resolving it, and this case DIFFs. That is the true state of
-  // chunk metadata filtering and it does not clear when this branch deploys: the two-query design
-  // is bounded by what one request returns, and every filter measured on prod is over that bound
-  // (`type` 2,911, `projectPhase` 1,425, `milestone` 36,471).
-  //
-  // An earlier version of this comment said `type` was under the cap and MUST narrow. That was
-  // true while the cap read 20,000 and became false when it was corrected to 499 — the case was
-  // left asserting the old premise, so it could never go green and said so nowhere.
-  //
-  // It carries no `accept` ON PURPOSE. The broad case above is a decided bound with a written
-  // reason; this one is an open question about whether chunk filters get paging, denormalisation,
-  // or removal from the UI. Accepting it would file an undecided gap as a settled one.
+  // `type` on chunks, which MUST narrow. The over-narrow answer is accepted only while demi reports
+  // the backfill unfinished, and hard-fails after: `whileUnstamped` reads that off the answer.
   //
   // The value is read off a real prod row, not composed. The first version of this case used an
   // id invented by editing one character of the milestone id — it matched nothing on either
   // service, both answered "not selective", the case passed, and it asserted nothing at all. A
   // probe that cannot fail is worse here than no probe, because the matrix looks broader than it is.
+  {
+    dataset: 'DocumentChunk', keywords: 'water', filter: 'type=5cf00c03a266b7e1877504cf',
+    accept: { selective: whileUnstamped('type') }
+  },
+  // The other two facets, which used to be excluded from the matrix on the grounds that demi
+  // narrowing where eagle does not would read as a diff. That left the parity intent asserted in a
+  // comment and nowhere else, so it is written as a per-case acceptance instead — printed on every
+  // run, next to the totals it is read against. Case-scoped, never dataset-scoped: the siblings
+  // above must keep failing.
   //
-  // `documentAuthorType` and `projectPhase` are deliberately NOT used: measured on prod, eagle
-  // ignores both on this dataset (418,190 either way), so they are parity and not a gap.
-  { dataset: 'DocumentChunk', keywords: 'water', filter: 'type=5cf00c03a266b7e1877504cf' },
+  // `mustNarrow` is what makes these cases able to FAIL. Both services ignoring the key is an
+  // agreement, and an agreement is invisible to a differ — so the case is graded against demi's own
+  // unfiltered answer as well. The value is demi's Document count for the same filter (of 2,624 for
+  // `keywords=water`, prod 2026-09-10): a reference in DOCUMENTS for a total in PASSAGES, printed
+  // beside the answer and never compared with it.
+  {
+    dataset: 'DocumentChunk', keywords: 'water', filter: `projectPhase=${PROJECT_PHASE}`,
+    mustNarrow: 1623, accept: { selective: chunkFacetParity }
+  },
+  {
+    dataset: 'DocumentChunk', keywords: 'water', filter: `documentAuthorType=${DOCUMENT_AUTHOR_TYPE}`,
+    mustNarrow: 1518, accept: { selective: chunkFacetParity }
+  },
   // The shape eagle-public REALLY sends: `sortBy` twice, the second often empty
   // (`api.ts:176-177` appends sortBy and then secondarySort). It is the one wire form both
   // implementations wrote explicit normalisation for, so it is the one most likely to diverge.
@@ -238,8 +303,8 @@ function buildUrl(base, kase, pageSize = DEFAULTS.pageSize) {
   // encoding to match the client without also checking the trim on both sides.
   for (const s of [].concat(kase.sortBy || [])) params.append('sortBy', s);
   if (kase.filter) {
-    const eq = kase.filter.indexOf('=');
-    params.set(`and[${kase.filter.slice(0, eq)}]`, kase.filter.slice(eq + 1));
+    const key = filterKey(kase);
+    params.set(`and[${key}]`, kase.filter.slice(key.length + 1));
   }
   params.set('pageNum', String(kase.pageNum));
   params.set('pageSize', String(pageSize));
@@ -269,10 +334,18 @@ const EXPECTED_DIVERGENCE = {
     'relevance-ordered. eagle-public never sorts this dataset (search/content sends no sortBy).'
 };
 
-/** The reason a divergence is accepted for this case, or undefined. Case first, dataset second. */
-function acceptedReason(kase, dataset, field) {
+/**
+ * The reason a divergence is accepted for this case, or undefined. Case first, dataset second.
+ *
+ * A case-scoped acceptance may be a FUNCTION of demi's own answer and of the disagreement itself,
+ * which is what lets an acceptance be tied to a live state (a backfill in flight) or to one
+ * DIRECTION of a divergence, instead of standing forever. It still has to return a written reason to
+ * accept anything: an acceptance nobody explained is an oversight.
+ */
+function acceptedReason(kase, dataset, field, answer, diff) {
   const own = kase && kase.accept && kase.accept[field];
-  return own || EXPECTED_DIVERGENCE[`${dataset}:${field}`];
+  const reason = typeof own === 'function' ? own(answer, { kase, diff }) : own;
+  return reason || EXPECTED_DIVERGENCE[`${dataset}:${field}`];
 }
 
 
@@ -383,7 +456,16 @@ function summarize(resp) {
     status: resp.status,
     total,
     ids: rows ? rows.map(row => String(row && row._id)) : null,
-    keys: rows && rows.length ? Object.keys(rows[0]).sort() : null
+    keys: rows && rows.length ? Object.keys(rows[0]).sort() : null,
+    // What demi says about its OWN answer, and the two are read for different jobs. A conditional
+    // acceptance is decided from `degradedReasons` alone (`whileUnstamped`): the mark is the state
+    // being excused. `droppedFilter` decides nothing — it is reported beside a `narrowed` finding,
+    // where it names the key demi says it did not apply.
+    //
+    // Empty rather than null when absent: "the service said nothing" and "the service reported no
+    // reasons" are the same answer to the only question asked of them.
+    degradedReasons: (meta && meta.degraded && meta.degraded.reasons) || [],
+    droppedFilter: (meta && meta.dropped && meta.dropped.filter) || []
   };
 }
 
@@ -445,13 +527,29 @@ function compareCase(demi, eagle, bases = {}) {
   const demiSel = selectivity(d, bases.demi);
   const eagleSel = selectivity(e, bases.eagle);
   if (demiSel !== undefined && eagleSel !== undefined && demiSel !== eagleSel) {
-    push(diffs, accepted, bases, { field: 'selective', demi: demiSel, eagle: eagleSel });
+    push(diffs, accepted, bases, { field: 'selective', demi: demiSel, eagle: eagleSel }, d);
+  }
+
+  // A DEMI-ONLY EXPECTATION, which `selective` cannot carry: it fires only where the two services
+  // DISAGREE, so where eagle applies no such filter at all — the chunk facets — demi dropping its
+  // own narrowing makes the two AGREE and the case goes silent. `mustNarrow` grades it against
+  // demi's own unfiltered baseline instead, eagle absent. `undefined` fails too: a case whose
+  // baseline or total was never measured has not been shown to narrow.
+  if (bases.kase && bases.kase.mustNarrow && demiSel !== true) {
+    diffs.push({
+      field: 'narrowed',
+      demi: d.total,
+      baseline: bases.demi ? bases.demi.total : null,
+      // The keys demi says it did not apply: a filter that matched everything and one the service
+      // threw away are different failures and send a reader to different code.
+      dropped: d.droppedFilter
+    });
   }
 
   const demiSorted = ordered(d, bases.demi);
   const eagleSorted = ordered(e, bases.eagle);
   if (demiSorted !== undefined && eagleSorted !== undefined && demiSorted !== eagleSorted) {
-    push(diffs, accepted, bases, { field: 'sortHonoured', demi: demiSorted, eagle: eagleSorted });
+    push(diffs, accepted, bases, { field: 'sortHonoured', demi: demiSorted, eagle: eagleSorted }, d);
   }
 
   // AN EMPTY PAGE IS ONLY EXCUSED WHEN THE SIDE'S OWN TOTAL EXPLAINS IT.
@@ -490,8 +588,8 @@ function compareCase(demi, eagle, bases = {}) {
 /**
  * Route one disagreement to `diffs` or to `accepted`, by whether somebody wrote down a reason.
  */
-function push(diffs, accepted, bases, diff) {
-  const reason = acceptedReason(bases.kase, bases.dataset, diff.field);
+function push(diffs, accepted, bases, diff, answer) {
+  const reason = acceptedReason(bases.kase, bases.dataset, diff.field, answer, diff);
   (reason ? accepted : diffs).push(reason ? { ...diff, reason } : diff);
 }
 
@@ -574,6 +672,12 @@ async function get(url, auth) {
 function formatDiff(diff) {
   if (diff.field === 'rowKeys') {
     return `    rowKeys UNEXPECTED: demi-only=[${diff.demiOnly.join(',')}] eagle-only=[${diff.eagleOnly.join(',')}]`;
+  }
+  // The one finding with no eagle side to print: it is demi measured against itself.
+  if (diff.field === 'narrowed') {
+    return `    narrowed: demi=${diff.demi} against its own unfiltered ${diff.baseline} — this `
+      + 'case\'s filter must change demi\'s answer'
+      + (diff.dropped && diff.dropped.length ? `; demi reports dropped.filter=[${diff.dropped.join(',')}]` : '');
   }
   // Booleans read badly as "true/false" when the question is "did the filter do anything", and this
   // line is the one a human acts on.
@@ -689,7 +793,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  CASES, PAGES, DEMI_URL, EAGLE_URL, RPROXY_HOST, EXPECTED_KEY_DELTA,
+  CASES, PAGES, DEMI_URL, EAGLE_URL, RPROXY_HOST, EXPECTED_KEY_DELTA, UNSTAMPED,
   baselineOf, selectivity, ordered, pagingReport, specKey, EXPECTED_DIVERGENCE, acceptedReason,
   pageIsPastEnd,
   parseArgs, credential, expandCases, buildUrl, label, summarize, compareCase, main
