@@ -1772,6 +1772,54 @@ test('generateProjectSummary', async (t) => {
     ], 'newest first, and the event both batches reported only once');
   });
 
+  await t.test('splits the timeline into count-sized batches off Ollama too', async () => {
+    // Foundry is the deployed provider and has no fixed window to size against, so the count cap
+    // is the whole bound there: `projectSummaryMaxChunks` chunks per call, over the whole document.
+    // One call carrying everything would drop the events on the pages past the first window.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'foundry';
+    config.foundryEndpoint = 'https://foundry.example';
+    config.foundryDeployment = 'gpt-4.1-mini-test';
+    config.projectSummaryMaxChunks = 2;
+    const calls = stubFoundry(t, [
+      JSON.stringify({
+        events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+      }),
+      JSON.stringify({
+        events: [
+          { date: '2014-10-14', label: 'Certificate  issued', citations: [1] },
+          { date: '2016-08-09', label: 'Certificate amended', citations: [1] }
+        ]
+      })
+    ]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'The certificate was issued on October 14, 2014.', 'docC'),
+          chunk(2, 'Conditions apply.', 'docC'),
+          chunk(3, 'The certificate was amended on August 9, 2016.', 'docC'),
+          chunk(4, 'End of document.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.strictEqual(calls.length, 2, 'one call per batch of `projectSummaryMaxChunks` chunks');
+    const batches = calls.map(pagesIn);
+    assert.deepStrictEqual(batches.map(b => b.map(s => s.page)), [[1, 2], [3, 4]],
+      'every page is sent once, two per batch, in page order');
+    assert.deepStrictEqual(record.sections.timelineEvents.map(e => [e.date, e.label]), [
+      ['2016-08-09', 'Certificate amended'],
+      ['2014-10-14', 'Certificate issued']
+    ], 'newest first, and the event both batches reported only once');
+    for (const event of record.sections.timelineEvents) {
+      assert.ok(event.citations.length && event.citations.every(n => record.citations[n - 1]),
+        'every merged event still cites a source the record carries');
+    }
+  });
+
   await t.test('sizes the timeline batches to the window, not to a fixed chunk count', async () => {
     // Project 302: split into fixed runs of `projectSummaryMaxChunks`, batch 1 of the assessment
     // report alone came 25,825 tokens over the window. `context_overflow` is not a timeline
