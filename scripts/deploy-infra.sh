@@ -148,9 +148,16 @@ require_secrets() {
   # only puts that environment's visitors back on one shared anonymous quota key. Both sides read
   # the SAME value — rotate it in eagle-edge and here together, or callers fall back for a while.
   EDGE_SECRET="${EDGE_SECRET:-$(os_secret demi-app-secrets EDGE_SECRET)}"
+  # The password POST /api/gate accepts. Never in `required` below, same as EDGE_SECRET above: an
+  # environment that runs no access curtain has none, and an empty one writes no Key Vault secret
+  # and leaves the route answering 404. eagle-api's Config.ACCESS_GATE is the other half — a
+  # password here with the flag off, or the flag on with no password here, is a curtain that never
+  # opens for anyone.
+  ACCESS_GATE_PASSWORD="${ACCESS_GATE_PASSWORD:-$(os_secret demi-app-secrets ACCESS_GATE_PASSWORD)}"
 
   export MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
   export TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET NOTIFY_API_KEY EDGE_SECRET
+  export ACCESS_GATE_PASSWORD
 
   local -a required=(MINIO_ACCESS_KEY MINIO_SECRET_KEY ADMIN_API_KEY DOCLING_API_KEY
     TRACK_CLIENT_SECRET ROLE_SYNC_CLIENT_SECRET)

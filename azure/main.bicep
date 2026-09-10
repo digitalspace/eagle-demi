@@ -146,6 +146,14 @@ param trustedProxyIps string = ''
 @secure()
 param edgeSecret string = ''
 
+// The public site's access curtain. Empty means no curtain: POST /api/gate answers 404 and no Key
+// Vault secret is written, which is what prod runs. OPTIONAL for that reason, like edgeSecret above
+// — and the flag the browser sees is the boolean ACCESS_GATE in the `public` config document, not
+// this value, so the two are set in different places on purpose.
+@description('Password POST /api/gate accepts. Compared in constant time and never served; empty leaves the site ungated.')
+@secure()
+param accessGatePassword string = ''
+
 // Flex needs its own subnet, delegated to `Microsoft.App/environments`. Empty deploys no API app
 // at all, so an environment that wants one must supply it.
 @description('Delegated subnet for the Flex Consumption API app. Empty deploys no API.')
@@ -407,6 +415,7 @@ module keyVault './modules/key-vault.bicep' = {
     roleSyncClientSecret: roleSyncClientSecret
     notifyApiKey: notifyApiKey
     edgeSecret: edgeSecret
+    accessGatePassword: accessGatePassword
   }
 }
 
@@ -570,6 +579,7 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     ssoAudience: ssoAudience
     trustedProxyIps: trustedProxyIps
     edgeSecretUri: keyVault.outputs.edgeSecretUri
+    accessGateSecretUri: keyVault.outputs.accessGateSecretUri
     virtualNetworkSubnetId: apiFlexSubnetId
     identityId: identity.outputs.identityId
     identityClientId: identity.outputs.clientId

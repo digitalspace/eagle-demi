@@ -40,6 +40,10 @@ param notifyApiKey string = ''
 @secure()
 param edgeSecret string = ''
 
+@description('Password the public site\'s access curtain accepts (POST /api/gate). Same handling as notifyApiKey: OPTIONAL, and empty writes no secret at all — an ungated environment has none.')
+@secure()
+param accessGatePassword string = ''
+
 // 3-24 characters, alphanumeric and hyphens, must start with a letter. `demi-kv-prod` is 12.
 var vaultName = 'demi-kv-${environmentName}'
 
@@ -117,6 +121,18 @@ resource edgeSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (h
   }
 }
 
+// Same shape again. Prod runs ungated, so empty is the expected state there rather than an
+// oversight, and writing an empty secret would make the curtain answer 401 instead of 404.
+var hasAccessGatePassword = !empty(accessGatePassword)
+
+resource accessGateSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (hasAccessGatePassword) {
+  parent: vault
+  name: 'access-gate-password'
+  properties: {
+    value: accessGatePassword
+  }
+}
+
 // Key Vault Secrets User — read of secret VALUES, nothing else. Not Secrets Officer: the app never
 // writes a secret, and rotation happens at the vault, not through the app.
 var keyVaultSecretsUser = '4633458b-17de-408a-b874-0445c86b69e6'
@@ -169,3 +185,9 @@ output notifyApiKeySecretUri string = hasNotifyKey ? notifyApiKeySecret!.propert
 // Empty where no secret was supplied — the app then gets an empty EDGE_SECRET and ignores the
 // header, rather than a Key Vault reference to a secret that was never written.
 output edgeSecretUri string = hasEdgeSecret ? edgeSecretSecret!.properties.secretUri : ''
+// Empty where no password was supplied — the app then gets an empty ACCESS_GATE_PASSWORD and
+// POST /api/gate answers 404, rather than a Key Vault reference to a secret that was never written.
+// Named `…SecretUri` and not `…PasswordSecretUri` because the linter's
+// `outputs-should-not-contain-secrets` heuristic reads 'password' in an output name as the value
+// itself; this is a vault URI, and the repo carries no linter suppressions.
+output accessGateSecretUri string = hasAccessGatePassword ? accessGateSecret!.properties.secretUri : ''

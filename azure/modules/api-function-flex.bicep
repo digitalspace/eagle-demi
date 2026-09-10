@@ -119,6 +119,11 @@ param trustedProxyIps string = ''
 @description('Key Vault URI of the shared secret the eagle-edge rule set stamps as X-Edge-Secret. Not the value: the app resolves it through a Key Vault reference. Empty ignores the header.')
 param edgeSecretUri string = ''
 
+// Empty leaves POST /api/gate answering 404, which is what an ungated environment wants. The
+// boolean the browser reads is ACCESS_GATE in the `public` config document, not this.
+@description('Key Vault URI of the password POST /api/gate accepts. Not the value: the app resolves it through a Key Vault reference. Empty leaves the site ungated.')
+param accessGateSecretUri string = ''
+
 @description('Application Insights connection string. Empty disables telemetry, which is the local-development case.')
 param appInsightsConnectionString string = ''
 
@@ -758,6 +763,13 @@ resource apiFunctionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'EDGE_SECRET'
           value: empty(edgeSecretUri) ? '' : '@Microsoft.KeyVault(SecretUri=${edgeSecretUri})'
+        }
+        // The public site's access curtain (src/controllers/gate.js). A reference, not the value,
+        // for the same reason as every secret above. Empty answers 404 on the route rather than
+        // 401, so an ungated environment does not advertise a curtain it does not have.
+        {
+          name: 'ACCESS_GATE_PASSWORD'
+          value: empty(accessGateSecretUri) ? '' : '@Microsoft.KeyVault(SecretUri=${accessGateSecretUri})'
         }
       ]
       // Platform-level CORS, in front of the app's own, and it answers the preflight itself — so

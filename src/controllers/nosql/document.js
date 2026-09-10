@@ -155,8 +155,32 @@ async function resolveDownload(req, id) {
 
 exports.resolveDownload = resolveDownload;
 
+/**
+ * Whether the caller wants to BE SENT to the file rather than told where it is. An `<a href>` sends
+ * `Accept: text/html` and cannot read JSON, so a navigation would otherwise render the URL as text.
+ */
+function wantsRedirect(req) {
+  const raw = req.query && req.query.redirect;
+  // Repeated query keys arrive as ARRAYS from querystring.parse (src/http/router.js).
+  const value = Array.isArray(raw) ? raw[raw.length - 1] : raw;
+  if (value === '1') return true;
+
+  const accept = String((req.headers && req.headers.accept) || '');
+  return accept.startsWith('text/html');
+}
+
 exports.downloadDocument = async (req, res) => {
   const { status, body } = await resolveDownload(req, req.params.id);
+
+  // Only a 200 redirects. A 404 or 500 stays JSON in both modes: there is nowhere to send the
+  // caller, and a browser gets the same body it would have got before.
+  if (status === 200 && wantsRedirect(req)) {
+    // The Location IS the credential: presigned and short-lived, so no cache or history entry may
+    // replay it. The presign already carries the file name (src/storage/content-disposition.js).
+    res.set('Cache-Control', 'no-store');
+    return res.redirect(302, body.url);
+  }
+
   return res.status(status).json(body);
 };
 

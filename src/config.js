@@ -96,6 +96,14 @@ const config = {
   doclingUrl:   process.env.DOCLING_URL      || 'http://eagle-demi:5000',
   doclingKey:   process.env.DOCLING_API_KEY  || '',
 
+  // The public site's access curtain (POST /api/gate). Compared in controllers/gate.js and nowhere
+  // else, so it never reaches a bundle or GET /config/public — the boolean `ACCESS_GATE` in the
+  // public config document is the only part of the curtain a browser is told about.
+  //
+  // Empty is a valid state and the one prod runs: no password means no gate, and the route 404s.
+  // So there is no boot guard here, unlike allowedClients — an ungated environment is a choice.
+  accessGatePassword: process.env.ACCESS_GATE_PASSWORD || '',
+
   // Keys under a project's `sources` that may leave over HTTP (src/vis/redact.js).
   // Empty = no enrichment is published, which is what prod runs.
   enrichmentSources: (process.env.ENRICHMENT_SOURCES || '').split(',').map(s => s.trim()).filter(Boolean),

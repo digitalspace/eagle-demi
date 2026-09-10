@@ -186,6 +186,13 @@ param roleSyncClientSecret = readEnvironmentVariable('ROLE_SYNC_CLIENT_SECRET')
 param notifyApiBase = ''
 param notifyApiKey = readEnvironmentVariable('NOTIFY_API_KEY', '')
 
+// ── Public site access curtain ─────────────────────────────────────────────────────────────────
+// The password POST /api/gate accepts. From OpenShift `demi-app-secrets` through deploy-infra.sh,
+// never from this file. The `''` fallback is deliberate, like notifyApiKey: an environment that
+// runs no curtain writes no secret, and the route 404s. Whether the SITE shows the gate is the
+// boolean ACCESS_GATE in the `public` config document, which eagle-api owns — set both or neither.
+param accessGatePassword = readEnvironmentVariable('ACCESS_GATE_PASSWORD', '')
+
 // Nightly 11:00 UTC, an hour after reconcile. Armed 2026-09-05 after Track prod shipped
 // /api/v1/projects/team-members.
 param syncTeamsSchedule = '0 0 11 * * *'
