@@ -16,7 +16,7 @@ const { logger } = require('../../src/utils/logger');
 const {
   generateProjectSummary, validCitations, groundedInCitations, normaliseNationName, joinNations,
   buildFacts, buildItems, buildTimeline, sanitisePromptName, pickSource, PRICED_AS, PICK,
-  isFrenchTitle
+  isFrenchTitle, hasFullDate
 } = require('../../src/ai/project-summary');
 const { INSTRUCTIONS } = require('../../src/ai/project-summary-prompts');
 
@@ -1954,9 +1954,9 @@ test('generateProjectSummary', async (t) => {
       chunks: {
         docC: [
           chunk(1, 'The certificate was issued on October 14, 2014.', 'docC'),
-          chunk(2, 'Conditions apply.', 'docC'),
+          chunk(2, 'Conditions apply from October 15, 2014.', 'docC'),
           chunk(3, 'The certificate was amended on August 9, 2016.', 'docC'),
-          chunk(4, 'End of document.', 'docC')
+          chunk(4, 'The amendment was filed on August 10, 2016.', 'docC')
         ]
       }
     });
@@ -1969,6 +1969,81 @@ test('generateProjectSummary', async (t) => {
       { date: '2016-08-09', label: 'Certificate amended', citations: [3] },
       { date: '2014-10-14', label: 'Certificate issued', citations: [1] }
     ], 'newest first, and the event both batches reported only once');
+  });
+
+  await t.test('reads only the pages that carry a full date for the timeline', async () => {
+    // Project 302's English assessment report is 680k tokens over 12 window-sized batches, at about
+    // twelve minutes a batch on a host that evaluates the prompt on CPU. Most of those pages carry
+    // no date at all, and the instruction only allows an event the source dates in full, so an
+    // undated page can never contribute one — sending it buys nothing and costs a batch.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    // One dated page per batch, so the filter and the merge are both visible in the calls.
+    config.projectSummaryMaxChunks = 1;
+    const calls = stubModel(t, [
+      JSON.stringify({
+        events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+      }),
+      JSON.stringify({
+        events: [{ date: '2016-08-09', label: 'Certificate amended', citations: [1] }]
+      })
+    ]);
+
+    const sources = fakeSources({
+      documents: [CERTIFICATE],
+      chunks: {
+        docC: [
+          chunk(1, 'Table of contents.', 'docC'),
+          chunk(2, 'The certificate was issued on October 14, 2014.', 'docC'),
+          chunk(3, 'The proponent must monitor water quality.', 'docC'),
+          chunk(4, 'Conditions apply for the life of the project.', 'docC'),
+          chunk(5, 'The certificate was amended on August 9, 2016.', 'docC'),
+          chunk(6, 'End of document.', 'docC')
+        ]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.deepStrictEqual(calls.map(call => pagesIn(call).map(s => s.page)), [[2], [5]],
+      'the two dated pages are asked, in page order, and the four undated ones are not');
+    assert.deepStrictEqual(record.sections.timelineEvents, [
+      { date: '2016-08-09', label: 'Certificate amended', citations: [2] },
+      { date: '2014-10-14', label: 'Certificate issued', citations: [1] }
+    ], 'the batches still merge, newest first');
+  });
+
+  await t.test('reads the next document when no page of the first carries a full date', async () => {
+    // A document with no dated page cannot answer the timeline, so it costs no model call at all
+    // and the chain moves on exactly as it does for a document that answered with nothing.
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    const calls = stubModel(t, JSON.stringify({
+      events: [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]
+    }));
+    const info = [];
+    t.mock.method(logger, 'info', line => { info.push(String(line)); });
+
+    const sources = fakeSources({
+      documents: [ASSESSMENT_REPORT, CERTIFICATE],
+      chunks: {
+        docAR: [
+          chunk(1, 'The Tilbury Marine Jetty project overview.', 'docAR'),
+          chunk(2, 'The proponent applied in 2014.', 'docAR')
+        ],
+        docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
+      }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'timelineEvents' });
+
+    assert.deepStrictEqual(sourcesNamed(calls), ['Environmental Assessment Certificate #E14-02'],
+      'the undated report is skipped without a call and the certificate is read');
+    assert.deepStrictEqual(record.sections.timelineEvents,
+      [{ date: '2014-10-14', label: 'Certificate issued', citations: [1] }]);
+    assert.strictEqual(record.sectionSources.timelineEvents.documentId, 'docC');
+    assert.strictEqual(record.sectionErrors.timelineEvents, undefined,
+      'a fallback that worked stores no error');
+    assert.ok(info.some(line => line.includes('timelineEvents') && line.includes('0 of 2')),
+      `the skipped document is logged with its counts: ${info.join(' | ')}`);
   });
 
   await t.test('splits the timeline into count-sized batches off Ollama too', async () => {
@@ -1997,9 +2072,9 @@ test('generateProjectSummary', async (t) => {
       chunks: {
         docC: [
           chunk(1, 'The certificate was issued on October 14, 2014.', 'docC'),
-          chunk(2, 'Conditions apply.', 'docC'),
+          chunk(2, 'Conditions apply from October 15, 2014.', 'docC'),
           chunk(3, 'The certificate was amended on August 9, 2016.', 'docC'),
-          chunk(4, 'End of document.', 'docC')
+          chunk(4, 'The amendment was filed on August 10, 2016.', 'docC')
         ]
       }
     });
@@ -2096,9 +2171,9 @@ test('generateProjectSummary', async (t) => {
       chunks: {
         docC: [
           chunk(1, 'The certificate was issued on October 14, 2014.', 'docC'),
-          chunk(2, 'Conditions apply.', 'docC'),
+          chunk(2, 'Conditions apply from October 15, 2014.', 'docC'),
           chunk(3, 'The certificate was amended on August 9, 2016.', 'docC'),
-          chunk(4, 'End of document.', 'docC')
+          chunk(4, 'The amendment was filed on August 10, 2016.', 'docC')
         ]
       }
     });
@@ -2235,7 +2310,7 @@ test('generateProjectSummary', async (t) => {
       const sources = fakeSources({
         documents: [ASSESSMENT_REPORT, CERTIFICATE],
         chunks: {
-          docAR: [chunk(1, 'The Tilbury Marine Jetty project overview.', 'docAR')],
+          docAR: [chunk(1, 'The application was accepted on March 3, 2013.', 'docAR')],
           docC: [chunk(1, 'The certificate was issued on October 14, 2014.', 'docC')]
         }
       });
@@ -2825,6 +2900,34 @@ test('timeline instruction', async (t) => {
       'the ask is capped, so the reply fits the completion budget');
     assert.match(INSTRUCTIONS.timelineEvents, /[Ll]eave out[^.]*meetings/,
       'meetings are named as something to leave out');
+  });
+});
+
+test('hasFullDate', async (t) => {
+  // What the timeline filter keeps. The instruction only allows an event the source dates in full,
+  // so a year on its own or a day with no year is a page that cannot produce one.
+  await t.test('matches a date written with a year, a month and a day', () => {
+    for (const text of [
+      'issued 2014-10-14',
+      'issued October 14, 2014',
+      'issued 14 October 2014',
+      'issued Oct. 14, 2014',
+      'déposé le 3 juillet 2024',
+      'modifié 3 décembre 2019'
+    ]) {
+      assert.ok(hasFullDate(text), `expected a full date in "${text}"`);
+    }
+  });
+
+  await t.test('rejects a partial date', () => {
+    for (const text of [
+      'issued October 2014',
+      'issued 14 October',
+      'issued in 2014',
+      'see page 14'
+    ]) {
+      assert.strictEqual(hasFullDate(text), false, `expected no full date in "${text}"`);
+    }
   });
 });
 
