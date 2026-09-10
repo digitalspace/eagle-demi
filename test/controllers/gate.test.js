@@ -118,6 +118,21 @@ test('the access curtain', async (t) => {
     });
   });
 
+  await t.test('503 when the configured password is an unresolved Key Vault reference', async (t) => {
+    // An unresolved reference arrives as the literal string, and the same literal is what an
+    // attacker would guess — it must not double as a working password.
+    const reference = '@Microsoft.KeyVault(SecretUri=https://kv.vault.azure.net/secrets/gate-password)';
+    config.accessGatePassword = reference;
+    gateOn(t);
+
+    await withServer(async (call) => {
+      const res = await post(call, { password: reference });
+      assert.equal(res.status, 503);
+      assert.equal(res.headers.get('cache-control'), 'no-store');
+      assert.deepEqual(await res.json(), { error: 'Gate misconfigured' });
+    });
+  });
+
   await t.test('404 when ACCESS_GATE is false and no password is configured', async (t) => {
     config.accessGatePassword = '';
     t.mock.method(configRepository, 'getPublic', async () => (
