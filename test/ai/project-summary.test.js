@@ -1259,6 +1259,8 @@ test('generateProjectSummary', async (t) => {
       title: 'Decision Statement',
       date: '2024-07-03',
       pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: 'pdf',
       pages: [
         { page: 1, text: 'Decision Statement issued under Section 54.' },
         { page: 2, text: 'Condition 3.1 The Proponent shall protect fish habitat.' }
@@ -1340,6 +1342,8 @@ test('generateProjectSummary', async (t) => {
         title: 'Decision Statement',
         date: '2024-07-03',
         pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+        pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+        format: 'pdf',
         pageCount: 2
       }
     });
@@ -1353,9 +1357,99 @@ test('generateProjectSummary', async (t) => {
       pageNumber: 2,
       documentName: 'Decision Statement',
       source: 'iaac',
-      url: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf'
+      url: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+      format: 'pdf'
     }]);
     assert.deepStrictEqual(federal.items[0].citations, [1]);
+  });
+
+  // An older CEAA 2012 decision was never filed as a PDF: the registry prints it on the document
+  // page. The page is then the only link there is, for the citation and for the fact row alike.
+  const inlineDecision = () => federalSource({
+    decision: {
+      docId: '158078',
+      title: 'Decision Statement',
+      date: '2013-05-22',
+      pdfUrl: null,
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: 'html',
+      pages: [
+        { page: 1, text: 'Decision Statement issued under Section 54.' },
+        { page: 2, text: 'Condition 3.1 The Proponent shall protect fish habitat.' }
+      ]
+    }
+  });
+
+  await t.test('cites the registry page when the decision was never filed as a PDF', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [2] }]
+    }));
+    stubFederalSource(t, inlineDecision());
+
+    const sources = fakeSources({
+      documents: [INSPECTION],
+      chunks: { docI: [chunk(1, 'No non-compliance.', 'docI')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    // Without the `pageUrl` fallback the citation carries no link at all and the reader is left
+    // with a document name and nowhere to follow it.
+    assert.deepStrictEqual(record.citations.map(c => c.url),
+      ['https://iaac-aeic.gc.ca/050/evaluations/document/158078']);
+  });
+
+  await t.test('stores the registry page and the format of an inline decision', async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [2] }]
+    }));
+    stubFederalSource(t, inlineDecision());
+
+    const sources = fakeSources({
+      documents: [INSPECTION],
+      chunks: { docI: [chunk(1, 'No non-compliance.', 'docI')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    // The page renders one link and one label from these three fields: no `pdfUrl` to offer, a
+    // page to send the reader to, and a format that says it is a registry page and not a file.
+    assert.deepStrictEqual(record.sections.federal.facts.decision, {
+      docId: '158078',
+      title: 'Decision Statement',
+      date: '2013-05-22',
+      pdfUrl: null,
+      pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+      format: 'html',
+      pageCount: 2
+    });
+  });
+
+  await t.test("carries the decision's format onto its citations", async () => {
+    config.summaryEnabled = true;
+    config.projectSummaryProvider = 'ollama';
+    config.federalSource = 'iaac';
+    stubModel(t, JSON.stringify({
+      items: [{ category: 'Federal', title: 'Condition 3.1',
+        oneLiner: 'The Proponent shall protect fish habitat.', bullets: [], citations: [2] }]
+    }));
+    stubFederalSource(t, inlineDecision());
+
+    const sources = fakeSources({
+      documents: [INSPECTION],
+      chunks: { docI: [chunk(1, 'No non-compliance.', 'docI')] }
+    });
+    const record = await generateProjectSummary('272', { sources, section: 'federal' });
+
+    // The chip labels itself from this field: a registry page is not a file, and a chip that
+    // offers "Open PDF" for one promises what the link cannot deliver.
+    assert.deepStrictEqual(record.citations.map(c => c.format), ['html']);
   });
 
   await t.test('stores the registry facts when Canada issued no decision', async () => {
@@ -1420,7 +1514,9 @@ test('generateProjectSummary', async (t) => {
             docId: '158078',
             title: 'Decision Statement',
             date: '2024-07-03',
-            pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf'
+            pdfUrl: 'https://iaac-aeic.gc.ca/050/documents/p80105/157936E.pdf',
+            pageUrl: 'https://iaac-aeic.gc.ca/050/evaluations/document/158078',
+            format: 'pdf'
           }
         },
         items: [],

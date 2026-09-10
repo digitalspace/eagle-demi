@@ -55,6 +55,25 @@ const NAMED_ENTITIES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', mdash: '—', ndash: '–'
 };
 
+/**
+ * Accented letters, which the registry writes by name. This is a bilingual site and the decisions
+ * name Nations in their own orthography — "Stk'eml&uacute;psemc te Secw&eacute;pemc" — so a read
+ * that leaves these escaped stores the escape and quotes it back at a reader.
+ */
+const LOWER_LETTERS = {
+  agrave: 'à', aacute: 'á', acirc: 'â', atilde: 'ã', auml: 'ä', aring: 'å', ccedil: 'ç',
+  egrave: 'è', eacute: 'é', ecirc: 'ê', euml: 'ë', igrave: 'ì', iacute: 'í', icirc: 'î',
+  iuml: 'ï', ntilde: 'ñ', ograve: 'ò', oacute: 'ó', ocirc: 'ô', otilde: 'õ', ouml: 'ö',
+  ugrave: 'ù', uacute: 'ú', ucirc: 'û', uuml: 'ü'
+};
+
+/** The same letters both ways round, because `&Eacute;` is a different letter from `&eacute;`. */
+const NAMED_LETTERS = Object.entries(LOWER_LETTERS).reduce((all, [name, letter]) => {
+  all[name] = letter;
+  all[name[0].toUpperCase() + name.slice(1)] = letter.toUpperCase();
+  return all;
+}, {});
+
 /** Registry markup is entity-escaped ("Minister&#39;s"), and a title is compared and stored. */
 function decodeEntities(text) {
   return String(text).replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body) => {
@@ -64,7 +83,10 @@ function decodeEntities(text) {
         : parseInt(body.slice(1), 10);
       return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
     }
-    const named = NAMED_ENTITIES[body.toLowerCase()];
+    // Letters are matched as written; the punctuation entities are not case-sensitive.
+    const named = NAMED_LETTERS[body] !== undefined
+      ? NAMED_LETTERS[body]
+      : NAMED_ENTITIES[body.toLowerCase()];
     return named === undefined ? whole : named;
   });
 }
@@ -202,6 +224,93 @@ function parsePdfLink(html) {
     : firstText(before.slice(openedAt), /<h2[^>]*>([\s\S]*?)<\/h2>/i);
 
   return { pdfUrl: `${REGISTRY_ORIGIN}${anchor[1]}`, title: heading };
+}
+
+/**
+ * The GC template's furniture, which wraps every document page: the registry menu, the search form,
+ * the stylesheets, the scripts. None of it is the decision and all of it carries words — the menu
+ * even carries an `<h2>` ("Registry") ahead of the document's own heading, so a read that keeps it
+ * would take the menu for the title.
+ */
+const FURNITURE = /<(script|style|form|nav|header|footer)\b[^>]*>[\s\S]*?<\/\1>/gi;
+
+/** Where the document stops and the template resumes: the page-details block, or `</main>`. */
+const CONTENT_END = /<div\b[^>]*\bid=["']?def-preFooter\b|<\/main\b/i;
+
+/** Tags that end a paragraph. An inline tag — `<em>`, `<abbr>` — does not, so a sentence stays one. */
+const BLOCK_BREAK = /<\/(?:p|div|section|h[1-6]|li|ul|ol|tr|table|blockquote|dt|dd|dl)\s*>/gi;
+
+/** About one printed page of a decision statement, in characters. */
+const INLINE_PAGE_CHARS = 3000;
+
+/**
+ * The least text that can be a decision. Below it the page is a stub — a row that links elsewhere,
+ * or a template that rendered without its document — and calling that a decision statement would
+ * put Canada's name on nothing.
+ */
+const INLINE_MIN_CHARS = 500;
+
+/**
+ * The decision a document page prints in its own body, for the pages that have no PDF.
+ *
+ * CEAA 2012-era statements — Ajax Mine, and three others in this corpus — were never filed as a
+ * file: the registry publishes the Minister's decision as the document page itself. So the page IS
+ * the statement, and the only thing missing next to the PDF path is the file.
+ *
+ * Read as markup, not as a DOM: the pages are unbalanced (`</div>` after the last paragraph, a
+ * `<div>` that never closes) and a parser strict enough to be worth adding would reject them.
+ *
+ * @returns {{text: string, title: string|null}|null} the body as paragraphs, or null for a page
+ *   whose main content cannot be found
+ */
+function parseInlineContent(html) {
+  let markup = String(html).replace(/<!--[\s\S]*?-->/g, ' ').replace(FURNITURE, ' ');
+  const end = CONTENT_END.exec(markup);
+  if (end) markup = markup.slice(0, end.index);
+
+  // The document's heading is where its content starts: everything above it belongs to the page.
+  const heading = /<h2\b[^>]*>/i.exec(markup);
+  if (!heading) return null;
+  const body = markup.slice(heading.index);
+
+  const paragraphs = body
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(BLOCK_BREAK, '\n\n')
+    .replace(/<[^>]*>/g, ' ')
+    .split(/\n{2,}/)
+    .map(part => decodeEntities(part).replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  if (paragraphs.length === 0) return null;
+
+  return {
+    text: paragraphs.join('\n\n'),
+    title: firstText(body, /<h2[^>]*>([\s\S]*?)<\/h2>/i)
+  };
+}
+
+/**
+ * Inline text as numbered pages, cut at paragraph boundaries.
+ *
+ * An HTML decision has no pages, but everything downstream cites one: a chunk carries a page
+ * number and a reader checks the quote against that page of the registry's own copy. So the text
+ * is cut into page-sized pieces, never mid-paragraph — a citation that straddles a cut would
+ * quote text no single page holds. A paragraph longer than a page stays whole and is its own page.
+ *
+ * @returns {Array<{page: number, text: string}>}
+ */
+function inlinePages(text, size = INLINE_PAGE_CHARS) {
+  const pages = [];
+  let current = '';
+  for (const paragraph of String(text).split(/\n{2,}/)) {
+    if (current && current.length + paragraph.length + 2 > size) {
+      pages.push(current);
+      current = paragraph;
+    } else {
+      current = current ? `${current}\n\n${paragraph}` : paragraph;
+    }
+  }
+  if (current) pages.push(current);
+  return pages.map((page, i) => ({ page: i + 1, text: page }));
 }
 
 /**
@@ -394,8 +503,16 @@ async function fetchFederalSource(project, opts = {}) {
   // The registry DOES list a decision statement. Every failure below is therefore a document that
   // could not be read, which is a different claim from Canada having issued no decision, so the row
   // is returned either way and `decision.error` says which of the two the caller is looking at.
+  // `format` says which of the two the text came from, and is null while there is no text: the
+  // registry files a decision either as a PDF or as the document page's own body.
   source.decision = {
-    docId: row.docId, title: row.title, date: row.date || null, pdfUrl: null, pages: []
+    docId: row.docId,
+    title: row.title,
+    date: row.date || null,
+    pdfUrl: null,
+    pageUrl: null,
+    format: null,
+    pages: []
   };
   const unreadable = (error) => {
     source.decision.error = error;
@@ -413,10 +530,28 @@ async function fetchFederalSource(project, opts = {}) {
     return unreadable(fetchFailed(err));
   }
   if (docHtml === null) return unreadable('request_budget_spent');
+  // The page was read, so it is a place a reader can be sent even when the document behind it
+  // could not be: a citation with no PDF still has somewhere to point.
+  source.decision.pageUrl = docUrl;
 
   const link = parsePdfLink(docHtml);
-  if (!link) return unreadable('no_pdf_link');
+  if (!link) {
+    // No file to fetch, because the older statements were never filed as one — the registry prints
+    // the decision on this page. Reading it costs no request: the page is already here.
+    const inline = parseInlineContent(docHtml);
+    if (!inline || inline.text.length < INLINE_MIN_CHARS) return unreadable('no_pdf_link');
+
+    source.decision.title = inline.title || row.title;
+    source.decision.format = 'html';
+    source.decision.pages = inlinePages(inline.text);
+    logger.info(`[federal-source] CEAR ${cearId} decision statement ${row.docId} is inline HTML: ` +
+      `${inline.text.length} characters`, {
+      cearId, docId: row.docId, pages: source.decision.pages.length, requests: spent
+    });
+    return source;
+  }
   source.decision.pdfUrl = link.pdfUrl;
+  source.decision.format = 'pdf';
   source.decision.title = link.title || row.title;
 
   let pdf;
@@ -444,6 +579,8 @@ module.exports = {
   parseDocumentRows,
   pickDecisionStatement,
   parsePdfLink,
+  parseInlineContent,
+  inlinePages,
   pdfToPages,
   fetchFederalSource,
   REGISTRY_ORIGIN,

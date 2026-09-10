@@ -136,6 +136,8 @@ export interface ProjectSummaryCitation {
   source?: 'demi' | 'iaac';
   /** The registry PDF, the only way to reach an `iaac` source. Set with `source: 'iaac'`. */
   url?: string;
+  /** What `url` opens: an older decision is a registry page, not a file. Absent means a file. */
+  format?: 'pdf' | 'html';
 }
 
 export interface StatusSection {
@@ -190,7 +192,12 @@ export interface FederalDocumentRef {
 }
 
 export interface FederalDecisionRef extends FederalDocumentRef {
-  pdfUrl: string;
+  /** Null for a decision the registry never filed as a file: `pageUrl` is then the only link. */
+  pdfUrl: string | null;
+  /** The registry's document page, which prints an older decision instead of linking a PDF. */
+  pageUrl?: string | null;
+  /** Which of the two the text came from; null while there is no text. */
+  format?: 'pdf' | 'html' | null;
   /** Absent when the PDF was found but could not be read, which is a reason of its own below. */
   pageCount?: number;
 }

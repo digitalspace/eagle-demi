@@ -22,7 +22,7 @@
               <a class="ps-cite" [href]="c.url" target="_blank" rel="noopener" [attr.title]="c.documentName">
                 <span class="ps-cite__n">[{{ c.n }}]</span>
                 <span class="ps-cite__doc">IAAC registry, p.&nbsp;{{ c.pageNumber }}</span>
-                <span class="ps-cite__action">Open PDF<span class="visually-hidden"> (opens in a new tab)</span></span>
+                <span class="ps-cite__action">{{ citeAction(c) }}<span class="visually-hidden"> (opens in a new tab)</span></span>
               </a>
             } @else if (c.source === 'iaac') {
               <!-- The registry never gave us a PDF url for this one: not a link anywhere, since
@@ -30,7 +30,7 @@
               <span class="ps-cite" [attr.title]="c.documentName">
                 <span class="ps-cite__n">[{{ c.n }}]</span>
                 <span class="ps-cite__doc">IAAC registry, p.&nbsp;{{ c.pageNumber }}</span>
-                <span class="ps-cite__action">Open PDF</span>
+                <span class="ps-cite__action">{{ citeAction(c) }}</span>
               </span>
             } @else {
               <button type="button" class="ps-cite" (click)="openDocument(c.documentId)" [disabled]="downloadingId() === c.documentId">
@@ -255,8 +255,13 @@
         @if (federalFacts(); as ff) {
           <p class="ps-federal">{{ federalLine() }} ·
             <a class="ps-card__link" [href]="ff.projectUrl" target="_blank" rel="noopener">View on IAAC registry<span class="visually-hidden"> (opens in a new tab)</span></a>
-            @if (ff.decision; as decision) {
-              &ngsp;· <a class="ps-card__link" [href]="decision.pdfUrl" target="_blank" rel="noopener">{{ federalPdfLabel() }}<span class="visually-hidden"> (opens in a new tab)</span></a>
+            @if (ff.decision) {
+              &ngsp;· @if (federalDecisionUrl(); as decisionUrl) {
+                <a class="ps-card__link" [href]="decisionUrl" target="_blank" rel="noopener">{{ federalDecisionLabel() }}<span class="visually-hidden"> (opens in a new tab)</span></a>
+              } @else {
+                <!-- Neither a file nor a page to send a reader to: naming the document is all that is left. -->
+                <span>{{ federalDecisionLabel() }}</span>
+              }
             }
           </p>
         }

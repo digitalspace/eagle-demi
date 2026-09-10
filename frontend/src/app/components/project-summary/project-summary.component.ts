@@ -255,9 +255,18 @@ export class ProjectSummaryComponent implements OnInit {
   /** Guarded: a federal section built from registry facts alone can arrive with no `items` key. */
   federalItems = computed<ConditionItem[]>(() => this.sections()?.federal?.items || []);
 
-  /** The PDF link's label. A decision whose text would not read is still a file worth offering. */
-  federalPdfLabel = computed<string>(() => {
-    const pages = this.federalFacts()?.decision?.pageCount;
+  /** The file when the registry filed one, else the page that prints the decision, else nothing. */
+  federalDecisionUrl = computed<string | null>(() => {
+    const decision = this.federalFacts()?.decision;
+    return decision ? decision.pdfUrl || decision.pageUrl || null : null;
+  });
+
+  /** The link's label. A decision whose text would not read is still a file worth offering. */
+  federalDecisionLabel = computed<string>(() => {
+    const decision = this.federalFacts()?.decision;
+    const isPdf = !!decision?.pdfUrl || decision?.format === 'pdf';
+    if (!isPdf) return 'Decision statement (registry page)';
+    const pages = decision?.pageCount;
     return pages ? `Decision statement (PDF, ${pages} pages)` : 'Decision statement (PDF)';
   });
 
@@ -301,6 +310,11 @@ export class ProjectSummaryComponent implements OnInit {
   citations(numbers: number[] | undefined): ProjectSummaryCitation[] {
     const lookup = this.service.citationsByNumber();
     return (numbers || []).map(n => lookup.get(n)).filter((c): c is ProjectSummaryCitation => !!c);
+  }
+
+  /** What a citation chip offers. A registry page is not a file, so it must not say PDF. */
+  citeAction(citation: ProjectSummaryCitation): string {
+    return citation.format === 'html' ? 'Open registry page' : 'Open PDF';
   }
 
   // Condition modal ------------------------------------------------------------------------
