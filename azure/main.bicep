@@ -127,9 +127,6 @@ param trustedProxyIps string = ''
 @description('Optional Key Vault secret names this environment holds: notify-api-key, edge-secret.')
 param optionalSecretNames array = []
 
-@description('Extra principal IDs granted Key Vault Secrets User on the vault, beyond the API identity.')
-param additionalSecretReaderPrincipalIds array = []
-
 // The OpenShift namespaces the secret sync writes to, and the switch that deploys it. Empty
 // deploys no sync app — which is what an environment whose vault holds no OpenShift copies wants.
 // The nonprod vault serves both nonprod namespaces; prod names only its own.
@@ -385,7 +382,6 @@ module keyVault './modules/key-vault.bicep' = {
     peSubnetId: privateEndpointSubnetId
     identityPrincipalId: identity.outputs.principalId
     optionalSecretNames: optionalSecretNames
-    additionalSecretReaderPrincipalIds: additionalSecretReaderPrincipalIds
   }
 }
 

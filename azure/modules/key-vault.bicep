@@ -37,11 +37,6 @@ param peSubnetId string
 @description('Optional secret names this environment\'s vault holds, e.g. notify-api-key, edge-secret. Empty leaves those app settings blank.')
 param optionalSecretNames array = []
 
-// Readers beyond the API identity: the analytics Flex Function identity and the APIM managed
-// identity, which arrive in a later phase and are principals this template does not create.
-@description('Extra principal IDs to grant Key Vault Secrets User, beyond identityPrincipalId.')
-param additionalSecretReaderPrincipalIds array = []
-
 // The names the API cannot start without. deploy-infra.sh reads this list out of this file, so it
 // is the one place the set is written down.
 var requiredSecretNames = [
@@ -107,18 +102,6 @@ resource secretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalType: 'ServicePrincipal'
   }
 }
-
-// Same name derivation as the grant above, so a principal that is already in the list re-deploys
-// as a no-op rather than a second assignment.
-resource additionalSecretsUsers 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for readerPrincipalId in additionalSecretReaderPrincipalIds: {
-  scope: vault
-  name: guid(vault.id, readerPrincipalId, keyVaultSecretsUser)
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultSecretsUser)
-    principalId: readerPrincipalId
-    principalType: 'ServicePrincipal'
-  }
-}]
 
 // No DNS zone group here, same as the Cosmos and AI Search endpoints: this landing zone attaches
 // one by policy (`deployedByPolicy`) pointing at privatelink.vaultcore.azure.net in a central DNS

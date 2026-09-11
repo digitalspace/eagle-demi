@@ -17,7 +17,7 @@ if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
 
 const { app } = require('@azure/functions');
 
-const { logger } = require('../utils/logger');
+const { logger } = require('./logger');
 const { loadMapping, namespacesFromEnv } = require('./mapping');
 const { reconcile } = require('./reconcile');
 const { createVaultReader } = require('./vault');
