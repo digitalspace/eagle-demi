@@ -331,15 +331,34 @@ test('access gate coverage', async (t) => {
     // from the same helper — so its four sites left the scan. The payload is asserted directly
     // below instead. +1 for the PUT /documents/:id refusal of a non-string parent field, then +3
     // for the 404 (row deleted under edit), 409 (staff PUT write-race exhausted) and 503 (eagle
-    // push write-race exhausted) sites.
-    assert.strictEqual(emissions.length, 38,
+    // push write-race exhausted) sites. +3 for GET /documents/recent-uploads: its 400, its memo
+    // hit and its ranked payload.
+    assert.strictEqual(emissions.length, 41,
       `the document controller's response sites changed; re-check each, then update this count (found ${emissions.length})`);
 
-    const ROW_SOURCES = /\b(saved|updated|existing|doc|items)\b(?!\s*\.)/;
+    // `ranked` and `memoed` are the recent-uploads row lists, named here so a site that emits
+    // either one BARE is caught the way a bare `items` is.
+    const ROW_SOURCES = /\b(saved|updated|existing|doc|items|ranked|memoed)\b(?!\s*\.)|\b(items|page)\.map\(/;
+    // The recent-uploads rows are redacted one step EARLIER, inside `recentUploadRow`, because the
+    // row is a wire shape (`eagleProjectId`, `document: {...}`) the catalog must never run over —
+    // the same reason the search fallback redacts inside its mapper. Those two emissions therefore
+    // say nothing on their own, so the BUILDER is asserted below instead. Exact text, so an
+    // emission of anything else is back in the scan.
+    const BUILT_ELSEWHERE = /^\{ items: (ranked|memoed) \}$/;
     const unredacted = emissions.filter(e => ROW_SOURCES.test(e) &&
-      !/redact(All)?ForAccess/.test(e));
+      !/redact(All)?ForAccess/.test(e) && !BUILT_ELSEWHERE.test(e.trim()));
     assert.deepStrictEqual(unredacted, [],
       'these emit a stored document row without redactForAccess — each ships read[], s3Key and _etag');
+
+    // What the exemption above rests on: the builder redacts BOTH rows and reads every field off
+    // the redacted copies. The negative test is the load-bearing half — `projectId: project.id`
+    // would ship a project id the redactor withheld.
+    const builder = /function recentUploadRow\([^)]*\) \{([\s\S]*?)\n\}/.exec(code(controller));
+    assert.ok(builder, 'recentUploadRow is gone — re-check what builds a recent-uploads row');
+    assert.match(builder[1], /redactForAccess\('documents'/);
+    assert.match(builder[1], /redactForAccess\('projects'/);
+    assert.ok(!/\b(doc|project)\.[A-Za-z]/.test(builder[1]),
+      'the recent-uploads row reads a field off a stored row rather than off its redacted copy');
 
     // Proves the filter above is not vacuous: the hand-built sites really are in the scan, so a new
     // one that DID name a row bare would be caught rather than silently skipped.
