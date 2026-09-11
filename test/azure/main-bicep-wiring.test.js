@@ -651,10 +651,15 @@ test('the API app reads EDGE_SECRET through a Key Vault reference', () => {
     'an environment that did not name the secret must get an empty URI, and the URI must be the ' +
     'VERSIONLESS one, so a rotation is a new secret version plus a recycle');
 
-  // The one environment that has a Front Door in front of it is the one that must name the secret.
+  // Both environments have a Front Door in front of them, so both must name the secret. Dropping
+  // the name from either param file blanks EDGE_SECRET on the next infrastructure deploy, and the
+  // app stops trusting the edge's forwarded caller address.
   assert.match(TEST_PARAMS, /^\s+'edge-secret'$/m,
     'test sits behind eagle-edge-test, so an unnamed edge-secret puts every visitor arriving ' +
     'through Front Door on one shared anonymous quota key');
+  assert.match(PROD_PARAMS, /^\s+'edge-secret'$/m,
+    'prod sits behind eagle-edge-prod and the vault holds the value, so an unnamed edge-secret ' +
+    'puts every visitor arriving through Front Door on one shared anonymous quota key');
 
   assert.doesNotMatch(DEPLOY, /EDGE_SECRET/,
     'the deploy script must not source the value at all any more — the vault holds it and the ' +
