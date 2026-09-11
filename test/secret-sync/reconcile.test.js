@@ -156,6 +156,87 @@ test('a changed value is written whole, stamped, and its consumers are patched',
   assert.deepStrictEqual(result, { checked: 1, updated: 1, restarted: 2, missing: 0, ok: true });
 });
 
+test('a key the mapping does not own keeps its value through the write', async () => {
+  const cluster = fakeCluster({
+    secrets: {
+      'getok-secret': {
+        type: 'Opaque',
+        metadata: { name: 'getok-secret', labels: { app: 'eagle-api' }, annotations: {} },
+        data: {
+          CLIENTID: b64('client-id-value'),
+          CLIENT_SECRET: b64('stale'),
+          EXTRA: b64('set-by-hand')
+        }
+      }
+    }
+  });
+
+  const { result } = await run({ cluster });
+
+  const put = cluster.calls.find((c) => c.method === 'PUT');
+  assert.deepStrictEqual(put.body.data, {
+    CLIENTID: b64('client-id-value'),
+    CLIENT_SECRET: b64('client-secret-value'),
+    EXTRA: b64('set-by-hand')
+  }, 'a PUT holding only the mapped keys DELETES every other key from a live Secret');
+  assert.strictEqual(result.updated, 1);
+});
+
+test('a key the mapping does not own is not drift, so nothing is written for it', async () => {
+  const cluster = fakeCluster({
+    secrets: {
+      'getok-secret': {
+        metadata: { name: 'getok-secret' },
+        data: {
+          CLIENTID: b64('client-id-value'),
+          CLIENT_SECRET: b64('client-secret-value'),
+          EXTRA: b64('set-by-hand')
+        }
+      }
+    }
+  });
+
+  const { result } = await run({ cluster });
+
+  assert.deepStrictEqual(
+    cluster.calls.map((c) => c.method), ['GET'],
+    'an unmapped key must not count as drift — it would roll every consumer daily'
+  );
+  assert.deepStrictEqual(result, { checked: 1, updated: 0, restarted: 0, missing: 0, ok: true });
+});
+
+test('the annotations and type already on the Secret survive the write', async () => {
+  const cluster = fakeCluster({
+    secrets: {
+      'getok-secret': {
+        type: 'kubernetes.io/basic-auth',
+        metadata: {
+          name: 'getok-secret',
+          labels: { app: 'eagle-api' },
+          annotations: {
+            'meta.helm.sh/release-name': 'eagle-api',
+            'kubectl.kubernetes.io/last-applied-configuration': '{}'
+          }
+        },
+        data: { CLIENTID: b64('client-id-value'), CLIENT_SECRET: b64('stale') }
+      }
+    }
+  });
+
+  await run({ cluster });
+
+  const put = cluster.calls.find((c) => c.method === 'PUT');
+  assert.deepStrictEqual(put.body.metadata.annotations, {
+    'meta.helm.sh/release-name': 'eagle-api',
+    'kubectl.kubernetes.io/last-applied-configuration': '{}',
+    'secret-sync/vault-version':
+      'getok-secret-client-secret=v-getok-secret-client-secret,getok-secret-clientid=v-getok-secret-clientid',
+    'secret-sync/updated-at': '2026-09-10T06:00:00.000Z'
+  });
+  assert.strictEqual(put.body.type, 'kubernetes.io/basic-auth',
+    'a PUT that retypes the object breaks every consumer that reads it by type');
+});
+
 test('a mapped Secret the namespace does not have is recorded missing and fails the run', async () => {
   const cluster = fakeCluster({ secrets: {} });
 
@@ -225,11 +306,14 @@ test('the run reports its counts once', async () => {
   assert.match(summary[0], /checked=1 updated=1 restarted=2 missing=0/);
 });
 
-test('the diff ignores annotations and sees a key added, removed or changed', () => {
+test('the diff ignores annotations and unmapped keys, and sees a mapped key added or changed', () => {
   const data = { A: b64('1'), B: b64('2') };
   assert.strictEqual(secretDataChanged({ data: { ...data } }, data), false);
-  assert.strictEqual(secretDataChanged({ data: { A: b64('1') } }, data), true, 'key added');
-  assert.strictEqual(secretDataChanged({ data: { ...data, C: b64('3') } }, data), true, 'key removed');
+  assert.strictEqual(secretDataChanged({ data: { A: b64('1') } }, data), true, 'mapped key added');
+  assert.strictEqual(
+    secretDataChanged({ data: { ...data, C: b64('3') } }, data), false,
+    'a key the mapping does not own is left alone, not treated as drift'
+  );
   assert.strictEqual(secretDataChanged({ data: { ...data, B: b64('x') } }, data), true, 'value changed');
   assert.strictEqual(secretDataChanged(null, data), true, 'no live secret at all');
   assert.strictEqual(
