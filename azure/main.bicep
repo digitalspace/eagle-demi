@@ -191,6 +191,16 @@ param existingSearchEndpoint string = ''
 @description('Principal of the identity the existing search service runs its indexers as. Used only when `deploySearch` is false; grants it Cosmos Data Reader.')
 param existingSearchIndexerPrincipalId string = ''
 
+// The kill switch for the two id-only indexes, per environment. Empty answers those datasets from
+// Cosmos with CONTAINS; the index name turns keyword ranking on. It lives here rather than only in
+// the module because `appSettings` is a whole-collection PUT — a value set by hand on the app is
+// deleted by the next deploy, so the turn-on is an edit to `main.<env>.bicepparam`.
+@description('Azure AI Search index holding recent activity. Empty falls back to Cosmos.')
+param searchIndexActivities string = ''
+
+@description('Azure AI Search index holding project notifications. Empty falls back to Cosmos.')
+param searchIndexProjectNotifications string = ''
+
 // Unlike `summaryEnabled`, which is the app-side switch, this decides whether the Foundry ACCOUNT
 // is created. Prod runs no summariser, so it should have no model resource to attribute or secure.
 @description('Deploy the Foundry account and model deployment. False leaves FOUNDRY_ENDPOINT empty, which is the same state summaryEnabled=false already produces.')
@@ -594,6 +604,8 @@ module apiFunctionFlex './modules/api-function-flex.bicep' = if (!empty(apiFlexS
     identityPrincipalId: identity.outputs.principalId
     cosmosEndpoint: cosmos.outputs.cosmosEndpoint
     searchEndpoint: deploySearch ? search!.outputs.searchEndpoint : existingSearchEndpoint
+    searchIndexActivities: searchIndexActivities
+    searchIndexProjectNotifications: searchIndexProjectNotifications
     appInsightsConnectionString: observability.outputs.connectionString
     enrichmentSources: enrichmentSources
     summaryEnabled: summaryEnabled

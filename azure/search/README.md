@@ -89,6 +89,10 @@ from Cosmos with `CONTAINS`, without ranking or a half-typed last word, and the 
 warning per process. Nothing to restore, nothing to reindex: it is a settings change. The other
 three have no such switch, because nothing else can answer them.
 
+Flip it in `azure/main.<env>.bicepparam`, never on the app. `appSettings` is a whole-collection PUT,
+so a value set in the portal or with `az functionapp config appsettings set` is deleted by the next
+infra deploy and the switch goes back off.
+
 `activities.content` is the one field under a custom analyzer other than `filename`: an update body
 can hold HTML, so `html_text` puts the `html_strip` char filter in front of the standard tokenizer.
 Without it `p` and `br` are indexed as words.
@@ -342,7 +346,9 @@ were added on 2026-09-10 and are the worked example.
 3. **`azure/search/indexers/<name>-indexer.json`** — joins the two, `PT5M`, `maxFailedItems: 0`.
 4. **The app setting**, in `azure/modules/api-function-flex.bicep` — both the parameter and the
    `appSettings` entry. That array is a whole-collection PUT, so a setting the code reads but the
-   template does not declare is deleted by the next infra deploy.
+   template does not declare is deleted by the next infra deploy. A setting whose value differs per
+   environment needs the same parameter in `azure/main.bicep`, passed into the module call, or the
+   module default is what every deploy writes and no param file can change it.
 5. **Register the index** in `src/controllers/search-schema.js` so `/health/search-schema` can probe
    it, and in `src/scripts/apply-search-definitions.js` under `liveNames` so `--live` maps the
    committed name onto the deployed one.
@@ -361,7 +367,14 @@ not the top-level `status`. The first run reported 2,433 rows for `activities` a
 `project-notifications`. Deploy the app last.
 
 The rollout order: deploy the app with the setting empty, PUT the index and data source, run the
-indexer once, then set the app setting to the index name.
+indexer once, then turn it on by adding the parameter to that environment's param file —
+
+```
+param searchIndexActivities = 'activities'
+param searchIndexProjectNotifications = 'project-notifications'
+```
+
+— and running `./scripts/deploy-infra.sh <env> --live`. Turning it off is the same edit in reverse.
 
 ## Restoring one
 

@@ -84,8 +84,12 @@ function filterFor(access, partitionField = 'projectId', documentField = null) {
 
     // The team arm: level 1, ORed with the role arm exactly as in `readClause`. A grant, so `or`;
     // the scope `and` below is the restriction and stays separate.
+    //
+    // A null `partitionField` skips the arm, as `scopeClause`'s allow-list does on the SQL side:
+    // rows with no project axis carry no team scope either, and the arm would otherwise emit
+    // `search.in(null, …)` — a 400 on every request.
     const teams = access.teams || [];
-    if (teams.length > 0) {
+    if (teams.length > 0 && partitionField) {
       grants.push(`(read/any(r: r eq ${quote(LEVEL_TOKENS[1])})` +
         ` and ${inClause(partitionField, teams)})`);
     }
