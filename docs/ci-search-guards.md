@@ -19,6 +19,12 @@ naming the missing fields. A 503 stops the release before `deploy-api` runs. The
 `orderby` of its own: an index's `sortable` flags are not the set the app can order by, and a list
 built from them would block a release over fields no query sorts on.
 
+Before it posts, the probe GETs `/health/search-schema` on the target app and keeps only the
+indexes the app reports back. Index definitions in the directory that the deployed app does not
+know yet — because they ship with the change under review — are skipped, and the script prints a
+line naming each one it skipped. If that filtering leaves nothing to probe, the run fails: a gate
+that skipped everything checked nothing, and must not report success.
+
 Like the rollback below, the job takes its tooling from the ref the workflow is running and only
 the index definitions from the tag: it checks that ref out at the workspace root, the tag into
 `release/`, and passes `release/azure/search/indexes` to the probe. `deploy-api` splits the same

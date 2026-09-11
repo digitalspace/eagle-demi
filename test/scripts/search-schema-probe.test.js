@@ -24,6 +24,16 @@ function runProbe(baseUrl, env = {}) {
   return runScript(SCRIPT, [baseUrl], { cwd: REPO_ROOT, env });
 }
 
+/**
+ * The body that was POSTed. Every run first GETs the endpoint to learn which indexes the deployed
+ * app knows, so the POST is never the first request on the stub.
+ */
+function postedBody(stub) {
+  const posts = stub.requests.filter((r) => r.method === 'POST');
+  assert.strictEqual(posts.length, 1, `POSTs: ${posts.length}`);
+  return JSON.parse(posts[0].body);
+}
+
 test('search-schema-probe.sh', async (t) => {
   await t.test('sends every committed index, with the fields the live index must answer', async () => {
     const stub = await startStub(() => ({ status: 200, json: { ok: true } }));
@@ -35,11 +45,10 @@ test('search-schema-probe.sh', async (t) => {
     }
 
     assert.strictEqual(run.status, 0, run.stderr);
-    assert.strictEqual(stub.requests.length, 1);
-    assert.strictEqual(stub.requests[0].method, 'POST');
-    assert.strictEqual(stub.requests[0].url, '/health/search-schema');
+    assert.deepStrictEqual(stub.requests.map((r) => r.method), ['GET', 'POST']);
+    assert.deepStrictEqual([...new Set(stub.requests.map((r) => r.url))], ['/health/search-schema']);
 
-    const { indexes } = JSON.parse(stub.requests[0].body);
+    const { indexes } = postedBody(stub);
     assert.deepStrictEqual(Object.keys(indexes).sort(),
       ['activities', 'chunks', 'documents', 'project-notifications', 'projects']);
     // Ids and nothing else: the two keyword indexes rank rows, and the row itself is read back
@@ -86,9 +95,71 @@ test('search-schema-probe.sh', async (t) => {
     }
 
     assert.strictEqual(run.status, 0, run.stderr);
-    const { indexes } = JSON.parse(stub.requests[0].body);
+    const { indexes } = postedBody(stub);
     assert.deepStrictEqual(Object.keys(indexes), ['documents']);
     assert.deepStrictEqual(indexes.documents.select, ['id', 'fieldOnlyThisTagHas']);
+  });
+
+  await t.test('probes only the indexes the deployed app knows, naming the ones it skips', async () => {
+    // The release that ADDS an index runs against the app that does not have it yet, and that app
+    // answers 400 to a body naming more indexes than it compiled in. Posting the whole body would
+    // block the release that ships the index, on the one thing about it that is expected.
+    const stub = await startStub((req) => (req.method === 'GET'
+      ? { status: 200, json: { ok: true, indexes: { chunks: { ok: true }, projects: { ok: true }, documents: { ok: true } } } }
+      : { status: 200, json: { ok: true } }));
+    let run;
+    try {
+      run = await runProbe(stub.url);
+    } finally {
+      await stub.close();
+    }
+
+    assert.strictEqual(run.status, 0, run.stderr);
+    const { indexes } = postedBody(stub);
+    assert.deepStrictEqual(Object.keys(indexes).sort(), ['chunks', 'documents', 'projects']);
+    // Silent dropping is how this gate would quietly stop probing an index for good.
+    assert.match(run.stdout, /skipping activities: not known to the deployed app at /);
+    assert.match(run.stdout, /skipping project-notifications: not known to the deployed app at /);
+    assert.strictEqual(run.stdout.match(/^skipping /gm).length, 2);
+  });
+
+  await t.test('posts every committed index when the deployed app will not say what it knows', async () => {
+    // An unreadable answer is not evidence that an index is unknown. Dropping on it would narrow
+    // the gate every time a proxy returned an error page.
+    const stub = await startStub((req) => (req.method === 'GET'
+      ? { status: 500, body: '<html>gateway error</html>' }
+      : { status: 200, json: { ok: true } }));
+    let run;
+    try {
+      run = await runProbe(stub.url);
+    } finally {
+      await stub.close();
+    }
+
+    assert.strictEqual(run.status, 0, run.stderr);
+    const { indexes } = postedBody(stub);
+    assert.deepStrictEqual(Object.keys(indexes).sort(),
+      ['activities', 'chunks', 'documents', 'project-notifications', 'projects']);
+    assert.doesNotMatch(run.stdout, /^skipping /m);
+  });
+
+  await t.test('fails when the cut leaves nothing to probe', async () => {
+    // Every index skipped is a step that exits 0 having asked the live index nothing — the same
+    // ungated release an empty base URL would wave through.
+    const stub = await startStub((req) => (req.method === 'GET'
+      ? { status: 200, json: { ok: true, indexes: { 'some-other-index': { ok: true } } } }
+      : { status: 200, json: { ok: true } }));
+    let run;
+    try {
+      run = await runProbe(stub.url);
+    } finally {
+      await stub.close();
+    }
+
+    assert.strictEqual(run.status, 1);
+    assert.strictEqual(stub.requests.filter((r) => r.method === 'POST').length, 0);
+    assert.match(run.stderr, /shares none of the committed indexes/);
+    assert.match(run.stderr, /some-other-index/);
   });
 
   await t.test('an empty base URL fails instead of reading as a passing gate', async () => {
