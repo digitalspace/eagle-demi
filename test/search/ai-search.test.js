@@ -171,6 +171,63 @@ test('ai-search query construction', async (t) => {
     const many = Array.from({ length: 40 }, (_, i) => `t${i}`).join(' ');
     assert.strictEqual(aiSearch.tokenize(many).length, 16);
   });
+
+  // The frontend searches on debounced keystrokes, so the last word is the one still being typed.
+  await t.test('the prefix arm lands on the LAST term only', () => {
+    assert.strictEqual(aiSearch.buildQuery(['peace', 'kemess'], true, true),
+      '(peace OR peace~1^0.5) AND (kemess OR kemess~1^0.5 OR kemess*)');
+    // An earlier term is a word the caller finished typing. `pipe*` mid-phrase matches "pipeline"
+    // and blurs a query that named `pipe`.
+    assert.ok(!aiSearch.buildQuery(['pipe', 'river'], true, true).includes('pipe*'));
+  });
+
+  await t.test('the prefix arm is independent of fuzzy', () => {
+    assert.strictEqual(aiSearch.buildQuery(['peace', 'kem'], false, true),
+      'peace AND (kem OR kem*)');
+  });
+
+  // The parity switch behind `prefix=false`. Off, the query must be byte-identical to what it was
+  // before type-ahead existed, or a comparison against it proves nothing.
+  await t.test('prefix off emits no star at all', () => {
+    assert.strictEqual(aiSearch.buildQuery(['peace', 'kemess'], true, false),
+      '(peace OR peace~1^0.5) AND (kemess OR kemess~1^0.5)');
+    // Default is OFF at this layer — the datasets that want it opt in. Chunk search does not.
+    assert.strictEqual(aiSearch.buildQuery(['peace', 'kemess'], true),
+      aiSearch.buildQuery(['peace', 'kemess'], true, false));
+  });
+
+  // `*` bypasses the query analyzer exactly as `~1` does, so on a term en.microsoft removes it
+  // demands a literal the index does not hold and the AND join zeroes the whole query.
+  await t.test('an analyzer stopword in last position gets neither arm', () => {
+    assert.strictEqual(aiSearch.buildQuery(['tailings', 'from'], true, true),
+      '(tailings OR tailings~1^0.5) AND from');
+    assert.strictEqual(aiSearch.buildQuery(['With'], true, true), 'With');
+  });
+
+  // MIN_PREFIX_LENGTH is 2, deliberately below MIN_FUZZY_LENGTH: a two-letter box is a real
+  // type-ahead state, while a one-letter prefix overruns the service's term-expansion cap.
+  await t.test('two characters prefix, one does not', () => {
+    assert.strictEqual(aiSearch.buildQuery(['ke'], true, true), '(ke OR ke*)');
+    assert.strictEqual(aiSearch.buildQuery(['k'], true, true), 'k');
+    // Below MIN_FUZZY_LENGTH, so the prefix arm is the ONLY one here — the two thresholds are
+    // separate and this pins that lowering one did not lower the other.
+    assert.ok(!aiSearch.buildQuery(['ke'], true, true).includes('~1'));
+  });
+
+  // queryType 'full' makes `*`, `~`, `(`, `:` operators, so an unescaped one is a 400 rather than a
+  // search. tokenize is what strips them, and the prefix arm must not smuggle one back in.
+  await t.test('Lucene specials never survive into a prefixed query', () => {
+    const query = aiSearch.buildQuery(aiSearch.tokenize('site c*: "kem?"'), true, true);
+    assert.strictEqual(query, '(site OR site~1^0.5) AND c AND (kem OR kem*)');
+    // The parentheses are the OR group this module writes itself; every other operator character
+    // the caller typed has to be gone.
+    assert.ok(!/[?:"~^]\S|["?:]/.test(query.replace(/~1\^0\.5/g, '')),
+      'no operator character survives but the ones this module emits');
+    assert.strictEqual((query.match(/\*/g) || []).length, 1, 'exactly one star, and we added it');
+    // A reserved boolean word in last position is demoted BEFORE the star is appended, so the
+    // prefix hangs off the term rather than the operator.
+    assert.strictEqual(aiSearch.buildQuery(['river', 'AND'], false, true), 'river AND (and OR and*)');
+  });
 });
 
 test('ai-search snippets are escaped before they are marked', async (t) => {
@@ -1210,14 +1267,14 @@ test('semantic reranking', async (t) => {
   });
 });
 
-test('the deploy template pins all three index names to the code defaults', () => {
+test('the deploy template pins every index name to the code defaults', () => {
   // THE TEMPLATE AND THE CODE MUST NAME THE SAME INDEX, and nothing else checks it. They are one
   // decision: the code default is what applies when a setting is absent, so a default that drifts
   // from the template it deploys alongside points the app at nothing — an unknown index is a 404 per
   // query, which the frontend renders as an empty results table.
   //
-  // Both sides read `chunks`/`projects`/`documents`, matching the definitions under `azure/search/`
-  // and the live indexes on `demi-search-test`. Rolling back means moving BOTH back together.
+  // Both sides read the definition names under `azure/search/indexes`. Rolling back means moving
+  // BOTH back together.
   //
   // The second half of the pair matters just as much. `appSettings` is a WHOLE-COLLECTION PUT, so a
   // name the app reads but the template omits is DELETED on the next deploy and the value silently
@@ -1231,6 +1288,8 @@ test('the deploy template pins all three index names to the code defaults', () =
   delete process.env.SEARCH_INDEX;
   delete process.env.SEARCH_INDEX_PROJECTS;
   delete process.env.SEARCH_INDEX_DOCUMENTS;
+  delete process.env.SEARCH_INDEX_ACTIVITIES;
+  delete process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS;
   const codeDefaults = aiSearch.config();
   Object.assign(process.env, saved);
 
@@ -1244,6 +1303,25 @@ test('the deploy template pins all three index names to the code defaults', () =
     assert.match(bicep, new RegExp(`param ${param} string = '${value}'`),
       `${param} must default to '${value}', the live index name`);
   }
+
+  // Activities and project-notifications are a deliberate kill switch, not a drifted pin: the
+  // bicep param defaults to '' until the index is PUT and the indexer has run, so the deploy
+  // never points the app at an index that does not exist yet.
+  for (const [setting, param] of [
+    ['SEARCH_INDEX_ACTIVITIES', 'searchIndexActivities'],
+    ['SEARCH_INDEX_PROJECT_NOTIFICATIONS', 'searchIndexProjectNotifications']
+  ]) {
+    assert.match(bicep, new RegExp(`name: '${setting}'\\s*\\n\\s*value: ${param}\\b`),
+      `${setting} must be an app setting fed by ${param}, or the next deploy deletes it`);
+    assert.match(bicep, new RegExp(`param ${param} string = ''`),
+      `${param} must default to '', the kill switch until the index exists`);
+  }
+
+  // The code default is where the name stays pinned while the template holds the kill switch.
+  assert.strictEqual(codeDefaults.activitiesIndex, 'activities',
+    'code default for the activities index must not drift while the bicep param is the kill switch');
+  assert.strictEqual(codeDefaults.notificationsIndex, 'project-notifications',
+    'code default for the project-notifications index must not drift while the bicep param is the kill switch');
 });
 
 // A name in `select` that the index does not carry is a 400 on EVERY query — the code says so and
@@ -1330,10 +1408,206 @@ test('project searches search the stopword-free copy of the name', async (t) => 
   });
 });
 
+// The frontend fires a request per debounced keystroke, so Project and Document must prefix-match
+// the half-typed last word WITHOUT being asked. Chunk search is left as it was.
+test('type-ahead is on by default for the two keyword datasets', async (t) => {
+  const docLegs = (i) => (i === 1
+    ? { json: { value: [{ id: '207' }], '@odata.count': 1 } }
+    : { json: { value: [{ id: 'd1' }], '@odata.count': 1 } });
+
+  await t.test('searchProjects prefixes unless told not to', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchProjects({ filter: null, keywords: 'peace kem' });
+    assert.ok(calls[0].body.search.includes('kem*'), `got: ${calls[0].body.search}`);
+
+    await aiSearch.searchProjects({ filter: null, keywords: 'peace kem', prefix: false });
+    assert.ok(!calls[1].body.search.includes('*'), `got: ${calls[1].body.search}`);
+  });
+
+  await t.test('searchDocuments prefixes BOTH legs and its exclusion clause', async (tt) => {
+    const calls = captureFetch(tt, docLegs);
+
+    await aiSearch.searchDocuments({
+      filter: null, projectFilter: null, keywords: 'peace kem', top: 10
+    });
+
+    assert.ok(calls[0].body.search.includes('kem*'), `direct leg: ${calls[0].body.search}`);
+    assert.ok(calls[1].body.search.includes('kem*'), `project leg: ${calls[1].body.search}`);
+    // The exclusion clause is leg one's own query re-serialised. A `*` on one side and not the
+    // other stops the legs being complements, which is the paging gap it exists to close.
+    assert.ok(calls[2].body.filter.includes(`not search.ismatch('${calls[0].body.search}'`),
+      `exclusion clause: ${calls[2].body.filter}`);
+  });
+
+  await t.test('prefix=false reaches every leg, not just the first', async (tt) => {
+    const calls = captureFetch(tt, docLegs);
+
+    await aiSearch.searchDocuments({
+      filter: null, projectFilter: null, keywords: 'peace kem', prefix: false, top: 10
+    });
+
+    assert.ok(!calls[0].body.search.includes('*'), `direct leg: ${calls[0].body.search}`);
+    assert.ok(!calls[1].body.search.includes('*'), `project leg: ${calls[1].body.search}`);
+    assert.ok(calls[2].body.filter.includes(`not search.ismatch('${calls[0].body.search}'`),
+      'the legs stay complements with type-ahead off too');
+  });
+
+  // UNCHANGED BEHAVIOUR, pinned because buildQuery is shared. A chunk query is a phrase somebody
+  // finished typing, and `*` on it would widen a 1.1M-row scan for nothing.
+  await t.test('chunk search does not prefix', async (tt) => {
+    const calls = captureFetch(tt, () => ({ json: { value: [] } }));
+
+    await aiSearch.searchChunks({ filter: null, keywords: 'peace kem', fuzzy: true });
+
+    assert.ok(!calls[0].body.search.includes('*'), `got: ${calls[0].body.search}`);
+  });
+});
+
 // THE INVARIANT THE CHUNK WINDOW RESTS ON. `group-chunks.windowFor` is handed SERVICE_MAX_TOP so a
 // page costs one request; if that ever exceeded MAX_PAGE_ROWS, `runSearch` would clamp `top` below
 // the window while `skip` still advanced by the whole window — the unreachable-chunk gap, back
 // again. Asserted on the two constants rather than on either alone: mutating SERVICE_MAX_TOP to
+/**
+ * The two keyword indexes behind RecentActivity and ProjectNotification.
+ *
+ * They rank rows and return ids; the row itself is read back from Cosmos by the controller. So what
+ * matters here is the QUERY: the fields it searches, the half-typed last word, the caller's filter,
+ * and the ids that come back — nothing about the shape of a row.
+ */
+test('keyword search over the two Cosmos-backed datasets', async (t) => {
+  const rows = (...ids) => ({
+    json: { value: ids.map(id => ({ id })), '@odata.count': ids.length }
+  });
+
+  await t.test('each dataset searches its own fields and selects ids alone', async (tt) => {
+    const calls = captureFetch(tt, () => rows('a'));
+
+    await aiSearch.searchActivities({ keywords: 'peace kem', filter: ANONYMOUS_ACL, top: 10 });
+    await aiSearch.searchNotifications({ keywords: 'peace kem', filter: ANONYMOUS_ACL, top: 10 });
+
+    assert.match(calls[0].url, /\/indexes\/activities\/docs\/search/);
+    assert.strictEqual(calls[0].body.searchFields, 'headline,content,notificationName');
+    assert.strictEqual(calls[0].body.select, 'id,eagleId,projectId');
+    assert.match(calls[1].url, /\/indexes\/project-notifications\/docs\/search/);
+    assert.ok(calls[1].body.searchFields.startsWith('name,description,proponent'));
+    assert.strictEqual(calls[1].body.select, 'id,eagleId');
+
+    // NO HIGHLIGHTS on either. The row a caller receives is the Cosmos row, so marked-up index
+    // text would be a second copy of fields this index deliberately does not return.
+    assert.strictEqual(calls[0].body.highlight, undefined);
+    assert.strictEqual(calls[1].body.highlight, undefined);
+  });
+
+  await t.test('type-ahead is on unless the caller opts out', async (tt) => {
+    const calls = captureFetch(tt, () => rows());
+
+    await aiSearch.searchActivities({ keywords: 'peace kem', fuzzy: true });
+    await aiSearch.searchNotifications({ keywords: 'peace kem', fuzzy: true });
+    await aiSearch.searchActivities({ keywords: 'peace kem', fuzzy: true, prefix: false });
+
+    assert.ok(calls[0].body.search.includes('kem*'), calls[0].body.search);
+    assert.ok(calls[1].body.search.includes('kem*'), calls[1].body.search);
+    assert.ok(!calls[2].body.search.includes('*'), calls[2].body.search);
+    // The same query builder as Project and Document, fuzzy arm included.
+    assert.strictEqual(calls[0].body.search,
+      aiSearch.buildQuery(aiSearch.tokenize('peace kem'), true, true));
+  });
+
+  await t.test('the caller filter, order and offset reach the request unchanged', async (tt) => {
+    const calls = captureFetch(tt, () => rows());
+
+    await aiSearch.searchNotifications({
+      keywords: 'quarry',
+      filter: `region eq 'Cariboo' and ${ANONYMOUS_ACL}`,
+      orderby: 'notificationReceivedDate desc, id asc',
+      skip: 20,
+      top: 10
+    });
+
+    assert.strictEqual(calls[0].body.filter, `region eq 'Cariboo' and ${ANONYMOUS_ACL}`);
+    assert.strictEqual(calls[0].body.orderby, 'notificationReceivedDate desc, id asc');
+    assert.strictEqual(calls[0].body.skip, 20);
+  });
+
+  await t.test('the ranked ids come back in the order the service gave them', async (tt) => {
+    captureFetch(tt, () => rows('u3', 'u1', 'u2'));
+
+    const result = await aiSearch.searchActivities({ keywords: 'peace', top: 10 });
+
+    assert.deepStrictEqual(result.items.map(r => r.id), ['u3', 'u1', 'u2']);
+    assert.strictEqual(result.count, 3);
+  });
+
+  // The kill switch. An empty app setting means the dataset is served from Cosmos, and the
+  // controller checks that BEFORE calling — a call that gets here anyway must not report zero
+  // matches as a fact about an index nobody searched.
+  await t.test('an emptied index setting throws rather than searching nothing', async (tt) => {
+    const calls = captureFetch(tt, () => rows('a'));
+    const saved = process.env.SEARCH_INDEX_ACTIVITIES;
+    process.env.SEARCH_INDEX_ACTIVITIES = '';
+    tt.after(() => {
+      if (saved === undefined) delete process.env.SEARCH_INDEX_ACTIVITIES;
+      else process.env.SEARCH_INDEX_ACTIVITIES = saved;
+    });
+
+    await assert.rejects(() => aiSearch.searchActivities({ keywords: 'x' }),
+      /SEARCH_ENDPOINT is not set/);
+    assert.strictEqual(calls.length, 0, 'no request may be issued against an empty index name');
+    // The OTHER dataset is unaffected: the switch is per dataset, not a global off.
+    await aiSearch.searchNotifications({ keywords: 'x' });
+    assert.strictEqual(calls.length, 1);
+  });
+
+  await t.test('an unset setting still names the default index', () => {
+    const saved = { ...process.env };
+    delete process.env.SEARCH_INDEX_ACTIVITIES;
+    delete process.env.SEARCH_INDEX_PROJECT_NOTIFICATIONS;
+    const cfg = aiSearch.config();
+    Object.assign(process.env, saved);
+
+    assert.strictEqual(cfg.activitiesIndex, 'activities');
+    assert.strictEqual(cfg.notificationsIndex, 'project-notifications');
+  });
+});
+
+// The same invariant DOCUMENT_SELECT and PROJECT_SELECT carry: a name the index does not declare
+// is a 400 on every query, and a searchFields name is no different.
+test('every field the two keyword searches name exists in the committed index', () => {
+  for (const [dataset, file] of [
+    ['activities', 'activities'], ['notifications', 'project-notifications']
+  ]) {
+    const definition = require(`../../azure/search/indexes/${file}.json`);
+    const byName = new Map(definition.fields.map(f => [f.name, f]));
+    const { select, searchFields } = aiSearch.KEYWORD_INDEXES[dataset];
+
+    for (const name of select.split(',')) {
+      const field = byName.get(name);
+      assert.ok(field, `${dataset} selects '${name}', not in ${definition.name}`);
+      // A non-retrievable field cannot be selected at all — that is its own 400.
+      assert.strictEqual(field.retrievable, true, `${dataset} selects non-retrievable '${name}'`);
+    }
+    for (const name of searchFields.split(',')) {
+      const field = byName.get(name);
+      assert.ok(field, `${dataset} searches '${name}', not in ${definition.name}`);
+      assert.strictEqual(field.searchable, true, `${dataset} searches non-searchable '${name}'`);
+    }
+  }
+});
+
+// An update body can hold markup, and `<p>` is not a word anybody searches for. The char filter is
+// what keeps tag names out of the index; nothing else in this repo asks for one.
+test('the activities index strips HTML before it tokenizes the content', () => {
+  const definition = require('../../azure/search/indexes/activities.json');
+  const content = definition.fields.find(f => f.name === 'content');
+  const analyzer = definition.analyzers.find(a => a.name === content.analyzer);
+
+  assert.ok(analyzer, `content names analyzer '${content.analyzer}', which the index does not declare`);
+  assert.deepStrictEqual(analyzer.charFilters, ['html_strip']);
+  assert.strictEqual(analyzer.tokenizer, 'standard_v2');
+  assert.deepStrictEqual(analyzer.tokenFilters, ['lowercase']);
+});
+
 // 600 left every test that compares against itself green.
 test('the service page cap stays inside the page-assembly cap', () => {
   assert.ok(aiSearch.SERVICE_MAX_TOP <= aiSearch.MAX_PAGE_ROWS,

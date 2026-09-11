@@ -33,7 +33,12 @@ const INDEX_DIR = path.join(__dirname, '..', '..', 'azure', 'search', 'indexes')
 const DATASET_INDEX = {
   Project: 'projects',
   Document: 'documents',
-  DocumentChunk: 'chunks'
+  DocumentChunk: 'chunks',
+  // KEYWORD SEARCHES ONLY. Both datasets are still served from Cosmos without keywords, and the
+  // index exists to rank a query the container cannot — so a field here that the Cosmos read also
+  // filters on has to mean the same thing in both places.
+  RecentActivity: 'activities',
+  ProjectNotification: 'project-notifications'
 };
 
 /**
@@ -107,7 +112,11 @@ const ALIASES = {
  * string is codepoint order and puts "Item 10" before "Item 2".
  */
 const SORT_KEYS = {
-  Document: { displayName: 'displayNameSort' }
+  Document: { displayName: 'displayNameSort' },
+  // The same mapping `repositories/notifications.js` SORT_ALIASES makes for the Cosmos read:
+  // eagle-public sorts the notifications page by `-_id`, a Mongo id it used as an arrival proxy,
+  // and received-date descending is that order said in a field these rows carry.
+  ProjectNotification: { _id: 'notificationReceivedDate' }
 };
 
 /**
@@ -170,7 +179,7 @@ const BARE_FILTER_KEYS = ['top', 'docIds', 'period', 'companyType', '_id'];
 
 const KNOWN_PARAMS = new Set([
   // this API's own
-  'dataset', 'keywords', 'q', 'fuzzy', 'pageSize',
+  'dataset', 'keywords', 'q', 'fuzzy', 'prefix', 'pageSize',
   // eagle-public's (api.ts:160-206). The last four are read by nobody here.
   'pageNum', 'sortBy', 'project', 'categorized', 'projectLegislation', 'populate', 'fields',
   ...BARE_FILTER_KEYS
@@ -222,7 +231,12 @@ function fieldsFor(dataset) {
  */
 const DATASET_CATALOG = {
   Project: 'index-projects',
-  Document: 'index-documents'
+  Document: 'index-documents',
+  // The STORED-row catalogs, and they apply unchanged because these two data sources rename
+  // nothing: an index field here is the Cosmos field of the same name. `read` is 0/0 in both, which
+  // is what stops `and[read]=…` from being a filterable field a caller can count rows against.
+  RecentActivity: 'updates',
+  ProjectNotification: 'notifications'
 };
 
 /**
@@ -681,6 +695,9 @@ module.exports = {
   ALIASES,
   // Exported so the drift test can hold it against `repositories/chunks.js` CHUNK_PARENT_FIELDS.
   DOCUMENT_FACETS,
+  // Exported for the ratchet tests beside ALIASES: one copy of the dataset -> catalog mapping, so
+  // a dataset added here without a catalog entry fails rather than going ungated.
+  DATASET_CATALOG,
   SORT_KEYS,
   DEFAULT_ORDER,
   KNOWN_PARAMS,

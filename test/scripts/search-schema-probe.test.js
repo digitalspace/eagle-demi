@@ -40,7 +40,12 @@ test('search-schema-probe.sh', async (t) => {
     assert.strictEqual(stub.requests[0].url, '/health/search-schema');
 
     const { indexes } = JSON.parse(stub.requests[0].body);
-    assert.deepStrictEqual(Object.keys(indexes).sort(), ['chunks', 'documents', 'projects']);
+    assert.deepStrictEqual(Object.keys(indexes).sort(),
+      ['activities', 'chunks', 'documents', 'project-notifications', 'projects']);
+    // Ids and nothing else: the two keyword indexes rank rows, and the row itself is read back
+    // from Cosmos. A searchable field turning retrievable here would start returning index text.
+    assert.deepStrictEqual(indexes.activities.select, ['id', 'eagleId', 'projectId']);
+    assert.deepStrictEqual(indexes['project-notifications'].select, ['id', 'eagleId']);
 
     // `fileSize` is the field the 2026-09-08 outage shipped without. If it stops being probed the
     // gate is decorative.

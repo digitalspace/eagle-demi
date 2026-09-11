@@ -61,8 +61,13 @@ async function list(access, { pageNum, pageSize, sortBy, ...filters } = {}) {
   return skip > 0 ? items.slice(skip) : items;
 }
 
-/** Name and id for a bounded set of notifications, in one query — the label an update refers to. */
-async function listByIds(access, ids) {
+/**
+ * A bounded set of notifications in one query: name and id for the label an update refers to, or
+ * whole rows under `{full: true}` for the keyword search, which reads back what the index ranked.
+ *
+ * Cosmos answers in its own order; a caller that asked for a ranking re-imposes it.
+ */
+async function listByIds(access, ids, { full = false } = {}) {
   const unique = Array.from(new Set((ids || []).map(String)));
   if (unique.length === 0) return [];
 
@@ -70,7 +75,7 @@ async function listByIds(access, ids) {
     access,
     partitionField: SCOPE_FIELD,
     criteria: [inList(PARTITION_FIELD, unique, '@nid')],
-    select: 'c.id, c.name'
+    select: full ? selectFor(CONTAINER, access, PARTITION_FIELD) : 'c.id, c.name'
   });
 
   const { items } = await cosmos.query(CONTAINER, spec, {});

@@ -14,7 +14,7 @@
 const cosmos = require('../db/cosmos-nosql');
 const { canRead, credentialField, systemAccess, TIER } = require('../helpers/access-sql');
 const projects = require('./projects');
-const { eq, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice } = require('./_sql');
+const { eq, inList, selectWhere, selectFor, countWhere, pageOptions, orderByFrom, pageSlice } = require('./_sql');
 
 const CONTAINER = 'updates';
 const PARTITION_FIELD = 'id';
@@ -144,6 +144,29 @@ async function list(access, { projectId, keywords, pageNum, pageSize, sortBy } =
   return skip > 0 ? items.slice(skip) : items;
 }
 
+/**
+ * A named set of updates, whole rows, in ONE query — how the keyword search reads back what the
+ * index ranked. The index carries ids and no text, so the row a caller receives is always the
+ * stored one, under the caller's own ACL: a row the index still holds and Cosmos no longer admits
+ * simply drops out, which is the fail-closed direction.
+ *
+ * Cosmos answers in its own order; the caller re-imposes the ranking it asked for.
+ */
+async function listByIds(access, ids) {
+  const unique = Array.from(new Set((ids || []).map(String)));
+  if (unique.length === 0) return [];
+
+  const spec = selectWhere({
+    access: await inEagleIdSpace(access),
+    partitionField: SCOPE_FIELD,
+    criteria: [inList(PARTITION_FIELD, unique, '@uid')],
+    select: selectFor(CONTAINER, access, PARTITION_FIELD)
+  });
+
+  const { items } = await cosmos.query(CONTAINER, spec, pageOptions({ pageSize: unique.length }));
+  return items;
+}
+
 /** The same predicate as the read, so the total cannot describe rows the page may not carry. */
 async function count(access, { projectId, keywords } = {}) {
   const spec = countWhere({
@@ -220,8 +243,13 @@ module.exports = {
   SCOPE_FIELD,
   SORTABLE,
   TOP_ROWS,
+  // Exported for the keyword-search path in controllers/search.js: the index holds EAGLE project
+  // ids while a caller's scope is in DEMI ones, so the OData ACL has to be built from the same
+  // translated access this container's own reads use.
+  inEagleIdSpace,
   getById,
   list,
+  listByIds,
   count,
   listTop,
   upsert,

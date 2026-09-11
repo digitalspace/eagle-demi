@@ -1,0 +1,19 @@
+{
+  "name": "demi-updates-ds",
+  "description": null,
+  "type": "cosmosdb",
+  "subtype": null,
+  "credentials": {
+    "connectionString": null
+  },
+  "container": {
+    "name": "updates",
+    "query": "SELECT c.id, c.eagleId, c.projectId, c.headline, c.content, c.notificationName, c.type, c.pinned, c.dateAdded, c.isPublished, c.read, c._ts FROM c WHERE c._ts >= @HighWaterMark ORDER BY c._ts"
+  },
+  "dataChangeDetectionPolicy": {
+    "@odata.type": "#Microsoft.Azure.Search.HighWaterMarkChangeDetectionPolicy",
+    "highWaterMarkColumnName": "_ts"
+  },
+  "dataDeletionDetectionPolicy": null,
+  "encryptionKey": null
+}

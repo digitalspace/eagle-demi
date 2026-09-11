@@ -614,7 +614,7 @@ test('every DATASET_INDEX value names an index definition that is actually on di
 
 // The catalog gates query keys as well as response fields (P2-3): a caller who cannot READ a field
 // cannot FILTER or SORT on it either, because a narrowed row count answers what the value is.
-const INDEX_CATALOG = { Project: 'index-projects', Document: 'index-documents' };
+const INDEX_CATALOG = eagleQuery.DATASET_CATALOG;
 
 test('every ALIASES target is a defaultVis 4 index field', () => {
   for (const [dataset, aliases] of Object.entries(eagleQuery.ALIASES)) {

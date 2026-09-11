@@ -116,7 +116,12 @@ function filterFor(access, partitionField = 'projectId', documentField = null) {
     clauses.push(`not read/any(r: r eq ${quote(SEALED_TOKEN)})`);
   }
 
-  if (access.tier === TIER.SCOPED) {
+  // A null `partitionField` means the index has no project axis at all — `project-notifications`,
+  // the twin of `boundaries` on the Cosmos side. `scopeClause` skips the narrowing there for the
+  // same reason: scoping on a field the rows do not carry would hide every public row from a
+  // project-scoped caller. Role ACL still applies. Without this the clause below would emit
+  // `search.in(null, …)`, which is a 400 on every request rather than a narrower page.
+  if (access.tier === TIER.SCOPED && partitionField) {
     const scope = access.projectScope;
     // Scoped to nothing must match nothing. Never fall through to the role clause alone, which
     // would hand a project-scoped caller the whole public corpus.

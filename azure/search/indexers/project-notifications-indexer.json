@@ -1,0 +1,22 @@
+{
+  "name": "project-notifications-indexer",
+  "description": null,
+  "dataSourceName": "demi-notifications-ds",
+  "skillsetName": null,
+  "targetIndexName": "project-notifications",
+  "disabled": null,
+  "schedule": {
+    "interval": "PT5M",
+    "startTime": "2026-09-10T00:00:00.000Z"
+  },
+  "parameters": {
+    "batchSize": null,
+    "maxFailedItems": 0,
+    "maxFailedItemsPerBatch": 0,
+    "base64EncodeKeys": null,
+    "configuration": {}
+  },
+  "fieldMappings": [],
+  "outputFieldMappings": [],
+  "encryptionKey": null
+}
